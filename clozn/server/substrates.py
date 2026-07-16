@@ -502,6 +502,41 @@ class EngineSubstrate(Substrate):
         r = self.engine.score(prompt=prompt, topk=int(topk), **kw)
         return r.get("tokens", [])
 
+    def score_prompt_tokens(self, prompt, continuation_ids=None, *, continuation=None, topk=0):
+        """score_tokens' RAW-PROMPT sibling: teacher-forced per-token logprob of a continuation against a
+        PRE-BUILT prompt STRING, skipping the messages -> block -> template assembly entirely.
+
+        WHY THIS EXISTS: score_tokens' only prompt surface is a `messages` list (it always runs
+        `ctx._inject_block` then `ctx._engine_tmpl`, the model's own chat-template render), because every
+        run it was built for HAD a messages list to reconstruct with/without arms from. A raw-prompt run
+        (CLI / native-journaled, `clozn.runs.sections`'s `message_index: null` convention) has no such
+        list -- what got recorded is `run["final_prompt"]`, the exact string the model already saw, with
+        no messages to re-template. For THAT case the run's own `final_prompt` (whole, or with a prompt-
+        section's char spans spliced out -- see `clozn.receipts.forced`'s raw-prompt section path) already
+        IS the prompt; re-deriving it through `_inject_block`/`_engine_tmpl` would be not just redundant
+        but WRONG (there's no message structure left to template against). So this method is score_tokens
+        minus the assembly step: it hands `prompt` straight to `self.engine.score`.
+
+        Consequences of skipping assembly: no `block`/`steer_strengths`/`steer_vec` params here at all --
+        a raw-prompt receipt's with/without arms differ ONLY in the prompt string (whatever section text
+        was spliced out), never in a memory block or tone dial, so there is nothing to reconstruct or hold
+        constant on that axis (any memory/dial effect a raw run had is already baked into its recorded
+        `final_prompt` text). Continuation precedence mirrors score_tokens EXACTLY: `continuation_ids`
+        (token ids from a stored trace) wins when given; `continuation` (text) is the boundary-approximate
+        fallback, retokenized independently by the engine (see score_tokens' own docstring for the same
+        caveat -- it applies unchanged here).
+
+        Returns [{"id", "piece", "logprob"}, ...] (+ "topk" per token when topk>0), same shape and order
+        as score_tokens' return.
+        """
+        kw = {}
+        if continuation_ids is not None:
+            kw["continuation_ids"] = [int(t) for t in continuation_ids]
+        elif continuation is not None:
+            kw["continuation"] = str(continuation)
+        r = self.engine.score(prompt=prompt, topk=int(topk), **kw)
+        return r.get("tokens", [])
+
     def jlens(self, text, layer=None, topk=5):
         """Proxy the engine's /jlens for the Run Inspector J-lens panel -- mirrors score_tokens' /score
         proxy. Returns a NORMALIZED dict (never raises): the engine's {layer, n_tokens, tokens, readouts}

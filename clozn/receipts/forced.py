@@ -7,16 +7,30 @@ than a block/steer knob swap. `_forced_ablation`'s section branch reuses replay.
 `_apply_section_exclusions`/`_strip_message_parts` splice (never a second copy of that span-removal logic)
 against `run["messages"]` -- the RAW, pre-block-injection list, which is exactly what an "api"/"auto"
 section's `parts[].message_index` is built from (see clozn.runs.sections's docstring + clozn.server.
-routes.openai's try_post). A part anchored to `final_prompt` (`message_index: null` -- a raw-prompt/CLI
-run) can't be spliced through a messages list either way: `EngineSubstrate.score_tokens`'s only prompt
-surface is `messages` -> `ctx._inject_block` -> `ctx._engine_tmpl` (the engine's chat-template render, see
-clozn.server.app._engine_tmpl) -- there is no raw-prompt scoring entry point on this substrate at all, so
-this is a real ceiling, not a shortcut we chose not to take. `_apply_section_exclusions` already reports
-that honestly (a raw-anchored part it can't touch), and that note rides straight through as this
-receipt's `ablation_note` -- no guessing, no silent no-op. No null-floor control is computed for a section
-ablation (there's no register-matched "equal-sized irrelevant text" analogue for an arbitrary prompt
-span the way a card has filler text or a dial has a random direction); the receipt still reports its raw
-delta, just without a floor-clearing ratio.
+routes.openai's try_post).
+
+A section whose parts are ALL anchored to `final_prompt` (`message_index: null` -- a raw-prompt/CLI or
+native-journaled run with no message breakdown) takes a DIFFERENT path (`_forced_raw_prompt_receipt` +
+`_splice_final_prompt`, dispatched from `forced_receipt` via the `raw_prompt_ablation` sentinel
+`_forced_ablation` returns for this case): there is no messages list to splice OR to feed
+`EngineSubstrate.score_tokens` (its only prompt surface is `messages` -> `ctx._inject_block` ->
+`ctx._engine_tmpl`), but `run["final_prompt"]` -- the exact string the model already saw -- IS the prompt,
+so ablation means splicing the section's char spans directly out of THAT string (reusing replay.py's
+`_strip_message_parts` verbatim by wrapping the string as a synthetic one-message list -- see
+`_splice_final_prompt` -- never a second copy of the span-removal math) and teacher-forcing the stored
+continuation against both versions via `EngineSubstrate.score_prompt_tokens` (the raw-prompt scoring
+entry point this used to lack -- see that method's own docstring for why it's a separate seam from
+score_tokens rather than an extra branch inside it). No block/steer reconstruction rides on this path: a
+raw-prompt run's memory block and tone dials, if any, are already baked into its recorded `final_prompt`
+text, so there's nothing separate left to hold constant between the two arms. A MIXED section (some
+parts null, some message-anchored) is not expected from the producer (`clozn.runs.sections`'s schema);
+if one shows up anyway, `_forced_ablation` prefers the message path, which already reports the raw-
+anchored leftovers honestly via `_apply_section_exclusions`'s own partial-application note.
+
+No null-floor control is computed for a section ablation on EITHER path (there's no register-matched
+"equal-sized irrelevant text" analogue for an arbitrary prompt span the way a card has filler text or a
+dial has a random direction); the receipt still reports its raw delta, just without a floor-clearing
+ratio.
 """
 from __future__ import annotations
 
@@ -43,6 +57,16 @@ _FORCED_NOTE = (
     "steering library / card store at the run's recorded strengths and card texts -- the same "
     "limitation the regen receipt already carries. The with/without prompts differ in length by "
     "whatever was ablated; deltas align per CONTINUATION token position, which is what matters -- not "
+    "per prompt token."
+)
+
+_FORCED_RAW_PROMPT_NOTE = (
+    "this section is anchored to final_prompt (a raw-prompt/CLI or native-journaled run with no message "
+    "breakdown), so both arms are scored directly against that recorded string via "
+    "EngineSubstrate.score_prompt_tokens -- no block/steer reconstruction rides here (a raw run's memory "
+    "block and tone dials, if any, are already baked into its final_prompt text; there's nothing separate "
+    "left to hold constant between the two arms). The with/without prompts differ in length by exactly "
+    "what was spliced out; deltas align per CONTINUATION token position, which is what matters -- not "
     "per prompt token."
 )
 
@@ -102,6 +126,115 @@ def _top_dependent(pieces: list, deltas: list, k: int = 5) -> list:
     order = sorted(range(len(deltas)), key=lambda i: -abs(deltas[i]))[:k]
     return [{"index": i, "piece": pieces[i] if i < len(pieces) else "", "delta": round(deltas[i], 6)}
             for i in order]
+
+
+def _forced_result(influence: dict, conditions: dict, with_tokens: list, without_tokens: list,
+                    note: str) -> dict:
+    """with/without token-logprob arms -> the receipt's core shape (answer_tokens/deltas/sum_nats/
+    mean_nats_per_token/top_dependent/has_effect/threshold/note/caveat) -- factored out so the
+    message-anchored path (forced_receipt's own with/without scoring) and the raw-prompt sibling
+    (_forced_raw_prompt_receipt, whose arms come from EngineSubstrate.score_prompt_tokens instead of
+    score_tokens) build the IDENTICAL output shape from whatever tokens they scored, rather than each
+    hand-rolling its own copy of this math. Degrades to a `causal_verified: False` dict (checkable via
+    `not result.get("causal_verified")`) when the arms don't align token-for-token; never raises. Carries
+    no `ablation_note`/`null_floor` -- callers that want those (only the generic message-anchored path
+    does) add them to the returned dict themselves."""
+    deltas = _forced_deltas(with_tokens, without_tokens)
+    if deltas is None:
+        return {"influence": influence, "mode": "forced", "causal_verified": False,
+                "note": "with/without arms did not align token-for-token (a scoring inconsistency)",
+                "caveat": _FORCED_CAVEAT}
+
+    pieces = [str(t.get("piece", "")) for t in with_tokens]
+    summary = _delta_summary(deltas)
+    has_effect = (summary["mean_nats_per_token"] >= _FORCED_MEAN_THRESHOLD
+                 or abs(summary["sum_nats"]) >= _FORCED_SUM_THRESHOLD)
+    return {
+        "influence": influence,
+        "mode": "forced",
+        "retokenized": conditions["retokenized"],
+        "causal_verified": True,
+        "answer_tokens": pieces,
+        "deltas": [round(d, 6) for d in deltas],
+        "sum_nats": summary["sum_nats"],
+        "mean_nats_per_token": summary["mean_nats_per_token"],
+        "top_dependent": _top_dependent(pieces, deltas),
+        "has_effect": has_effect,
+        "threshold": {"mean_abs_nats_per_token": _FORCED_MEAN_THRESHOLD,
+                     "abs_sum_nats": _FORCED_SUM_THRESHOLD},
+        "note": note,
+        "caveat": _FORCED_CAVEAT,
+    }
+
+
+def _splice_final_prompt(final_prompt: str, parts: list) -> str:
+    """`final_prompt` with `parts`'s char spans (every one `message_index: null`) removed. Reuses
+    replay.py's OWN `_strip_message_parts` verbatim -- never a second copy of the span-removal math -- by
+    wrapping `final_prompt` as a synthetic ONE-message list (`_strip_message_parts` only cares that it
+    gets a dict with a `content` string at the index its `parts_by_index` names; it has no idea, and no
+    need to know, that the "message" here is really a whole raw prompt string). If the section's span(s)
+    cover the WHOLE prompt, `_strip_message_parts`'s own whole-message rule drops that synthetic message
+    entirely, which this reports as an empty ablated prompt -- an honest, if extreme, ablation, not a
+    bug. Never raises: a part with a non-int start/end is skipped (mirrors `_apply_section_exclusions`'s
+    own per-part tolerance)."""
+    from clozn.replay.replay import _strip_message_parts
+    spans = []
+    for p in parts or []:
+        if not isinstance(p, dict):
+            continue
+        try:
+            spans.append((int(p.get("start", 0)), int(p.get("end", 0))))
+        except (TypeError, ValueError):
+            continue
+    if not spans:
+        return final_prompt
+    out = _strip_message_parts([{"content": final_prompt}], {0: spans})
+    return out[0]["content"] if out else ""
+
+
+def _score_raw_prompt(sub, prompt: str, continuation_ids, response_text: str):
+    """rederive.score_arm's raw-prompt sibling: one `sub.score_prompt_tokens` call (never `score_tokens`
+    -- there are no messages here to assemble), same continuation_ids-primary/response-text-fallback
+    precedence. Returns (tokens, ok) -- ([], False) on any failure, including a substrate with no
+    score_prompt_tokens (a torch lab substrate, or a test fake that only stubs score_tokens) -- never
+    raises."""
+    score = getattr(sub, "score_prompt_tokens", None)
+    if not callable(score):
+        return [], False
+    try:
+        if continuation_ids is not None:
+            tokens = score(prompt, continuation_ids)
+        else:
+            if not response_text:
+                return [], False
+            tokens = score(prompt, None, continuation=response_text)
+        return (tokens if isinstance(tokens, list) else []), True
+    except Exception:
+        return [], False
+
+
+def _forced_raw_prompt_receipt(run: dict, influence: dict, sub, conditions: dict, raw: dict) -> dict:
+    """The section ablation's raw-prompt sibling of forced_receipt's main with/without scoring: score the
+    run's own stored continuation against `raw["prompt"]` (baseline = final_prompt unchanged) and
+    `raw["ablated_prompt"]` (final_prompt with the section spliced out -- see _splice_final_prompt) via
+    EngineSubstrate.score_prompt_tokens, then build the SAME receipt shape forced_receipt's generic path
+    does (via the shared _forced_result) so a caller never has to know which path scored a given
+    section."""
+    ids = conditions.get("continuation_ids")
+    response = conditions.get("response") or ""
+
+    with_tokens, with_ok = _score_raw_prompt(sub, raw["prompt"], ids, response)
+    if not with_ok:
+        return {"influence": influence, "mode": "forced", "causal_verified": False,
+                "note": "forced scoring needs the engine substrate (score_prompt_tokens is not available "
+                        "here)", "caveat": _FORCED_CAVEAT}
+
+    without_tokens, without_ok = _score_raw_prompt(sub, raw["ablated_prompt"], ids, response)
+    if not without_ok:
+        return {"influence": influence, "mode": "forced", "causal_verified": False,
+                "note": "the ablated arm could not be scored", "caveat": _FORCED_CAVEAT}
+
+    return _forced_result(influence, conditions, with_tokens, without_tokens, _FORCED_RAW_PROMPT_NOTE)
 
 
 def _forced_ablation(run: dict, influence: dict, sub, conditions: dict):
@@ -190,6 +323,28 @@ def _forced_ablation(run: dict, influence: dict, sub, conditions: dict):
             return {"without": None, "control": None,
                     "note": f"section '{section}' is memory-card-sourced -- ablate it via its card_id "
                             "instead (a section-name ablation here only supports api/auto sections)"}
+
+        # RAW-PROMPT section: every part anchored to final_prompt (message_index: null -- a raw-prompt/
+        # CLI or native-journaled run with no message breakdown at all). A MIXED section (some parts
+        # null, some message-anchored) is not expected from the producer (clozn.runs.sections's schema);
+        # when it happens anyway, fall through to the message path below, which already reports any
+        # raw-anchored leftovers honestly via _apply_section_exclusions's own partial-application note --
+        # only an ALL-null section takes this branch. Returns a `raw_prompt_ablation` sentinel that
+        # forced_receipt dispatches on BEFORE its generic messages-based with/without construction (see
+        # _forced_raw_prompt_receipt) -- "without"/"control" stay None/None here since this ablation never
+        # reconstructs block/steer arms the way every other kind does.
+        if entry is not None:
+            parts = entry.get("parts") if isinstance(entry.get("parts"), list) else []
+            if parts and all(isinstance(p, dict) and p.get("message_index") is None for p in parts):
+                final_prompt = run.get("final_prompt")
+                if not isinstance(final_prompt, str) or not final_prompt:
+                    return {"without": None, "control": None,
+                            "note": f"section '{section}' is anchored to final_prompt offsets, but this "
+                                    "run has no final_prompt recorded -- nothing to splice"}
+                ablated_prompt = _splice_final_prompt(final_prompt, parts)
+                return {"without": None, "control": None, "note": None,
+                        "raw_prompt_ablation": {"prompt": final_prompt, "ablated_prompt": ablated_prompt}}
+
         from clozn.replay.replay import _apply_section_exclusions
         without_messages, notes, applied = _apply_section_exclusions(
             run, list(run.get("messages") or []), [str(section)])
@@ -216,6 +371,17 @@ def forced_receipt(run: dict, influence: dict, sub) -> dict | None:
         ablation = _forced_ablation(run, influence, sub, conditions)
         if ablation is None:
             return None
+
+        # RAW-PROMPT section ablation (see _forced_ablation's section branch + this module's docstring):
+        # a wholly different with/without construction (final_prompt splicing + score_prompt_tokens, no
+        # messages/block/steer anywhere), so it's dispatched to its own builder and returned directly --
+        # BEFORE the generic `ablation.get("without") is None` check below, since this sentinel also
+        # carries "without": None (it never populates the messages-based ablation dict the generic path
+        # expects).
+        raw = ablation.get("raw_prompt_ablation")
+        if raw is not None:
+            return _forced_raw_prompt_receipt(run, influence, sub, conditions, raw)
+
         if ablation.get("without") is None:
             return {"influence": influence, "mode": "forced", "causal_verified": False,
                     "note": ablation.get("note"), "caveat": _FORCED_CAVEAT}
@@ -240,33 +406,9 @@ def forced_receipt(run: dict, influence: dict, sub) -> dict | None:
             return {"influence": influence, "mode": "forced", "causal_verified": False,
                     "note": "the ablated arm could not be scored", "caveat": _FORCED_CAVEAT}
 
-        deltas = _forced_deltas(with_tokens, without_tokens)
-        if deltas is None:
-            return {"influence": influence, "mode": "forced", "causal_verified": False,
-                    "note": "with/without arms did not align token-for-token (a scoring inconsistency)",
-                    "caveat": _FORCED_CAVEAT}
-
-        pieces = [str(t.get("piece", "")) for t in with_tokens]
-        summary = _delta_summary(deltas)
-        has_effect = (summary["mean_nats_per_token"] >= _FORCED_MEAN_THRESHOLD
-                     or abs(summary["sum_nats"]) >= _FORCED_SUM_THRESHOLD)
-
-        out = {
-            "influence": influence,
-            "mode": "forced",
-            "retokenized": conditions["retokenized"],
-            "causal_verified": True,
-            "answer_tokens": pieces,
-            "deltas": [round(d, 6) for d in deltas],
-            "sum_nats": summary["sum_nats"],
-            "mean_nats_per_token": summary["mean_nats_per_token"],
-            "top_dependent": _top_dependent(pieces, deltas),
-            "has_effect": has_effect,
-            "threshold": {"mean_abs_nats_per_token": _FORCED_MEAN_THRESHOLD,
-                         "abs_sum_nats": _FORCED_SUM_THRESHOLD},
-            "note": _FORCED_NOTE,
-            "caveat": _FORCED_CAVEAT,
-        }
+        out = _forced_result(influence, conditions, with_tokens, without_tokens, _FORCED_NOTE)
+        if not out.get("causal_verified"):
+            return out
         if ablation.get("note"):
             out["ablation_note"] = ablation["note"]
 
@@ -280,7 +422,7 @@ def forced_receipt(run: dict, influence: dict, sub) -> dict | None:
             if control_deltas is not None:
                 c_summary = _delta_summary(control_deltas)
                 floor_mean = c_summary["mean_nats_per_token"]
-                ratio = (summary["mean_nats_per_token"] / floor_mean) if floor_mean > 0 else None
+                ratio = (out["mean_nats_per_token"] / floor_mean) if floor_mean > 0 else None
                 out["null_floor"] = {
                     "kind": ("card_filler" if influence.get("card_id") else
                             "block_filler" if influence.get("memory_off") else

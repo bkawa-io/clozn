@@ -1,16 +1,24 @@
 """test_section_influence -- model-free tests for the prompt-section influence FAST PATH:
 
   1. clozn.receipts.forced.forced_receipt()'s new "section" influence kind (mirrors test_receipts.py's own
-     forced-mode section: a ForcedFakeSub-style fake, no model, no GPU, no network).
+     forced-mode section: a ForcedFakeSub-style fake, no model, no GPU, no network) -- INCLUDING the
+     raw-prompt sibling (message_index: null sections, scored against `run["final_prompt"]` via
+     EngineSubstrate.score_prompt_tokens instead of score_tokens; this used to be an honest "can't score
+     it" skip and is now a real computation -- see forced.py's module docstring).
   2. clozn.server.routes.section_influence -- the pure `_shares`/`_summary` helpers, and the THIN
      POST /runs/<id>/section-influence endpoint wiring (mirrors test_receipts_server.py's no-socket
      object.__new__(H) handler-driving trick, isolated flat-file stores, a FakeSub standing in for the
      engine).
   3. clozn.cli.commands.run._format_influence_line -- the `--show-influence` / REPL `/influence` render,
      a pure function (dict in, text out) tested against canned payloads only.
+  4. clozn.server.substrates.EngineSubstrate.score_prompt_tokens itself -- the raw-prompt-string scoring
+     seam the raw-prompt section path (1) is built on, unit-tested directly against a fake engine (mirrors
+     tests/test_engine_score.py's own score_tokens conventions -- object.__new__(cs.EngineSubstrate), a
+     fake with just a .score() method).
 
 No model, no GPU, no engine launch anywhere in this file -- every substrate here is a small deterministic
-fake keyed on exactly the (messages / block / steer) a real EngineSubstrate.score_tokens would vary on.
+fake keyed on exactly the (messages / block / steer / raw prompt string) a real EngineSubstrate.
+score_tokens / score_prompt_tokens would vary on.
 """
 from __future__ import annotations
 
@@ -142,29 +150,85 @@ def test_forced_receipt_declines_a_memory_card_sourced_section(iso):
     assert sub.calls == []
 
 
+RAG_SEGMENT = "RAG: whales are mammals."
+RAWPROMPT_FINAL_PROMPT = "SYSTEM\n" + RAG_SEGMENT + "\nQ: what are whales?"
+_RAG_START = RAWPROMPT_FINAL_PROMPT.index(RAG_SEGMENT)
+_RAG_END = _RAG_START + len(RAG_SEGMENT)
+
 RAWPROMPT_SECTION_RUN = {
     "id": "run_sec_raw",
     "messages": [{"role": "user", "content": "irrelevant -- offsets are into final_prompt, not this list"}],
-    "final_prompt": "SYSTEM\nRAG: whales are mammals.\nQ: what are whales?",
+    "final_prompt": RAWPROMPT_FINAL_PROMPT,
     "response": "mammals",
     "trace": {"token_ids": [9]},
     "sections": [{"id": "sec_rag", "name": "rag_context", "source": "auto",
-                 "parts": [{"message_index": None, "start": 8, "end": 33}],
-                 "char_count": 25, "preview": "RAG: whales are mammals."}],
+                 "parts": [{"message_index": None, "start": _RAG_START, "end": _RAG_END}],
+                 "char_count": len(RAG_SEGMENT), "preview": RAG_SEGMENT}],
 }
 
 
-def test_forced_receipt_section_raw_prompt_anchored_degrades_honestly(iso):
-    """message_index: null (a raw-prompt/CLI run) cannot be spliced through a messages list -- and
-    EngineSubstrate.score_tokens has NO raw-prompt scoring surface at all (only `messages` ->
-    apply_template; see clozn.server.app._engine_tmpl), so this is a real ceiling, not a shortcut. The
-    receipt degrades honestly (never scored) instead of guessing or fabricating a delta -- exactly what
-    replay.py's own _apply_section_exclusions already reports for the identical case, reused verbatim."""
-    sub = SectionForcedFakeSub(["m"], "never-matched-marker", present_lp=[-0.1], absent_lp=[-0.1])
+class RawPromptForcedFakeSub:
+    """The raw-prompt sibling of SectionForcedFakeSub: this fake has NO `score_tokens` at all (a
+    misdirected call would fail loudly, AttributeError, rather than silently succeeding on the wrong
+    seam) -- only `score_prompt_tokens`, whose logprob is a deterministic function of whether `marker` is
+    still present in the PROMPT STRING it was actually called with."""
+
+    def __init__(self, pieces, marker, present_lp, absent_lp):
+        self.pieces = list(pieces)
+        self.marker = marker
+        self.present_lp = present_lp
+        self.absent_lp = absent_lp
+        self.calls: list = []       # one entry per score_prompt_tokens() call, in call order
+
+    def score_prompt_tokens(self, prompt, continuation_ids=None, *, continuation=None, topk=0):
+        self.calls.append({"prompt": prompt, "continuation_ids": continuation_ids})
+        lps = self.present_lp if self.marker in prompt else self.absent_lp
+        return [{"id": i, "piece": p, "logprob": lp} for i, (p, lp) in enumerate(zip(self.pieces, lps))]
+
+
+def test_forced_receipt_section_raw_prompt_now_scores_via_final_prompt_splice(iso):
+    """THE FIX: message_index: null no longer degrades to an honest skip -- it splices final_prompt and
+    teacher-forces both arms via score_prompt_tokens. Deltas/sum/mean come out exactly as hand-crafted
+    (same shape and math as the message-anchored case), and -- like that case -- there is still no
+    null_floor (no register-matched control for an arbitrary prompt span)."""
+    sub = RawPromptForcedFakeSub(["m"], RAG_SEGMENT, present_lp=[-0.1], absent_lp=[-3.0])
+    rec = receipts.forced_receipt(RAWPROMPT_SECTION_RUN, {"section": "rag_context", "source": "auto"}, sub)
+    assert rec["causal_verified"] is True
+    assert rec["mode"] == "forced"
+    assert rec["answer_tokens"] == ["m"]
+    assert rec["deltas"] == [round(2.9, 6)]
+    assert rec["sum_nats"] == round(2.9, 6)
+    assert rec["mean_nats_per_token"] == round(2.9, 6)
+    assert rec["has_effect"] is True
+    assert "null_floor" not in rec
+    assert rec["caveat"] == receipts._FORCED_CAVEAT
+    assert len(sub.calls) == 2                              # with (baseline) + without (ablated)
+
+
+def test_forced_receipt_section_raw_prompt_ablated_arm_actually_lacks_the_section_text(iso):
+    """Not just "a delta came back" -- prove the WITH call saw the unmodified final_prompt and the
+    WITHOUT call's prompt genuinely has the section spliced out (not just a different score, in case the
+    fake's marker-matching logic were the only thing exercised)."""
+    sub = RawPromptForcedFakeSub(["m"], RAG_SEGMENT, present_lp=[-0.1], absent_lp=[-3.0])
+    receipts.forced_receipt(RAWPROMPT_SECTION_RUN, {"section": "rag_context", "source": "auto"}, sub)
+    with_prompt = sub.calls[0]["prompt"]
+    without_prompt = sub.calls[1]["prompt"]
+    assert with_prompt == RAWPROMPT_FINAL_PROMPT                      # baseline: final_prompt UNCHANGED
+    assert RAG_SEGMENT in with_prompt
+    assert RAG_SEGMENT not in without_prompt                          # ablated: section spliced OUT
+    assert without_prompt == "SYSTEM\n\nQ: what are whales?"          # exact spliced result
+    assert sub.calls[0]["continuation_ids"] == [9]                    # the run's own stored trace ids
+    assert sub.calls[1]["continuation_ids"] == [9]
+
+
+def test_forced_receipt_section_raw_prompt_degrades_when_substrate_has_no_score_prompt_tokens(iso):
+    """The ceiling now is the SUBSTRATE's capability, not the section's anchor: a substrate exposing only
+    score_tokens (the old message-anchored seam) still can't score a raw-prompt section, and says so --
+    it never silently falls back to score_tokens with a fabricated messages list."""
+    sub = SectionForcedFakeSub(["m"], RAG_SEGMENT, present_lp=[-0.1], absent_lp=[-3.0])
     rec = receipts.forced_receipt(RAWPROMPT_SECTION_RUN, {"section": "rag_context", "source": "auto"}, sub)
     assert rec["causal_verified"] is False
-    assert "final_prompt" in rec["note"]
-    assert sub.calls == []
+    assert "score_prompt_tokens" in rec["note"]
 
 
 def test_forced_receipt_section_deterministic_across_repeated_calls(iso):
@@ -383,3 +447,74 @@ def test_format_influence_line_never_raises_on_malformed_payload():
     assert _format_influence_line("not a dict") == "- sections: no sections on this run"
     assert _format_influence_line({}) == "- sections: no sections on this run"
     assert _format_influence_line({"sections": "not a list"}) == "- sections: no sections on this run"
+
+
+# ============================================================================================================
+# ==================== 4. EngineSubstrate.score_prompt_tokens -- the raw-prompt scoring seam ==================
+# ============================================================================================================
+# The seam the raw-prompt section path (section 1, above) is built on: unlike score_tokens, this skips
+# prompt assembly (_inject_block/_engine_tmpl) entirely -- the caller's `prompt` string rides to
+# engine.score() UNCHANGED. Mirrors tests/test_engine_score.py's own score_tokens conventions
+# (object.__new__(cs.EngineSubstrate), a fake with just a .score() method) -- no model, no GPU.
+
+class _FakePromptScoreEngine:
+    """Stands in for cloze_engine.EngineClient inside score_prompt_tokens: only `.score()` -- deliberately
+    NO `.apply_template()` at all, unlike test_engine_score.py's `_FakeScoreEngine` -- because this seam
+    never templates anything. If score_prompt_tokens ever regressed into calling apply_template, this
+    fake would raise AttributeError instead of silently passing."""
+
+    def __init__(self, reply=None):
+        self.calls: list = []
+        self._reply = reply if reply is not None else {"tokens": []}
+
+    def score(self, **kw):
+        self.calls.append(kw)
+        return self._reply
+
+
+def _bare_engine_substrate(engine):
+    """EngineSubstrate via object.__new__ (mirrors test_engine_score.py's own helper) -- exercises
+    score_prompt_tokens without a real engine/steer/health call."""
+    sub = object.__new__(cs.EngineSubstrate)
+    sub.engine = engine
+    return sub
+
+
+def test_score_prompt_tokens_passes_the_prompt_straight_through_untemplated():
+    reply = {"tokens": [{"id": 1, "piece": "a", "logprob": -0.2}]}
+    fe = _FakePromptScoreEngine(reply=reply)
+    sub = _bare_engine_substrate(fe)
+    out = sub.score_prompt_tokens("SYSTEM\n\nQ: what are whales?", [1, 2, 3], topk=5)
+    assert fe.calls[-1]["prompt"] == "SYSTEM\n\nQ: what are whales?"     # byte-identical, no template
+    assert fe.calls[-1]["continuation_ids"] == [1, 2, 3]
+    assert fe.calls[-1]["topk"] == 5
+    assert out == reply["tokens"]
+
+
+def test_score_prompt_tokens_continuation_ids_take_precedence_over_text():
+    fe = _FakePromptScoreEngine()
+    sub = _bare_engine_substrate(fe)
+    sub.score_prompt_tokens("p", [1, 2], continuation="ignored text")
+    assert fe.calls[-1]["continuation_ids"] == [1, 2]
+    assert "continuation" not in fe.calls[-1]
+
+
+def test_score_prompt_tokens_continuation_text_fallback_when_no_ids():
+    fe = _FakePromptScoreEngine()
+    sub = _bare_engine_substrate(fe)
+    sub.score_prompt_tokens("p", None, continuation="hello world")
+    assert fe.calls[-1]["continuation"] == "hello world"
+    assert "continuation_ids" not in fe.calls[-1]
+
+
+def test_score_prompt_tokens_forwards_ids_as_ints():
+    fe = _FakePromptScoreEngine()
+    sub = _bare_engine_substrate(fe)
+    sub.score_prompt_tokens("p", [1.0, 2.0, 3])
+    assert fe.calls[-1]["continuation_ids"] == [1, 2, 3]
+
+
+def test_score_prompt_tokens_tolerates_a_degraded_reply():
+    fe = _FakePromptScoreEngine(reply={})
+    sub = _bare_engine_substrate(fe)
+    assert sub.score_prompt_tokens("p", [1]) == []
