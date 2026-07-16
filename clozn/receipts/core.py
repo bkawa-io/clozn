@@ -9,7 +9,7 @@ import os
 
 from clozn.replay.replay import replay as replay_run
 
-from .deltas import _ablation_changes, _build_receipt, _key, _merge_ablation_changes
+from .deltas import _ablation_changes, _build_receipt, _key, _merge_ablation_changes, _section_influences
 from .forced import forced_receipt
 from .metrics import receipt_metrics
 
@@ -87,7 +87,7 @@ def _receipt_regen(run: dict, influence: dict, sub) -> dict | None:
 
 
 def _fired_influences(manifest: dict):
-    """M1 manifest cards + dials as receipt influence specs."""
+    """M1 manifest cards + dials + sections as receipt influence specs."""
     influences: list = []
     skipped: list = []
     active = (manifest or {}).get("influences_active") or {}
@@ -103,6 +103,11 @@ def _fired_influences(manifest: dict):
     for d in active.get("dials") or []:
         if isinstance(d, dict) and d.get("name"):
             influences.append({"dial": d["name"], "value": d.get("value")})
+    # sections: enumeration + the memory_card dedup rule both live in deltas.py (see
+    # _section_influences' docstring) -- this loop just extends the two lists it already returns.
+    sec_influences, sec_skipped = _section_influences(manifest)
+    influences.extend(sec_influences)
+    skipped.extend(sec_skipped)
     return influences, skipped
 
 

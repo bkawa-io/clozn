@@ -14,9 +14,24 @@ the same dials/strength the normal chat path reads:
                In internalized mode a single card can't leave the fused prefix without a retrain, so
                `disabled_memory_ids` stays an honest "not applied" note.
   * behavior -- sub.steer.strength (sub.chat() engages the hook, which reads .strength)
+  * sections -- changes["exclude_sections"] (a list of section NAMES against the run's `sections`
+               manifest -- the fixed schema clozn.runs.sections/store produce: id/name/source/parts/
+               char_count/preview) rebuilds the MESSAGE LIST itself, with each named section's parts
+               removed (whole-message drop when a part's span covers the entire content, a char-range
+               splice otherwise; a section with several parts has all of them removed, right-to-left
+               within a message so earlier offsets stay valid), and regenerates against that modified
+               prompt -- a real, content-level ablation, unlike the knob toggles above. Offsets are
+               read against `assembled_messages` when the run has it (that's what the model actually
+               saw); a part anchored to `final_prompt` (message_index: null -- a raw-prompt run with no
+               message breakdown) can't be spliced through this path (chat() takes a message list, not
+               a raw prompt override -- that's fork.py's engine.complete seam, not this one's) and is
+               left in place with an honest note. Unknown section names, or a run with no `sections`
+               manifest at all (predates section capture), are the SAME best-effort no-op + honest note
+               `disabled_memory_ids` already uses for a card ablation that can't apply in the active mode.
 
-so a replay is exactly "chat, but with these knobs different for one turn". The temporary dials are NEVER
-persisted (no save_state during replay) -- that would silently rewrite the user's personality.
+so a replay is exactly "chat, but with these knobs (or, now, this prompt content) different for one turn".
+The temporary dials are NEVER persisted (no save_state during replay) -- that would silently rewrite the
+user's personality.
 
 Stdlib + the siblings `runlog` / `memory_mode` / `memory_cards` (all stdlib-only themselves); the
 substrate is passed in (the live SUB), never imported, so this module is unit-testable against a fake
@@ -115,13 +130,132 @@ def _effective_dials(sub) -> dict:
         return {}
 
 
+# --- section ablation (the fixed schema: clozn.runs.sections/store's `sections` manifest) -----------------
+#
+# A section is a named span of prompt content (id/name/source/parts/char_count/preview -- see the
+# manifest producer). `parts` are char spans keyed by `message_index` into whichever message list the
+# manifest was built against (assembled_messages when the run has one -- that's what the model actually
+# saw -- else the raw messages); `message_index: null` means the span is anchored to `final_prompt`
+# instead, which this module has no way to feed back into `sub.chat()` (its only surface is a MESSAGE
+# list, not a raw prompt string -- that override exists on the engine's raw-completion seam, which is
+# fork.py's territory, not replay's). We splice everything we CAN (message-anchored parts) and leave
+# final_prompt-anchored parts in place with an honest note, rather than silently pretending they were
+# removed.
+
+def _strip_message_parts(messages: list, parts_by_index: dict) -> list:
+    """A NEW message list with each message's listed char spans removed. `parts_by_index` is
+    {message_index: [(start, end), ...]}. Per the schema: a span covering the WHOLE content drops that
+    message entirely; otherwise every span for that message is spliced out, right-to-left (highest
+    start first) so an earlier span's offsets are never invalidated by a later one's removal. Never
+    raises: an out-of-range index, or a non-dict message, is simply left untouched."""
+    if not parts_by_index:
+        return list(messages or [])
+    msgs = list(messages or [])
+    out = []
+    for i, m in enumerate(msgs):
+        spans = parts_by_index.get(i)
+        if not spans or not isinstance(m, dict):
+            out.append(m)
+            continue
+        content = str(m.get("content", ""))
+        whole = any(int(s) <= 0 and int(e) >= len(content) for s, e in spans)
+        if whole:
+            continue                                       # the whole message is one of this section's parts
+        for s, e in sorted(spans, key=lambda p: p[0], reverse=True):
+            s = max(0, min(int(s), len(content)))
+            e = max(0, min(int(e), len(content)))
+            if e < s:
+                s, e = e, s
+            content = content[:s] + content[e:]
+        m = dict(m)
+        m["content"] = content
+        out.append(m)
+    return out
+
+
+def _apply_section_exclusions(run: dict, base_messages: list, names) -> tuple[list, dict, list]:
+    """`base_messages` minus the parts of each named section in `run["sections"]`. Returns
+    (new_messages, notes, applied): `notes` maps a requested name to an honest reason it did NOT apply
+    in full (no manifest at all, an unknown name, no usable parts, or a final_prompt-anchored part this
+    surface can't splice) -- exactly the `disabled_memory_ids` convention (a best-effort no-op is
+    reported, never silently swallowed); `applied` lists the names that DID remove at least one part.
+    Never raises."""
+    notes: dict = {}
+    applied: list = []
+    if isinstance(names, (list, tuple, set)):
+        names = [str(n) for n in names if n]
+    elif names:
+        names = [str(names)]
+    else:
+        names = []
+    if not names:
+        return list(base_messages or []), notes, applied
+
+    manifest = run.get("sections") if isinstance(run, dict) else None
+    if not isinstance(manifest, list) or not manifest:
+        for n in names:
+            notes[n] = "not applied: this run carries no section manifest (predates section capture)"
+        return list(base_messages or []), notes, applied
+
+    by_name: dict = {}
+    for sec in manifest:
+        if isinstance(sec, dict) and sec.get("name"):
+            by_name.setdefault(str(sec["name"]), sec)
+
+    n_messages = len(base_messages or [])
+    parts_by_index: dict = {}
+    for n in names:
+        sec = by_name.get(n)
+        if sec is None:
+            notes[n] = f"not applied: no section named '{n}' on this run's manifest"
+            continue
+        parts = sec.get("parts")
+        if not isinstance(parts, list) or not parts:
+            notes[n] = f"not applied: section '{n}' has no parts recorded"
+            continue
+        removed_any = False
+        raw_anchored = False
+        for p in parts:
+            if not isinstance(p, dict):
+                continue
+            idx = p.get("message_index")
+            if idx is None:
+                raw_anchored = True                        # anchored to final_prompt -- can't splice here
+                continue
+            try:
+                idx = int(idx)
+                s, e = int(p.get("start", 0)), int(p.get("end", 0))
+            except (TypeError, ValueError):
+                continue
+            if idx < 0 or idx >= n_messages:
+                continue
+            parts_by_index.setdefault(idx, []).append((s, e))
+            removed_any = True
+        if removed_any:
+            applied.append(n)
+            if raw_anchored:
+                notes[n] = (f"partially applied: section '{n}' has part(s) anchored to final_prompt "
+                            "offsets (no message breakdown), which replay's chat(messages, ...) surface "
+                            "cannot splice -- only its message-anchored parts were removed")
+        elif raw_anchored:
+            notes[n] = (f"not applied: section '{n}' is anchored entirely to final_prompt offsets "
+                        "(a raw-prompt run) -- replay's chat(messages, ...) surface has no raw-prompt "
+                        "override to splice against")
+        else:
+            notes[n] = f"not applied: section '{n}' has no usable parts"
+
+    new_messages = _strip_message_parts(base_messages, parts_by_index)
+    return new_messages, notes, applied
+
+
 def replay(run: dict, changes: dict, sub, reference_tokens=None) -> dict | None:
     """Re-run `run` under `changes` on the live substrate `sub`; record the result as a child run and return
     it. Returns None on any failure (a replay must never raise into the request handler).
 
     `run`      -- a run dict from runlog.get_run(id) (needs at least "id" and "messages").
     `changes`  -- the change spec (see module docstring): memory_off / behavior_off / nudge /
-                  behavior_overrides / disabled_memory_ids / edited_memory / plain. {} == a plain re-roll.
+                  behavior_overrides / disabled_memory_ids / edited_memory / exclude_sections / plain.
+                  {} == a plain re-roll.
     `sub`      -- the live substrate (SUB); must expose .chat(messages, max_new=, sample=). Its
                   .memory.memory_strength and .steer.strength are snapshotted and restored around generation.
     `reference_tokens` -- optional baseline reply token ids (prove-all early-stop): when the substrate's
@@ -142,6 +276,20 @@ def replay(run: dict, changes: dict, sub, reference_tokens=None) -> dict | None:
         changes = changes or {}
         mode = _mode()
 
+        # section ablation: rebuild `messages` itself (a content change, not a knob) BEFORE anything else
+        # reads it -- offsets are defined against assembled_messages when the run has one (that's what the
+        # model actually saw), else the raw messages. Never touches `messages` at all when this change key
+        # is absent, so every existing (knob-only) replay path is byte-for-byte unchanged.
+        section_notes: dict = {}
+        sections_applied: list = []
+        exclude_sections = changes.get("exclude_sections")
+        if exclude_sections:
+            base_messages = run.get("assembled_messages")
+            if not isinstance(base_messages, list) or not base_messages:
+                base_messages = messages
+            messages, section_notes, sections_applied = _apply_section_exclusions(
+                run, base_messages, exclude_sections)
+
         steer = getattr(sub, "steer", None)
         mem = getattr(sub, "memory", None) or getattr(sub, "_mem", None)
 
@@ -155,6 +303,8 @@ def replay(run: dict, changes: dict, sub, reference_tokens=None) -> dict | None:
 
         t0 = time.time()
         notes = _apply_changes(changes, sub, mode)
+        if section_notes:
+            notes["exclude_sections"] = section_notes
         eff_dials = _effective_dials(sub)
         trace_steps: list = []          # per-token trace of the replay reply (B3) -- the baseline-vs-replay
         #                                 token diff needs it; replay previously never passed trace_out.
@@ -298,6 +448,11 @@ def replay(run: dict, changes: dict, sub, reference_tokens=None) -> dict | None:
         if diverged is not None:
             child["diverged"] = diverged
             child["diverged_at"] = diverged_at
+        if exclude_sections:
+            # names that actually removed something (vs. skipped -- see `section_notes`, which already
+            # rode into memory.notes.exclude_sections above and is what the receipt layer's honesty check
+            # reads); a convenience mirror for any caller inspecting the child directly.
+            child["sections_excluded"] = sections_applied
         return child
     except Exception:
         return None

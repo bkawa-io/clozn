@@ -359,6 +359,145 @@ def test_prove_all_degrades_when_substrate_is_none(iso):
     assert any("baseline" in s["reason"] for s in out["skipped"])
 
 
+# ==================================================================================== sections (prompt-section receipts)
+#
+# The section generalization: a run's `sections` manifest (id/name/source/parts/char_count/preview -- the
+# fixed schema clozn.runs.sections/store produce) yields its own leave-one-out ablation arm, exactly like a
+# card or a dial, EXCEPT for sections whose source is "memory_card" -- those duplicate a card influence that
+# already has its own (richer, provenance-resolved) ablation path, so ablating both would double-count one
+# real cause (see deltas._section_influences' docstring for the full reasoning).
+
+SECTION_PREFIX = "Question. "
+SECTION_TEXT = "RAG-MARKER extra info here."
+
+RAG_SECTION = {"id": "sec_rag", "name": "rag_context", "source": "auto",
+              "parts": [{"message_index": 0, "start": len(SECTION_PREFIX),
+                        "end": len(SECTION_PREFIX) + len(SECTION_TEXT)}],
+              "char_count": len(SECTION_TEXT), "preview": SECTION_TEXT}
+
+SECTION_RUN = {"id": "run_section0", "model": "clozn-qwen", "substrate": "QwenSubstrate",
+              "messages": [{"role": "user", "content": SECTION_PREFIX + SECTION_TEXT}],
+              "response": "SAMPLED reply, never a baseline",
+              "sections": [RAG_SECTION]}
+
+
+class SectionFakeSub:
+    """chat() is a pure function of whether the RAG marker text is present anywhere in `messages` -- unlike
+    this file's other FakeSub (a function of memory/dial STATE), a section ablation changes prompt CONTENT,
+    so the deterministic signal has to be read off the messages actually passed in."""
+
+    def __init__(self, marker="RAG-MARKER"):
+        self.marker = marker
+        self.memory = FakeMem()
+        self.steer = FakeSteer()
+        self.seen: list = []
+
+    @property
+    def calls(self):
+        return len(self.seen)
+
+    def chat(self, messages, max_new=256, sample=True):
+        self.seen.append({"messages": messages, "sample": sample})
+        present = any(self.marker in str(m.get("content", "")) for m in (messages or []))
+        return "Answer WITH context." if present else "Answer with no context at all."
+
+
+def test_section_receipt_ablation_shows_effect_and_carries_kind_metadata(iso):
+    sub = SectionFakeSub()
+    rec = receipts.receipt(SECTION_RUN, {"section": "rag_context", "source": "auto"}, sub)
+    assert rec is not None
+    assert rec["kind"] == "section"
+    assert rec["section_name"] == "rag_context"
+    assert rec["section_source"] == "auto"
+    assert rec["causal_verified"] is True
+    assert rec["has_effect"] is True
+    assert rec["baseline_reply"] == "Answer WITH context."
+    assert rec["ablated_reply"] == "Answer with no context at all."
+    assert rec["changes_applied"] == {"exclude_sections": ["rag_context"]}
+    assert "prompt content" in rec["cost_note"] or "re-prefill" in rec["cost_note"]
+
+
+def test_receipt_returns_none_when_the_named_section_cannot_be_resolved_but_arm_is_well_formed(iso):
+    """An unknown section name still builds a receipt (replay's graceful skip kicks in, not receipt()'s own
+    validation) -- but it must be honestly flagged unverified, not silently reported as no-effect-proven."""
+    sub = SectionFakeSub()
+    rec = receipts.receipt(SECTION_RUN, {"section": "not_a_real_section", "source": "auto"}, sub)
+    assert rec is not None
+    assert rec["causal_verified"] is False
+    assert "no section named" in rec["ablation_note"]
+    assert rec["has_effect"] is False                # nothing actually changed -> both arms identical
+
+
+def test_prove_all_emits_a_section_arm_for_an_auto_section(iso):
+    """No explicit manifest: prove_all's default explain.explain(run) reads the run's OWN `sections` field
+    end to end -- the real wiring, not a hand-fed influence spec."""
+    sub = SectionFakeSub()
+    out = receipts.prove_all(SECTION_RUN, sub)
+    assert out["skipped"] == []
+    assert len(out["receipts"]) == 1
+    rec = out["receipts"][0]
+    assert rec["influence"] == {"section": "rag_context", "source": "auto"}
+    assert rec["kind"] == "section"
+    assert rec["has_effect"] is True
+    assert rec["causal_verified"] is True
+
+
+def test_section_influences_helper_skips_memory_card_sourced_sections(iso):
+    """Direct unit test of the dedup rule: a manifest with one api-sourced and one memory_card-sourced
+    section yields an ablation arm for the api one only."""
+    manifest = {"influences_active": {"sections": {"available": True, "sections": [
+        {"id": "sec_a", "name": "system_prompt", "source": "api"},
+        {"id": "sec_b", "name": "user_pref_card", "source": "memory_card"},
+    ]}}}
+    influences, skipped = receipts._section_influences(manifest)
+    assert influences == [{"section": "system_prompt", "source": "api"}]
+    assert skipped == []
+
+
+def test_section_influences_helper_accepts_the_auto_source_too(iso):
+    manifest = {"influences_active": {"sections": {"available": True, "sections": [
+        {"id": "sec_a", "name": "rag_context", "source": "auto"},
+    ]}}}
+    influences, _ = receipts._section_influences(manifest)
+    assert influences == [{"section": "rag_context", "source": "auto"}]
+
+
+def test_section_influences_helper_skips_a_nameless_section_honestly(iso):
+    manifest = {"influences_active": {"sections": {"available": True, "sections": [
+        {"id": "sec_a", "source": "auto"},        # no "name"
+    ]}}}
+    influences, skipped = receipts._section_influences(manifest)
+    assert influences == []
+    assert len(skipped) == 1
+    assert "no name" in skipped[0]["reason"]
+
+
+def test_section_influences_helper_degrades_when_no_sections_manifest_at_all(iso):
+    assert receipts._section_influences({"influences_active": {}}) == ([], [])
+    assert receipts._section_influences(None) == ([], [])
+
+
+def test_prove_all_does_not_double_ablate_a_memory_card_backed_section(iso):
+    """A card influence AND a section describing that SAME fired card (source memory_card) both appear in
+    the manifest -- prove_all must produce exactly ONE receipt (the card's real, provenance-resolved path),
+    never a second one for the section that just redescribes it."""
+    memory_mode.set_mode("prompt")
+    manifest = {
+        "influences_active": {
+            "cards": [{"id": CARD_A, "text": "Be concise."}],
+            "dials": [],
+            "sections": {"available": True, "sections": [
+                {"id": "sec_card_a", "name": "memory_card_a", "source": "memory_card"},
+            ]},
+        }
+    }
+    sub = FakeSub(mem=FakeMem(1.0), steer=FakeSteer({}), concise_card_ids=[CARD_A])
+    out = receipts.prove_all(REDUNDANT_RUN, sub, manifest=manifest)
+    assert len(out["receipts"]) == 1
+    assert out["receipts"][0]["influence"].get("card_id") == CARD_A
+    assert not any(r.get("kind") == "section" for r in out["receipts"])
+
+
 # ============================================================================================================
 # ============================================ forced-mode receipts ==
 # ============================================================================================================

@@ -197,8 +197,15 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
            parent_run_id: str | None = None, changes_applied: dict | None = None,
            error: str | None = None, finish_reason: str | None = None,
            meta: dict | None = None, assembled_messages=None, final_prompt: str | None = None,
-           workspace_provider=None) -> str | None:
-    """Persist a completed run and return its id. Logging failures remain non-fatal."""
+           workspace_provider=None, sections: list | None = None) -> str | None:
+    """Persist a completed run and return its id. Logging failures remain non-fatal.
+
+    `sections` (prompt-section influence foundation, clozn.runs.sections): the run's ablatable-section
+    manifest, if the caller built one -- explicit `clozn_section` tags, the deterministic auto-chunker, or
+    memory-card locations, per clozn.runs.sections's own docstring. Stored as the top-level `sections`
+    field ONLY when non-empty; an old caller that never passes it (every replay/fork/timetravel call site
+    today) gets exactly the schema it always got -- no `sections` key at all, not a null or empty list --
+    so this is purely additive and nothing downstream needs to special-case its absence."""
     try:
         _ensure()
         started = started if started is not None else time.time()
@@ -232,6 +239,8 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
             "finish_reason": finish_reason,
             "meta": meta or {},
         }
+        if sections:
+            rec["sections"] = list(sections)
         rec["flags"] = _flags(rec)
         if not _put(rec):
             return None

@@ -630,6 +630,7 @@ from clozn.server.routes import runs as _runs_routes                  # noqa: E4
 from clozn.server.routes import memory as _memory_routes              # noqa: E402
 from clozn.server.routes import facts as _facts_routes                # noqa: E402
 from clozn.server.routes import receipts as _receipts_routes          # noqa: E402
+from clozn.server.routes import section_influence as _section_influence_routes  # noqa: E402
 from clozn.server.routes import replay as _replay_routes              # noqa: E402
 from clozn.server.routes import timetravel as _timetravel_routes      # noqa: E402
 from clozn.server.routes import profiles as _profiles_routes          # noqa: E402
@@ -654,8 +655,8 @@ _GET_ROUTES = [_static_routes, _health_routes, _runs_routes, _memory_routes, _re
               _timetravel_routes, _profiles_routes, _openai_routes, _engine_routes,
               _journal_routes, _card_routes, _anchored_routes, _diff_routes, _receipt_link_routes,
               _runs_fallback_routes]
-_POST_ROUTES = [_health_routes, _memory_routes, _facts_routes, _receipts_routes, _replay_routes,
-               _timetravel_routes, _profiles_routes, _preferences_routes, _feedback_routes,
+_POST_ROUTES = [_health_routes, _memory_routes, _facts_routes, _receipts_routes, _section_influence_routes,
+               _replay_routes, _timetravel_routes, _profiles_routes, _preferences_routes, _feedback_routes,
                _openai_routes, _engine_routes, _readouts_routes,
                _span_receipt_routes, _fork_routes, _journal_routes, _anchored_routes, _diff_routes,
                _receipt_link_routes]
@@ -787,10 +788,15 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
             return provider
 
         def _log_run(self, source, messages, response, model, started, error=None, trace=None,
-                     mem_out=None, finish_reason=None, finish_reason_fallback=None):
+                     mem_out=None, finish_reason=None, finish_reason_fallback=None, sections=None):
             """Persist this interaction as an inspectable run (never let logging break the request).
             mem_out (prompt mode): the {applied, gate, strength?} record the generation path filled --
             what memory ACTUALLY rode this turn (the topic gate may have omitted the block).
+            `sections` (optional): the caller's own explicit-or-auto prompt-section manifest (see
+            clozn.runs.sections) -- e.g. openai.py's /v1/chat/completions builds one from the incoming
+            messages before this is called. Any memory cards that rode this turn are folded in here
+            regardless of whether a caller passed one (see below), so routes that don't build a manifest
+            yet still get memory-card sections for free.
             Returns the new run's id (str) on success, else None -- any failure along the way is swallowed,
             never raised. The M5 any-client bridge surfaces this id to the caller; None means "nothing to
             surface", not an error the request should see."""
@@ -917,12 +923,31 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 # on the engine chat paths). Captured in ANY memory mode -- the internalized/engine path
                 # still renders a prompt even without a block. None -> consumers fall back to assembled_messages.
                 final_prompt = mo.get("final_prompt")
+                # PROMPT-SECTION INFLUENCE (foundation): fold the memory cards that ACTUALLY rode this turn
+                # into the section manifest, regardless of which route called _log_run -- memd["cards_applied"]
+                # is already exactly the applied card texts in both prompt and internalized modes (see above),
+                # so this one spot covers openai_api/engine_chat/studio_chat/denoise alike without touching
+                # each route. Located by substring inside assembled_messages (clozn.runs.sections.
+                # memory_card_sections); internalized mode has no assembled block to search (the memory lives
+                # in the trained prefix, not visible prompt text) so this degrades to [] there, correctly --
+                # nothing IS literally present to point at. `sections` itself (the caller's own explicit-or-
+                # auto manifest, e.g. from openai.py's try_post) may be None -- routes that don't build one
+                # yet still get memory-card sections alone. Guarded: a chunker/locator bug must never cost
+                # the run its log entry.
+                try:
+                    from clozn.runs import sections as clozn_sections
+                    card_texts = [c for c in (memd.get("cards_applied") or []) if isinstance(c, str) and c.strip()]
+                    card_sections = clozn_sections.memory_card_sections(assembled_messages, card_texts)
+                    if card_sections:
+                        sections = clozn_sections.dedupe_ids(list(sections or []) + card_sections)
+                except Exception:
+                    pass
                 rid = runlog.record(source=source, client=self._client(self.headers.get("User-Agent", "")),
                                     model=str(model), substrate=_subname(), messages=messages, response=response,
                                     memory=memd, behavior={"active_dials": dials}, started=started, error=error,
                                     trace=trace, finish_reason=finish_reason, meta=meta,
                                     assembled_messages=assembled_messages, final_prompt=final_prompt,
-                                    workspace_provider=workspace_provider)
+                                    workspace_provider=workspace_provider, sections=sections)
                 self._maybe_snapshot_turn(rid, messages, trace, error)
                 return rid                        # M5 bridge: the run id, for callers that want to surface it
             except Exception:

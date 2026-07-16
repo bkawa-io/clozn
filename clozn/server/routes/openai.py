@@ -61,6 +61,23 @@ def try_post(h, p, body):
     # receipt footers as context (it would imitate/steer on them). No-op when no footer ever rode.
     from clozn.runs.receipt_footer import strip_footers
     msgs = strip_footers(msgs)
+    # PROMPT-SECTION INFLUENCE (foundation): build the ablatable-section manifest AFTER footer-stripping
+    # (which can shrink an echoed assistant message's content) but BEFORE clozn_section is popped just
+    # below -- building it any earlier would let a stripped footer's length change drift a section's char
+    # offsets out from under the message content this run actually records. Explicit tags win; absent any,
+    # the deterministic auto-chunker stands in, so every run (tagged or not) gets a manifest for the
+    # (separately-owned) receipts system to later measure against. clozn_section is then popped off every
+    # message so the engine/template path never sees our extension field -- a standard OpenAI client that
+    # never sends the tag gets a byte-identical prompt either way; this is additive, never a behavior
+    # change to the reply itself. Guarded: a chunker bug must never break a chat.
+    from clozn.runs import sections as clozn_sections
+    try:
+        section_manifest = clozn_sections.sections_from_messages(msgs)
+        if section_manifest is None:
+            section_manifest = clozn_sections.auto_chunk_messages(msgs)
+    except Exception:
+        section_manifest = []
+    msgs = [{k: v for k, v in message.items() if k != "clozn_section"} for message in msgs]
     if body.get("stream") and getattr(ctx.active_sub(h), "chat_stream", None):
         from clozn.server import sse
         from clozn.server.routes.receipt_link import receipt_enabled
@@ -68,7 +85,7 @@ def try_post(h, p, body):
         # standard OpenAI clients, so their streams stay byte-identical (same opt-in rule as clozn_trust).
         # receipt: the in-band footer as a final content chunk (the one ambient surface).
         sse.sse_chat(h, msgs, mx, selected_model, lens=body.get("clozn_lens"),
-                     receipt=body.get("clozn_receipt", receipt_enabled()))
+                     receipt=body.get("clozn_receipt", receipt_enabled()), sections=section_manifest)
         return True
     t0 = time.time()
     trace_steps = []                            # HF non-stream: capture a per-token trace (B3)
@@ -79,7 +96,8 @@ def try_post(h, p, body):
     try:
         reply = ctx.active_sub(h).chat(msgs, mx, temperature > 0, **chat_kw)
     except Exception as exc:
-        h._log_run("openai_api", msgs, "", selected_model, t0, error=str(exc), mem_out=memout)
+        h._log_run("openai_api", msgs, "", selected_model, t0, error=str(exc), mem_out=memout,
+                  sections=section_manifest)
         _api_error(h, 502, str(exc), kind="upstream_error")
         return True
     fr = ctx.active_sub(h).last_finish_reason() if hasattr(ctx.active_sub(h), "last_finish_reason") else None
@@ -87,7 +105,7 @@ def try_post(h, p, body):
     # runlog.record normalizes the raw step list -> {tokens, confidence, alternatives}.
     rid = h._log_run("openai_api", msgs, reply, selected_model, t0,
                      trace=trace_steps, mem_out=memout, finish_reason=fr,
-                     finish_reason_fallback=None if fr else openai_fr)
+                     finish_reason_fallback=None if fr else openai_fr, sections=section_manifest)
     resp = {"id": "chatcmpl-clozn", "object": "chat.completion",
            "created": int(time.time()), "model": selected_model,
            "choices": [{"index": 0, "finish_reason": openai_fr,

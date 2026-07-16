@@ -14,9 +14,14 @@ from clozn.server import app as ctx
 from clozn.server.http_policy import send_cors_headers
 
 
-def sse_chat(handler, messages, max_new, model, lens=None, receipt=False):
+def sse_chat(handler, messages, max_new, model, lens=None, receipt=False, sections=None):
     """Stream one /v1/chat/completions reply as OpenAI-style `chat.completion.chunk` frames over SSE,
     then log the run. `handler` is the live BaseHTTPRequestHandler (needs .wfile + ._log_run).
+
+    `sections` (prompt-section influence foundation): the caller's already-built explicit-or-auto section
+    manifest (see clozn.runs.sections / clozn.server.routes.openai's try_post), threaded straight through
+    to both `_log_run` calls below (success and error) so a streamed chat run gets the same manifest a
+    non-streamed one does. None (the default) is exactly today's behavior for any caller that predates this.
 
     AMBIENT DELIVERY (AMBIENT_DELIVERY.md): `receipt` (the request's opt-in `clozn_receipt`, or the
     server-wide default) appends the exception-only in-band footer as ONE final content chunk -- so the
@@ -89,7 +94,7 @@ def sse_chat(handler, messages, max_new, model, lens=None, receipt=False):
         trace = ctx.active_sub(handler).last_stream_trace() if hasattr(ctx.active_sub(handler), "last_stream_trace") else None
         rid = handler._log_run("openai_api", messages, "".join(acc), model, t0, trace=trace,
                                mem_out=memout, finish_reason=fr,
-                               finish_reason_fallback=None if fr else openai_fr)
+                               finish_reason_fallback=None if fr else openai_fr, sections=sections)
         if receipt and rid:                       # the exception-only footer, as one final content chunk
             try:
                 import clozn.runs.store as _runlog
@@ -104,7 +109,8 @@ def sse_chat(handler, messages, max_new, model, lens=None, receipt=False):
         handler.wfile.write(b"data: [DONE]\n\n")
         handler.wfile.flush()
     except Exception as e:
-        handler._log_run("openai_api", messages, "".join(acc), model, t0, error=str(e), mem_out=memout)
+        handler._log_run("openai_api", messages, "".join(acc), model, t0, error=str(e), mem_out=memout,
+                         sections=sections)
         try:
             handler.wfile.write(("data: " + json.dumps({"error": str(e)}) + "\n\n").encode("utf-8"))
             handler.wfile.flush()

@@ -237,6 +237,71 @@ def test_influences_active_no_dials_active(store):
     assert explain.explain(store.get_run(rid))["influences_active"]["dials"] == []
 
 
+# --------------------------------------------------------------------------------------- fixture: sections
+
+def test_sections_active_lists_the_manifest_with_causal_verified_null(store):
+    """Forward-compatible contract (mirrors the concepts fixture below): no current path threads `sections`
+    through runlog.record() itself (that producer -- clozn.runs.sections/store -- lands separately), so this
+    constructs the field by hand on a fetched run, exactly like test_concepts_available_when_the_run_carries_
+    sae_readouts does for trace["concepts"]. Proves the ASSEMBLY side of the contract."""
+    rid = store.record(source="engine_chat", messages=[{"role": "user", "content": "q"}], response="a")
+    run = store.get_run(rid)
+    run["sections"] = [
+        {"id": "sec_rag", "name": "rag_context", "source": "auto",
+         "parts": [{"message_index": 0, "start": 0, "end": 5}],
+         "char_count": 5, "preview": "hello"},
+        {"id": "sec_sys", "name": "system_prompt", "source": "api",
+         "parts": [{"message_index": None, "start": 0, "end": 10}],
+         "char_count": 10, "preview": "You are.."},
+    ]
+    out = explain.explain(run)
+    sections = out["influences_active"]["sections"]
+    assert sections["available"] is True
+    names = {s["name"] for s in sections["sections"]}
+    assert names == {"rag_context", "system_prompt"}
+    assert all(s["causal_verified"] is None for s in sections["sections"])
+    rag = next(s for s in sections["sections"] if s["name"] == "rag_context")
+    assert rag["source"] == "auto"
+    assert rag["char_count"] == 5
+    assert rag["preview"] == "hello"
+    assert rag["id"] == "sec_rag"
+
+
+def test_sections_active_absent_manifest_degrades_explicitly(store):
+    """A run predating section capture carries no `sections` key at all -- an explicit
+    {"available": false, "note": ...}, never a silently-missing key or a misleadingly empty list."""
+    rid = store.record(source="cli", messages=[{"role": "user", "content": "q"}], response="a")
+    run = store.get_run(rid)
+    assert "sections" not in run             # confirms runlog really stored nothing (no producer wired yet)
+    sections = explain.explain(run)["influences_active"]["sections"]
+    assert sections == {"available": False, "note": explain._NO_SECTIONS_NOTE}
+
+
+def test_sections_active_tolerates_a_malformed_manifest(store):
+    """Guard field-by-field like every other panel: a `sections` value that isn't a list degrades to the
+    honest unavailable shape; a list with junk entries mixed in keeps only the well-formed ones."""
+    rid = store.record(source="cli", messages=[{"role": "user", "content": "q"}], response="a")
+    run = store.get_run(rid)
+
+    run["sections"] = "not-a-list"
+    assert explain.explain(run)["influences_active"]["sections"] == {
+        "available": False, "note": explain._NO_SECTIONS_NOTE}
+
+    run["sections"] = ["not-a-dict", 42, {"id": "sec_ok", "name": "ok", "source": "auto"}]
+    secs = explain.explain(run)["influences_active"]["sections"]
+    assert secs["available"] is True
+    assert len(secs["sections"]) == 1
+    assert secs["sections"][0]["name"] == "ok"
+    assert secs["sections"][0]["causal_verified"] is None
+
+
+def test_no_aggregate_confidence_field_still_holds_with_a_sections_manifest(store):
+    rid = store.record(source="cli", messages=[{"role": "user", "content": "q"}], response="a")
+    run = store.get_run(rid)
+    run["sections"] = [{"id": "sec_a", "name": "a", "source": "auto", "char_count": 3, "preview": "abc"}]
+    _assert_no_aggregate_confidence(explain.explain(run))
+
+
 # ----------------------------------------------------------------------------------------- fixture: concepts
 
 def test_concepts_unavailable_on_an_ordinary_run(store):

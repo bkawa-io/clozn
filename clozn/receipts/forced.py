@@ -1,4 +1,23 @@
-"""Teacher-forced receipt scoring and null-floor controls."""
+"""Teacher-forced receipt scoring and null-floor controls.
+
+SECTION ABLATION (prompt-section influence, fast path): a "section" influence (`{"section": name,
+"source": "api"|"auto"}`, from deltas._section_influences -- memory_card-sourced sections are dedup'd out
+there and never reach this module) is the one kind here whose ablation is a prompt-CONTENT edit rather
+than a block/steer knob swap. `_forced_ablation`'s section branch reuses replay.py's OWN
+`_apply_section_exclusions`/`_strip_message_parts` splice (never a second copy of that span-removal logic)
+against `run["messages"]` -- the RAW, pre-block-injection list, which is exactly what an "api"/"auto"
+section's `parts[].message_index` is built from (see clozn.runs.sections's docstring + clozn.server.
+routes.openai's try_post). A part anchored to `final_prompt` (`message_index: null` -- a raw-prompt/CLI
+run) can't be spliced through a messages list either way: `EngineSubstrate.score_tokens`'s only prompt
+surface is `messages` -> `ctx._inject_block` -> `ctx._engine_tmpl` (the engine's chat-template render, see
+clozn.server.app._engine_tmpl) -- there is no raw-prompt scoring entry point on this substrate at all, so
+this is a real ceiling, not a shortcut we chose not to take. `_apply_section_exclusions` already reports
+that honestly (a raw-anchored part it can't touch), and that note rides straight through as this
+receipt's `ablation_note` -- no guessing, no silent no-op. No null-floor control is computed for a section
+ablation (there's no register-matched "equal-sized irrelevant text" analogue for an arbitrary prompt
+span the way a card has filler text or a dial has a random direction); the receipt still reports its raw
+delta, just without a floor-clearing ratio.
+"""
 from __future__ import annotations
 
 import math
@@ -153,6 +172,36 @@ def _forced_ablation(run: dict, influence: dict, sub, conditions: dict):
         return {"without": {"block": with_block, "steer_strengths": {}}, "control": control,
                 "note": None if with_strengths else "no active dial on this run -- nothing to ablate"}
 
+    section = influence.get("section")
+    if section:
+        # A prompt-CONTENT ablation, not a block/steer swap -- see this module's docstring. Reuse
+        # replay.py's own splice (`_apply_section_exclusions` already does the by-name manifest lookup +
+        # per-name honest notes, including the raw-anchored-part case) against the RAW message list, since
+        # that's the list an "api"/"auto" section's offsets were computed against.
+        #
+        # Callers are expected to have already filtered to api/auto sources (deltas._section_influences's
+        # dedup rule -- see this module's docstring); a "memory_card" section's offsets are into
+        # assembled_messages instead, which splicing against the RAW list here would get subtly wrong
+        # rather than honestly failing. Guarded directly (not just trusted from the caller) so a
+        # misdirected call degrades to a note instead of a silently-bad splice.
+        manifest = run.get("sections") if isinstance(run.get("sections"), list) else []
+        entry = next((s for s in manifest if isinstance(s, dict) and s.get("name") == section), None)
+        if entry is not None and entry.get("source") == "memory_card":
+            return {"without": None, "control": None,
+                    "note": f"section '{section}' is memory-card-sourced -- ablate it via its card_id "
+                            "instead (a section-name ablation here only supports api/auto sections)"}
+        from clozn.replay.replay import _apply_section_exclusions
+        without_messages, notes, applied = _apply_section_exclusions(
+            run, list(run.get("messages") or []), [str(section)])
+        note = notes.get(str(section))
+        if not applied:
+            return {"without": None, "control": None,
+                    "note": note or f"section '{section}' has no usable parts on this run -- nothing to ablate"}
+        # steer_strengths/block are UNCHANGED from the with-arm -- only the message content differs.
+        return {"without": {"messages": without_messages, "block": with_block,
+                            "steer_strengths": with_strengths},
+                "control": None, "note": note}
+
     return None
 
 
@@ -179,8 +228,14 @@ def forced_receipt(run: dict, influence: dict, sub) -> dict | None:
                     "note": "forced scoring needs the engine substrate (score_tokens is not available "
                             "here)", "caveat": _FORCED_CAVEAT}
 
+        # A section ablation's "without" dict carries its OWN spliced `messages` (a content edit, not a
+        # block/steer swap); every other kind leaves that key absent and gets `raw_messages` unchanged --
+        # popped rather than passed alongside so a section's `messages` key never collides with the
+        # explicit kwarg below.
+        without_kwargs = dict(ablation["without"])
+        without_messages = without_kwargs.pop("messages", conditions["raw_messages"])
         without_tokens, without_ok = rederive.score_arm(
-            sub, conditions, messages=conditions["raw_messages"], **ablation["without"])
+            sub, conditions, messages=without_messages, **without_kwargs)
         if not without_ok:
             return {"influence": influence, "mode": "forced", "causal_verified": False,
                     "note": "the ablated arm could not be scored", "caveat": _FORCED_CAVEAT}
@@ -217,8 +272,10 @@ def forced_receipt(run: dict, influence: dict, sub) -> dict | None:
 
         control = ablation.get("control")
         if control is not None:
+            control_kwargs = dict(control)
+            control_messages = control_kwargs.pop("messages", conditions["raw_messages"])
             control_tokens, control_ok = rederive.score_arm(
-                sub, conditions, messages=conditions["raw_messages"], **control)
+                sub, conditions, messages=control_messages, **control_kwargs)
             control_deltas = _forced_deltas(with_tokens, control_tokens) if control_ok else None
             if control_deltas is not None:
                 c_summary = _delta_summary(control_deltas)

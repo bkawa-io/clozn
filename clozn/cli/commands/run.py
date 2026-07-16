@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import time
+import urllib.error
 import urllib.request
 
 from clozn.cli import formatting as fmt
@@ -164,17 +165,116 @@ def _run_turn(port, mode, text, max_tokens, gpu, model_name, prompt_for_trace, h
 def _log_run_cli(model_name, prompt, resp, steps, started, finish_reason=None):
     """Write this CLI turn to the Run Log so `clozn run`/REPL turns show up in the Studio alongside chats.
     runlog.py lives in clozn.runs (a sibling of this stdlib-only CLI) and is itself stdlib-only, so we
-    import it directly. Logging must NEVER break a run -- swallow everything."""
+    import it directly. Logging must NEVER break a run -- swallow everything.
+
+    PROMPT-SECTION INFLUENCE (foundation) -- an honest divergence worth stating plainly: the natural home
+    for this would be `/api/clozn/generate` itself, but that route (generation_gateway.native_completion)
+    is a transparent proxy straight to the C++ engine's own `/v1/completions` -- it never calls
+    runlog.record() at all. THIS function is the only place a native/CLI generation actually gets
+    persisted, so it's where the section manifest has to be built instead. There's no per-request JSON
+    body here (this is a Python call, not an HTTP handler) and so no way for a caller to pass explicit char
+    ranges -- every CLI/native run gets the deterministic auto-chunker only, over `prompt` (the exact
+    string sent to the engine; also recorded verbatim as `final_prompt`, since a raw-prompt run's section
+    offsets are into that field, not a chat `messages` list -- see clozn.runs.sections's docstring)."""
     try:
         import clozn.runs.store as runlog
+        from clozn.runs import sections as clozn_sections
         # stream_ar hands us per-token steps ({piece, conf, alts}); runlog owns the steps->trace mapping so
         # the on-disk trace schema stays one contract shared with the engine-chat capture (issue B3).
         trace = runlog.steps_to_trace(steps)
+        try:
+            manifest = clozn_sections.auto_chunk_prompt(prompt)
+        except Exception:
+            manifest = []
         runlog.record(source="cli", client="cli", model=model_name, substrate="engine",
                       messages=[{"role": "user", "content": prompt}], response=resp,
-                      trace=trace, started=started, finish_reason=finish_reason)
+                      trace=trace, started=started, finish_reason=finish_reason,
+                      final_prompt=prompt, sections=manifest)
     except Exception:
         pass
+
+
+# --------------------------------------------------------------------- --show-influence / REPL /influence
+# Quick, opt-in read of the prompt-section influence fast path (clozn.server.routes.section_influence) for
+# the LAST run this process just wrote -- approximate, teacher-forced, never causal proof (the route's own
+# `note` field says so; this CLI just relays it). Both call sites below share the same two helpers so a
+# one-shot `--show-influence` and the REPL's `/influence` render byte-identically.
+
+def _last_run_id():
+    """The most recent run in the shared Studio run log, read directly -- mirrors clozn.cli.commands.
+    explain's own private `_last_run_id` (duplicated here, not imported: explain.py imports FROM this
+    module already, so importing back would be circular -- see this module's docstring on why HOME/
+    CloznError are imported inside functions for the same reason). include_replays=False so an internal
+    receipts/replay re-generation (source="replay") never outranks the turn the user actually just ran."""
+    try:
+        import clozn.runs.store as runlog
+        runs = runlog.list_runs(limit=1, include_replays=False)
+        return runs[0]["id"] if runs else None
+    except Exception:
+        return None
+
+
+def _fetch_section_influence(port: int, run_id: str) -> dict:
+    """POST /runs/<id>/section-influence on the Studio gateway (mirrors commands.explain._fetch_explain's
+    request shape exactly: same bare `{}` body, same URL pattern). Unlike _fetch_explain/_fetch_narrate --
+    which raise a CloznError that aborts the command with a clean one-line error -- this is an opt-in
+    ADD-ON to an ALREADY-successful `clozn run` turn: a gateway that's down, one too old to have this
+    route yet, or a run with no section manifest must never turn a successful generation into a failed
+    command. So every failure degrades to a plain {"error": "..."} dict here instead of raising, and
+    _format_influence_line renders that as one honest line, never a stack trace."""
+    url = f"http://127.0.0.1:{port}/runs/{run_id}/section-influence"
+    req = urllib.request.Request(url, data=b"{}", method="POST", headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return {"error": "section-influence isn't available on this gateway (old build?)"}
+        try:
+            msg = json.loads(e.read()).get("error", str(e))
+        except Exception:
+            msg = str(e)
+        return {"error": f"section-influence failed ({e.code}): {msg}"}
+    except urllib.error.URLError as e:
+        return {"error": f"couldn't reach the Clozn gateway on port {port} ({e.reason})"}
+    except Exception as e:
+        return {"error": f"section-influence failed: {e}"}
+
+
+def _format_influence_line(payload: dict) -> str:
+    """The section-influence response -> one compact terminal line:
+        - sections: rag_context (42% influence), few_shot (8%), auto_3 (3%)  [approximate, teacher-forced]
+    Pure function (dict in, text out) -- testable with a canned payload, no server, no model, no I/O --
+    mirrors format_explain's contract. Ranked by |influence_share| descending (the biggest measured effect
+    leads); only the FIRST entry spells out "influence" (matches the fixed contract's own worked example),
+    the rest just show the percentage. Degrades to one honest line on any missing/error/empty shape -- a
+    down gateway, an old gateway with no route, a run with no sections manifest -- never a stack trace,
+    never silence."""
+    payload = payload if isinstance(payload, dict) else {}
+    if payload.get("error"):
+        return f"- sections: {payload['error']}"
+    sections = [s for s in (payload.get("sections") or []) if isinstance(s, dict)]
+    if not sections:
+        return f"- sections: {payload.get('note') or 'no sections on this run'}"
+    ranked = sorted(sections, key=lambda s: -abs(fmt._num(s.get("influence_share"))))
+    bits = []
+    for i, s in enumerate(ranked):
+        name = s.get("name") or s.get("id") or "?"
+        pct = round(abs(fmt._num(s.get("influence_share"))) * 100)
+        bits.append(f"{name} ({pct}% influence)" if i == 0 else f"{name} ({pct}%)")
+    return f"- sections: {', '.join(bits)}  [approximate, teacher-forced]"
+
+
+def _print_influence(port: int):
+    """The shared render step for --show-influence and /influence: resolve the last run, fetch, print to
+    stderr (same channel as this file's other post-turn diagnostics, e.g. the '- N tok in Xs' line) --
+    never raises, since a nice-to-have inspection line must never take down the turn that already
+    succeeded."""
+    rid = _last_run_id()
+    if not rid:
+        print(f"{fmt.DIM}- sections: no run recorded yet to inspect{fmt.RST}", file=sys.stderr)
+        return
+    print(f"{fmt.DIM}{_format_influence_line(_fetch_section_influence(port, rid))}{fmt.RST}", file=sys.stderr)
 
 
 def _repl(port, mode, flags, fam, gpu, model, max_tokens, heat=False):
@@ -182,7 +282,8 @@ def _repl(port, mode, flags, fam, gpu, model, max_tokens, heat=False):
     name = _friendly(model)
     is_chat = flags.get("chat") and mode == "autoregressive"
     tty = sys.stdin.isatty()
-    print(f"{fmt.DIM}chat with {name}  -  /reset clears history, /bye quits{fmt.RST}", file=sys.stderr)
+    print(f"{fmt.DIM}chat with {name}  -  /reset clears history, /bye quits, "
+          f"/influence shows the last turn's per-section influence{fmt.RST}", file=sys.stderr)
     history = []
     while True:
         if tty:
@@ -201,6 +302,8 @@ def _repl(port, mode, flags, fam, gpu, model, max_tokens, heat=False):
             break
         if msg == "/reset":
             history = []; print(f"{fmt.DIM}(history cleared){fmt.RST}", file=sys.stderr); continue
+        if msg == "/influence":
+            _print_influence(port); continue
         text = (_chat_session(history, msg, fam) if is_chat
                 else "".join(f"{u}\n{a}\n" for u, a in history) + msg)
         sys.stdout.write(f"{fmt.BOLD}{name}>{fmt.RST} ")
@@ -248,6 +351,8 @@ def cmd_run(args):
             if mode == "autoregressive":
                 print(f"{fmt.DIM}  clozn trace   inspect where it was uncertain + what it almost said{fmt.RST}",
                       file=sys.stderr)
+            if args.show_influence:
+                _print_influence(port)
         else:                                                  # interactive REPL (Ollama-style)
             _repl(port, mode, flags, fam, gpu, model, args.max, heat=args.heat)
     finally:

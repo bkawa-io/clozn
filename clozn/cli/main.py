@@ -75,6 +75,9 @@ def build_parser():
     pr.add_argument("--eos", type=int, default=None)
     pr.add_argument("--heat", action="store_true", help="paint each token as it streams by the model's "
                     "confidence (warm = wavered, cool = sure) -- the denoise heatmap, live (AR models)")
+    pr.add_argument("--show-influence", action="store_true", help="after the reply, print a quick "
+                    "teacher-forced per-section influence line for this turn (approximate, not causal "
+                    "proof -- needs a running Clozn gateway; degrades to one honest line otherwise)")
     pr.set_defaults(fn=cmd_run)
 
     ps = sub.add_parser("serve", help="bring up the OpenAI-compatible endpoint")

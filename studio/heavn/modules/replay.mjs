@@ -30,6 +30,7 @@ export function ReplayModule(){
       <${LieDetector} rec=${rec}/>
       <${Steer} rec=${rec}/>
       <${Minfl} rec=${rec}/>
+      <${SectionsInfl} rec=${rec}/>
     </div>
   </div>`;
 }
@@ -1051,6 +1052,9 @@ function influenceName(inf, rec){
     return i >= 0 && texts[i] ? `card · ${String(texts[i]).slice(0, 40)}` : `card ${inf.card_id}`;
   }
   if(inf.dial) return `dial · ${inf.dial}`;
+  // sections now fire through the same prove-all as cards/dials (receipts.deltas._section_influences) --
+  // without this branch a section falls through to the raw-JSON fallback below.
+  if(inf.section) return `section · ${inf.section}`;
   if(inf.memory_off) return "memory (whole block)";
   if(inf.behavior_off) return "behavior (all dials)";
   return JSON.stringify(inf).slice(0, 40);
@@ -1290,5 +1294,123 @@ function Minfl({ rec }){
         <span class="bar"><i style=${"width:" + Math.round(mem.gate*100) + "%"}></i></span>
       </div>`}
     </div>
+  </div>`;
+}
+
+/* ── prompt-section influence (foundation): the run's own prompt-section manifest -- system prompt /
+   RAG context / memory-card blocks -- from clozn.runs.sections (rec.sections, a fixed contract with the
+   server). Each row gets a FAST, approximate influence reading from the new /section-influence route
+   (teacher-forced log-prob delta -- NOT causal; the fixed contract this module codes against, built in
+   parallel on the server, so its implementation is deliberately not read here) plus a real causal receipt
+   via the SAME single-influence /receipt call SpanForensics above already uses (a section is just one
+   more `_ablation_changes` arm server-side -- "section receipts are just more arms in the same
+   prove-all", this app's per-item receipt call included). Renders nothing when a run carries no
+   `sections` manifest (old runs) or an empty one -- no error, no empty card. */
+
+/* api.mjs (untouched by this feature) has no wrapper for the new route yet -- this is a deliberate,
+   minimal local mirror of that file's own postE (same contract: __status rides even on a non-2xx
+   response; null only on a genuine network failure), scoped to the one path this module needs. */
+async function postSectionInfluence(id){
+  const c = new AbortController();
+  const k = setTimeout(() => c.abort(), 30000);
+  try{
+    const r = await fetch("/runs/" + encodeURIComponent(id) + "/section-influence", {
+      method: "POST", signal: c.signal,
+      headers: { "Content-Type": "application/json" }, body: "{}" });
+    clearTimeout(k);
+    let o = null; try{ o = await r.json(); }catch(e){ o = {}; }
+    return Object.assign({ __status: r.status }, o);
+  }catch(e){ clearTimeout(k); return null; }
+}
+
+/* source -> one of the existing .tag color variants, borrowed for their COLOR only (own text below, not
+   their usual CAPTURED/DERIVED/sample labels) -- so a section's provenance reads consistently with the
+   rest of the instrument without a new theme.css rule. */
+function sectionTagClass(source){
+  return source === "auto" ? "der-t" : source === "memory_card" ? "smp-t" : "cap-t";
+}
+
+/* one section: collapsible (details.leader, the same pattern LineageTree above uses) -- name/source/share%
+   always visible in the summary, delta/preview/receipt only on expand. `fast` is undefined (still
+   reading), null (no fast reading for this section), or the route's own per-section entry. */
+function SectionRow({ rec, sec, fast }){
+  const [out, setOut] = useState(null);      // this row's own causal receipt, once proven
+  const [busy, setBusy] = useState(false);
+  const share = fast && fast.influence_share != null ? +fast.influence_share : null;
+  const pct = share != null ? Math.round(Math.max(0, Math.min(1, share)) * 100) : null;
+  const prove = async () => {
+    if(guardSample(rec) || busy) return;
+    setBusy(true);
+    toast(`proving “${sec.name || sec.id}” — regenerating greedy, with vs without this section…`);
+    /* contracts-adjacent: the single-influence /receipt route (api.receipt) already accepts
+       {influence:{section, ...}} server-side (receipts.deltas._ablation_changes) -- a real per-section
+       causal receipt, not just this app's blunt global PROVE. */
+    const r = await api.receipt(rec.id, { influence: { section: sec.name }, mode: "regen" });
+    setBusy(false);
+    if(!r || r.error){
+      setOut({ error: (r && r.error) || "receipt failed — needs a chat-capable substrate; is the engine up?" });
+      return;
+    }
+    setOut(r);
+  };
+  return html`<details class="leader">
+    <summary>
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${String(sec.name || sec.id || "section")}</span>
+      <span class="tag ${sectionTagClass(sec.source)}">${String(sec.source || "?")}</span>
+      <span style="font-size:9px;color:#1B87A8;font-weight:600;white-space:nowrap">${fast === undefined ? "…" : pct != null ? pct + "%" : "—"}</span>
+    </summary>
+    <div class="leader-body">
+      ${sec.char_count != null && html`<div>${sec.char_count} chars</div>`}
+      ${sec.preview && html`<div style="font-style:italic">“${String(sec.preview).slice(0, 120)}”</div>`}
+      ${fast === undefined && html`<div class="none">reading fast influence…</div>`}
+      ${fast === null && html`<div class="none">no fast influence reading for this run.</div>`}
+      ${fast && fast.log_prob_delta != null && html`<div class="none">Δ logprob ${(+fast.log_prob_delta).toFixed(2)}${fast.per_token_delta != null ? ` (${(+fast.per_token_delta).toFixed(3)}/token)` : ""}</div>`}
+      ${fast && fast.summary && html`<div class="none">${String(fast.summary).slice(0, 160)}</div>`}
+      ${!out && html`<button class="spd" style="margin-top:6px" disabled=${busy}
+        onClick=${prove}>${busy ? "PROVING…" : "PROVE THIS SECTION"}</button>`}
+      ${out && out.error && html`<div class="none" style="margin-top:6px">${String(out.error)}</div>`}
+      ${out && !out.error && html`<div class="receipt-row" style="border-top:none;padding-top:6px">
+        <span>${out.has_effect ? "changed the answer" : "no change"}
+          ${out.ablated_reply_truncated && html` <span class="tag der-t">early-stopped prefix</span>`}</span>
+        <span class="sub">
+          <span class=${out.causal_verified ? "yes" : "no"}>causal_verified · ${String(out.causal_verified)}</span>
+          ${out.delta && out.delta.changed != null && html`<span>word-shift ${out.delta.changed}%</span>`}
+          ${(out.ablation_note || out.early_stop_note) && html`<span>${String(out.ablation_note || out.early_stop_note).slice(0, 120)}</span>`}
+        </span>
+      </div>`}
+    </div>
+  </details>`;
+}
+
+function SectionsInfl({ rec }){
+  const [infl, setInfl] = useState();   // undefined = not asked yet, null = asked but failed/empty
+  useEffect(() => {
+    setInfl();
+    if(rec._sample || !Array.isArray(rec.sections) || !rec.sections.length) return;
+    let dead = false;
+    (async () => {
+      const r = await postSectionInfluence(rec.id);
+      if(dead) return;
+      setInfl((r && r.__status < 300 && Array.isArray(r.sections) && r.sections.length) ? r : null);
+    })();
+    return () => { dead = true; };
+  }, [rec.id]);
+
+  const sections = Array.isArray(rec.sections) ? rec.sections : [];
+  if(!sections.length) return null;   // no manifest on this run (old run, or a source that never built one)
+  const byId = {};
+  ((infl && infl.sections) || []).forEach(s => { if(s && s.id != null) byId[s.id] = s; });
+
+  return html`<div class="mod">
+    <div class="mod-h"><span class="led"></span><span class="cap">prompt sections</span>
+      <span class="tail">${infl === undefined ? "reading…" : sections.length + " section(s)"}</span></div>
+    ${infl && infl.note && html`<div class="none" style="padding:0 14px 6px;font-size:8px">${String(infl.note).slice(0, 200)}</div>`}
+    <div style="padding-bottom:4px">
+      ${sections.map((sec, i) => html`<${SectionRow} key=${sec.id || i} rec=${rec} sec=${sec}
+        fast=${infl === undefined ? undefined : (byId[sec.id] || null)}/>`)}
+    </div>
+    <div class="none" style="padding:2px 14px 10px;font-size:8px">Share/Δ above are approximate
+      (teacher-forced log-probability deltas) — NOT causal proof; press a row's own PROVE for the real,
+      measured ablation receipt.</div>
   </div>`;
 }
