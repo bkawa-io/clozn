@@ -72,7 +72,44 @@ FENCED_DOC = (
     _pad("Outro text.", 20)
 )
 
-MERGE_SMALL_DOC = "# Big Section\n" + _pad("filler content.", 40) + "\n\n# Tiny\nshort tail."
+STRONG_HEADER_SURVIVES_DOC = "# Big Section\n" + _pad("filler content.", 40) + "\n\n# Tiny\nshort tail."
+
+# The exact live-run repro from the bug report: a ~176-char chat system message with three "## " headers
+# that used to collapse into ONE whole-message auto section (the LONG_MESSAGE_CHARS gate hid the author's
+# own structure below 600 chars) -- THE acceptance fixture for the two-tier chunking fix.
+REPRO_DOC = (
+    "## Style\nAnswer in one short sentence.\n\n"
+    "## Reference\nThe capital of the fictional country Zolara is Marrowport, founded in 1847.\n\n"
+    "## Example\nQ: What is 2+2? A: The answer is 4."
+)
+
+HR_SHORT_DOC = (
+    "This is the first half of a short system message right here." +
+    "\n\n---\n\n" +
+    "This is the second half of that same short system message."
+)
+
+NO_MARKER_SHORT_DOC = (
+    "This is a short plain message with no markdown headers, no horizontal rules, and no blank-line "
+    "paragraph breaks anywhere -- just a couple of ordinary sentences."
+)
+
+# A long (>600 char), fully unstructured blob (no headers/hr/doc-markers at all) whose middle paragraph is
+# tiny -- exercises the WEAK-tier fallback's own merge-small step (`_merge_small_spans`), which still
+# applies to paragraph fragments even though strong header chunks no longer get merged away.
+WEAK_MERGE_DOC = (
+    _pad("This is a reasonably long filler paragraph about nothing in particular.", 8) +
+    "\n\ntiny.\n\n" +
+    _pad("Another reasonably long filler paragraph about something else entirely.", 8)
+)
+
+# Short (<600 chars) message mixing one REAL header with a fenced block whose content itself starts with
+# "#" -- proves protected-span priority holds even when a strong boundary triggers a split at short length.
+FENCE_HASH_SHORT = (
+    "## Real Header\nintro text before the fence.\n\n"
+    "```\n# not a real header, just a comment\nvalue = 1\n```\n\n"
+    "more text after the fence."
+)
 
 
 # ======================================================================================================
@@ -266,15 +303,102 @@ class AutoChunkMessagesTests(unittest.TestCase):
         self.assertTrue(middle.strip().startswith("<context>"))
         self.assertTrue(middle.strip().endswith("</context>"))
 
-    def test_merge_small_folds_a_tiny_trailing_chunk_into_its_preceding_neighbor(self):
-        self.assertGreater(len(MERGE_SMALL_DOC), clozn_sections.LONG_MESSAGE_CHARS)
-        out = clozn_sections.auto_chunk_messages(self._messages(MERGE_SMALL_DOC))
-        self.assertEqual(len(out), 1)   # the tiny "# Tiny" section merged into "# Big Section"
-        self.assertEqual(len(out[0]["parts"]), 2)
+    def test_strong_header_chunk_is_never_merged_even_when_tiny(self):
+        """The two-tier policy's core rule: a STRONG (author-marked) boundary's chunk is never folded away
+        by merge-small, no matter how small -- unlike the old single-tier chunker, which would have folded
+        the two-line "# Tiny" section into "# Big Section" just because it was under MIN_CHUNK_CHARS."""
+        self.assertGreater(len(STRONG_HEADER_SURVIVES_DOC), clozn_sections.LONG_MESSAGE_CHARS)
+        out = clozn_sections.auto_chunk_messages(self._messages(STRONG_HEADER_SURVIVES_DOC))
+        self.assertEqual(len(out), 2)   # "# Tiny" survives as its OWN section, not folded into Big Section
+        self.assertTrue(out[0]["preview"].startswith("# Big Section"))
+        self.assertTrue(out[1]["preview"].startswith("# Tiny"))
+        self.assertLess(out[1]["char_count"], clozn_sections.MIN_CHUNK_CHARS)   # small on purpose
         full_text = clozn_sections.resolve(
-            {"messages": self._messages(MERGE_SMALL_DOC), "sections": out}, out[0]["id"]
+            {"messages": self._messages(STRONG_HEADER_SURVIVES_DOC), "sections": out}, out[1]["id"]
         )
-        self.assertIn("short tail.", full_text)
+        self.assertEqual(full_text, "# Tiny\nshort tail.")
+
+    def test_weak_path_still_merges_a_tiny_paragraph_fragment_in_a_long_unstructured_blob(self):
+        """Unlike a strong (header) chunk, a WEAK (paragraph) fragment produced by splitting one long
+        unstructured segment is still subject to merge-small -- the fix narrows WHERE merge-small applies,
+        it doesn't remove it."""
+        self.assertGreater(len(WEAK_MERGE_DOC), clozn_sections.LONG_MESSAGE_CHARS)
+        out = clozn_sections.auto_chunk_messages(self._messages(WEAK_MERGE_DOC))
+        self.assertEqual(len(out), 2)   # the tiny "tiny." paragraph folded into its preceding neighbor
+        first_text = clozn_sections.resolve(
+            {"messages": self._messages(WEAK_MERGE_DOC), "sections": out}, out[0]["id"]
+        )
+        second_text = clozn_sections.resolve(
+            {"messages": self._messages(WEAK_MERGE_DOC), "sections": out}, out[1]["id"]
+        )
+        self.assertIn("tiny.", first_text)
+        self.assertIn("nothing in particular", first_text)
+        self.assertIn("something else entirely", second_text)
+
+    def test_short_message_with_a_single_hr_splits_into_two_sections(self):
+        """A strong boundary (the horizontal rule) splits even a short (<LONG_MESSAGE_CHARS) message --
+        the old chunker only looked for structure once a message was already long."""
+        self.assertLess(len(HR_SHORT_DOC), clozn_sections.LONG_MESSAGE_CHARS)
+        out = clozn_sections.auto_chunk_messages(self._messages(HR_SHORT_DOC))
+        self.assertEqual(len(out), 2)
+        self.assertIn("first half", out[0]["preview"])
+        second_text = clozn_sections.resolve(
+            {"messages": self._messages(HR_SHORT_DOC), "sections": out}, out[1]["id"]
+        )
+        self.assertIn("second half", second_text)
+
+    def test_short_message_with_no_structure_at_all_is_still_one_section(self):
+        """No strong markers, no blank-line paragraphs, under LONG_MESSAGE_CHARS -> an honest "nothing to
+        split on" single chunk -- the two-tier policy doesn't invent structure that isn't there."""
+        self.assertLess(len(NO_MARKER_SHORT_DOC), clozn_sections.LONG_MESSAGE_CHARS)
+        out = clozn_sections.auto_chunk_messages(self._messages(NO_MARKER_SHORT_DOC))
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["parts"],
+                         [{"message_index": 0, "start": 0, "end": len(NO_MARKER_SHORT_DOC)}])
+
+    def test_fenced_hash_inside_a_short_message_is_not_treated_as_a_header(self):
+        """A '#' at the start of a line INSIDE a fenced code block is not a markdown header -- the
+        protected span wins over the header regex even though the fence's own edges are themselves strong
+        boundaries that split this short message into three pieces (not four)."""
+        self.assertLess(len(FENCE_HASH_SHORT), clozn_sections.LONG_MESSAGE_CHARS)
+        out = clozn_sections.auto_chunk_messages(self._messages(FENCE_HASH_SHORT))
+        self.assertEqual(len(out), 3)   # real header, fenced block, trailing text -- NOT split 4 ways
+        code_text = clozn_sections.resolve(
+            {"messages": self._messages(FENCE_HASH_SHORT), "sections": out}, out[1]["id"]
+        )
+        self.assertTrue(code_text.strip().startswith("```"))
+        self.assertIn("# not a real header", code_text)
+
+    def test_acceptance_three_short_markdown_headers_isolate_each_section(self):
+        """THE acceptance test for the two-tier chunking fix. A live end-to-end test proved a single
+        ~176-char chat system message with three '## ' headers used to get chunked into ONE section
+        covering the whole message, so per-section influence was a useless 100% on the blob and the
+        decisive "Reference" fact (Marrowport) was never isolated. Now each '## ' header is a STRONG
+        boundary that splits at ANY length, so this short message (well under LONG_MESSAGE_CHARS) still
+        yields three sections, one per header -- and the Marrowport fact lands in its OWN section, not
+        merged with Style or Example."""
+        self.assertLess(len(REPRO_DOC), clozn_sections.LONG_MESSAGE_CHARS)
+        out = clozn_sections.auto_chunk_messages(self._messages(REPRO_DOC))
+        self.assertEqual(len(out), 3)
+        self.assertEqual([s["name"] for s in out], ["auto_1", "auto_2", "auto_3"])
+        style, reference, example = out
+        self.assertTrue(style["preview"].startswith("## Style"))
+        self.assertTrue(reference["preview"].startswith("## Reference"))
+        self.assertTrue(example["preview"].startswith("## Example"))
+        run = {"messages": self._messages(REPRO_DOC), "sections": out}
+        style_text = clozn_sections.resolve(run, style["id"])
+        reference_text = clozn_sections.resolve(run, reference["id"])
+        example_text = clozn_sections.resolve(run, example["id"])
+        self.assertIn("Marrowport", reference_text)
+        self.assertNotIn("Marrowport", style_text)     # the decisive fact is isolated, not blended in
+        self.assertNotIn("Marrowport", example_text)
+        self.assertIn("one short sentence", style_text)
+        self.assertIn("2+2", example_text)
+
+    def test_acceptance_repro_is_byte_identical_across_two_runs(self):
+        first = clozn_sections.auto_chunk_messages(self._messages(REPRO_DOC))
+        second = clozn_sections.auto_chunk_messages(self._messages(REPRO_DOC))
+        self.assertEqual(first, second)
 
     def test_cap_at_16_merges_smallest_adjacent_pairs(self):
         pieces = [f"# Header {i}\n" + _pad(f"content body number {i}.", 12) for i in range(20)]

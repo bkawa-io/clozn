@@ -29,6 +29,28 @@ THREE WAYS A SECTION IS BORN, in priority order when more than one could apply t
      of its input -- same messages in, byte-identical manifest out, every time, forever (no randomness, no
      model calls, no wall-clock/uuid anywhere in this file) -- that's what makes a manifest replayable and
      what makes THIS module's own tests meaningful.
+
+     TWO-TIER CHUNKING POLICY (`_chunk_text`, the auto-chunker's core). A short system/RAG message with
+     three "## " headers used to get chunked into ONE whole-message blob, because the old code only looked
+     for structure at all once a message was already over LONG_MESSAGE_CHARS -- an author who bothered to
+     mark three sections in 176 characters got exactly the same non-answer as an author who marked none.
+     The fix distinguishes two tiers of "boundary", by how much the split reflects something the author
+     actually did versus something this module is guessing at:
+       * STRONG boundaries -- markdown headers, horizontal rules, "Document N"/"[N]" markers, and the
+         edges of protected spans (fenced code / XML wrappers), i.e. everything `_boundary_offsets` finds.
+         These are structure the author explicitly marked, so they split the message at ANY length (no
+         LONG_MESSAGE_CHARS gate), and the chunks they produce are NEVER folded away by merge-small: a
+         two-line "## Reference" section staying tiny is the intended outcome, not noise to clean up.
+       * WEAK boundaries -- blank-line paragraph breaks (`_split_paragraphs`), the lowest-priority,
+         purely-heuristic fallback. These only fire to further split one already-strong segment that is
+         itself still a long unstructured blob (trimmed length > LONG_MESSAGE_CHARS), and only the
+         resulting paragraph fragments are subject to merge-small (`_merge_small_spans`) -- folding a
+         stray tiny paragraph into its neighbor is fine because nothing there was author-marked.
+     Net behavior: a message with strong markers gets one chunk per strong segment regardless of length
+     (long segments additionally paragraph-split internally); a message with none, under LONG_MESSAGE_CHARS,
+     is an honest single "nothing to split on" chunk; a message with none, over LONG_MESSAGE_CHARS, is the
+     old paragraph-split-and-merge behavior. Cap-16 (`_cap`) still applies globally, last, across whatever
+     chunks either tier produced.
   3. MEMORY CARD (`source: "memory_card"`) -- `memory_card_sections` locates each applied memory-card's
      text inside the assembled prompt by plain substring search and emits one section per card found. This
      is ADDITIVE: it runs after (1)/(2) produced whatever they produced, and its output is meant to be
@@ -55,8 +77,13 @@ import re
 
 # ------- tunables (the deterministic auto-chunker's only "policy" knobs) -----------------------------
 
-LONG_MESSAGE_CHARS = 600     # a message at or under this length is one chunk; only longer ones get split
-MIN_CHUNK_CHARS = 200        # any chunk under this is folded into a neighbor (rule c)
+LONG_MESSAGE_CHARS = 600     # gates the WEAK tier only: a strong segment at or under this length is kept
+                             # whole; only a longer one gets further paragraph-split (see _chunk_text).
+                             # Strong boundaries (headers/hr/doc-markers/protected spans) split at ANY
+                             # length -- this knob never suppresses them, only the paragraph fallback.
+MIN_CHUNK_CHARS = 200        # any WEAK (paragraph) fragment under this is folded into a neighbor, but only
+                             # within the strong segment it came from (`_merge_small_spans`); a small STRONG
+                             # chunk (a short "## Header" section) is never folded -- its size was the point.
 MAX_SECTIONS = 16            # hard cap on the auto-chunker's output (rule d)
 PREVIEW_CHARS = 80           # "first ~80 chars" (schema's `preview` field)
 
@@ -229,27 +256,73 @@ def _split_paragraphs(text: str, start: int, end: int) -> list[tuple[int, int]]:
     return spans or [(start, end)]
 
 
-def _structural_chunks(text: str) -> list[tuple[int, int]]:
-    """One long message's text -> ordered (start, end) spans, split on structural boundaries in priority
-    order (rule b): markdown headers, horizontal rules, "Document N"/"[N]" RAG markers, fenced code blocks
-    and XML-ish wrapper tags (both kept intact, never split inside), then -- lowest priority, only within
-    whatever plain-text segments are left -- blank-line paragraph breaks. A message with none of these
-    (no headers, no blank lines, nothing) degrades to one whole-text chunk; that's an honest "nothing to
-    split on" answer, not a bug."""
+def _combine_spans(a: tuple[int, int], b: tuple[int, int]) -> tuple[int, int]:
+    return (a[0], b[1])
+
+
+def _merge_small_spans(text: str, spans: list[tuple[int, int]],
+                        min_chars: int = MIN_CHUNK_CHARS) -> list[tuple[int, int]]:
+    """The WEAK-tier counterpart of `_merge_small`: folds a paragraph fragment under `min_chars` into its
+    PRECEDING neighbor, same rule (c), but operating on plain (start, end) offsets within ONE strong
+    segment rather than cross-message `units` dicts -- there's no separate `parts` list to concatenate
+    here, the two fragments are already contiguous slices of the same segment, so "merge" is just "widen
+    the range" (`_combine_spans`). A fragment with no preceding neighbor (it's first) instead folds
+    FORWARD into the following one, mirroring `_merge_small` exactly, so a tiny leading paragraph never
+    survives alone just because of where it happened to sit. `text` is accepted (unused) for symmetry with
+    this module's other span-producing helpers, which all take the source text alongside offsets into it."""
+    if not spans:
+        return spans
+    merged = [spans[0]]
+    for s, e in spans[1:]:
+        if (e - s) < min_chars:
+            merged[-1] = _combine_spans(merged[-1], (s, e))
+        else:
+            merged.append((s, e))
+    while len(merged) > 1 and (merged[0][1] - merged[0][0]) < min_chars:
+        head = merged.pop(0)
+        merged[0] = _combine_spans(head, merged[0])
+    return merged
+
+
+def _chunk_text(text: str) -> list[tuple[int, int]]:
+    """The two-tier auto-chunker's core (see the module docstring's TWO-TIER CHUNKING POLICY section for
+    the full rationale -- this replaces the old `_structural_chunks`, whose single LONG_MESSAGE_CHARS gate
+    let a short multi-header message fall through as one useless whole-message chunk).
+
+    Splits `text` at every STRONG boundary (`_boundary_offsets`: markdown headers, horizontal rules,
+    "Document N"/"[N]" markers, and protected-span edges) regardless of message length -- a protected span
+    itself (fenced code / XML wrapper) rides out whole, at whatever size it is. Every OTHER resulting
+    segment is trimmed and then, individually: kept whole if its trimmed length is at or under
+    LONG_MESSAGE_CHARS (the common case for an author-marked section -- a "## Reference" block a few
+    sentences long is exactly one chunk, small or not); otherwise it's still a long unstructured blob
+    within its own strong boundaries, so it gets the WEAK-tier fallback -- paragraph-split
+    (`_split_paragraphs`) and merge-small'd (`_merge_small_spans`) -- strictly WITHIN that one segment,
+    never across a strong boundary, so a tiny strong chunk is never folded into its neighbor.
+
+    A text with no strong boundaries at all reduces to the single segment (0, len(text)): at or under
+    LONG_MESSAGE_CHARS that's one whole chunk (an honest "nothing to split on"), otherwise it's the plain
+    paragraph-split-and-merge behavior. Always returns at least one (start, end) span."""
+    if not text:
+        return [(0, 0)]
     protected = _protected_spans(text)
     points = sorted(_boundary_offsets(text, protected) | {0, len(text)})
-    chunks: list[tuple[int, int]] = []
+    spans: list[tuple[int, int]] = []
     for a, b in zip(points, points[1:]):
         if b <= a:
             continue
         if (a, b) in protected:
-            chunks.append((a, b))
+            spans.append((a, b))
             continue
-        for s, e in _split_paragraphs(text, a, b):
-            ts, te = _trim(text, s, e)
-            if te > ts:
-                chunks.append((ts, te))
-    return chunks or [(0, len(text))]
+        ts, te = _trim(text, a, b)
+        if te <= ts:
+            continue
+        if (te - ts) > LONG_MESSAGE_CHARS:
+            frags = [_trim(text, s, e) for s, e in _split_paragraphs(text, ts, te)]
+            frags = [(s, e) for s, e in frags if e > s]
+            spans.extend(_merge_small_spans(text, frags))
+        else:
+            spans.append((ts, te))
+    return spans or [(0, len(text))]
 
 
 def _unit_chars(unit: dict) -> int:
@@ -258,24 +331,6 @@ def _unit_chars(unit: dict) -> int:
 
 def _combine_units(a: dict, b: dict) -> dict:
     return {"parts": a["parts"] + b["parts"]}
-
-
-def _merge_small(units: list[dict], min_chars: int = MIN_CHUNK_CHARS) -> list[dict]:
-    """Rule (c): fold any chunk under `min_chars` into its PRECEDING neighbor. A chunk with no preceding
-    neighbor (it's first) instead folds into the FOLLOWING one, so a tiny leading fragment never survives
-    as its own section just because of where it happened to sit."""
-    if not units:
-        return units
-    merged = [units[0]]
-    for u in units[1:]:
-        if _unit_chars(u) < min_chars:
-            merged[-1] = _combine_units(merged[-1], u)
-        else:
-            merged.append(u)
-    while len(merged) > 1 and _unit_chars(merged[0]) < min_chars:
-        head = merged.pop(0)
-        merged[0] = _combine_units(head, merged[0])
-    return merged
 
 
 def _cap(units: list[dict], limit: int = MAX_SECTIONS) -> list[dict]:
@@ -315,12 +370,14 @@ def auto_chunk_messages(messages: list) -> list:
     the full policy). Candidates are every message that is NEITHER role "user" NOR the final turn (rule a
     reduces to plain role-filtering: a user message can never be anything but excluded, since the one
     "final" position the exclusion rule (e) cares about is itself always a user message in a well-formed
-    conversation -- `_is_excluded_final` also guards the raw list-position case defensively). A candidate
-    at or under LONG_MESSAGE_CHARS is one chunk; a longer one is split structurally (`_structural_chunks`).
-    Each resulting chunk becomes its own auto_N section (this is the whole point: one big RAG dump becomes
-    several independently-ablatable pieces, not one) -- until merge-small (c) and cap-16 (d) fold some back
-    together. Pure function of `messages`: no randomness, no clock, no model calls -- same input always
-    produces byte-identical output."""
+    conversation -- `_is_excluded_final` also guards the raw list-position case defensively). Each
+    candidate's content is split by `_chunk_text` -- STRONG author-marked boundaries at any length, WEAK
+    paragraph fallback + merge-small only within a still-long strong segment (the module docstring's
+    TWO-TIER CHUNKING POLICY). Each resulting span becomes its own auto_N section (this is the whole
+    point: one big RAG dump, or even a short multi-header system message, becomes several independently-
+    ablatable pieces, not one) -- until cap-16 (d) folds some back together GLOBALLY, across every
+    candidate message, as the one merge step left after chunking. Pure function of `messages`: no
+    randomness, no clock, no model calls -- same input always produces byte-identical output."""
     if not isinstance(messages, list) or not messages:
         return []
     texts: dict = {}
@@ -332,11 +389,11 @@ def auto_chunk_messages(messages: list) -> list:
         if not content:
             continue
         texts[idx] = content
-        spans = _structural_chunks(content) if len(content) > LONG_MESSAGE_CHARS else [(0, len(content))]
+        spans = _chunk_text(content)
         units.extend({"parts": [(idx, s, e)]} for s, e in spans if e > s)
     if not units:
         return []
-    units = _cap(_merge_small(units), MAX_SECTIONS)
+    units = _cap(units, MAX_SECTIONS)
     return _sections_from_units(units, texts)
 
 
@@ -350,16 +407,16 @@ def auto_chunk_prompt(prompt: str) -> list:
     Honest tradeoff, stated plainly: a raw prompt string has no reliable way to detect "the trailing user
     turn" the way a chat `messages` list does (that structure is exactly what got flattened away by
     whatever rendered this string), so unlike `auto_chunk_messages` this chunks the ENTIRE prompt, including
-    whatever its final turn is. Same structural rules (b-d); `message_index` is always None per the
-    schema's raw-prompt convention -- parts are offsets into the run's `final_prompt`, not a `messages`
-    list index."""
+    whatever its final turn is. Same two-tier policy as `auto_chunk_messages` (`_chunk_text`); `message_index`
+    is always None per the schema's raw-prompt convention -- parts are offsets into the run's `final_prompt`,
+    not a `messages` list index."""
     if not isinstance(prompt, str) or not prompt:
         return []
-    spans = _structural_chunks(prompt) if len(prompt) > LONG_MESSAGE_CHARS else [(0, len(prompt))]
+    spans = _chunk_text(prompt)
     units = [{"parts": [(None, s, e)]} for s, e in spans if e > s]
     if not units:
         return []
-    units = _cap(_merge_small(units), MAX_SECTIONS)
+    units = _cap(units, MAX_SECTIONS)
     return _sections_from_units(units, {None: prompt})
 
 
