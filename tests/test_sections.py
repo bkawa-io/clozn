@@ -448,6 +448,60 @@ class AutoChunkPromptTests(unittest.TestCase):
 
 
 # ======================================================================================================
+class DrillSplitTests(unittest.TestCase):
+    """clozn_sections.drill_split -- the finer, sentence/line-level sibling of `_chunk_text` (see that
+    function's own docstring for the section-vs-drill distinction). Offset REMAPPING back into real prompt
+    coordinates is section_drill.py's job, not this module's -- these tests only check the pure
+    text -> spans function."""
+
+    MULTI = ("The kayak trip starts at dawn on the wide river bend. "
+             "The guide checks every life vest twice before departure. "
+             "Lunch is packed cold to save time out on the water.")
+
+    def test_multi_sentence_paragraph_splits_into_n_spans(self):
+        spans = clozn_sections.drill_split(self.MULTI)
+        self.assertEqual(len(spans), 3)
+        texts = [self.MULTI[s:e] for s, e in spans]
+        self.assertTrue(texts[0].startswith("The kayak trip starts at dawn"))
+        self.assertTrue(texts[1].startswith("The guide checks every life vest"))
+        self.assertTrue(texts[2].startswith("Lunch is packed cold"))
+        # spans are contiguous/non-overlapping and cover the whole text once whitespace is accounted for
+        self.assertEqual(spans[0][0], 0)
+        self.assertEqual(spans[-1][1], len(self.MULTI))
+
+    def test_single_short_sentence_is_one_span(self):
+        """Nothing finer to find -- an honest single span, not a bug (see the function's own docstring)."""
+        text = "Arrive by nine sharp."
+        self.assertLess(len(text), clozn_sections.DRILL_MIN_CHARS)
+        spans = clozn_sections.drill_split(text)
+        self.assertEqual(spans, [(0, len(text))])
+
+    def test_determinism_same_input_twice_is_byte_identical(self):
+        first = clozn_sections.drill_split(self.MULTI)
+        second = clozn_sections.drill_split(self.MULTI)
+        self.assertEqual(first, second)
+
+    def test_empty_text_is_safe(self):
+        self.assertEqual(clozn_sections.drill_split(""), [(0, 0)])
+
+    def test_short_trailing_fragment_is_merged_not_left_as_a_sliver(self):
+        """A short trailing remark after a real sentence must not survive as its own 3-char-ish span --
+        it folds into the preceding (long enough) sentence, per DRILL_MIN_CHARS."""
+        long_sentence = "This is a genuinely long sentence that comfortably clears the merge threshold."
+        text = long_sentence + " Ok."
+        spans = clozn_sections.drill_split(text)
+        self.assertEqual(spans, [(0, len(text))])
+
+    def test_hard_newlines_split_lines_even_without_sentence_punctuation(self):
+        text = ("This is a long enough first line with no terminal punctuation at all\n"
+                "and this is a second, equally long line that also lacks one")
+        spans = clozn_sections.drill_split(text)
+        self.assertEqual(len(spans), 2)
+        self.assertTrue(text[spans[0][0]:spans[0][1]].startswith("This is a long"))
+        self.assertTrue(text[spans[1][0]:spans[1][1]].startswith("and this is a second"))
+
+
+# ======================================================================================================
 class SectionsFromNativeTests(unittest.TestCase):
     PROMPT = "0123456789" * 10   # 100 chars
 

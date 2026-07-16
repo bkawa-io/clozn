@@ -421,6 +421,78 @@ def auto_chunk_prompt(prompt: str) -> list:
 
 
 # ======================================================================================================
+# 2b. drill-down: splitting ONE section's own text into finer sentence/line-level sub-spans
+# ======================================================================================================
+# A SIBLING to the section-granularity chunker above, one grain size down. `_chunk_text` answers "which
+# section of the prompt mattered" by splitting on structure an AUTHOR marked (headers, hr, doc markers,
+# fenced/XML spans). Once one of ITS sections is known to matter, the next question is "which PART of
+# that section" -- and a single section's text (a RAG paragraph, a memory card, a few-shot block) rarely
+# has any of that author-marked structure left inside it; what it does have is ordinary prose structure:
+# sentences and lines. `drill_split` is the pure text->spans function for that; clozn.server.routes.
+# section_drill is the one (and, today, only) caller, which remaps its (start, end) pairs -- relative to
+# the ONE section's own concatenated text -- back into real prompt coordinates (see that module for the
+# offset-remapping half of this feature; that half is NOT this module's job, per the "Touch ONLY"
+# boundary this deliverable was scoped to).
+
+DRILL_MIN_CHARS = 40   # a drill sub-span under this many chars folds into its preceding neighbor (see
+                       # drill_split's docstring) -- the sentence-level analogue of MIN_CHUNK_CHARS, just
+                       # an order of magnitude smaller: a drill target is already ONE section's text, not
+                       # a whole message, so "a few words" is the right notion of "too small to be useful"
+                       # here, not "a whole paragraph".
+
+_DRILL_SENTENCE_END_RE = re.compile(r"[.!?]+(?=[ \t]|\n|$)")   # ". "/"! "/"? " or end-of-text/end-of-line
+_DRILL_NEWLINE_RE = re.compile(r"\n+")                          # a hard newline is ALWAYS a boundary on
+                                                                 # BOTH sides -- keeps a one-line list item
+                                                                 # from bleeding into whatever follows it,
+                                                                 # and keeps a run of blank lines from
+                                                                 # surviving as its own (empty) span.
+
+
+def drill_split(text: str) -> list[tuple[int, int]]:
+    """ONE section's text -> finer (start, end) sub-spans -- turns "which section" into "which sentence".
+    This is `_chunk_text`'s sibling, one grain size down: `_chunk_text` looks for structure an AUTHOR
+    marked (headers, hr, doc markers, fenced/XML spans) at SECTION granularity; `drill_split` looks for
+    the finest structure ordinary PROSE already has -- a sentence boundary (a run of `.`/`!`/`?`
+    immediately followed by whitespace, a newline, or the end of the text) or a hard newline (a manually
+    broken line, a list item). Both sides of a newline run are boundary points, so a blank line never
+    survives as a lone empty span and a one-line item never bleeds into its neighbor.
+
+    Every resulting fragment under `DRILL_MIN_CHARS` folds into its PRECEDING neighbor (the first fragment
+    folds FORWARD instead -- same edge case `_merge_small_spans` already handles for the section-level
+    chunker) -- reused here VERBATIM, just at a much smaller threshold, rather than a second copy of the
+    same merge math. This is a real tradeoff, stated honestly rather than hidden: a short list item (say,
+    "- milk" at 6 chars) DOES get swallowed into whatever line precedes it -- the alternative (guessing
+    "this short line looks like a list item, don't merge it") is its own heuristic with its own test
+    surface; folding purely by length is one rule, applied uniformly, that at least never leaves a
+    3-character sliver no human would call an ablatable unit.
+
+    A text with no sentence terminator and no newline at all reduces to the single (0, len(text)) span --
+    "one short sentence, nothing finer to find" is an honest answer, not a bug (see this function's caller,
+    section_drill.py, which reports that case explicitly rather than pretending a split happened). Pure/
+    deterministic: stdlib `re` only, no randomness, no model calls, no wall-clock -- same text in, same
+    spans out, forever, like every other span-producer in this module. Always returns at least one span."""
+    if not text:
+        return [(0, 0)]
+    points = {0, len(text)}
+    for m in _DRILL_SENTENCE_END_RE.finditer(text):
+        points.add(m.end())
+    for m in _DRILL_NEWLINE_RE.finditer(text):
+        points.add(m.start())
+        points.add(m.end())
+    pts = sorted(points)
+    spans: list[tuple[int, int]] = []
+    for a, b in zip(pts, pts[1:]):
+        if b <= a:
+            continue
+        ts, te = _trim(text, a, b)
+        if te > ts:
+            spans.append((ts, te))
+    if not spans:
+        return [(0, len(text))]
+    return _merge_small_spans(text, spans, min_chars=DRILL_MIN_CHARS)
+
+
+# ======================================================================================================
 # 3. explicit char ranges (native shape): sections_from_native
 # ======================================================================================================
 

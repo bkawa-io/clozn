@@ -631,6 +631,7 @@ from clozn.server.routes import memory as _memory_routes              # noqa: E4
 from clozn.server.routes import facts as _facts_routes                # noqa: E402
 from clozn.server.routes import receipts as _receipts_routes          # noqa: E402
 from clozn.server.routes import section_influence as _section_influence_routes  # noqa: E402
+from clozn.server.routes import section_drill as _section_drill_routes         # noqa: E402
 from clozn.server.routes import replay as _replay_routes              # noqa: E402
 from clozn.server.routes import timetravel as _timetravel_routes      # noqa: E402
 from clozn.server.routes import profiles as _profiles_routes          # noqa: E402
@@ -656,6 +657,7 @@ _GET_ROUTES = [_static_routes, _health_routes, _runs_routes, _memory_routes, _re
               _journal_routes, _card_routes, _anchored_routes, _diff_routes, _receipt_link_routes,
               _runs_fallback_routes]
 _POST_ROUTES = [_health_routes, _memory_routes, _facts_routes, _receipts_routes, _section_influence_routes,
+               _section_drill_routes,
                _replay_routes, _timetravel_routes, _profiles_routes, _preferences_routes, _feedback_routes,
                _openai_routes, _engine_routes, _readouts_routes,
                _span_receipt_routes, _fork_routes, _journal_routes, _anchored_routes, _diff_routes,
