@@ -27,6 +27,7 @@ RESEARCH = os.path.dirname(HERE)
 sys.path.insert(0, RESEARCH)
 
 from clozn.server import app as cs      # noqa: E402
+import clozn.lab.substrates as lab_substrates       # noqa: E402  (the _InternalizedRetrain mixin lives here)
 import clozn.memory.cards as memory_cards            # noqa: E402
 import clozn.memory.mode as memory_mode             # noqa: E402
 import clozn.runs.store as runlog                  # noqa: E402
@@ -67,9 +68,19 @@ class SlowMem:
         return {"ok": True}
 
 
+class _LabSub(lab_substrates._InternalizedRetrain, cs.Substrate):
+    """A lab substrate: the base studio surface + the per-instance internalized retrain machinery (same
+    MRO as QwenSubstrate/DreamSubstrate), so /memory/* dispatch runs through the REAL async-retrain path
+    now that the retrain state moved off the app module onto the substrate."""
+
+
+_LIVE_SUBS: list = []   # substrates handed out this test -> joined at teardown (retrain state is per-instance)
+
+
 def _substrate(mem):
-    sub = object.__new__(cs.Substrate)
+    sub = object.__new__(_LabSub)
     sub._mem = mem
+    _LIVE_SUBS.append(sub)
     return sub
 
 
@@ -84,11 +95,13 @@ def iso(tmp_path, monkeypatch):
     monkeypatch.setattr(memory_mode, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "no_such.pt")])
     assert memory_mode.set_mode("internalized")
-    # fresh retrain state per test (the singletons are process-global)
-    with cs._RETRAIN_META:
-        cs._RETRAIN.update(active=False, card_id=None, action=None, started_at=None, error=None)
+    # retrain state is PER-SUBSTRATE now (moved off the app module onto _InternalizedRetrain); each test
+    # builds its own sub via _substrate(), so there's nothing process-global to reset -- just make sure no
+    # daemon retrain outlives the test by joining every substrate we handed out.
+    _LIVE_SUBS.clear()
     yield tmp_path
-    cs._join_retrain(timeout=10.0)                        # never leave a daemon retrain running past a test
+    while _LIVE_SUBS:
+        _LIVE_SUBS.pop()._join_retrain(timeout=10.0)      # never leave a daemon retrain running past a test
 
 
 # ---- the endpoint returns fast; the retrain runs in the background --------------------------------
@@ -109,15 +122,15 @@ def test_approve_returns_immediately_and_retrains_in_background(iso):
     # the retrain hasn't applied yet: rules still the old set right after the call
     assert mem.consolidate_calls == []
 
-    assert cs._retrain_in_flight() is True               # the poll signal is live
-    st = cs._retrain_status()
+    assert sub._retrain_in_flight() is True               # the poll signal is live
+    st = sub._retrain_status()
     assert st["active"] is True and st["card_id"] == card["id"] and st["action"] == "approve"
 
-    assert cs._join_retrain(timeout=5.0)                 # await the background consolidate
+    assert sub._join_retrain(timeout=5.0)                 # await the background consolidate
     assert set(mem.rules) == {"likes tea", "wants bullet points"}
     assert mem.consolidate_calls[-1] and set(mem.consolidate_calls[-1]) == {"likes tea", "wants bullet points"}
-    assert cs._retrain_in_flight() is False              # flag cleared on finish
-    assert cs._retrain_status()["active"] is False
+    assert sub._retrain_in_flight() is False              # flag cleared on finish
+    assert sub._retrain_status()["active"] is False
     # it really ran off the calling thread
     assert mem.consolidate_thread is not None and mem.consolidate_thread is not threading.current_thread()
 
@@ -141,7 +154,7 @@ def test_retrain_status_endpoint_and_cards_expose_the_flag(iso):
     folded = sub._memory("/memory/cards", {})["retraining"]
     assert folded["active"] is True and folded["card_id"] == card["id"]
 
-    assert cs._join_retrain(timeout=5.0)
+    assert sub._join_retrain(timeout=5.0)
     assert sub._memory("/memory/retrain-status", {})["active"] is False
     assert sub._memory("/memory/cards", {})["retraining"]["active"] is False
 
@@ -149,10 +162,10 @@ def test_retrain_status_endpoint_and_cards_expose_the_flag(iso):
 # ---- CONCURRENCY: a chat serializes behind the retrain (waits, never races) -----------------------
 
 def test_chat_blocks_until_retrain_finishes(iso):
-    """The chat/generate paths acquire cs._TRAIN_LOCK, so a chat that arrives mid-retrain must wait out the
-    consolidate rather than racing the shared model. We stand in for 'a chat' with the SAME lock the real
-    QwenSubstrate.chat / chat_stream / _say paths take, and assert the ordering: the chat can't proceed
-    until the background retrain releases the lock."""
+    """The chat/generate paths acquire the substrate's self._train_lock, so a chat that arrives mid-retrain
+    must wait out the consolidate rather than racing the shared model. We stand in for 'a chat' with the
+    SAME lock the real QwenSubstrate.chat / chat_stream / _say paths take, and assert the ordering: the chat
+    can't proceed until the background retrain releases the lock."""
     mem = SlowMem(["likes tea"], delay=0.7)
     sub = _substrate(mem)
     card = sub._memory("/memory/add", {"text": "wants bullet points"})
@@ -160,12 +173,12 @@ def test_chat_blocks_until_retrain_finishes(iso):
     order = []
 
     def chat():
-        # mirrors `with _TRAIN_LOCK:` in QwenSubstrate.chat / _say / DreamSubstrate /denoise
-        with cs._TRAIN_LOCK:
+        # mirrors `with self._train_lock:` in QwenSubstrate.chat / _say / DreamSubstrate /denoise
+        with sub._train_lock:
             order.append(("chat_ran", time.time(), bool(mem.consolidate_calls)))
 
     sub._memory("/memory/approve", {"id": card["id"]})   # kicks off the ~0.7s background retrain
-    assert cs._retrain_in_flight() is True
+    assert sub._retrain_in_flight() is True
 
     t = threading.Thread(target=chat)
     t0 = time.time()
@@ -179,7 +192,7 @@ def test_chat_blocks_until_retrain_finishes(iso):
     assert (when - t0) >= 0.5, "chat did not wait for the retrain to release the lock"
     # and by the time it ran, the retrain had committed (consolidate recorded) -> it saw a consistent model
     assert saw_consolidate is True
-    assert cs._retrain_in_flight() is False
+    assert sub._retrain_in_flight() is False
 
 
 # ---- a failed retrain still clears the in-flight flag ---------------------------------------------
@@ -192,8 +205,8 @@ def test_failed_retrain_clears_the_flag(iso):
     res = sub._memory("/memory/approve", {"id": card["id"]})
     assert res["resync"]["retraining"] is True
 
-    assert cs._join_retrain(timeout=5.0)                 # the worker's finally: must clear the flag even on error
-    st = cs._retrain_status()
+    assert sub._join_retrain(timeout=5.0)                 # the worker's finally: must clear the flag even on error
+    st = sub._retrain_status()
     assert st["active"] is False                          # poll terminates
     assert st["error"] and "RuntimeError" in st["error"]  # the error is surfaced for the UI
 
@@ -211,7 +224,7 @@ def test_noop_transition_does_not_retrain(iso):
     res = sub._memory("/memory/approve", {"id": only["id"]})
     assert res["resync"]["retraining"] is False
     assert res["resync"]["changed"] is False
-    assert cs._retrain_in_flight() is False
+    assert sub._retrain_in_flight() is False
     assert mem.consolidate_calls == []
 
 
@@ -225,7 +238,7 @@ def test_second_retrain_is_refused_while_one_runs(iso):
 
     first = sub._memory("/memory/approve", {"id": a["id"]})
     assert first["resync"]["retraining"] is True
-    assert cs._retrain_in_flight() is True
+    assert sub._retrain_in_flight() is True
 
     # a second mutation arriving mid-retrain flips its card synchronously but does NOT stack a 2nd thread
     second = sub._memory("/memory/approve", {"id": b["id"]})
@@ -233,5 +246,5 @@ def test_second_retrain_is_refused_while_one_runs(iso):
     assert second["resync"].get("busy") is True          # ...but the retrain was refused as busy
     assert second["resync"]["retraining"] is True
 
-    assert cs._join_retrain(timeout=5.0)
-    assert cs._retrain_in_flight() is False
+    assert sub._join_retrain(timeout=5.0)
+    assert sub._retrain_in_flight() is False

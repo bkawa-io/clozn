@@ -32,6 +32,7 @@ RESEARCH = os.path.dirname(HERE)
 sys.path.insert(0, RESEARCH)
 
 from clozn.server import app as cs      # noqa: E402
+import clozn.lab.substrates as lab_substrates       # noqa: E402  (the _InternalizedRetrain mixin lives here)
 import clozn.memory.cards as memory_cards            # noqa: E402
 import clozn.memory.mode as memory_mode             # noqa: E402
 from clozn import replay                  # noqa: E402
@@ -89,9 +90,19 @@ class StubGate:
         return self.value
 
 
+class _LabSub(lab_substrates._InternalizedRetrain, cs.Substrate):
+    """A lab substrate: the base studio surface + the per-instance internalized retrain machinery (same
+    MRO as QwenSubstrate/DreamSubstrate). In PROMPT mode _start_retrain short-circuits exactly like the
+    base; in INTERNALIZED mode it runs the REAL background consolidate -- both paths are exercised here."""
+
+
+_LIVE_SUBS: list = []   # substrates handed out this test -> joined at teardown (retrain state is per-instance)
+
+
 def _substrate(mem):
-    sub = object.__new__(cs.Substrate)
+    sub = object.__new__(_LabSub)
     sub._mem = mem
+    _LIVE_SUBS.append(sub)
     return sub
 
 
@@ -111,10 +122,13 @@ def iso(tmp_path, monkeypatch):
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(memory_mode, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "legacy.pt")])
-    with cs._RETRAIN_META:
-        cs._RETRAIN.update(active=False, card_id=None, action=None, started_at=None, error=None)
+    # retrain state is PER-SUBSTRATE now (moved off the app module onto _InternalizedRetrain); each test
+    # builds its own sub via _substrate(), so there's nothing process-global to reset -- just make sure no
+    # daemon retrain outlives the test by joining every substrate we handed out.
+    _LIVE_SUBS.clear()
     yield tmp_path
-    cs._join_retrain(timeout=10.0)
+    while _LIVE_SUBS:
+        _LIVE_SUBS.pop()._join_retrain(timeout=10.0)
 
 
 # ---- memory_mode: mode persistence + migration rule -------------------------------------------------
@@ -402,7 +416,7 @@ def test_prompt_mode_approve_is_instant_and_never_consolidates(iso):
     assert res["status"] == "active"
     assert res["resync"] == {"retraining": False, "changed": True, "mode": "prompt"}
     assert mem.consolidate_calls == []                       # the prefix machinery never ran
-    assert cs._retrain_in_flight() is False                  # and no thread was spawned
+    assert sub._retrain_in_flight() is False                 # and no thread was spawned
     assert set(mem.rules) == {"likes tea", "wants bullet points"}   # bookkeeping still syncs
 
 
@@ -455,9 +469,10 @@ def test_force_retrain_consolidates_even_when_rules_are_synced(iso):
     memory_mode.set_mode("internalized")
     mem = FakeMem(["likes tea"])
     cs._mem_migrate(mem)                                     # store == rules -> the no-op pre-check would skip
-    res = cs._start_retrain(mem, "mode-switch", None, force=True)
+    sub = _substrate(mem)
+    res = sub._start_retrain(mem, "mode-switch", None, force=True)
     assert res["retraining"] is True
-    assert cs._join_retrain(timeout=5.0)
+    assert sub._join_retrain(timeout=5.0)
     assert mem.consolidate_calls == [["likes tea"]]
 
 
@@ -595,7 +610,7 @@ def test_toggle_to_internalized_kicks_the_catchup_retrain(server, monkeypatch):
     code, out = _http(server, "/memory/mode", {"mode": "internalized"})
     assert code == 200 and out["ok"] is True
     assert out["resync"]["retraining"] is True
-    assert cs._join_retrain(timeout=5.0)
+    assert cs.SUB._join_retrain(timeout=5.0)                 # retrain ran on the active substrate (cs.SUB)
     assert mem.consolidate_calls == [["likes tea"]]          # the prefix caught up to the cards
 
 

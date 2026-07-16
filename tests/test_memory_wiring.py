@@ -22,6 +22,7 @@ RESEARCH = os.path.dirname(HERE)
 sys.path.insert(0, RESEARCH)
 
 from clozn.server import app as cs      # noqa: E402
+import clozn.lab.substrates as lab_substrates       # noqa: E402  (the _InternalizedRetrain mixin lives here)
 import clozn.memory.cards as memory_cards            # noqa: E402
 import clozn.memory.mode as memory_mode             # noqa: E402
 import clozn.runs.store as runlog                  # noqa: E402
@@ -51,19 +52,26 @@ class FakeMem:
         return {"ok": True}
 
 
+class _LabSub(lab_substrates._InternalizedRetrain, cs.Substrate):
+    """A lab substrate: the base studio surface + the per-instance internalized retrain machinery (same
+    MRO as QwenSubstrate/DreamSubstrate). This suite pins internalized mode, so the card mutations must
+    dispatch through the REAL background-consolidate path -- which now lives on the substrate."""
+
+
 def _substrate(mem):
-    """A bare Substrate (no __init__ / no model) with a fake memory attached -- exercises the real
-    _memory / _card_status dispatch."""
-    sub = object.__new__(cs.Substrate)
+    """A bare lab substrate (no __init__ / no model) with a fake memory attached -- exercises the real
+    _memory / _card_status dispatch + the internalized async-retrain path."""
+    sub = object.__new__(_LabSub)
     sub._mem = mem
     return sub
 
 
-def _settle(timeout=5.0):
+def _settle(sub, timeout=5.0):
     """Card retrains now run on a background thread (async retrain, issue: memory retrains block the
     request). The prefix effect (consolidate/reset on the fake mem) therefore lands slightly AFTER the
-    endpoint returns -- so wait for it before asserting mem.rules / consolidate_calls."""
-    assert cs._join_retrain(timeout=timeout), "background retrain did not finish in time"
+    endpoint returns -- so wait for it (on THIS substrate's per-instance lock) before asserting
+    mem.rules / consolidate_calls."""
+    assert sub._join_retrain(timeout=timeout), "background retrain did not finish in time"
 
 
 @pytest.fixture()
@@ -138,7 +146,7 @@ def test_approve_activates_card_adds_to_rules_and_consolidates(iso):
 
     updated = sub._memory("/memory/approve", {"id": card["id"]})
     assert updated["status"] == "active"
-    _settle()                                            # await the backgrounded retrain
+    _settle(sub)                                         # await the backgrounded retrain
     # rules now == the active-card texts (both), and consolidate ran on exactly that set
     assert set(mem.rules) == {"likes tea", "wants bullet points"}
     assert len(mem.consolidate_calls) == 1
@@ -182,7 +190,7 @@ def test_approve_succeeds_for_a_card_with_real_provenance(iso):
 
     out = sub._memory("/memory/approve", {"id": card["id"]})
     assert out["status"] == "active"
-    _settle()
+    _settle(sub)
     assert mem.rules == ["prefers concise, technical answers"]
 
 
@@ -215,7 +223,7 @@ def test_disable_removes_from_rules_and_reconsolidates(iso):
     target = next(c for c in memory_cards.list_cards() if c["text"] == "wants bullet points")
 
     sub._memory("/memory/disable", {"id": target["id"]})
-    _settle()                                            # await the backgrounded retrain
+    _settle(sub)                                         # await the backgrounded retrain
     assert mem.rules == ["likes tea"]                    # dropped from the active set
     assert mem.consolidate_calls[-1] == ["likes tea"]   # retrained on the survivors
     # the card is KEPT, just unused
@@ -229,7 +237,7 @@ def test_reject_drops_card_from_rules(iso):
     target = next(c for c in memory_cards.list_cards() if c["text"] == "likes tea")
 
     sub._memory("/memory/reject", {"id": target["id"]})
-    _settle()                                            # await the backgrounded retrain
+    _settle(sub)                                         # await the backgrounded retrain
     assert mem.rules == ["wants bullet points"]
     assert memory_cards.get(target["id"])["status"] == "rejected"
 
@@ -241,7 +249,7 @@ def test_disabling_last_card_resets_the_prefix(iso):
     only = memory_cards.list_cards()[0]
 
     sub._memory("/memory/disable", {"id": only["id"]})
-    _settle()                                            # await the backgrounded retrain (reset here)
+    _settle(sub)                                         # await the backgrounded retrain (reset here)
     assert mem.rules == []
     assert mem.reset_calls == 1                           # empty active set -> prefix dropped
     assert mem.prefix is None
@@ -253,11 +261,11 @@ def test_reenable_restores_to_rules(iso):
     sub._memory("/memory/cards", {})
     target = next(c for c in memory_cards.list_cards() if c["text"] == "wants bullet points")
     sub._memory("/memory/disable", {"id": target["id"]})
-    _settle()                                            # await the backgrounded retrain
+    _settle(sub)                                         # await the backgrounded retrain
     assert mem.rules == ["likes tea"]
 
     sub._memory("/memory/enable", {"id": target["id"]})
-    _settle()                                            # await the backgrounded retrain
+    _settle(sub)                                         # await the backgrounded retrain
     assert set(mem.rules) == {"likes tea", "wants bullet points"}
 
 
@@ -271,7 +279,7 @@ def test_remove_active_card_reconsolidates_survivors(iso):
 
     res = sub._memory("/memory/remove", {"id": target["id"]})
     assert res["ok"] is True
-    _settle()                                            # await the backgrounded retrain
+    _settle(sub)                                         # await the backgrounded retrain
     assert memory_cards.get(target["id"]) is None        # gone
     assert mem.rules == ["likes tea"]
     assert mem.consolidate_calls[-1] == ["likes tea"]
@@ -299,7 +307,7 @@ def test_edit_active_card_reconsolidates(iso):
 
     updated = sub._memory("/memory/edit", {"id": card["id"], "text": "loves strong tea"})
     assert updated["text"] == "loves strong tea"
-    _settle()                                            # await the backgrounded retrain
+    _settle(sub)                                         # await the backgrounded retrain
     assert mem.rules == ["loves strong tea"]
     assert mem.consolidate_calls[-1] == ["loves strong tea"]
 

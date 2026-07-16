@@ -27,6 +27,7 @@ RESEARCH = os.path.dirname(HERE)
 sys.path.insert(0, RESEARCH)
 
 from clozn.server import app as cs      # noqa: E402
+import clozn.lab.substrates as lab_substrates       # noqa: E402  (the _InternalizedRetrain mixin lives here)
 import clozn.memory.cards as memory_cards            # noqa: E402
 import clozn.memory.mode as memory_mode             # noqa: E402
 from clozn.profiles import store as P           # noqa: E402
@@ -87,10 +88,11 @@ class FakeSteer:
         self.saved_custom_paths.append(path)
 
 
-class FakeSub(cs.Substrate):
+class FakeSub(lab_substrates._InternalizedRetrain, cs.Substrate):
     """A qwen-like substrate: ._mem for cards/rules, .steer for dials. Subclasses the real cs.Substrate
     (zero-arg, __init__ skipped) so /memory/* still runs through the REAL Substrate._memory dispatch if a
-    test needs it -- mirrors test_propose_memory.FakeSub."""
+    test needs it -- mirrors test_propose_memory.FakeSub. Mixes in _InternalizedRetrain (same MRO as the
+    real QwenSubstrate) so the internalized-mode switch goes through the REAL background-consolidate path."""
     name = "qwen"
 
     def __init__(self, mem=None, steer=None):
@@ -306,12 +308,11 @@ def test_switch_in_internalized_mode_kicks_the_normal_background_retrain(iso, mo
     mem, steer = FakeMem(["stale"]), FakeSteer()
     sub = FakeSub(mem=mem, steer=steer)
     monkeypatch.setattr(cs, "SUB", sub)
-    with cs._RETRAIN_META:
-        cs._RETRAIN.update(active=False, card_id=None, action=None, started_at=None, error=None)
+    # retrain state is per-substrate now; this fresh sub starts idle, so there's nothing to reset.
 
     out = _post("/profiles/switch", {"name": "friend"})
     assert out["resync"]["retraining"] is True
-    assert cs._join_retrain(timeout=5.0)                     # await the background consolidate
+    assert sub._join_retrain(timeout=5.0)                    # await the background consolidate
     assert mem.consolidate_calls and mem.consolidate_calls[-1] == ["Loves sci-fi"]
 
 
