@@ -54,6 +54,13 @@ _UNSPLITTABLE_NOTE = (_NOTE + " This section has nothing finer to split (drill_s
                      "boundary or hard newline inside it) -- reporting it as a single, whole-section "
                      "sub-section rather than fabricating a split that isn't there.")
 
+# Surfaced (with any_meaningful:false) when the section DID split but no sub-part measurably dominates:
+# each sub-section's removal moved the stored answer's fit within noise, so the within-section shares are
+# not a meaningful ranking (same honesty guard as section_influence, scoped to sub-sections).
+_NO_SUBEFFECT_NOTE = ("No single part of this section measurably dominates: every sub-section's removal "
+                     "moved the stored answer's fit within noise. The shares below are not a meaningful "
+                     "ranking. " + _NOTE)
+
 _MULTIPART_NOTE = ("This section has more than one part (it rode in more than one message/prompt region). "
                    "A sub-span found on its CONCATENATED text has no single, unambiguous prompt-coordinate "
                    "mapping without re-deriving which physical part each character came from -- this route "
@@ -191,8 +198,15 @@ def try_post(h, p, body):
                      "log_prob_delta": s["log_prob_delta"], "per_token_delta": s["per_token_delta"],
                      "summary": s["summary"]} for s in scored]
 
-    note = _UNSPLITTABLE_NOTE if len(spans) <= 1 else _NOTE
+    meaningful = si.any_meaningful(scored)
+    if len(spans) <= 1:
+        note = _UNSPLITTABLE_NOTE
+    elif not meaningful:
+        note = _NO_SUBEFFECT_NOTE
+    else:
+        note = _NOTE
     h._json(200, {"run_id": rid, "method": "teacher_forced", "note": note,
                  "parent_section": real_name, "baseline_logprob": baseline_logprob,
+                 "any_meaningful": meaningful,
                  "sub_sections": sub_sections})
     return True

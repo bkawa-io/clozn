@@ -362,7 +362,8 @@ def test_route_missing_run_is_a_clean_404(iso):
 def test_route_no_manifest_is_a_clean_empty_200(iso):
     rid = runlog.record(source="cli", messages=[{"role": "user", "content": "hi"}], response="hey")
     out = _post(f"/runs/{rid}/section-influence")
-    assert out == {"run_id": rid, "sections": [], "note": "no section manifest on this run"}
+    assert out == {"run_id": rid, "sections": [], "any_meaningful": False,
+                   "note": "no section manifest on this run"}
 
 
 def test_route_needs_the_substrate_503(iso):
@@ -380,6 +381,7 @@ def test_route_happy_path_ranks_sections_by_measured_effect(iso, monkeypatch):
     assert "NOT causal proof" in out["note"]
     assert "receipts" in out["note"]
     assert out["baseline_logprob"] == round(-0.1, 6)
+    assert out["any_meaningful"] is True                     # rag_context's -2.9 delta clears the floor
     names = [s["name"] for s in out["sections"]]
     assert names == ["rag_context", "few_shot"]              # biggest measured effect ranked first
     shares = [s["influence_share"] for s in out["sections"]]
@@ -390,6 +392,48 @@ def test_route_happy_path_ranks_sections_by_measured_effect(iso, monkeypatch):
                                  "per_token_delta", "summary"}
         assert s["log_prob_delta"] < 0                        # both removals make the answer fit worse here
         assert "worse" in s["summary"]
+
+
+class NegligibleFakeSub:
+    """Every arm scores ~the same -- removing EITHER section barely moves the fit (a parametric-knowledge
+    answer: the reply came from the model's weights, not the prompt). The share math still normalizes to
+    sum=1, so this is the case the any_meaningful guard exists to catch."""
+    name = "engine"
+
+    def score_tokens(self, messages, continuation_ids, *, continuation=None, block=None,
+                     steer_strengths=None, steer_vec=None, topk=0):
+        text = " ".join(str((m or {}).get("content", "")) for m in (messages or []) if isinstance(m, dict))
+        both = "whales are mammals" in text and "2+2" in text
+        return [{"id": 1, "piece": "x", "logprob": -0.10 if both else -0.12}]   # |delta| = 0.02 < 0.05 floor
+
+
+def test_route_flags_when_no_section_meaningfully_mattered(iso, monkeypatch):
+    # Both removals move the fit by 0.02 nats/token -- under _NEGLIGIBLE. Shares still sum to 1 (that's the
+    # trap), but any_meaningful must be False and the note must warn the shares aren't a ranking.
+    monkeypatch.setattr(cs, "SUB", NegligibleFakeSub())
+    rid = _seed_two_section_run()
+    out = _post(f"/runs/{rid}/section-influence")
+    assert out["any_meaningful"] is False
+    assert len(out["sections"]) == 2                          # sections still scored, not dropped
+    assert abs(sum(s["influence_share"] for s in out["sections"]) - 1.0) < 1e-6   # the misleading sum=1
+    assert "not a meaningful ranking" in out["note"]          # ...but the note says don't trust it
+    assert all("negligible" in s["summary"] for s in out["sections"])
+
+
+def test_any_meaningful_true_when_one_row_clears_the_floor():
+    assert si.any_meaningful([{"per_token_delta": -0.01}, {"per_token_delta": -2.4}]) is True
+
+
+def test_any_meaningful_false_when_all_rows_below_floor():
+    assert si.any_meaningful([{"per_token_delta": 0.01}, {"per_token_delta": -0.049}]) is False
+
+
+def test_any_meaningful_empty_is_false():
+    assert si.any_meaningful([]) is False
+
+
+def test_any_meaningful_tolerates_missing_or_none_delta():
+    assert si.any_meaningful([{"per_token_delta": None}, {}]) is False
 
 
 # ============================================================================================================

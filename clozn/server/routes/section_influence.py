@@ -55,6 +55,15 @@ from clozn.server import app as ctx
 _NOTE = ("Approximate influence via log-probability delta under teacher forcing; NOT causal proof. "
         "POST /runs/<id>/receipts for full ablation receipts.")
 _NO_MANIFEST_NOTE = "no section manifest on this run"
+# Surfaced when NOT any section cleared the per-token effect floor: manual probing showed that on a
+# parametric-knowledge answer (the reply came from the model's own weights, not the prompt), every
+# section's removal moves the fit within noise -- yet `influence_share` still normalizes to sum=1 and
+# manufactures a confident-looking split (e.g. 54%/46%) out of ~0.1-nat deltas. A UI leading with that
+# share would be lying. This note (paired with the top-level `any_meaningful:false` flag) says so plainly.
+_NO_EFFECT_NOTE = ("No prompt section measurably changed this answer: every section's removal moved the "
+                  f"stored answer's fit by less than {_FORCED_MEAN_THRESHOLD} nats/token, i.e. within noise "
+                  "-- the answer likely came from the model's own knowledge or the query itself. The shares "
+                  "below are not a meaningful ranking. " + _NOTE)
 
 # `summary` bucket boundaries for |per_token_delta|. The negligible/small line reuses forced.py's own
 # has-effect threshold (0.05 nats/token is already this codebase's one definition of "a real measured
@@ -98,6 +107,16 @@ def _shares(deltas: list) -> list:
     return [round(abs(d) / denom, 6) for d in deltas]
 
 
+def any_meaningful(scored: list) -> bool:
+    """True iff at least one scored section clears the per-token "real effect" floor (_NEGLIGIBLE). When
+    False, every section's removal moved the stored answer's fit within noise -- the answer didn't
+    measurably depend on ANY tagged part (it came from the model's own weights or the query). Exposed as a
+    top-level flag (and shared with the drill route) so a UI never presents `influence_share` -- which
+    always normalizes to sum=1 -- as a meaningful ranking of noise. Pure function of the scored rows, for
+    unit-testability; an empty list is vacuously not-meaningful (False)."""
+    return any(abs(s.get("per_token_delta") or 0.0) >= _NEGLIGIBLE for s in scored)
+
+
 def _section_score(run: dict, sec: dict, sub) -> dict | None:
     """One section's {id, name, source, log_prob_delta, per_token_delta, summary} (influence_share is
     filled in by the caller once every section's delta is known). None when forced_receipt could not
@@ -131,7 +150,7 @@ def try_post(h, p, body):
         # No manifest at all (predates section capture), or a manifest with nothing this fast path can
         # ablate (memory_card-only) -- either way, an honest empty answer, not an engine-availability check
         # nobody needed: there is nothing to score regardless of substrate state.
-        h._json(200, {"run_id": rid, "sections": [], "note": _NO_MANIFEST_NOTE})
+        h._json(200, {"run_id": rid, "sections": [], "any_meaningful": False, "note": _NO_MANIFEST_NOTE})
         return True
 
     sub = ctx.active_sub(h)
@@ -171,6 +190,9 @@ def try_post(h, p, body):
               "influence_share": s["influence_share"], "per_token_delta": s["per_token_delta"],
               "summary": s["summary"]} for s in scored]
 
-    h._json(200, {"run_id": rid, "method": "teacher_forced", "note": _NOTE,
+    meaningful = any_meaningful(scored)
+    h._json(200, {"run_id": rid, "method": "teacher_forced",
+                 "note": _NOTE if meaningful else _NO_EFFECT_NOTE,
+                 "any_meaningful": meaningful,
                  "baseline_logprob": baseline_logprob, "sections": scored})
     return True

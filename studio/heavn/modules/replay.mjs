@@ -1404,6 +1404,7 @@ function SectionsInfl({ rec }){
   return html`<div class="mod">
     <div class="mod-h"><span class="led"></span><span class="cap">prompt sections</span>
       <span class="tail">${infl === undefined ? "reading…" : sections.length + " section(s)"}</span></div>
+    ${infl && infl.any_meaningful === false && html`<div class="none" style="padding:3px 14px 4px;font-size:9px;opacity:.9">No section measurably influenced this reply — the shares below are within noise, not a ranking (it likely came from the model's own knowledge).</div>`}
     ${infl && infl.note && html`<div class="none" style="padding:0 14px 6px;font-size:8px">${String(infl.note).slice(0, 200)}</div>`}
     <div style="padding-bottom:4px">
       ${sections.map((sec, i) => html`<${SectionRow} key=${sec.id || i} rec=${rec} sec=${sec}
