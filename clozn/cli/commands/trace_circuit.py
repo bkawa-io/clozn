@@ -10,12 +10,12 @@ features-and-components sense. Its nodes are LOCATIONS in the residual stream, n
 functional roles, and a trace does not generalize beyond its prompt. The measured legibility
 (~24% median) and the SAE study in section 5e are what forced the honest name: at these sites no
 individual dictionary feature is load-bearing, so there is no sparse circuit to report. The
-original `trace-circuit` spelling stays registered as a hidden alias so nothing that already calls
-it breaks.
+original `trace-circuit` spelling was retired once the rename to `causal-trace` shipped (no
+compat alias -- nothing else in the product called it by the old name).
 
-Registration in clozn/cli/main.py mirrors quant-check exactly: import `cmd_trace_circuit,
-add_subparser as _add_trace_circuit` alongside the other commands.* imports, and call
-`_add_trace_circuit(sub)` in build_parser() before `return p`.
+Registration in clozn/cli/main.py mirrors quant-check: import `cmd_trace_circuit,
+add_subparser as _add_causal_trace` alongside the other commands.* imports, and call
+`_add_causal_trace(sub)` in build_parser() before `return p`.
 """
 from __future__ import annotations
 
@@ -24,13 +24,12 @@ import sys
 
 
 def add_subparser(sub):
-    """Register `clozn causal-trace` + the legacy `trace-circuit` alias (own function so wiring is
-    testable without dispatching; mirrors commands.quant_check.add_subparser)."""
+    """Register `clozn causal-trace` (own function so wiring is testable without dispatching;
+    mirrors commands.quant_check.add_subparser)."""
     pt = _build("causal-trace", sub,
                 help="causal trace: which (layer, position) sites causally support continuation "
                      "token N? measured by ablation, not attention (needs a running cloze-server "
                      "with a J-lens sidecar)")
-    _build("trace-circuit", sub, help=None)   # legacy alias, hidden from --help
     return pt
 
 

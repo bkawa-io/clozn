@@ -118,8 +118,11 @@ first: `cd engine/core && build_gpu.bat` (GPU, CUDA) or `build_serve.bat` (CPU).
 The legibility-science spikes and findings (the interpretability-tax thread) live in a separate
 local-only sibling repo: `../clozn-research`.
 
-Two model substrates sit behind one spine today: **autoregressive** GGUF and **diffusion** LLaDA/Dream
-(viz-only). The AR core contract includes trace, harvest, steer, and teacher-forced `/score`; the checked-in
-qualification ledger records how far each exact model/quant has passed. **J-lens is fit per model**
-(offline, nf4 + autograd) and applied forward on the engine's own GGUF head; today's qualified fit covers
-Qwen2.5-7B. A second-family fit and targeted cross-family write checks remain open.
+Two model substrates sit behind one spine: **autoregressive** GGUF (live) and **diffusion** LLaDA/Dream
+— **dormant** (re-enter on a chat-quality open dLLM; pin-and-resolve editing, Studio's Edit view, is the
+one piece kept visible meanwhile). The AR core contract includes trace, harvest, steer, and teacher-forced
+`/score`; the checked-in qualification ledger records how far each exact model/quant has passed. **J-lens
+runs a published Jacobian-lens method** (not a clozn invention), fit per model offline (nf4 + autograd)
+and applied forward on the engine's own GGUF head; today's qualified fit covers Qwen2.5-7B, and the
+quantized-transfer fidelity itself isn't claimed as novel. A second-family fit and targeted cross-family
+write checks remain open.

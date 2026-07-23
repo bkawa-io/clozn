@@ -73,7 +73,7 @@ from clozn.cli.commands.eval import cmd_eval, add_subparser as _add_eval        
 from clozn.cli.commands.test_model import cmd_test_model, add_subparser as _add_test_model      # noqa: E402,F401
 from clozn.cli.commands.qualify import cmd_qualify, add_subparser as _add_qualify              # noqa: E402,F401
 from clozn.cli.commands.qualify_chat_io import add_subparser as _add_qualify_chat_io            # noqa: E402
-from clozn.cli.commands.trace_circuit import cmd_trace_circuit, add_subparser as _add_trace_circuit  # noqa: E402
+from clozn.cli.commands.trace_circuit import cmd_trace_circuit, add_subparser as _add_causal_trace  # noqa: E402
 from clozn.cli.commands.ci_check import cmd_ci_baseline, cmd_ci_check, add_subparser as _add_ci_check  # noqa: E402,F401
 from clozn.cli.commands.experiment_suite import add_subparser as _add_experiment_suite                  # noqa: E402
 from clozn.cli.commands.migrate import cmd_migrate_runs                                        # noqa: E402
@@ -238,7 +238,7 @@ def build_parser():
     _add_test_model(sub)    # `clozn test-model` — the model's own CI: pinned probes vs. a golden fixture
     _add_qualify(sub)       # `clozn qualify-whitebox <gguf>` — honest per-feature capability matrix
     _add_qualify_chat_io(sub)  # `clozn qualify-chat-io <gguf>` — exact live native structured-I/O gate
-    _add_trace_circuit(sub)  # `clozn trace-circuit` — intervention-validated causal circuit trace
+    _add_causal_trace(sub)  # `clozn causal-trace` — intervention-validated causal tracing
     _add_ci_check(sub)      # `clozn ci baseline`/`clozn ci check` — headless CI gate (§4.4)
     _add_experiment_suite(sub)  # `clozn experiment run/show` — versioned case x variant x seed object (§4.2)
     _add_context(sub)           # `clozn context last` — delivered vs survived prompt receipt (Phase 2.4)

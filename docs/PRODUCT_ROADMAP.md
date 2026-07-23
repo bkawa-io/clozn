@@ -120,9 +120,11 @@ the front door.
    texture; never the pitch. (Demotes BACKLOG #18 ambient channel-3 — see §8.)
 2. **Model CI is promoted to the lead wedge.** "Evaluation is vibes" is a *named* failure mode;
    silent no-op LoRAs and undetected forgetting are the top developer pains; nobody owns the gate.
-3. **The J-lens is no longer unique** (Neuronpedia shipped a Jacobian Lens 2026-07-17, verified).
-   Ours differentiates by *where it runs* (inside the llama.cpp serving path, <10% overhead, on
-   quantized models), not by existing.
+3. **The J-lens runs a published method, not our invention** — a Jacobian lens (Neuronpedia shipped
+   one 2026-07-17, verified; the technique traces to Anthropic's own interpretability work). What we
+   can claim is *where it runs* (inside the llama.cpp serving path, <10% overhead, on the quantized
+   model you actually deploy) — not the method, and not that quantized transfer is novel; that
+   fidelity is measured on one model family so far, unverified beyond it.
 4. **Steering-vector sharing is a bet, not a plan** — strong adoption-gap evidence, weak voiced
    demand. Test cheaply (§8 R4) before building any UI.
 5. **The GGUF-interp niche is real but inferred** — two serious teams built "interp bolted onto a
@@ -401,9 +403,12 @@ training, native circuit-tracer reimplementation.
 - **R6 — Memory that changes the answer.** Two-tier legible memory scale-up (X7, n=6 today) +
   native fast-weight fact memory (BACKLOG #12) with with/without/null receipts. *Hook:* the
   persona-1/2 memory story beyond prompt cards. **L/R.**
-- **R7 — AR×diffusion.** H2 ceiling-first with degeneration veto (per the A4 runbook §0b
-  revisions — not this file's R1/R2 lanes), H5 counterfactual patches,
-  Route C free-text edit instructions. VRAM-gated (co-residency); park until ~10 GB frees. **R.**
+- **R7 — AR×diffusion. DORMANT** — re-enter on a chat-quality open dLLM (today's LLaDA/Dream are
+  viz-only research substrates, not product-grade); pin-and-resolve editing (Studio's Edit view) is
+  the one piece kept visible meanwhile. Also VRAM-gated regardless (co-residency; park until ~10 GB
+  frees). H2 ceiling-first with degeneration veto (per the A4 runbook §0b revisions — not this
+  file's R1/R2 lanes), H5 counterfactual patches, Route C free-text edit instructions remain
+  scoped, paused. **R.**
 - **R8 — Cross-family dials.** Dense Llama-3.1-8B J fit (deferred #109, overnight) → A1.4 spec
   ports with floors/ceilings; Fast-J stays scoped to subspace features (dial authoring needs the
   dense J — measured, not a preference). *Hook:* "author a dial once, run it on any qualified
