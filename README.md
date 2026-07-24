@@ -1,4 +1,4 @@
-# Clozn
+# Clozn (wip dont use this yet please)
 
 **Model CI and an inspectable local runtime for the GGUFs you already use.** Compare a base model with a
 fine-tune, run target + guard experiments, and fail CI on regressions with per-token receipts. Then serve
