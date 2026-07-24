@@ -3,12 +3,13 @@
 **Status:** internal research writeup. Not for external distribution without a separate review pass.
 **Scope:** Qwen2.5-7B-Instruct, Qwen3.5-9B, Meta-Llama-3.1-8B-Instruct, all served Q4_K_M via
 llama.cpp through clozn's own engine. Two vendor families, three checkpoints, four independently
-built measurement instruments, small batteries (5-30 cases each). Every number below is read
-directly from a receipt JSON or a script's committed source; where a receipt disagreed with the
-draft brief this was written against, that is called out explicitly in its own section rather than
-quietly corrected.
+built measurement instruments, small batteries (5-30 cases each), plus a same-day GPU-lab addendum
+(below) with four more findings. Every number below is read directly from a receipt JSON or a
+script's committed source; where a receipt disagreed with the draft brief this was written against,
+that is called out explicitly in its own section rather than quietly corrected.
 
-**Date:** 2026-07-23. **Author's note:** this document is written by an agent from the receipts on
+**Date:** 2026-07-23 (original); GPU-lab addendum added same day, after a `git merge main` brought in
+the underlying commits. **Author's note:** this document is written by an agent from the receipts on
 disk; it makes no claims not traceable to a specific file path below.
 
 ---
@@ -32,6 +33,19 @@ results together triangulate a specific, falsifiable, and narrower claim than "e
 distributed": on these models, at these scales, *localized causal structure lives on the input
 attention edges, not on the residual stream's sites* — a sharp instrument (edge severance) finds it,
 and a blunt one (residual ablation) does not, at any granularity tried so far.
+
+**Update, same day.** A GPU-lab follow-up session (addendum below) tested the methodological seam's
+own prediction directly: does a non-contiguous SET of input positions, severed at the attention edge
+rather than ablated at the residual site, beat matched random-k controls the way the contiguous span
+already does? It does — 4/5 distributed-retrieval cases clear the >=2x control bar (mean separation
+4.21x, up to 10.75x), and in 3/5 the free (non-contiguous) set clearly beats even the best equal-size
+*contiguous* span. The precise positive claim this document now defends: **the nameable causal unit
+on these models is a small, possibly non-contiguous SET OF INPUT EDGES severed at the attention
+interface — not any set of residual sites, and not necessarily a contiguous run of edges either.**
+The same session also partly retired this document's own quantization scope caveat (Q4_K_M residuals
+measured at ~99.4-99.5% cosine alignment with a full-precision reference, across every position
+tested) and found that even quantization *damage*, not just causal function, is mostly distributed
+rather than localizable to one layer.
 
 ---
 
@@ -294,6 +308,11 @@ one thing in this whole program that *did* beat its controls by 100x or more —
 span — is a different instrument (attention-edge severance of contiguous input tokens), not this one
 (residual mean-ablation of an arbitrary position set).
 
+**This exact open question was answered the same day.** A follow-up run, `edge_coalitions_7b.json`,
+repeats this coalition-construction idea with the sharp instrument (attention-edge severance) instead
+of the blunt one (residual mean-ablation) — see the GPU-lab addendum below. Short version: the
+molecule that dissolved here comes back to life under severance.
+
 **Receipt paths.** `runs/experiments/molecules_qwen2.5-7b.json` (contrastive, simple factual),
 `runs/experiments/molecules_qwen2.5-7b-abs.json` (absolute, simple factual),
 `runs/experiments/molecules_qwen2.5-7b-kv.json` (absolute, distributed cases, readout excluded);
@@ -304,7 +323,8 @@ method + VERDICT block in `scripts/tracer/molecules.py`.
 ## The positive half: what IS real (sets, not atoms)
 
 The negative results above are not the whole story, and a document that only listed failures would
-misrepresent the receipts. Four things measured cleanly and repeatably:
+misrepresent the receipts. Six things measured cleanly and repeatably (five from the original
+instruments, one — #6 — from the same-day GPU-lab addendum):
 
 1. **Greedy contiguous input spans under attention-edge severance.** The one clean, large,
    unambiguous win in this entire program. Ratios over matched random-position-set controls reach
@@ -341,6 +361,13 @@ misrepresent the receipts. Four things measured cleanly and repeatably:
    agreement" headline is reproducible from the stored receipts, but not by reading the summary
    block already written into the JSON files — see the next section.
 
+6. **Non-contiguous edge coalitions beating random-k AND beating the equal-size contiguous span.**
+   The GPU-lab addendum below (`edge_coalitions_7b.json`) answers Instrument 4b's own open question:
+   under attention-edge severance rather than residual ablation, greedily-built coalitions of input
+   positions clear the >=2x control bar in 4/5 distributed cases (mean 4.21x) and beat the best
+   equal-size contiguous span in 3/5 of those. This is the arc's constructive ending — the molecule
+   that failed under the blunt instrument is real under the sharp one.
+
 ---
 
 ## The methodological seam: a sharp instrument and a blunt one
@@ -374,6 +401,12 @@ measure on this specific engine and these specific models — not a general clai
 interpretability is impossible, and not yet a mechanistic explanation of *why* the edges carry more
 structure than the sites (see Open Questions).
 
+**This prediction was tested directly, the same day.** If the seam is real, a coalition-construction
+method that failed under residual mean-ablation (Instrument 4b, separation 0.93x-1.43x) should
+succeed once pointed at the sharp instrument instead. `edge_coalitions_7b.json` (GPU-lab addendum
+below) ran exactly that experiment on the same kind of distributed-retrieval cases and found 4/5
+clearing the >=2x bar (mean 4.21x) — the seam's prediction, confirmed rather than merely asserted.
+
 ---
 
 ## Honest scope limits
@@ -400,7 +433,17 @@ structure than the sites (see Open Questions).
   format. `notes/JLENS_SAE_FINDINGS.md` finding #8 documents that other work in this project (the
   J-lens sidecar) was fit against a *different* 4-bit scheme (`nf4` via bitsandbytes) — a reminder
   that "4-bit" is not one thing, and that this document's quantization scope is specifically Q4_K_M
-  on the served engine, not a general claim about 4-bit quantization.
+  on the served engine, not a general claim about 4-bit quantization. **Update:** a same-day
+  qualification run partially retires this caveat's sharpest edge — "maybe this is just a
+  quantization artifact." `runs/experiments/quant_vs_reference_7b.json` (Qwen2.5-7B, 12 prompts, 3
+  mid layers, ALL prompt positions) measured Q4_K_M residuals at mean cosine **0.995** against the
+  full-precision bf16 reference (worst single position **0.973**), a Q8_0 sanity anchor at **0.9998**
+  confirming layer alignment, and 100% next-token argmax agreement at both Q8 and Q4. Every
+  activation the four instruments above read off the served engine is, on this measurement,
+  ~99.4-99.5% cosine-aligned with what a full-precision reference would show at the same site — the
+  residual stream is not scrambled by Q4_K_M relative to FP. This narrows, but does not close, the
+  quantization scope note: still Qwen2.5-7B only, 12 prompts, 3 of 28+ layers (see the GPU-lab
+  addendum below for the full method and the Q2_K degradation-floor comparison).
 - **7-9B instruction-tuned chat models only.** No base/pretrained models, no models under 7B or over
   9B, are part of this specific claim. (Other threads in this project — the peek-ahead-steering and
   CoT-shortcut null results in `notes/JLENS_SAE_FINDINGS.md` — touch a 0.5B model, but that is a
@@ -435,11 +478,17 @@ structure than the sites (see Open Questions).
   were tested jointly only up to k=3, and even that figure is not in the stored receipt — see the
   reconciliation note below). Other layers per site, value-zeroing vs. mean-ablation, and head roles
   at non-answer positions are all untested (`notes/HEAD_UNITS_DESIGN.md` §"left open").
-- **Position coalitions:** the module's own next step is to try the coalition-construction idea on
-  attention-EDGE sets rather than residual-site sets — exactly where the methodological seam above
-  says the structure should live — plus larger k and other layers (`scripts/tracer/molecules.py`,
-  final comment block: "any revival starts from a coalition that beats its control — this one does
-  not").
+- **Position coalitions on attention edges — ANSWERED (2026-07-23).** The module's own next step was
+  to try the coalition-construction idea on attention-EDGE sets rather than residual-site sets —
+  exactly where the methodological seam above says the structure should live. `edge_coalitions_7b.json`
+  (GPU-lab addendum below) did this: 4/5 distributed cases clear the >=2x control bar (mean 4.21x),
+  and 3/5 beat the equal-size contiguous span. Newly open in its place: **cross-family replication**
+  (Qwen2.5-7B only so far — Llama-3.1-8B untested at this granularity), **larger batteries** (n=5 is
+  smaller than any other instrument in this document), **larger k / other layers** (the found sets
+  topped out at k<=4; whether larger non-contiguous coalitions keep separating is untested), and
+  **the "red door" failure mode** — one of the 5 cases (k=1) tied its random control exactly (1.0x
+  separation); understanding whether that is a property of the prompt, the k=1 degenerate case, or a
+  real limit of the method needs more cases before it can be dismissed as noise.
 - **Contrastive scoring at battery scale:** the fix for `screen_null`'s generic-vs-specific caveat
   (contrastive scoring, `1edcecf`) exists in `clozn/analysis/tracer.py` but has not been re-run as a
   full battery the way the absolute-scoring `causal_trace_battery` has. The 91.7%/91.1% S4 numbers
@@ -456,9 +505,166 @@ structure than the sites (see Open Questions).
 
 ---
 
+## GPU-lab session results (2026-07-23)
+
+A same-day GPU-lab session (torch cu128 on a local 5080) ran four additional measurements that bear
+directly on this document: one partially retires a scope caveat, one is a distributed-damage echo of
+the main thesis from the failure-mode side, one is peripheral context, and one directly answers this
+document's own open question and is the arc's constructive ending. Commits: `4292456`, `81f74b9`,
+`4a42c5d`, `6b736f5`, `1958e97`.
+
+### A. Quantization fidelity: does Q4_K_M preserve the residuals this document reads?
+
+**Method.** `scripts/calibration/quant_vs_reference.py`. Qwen2.5-7B-Instruct, sequential-VRAM capture
+on a single 16GB card: the full-precision bf16 reference is captured via torch, freed, then each GGUF
+quant (Q8_0, Q4_K_M, Q2_K) is captured via the engine. Compares the residual at layers 14/18/21,
+**at every prompt position** (cosine similarity — what a lens or tracer actually reads), plus
+next-token argmax agreement (behavioral), across 12 prompts. Q8_0 is a sanity anchor (near-lossless,
+so its cosine confirms the engine's `l_out-<il>` aligns with torch's `hidden_states[il+1]` — the
+numbers are trustworthy before Q4/Q2 are read at all); Q2_K is the degradation floor, included so the
+metric's dynamic range is visible (it does not saturate at 1.0 for every quant).
+
+**Control.** Not a causal control in the sense of the other instruments — this is a qualification
+measurement. The Q8_0 anchor and Q2_K floor bracket the metric so a Q4_K_M reading in between is
+interpretable rather than a bare, uncalibrated number.
+
+**Result.** Q8_0: mean cosine **0.9998** at all three layers (min_cos 0.9996/0.9993/0.9991),
+argmax_agree **1.0**. Q4_K_M — the format every instrument in this document reads from — mean
+cosine 0.9953/0.9950/0.9946 across layers 14/18/21 (~**0.995** average), **worst single position
+cosine 0.9734** (layer 21) across all 98 positions x 12 prompts x 3 layers swept, argmax_agree
+**1.0** (100% next-token agreement with the FP reference on every prompt). Q2_K: mean cosine
+0.9579/0.9571/0.9540 (layer 21 alone is exactly **0.954**; the 3-layer average is 0.956 — a minor
+imprecision if "0.954" is read as an all-layer mean rather than layer 21's own figure), worst
+min_cos **0.8443** (≈0.84), argmax_agree **0.917** (≈92%).
+
+**Reading.** This directly answers the objection "maybe the distributed-function pattern is a
+quantization artifact, not a fact about the model." At Q4_K_M, the residual stream is ~99.4-99.5%
+cosine-aligned with the full-precision reference at every layer and position tested, with identical
+next-token behavior (100% argmax agreement) — not a last-token artifact; the deepened, all-positions
+version of this script confirms the same numbers hold at every position, not just the answer row.
+This does not prove the distributed-function pattern is architecture-general or quantization-
+independent in some other respect, but it removes the most obvious version of the objection: the
+activations this document's four instruments read are not scrambled or grossly degraded relative to
+full precision. Honest scope: Qwen2.5-7B only, 12 prompts, 3 of 28+ layers — not yet a second family,
+not exhaustive across depth.
+
+**Receipt path.** `runs/experiments/quant_vs_reference_7b.json`; method
+`scripts/calibration/quant_vs_reference.py`; commits `4292456` (last-position pilot) and `81f74b9`
+(deepened to all positions — the version in the stored receipt: confirmed by `"n_positions": 98` per
+layer and `"scope": "ALL prompt positions"` in the JSON itself).
+
+### B. Transplant localization: even the quantization DAMAGE is distributed
+
+**Method.** `scripts/tracer/transplant_localize.py`. Find prompts where Q2_K's next-token argmax
+flips relative to the FP reference (a genuine quantization regression), then transplant the FP
+reference's clean residual into the Q2_K engine at a single layer (of 5 candidates: 10/14/18/21/25)
+and see whether the flip corrects. The layer whose transplant fixes the flip localizes where the
+damage manifests — proven by transplant, not asserted.
+
+**Control.** A random-equal-norm-direction write at the same layer and position: does an arbitrary
+perturbation of the same magnitude ALSO fix the flip? If so, the "fix" is not FP-specific — the flip
+was a knife-edge decision any perturbation would topple, not evidence the FP residual was uniquely
+correct at that layer.
+
+**Result — two inconsistent versions of this finding exist in the project's own history, and only
+one is in the file this document was told to read; flagged prominently rather than silently
+resolved.** The first pass (commit `81f74b9`, no control): 12 Q2_K flips found across 20 prompts;
+**5/12** corrected by transplanting the FP residual at a single layer, most often layers 14 (3
+fixes) and 10 (2 fixes). This is exactly what `runs/experiments/transplant_localize_7b.json`
+currently contains on disk — verified directly: its summary's own keys
+(`n_flips_fixed_by_some_layer`, `fixes_by_layer`, and each flip's `fixed_by_layers`) match only this
+**pre-control** schema; there is no `random_fixed_by` field anywhere in the file. The very next
+commit, `4a42c5d`, added exactly the random-equal-norm control the first pass's own commit message
+flagged as missing, and reports a DIFFERENT, corrected result on a re-run: 9 flips (not 12), FP
+transplant fixed **3/9**, but the random control fixed **2/9** of those same flips — leaving only
+**2/9** flips genuinely FP-specific (a Roman-numeral-40 case at L10/14, and a 9-factorial case at
+L14; a third, "third planet from the sun," is a near-tie any perturbation topples). The commit's own
+words: *"the first run's 5/12 was overclaimed — perturbation-sensitivity masquerading as
+localization; the control caught it."* The currently-committed script,
+`scripts/tracer/transplant_localize.py`, matches this CORRECTED version exactly (its summary computes
+`n_fp_fixed`/`n_fp_specific_fixed`/`n_random_fixed` and states "the control corrected the first run's
+overclaim" verbatim) — but the JSON file it writes to still holds the earlier, superseded, no-control
+output. **The corrected 3/9-vs-2/9 numbers exist only in the `4a42c5d` commit message, not in any
+file read for this document.** Reported here on the commit's authority; see reconciliation #5 below.
+
+Either version supports the same qualitative reading argued throughout this document: quantization
+damage does not localize to one specific layer in the general case. Taking the corrected (and more
+careful) numbers: only 2 of 9 genuine Q2_K regressions were fixed by an FP-specific single-layer
+transplant; the rest were either fixed just as well by a random perturbation (distributed damage, or
+a knife-edge decision rather than a localized cause) or not fixed by any single layer tested at all.
+Even where quantization actively breaks a prediction, the breakage is mostly not a nameable
+single-site event — an on-theme echo of this document's thesis from the failure-mode side rather
+than the causal-attribution side.
+
+**Receipt path.** `runs/experiments/transplant_localize_7b.json` (stale — holds the superseded
+12-flip/5-fixed, no-control version; see reconciliation #5); corrected 3/9-vs-2/9 numbers from commit
+`4a42c5d` only (not reproducible from any file read for this document); method
+`scripts/tracer/transplant_localize.py` (matches the corrected version, not the stored JSON).
+
+### C. Facts efficacy tuning (peripheral context, not core to this document's thesis)
+
+One line: a step-targeted fact-injection mechanism (SlotMem, a memory-injection research thread
+unrelated to this document's causal-attribution instruments) was tuned from 42% to **75%** recall by
+lengthening its injection schedule from 1 answer-token direction to 3 (Qwen2.5-7B, layer 18, eta*1.0,
+null-controlled at 0%, n=12) — another instance of "a well-chosen SET of scheduled steps beats a
+single one," but a memory mechanism, not a causal-attribution result, and out of scope beyond this
+note. Receipt: `runs/experiments/facts_efficacy_tune_7b.json`; method
+`scripts/calibration/facts_efficacy_tune.py`; commit `6b736f5`.
+
+### D. Edge coalitions: the molecule LIVES under the sharp instrument — the arc's constructive ending
+
+**Method.** `scripts/tracer/edge_coalitions.py`. Directly answers Instrument 4b's own open question:
+do non-contiguous coalitions of input positions beat matched random controls if severed at the
+attention EDGE (this document's "sharp" instrument) instead of ablated at the residual SITE (the
+"blunt" one)? On the same 5 distributed cases as the molecules program (KV recall, induction,
+multi-hop; readout position excluded), greedily build a SET of prompt positions whose joint
+attention-severance (all layers, all query rows downstream of the set, renormalized — the same
+primitive as Instrument 1's span search, but NOT constrained to be contiguous) most drops the
+answer's logprob, stopping by the same 80%-of-peak rule as `molecules.py`. Compare against 8 random
+same-size position-sets AND against the best contiguous span of the same size k (the honest
+tiebreaker: if the free set never beats the best equal-size span, contiguity was never the real
+constraint and Instrument 1's story stands unchanged as-is).
+
+**Control.** Matched random-k position sets (8 draws, same size, excluding the readout row) — the
+same control design as `molecules.py`, now applied to edge severance instead of residual ablation.
+
+**Result.** **4 of 5 cases** beat the random-k control by >=2x (mean separation **4.21x**, up to
+**10.75x** on the "box is blue / lamp is red / cup is green" case: a 2-position set {17, 3} severed
+jointly reaches **+7.762** nats against a random-2-set ceiling of only **+0.722**). In **3 of those
+5** cases (the ones found at k>=2) the free set clearly beats the best equal-size CONTIGUOUS span at
+the same budget: {17,3} reaches +7.762 vs. the best 2-token contiguous span's **+1.766**; the
+Anna/Ben/Carl "person with the map" case reaches +5.238 (its own 2-set) vs. **+2.581** (best
+2-span); the Zorblax case — a near-contiguous block at positions 11-13 plus one separated site at
+position 4 — reaches +14.871 vs. **+5.201** for the best contiguous 4-span. The other two cases were
+found at k=1 (a single position), where a "set" and a "span" of size 1 are definitionally identical,
+so no contiguity comparison is possible there: one (Tokyo/Paris/Cairo) still clears its random-k
+control cleanly (2.29x); the other — the "red door" case — is the one reported failure: its single
+chosen position's severance delta (+13.157) exactly ties the strongest of the 8 random single
+positions (also +13.157), separation **1.0x**, below the >=2x bar. Reported as a real miss, not
+smoothed over.
+
+**Reading.** This is the arc's constructive ending. Every other granularity in this document —
+positions solo, SAE features solo, attention heads solo and joint-3, residual sites solo, AND
+residual-site coalitions (Instrument 4b) — failed to produce an individually-nameable causal unit
+that beats its control. Edge coalitions are the one place a SET-level construction beats its control
+at a granularity finer than the whole contiguous span (Instrument 1) and coarser than a single
+position, and it succeeds specifically because it uses the sharp instrument the methodological-seam
+section already identified as the one that finds structure. The precise positive claim this document
+defends, updated: **the nameable causal unit on these models is not a residual site, not a
+residual-site coalition, not a solo SAE feature, not a solo or small-jointly-ablated attention head —
+it is a small, possibly non-contiguous SET OF INPUT EDGES severed at the attention interface.**
+Contiguity (Instrument 1's original span) is a special case of this more general unit, not the
+fundamental constraint; whether non-contiguity generalizes further (larger k, other prompt types,
+the second family) is the open question this addendum leaves for the next battery.
+
+**Receipt path.** `runs/experiments/edge_coalitions_7b.json`; method + reading in
+`scripts/tracer/edge_coalitions.py`; commit `1958e97`.
+
+---
+
 ## Numbers that required reconciliation (report honestly)
 
-Four figures in the sources for this document did not match on first read. All four are reported
+Five figures in the sources for this document did not match on first read. All five are reported
 here with the reconciliation, not silently corrected or silently dropped.
 
 1. **"41/41 two-family agreement"** (`notes/RETROSPECTIVE_2026-07.md`, `provenance.py`'s
@@ -493,6 +699,14 @@ here with the reconciliation, not silently corrected or silently dropped.
    the measured range rather than matching the median — most likely written from an earlier or
    partial pass of the same battery. Not corrected in `coalition.py` by this document; flagged here
    for whoever next touches that file.
+5. **Transplant localization "3/9 FP-specific, 2/9 random-fixed"** (commit `4a42c5d`, the corrected,
+   control-added re-run) is **not** what `runs/experiments/transplant_localize_7b.json` contains on
+   disk: the stored file has 12 flips, 5/12 fixed, and no random-control field at all — the schema of
+   an *earlier* commit (`81f74b9`) that `4a42c5d`'s own message says was "overclaimed" and corrected.
+   The currently-committed script (`scripts/tracer/transplant_localize.py`) matches the corrected
+   version's logic exactly, but the receipt it would produce was never re-written to disk (or was
+   overwritten back to the older run) after the fix. Both numbers are reported in this document's
+   GPU-lab addendum (§B), with the discrepancy stated there and here rather than picking one silently.
 
 ---
 
@@ -528,3 +742,11 @@ here with the reconciliation, not silently corrected or silently dropped.
 | 26 | `notes/CIRCUIT_TRACER_DESIGN.md` §5f-5g | Methodological seam | Cross-position residual patching blocked (0.0% routed fraction); the fix that led to attention-edge severance |
 | 27 | `notes/RETROSPECTIVE_2026-07.md` | Context | Cycle retrospective; source of the "41/41" and "distributed function" framing this document verifies |
 | 28 | `notes/JLENS_SAE_FINDINGS.md` finding #8 | Scope note | nf4-vs-Q4_K_M quantization-scheme distinction |
+| 29 | `runs/experiments/quant_vs_reference_7b.json` | GPU-lab A. Quant fidelity | Q4_K_M vs FP residual cosine (all positions, 3 layers, 12 prompts); mean 0.995, worst 0.973 |
+| 30 | `runs/experiments/transplant_localize_7b.json` | GPU-lab B. Transplant localization | STALE: holds the superseded 12-flip/5-fixed, no-control run (see reconciliation #5) |
+| 31 | `runs/experiments/facts_efficacy_tune_7b.json` | GPU-lab C. Facts efficacy (peripheral) | Step-targeted injection tuning sweep; best config 75% recall, null 0% |
+| 32 | `runs/experiments/edge_coalitions_7b.json` | GPU-lab D. Edge coalitions | 5-case non-contiguous edge-severance coalition battery; 4/5 beat random-k, 3/5 beat contiguous span |
+| 33 | `scripts/calibration/quant_vs_reference.py` | GPU-lab A. Method | Sequential-VRAM FP-vs-quant cosine/argmax qualification script |
+| 34 | `scripts/tracer/transplant_localize.py` | GPU-lab B. Method | FP-residual transplant + random-control script (matches the CORRECTED numbers, not the stored JSON) |
+| 35 | `scripts/calibration/facts_efficacy_tune.py` | GPU-lab C. Method | Layer x eta x schedule sweep for step-targeted fact injection |
+| 36 | `scripts/tracer/edge_coalitions.py` | GPU-lab D. Method | Greedy non-contiguous edge-severance coalition script + contiguous-span tiebreaker |
