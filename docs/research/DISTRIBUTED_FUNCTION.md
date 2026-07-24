@@ -575,31 +575,28 @@ currently contains on disk — verified directly: its summary's own keys
 (`n_flips_fixed_by_some_layer`, `fixes_by_layer`, and each flip's `fixed_by_layers`) match only this
 **pre-control** schema; there is no `random_fixed_by` field anywhere in the file. The very next
 commit, `4a42c5d`, added exactly the random-equal-norm control the first pass's own commit message
-flagged as missing, and reports a DIFFERENT, corrected result on a re-run: 9 flips (not 12), FP
-transplant fixed **3/9**, but the random control fixed **2/9** of those same flips — leaving only
-**2/9** flips genuinely FP-specific (a Roman-numeral-40 case at L10/14, and a 9-factorial case at
-L14; a third, "third planet from the sun," is a near-tie any perturbation topples). The commit's own
-words: *"the first run's 5/12 was overclaimed — perturbation-sensitivity masquerading as
-localization; the control caught it."* The currently-committed script,
-`scripts/tracer/transplant_localize.py`, matches this CORRECTED version exactly (its summary computes
-`n_fp_fixed`/`n_fp_specific_fixed`/`n_random_fixed` and states "the control corrected the first run's
-overclaim" verbatim) — but the JSON file it writes to still holds the earlier, superseded, no-control
-output. **The corrected 3/9-vs-2/9 numbers exist only in the `4a42c5d` commit message, not in any
-file read for this document.** Reported here on the commit's authority; see reconciliation #5 below.
+flagged as missing (its interim run: 9 flips, FP 3/9, random 2/9, FP-specific 2/9 — recorded only in
+that commit's message because its summary step crashed before writing the JSON). The receipt was then
+REGENERATED with the corrected script (2026-07-23, fresh FP capture), and that regenerated,
+control-carrying version is what `runs/experiments/transplant_localize_7b.json` now holds — the
+FINAL numbers: **12 flips; FP transplant fixed 5/12; the random control fixed 3/12; only 3/12
+(25%) genuinely FP-specific.** (The flip set itself varied slightly across FP recaptures — 12 vs 9
+flips — bf16 reload variance on knife-edge prompts; reported rather than smoothed.) The corrected
+commit's own words apply to every pass: *"the first run's 5/12 was overclaimed —
+perturbation-sensitivity masquerading as localization; the control caught it."*
 
-Either version supports the same qualitative reading argued throughout this document: quantization
-damage does not localize to one specific layer in the general case. Taking the corrected (and more
-careful) numbers: only 2 of 9 genuine Q2_K regressions were fixed by an FP-specific single-layer
+Every pass supports the same qualitative reading argued throughout this document: quantization
+damage does not localize to one specific layer in the general case. Taking the final regenerated
+numbers: only 3 of 12 genuine Q2_K regressions were fixed by an FP-specific single-layer
 transplant; the rest were either fixed just as well by a random perturbation (distributed damage, or
 a knife-edge decision rather than a localized cause) or not fixed by any single layer tested at all.
 Even where quantization actively breaks a prediction, the breakage is mostly not a nameable
 single-site event — an on-theme echo of this document's thesis from the failure-mode side rather
 than the causal-attribution side.
 
-**Receipt path.** `runs/experiments/transplant_localize_7b.json` (stale — holds the superseded
-12-flip/5-fixed, no-control version; see reconciliation #5); corrected 3/9-vs-2/9 numbers from commit
-`4a42c5d` only (not reproducible from any file read for this document); method
-`scripts/tracer/transplant_localize.py` (matches the corrected version, not the stored JSON).
+**Receipt path.** `runs/experiments/transplant_localize_7b.json` (REGENERATED 2026-07-23 with the
+control-carrying schema — n_fp_fixed 5, n_random_fixed 3, n_fp_specific_fixed 3 of 12 flips; the
+staleness flagged in reconciliation #5 is resolved); method `scripts/tracer/transplant_localize.py`.
 
 ### C. Facts efficacy tuning (peripheral context, not core to this document's thesis)
 
@@ -699,14 +696,14 @@ here with the reconciliation, not silently corrected or silently dropped.
    the measured range rather than matching the median — most likely written from an earlier or
    partial pass of the same battery. Not corrected in `coalition.py` by this document; flagged here
    for whoever next touches that file.
-5. **Transplant localization "3/9 FP-specific, 2/9 random-fixed"** (commit `4a42c5d`, the corrected,
-   control-added re-run) is **not** what `runs/experiments/transplant_localize_7b.json` contains on
-   disk: the stored file has 12 flips, 5/12 fixed, and no random-control field at all — the schema of
-   an *earlier* commit (`81f74b9`) that `4a42c5d`'s own message says was "overclaimed" and corrected.
-   The currently-committed script (`scripts/tracer/transplant_localize.py`) matches the corrected
-   version's logic exactly, but the receipt it would produce was never re-written to disk (or was
-   overwritten back to the older run) after the fix. Both numbers are reported in this document's
-   GPU-lab addendum (§B), with the discrepancy stated there and here rather than picking one silently.
+5. **Transplant localization** — RESOLVED (2026-07-23). This audit originally found the on-disk
+   receipt held the superseded pre-control run (12 flips / 5 fixed / no control field): the interim
+   control run (`4a42c5d`: 9 flips, 3/9 FP, 2/9 random) had crashed at its summary step before
+   writing the JSON. The receipt has since been REGENERATED with the corrected script and a fresh FP
+   capture; the file now carries the control-schema FINAL numbers (12 flips; FP 5/12; random 3/12;
+   FP-specific 3/12). Residual honest note: the flip SET varied across FP recaptures (12 vs 9 —
+   bf16 reload variance on knife-edge prompts); the qualitative verdict (minority-case localization,
+   control-corrected) was identical in every pass. §B carries the final numbers.
 
 ---
 
@@ -743,7 +740,7 @@ here with the reconciliation, not silently corrected or silently dropped.
 | 27 | `notes/RETROSPECTIVE_2026-07.md` | Context | Cycle retrospective; source of the "41/41" and "distributed function" framing this document verifies |
 | 28 | `notes/JLENS_SAE_FINDINGS.md` finding #8 | Scope note | nf4-vs-Q4_K_M quantization-scheme distinction |
 | 29 | `runs/experiments/quant_vs_reference_7b.json` | GPU-lab A. Quant fidelity | Q4_K_M vs FP residual cosine (all positions, 3 layers, 12 prompts); mean 0.995, worst 0.973 |
-| 30 | `runs/experiments/transplant_localize_7b.json` | GPU-lab B. Transplant localization | STALE: holds the superseded 12-flip/5-fixed, no-control run (see reconciliation #5) |
+| 30 | `runs/experiments/transplant_localize_7b.json` | GPU-lab B. Transplant localization | regenerated 2026-07-23 with control schema (12 flips; FP 5; random 3; FP-specific 3) |
 | 31 | `runs/experiments/facts_efficacy_tune_7b.json` | GPU-lab C. Facts efficacy (peripheral) | Step-targeted injection tuning sweep; best config 75% recall, null 0% |
 | 32 | `runs/experiments/edge_coalitions_7b.json` | GPU-lab D. Edge coalitions | 5-case non-contiguous edge-severance coalition battery; 4/5 beat random-k, 3/5 beat contiguous span |
 | 33 | `scripts/calibration/quant_vs_reference.py` | GPU-lab A. Method | Sequential-VRAM FP-vs-quant cosine/argmax qualification script |
