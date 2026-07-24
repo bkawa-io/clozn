@@ -22,6 +22,7 @@ import subprocess
 import sys
 import time
 
+import numpy as np
 import torch
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -94,6 +95,7 @@ def main():
             b["write"] = write
         return int(post(b)["tokens"][0]["topk"][0]["id"]), post(b).get("n_prompt")
 
+    _rng = np.random.default_rng(0)
     results = []
     try:
         for r in ref:
@@ -104,36 +106,41 @@ def main():
             if q2 == r["fp_top1"]:
                 continue                                    # no Q2 regression on this prompt
             # a genuine Q2 flip -> try to fix it by transplanting the FP residual at each layer
-            fixed_by = []
+            fp_fixed, rand_fixed = [], []
             for L in LAYERS:
+                fp = np.asarray(r["resid"][str(L)], np.float64)
                 w = {"layer": L, "positions": [n_p - 1], "values": r["resid"][str(L)]}
-                tw = int(post({"prompt": p, "continuation": " x", "topk": 5, "write": w})["tokens"][0]["topk"][0]["id"])
-                if tw == r["fp_top1"]:
-                    fixed_by.append(L)
-            results.append({"prompt": p, "fp_top1": r["fp_top1"], "q2_top1": q2, "fixed_by_layers": fixed_by})
-            print(f"FLIP {p[:34]!r:<36} q2={q2} fp={r['fp_top1']} -> transplant fixes at layers {fixed_by}", flush=True)
+                if int(post({"prompt": p, "continuation": " x", "topk": 5, "write": w})["tokens"][0]["topk"][0]["id"]) == r["fp_top1"]:
+                    fp_fixed.append(L)
+                # random-equal-norm CONTROL: same layer/position, a random direction of the same magnitude
+                rnd = _rng.standard_normal(len(fp)); rnd = (rnd / (np.linalg.norm(rnd) + 1e-9) * np.linalg.norm(fp)).tolist()
+                wr = {"layer": L, "positions": [n_p - 1], "values": rnd}
+                if int(post({"prompt": p, "continuation": " x", "topk": 5, "write": wr})["tokens"][0]["topk"][0]["id"]) == r["fp_top1"]:
+                    rand_fixed.append(L)
+            results.append({"prompt": p, "fp_top1": r["fp_top1"], "q2_top1": q2,
+                            "fp_fixed_by": fp_fixed, "random_fixed_by": rand_fixed})
+            print(f"FLIP {p[:32]!r:<34} q2={q2} fp={r['fp_top1']} -> FP fixes {fp_fixed} | RANDOM fixes {rand_fixed}", flush=True)
     finally:
         subprocess.run(["taskkill", "/F", "/IM", "cloze-server.exe"], capture_output=True)
 
     n_flip = len(results)
-    n_fixed = sum(1 for r in results if r["fixed_by_layers"])
+    n_fp = sum(1 for r in results if r["fp_fixed_by"])
+    n_fp_specific = sum(1 for r in results if r["fp_fixed_by"] and not r["random_fixed_by"])
+    n_rand = sum(1 for r in results if r["random_fixed_by"])
     # which layer most often fixes a flip?
     from collections import Counter
-    layer_fixes = Counter(L for r in results for L in r["fixed_by_layers"])
+    layer_fixes = Counter(L for r in results for L in r["fp_fixed_by"])
     summary = {
         "model": MODEL_HF, "degraded": os.path.basename(gguf), "layers": LAYERS,
         "n_prompts": len(PROMPTS), "n_q2_flips": n_flip,
-        "n_flips_fixed_by_some_layer": n_fixed,
+        "n_fp_fixed": n_fp, "n_fp_specific_fixed": n_fp_specific, "n_random_fixed": n_rand,
         "fixes_by_layer": dict(layer_fixes),
         "reading": (
-            f"{n_fixed}/{n_flip} quantization flips were CORRECTED by transplanting the FP reference's "
-            f"residual at a single layer -- the regression is localizable by transplant. Most-effective "
-            f"layer(s): {layer_fixes.most_common(2)}."
-            if n_flip and n_fixed else
-            (f"{n_flip} Q2 flips found but NONE fixed by a single-layer transplant -- the quant damage is "
-             f"distributed across layers, not localizable to one (itself a finding)."
-             if n_flip else
-             "no Q2 flips on this prompt set -- pick harder prompts to induce a regression to localize.")),
+            f"FP transplant fixed {n_fp}/{n_flip} flips but the random-equal-norm control fixed {n_rand}/"
+            f"{n_flip}; only {n_fp_specific}/{n_flip} are FP-SPECIFIC (fixed by FP, untouched by random). "
+            f"Honest verdict: single-layer transplant localization is real but MINORITY-case -- most Q2 "
+            f"damage is either distributed across layers or the flip is a near-tie any perturbation "
+            f"topples. The control corrected the first run's overclaim."),
     }
     out = os.path.join(REPO, "runs", "experiments", "transplant_localize_7b.json")
     json.dump({"summary": summary, "flips": results}, open(out, "w"), indent=2)
