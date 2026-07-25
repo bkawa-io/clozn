@@ -7,6 +7,8 @@ import sys
 
 import numpy as np
 
+from clozn._io import atomic_write_json
+
 from . import axes
 from . import jlens_transport
 
@@ -299,9 +301,10 @@ class EngineSteer:
         return {k: v for k, v in self.strength.items() if v}
 
     def save_state(self, path):
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(self.strength, f)
+        # Atomic: a crash or a concurrent writer mid-write used to leave a truncated dial file, which
+        # load_state's except-pass then silently swallowed -- the user's dials would just be gone, with
+        # no error anywhere. Same failure shape as the settings/cards data-loss fix; same remedy.
+        atomic_write_json(path, self.strength)
 
     def load_state(self, path):
         if os.path.isfile(path):
