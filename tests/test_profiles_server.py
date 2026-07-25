@@ -261,11 +261,17 @@ def test_switch_replaces_cards_and_dials_and_is_instant_in_prompt_mode(iso, monk
     assert out["resync"]["mode"] == "prompt"
     assert mem.consolidate_calls == []
 
-    # facts: the item-5 seam is NAMED, not silently dropped. With the facts tier OFF (the default in
-    # this fixture) the note explains the bundle's facts travel but aren't compiled until the tier is on
-    # (the seam is now CLOSED -- see test_facts_server for the on-path that actually compiles them).
-    assert out["facts_note"] is not None
-    assert "fact" in out["facts_note"] and ("tier is off" in out["facts_note"] or "store" in out["facts_note"])
+    # facts: a profile's facts are NAMED, not silently dropped. There is no longer any "tier on" state
+    # to wait for -- slot-memory is a lab-only research module and reorg Stage B removed the product-side
+    # facts surface entirely (no SlotBox, no /facts/* routes; see the switch handler's docstring in
+    # clozn/server/app.py). So the honest note is that they travel in the bundle and are compiled
+    # NOWHERE, which is what this asserts. The older wording ("...until the tier is on", cross-referencing
+    # a test_facts_server that no longer exists) implied a product on-path that does not exist.
+    note = out["facts_note"]
+    assert note is not None                      # never silently dropped
+    assert "fact" in note                        # says WHAT is uncompiled
+    assert "not compiled" in note                # and that it is not compiled -- the honest part
+    assert "lab" in note                         # and where it actually lives
 
     # the active-profile name is now readable back
     assert cs._active_profile_name() == "friend"
