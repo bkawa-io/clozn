@@ -250,7 +250,10 @@ def test_block_wording_is_exactly_consolidates_sys_rule(iso):
 def test_block_wording_still_matches_self_teach_source(iso):
     # drift guard from the other end: if consolidate's sys_rule literal is ever reworded, this fails and
     # forces a lockstep update of compile_prompt_block (and vice versa via the exact-output test above).
-    src = open(os.path.join(RESEARCH, "clozn", "substrates", "self_teach.py"), encoding="utf-8").read()
+    # Path follows the substrates reorg: clozn/substrates/ -> clozn/lab/substrates/ (torch substrates
+    # are lab-only). The guard itself is unchanged -- it is the wording, not the location, that matters.
+    src = open(os.path.join(RESEARCH, "clozn", "lab", "substrates", "self_teach.py"),
+               encoding="utf-8").read()
     assert "You are a helpful assistant talking with a returning user. Here is what you know " in src
     assert "about them; use it naturally to tailor how you respond:" in src
 
