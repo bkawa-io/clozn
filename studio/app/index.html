@@ -112,6 +112,28 @@
   [data-lens="sources"] mark.xlink{box-shadow:0 0 0 2px var(--evidence) inset}
   [data-lens="sources"] mark.xlink-self{box-shadow:0 0 0 2px var(--fork) inset}
 
+  /* -- shakiness: reply-pane confidence-band marks (strong is left plain -- the unflagged default) -- */
+  [data-lens="shakiness"] mark.shk-mark{cursor:default;border-radius:2px;padding:0 1px}
+  [data-lens="shakiness"] mark.shk-okay{background:color-mix(in srgb,var(--confidence) 14%,transparent)}
+  [data-lens="shakiness"] mark.shk-shaky{background:color-mix(in srgb,var(--shaky) 22%,transparent);
+    border-bottom:2px solid color-mix(in srgb,var(--shaky) 55%,transparent)}
+
+  /* -- compare (lens): this run's own reply, painted by divergence from the picked run -- identical
+     stays plain; only latent/flipped runs are marked. Same --fork/--almost hues as the Compare canvas. -- */
+  [data-lens="compare"] mark.cmpl-mark{cursor:default;border-radius:2px;padding:0 1px}
+  [data-lens="compare"] mark.cmpl-latent{background:color-mix(in srgb,var(--fork) 16%,transparent);
+    border-bottom:2px solid var(--fork)}
+  [data-lens="compare"] mark.cmpl-flip{background:color-mix(in srgb,var(--almost) 18%,transparent);
+    border-bottom:2px solid var(--almost)}
+
+  /* -- a small band/state legend, shared shape with the Compare canvas's own .cmp-legend -- */
+  .lens-legend{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:2px;font-size:var(--text-label);color:var(--ink-soft)}
+  .lens-legend span{display:inline-flex;align-items:center;gap:6px}
+  .lens-legend i{width:10px;height:10px;border-radius:2px;flex:none}
+  .lens-legend i.lg-strong{background:var(--line-strong)}
+  .lens-legend i.lg-okay{background:color-mix(in srgb,var(--confidence) 40%,transparent);border:1px solid var(--confidence)}
+  .lens-legend i.lg-shaky{background:var(--shaky)}
+
   .honesty-drawer{padding:14px 18px;display:flex;flex-direction:column;gap:7px}
   .drawer-row{display:flex;gap:14px;font-size:var(--text-small)}
   .drawer-row .label{flex:0 0 110px;font-family:var(--voice-machine);font-size:var(--text-label);

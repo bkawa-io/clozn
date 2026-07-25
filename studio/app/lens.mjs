@@ -24,6 +24,10 @@ async function getJSON(url, opts) {
     return { ok: false, status: 0, body: null, networkError: String(e) };
   }
 }
+const postJSON = (url, payload) => getJSON(url, {
+  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload || {}),
+});
+function fmtConfVal(x) { return Number.isFinite(x) ? x.toFixed(3) : "—"; }
 
 const LENSES = [
   { id: "sources", label: "Sources" },
@@ -60,6 +64,11 @@ export async function renderLens(view, runId, light) {
     provenance: { status: "idle", data: null },
     spanSummary,
     copyTargets: [],
+    // Build 3: the four declared-skeleton lenses, wired to real routes --
+    // see the per-lens compute-on-demand functions near the bottom of this file.
+    influences: { status: "idle", data: null, error: null },
+    concepts: { status: "idle", data: null, reason: null },
+    compareLens: { status: "idle", candidates: null, pickedId: null, diff: null },
   };
 
   view.innerHTML = shell(state);
@@ -223,8 +232,14 @@ function renderReplyPane(state) {
     return { html: `<p class="quiet">no recorded reply text for this run.</p>`, copyTargets: [] };
   }
 
+  // Marks are computed PER LENS, exclusively -- only the active lens's marks are built each render, and
+  // activateLens() re-renders the panes on every tab switch (see below) so the DOM always carries exactly
+  // one lens's marks at a time. This sidesteps merging independently-grouped, generally-OVERLAPPING span
+  // partitions (source-carried runs vs confidence bands vs cross-run divergence runs) into one non-
+  // overlapping mark list, which applyMarks() cannot do -- each lens gets its own clean, non-overlapping
+  // partition of the SAME text instead.
   let marks = [];
-  if (state.influence.status === "done") {
+  if (state.lens === "sources" && state.influence.status === "done") {
     const map = state.influence.data;
     const answer = map && map.answer;
     // Marks are offsets into the EXACT text the map measured (answer.scored_text). Only trust them
@@ -233,6 +248,10 @@ function renderReplyPane(state) {
     if (answer && answer.scored_text_matches_recorded && answer.recorded_text === text) {
       marks = buildAnswerMarks(map);
     }
+  } else if (state.lens === "shakiness") {
+    marks = buildShakinessMarks(state, text);
+  } else if (state.lens === "compare") {
+    marks = buildCompareMarks(state, text);
   }
 
   const copyTargets = [text];
@@ -382,12 +401,21 @@ function renderInline(para, marks) {
   const re = /`([^`\n]+)`/g;
   let last = 0, m, out = "";
   while ((m = re.exec(text))) {
-    if (m.index > last) out += applyMarks(text.slice(last, m.index), start + last, marks, ansMarkHtml);
-    out += `<code class="machine">${applyMarks(m[1], start + m.index + 1, marks, ansMarkHtml)}</code>`;
+    if (m.index > last) out += applyMarks(text.slice(last, m.index), start + last, marks, replyMarkHtml);
+    out += `<code class="machine">${applyMarks(m[1], start + m.index + 1, marks, replyMarkHtml)}</code>`;
     last = re.lastIndex;
   }
-  if (last < text.length) out += applyMarks(text.slice(last), start + last, marks, ansMarkHtml);
+  if (last < text.length) out += applyMarks(text.slice(last), start + last, marks, replyMarkHtml);
   return out.replace(/\n/g, "<br>");
+}
+
+/* One dispatcher for every reply-pane mark kind, since renderInline/applyMarks call a single toHtml --
+   each lens tags its own marks with `.kind` (sources' buildAnswerMarks marks carry none, so they fall to
+   the default/ans-mark branch, UNCHANGED from before this dispatcher existed). */
+function replyMarkHtml(slice, m) {
+  if (m.kind === "shaky") return shkMarkHtml(slice, m);
+  if (m.kind === "cmp") return cmpMarkHtml(slice, m);
+  return ansMarkHtml(slice, m);
 }
 
 function ansMarkHtml(slice, m) {
@@ -417,15 +445,114 @@ function buildAnswerMarks(map) {
   return groups;
 }
 
+/* ======================================================================== shakiness: reply-pane marks */
+
+/* True only when this run's OWN recorded trace tokens reconstruct its OWN recorded reply text, character
+   for character -- the same alignment discipline buildAnswerMarks/cast-feed.mjs already apply before
+   trusting any token-index -> char-offset mapping. False means an honest skip, never a guessed offset. */
+function traceTokensAlignToText(run) {
+  const tokens = run && run.trace && Array.isArray(run.trace.tokens) ? run.trace.tokens : null;
+  const text = String((run && run.response) || "");
+  return !!(tokens && tokens.length && tokens.join("") === text);
+}
+
+/* GET /runs/<id>/spans (clozn.runs.confidence_spans) is fetched ONCE at page open regardless of lens
+   (state.spanSummary) -- shakiness never issues its own fetch. It already reshapes the run's own
+   trace.confidence into maximal same-band (strong/okay/shaky) runs that never cross a sentence boundary
+   -- a SPAN grouping, not per-token shading (the page's "color spans/sets, not single tokens" rule).
+   spans[].start/end are INCLUSIVE TOKEN indices; converted to char offsets here via the same cumulative-
+   join trick cast-feed.mjs uses, only once alignment is verified. */
+function buildShakinessMarks(state, text) {
+  const spans = state.spanSummary && Array.isArray(state.spanSummary.spans) ? state.spanSummary.spans : null;
+  if (!spans || !spans.length || !traceTokensAlignToText(state.run)) return [];
+  const tokens = state.run.trace.tokens;
+  const offsets = [0];
+  for (const t of tokens) offsets.push(offsets[offsets.length - 1] + t.length);
+  return spans
+    .map(s => ({
+      start: offsets[s.start], end: offsets[s.end + 1], kind: "shaky",
+      band: s.band, meanConf: s.mean_conf, minConf: s.min_conf, nTokens: s.n_tokens,
+    }))
+    .filter(m => m.end > m.start && text.slice(m.start, m.end).length);
+}
+
+/* Every span becomes a <mark> (so every span -- including "strong" -- is hoverable for its exact numbers),
+   but only "okay"/"shaky" get a background tint; "strong" renders as plain text (the base `mark{background:
+   none}` rule) since it's the unflagged default -- the legend states all three thresholds regardless. */
+function shkMarkHtml(slice, m) {
+  const cls = m.band === "shaky" ? " shk-shaky" : m.band === "okay" ? " shk-okay" : " shk-strong";
+  const title = `${m.band} \xb7 mean conf ${m.meanConf.toFixed(3)} \xb7 min ${m.minConf.toFixed(3)} \xb7 `
+    + `${m.nTokens} token${m.nTokens === 1 ? "" : "s"}`;
+  return `<mark class="shk-mark${cls}" title="${esc(title)}">${esc(slice)}</mark>`;
+}
+
+/* ======================================================================== compare: reply-pane marks */
+
+// Mirrors compare.mjs's OWN LATENT_THRESHOLD constant + classify() exactly (a fixed, disclosed cutoff --
+// not re-derived here). compare.mjs's internals aren't exported (only renderCompare is), and this file may
+// only edit lens.mjs -- so this is a faithful, documented copy, not an independent judgment call; keep it
+// in lockstep with compare.mjs if that constant/formula ever changes.
+const CMP_LATENT_THRESHOLD = 0.15;
+function classifyCmp(p) {
+  if (p.same === false) return "flip";
+  const hasBoth = Number.isFinite(p.a_conf) && Number.isFinite(p.b_conf);
+  if (hasBoth && Math.abs(p.a_conf - p.b_conf) > CMP_LATENT_THRESHOLD) return "latent";
+  return "same";
+}
+
+/* Builds marks for THIS run's OWN reply text only (a = this run, always -- see loadCompareDiff), grouping
+   consecutive same-classification positions into one contiguous span (never per-token shading). Identical
+   positions stay unmarked plain text; only latent/flipped runs get painted -- this lens overlays the
+   picked run's divergence ONTO this run's own reply, unlike the Compare canvas's two-channel fork view. */
+function buildCompareMarks(state, text) {
+  const d = state.compareLens.diff;
+  if (!d || d.ok !== true || d.trace_available === false) return [];
+  const positions = (d.positions || []).filter(p => p.a_piece != null).slice().sort((a, b) => a.i - b.i);
+  if (!positions.length || positions.map(p => p.a_piece).join("") !== text) return [];  // can't trust offsets
+  const marks = [];
+  let cur = null, pos = 0;
+  for (const p of positions) {
+    const start = pos, end = pos + p.a_piece.length;
+    pos = end;
+    const cls = classifyCmp(p);
+    if (cls === "same") { cur = null; continue; }
+    const title = cls === "flip"
+      ? `flipped -- this run said "${p.a_piece}", the compared run said "${p.b_piece == null ? "∅" : p.b_piece}"`
+      : `latent divergence -- same token, confidence a=${fmtConfVal(p.a_conf)} vs b=${fmtConfVal(p.b_conf)}`;
+    if (cur && cur.state === cls && cur.end === start) { cur.end = end; cur.title = title; }
+    else { cur = { start, end, kind: "cmp", state: cls, title }; marks.push(cur); }
+  }
+  return marks;
+}
+
+function cmpMarkHtml(slice, m) {
+  const cls = m.state === "flip" ? " cmpl-flip" : " cmpl-latent";
+  return `<mark class="cmpl-mark${cls}" title="${esc(m.title)}">${esc(slice)}</mark>`;
+}
+
 /* ======================================================================== honesty drawer */
 
+const DRAWERS = {
+  sources: sourcesDrawer,
+  shakiness: state => shakinessDrawer(state),
+  influences: state => influencesDrawer(state),
+  concepts: state => conceptsDrawer(state),
+  compare: state => compareLensDrawer(state),
+};
 function renderDrawer(view, state) {
   const el = view.querySelector("#drawer");
-  if (el) el.innerHTML = state.lens === "sources" ? sourcesDrawer(state) : skeletonDrawer(state.lens);
+  if (!el) return;
+  const fn = DRAWERS[state.lens];
+  el.innerHTML = fn ? fn(state) : skeletonDrawer(state.lens);
 }
 
 function row(label, val) {
   return `<div class="drawer-row"><span class="label">${esc(label)}</span><span class="drawer-val">${esc(val)}</span></div>`;
+}
+// Same shape as row(), but `html` is trusted markup (a button/select the caller built with esc() already
+// applied to any user/data-derived text inside it) rather than plain text to escape.
+function rawRow(label, html) {
+  return `<div class="drawer-row"><span class="label">${esc(label)}</span><span class="drawer-val">${html}</span></div>`;
 }
 
 const VERDICT_LABEL = {
@@ -501,6 +628,280 @@ function skeletonDrawer(lens) {
     <div class="drawer-row"><span class="label">verdict</span><span class="drawer-val">not computed in this build</span></div>
     ${s.caveat ? row("caveat", s.caveat) : ""}
     <p class="quiet drawer-arriving">arriving in a later build — no placeholder numbers, only the honest plan.</p>`;
+}
+
+/* ======================================================================== shakiness drawer */
+
+function bandLegendHTML() {
+  return `<div class="lens-legend">
+    <span><i class="lg-strong"></i>strong (&ge; 0.80)</span>
+    <span><i class="lg-okay"></i>okay (0.50 &ndash; 0.80)</span>
+    <span><i class="lg-shaky"></i>shaky (&lt; 0.50)</span>
+  </div>`;
+}
+
+function shakinessDrawer(state) {
+  const rows = [bandLegendHTML()];
+  const spans = state.spanSummary && Array.isArray(state.spanSummary.spans) ? state.spanSummary.spans : null;
+  if (!spans || !spans.length) {
+    rows.push(row("spans", "no per-token confidence trace recorded for this run -- nothing to band."));
+    rows.push(row("caveat", SKELETONS.shakiness.caveat));
+    return rows.join("");
+  }
+  if (!traceTokensAlignToText(state.run)) {
+    rows.push(row("spans", `${spans.length} span(s) computed, but this run's own trace tokens don't `
+      + `reconstruct its own reply text character-for-character -- can't safely paint them onto the text; `
+      + `shown as counts only.`));
+  }
+  const counts = { strong: 0, okay: 0, shaky: 0 };
+  spans.forEach(s => { counts[s.band] = (counts[s.band] || 0) + 1; });
+  rows.push(row("verdict", state.spanSummary.summary || "—"));
+  rows.push(row("spans", `${counts.strong || 0} strong \xb7 ${counts.okay || 0} okay \xb7 ${counts.shaky || 0} `
+    + `shaky (${spans.length} total) -- maximal same-band token runs, split at sentence boundaries`));
+  rows.push(row("method", "each token banded by its OWN recorded confidence (trace.confidence, i.e. "
+    + "exp(recorded logprob)); a span is a maximal run of same-band tokens that never crosses a sentence "
+    + "boundary. Zero re-generation -- GET /runs/<id>/spans, already fetched when this run opened."));
+  rows.push(row("caveat", SKELETONS.shakiness.caveat));
+  return rows.join("");
+}
+
+/* ======================================================================== influences drawer + measure */
+
+async function runInfluencesMeasure(view, state) {
+  state.influences.status = "busy";
+  renderDrawer(view, state);
+  const res = await postJSON(`/runs/${encodeURIComponent(state.runId)}/receipts`, { mode: "both" });
+  if (res.ok && res.body && typeof res.body === "object" && !res.body.error) {
+    state.influences.status = "done";
+    state.influences.data = res.body;
+  } else {
+    state.influences.status = "error";
+    state.influences.error = extractReason(res.body) || `the receipts route did not answer (status ${res.status})`;
+  }
+  state.light && state.light.pulse(.55);
+  renderDrawer(view, state);
+}
+
+function influencesDrawer(state) {
+  const rows = [];
+  const dials = (state.run.behavior && state.run.behavior.active_dials) || {};
+  const dialNames = Object.keys(dials);
+  rows.push(row("recorded on this run", dialNames.length
+    ? dialNames.map(n => `${n}=${dials[n]}`).join(", ")
+    : "no active steering dials recorded on this run"));
+
+  const inf = state.influences;
+  if (inf.status === "idle") {
+    rows.push(rawRow("measure", `<button class="btn-ghost small" type="button" data-measure-influences>`
+      + `leave one out &rarr;</button><br><span class="quiet small-note">cost: regenerates one greedy `
+      + `baseline, then one no-dial control per active dial (decode-time only -- the prompt KV stays `
+      + `reusable, cheap) plus one teacher-forced dependence pass per dial (no generation) -- a few `
+      + `seconds, on demand. POST /runs/&lt;id&gt;/receipts, mode "both".</span>`));
+    rows.push(row("caveat", SKELETONS.influences.caveat));
+    return rows.join("");
+  }
+  if (inf.status === "busy") { rows.push(row("measuring", "regenerating the no-dial control(s)…")); return rows.join(""); }
+  if (inf.status === "error") {
+    rows.push(row("error", inf.error));
+    rows.push(row("caveat", SKELETONS.influences.caveat));
+    return rows.join("");
+  }
+
+  const d = inf.data;
+  const dialReceipts = (d.receipts || []).filter(r => r.influence && r.influence.dial);
+  const dialForced = new Map((d.forced_receipts || []).filter(r => r.influence && r.influence.dial)
+    .map(r => [r.influence.dial, r]));
+  const dialSkipped = (d.skipped || []).filter(s => s.influence && s.influence.dial);
+
+  if (!dialReceipts.length && !dialSkipped.length) {
+    rows.push(row("result", "no active steering dials were fired on this run -- nothing to leave one out."));
+    rows.push(row("caveat", SKELETONS.influences.caveat));
+    return rows.join("");
+  }
+
+  for (const r of dialReceipts) {
+    const name = r.influence.dial;
+    const forced = dialForced.get(name);
+    const parts = [r.has_effect ? "regen: changed the greedy reply" : "regen: no change to the greedy reply"];
+    if (r.delta) {
+      parts.push(`words ${r.delta.words[0]}→${r.delta.words[1]} \xb7 word-set changed ${r.delta.changed}%`);
+    }
+    if (r.ablated_reply_truncated) parts.push("(ablated reply early-stopped at first divergence)");
+    if (forced && forced.causal_verified) {
+      parts.push(`forced: ${forced.has_effect ? "measurable dependence" : "below the dependence floor"} `
+        + `(${forced.mean_nats_per_token.toFixed(3)} mean nats/token)`);
+      const floor = forced.null_floor;
+      if (floor && Number.isFinite(floor.ratio_real_over_floor)) {
+        parts.push(floor.exceeds_floor_by_order_of_magnitude
+          ? `clears a random-vector null floor by ${floor.ratio_real_over_floor.toFixed(1)}\xd7`
+          : `NOT clearly above a random-vector-sized null floor (ratio ${floor.ratio_real_over_floor.toFixed(2)})`);
+      }
+      if (!r.has_effect && forced.has_effect) {
+        parts.push("silent influence: the greedy TEXT didn't change, but the model's confidence in it did");
+      }
+    } else if (forced) {
+      parts.push(`forced: ${forced.note || "not measurable"}`);
+    }
+    rows.push(row(`dial \xb7 ${name}=${r.influence.value}`, parts.join(" \xb7 ")));
+  }
+  for (const s of dialSkipped) {
+    rows.push(row(`dial \xb7 ${s.influence.dial}`, `skipped -- ${s.reason}`));
+  }
+  const dialRedundant = (d.redundant_pairs || []).filter(p => (p.redundant || []).some(k => k.startsWith("dial:")));
+  for (const p of dialRedundant) rows.push(row("redundant pair", `${p.redundant.join(" + ")} -- ${p.note}`));
+  rows.push(row("method", d.perf_note || "leave-one-out over every fired dial, plus a pairwise redundancy guard."));
+  rows.push(row("caveat", SKELETONS.influences.caveat));
+  return rows.join("");
+}
+
+/* ======================================================================== concepts drawer + J-lens fetch */
+
+async function fetchConceptsLayer(view, state, layer) {
+  state.concepts.status = "busy";
+  renderDrawer(view, state);
+  const body = { topk: 5 };
+  if (layer !== undefined && layer !== null) body.layer = layer;
+  const res = await postJSON(`/runs/${encodeURIComponent(state.runId)}/jlens`, body);
+  if (res.ok && res.body && res.body.available) {
+    state.concepts.status = "done";
+    state.concepts.data = res.body;
+  } else {
+    state.concepts.status = "error";
+    state.concepts.reason = (res.body && res.body.reason) || `J-lens unavailable (status ${res.status})`;
+  }
+  state.light && state.light.pulse(.5);
+  renderDrawer(view, state);
+}
+
+function ensureConceptsComputed(view, state) {
+  if (state.concepts.status !== "idle") return;
+  fetchConceptsLayer(view, state, undefined);
+}
+
+function conceptsDrawer(state) {
+  const c = state.concepts;
+  if (c.status === "idle" || c.status === "busy") {
+    return row("reading", c.status === "busy" ? "reading the J-lens…" : "not read yet");
+  }
+  if (c.status === "error") {
+    return row("unavailable", c.reason) + row("caveat", SKELETONS.concepts.caveat);
+  }
+  const d = c.data;
+  const layerOptions = (d.available_layers || []).map(l =>
+    `<option value="${l}"${l === d.layer ? " selected" : ""}>layer ${l}</option>`).join("");
+  const rows = [];
+  rows.push(rawRow("layer", `<select class="text-input" id="cptLayerPick">${layerOptions}</select> `
+    + `<span class="quiet small-note">of [${esc((d.available_layers || []).join(", "))}] fitted layers</span>`));
+  rows.push(row("reading", `this run's own recorded ${d.text_source === "response" ? "reply" : esc(String(d.text_source))} `
+    + `text (${d.n_tokens} token(s))`));
+  const tableRows = (d.tokens || []).map((tok, i) => {
+    const top = (d.readouts[i] || []).slice(0, 3)
+      .map(r => `${esc(r.piece)} <span class="quiet" style="padding:0">(${Number(r.score).toFixed(2)})</span>`)
+      .join(" \xb7 ");
+    return `<tr><td>${esc(tok)}</td><td>${top || "—"}</td></tr>`;
+  }).join("");
+  rows.push(`<table class="readout-table">
+    <thead><tr><th>token</th><th>disposed to say next (top-3, raw lens logit)</th></tr></thead>
+    <tbody>${tableRows}</tbody></table>`);
+  const prov = d.provenance || {};
+  if (prov.fit_model) rows.push(row("fitted on", prov.fit_model));
+  rows.push(row("caveat", prov.note || SKELETONS.concepts.caveat));
+  return rows.join("");
+}
+
+/* ======================================================================== compare-lens drawer + diff */
+
+async function ensureCompareCandidatesLoaded(view, state) {
+  if (state.compareLens.candidates) return;
+  state.compareLens.status = "busy";
+  renderDrawer(view, state);
+  const res = await getJSON("/runs");
+  const all = (res.ok && res.body && Array.isArray(res.body.runs)) ? res.body.runs : [];
+  const run = state.run, rid = state.runId;
+  const promptSummary = run.prompt_summary || null;
+  const parentId = run.parent_run_id || null;
+  const candidates = [];
+  for (const r of all) {
+    const id = r.id || r.run_id;
+    if (!id || id === rid) continue;
+    let tag = null;
+    if (r.parent_run_id === rid) tag = "forked child";
+    else if (parentId && id === parentId) tag = "parent";
+    else if (promptSummary && r.prompt_summary === promptSummary) tag = "same prompt";
+    if (tag) candidates.push({ id, label: r.prompt_summary || id, when: r.created_at || "", tag });
+  }
+  state.compareLens.candidates = candidates;
+  state.compareLens.status = "idle";
+  renderDrawer(view, state);
+}
+
+async function loadCompareDiff(view, state, pickedId) {
+  state.compareLens.pickedId = pickedId || null;
+  state.compareLens.diff = null;
+  if (!pickedId) { renderDrawer(view, state); renderPanes(view, state); return; }
+  state.compareLens.status = "busy";
+  renderDrawer(view, state);
+  const res = await postJSON("/diff/runs", { a: state.runId, b: pickedId });
+  state.compareLens.diff = (res.body && typeof res.body === "object")
+    ? res.body : { ok: false, error: "no response from the server" };
+  state.compareLens.status = "done";
+  state.light && state.light.pulse(.5);
+  renderDrawer(view, state);
+  renderPanes(view, state);   // the diff just resolved -- (re)paint the reply pane's divergence marks
+}
+
+function compareLensDrawer(state) {
+  const cl = state.compareLens;
+  const rows = [];
+
+  if (cl.status === "busy" && !cl.candidates) {
+    rows.push(row("candidates", "loading runs that share this run's prompt or lineage…"));
+    return rows.join("");
+  }
+  const cands = cl.candidates || [];
+  if (!cands.length) {
+    rows.push(row("compare to", "no other run shares this run's prompt, and this run has no forked "
+      + "children or parent -- nothing to compare against here."));
+    rows.push(row("caveat", SKELETONS.compare.caveat));
+    return rows.join("");
+  }
+  const options = cands.map(c => `<option value="${esc(c.id)}"${c.id === cl.pickedId ? " selected" : ""}>`
+    + `${esc(String(c.label).slice(0, 56))} — ${esc(c.tag)}${c.when ? " \xb7 " + esc(c.when) : ""}</option>`).join("");
+  rows.push(rawRow("compare to", `<select class="text-input" id="cmpLensPick" style="max-width:100%">`
+    + `<option value="">— pick a run —</option>${options}</select>`));
+
+  if (cl.status === "busy" && cl.pickedId) { rows.push(row("diff", "diffing…")); return rows.join(""); }
+
+  const d = cl.diff;
+  if (!d) { rows.push(row("caveat", SKELETONS.compare.caveat)); return rows.join(""); }
+  if (d.ok !== true) {
+    rows.push(row("diff", d.error || "diff unavailable."));
+    return rows.join("");
+  }
+  if (d.warn) rows.push(row("warn", d.warn));
+  if (d.trace_available === false) {
+    const s = d.summary || {};
+    rows.push(row("diff", d.note || "no per-token trace on the compared run -- text-only comparison."));
+    rows.push(row("surface similarity", `${s.char_similarity} — ${s.char_similarity_label || ""}`));
+  } else {
+    const positions = (d.positions || []).filter(p => p.a_piece != null);
+    const counts = { same: 0, latent: 0, flip: 0 };
+    positions.forEach(p => { counts[classifyCmp(p)]++; });
+    rows.push(row("this run's spans", `${counts.same} identical \xb7 ${counts.latent} latent \xb7 `
+      + `${counts.flip} flipped (of ${positions.length}) -- painted on the reply at left; identical stays plain`));
+    rows.push(row("latent threshold", `flagged when the SAME committed token's confidence differs by more `
+      + `than ${CMP_LATENT_THRESHOLD.toFixed(2)} between runs -- a fixed, disclosed cutoff (mirrors the `
+      + `Compare canvas's own), not a measured boundary.`));
+    if (d.positions_truncated) rows.push(row("note", "positions truncated at the server's cap."));
+  }
+  rows.push(row("method", "POST /diff/runs -- clozn.analysis.model_diff.diff_runs(); a pure, observational "
+    + "record diff, no re-generation. The same route the Compare canvas uses."));
+  rows.push(row("caveat", d.caveat || SKELETONS.compare.caveat));
+  if (cl.pickedId) {
+    rows.push(`<p class="quiet small-note"><a class="machine" href="#/compare/${esc(state.runId)}/${esc(cl.pickedId)}">`
+      + `open the full Compare canvas for these two runs &rarr;</a></p>`);
+  }
+  return rows.join("");
 }
 
 /* ======================================================================== quiet strip */
@@ -592,8 +993,13 @@ function activateLens(view, state, lensId) {
   const panes = view.querySelector(".lens-panes");
   if (panes) panes.dataset.lens = lensId;
   state.light && state.light.pulse(.45);
+  // Reply-pane marks are lens-exclusive (see renderReplyPane) -- re-render the panes on every switch so
+  // the DOM always carries the NEWLY active lens's own marks, not whichever lens rendered last.
+  renderPanes(view, state);
   renderDrawer(view, state);
   if (lensId === "sources") ensureSourcesComputed(view, state);
+  else if (lensId === "concepts") ensureConceptsComputed(view, state);
+  else if (lensId === "compare") ensureCompareCandidatesLoaded(view, state);
 }
 
 async function doCopy(btn, text) {
@@ -629,6 +1035,12 @@ function wire(view, state) {
     if (copyBtn) { doCopy(copyBtn, state.copyTargets[Number(copyBtn.dataset.copyIdx)]); return; }
     const permaBtn = e.target.closest("[data-copy-permalink]");
     if (permaBtn) { doCopy(permaBtn, permaBtn.dataset.copyPermalink); return; }
+    const measureBtn = e.target.closest("[data-measure-influences]");
+    if (measureBtn) { runInfluencesMeasure(view, state); return; }
+  });
+  view.addEventListener("change", e => {
+    if (e.target.id === "cptLayerPick") { fetchConceptsLayer(view, state, Number(e.target.value)); return; }
+    if (e.target.id === "cmpLensPick") { loadCompareDiff(view, state, e.target.value || null); return; }
   });
   view.addEventListener("keydown", e => {
     if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
