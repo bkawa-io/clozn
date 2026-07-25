@@ -16,6 +16,7 @@ def cmd_serve(args):
     from clozn.cli import main as ctx
 
     model = resolve_model(args.model)
+    print(f"{fmt.DIM}- model: {model}{fmt.RST}", file=sys.stderr, flush=True)
     flags = _flags_for(model)
     if args.mask is not None:
         flags["mask"] = args.mask

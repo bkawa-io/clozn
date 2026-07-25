@@ -16,6 +16,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -109,20 +110,57 @@ def _friendly(path: str) -> str:
     return os.path.splitext(os.path.basename(path))[0]
 
 
+_QUANT_TAG_RE = re.compile(r"(?:^|[.\-_])((?:IQ|Q|F|BF)\d[A-Z0-9_]*)$", re.IGNORECASE)
+
+
+def _quant_tag(path: str) -> str:
+    """Best-effort quant label parsed off a GGUF's filename stem (e.g. 'Q2_K', 'Q4_K_M', 'Q8_0'), for the
+    disambiguation note only -- falls back to the file size when no recognizable tag is present."""
+    stem = os.path.splitext(os.path.basename(path))[0]
+    m = _QUANT_TAG_RE.search(stem)
+    return m.group(1).upper() if m else f"{os.path.getsize(path) / 1e9:.1f}G"
+
+
+def _pick_best_quant(hits: list[str], arg: str) -> str:
+    """>1 file on disk matches the SAME known short name -> never silently pick one (a naive first-match
+    over `_scan_models()`'s alphabetically-sorted list lands on Q2_K before Q4_K_M/Q8_0 for 'qwen' --
+    exactly the worst quant on disk, where this project's own quant-ladder receipts measure prose
+    degrading, ~27% argmax flips vs Q8). Picks the LARGEST file instead: a reliable proxy for
+    bits-per-weight across quants of the same base model, since architecture/layer-count are fixed and
+    only bit-width varies file size. Always prints which file and why, so the choice is visible rather
+    than silent -- pass the exact filename (or an unambiguous fragment) to get a different one."""
+    if len(hits) == 1:
+        return hits[0]
+    best = max(hits, key=os.path.getsize)
+    tags = ", ".join(f"{_quant_tag(h)}{' <- picked' if h == best else ''}" for h in hits)
+    print(
+        f"{fmt.DIM}- '{arg}' matched {len(hits)} files on disk ({tags}); "
+        f"picked the highest-precision quant automatically. Pass the exact filename to choose a "
+        f"different one.{fmt.RST}",
+        file=sys.stderr,
+    )
+    return best
+
+
 def resolve_model(arg: str) -> str:
-    """A path, a known short name, or a fuzzy filename fragment -> an absolute GGUF path."""
+    """A path, a known short name, or a fuzzy filename fragment -> an absolute GGUF path.
+
+    Never a SILENT pick among multiple matches (see _pick_best_quant): the historical bug here was the
+    exact-known-short-name branch returning the first alphabetical match, which for 'qwen' with
+    Q2_K/Q4_K_M/Q8_0 all on disk meant the worst quant loaded with zero indication.
+    """
     from clozn.cli import main as ctx
     if arg.lower().endswith(".gguf") and os.path.isfile(arg):
         return os.path.abspath(arg)
     models = _scan_models()
     if not models:
         raise ctx.CloznError("no GGUF models found. Put .gguf files in ~/.clozn/models or set CLOZN_MODELS=<dir>.")
-    # exact known short-name
+    # exact known short-name: collect every file matching this fragment, not just the first.
     for frag, name, _ in KNOWN:
         if arg.lower() == name:
-            for m in models:
-                if frag in os.path.basename(m).lower():
-                    return m
+            hits = [m for m in models if frag in os.path.basename(m).lower()]
+            if hits:
+                return _pick_best_quant(hits, arg)
     # fuzzy: filename contains the arg
     hits = [m for m in models if arg.lower() in os.path.basename(m).lower()]
     if len(hits) == 1:
