@@ -286,6 +286,42 @@ def identity_policy_check(baseline_identity: dict, pin_model: bool, current_iden
     return out
 
 
+def live_identity_verdict(certified_sha, live_sha, allow_model_change: bool = False) -> dict:
+    """Pure. Did the model that ANSWERED the probes match the identity this report certifies?
+
+    `identity_policy_check` above compares two FILESYSTEM hashes (baseline's vs the local GGUF the
+    `--model` name resolved to). Neither has anything to do with `--url`. So on its own it can print
+    "match: True" for a model that never answered a single probe -- the gate would certify a model it
+    did not test. This closes that hole using the live sha the golden check already collects.
+
+    Returns {"state": "verified"|"mismatch"|"unverified", "certified_sha256", "live_sha256",
+             "ok": bool, "reason": str|None}.
+    A mismatch is NOT gated on pin_model: pinning is about "is this the same model as the baseline",
+    whereas this is about "are the numbers in this report even about the model named in it". The latter
+    invalidates the report either way. `--allow-model-change` remains the deliberate escape hatch.
+    "unverified" never fails -- a tiny-only gate (--no-golden) has no live probe to compare against, and
+    saying so plainly is the honest outcome, not a failure.
+    """
+    if not live_sha or not certified_sha:
+        return {"state": "unverified", "certified_sha256": certified_sha, "live_sha256": live_sha,
+                "ok": True,
+                "reason": ("no live model sha to compare against -- the identity above is a hash of a "
+                           "LOCAL FILE, not of the model that produced these results")}
+    if certified_sha == live_sha:
+        return {"state": "verified", "certified_sha256": certified_sha, "live_sha256": live_sha,
+                "ok": True, "reason": None}
+    return {
+        "state": "mismatch", "certified_sha256": certified_sha, "live_sha256": live_sha,
+        "ok": bool(allow_model_change),
+        "reason": (
+            f"the model that answered these probes (sha256 {live_sha}) is NOT the model this report "
+            f"certifies (sha256 {certified_sha}) -- the results are real but they are about a different "
+            "model, so the identity line cannot be trusted. Point --model at the model actually serving "
+            "--url, or pass --allow-model-change if gating across models is intentional."
+        ),
+    }
+
+
 # ================================================================================ experiment result ===
 
 def _experiment_manifest_digest(manifest: dict) -> str:
@@ -507,6 +543,10 @@ def build_baseline(*, model_path: str, url: str = _DEFAULT_URL, which: str = "al
             "enabled": True, "which": which,
             "min_pass_rate": min_pass_rate if min_pass_rate is not None else measured_rate,
             "measured": {"n": g["n"], "n_correct": g["n_correct"], "pass_rate": measured_rate},
+            # WHO actually produced the numbers above, straight from the gateway at `url`. `identity`
+            # is a hash of a local FILE resolved from a name and can name a different model entirely;
+            # persisting this makes the artifact self-describing instead of merely self-labelled.
+            "measured_on": {"model": g.get("model"), "model_sha256": g.get("model_sha256")},
         }
     else:
         checks["golden"] = {"enabled": False}
@@ -561,14 +601,19 @@ def _check_golden(cfg: dict, url: str) -> dict:
                 "worst_offenders": []}
     pass_rate = result.get("pass_rate")
     observed = {"n": result.get("n", 0), "n_correct": result.get("n_correct", 0), "pass_rate": pass_rate}
+    # The model that ACTUALLY answered these probes, as reported by the gateway at `url`. Carried
+    # through (not dropped) so `run_gate` can check it against the identity the report certifies --
+    # the two are independent, and the whole gate is untrustworthy if they disagree.
+    live = {"model": result.get("model"), "model_sha256": result.get("model_sha256")}
     if pass_rate is None:
         return {"ran": True, "passed": False, "budget": {"min_pass_rate": budget, "which": which},
                 "observed": observed, "reason": "no probes were graded (n=0) -- nothing to gate on",
-                "worst_offenders": []}
+                "worst_offenders": [], "live": live}
     passed = budget is None or pass_rate >= budget
     reason = None if passed else f"pass_rate {pass_rate} < budget min_pass_rate {budget} (n={observed['n']})"
     return {"ran": True, "passed": passed, "budget": {"min_pass_rate": budget, "which": which},
-            "observed": observed, "reason": reason, "worst_offenders": result.get("wrong", [])[:20]}
+            "observed": observed, "reason": reason, "worst_offenders": result.get("wrong", [])[:20],
+            "live": live}
 
 
 def _check_tiny(cfg: dict) -> dict:
@@ -687,16 +732,25 @@ def run_gate(*, baseline: dict, model_path: str, url: str = _DEFAULT_URL,
         report_checks["diff"] = _check_diff(d_cfg, model_path, cpu=cpu)
         any_fail = any_fail or not report_checks["diff"]["passed"]
 
+    # Now that a live probe has (maybe) run, check the identity we are about to CERTIFY against the
+    # model that actually answered. `policy` above only ever compared two local files.
+    live_sha = ((report_checks.get("golden") or {}).get("live") or {}).get("model_sha256")
+    live_check = live_identity_verdict(current.get("model_sha256"), live_sha, allow_model_change)
+
     reason = None
     if not report_checks:
         any_fail = True
         reason = "baseline declares no enabled checks -- nothing to gate on (misconfigured baseline)"
+    elif not live_check["ok"]:
+        any_fail = True
+        reason = live_check["reason"]
     elif any_fail:
         failed = [name for name, c in report_checks.items() if not c["passed"]]
         reason = f"budget violated: {', '.join(failed)}"
 
-    return {"identity": current, "identity_policy": policy, "checks": report_checks,
-            "overall": "fail" if any_fail else "pass", "reason": reason, "generated_at": _now_iso()}
+    return {"identity": current, "identity_policy": policy, "live_identity": live_check,
+            "checks": report_checks, "overall": "fail" if any_fail else "pass", "reason": reason,
+            "generated_at": _now_iso()}
 
 
 # ================================================================================================ CLI ==
@@ -722,6 +776,20 @@ def format_ci_report(report: dict) -> str:
         lines.append(f"  identity: pin_model={pol.get('pin_model')}  match={pol.get('match')}  "
                     f"baseline_sha256={_short(pol.get('baseline_sha256'))}  "
                     f"current_sha256={_short(pol.get('current_sha256'))}")
+        # The line above compares two LOCAL FILES. Say plainly whether the model that actually
+        # answered was confirmed to be that model -- silence here used to read as "verified".
+        live = report.get("live_identity") or {}
+        state = live.get("state")
+        if state == "verified":
+            lines.append(f"            verified against the live engine "
+                         f"(it answered with sha256 {_short(live.get('live_sha256'))})")
+        elif state == "mismatch":
+            lines.append(f"            *** NOT the model that answered: live sha256 "
+                         f"{_short(live.get('live_sha256'))} != certified "
+                         f"{_short(live.get('certified_sha256'))} ***")
+        elif state == "unverified":
+            lines.append("            NOT verified against a live engine -- this is a hash of a local "
+                         "file, not of whatever produced these results")
     for name, c in (report.get("checks") or {}).items():
         mark = "PASS" if c.get("passed") else "FAIL"
         lines.append(f"\n  [{mark}] {name}")
@@ -847,6 +915,15 @@ def cmd_ci_baseline(args):
     if g.get("enabled"):
         print(f"  golden: n={g['measured']['n']}  pass_rate={g['measured']['pass_rate']}  "
               f"budget min_pass_rate={g['min_pass_rate']}")
+        # Say it NOW if this artifact is about to be labelled with a model that did not measure it --
+        # a baseline outlives the session, and every later check inherits the wrong label silently.
+        live_sha = (g.get("measured_on") or {}).get("model_sha256")
+        named_sha = (baseline.get("identity") or {}).get("model_sha256")
+        if live_sha and named_sha and live_sha != named_sha:
+            print(f"  WARNING: measured against sha256 {_short(live_sha)} but this baseline is labelled "
+                  f"with {_short(named_sha)} (the model '{args.model}' resolved to on disk). The numbers "
+                  f"above are real; the label is not the model that produced them. Re-run naming the "
+                  f"model actually serving --url if that was not intended.")
     t = baseline["checks"]["tiny"]
     if t.get("enabled"):
         total_passing = sum(len(f.get("baseline_passing_tests") or []) for f in t["files"])
