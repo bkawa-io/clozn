@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>clozn</title>
+<link rel="stylesheet" href="./tokens.css">
+<style>
+  /* shell layout only — all look comes from tokens.css */
+  .shell{position:relative;z-index:1;max-width:1160px;margin:0 auto;padding:18px 20px 40px}
+  #ambient{position:fixed;inset:0;width:100vw;height:100vh;z-index:0;opacity:.5}
+  header.bar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:6px}
+  .brand{font-family:var(--voice-display);font-size:15px;letter-spacing:.3em;font-weight:600}
+  .serving{display:inline-flex;gap:8px;align-items:center;font-family:var(--voice-machine);
+    font-size:var(--text-small);color:var(--ink-soft);border:1px solid var(--line);
+    border-radius:var(--r-pill);padding:5px 13px}
+  .serving .dot{width:7px;height:7px;border-radius:50%;background:var(--line-strong);flex:none}
+  .serving .dot.up{background:var(--evidence)}
+  .bar .spacer{flex:1}
+  .theme-toggle{font-family:var(--voice-machine);font-size:var(--text-label);letter-spacing:var(--track-label);
+    color:var(--ink-soft);border:1px solid var(--line);border-radius:var(--r-pill);padding:6px 14px}
+  .theme-toggle:hover{color:var(--ink);border-color:var(--line-strong)}
+  nav.primary{display:flex;gap:6px;margin:14px 0 22px;flex-wrap:wrap}
+  nav.primary a{font-family:var(--voice-machine);font-size:var(--text-small);letter-spacing:.05em;
+    color:var(--ink-soft);text-decoration:none;padding:7px 16px;border-radius:var(--r-pill);
+    border:1px solid transparent}
+  nav.primary a:hover{color:var(--ink);border-color:var(--line)}
+  nav.primary a[aria-current="page"]{color:var(--ink);border-color:var(--line-strong)}
+  main#view{min-height:50vh}
+  .view-title{margin:0 0 4px;font-size:var(--text-title);font-weight:600}
+  .view-sub{font-family:var(--voice-machine);font-size:var(--text-label);letter-spacing:var(--track-label);
+    color:var(--ink-faint);margin-bottom:16px}
+  .run-list{display:flex;flex-direction:column;gap:8px;padding:0;margin:0;list-style:none}
+  .run-list a{display:block;padding:12px 16px;text-decoration:none;color:var(--ink)}
+  .run-list li{transition:border-color var(--swift)}
+  .run-list li:hover{border-color:var(--line-strong)}
+  .run-prompt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .run-meta{font-family:var(--voice-machine);font-size:var(--text-label);color:var(--ink-faint);
+    margin-top:4px;display:flex;gap:10px;flex-wrap:wrap}
+  .quiet{color:var(--ink-soft);font-style:italic;padding:26px 0}
+  .kv{display:flex;gap:18px;flex-wrap:wrap;font-family:var(--voice-machine);font-size:var(--text-small);
+    color:var(--ink-soft)}
+  .kv b{color:var(--ink);font-weight:600}
+</style>
+</head>
+<body>
+<canvas id="ambient" aria-hidden="true"></canvas>
+<div class="shell">
+  <header class="bar">
+    <span class="brand">CLOZN</span>
+    <span class="serving" id="serving"><span class="dot"></span><span>reaching the runtime…</span></span>
+    <span class="spacer"></span>
+    <button class="theme-toggle" id="theme">◐ NIGHT</button>
+  </header>
+  <nav class="primary" id="nav">
+    <a href="#/runs">runs</a>
+    <a href="#/model">model</a>
+    <a href="#/behavior">behavior</a>
+  </nav>
+  <main id="view" aria-live="polite"></main>
+</div>
+<script type="module" src="./app.mjs"></script>
+</body>
+</html>
