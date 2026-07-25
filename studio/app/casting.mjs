@@ -105,7 +105,14 @@
    lands). The demo/scripted flag on DEMO_CASTING is carried through to the demo page's footer, never
    silently dropped. `prefers-reduced-motion` renders one static, fully-resolved (INSPECT) frame --
    motion is earned by an actual cast or interaction, never mood.
-*/
+
+   LAYERING (spec SS9.2, shader commitment): a WebGL2 canvas sits BENEATH this one and carries
+   atmosphere ONLY -- the cloud as a volume (fbm density field shaped by entropyByDepth/turbulence/
+   width/crystalline), bolt glow along a real strike, and ground embers that breathe with a planted
+   word's own entropy. Text, precise bolt-vertex geometry, hit-testing, and every existing particle/
+   cell/HUD element ABOVE stay exactly this Canvas2D code, unchanged. See createAtmosphere() below for
+   the full uniform-to-data mapping and the graceful-absence contract (no WebGL2 -> this file's
+   Canvas2D path renders byte-for-byte as it always has). */
 
 /* ============================================================================ tokens.css bridge */
 
@@ -321,6 +328,235 @@ function sameTexts(a, b) {
   return true;
 }
 
+/* ============================================================================ atmosphere (WebGL2 enhancement layer, spec SS9.2)
+   A second canvas, painted BENEATH the Canvas2D layer above it (text, precise bolt geometry, and hit-
+   testing STAY Canvas2D -- legibility constitution: no texture over text). Raw WebGL2, hand-written
+   GLSL, zero deps, matching studio/app/light.mjs's idiom (fullscreen triangle via gl_VertexID, dual
+   parity via a uNight uniform, activity-gated motion via uAct -- "time flows with activity", decaying
+   so motion must be re-earned). This module does NOT import or modify light.mjs; the fullscreen-
+   triangle trick and the dual-parity/activity pattern are the house convention, reproduced
+   independently here for the casting's own uniform surface.
+
+   GRACEFUL ABSENCE: if WebGL2 context creation (or shader compile/link) fails, createAtmosphere()
+   returns null, the extra <canvas class="cst-gl"> is removed from the DOM, and mountCasting's
+   Canvas2D path renders EXACTLY as it did before this layer existed -- same opaque gradient fill,
+   same particles/cells/bolts/text. This layer only ever ADDS a backdrop; it never gates legibility.
+
+   UNIFORM SURFACE -- every one maps to a real quantity already in the data contract or the phase
+   machine; nothing here is unearned decoration:
+     uT                     entropy-fall / effective-rank collapse (0 at REST -> 1 once committed) --
+                            the cloud's presence/opacity (data: entropyByDepth via the same t the
+                            Canvas2D layer already animates)
+     uTurb / uWidth / uCryst  data.turbulence / data.width / data.crystalline, unchanged
+     uSheet                 the "sheet-light" event flash (decision/flip lighting the cloud from
+                            within) -- the same `sheet` value the Canvas2D layer already tracks
+     uCommitU               meta.commitLayer's position along the envelope (0..1)
+     uEnv[12]               cloudW(y)/entropyByDepth sampled as screen-projected half-widths,
+                            shallow -> deep -- i.e. the SAME silhouette function the Canvas2D particle
+                            field already uses, projected through the SAME camera (project())
+     uCloudC / uAxis / uCloudH  the real camera projection of the cloud's vertical axis; yaw/pitch
+                            orbit (drag-to-rotate) moves this exactly like the Canvas2D particle field
+     uBoltPts / uBoltLife   active ground-bolt polylines (per-layer kink vertices), projected each
+                            frame from the SAME bolt segments the Canvas2D layer strokes -- a real
+                            strike, not a decorative flare
+     uEmberPts / uEmberAmt / uEmberHue  planted words' ground positions; uEmberAmt is the identical
+                            entropy-driven breathing formula the Canvas2D word-glow already uses
+     uAct                   phase/event-driven activity (MOTION = MEANING): idle is a near-still
+                            breath, a cast in progress is alive; gates drift/intensity, never the
+                            base cloud shape (that's uT, a measured quantity, not an activity level)
+     uNight                 dual parity: DAWN PAINTS TOWARD the hue (mix), NIGHT ADDS light -- the
+                            hard-won lesson that additive glow on a light ground clips to white and
+                            colors vanish
+   Colors are the SAME rgb values casting.mjs already reads from tokens.css via readTokens(); there is
+   no separate palette for this layer. */
+
+const ENVN = 12, BMAX = 3, PMAX = 16, EMAX = 24;
+
+function luma(rgb) { return 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]; }
+function deriveNight(colors) { return luma(colors["ground-0"]) < 128 ? 1 : 0; }
+
+const ATMO_VS = `#version 300 es
+void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);gl_Position=vec4(p*2.-1.,0,1);}`;
+
+const ATMO_FS = `#version 300 es
+precision highp float;
+uniform vec2 uRes;
+uniform float uTime,uNight,uAct,uT,uTurb,uWidth,uCryst,uSheet,uCommitU;
+uniform vec2 uCloudC,uAxis;
+uniform float uCloudH;
+uniform float uEnv[${ENVN}];
+uniform vec2 uBoltPts[${BMAX * PMAX}];
+uniform float uBoltLife[${BMAX}];
+uniform vec2 uEmberPts[${EMAX}];
+uniform float uEmberAmt[${EMAX}],uEmberHue[${EMAX}];
+uniform vec3 uG0,uG1,uFork,uShaky,uConfidence,uInkSoft;
+uniform vec3 uIri[5];
+out vec4 O;
+float h21(vec2 p){p=fract(p*vec2(234.34,435.345));p+=dot(p,p+34.23);return fract(p.x*p.y);}
+float vnoise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
+  return mix(mix(h21(i),h21(i+vec2(1,0)),f.x),mix(h21(i+vec2(0,1)),h21(i+vec2(1,1)),f.x),f.y);}
+float fbm(vec2 p){float v=0.,a=.5;
+  for(int i=0;i<4;i++){v+=a*vnoise(p);p=p*2.03+vec2(1.7,9.2);a*=.55;}return v;}
+vec3 iriAt(float t){
+  float f=clamp(t,0.,1.)*4.0; int i=int(floor(f)); float fr=f-float(i);
+  return mix(uIri[i],uIri[min(i+1,4)],fr);
+}
+float envAt(float u){
+  float f=clamp(u,0.,1.)*float(${ENVN - 1}); int i=int(floor(f)); float fr=f-float(i);
+  return mix(uEnv[i],uEnv[min(i+1,${ENVN - 1})],fr);
+}
+float segDist(vec2 p,vec2 a,vec2 b){
+  vec2 pa=p-a,ba=b-a; float h=clamp(dot(pa,ba)/max(dot(ba,ba),1e-6),0.,1.);
+  return length(pa-ba*h);
+}
+void main(){
+  vec2 uv=(gl_FragCoord.xy-.5*uRes)/uRes.y;
+
+  /* background -- the SAME top(ground-0)/base(ground-1) gradient the Canvas2D fill it replaces used */
+  float vy=1.0-gl_FragCoord.y/uRes.y; // gl_FragCoord.y is bottom-up; flip so vy=0 is the sky (top)
+  vec3 bg=mix(uG0,uG1,vy);
+
+  /* CLOUD volume -- data: entropyByDepth (uEnv), turbulence, width, crystalline, condensation (uT) */
+  vec2 rel=uv-uCloudC;
+  float warpSpeed=uTime*.15*max(uAct,.06);
+  vec2 warp=vec2(fbm(rel*2.2+warpSpeed),fbm(rel*2.2+vec2(4.1,1.7)-warpSpeed))-0.5;
+  rel+=warp*uTurb*(0.16-0.08*uCryst);
+  float along=dot(rel,uAxis);
+  float u=clamp(along/max(uCloudH,1e-4)*0.5+0.5,0.,1.);
+  vec2 perp=rel-uAxis*along;
+  float across=length(perp);
+  float w=envAt(u)*uWidth;
+  float band=mix(.16,.05,uCryst);
+  float edge=w-across;
+  float cloudMask=smoothstep(-band,band,edge)*smoothstep(0.0,0.12,u)*smoothstep(1.0,0.82,u);
+  cloudMask*=uT;
+  float sheetFlash=uSheet*(0.5+0.5*fbm(rel*3.0+uTime*.4));
+  float cloudGlow=cloudMask*(0.55+0.65*fbm(rel*1.6-warpSpeed*.6))*(1.0+sheetFlash*1.1);
+  vec3 cloudTint=iriAt(u*.85+.05);
+  // commit stratum -- data: meta.commitLayer (uCommitU); a NEUTRAL brightening (tints toward
+  // uInkSoft, the exact color the Canvas2D commit ring above already uses), distinct from the
+  // candidate-color cloud tint so it reads as a structural event, not another cell.
+  float commitGlow=smoothstep(0.10,0.0,abs(u-uCommitU))*uT*0.6;
+
+  /* BOLT glow -- data: active strike polylines, projected each frame from the real bolt segments */
+  float boltG=0.0; vec3 boltCol=vec3(0.);
+  for(int b=0;b<${BMAX};b++){
+    float life=uBoltLife[b]; if(life<=0.0) continue;
+    float d=1e6;
+    for(int i=0;i<${PMAX - 1};i++){
+      d=min(d,segDist(uv,uBoltPts[b*${PMAX}+i],uBoltPts[b*${PMAX}+i+1]));
+    }
+    float g=life*(0.0026/(d*d+0.0013));
+    boltG+=g; boltCol+=uIri[2]*g; // iri-peri -- matches the Canvas2D strike's own glow hue
+  }
+
+  /* GROUND EMBERS -- data: planted words' entropy-driven breathing (same amount as the Canvas2D glow) */
+  float emberG=0.0; vec3 emberCol=vec3(0.);
+  for(int e=0;e<${EMAX};e++){
+    float amt=uEmberAmt[e]; if(amt<=0.0) continue;
+    float d=length(uv-uEmberPts[e]);
+    float g=amt*(0.0017/(d*d+0.0022));
+    vec3 hueCol=mix(mix(uConfidence,uShaky,step(0.5,uEmberHue[e])),uFork,step(1.5,uEmberHue[e]));
+    emberG+=g; emberCol+=hueCol*g;
+  }
+
+  /* DUAL PARITY -- dawn paints TOWARD the hue (mix), never adds toward white; night adds light. */
+  vec3 dawn=bg;
+  dawn=mix(dawn,cloudTint,clamp(cloudGlow,0.,1.)*.62);
+  dawn=mix(dawn,uInkSoft,clamp(commitGlow,0.,1.));
+  dawn=mix(dawn,uIri[2],clamp(boltG,0.,1.));
+  dawn=mix(dawn,emberCol/max(emberG,1e-4),clamp(emberG,0.,1.));
+
+  vec3 night=bg;
+  night+=cloudTint*cloudGlow*.85;
+  night+=uInkSoft*commitGlow*.7;
+  night+=boltCol;
+  night+=emberCol;
+
+  vec3 col=mix(dawn,night,uNight);
+  O=vec4(col,1.0);
+}`;
+
+function createAtmosphere(glCanvas) {
+  const gl = glCanvas.getContext("webgl2", { antialias: false, alpha: false });
+  if (!gl) return null; // caller's Canvas2D-only path remains, untouched
+  const compile = (type, src) => {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      const log = gl.getShaderInfoLog(s); gl.deleteShader(s); throw new Error(log || "shader compile failed");
+    }
+    return s;
+  };
+  let prog;
+  try {
+    prog = gl.createProgram();
+    gl.attachShader(prog, compile(gl.VERTEX_SHADER, ATMO_VS));
+    gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, ATMO_FS));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog) || "link failed");
+  } catch {
+    return null; // a compile/link failure must degrade to "no atmosphere", never break the storm
+  }
+  gl.useProgram(prog);
+  const U = n => gl.getUniformLocation(prog, n);
+  const loc = {
+    uRes: U("uRes"), uTime: U("uTime"), uNight: U("uNight"), uAct: U("uAct"), uT: U("uT"),
+    uTurb: U("uTurb"), uWidth: U("uWidth"), uCryst: U("uCryst"), uSheet: U("uSheet"),
+    uCommitU: U("uCommitU"), uCloudC: U("uCloudC"), uAxis: U("uAxis"), uCloudH: U("uCloudH"),
+    uEnv: U("uEnv"), uBoltPts: U("uBoltPts"), uBoltLife: U("uBoltLife"),
+    uEmberPts: U("uEmberPts"), uEmberAmt: U("uEmberAmt"), uEmberHue: U("uEmberHue"),
+    uG0: U("uG0"), uG1: U("uG1"),
+    uFork: U("uFork"), uShaky: U("uShaky"), uConfidence: U("uConfidence"), uInkSoft: U("uInkSoft"),
+    uIri: U("uIri"),
+  };
+  let dead = false;
+
+  function setColors(colors) {
+    if (dead) return;
+    gl.useProgram(prog);
+    const set3 = (l, rgb) => gl.uniform3f(l, rgb[0] / 255, rgb[1] / 255, rgb[2] / 255);
+    set3(loc.uG0, colors["ground-0"]); set3(loc.uG1, colors["ground-1"]);
+    set3(loc.uFork, colors.fork); set3(loc.uShaky, colors.shaky);
+    set3(loc.uConfidence, colors.confidence); set3(loc.uInkSoft, colors["ink-soft"]);
+    const flat = new Float32Array(15);
+    colors.IRI.forEach((rgb, i) => { flat[i * 3] = rgb[0] / 255; flat[i * 3 + 1] = rgb[1] / 255; flat[i * 3 + 2] = rgb[2] / 255; });
+    gl.uniform3fv(loc.uIri, flat);
+  }
+  function resize(wDev, hDev) { if (!dead) gl.viewport(0, 0, wDev, hDev); }
+  function draw(u) {
+    if (dead) return;
+    gl.useProgram(prog);
+    gl.uniform2f(loc.uRes, u.resW, u.resH);
+    gl.uniform1f(loc.uTime, u.time);
+    gl.uniform1f(loc.uNight, u.night);
+    gl.uniform1f(loc.uAct, u.act);
+    gl.uniform1f(loc.uT, u.t);
+    gl.uniform1f(loc.uTurb, u.turb);
+    gl.uniform1f(loc.uWidth, u.width);
+    gl.uniform1f(loc.uCryst, u.cryst);
+    gl.uniform1f(loc.uSheet, u.sheet);
+    gl.uniform1f(loc.uCommitU, u.commitU);
+    gl.uniform2f(loc.uCloudC, u.cloudC[0], u.cloudC[1]);
+    gl.uniform2f(loc.uAxis, u.axis[0], u.axis[1]);
+    gl.uniform1f(loc.uCloudH, u.cloudH);
+    gl.uniform1fv(loc.uEnv, u.env);
+    gl.uniform2fv(loc.uBoltPts, u.boltPts);
+    gl.uniform1fv(loc.uBoltLife, u.boltLife);
+    gl.uniform2fv(loc.uEmberPts, u.emberPts);
+    gl.uniform1fv(loc.uEmberAmt, u.emberAmt);
+    gl.uniform1fv(loc.uEmberHue, u.emberHue);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  function destroy() {
+    if (dead) return;
+    dead = true;
+    const ext = gl.getExtension("WEBGL_lose_context");
+    if (ext) ext.loseContext();
+  }
+  return { setColors, resize, draw, destroy };
+}
+
 /* ============================================================================ chrome (DOM + injected, scoped styles) */
 
 const PHASE = { REST: 0, CONDENSE: 1, STORM: 2, RELEASE: 3, INSPECT: 4 };
@@ -338,7 +574,8 @@ function ensureStyles() {
     .cst-root{position:relative;width:100%;height:100%;overflow:hidden;isolation:isolate;
       border-radius:var(--r-pane,13px);border:1px solid var(--pearl-edge,var(--line,#333));
       background:var(--ground-0,#0B0D1E)}
-    .cst-canvas{display:block;width:100%;height:100%;cursor:grab;touch-action:none}
+    .cst-gl{position:absolute;inset:0;width:100%;height:100%;display:block;z-index:0;pointer-events:none}
+    .cst-canvas{position:absolute;inset:0;z-index:1;display:block;width:100%;height:100%;cursor:grab;touch-action:none}
     .cst-canvas:active{cursor:grabbing}
     .cst-note{position:absolute;left:14px;top:12px;max-width:min(320px,44%);
       font-family:var(--voice-machine);font-size:var(--text-label,11px);line-height:1.6;
@@ -374,6 +611,7 @@ export function mountCasting(container, opts = {}) {
 
   container.innerHTML = `
     <div class="cst-root">
+      <canvas class="cst-gl" aria-hidden="true"></canvas>
       <canvas class="cst-canvas" aria-label="${escapeAttr(opts.ariaLabel
         || "A storm cloud that inhales sky words along influence threads, argues via lead-change "
         + "flashes, strikes answer words into the ground, and can be forked from any almost-chosen token")}"></canvas>
@@ -387,6 +625,7 @@ export function mountCasting(container, opts = {}) {
       <button type="button" class="cst-center">⌖ center on the words</button>
     </div>`;
   const rootEl = container.querySelector(".cst-root");
+  const glCanvas = container.querySelector(".cst-gl");
   const canvas = container.querySelector(".cst-canvas");
   const noteEl = container.querySelector(".cst-note");
   const phaseEl = container.querySelector(".cst-phase b");
@@ -397,10 +636,21 @@ export function mountCasting(container, opts = {}) {
   const ctx = canvas.getContext("2d");
   if (!ctx) { container.innerHTML = ""; return null; }
 
+  // atmosphere is an ENHANCEMENT ONLY -- graceful absence: no WebGL2 (or a compile/link failure)
+  // means createAtmosphere() returns null, the extra canvas is dropped, and every `if (atmosphere)`
+  // branch below is simply skipped, leaving the Canvas2D path identical to before this layer existed.
+  const atmosphere = createAtmosphere(glCanvas);
+  if (!atmosphere) glCanvas.remove();
+
   let colors = readTokens();
+  let atmNightTarget = deriveNight(colors), atmNightT = atmNightTarget;
+  let atmAct = 0, atmActT = 0, atmT = 20; // atmT offset matches light.mjs's own silkT convention
+  if (atmosphere) atmosphere.setColors(colors);
   function refreshTokens() {
     colors = readTokens();
     if (particles.length) for (const p of particles) p.c = iriAt(colors.IRI, p.colorSeed);
+    atmNightTarget = deriveNight(colors);
+    if (atmosphere) atmosphere.setColors(colors);
   }
 
   let W = 0, H = 0, DPR = 1;
@@ -410,6 +660,10 @@ export function mountCasting(container, opts = {}) {
     W = b.width; H = b.height;
     canvas.width = Math.max(1, W * DPR); canvas.height = Math.max(1, H * DPR);
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    if (atmosphere) {
+      glCanvas.width = canvas.width; glCanvas.height = canvas.height;
+      atmosphere.resize(canvas.width, canvas.height);
+    }
     if (reduce) renderOnce();
   }
   const ro = new ResizeObserver(resize);
@@ -520,7 +774,11 @@ export function mountCasting(container, opts = {}) {
     else { applyData(data); setPhase(PHASE.CONDENSE); }
   }
 
-  function setNight() { refreshTokens(); if (reduce) renderOnce(); }
+  function setNight(nightArg) {
+    refreshTokens(); // re-reads tokens.css; also derives atmNightTarget as a CSS-luminance fallback
+    if (typeof nightArg === "boolean") atmNightTarget = nightArg ? 1 : 0; // the host's explicit, immediate flip wins
+    if (reduce) renderOnce();
+  }
 
   /* ---------------- camera + interaction */
   let yaw = .45, pitch = .22, dragging = false, moved = false, lx = 0, ly = 0, autoRot = true;
@@ -648,6 +906,21 @@ export function mountCasting(container, opts = {}) {
     sparks.forEach(s => { s.life -= dt * 1.6; s.p[0] *= 1.02; s.p[2] *= 1.02; s.p[1] += dt * .10; });
     sparks = sparks.filter(s => s.life > 0);
     updateHud();
+
+    /* atmosphere clock -- MOTION = MEANING: idle is a near-still breath; real events (strikes via
+       `sheet`, the all-bolt flare via `allFlash`, the phase itself) are what earn faster time/glow.
+       Under reduced motion (dt===0, no RAF to let smoothing converge) both targets are snapped
+       immediately so the single static frame is still correct, never a stale lag from mount. */
+    if (atmosphere) {
+      atmAct = clamp(0.08 + sheet * .7 + allFlash * .35 + (
+        phase === PHASE.STORM ? .5 : phase === PHASE.CONDENSE ? .4 : phase === PHASE.RELEASE ? .3
+        : phase === PHASE.INSPECT ? .15 : 0
+      ), 0, 1);
+      const actRate = reduce ? 1 : (atmAct > atmActT ? .12 : .03);
+      atmActT += (atmAct - atmActT) * actRate;
+      atmT += dt * (0.05 + 0.95 * atmActT);
+      atmNightT += (atmNightTarget - atmNightT) * (reduce ? 1 : .06);
+    }
   }
 
   function updateHud() {
@@ -675,10 +948,15 @@ export function mountCasting(container, opts = {}) {
   /* ---------------- draw (reads state written by step(); never mutates simulation state) */
   function draw(time) {
     ctx.globalCompositeOperation = "source-over";
-    const grad = ctx.createLinearGradient(0, 0, 0, H); // SKY at top, GROUND at bottom -- literal fit
-    grad.addColorStop(0, rgbaC(colors["ground-0"], 1));
-    grad.addColorStop(1, rgbaC(colors["ground-1"], 1));
-    ctx.fillStyle = grad; ctx.fillRect(0, 0, W, H);
+    if (atmosphere) {
+      // the WebGL2 layer beneath paints the sky/ground gradient + cloud volume; leave it transparent here
+      ctx.clearRect(0, 0, W, H);
+    } else {
+      const grad = ctx.createLinearGradient(0, 0, 0, H); // SKY at top, GROUND at bottom -- literal fit
+      grad.addColorStop(0, rgbaC(colors["ground-0"], 1));
+      grad.addColorStop(1, rgbaC(colors["ground-1"], 1));
+      ctx.fillStyle = grad; ctx.fillRect(0, 0, W, H);
+    }
     ctx.globalCompositeOperation = "lighter";
     ghostRects = [];
 
@@ -894,14 +1172,97 @@ export function mountCasting(container, opts = {}) {
     ctx.strokeStyle = style; ctx.lineWidth = w; ctx.stroke();
   }
 
+  /* ---------------- atmosphere uniform prep (reads the SAME state draw() reads; never mutates it).
+     Reuses casting.mjs's own project() camera each frame, so the shader's cloud axis/envelope/bolt
+     glow/embers track the real orbit (yaw/pitch drag) exactly like the Canvas2D particle field. */
+  const _atmScratchA = [0, 0, 0], _atmScratchB = [0, 0, 0];
+  const _atmEnv = new Float32Array(ENVN);
+  const _atmBoltPts = new Float32Array(BMAX * PMAX * 2);
+  const _atmBoltLife = new Float32Array(BMAX);
+  const _atmEmberPts = new Float32Array(EMAX * 2);
+  const _atmEmberAmt = new Float32Array(EMAX);
+  const _atmEmberHue = new Float32Array(EMAX);
+
+  function toAtmUV(p3) {
+    project(p3, _atmScratchA);
+    const rx = canvas.width, ry = canvas.height || 1;
+    return [
+      (_atmScratchA[0] * DPR - 0.5 * rx) / ry,
+      ((ry - _atmScratchA[1] * DPR) - 0.5 * ry) / ry, // flip to match the shader's bottom-up gl_FragCoord
+    ];
+  }
+
+  function computeAtmoUniforms(nowSec) {
+    const [tux, tuy] = toAtmUV([0, Y_TOP, 0]);
+    const [bux, buy] = toAtmUV([0, Y_BASE, 0]);
+    const cloudC = [(tux + bux) / 2, (tuy + buy) / 2];
+    let axX = bux - tux, axY = buy - tuy;
+    const axLen = Math.hypot(axX, axY) || 1e-4;
+    axX /= axLen; axY /= axLen;
+
+    for (let i = 0; i < ENVN; i++) {
+      const u = i / (ENVN - 1);
+      const y = Y_TOP + u * (Y_BASE - Y_TOP);
+      const [cx, cy] = toAtmUV([0, y, 0]);
+      const wLocal = cloudW(y, preset);
+      const [ex, ey] = toAtmUV([wLocal, y, 0]);
+      _atmEnv[i] = Math.hypot(ex - cx, ey - cy);
+    }
+
+    const nb = Math.min(BMAX, bolts.length);
+    _atmBoltLife.fill(0);
+    for (let bI = 0; bI < BMAX; bI++) {
+      if (bI >= nb) continue;
+      const b = bolts[bolts.length - nb + bI];
+      _atmBoltLife[bI] = clamp(b.life, 0, 1);
+      const segs = b.segs, n = segs.length;
+      for (let i = 0; i < PMAX; i++) {
+        const si = n > 1 ? Math.min(n - 1, Math.round((i * (n - 1)) / (PMAX - 1))) : 0;
+        const [px, py] = toAtmUV(segs[si] || segs[0] || [0, 0, 0]);
+        _atmBoltPts[(bI * PMAX + i) * 2] = px;
+        _atmBoltPts[(bI * PMAX + i) * 2 + 1] = py;
+      }
+    }
+
+    const ne = Math.min(EMAX, planted.length);
+    _atmEmberAmt.fill(0);
+    for (let eI = 0; eI < EMAX; eI++) {
+      if (eI >= ne) continue;
+      const e = planted[planted.length - ne + eI];
+      const shaky = e.ent > SHAKY_ENTROPY_BITS;
+      const fl = shaky ? (.55 + .35 * Math.sin(nowSec * 11 + e.x * 9)) : 1;
+      _atmEmberAmt[eI] = (shaky ? .30 : .20) * fl;
+      _atmEmberHue[eI] = e.br ? 2 : (shaky ? 1 : 0);
+      const [ex, ey] = toAtmUV([e.x, Y_GROUND, e.z]);
+      _atmEmberPts[eI * 2] = ex; _atmEmberPts[eI * 2 + 1] = ey;
+    }
+
+    return {
+      resW: canvas.width, resH: canvas.height,
+      time: atmT, night: atmNightT, act: atmActT, t,
+      turb: preset.turbulence, width: preset.width, cryst: preset.crystalline ? 1 : 0,
+      sheet, commitU: preset.nL > 1 ? preset.commitLayerIdx / (preset.nL - 1) : 0.5,
+      cloudC, axis: [axX, axY], cloudH: axLen / 2,
+      env: _atmEnv, boltPts: _atmBoltPts, boltLife: _atmBoltLife,
+      emberPts: _atmEmberPts, emberAmt: _atmEmberAmt, emberHue: _atmEmberHue,
+    };
+  }
+
   function frame(now) {
     if (dead) return;
     const dt = Math.min(.05, (now - lastTime) / 1000); lastTime = now;
     step(dt);
-    draw(now / 1000);
+    const nowSec = now / 1000;
+    draw(nowSec);
+    if (atmosphere) atmosphere.draw(computeAtmoUniforms(nowSec));
     if (!reduce) requestAnimationFrame(frame);
   }
-  function renderOnce() { step(0); draw(performance.now() / 1000); }
+  function renderOnce() {
+    const nowSec = performance.now() / 1000;
+    step(0);
+    draw(nowSec);
+    if (atmosphere) atmosphere.draw(computeAtmoUniforms(nowSec));
+  }
 
   resize();
   if (opts.data) update(opts.data);
@@ -912,6 +1273,7 @@ export function mountCasting(container, opts = {}) {
     setNight,
     destroy() {
       dead = true;
+      if (atmosphere) atmosphere.destroy();
       ro.disconnect();
       themeObserver.disconnect();
       prefersDark.removeEventListener("change", onPrefersChange);

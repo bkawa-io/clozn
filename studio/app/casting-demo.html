@@ -51,6 +51,7 @@
   <div class="head">
     <h1 class="brand">CLOZN · THE CASTING</h1>
     <span class="spacer"></span>
+    <span class="theme-toggle" id="glStatus" style="cursor:default"></span>
     <button class="theme-toggle" id="theme" type="button">◐ NIGHT</button>
   </div>
   <p class="sub">Your words hang in the sky · the storm inhales them, argues, and strikes the answer into
@@ -66,6 +67,15 @@
   <div class="fork-status" id="forkStatus" aria-live="polite"></div>
 
   <div class="foot">
+    <b>atmosphere (WebGL2, beneath the storm):</b> the cloud is now a volumetric fbm density field
+    shaped by the SAME entropyByDepth/turbulence/width/crystalline this cast already carries — compare
+    "47 × 6" (tight, crystalline) against "a line about the sea" (wide, roiling) to see it morph · a
+    live strike blooms along its real polyline · planted words get a soft under-glow breathing with
+    their own entropy, same amount as their Canvas2D flicker · commit stratum brightens neutrally
+    (ink-soft) · dawn PAINTS toward each hue, night ADDS light (no white-clipping) · idle is a near-
+    still breath, activity (a cast in progress) makes it move — MOTION = MEANING · if your browser
+    lacks WebGL2 this whole paragraph is moot: the badge above reads "Canvas2D only" and the storm
+    renders exactly as before, no atmosphere layer at all ·
     intake threads = influence streams (width/brightness = how hard each sky word is being drawn on) ·
     intra-cloud flashes = LEAD CHANGES — each one is the rank-1 candidate flipping between two cells at a
     specific layer (silent storm = never contested) · bolt kinks are layers (kink = that layer's
@@ -96,6 +106,19 @@ const stage = document.getElementById("stage");
 const themeBtn = document.getElementById("theme");
 const castButtons = document.getElementById("castButtons");
 const forkStatus = document.getElementById("forkStatus");
+const glStatus = document.getElementById("glStatus");
+
+/* ---------- verification aid only: independently probes WebGL2 support (does NOT touch casting.mjs's
+   API -- mountCasting/update/setNight/destroy stay exactly as documented). Lets a reader confirm at a
+   glance whether the atmosphere layer described in the footer should be visible on this machine, or
+   whether they're correctly seeing the plain Canvas2D fallback. ---------- */
+(function probeGL() {
+  const probe = document.createElement("canvas").getContext("webgl2");
+  glStatus.textContent = probe ? "◆ WebGL2 atmosphere" : "◇ Canvas2D only";
+  glStatus.title = probe
+    ? "WebGL2 is available -- the casting should be rendering the volumetric cloud/bolt-glow/ember atmosphere beneath the storm."
+    : "No WebGL2 in this browser/GPU -- the casting falls back to its plain Canvas2D rendering, unchanged from before the atmosphere layer existed.";
+})();
 
 /* ---------- theme: OS preference by default, explicit toggle wins for this page's own session ---------- */
 const prefersNight = matchMedia("(prefers-color-scheme: dark)");
