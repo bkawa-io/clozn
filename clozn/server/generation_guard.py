@@ -324,6 +324,55 @@ def parse_guard_spec(body: Any) -> Optional[dict]:
 
 
 # =================================================================================================
+# PERSISTED SERVER-WIDE DEFAULT -- clozn.server.routes.guard's GET/POST /guard/mode reads and writes
+# through these two functions. Added so the guard has a toggle that STICKS (previously GUARD_SETTING was
+# only ever read here, never written by any HTTP route -- see studio/app/behavior.mjs's prior "declared
+# skeleton" note). Nothing about parse_guard_spec's own precedence changes: an explicit per-request
+# `clozn_guard` field on /v1/chat/completions ALWAYS wins over whatever is persisted here, including an
+# explicit falsy value meaning "opted out this one call even though the server default is on" -- this
+# persisted default only ever governs a request that says nothing about clozn_guard at all.
+# =================================================================================================
+
+def get_persisted_guard_spec() -> Optional[dict]:
+    """The currently persisted server-wide guard default, fully normalized (same shape parse_guard_spec
+    returns for a request-level spec), or None when off/absent/corrupt. A corrupt or stale persisted value
+    (e.g. hand-edited settings file) degrades to None -- treated as off -- rather than raising, mirroring
+    clozn.memory.mode's own never-raise-on-load discipline; the only place a malformed guard spec is ever
+    surfaced as an error is set_persisted_guard_spec, at the moment someone tries to WRITE it."""
+    try:
+        from clozn.memory import mode as memory_mode
+        saved = memory_mode.get_setting(GUARD_SETTING, None)
+    except Exception:
+        saved = None
+    if not saved:
+        return None
+    try:
+        return _normalize_guard_spec(saved)
+    except ValueError:
+        return None
+
+
+def set_persisted_guard_spec(raw: Any) -> Optional[dict]:
+    """Validate and persist the server-wide guard default via clozn.memory.mode.set_setting -- which
+    writes through clozn._io.atomic_write_json (temp-file-then-rename), never a bare open().write() that
+    could truncate the settings file on a bad value (see clozn._io's own module docstring for the bug this
+    closes). `raw` uses the exact same shape as a request's `clozn_guard` field (concepts + optional
+    threshold/counter_strength/max_fires/layer/chunk_tokens/topk) -- this function invents no new knobs,
+    it validates through the SAME _normalize_guard_spec every live per-request clozn_guard value goes
+    through. An empty/falsy `raw` (or one with no concepts) persists OFF (None), matching the opt-in
+    contract "empty is off, not an error" documented on _normalize_guard_spec.
+
+    Raises ValueError on a structurally malformed non-empty value (bad types, e.g. concepts not a list) --
+    the caller (clozn.server.routes.guard) must turn that into an HTTP 400, never swallow it, exactly like
+    parse_guard_spec's own contract for a live request. Returns the normalized spec that was persisted
+    (None when turned off)."""
+    from clozn.memory import mode as memory_mode
+    spec = _normalize_guard_spec(raw if raw else {})
+    memory_mode.set_setting(GUARD_SETTING, spec)
+    return spec
+
+
+# =================================================================================================
 # per-model guard-threshold calibration (mirrors concept_dir.py's per-model concept-dial calibration)
 # =================================================================================================
 

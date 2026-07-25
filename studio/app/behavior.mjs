@@ -14,10 +14,10 @@
    LIVE-WIRED this build: /steer/axes + /steer/set (+ /steer/check preview, /steer/custom_delete),
    /steer/concept/set + /steer/concept/check, /memory/anchored/list + /fit + /toggle + /delete_term +
    /whatlearned, /memory/cards (read, to pick a card to fit), /sampling/mode (GET+POST),
-   /profiles/list + /save + /switch + /delete, /engine/health (for the applies-to line).
-   DECLARED SKELETON (no backing route found -- see the commit message): the opt-in disposition guard has
-   no persisted Studio-side default toggle (it is a per-request `clozn_guard` field on
-   /v1/chat/completions, or a server-wide setting only ever READ, never written, by any HTTP route). */
+   /profiles/list + /save + /switch + /delete, /engine/health (for the applies-to line),
+   /guard/mode (GET+POST) -- the disposition guard's persisted server-wide default now has a real toggle
+   here (a per-request `clozn_guard` field on /v1/chat/completions still always overrides it -- this page
+   only ever sets what a request that says nothing about clozn_guard falls back to). */
 
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -43,7 +43,7 @@ export async function renderBehavior(view, light) {
   view.innerHTML = shell();
   const state = {
     light, health: null, axes: [], concepts: new Map(), cards: null,
-    bags: null, sampling: null, profiles: null, activeProfile: null,
+    bags: null, sampling: null, guard: null, profiles: null, activeProfile: null,
   };
   wire(view, state);
   await Promise.all([
@@ -299,11 +299,11 @@ async function loadWhatlearned(view, state) {
 /* ======================================================================== settings */
 
 async function loadSettings(view, state) {
-  const res = await getJSON("/sampling/mode");
+  const [samplingRes, guardRes] = await Promise.all([getJSON("/sampling/mode"), getJSON("/guard/mode")]);
   const el = view.querySelector("#bhvSettings");
   if (!el) return;
-  if (res.ok && res.body) {
-    state.sampling = res.body;
+  if (samplingRes.ok && samplingRes.body) {
+    state.sampling = samplingRes.body;
     el.innerHTML = `
       <h3 class="bhv-h3">decode</h3>
       <div class="settings-row">
@@ -317,23 +317,51 @@ async function loadSettings(view, state) {
         ${settingsNumber("sampRep", "repeat_penalty", state.sampling.sample_repeat_penalty, 0.5, 2, 0.01)}
       </div>
       <button class="btn-ghost small primary" type="button" data-save-sampling>save decode settings</button>
-      <div class="quiet" id="samplingSaved" hidden></div>
-
-      <h3 class="bhv-h3">disposition guard</h3>
-      <div class="skeleton-block">
-        <div class="drawer-row"><span class="label">what it does</span><span class="drawer-val">a closed-loop
-          guard that detects a chosen concept's disposition rising mid-reply and steers the continuation
-          away from it -- opt-in, off by default.</span></div>
-        <div class="drawer-row"><span class="label">how it's set</span><span class="drawer-val">per API call,
-          as a <span class="machine">clozn_guard</span> object on <span class="machine">POST /v1/chat/completions</span>
-          (concepts + threshold) -- there is no server-wide default route this page can flip yet, so no
-          toggle is drawn here rather than one that would silently do nothing.</span></div>
-        <p class="quiet drawer-arriving">a persisted Studio-side default is a real gap, not a later-build
-          placeholder -- noted in this build's commit.</p>
-      </div>`;
+      <div class="quiet" id="samplingSaved" hidden></div>`;
   } else {
     el.innerHTML = `<p class="quiet">decode settings unavailable.</p>`;
   }
+  state.guard = (guardRes.ok && guardRes.body) ? guardRes.body : null;
+  el.insertAdjacentHTML("beforeend", guardBlockHTML(state.guard));
+}
+
+function guardBlockHTML(guard) {
+  if (!guard) {
+    return `
+      <h3 class="bhv-h3">disposition guard</h3>
+      <p class="quiet">guard default unavailable.</p>`;
+  }
+  const g = guard.guard || {};
+  const concepts = Array.isArray(g.concepts) ? g.concepts.join(", ") : "";
+  const counter = typeof g.counter_strength === "number" ? g.counter_strength : -0.5;
+  const maxFires = typeof g.max_fires === "number" ? g.max_fires : 3;
+  return `
+    <h3 class="bhv-h3">disposition guard</h3>
+    <p class="bhv-sub quiet">a closed-loop guard that detects a chosen concept's disposition rising
+      mid-reply and steers the continuation away from it -- present-tense detect-and-correct, not
+      predictive. This is the server-wide default for a request that sends no <span class="machine">clozn_guard</span>
+      field at all; an explicit <span class="machine">clozn_guard</span> on
+      <span class="machine">POST /v1/chat/completions</span> always overrides it, including turning it off
+      for that one call.</p>
+    <div class="settings-row">
+      <label class="switch-label"><input type="checkbox" id="guardEnabled" ${guard.enabled ? "checked" : ""}>
+        <span class="machine">on by default</span></label>
+    </div>
+    <div class="settings-row settings-field">
+      <label class="label" for="guardConcepts">concepts (comma-separated)</label>
+      <input class="text-input machine" id="guardConcepts" placeholder="e.g. violence, self-harm"
+        value="${esc(concepts)}">
+    </div>
+    <div class="settings-grid">
+      ${settingsNumber("guardCounter", "counter_strength", counter, -2, 0, 0.1)}
+      ${settingsNumber("guardMaxFires", "max_fires", maxFires, 1, 10, 1)}
+    </div>
+    <button class="btn-ghost small primary" type="button" data-save-guard>save guard default</button>
+    <div class="quiet" id="guardSaved" hidden></div>
+    <p class="quiet small-note">turning this on with no concepts is refused (400) -- an empty concepts
+      list is what turns it off, not what enables it with nothing to guard against. calibration (catch/
+      false-positive rate, per concept) is a small-battery signal-design result, not a public reliability
+      claim at any scale.</p>`;
 }
 
 function settingsNumber(id, label, value, min, max, step) {
@@ -579,6 +607,31 @@ function wire(view, state) {
       const out = view.querySelector("#samplingSaved");
       if (out) { out.hidden = false; out.textContent = res.ok ? "saved." : "could not save."; }
       if (res.ok) state.light && state.light.pulse(.5);
+      return;
+    }
+
+    /* -- settings: save disposition-guard default -- */
+    const saveGuard = e.target.closest("[data-save-guard]");
+    if (saveGuard) {
+      const enabled = view.querySelector("#guardEnabled").checked;
+      const conceptsRaw = (view.querySelector("#guardConcepts").value || "").trim();
+      const concepts = conceptsRaw ? conceptsRaw.split(",").map(s => s.trim()).filter(Boolean) : [];
+      const payload = { enabled, concepts };
+      const counterVal = view.querySelector("#guardCounter").value;
+      if (counterVal !== "") payload.counter_strength = Number(counterVal);
+      const maxFiresVal = view.querySelector("#guardMaxFires").value;
+      if (maxFiresVal !== "") payload.max_fires = Number(maxFiresVal);
+      const res = await postJSON("/guard/mode", payload);
+      const out = view.querySelector("#guardSaved");
+      if (out) {
+        out.hidden = false;
+        out.textContent = res.ok ? "saved."
+          : ((res.body && res.body.error && (res.body.error.message || res.body.error)) || "could not save.");
+      }
+      if (res.ok) {
+        state.guard = res.body;
+        state.light && state.light.pulse(.5);
+      }
       return;
     }
 

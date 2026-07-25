@@ -657,6 +657,7 @@ from clozn.server.routes import feedback as _feedback_routes          # noqa: E4
 from clozn.server.routes import ollama as _ollama_routes              # noqa: E402
 from clozn.server.routes import openai as _openai_routes              # noqa: E402
 from clozn.server.routes import engine as _engine_routes              # noqa: E402
+from clozn.server.routes import guard as _guard_routes                # noqa: E402 (persisted /guard/mode)
 from clozn.server.routes import rewrite as _rewrite_routes            # noqa: E402 (edit Route D: AR rewrite)
 from clozn.server.routes import readouts as _readouts_routes          # noqa: E402
 # Inspector route families: span receipts, fork-at-token, journal actuary +
@@ -677,12 +678,13 @@ _runs_fallback_routes = _types.SimpleNamespace(try_get=_runs_routes.try_get_fall
 
 _GET_ROUTES = [_static_routes, _health_routes, _runs_routes, _memory_routes, _receipts_routes,
               _timetravel_routes, _profiles_routes, _ollama_routes, _openai_routes, _engine_routes,
+              _guard_routes,
               _journal_routes, _card_routes, _anchored_routes, _diff_routes, _receipt_link_routes,
               _influence_map_routes, _contracts_routes, _runs_fallback_routes]
 _POST_ROUTES = [_health_routes, _memory_routes, _receipts_routes,
                _corrective_retry_routes, _replay_routes,
                _timetravel_routes, _profiles_routes, _preferences_routes, _feedback_routes,
-               _ollama_routes, _openai_routes, _engine_routes, _rewrite_routes, _readouts_routes,
+               _ollama_routes, _openai_routes, _engine_routes, _guard_routes, _rewrite_routes, _readouts_routes,
                _span_receipt_routes, _fork_routes, _journal_routes, _anchored_routes, _diff_routes,
                _receipt_link_routes, _influence_map_routes, _contracts_routes,
                _provenance_routes, _causal_trace_routes]
