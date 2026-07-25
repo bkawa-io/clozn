@@ -28,6 +28,11 @@ def cmd_serve(args):
         flags["sae"] = args.sae
         if args.sae_k is not None:
             flags["sae_k"] = args.sae_k
+    if args.no_flash_attn:
+        # extra_args is the generic engine-argv passthrough _launch_args already documents (see
+        # engine_process.py) -- attention-edge provenance (clozn provenance / the Studio Sources lens)
+        # needs the engine started this way so kq_soft_max materializes for /score's attn_knockout.
+        flags.setdefault("extra_args", []).append("--no-flash-attn")
 
     port = args.port or 8080
     os.makedirs(ctx.HOME, exist_ok=True)

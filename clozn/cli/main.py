@@ -120,6 +120,11 @@ def build_parser():
     ps.add_argument("--sae", default=None, help="on-device SAE readout dir (dims must match the model; "
                     "server refuses politely on mismatch)")
     ps.add_argument("--sae-k", type=int, default=None, help="SAE features kept per position (default 16)")
+    ps.add_argument("--no-flash-attn", action="store_true",
+                    help="materialize attention weights instead of fusing them, so /score's "
+                         "attn_knockout works and `clozn provenance`/the Studio Sources lens become "
+                         "available (GET /health.capabilities.attn_knockout flips true). Off by "
+                         "default; costs decode speed.")
     ps.set_defaults(fn=cmd_serve)
 
     sub.add_parser("models", help="list local models + the engine backend").set_defaults(fn=cmd_models)
