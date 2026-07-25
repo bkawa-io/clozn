@@ -22,7 +22,9 @@ unit of computation — one context position, one SAE feature, one attention hea
 — carries almost none of the causal mass behind a model's answer, and fails to separate from a
 matched random control. Some, not all, ways of aggregating units into a SET recover a clean, large,
 control-beating effect: a greedily-constructed contiguous span of input positions (severed at the
-attention edge) reaches separations of 100x-800,000x over matched random controls; a jointly-ablated
+attention edge) reaches separations of 100x-3,273,088x over matched random controls (the max is
+the `doc_town` case, Qwen2.5-7B; Llama-3.1-8B's max is 244,950x on `dis_edison` -- both read
+directly from the battery receipts, correcting an earlier draft that understated this as 800,000x); a jointly-ablated
 group of 8-16 SAE features reaches 10-45% of a site's causal mass against a 0-6% random-group floor;
 jointly ablating an entire trace's surviving residual sites produces a prediction-vs-observation
 scorecard correct on 91-92% of tested flips across both families. But one further generalization of
