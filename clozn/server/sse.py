@@ -170,16 +170,30 @@ def sse_chat(handler, messages, max_new, model, lens=None, receipt=False, sample
         # route (see generation_gateway.policy_signal), delivered as one side-frame before the finish
         # chunk -- silent (no frame at all) unless a matching, fitted calibration actually says "ask" or
         # "abstain".
-        from clozn.server.generation_gateway import policy_signal
+        from clozn.server.generation_gateway import policy_verdict_and_signal
         policy_trace = trace
         if think_result is not None and think_result.stripped and isinstance(trace, list):
             from clozn.runs.think_tags import prompt_opens_think, sanitize_steps
             policy_trace, _, _ = sanitize_steps(
                 trace, implicit_open=prompt_opens_think(memout.get("final_prompt"))
             )
-        policy = policy_signal(policy_trace, model, task=task)
+        # ONE _policy_verdict lookup feeds both the live ask/abstain-only signal below and the
+        # all-bands receipt persisted onto the run record -- policy_verdict_and_signal's own docstring
+        # explains why this must not be two separate calls.
+        policy, policy_verdict_meta = policy_verdict_and_signal(policy_trace, model, task=task)
         if policy:
             chunk({}, extension={"clozn_policy": policy})
+        # Persist the ALL-BANDS verdict (including 'answer', which the live signal above never
+        # surfaces) onto the run record, so a later reader of THIS run can tell whether the policy
+        # would have answered, asked, or abstained -- not just live callers. After the fact because the
+        # run must already be logged (rid assigned just above) before its own trace can be scored.
+        # Additive and best-effort: any hiccup here must never touch the SSE stream already in flight.
+        if rid and policy_verdict_meta:
+            try:
+                from clozn.runs.attachments import attach_policy_verdict
+                attach_policy_verdict(rid, policy_verdict_meta)
+            except Exception:
+                pass
         from clozn.runs.context_receipt import warnings_for
         cutoff_warnings = warnings_for(fr, {"max_tokens": int(max_new)})
         terminal = {}

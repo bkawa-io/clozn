@@ -260,6 +260,49 @@ def _policy_verdict(trace_steps, model: str | None, task: str | None = None) -> 
         return {"available": False, "reason": f"policy verdict lookup failed: {exc}"}
 
 
+def _signal_from_verdict(verdict: dict) -> dict | None:
+    """The ask/abstain-only, note-carrying LIVE shape (`policy_signal`'s return value), derived from an
+    already-computed `_policy_verdict` result without re-deriving it. Split out so
+    `policy_verdict_and_signal` below can hand back both the live signal and the persisted receipt from
+    ONE `_policy_verdict` call -- a caller that needs both must never pay for (or, worse, cause) two
+    separate calibration-store lookups over the same reply."""
+    band = verdict.get("band")
+    if not verdict.get("available") or band not in ("ask", "abstain"):
+        return None
+    return {
+        "band": band,
+        "score": verdict["score"],
+        "score_aggregate": verdict["score_aggregate"],
+        "answer_at": verdict["answer_at"],
+        "ask_at": verdict["ask_at"],
+        "calibration_task": verdict.get("calibration_task"),
+        "calibration_model": verdict.get("calibration_model"),
+        "note": _POLICY_NOTES[band],
+    }
+
+
+def _meta_from_verdict(verdict: dict) -> dict | None:
+    """The full, ALL-BANDS receipt shape for persistence (`meta.clozn_policy` -- see
+    clozn.runs.attachments.attach_policy_verdict), derived from an already-computed `_policy_verdict`
+    result. Unlike `_signal_from_verdict`, this returns a value for EVERY available band including
+    'answer' -- a stored run must be able to say "the policy would have answered this" just as honestly
+    as it says "asked" or "abstained," or a later reader can never reconstruct which stored answers the
+    policy actually blessed. Returns None -- never a fabricated verdict -- when the verdict is
+    unavailable (no calibration saved, model/task mismatch, no scored trace, ...); the caller must then
+    leave the run's meta.clozn_policy key ABSENT, never default it to 'answer'."""
+    if not verdict.get("available"):
+        return None
+    return {
+        "band": verdict["band"],
+        "score": verdict["score"],
+        "score_aggregate": verdict["score_aggregate"],
+        "answer_at": verdict["answer_at"],
+        "ask_at": verdict["ask_at"],
+        "calibration_task": verdict.get("calibration_task"),
+        "calibration_model": verdict.get("calibration_model"),
+    }
+
+
 def policy_signal(trace_steps, model: str | None, task: str | None = None) -> dict | None:
     """The selective-generation policy's verdict for one just-completed /v1/chat/completions reply, or
     None when there is nothing honest to say -- no calibration saved yet (`clozn eval --save`), the saved
@@ -279,28 +322,59 @@ def policy_signal(trace_steps, model: str | None, task: str | None = None) -> di
 
     ALWAYS ON -- no opt-in gate. This is metadata only; the reply text itself is never touched. The
     separate, opt-in ACTION that can replace the reply text is `selective_generation_action` below (BK
-    decision: abstain/ask may become an ACTION, but OPT-IN, DEFAULT OFF)."""
+    decision: abstain/ask may become an ACTION, but OPT-IN, DEFAULT OFF).
+
+    A caller that ALSO needs the all-bands persisted receipt for the same reply (see
+    `policy_meta_for_run`) should call `policy_verdict_and_signal` instead of calling this and
+    `policy_meta_for_run` separately -- each of those two independently re-runs `_policy_verdict`
+    (including the calibration-store lookup), which is wasted work and, worse, double-invokes any
+    caller-supplied `eval_store.load_profile`."""
     try:
-        verdict = _policy_verdict(trace_steps, model, task)
-        band = verdict.get("band")
-        if not verdict.get("available") or band not in ("ask", "abstain"):
-            return None
-        return {
-            "band": band,
-            "score": verdict["score"],
-            "score_aggregate": verdict["score_aggregate"],
-            "answer_at": verdict["answer_at"],
-            "ask_at": verdict["ask_at"],
-            "calibration_task": verdict.get("calibration_task"),
-            "calibration_model": verdict.get("calibration_model"),
-            "note": _POLICY_NOTES[band],
-        }
+        return _signal_from_verdict(_policy_verdict(trace_steps, model, task))
     except Exception:
         return None
 
 
 # Backward-compat alias: earlier callers imported this name back when only the 'ask' band was wired.
 ask_band_signal = policy_signal
+
+
+def policy_meta_for_run(trace_steps, model: str | None, task: str | None = None) -> dict | None:
+    """The full, ALL-BANDS selective-generation verdict for one just-completed reply, shaped for
+    persistence onto the run record (`meta.clozn_policy` -- see clozn.runs.attachments.
+    attach_policy_verdict), never for the wire response. `policy_signal` above stays the live-facing
+    surface and deliberately says nothing when the band is 'answer' (there is nothing actionable to
+    tell the caller); a stored run has the opposite need -- without an 'answer' verdict on file, nobody
+    reading the run back later can tell a policy-blessed answer from a run the policy was never run
+    against at all. This is the honest receipt for BOTH cases.
+
+    Returns None -- never a fabricated verdict -- exactly when `_policy_verdict` reports unavailable (no
+    calibration saved, model/task mismatch, no scored trace, ...). The caller must leave the run's
+    meta.clozn_policy key ABSENT in that case; never default it to 'answer'. Never raises.
+
+    See `policy_signal`'s docstring: a caller needing both this and the live signal for the SAME reply
+    should call `policy_verdict_and_signal` instead, to avoid computing `_policy_verdict` twice."""
+    try:
+        return _meta_from_verdict(_policy_verdict(trace_steps, model, task))
+    except Exception:
+        return None
+
+
+def policy_verdict_and_signal(trace_steps, model: str | None,
+                               task: str | None = None) -> tuple[dict | None, dict | None]:
+    """Compute `_policy_verdict` exactly ONCE and return `(live_signal, persisted_meta)` -- the same
+    shapes `policy_signal` and `policy_meta_for_run` return, respectively. For callers (sse_chat, the
+    non-streaming /v1/chat/completions handler) that need BOTH the live wire/SSE signal and the
+    run-record receipt for the SAME reply: calling `policy_signal` and `policy_meta_for_run` separately
+    would re-run the calibration-store lookup twice for one reply, which is wasted work and, when a
+    caller's `eval_store.load_profile` is itself instrumented/counted (as
+    tests/test_ask_band_server.py's task-selection test does), an observable behavior change. Never
+    raises -- any failure collapses to `(None, None)`."""
+    try:
+        verdict = _policy_verdict(trace_steps, model, task)
+    except Exception:
+        return None, None
+    return _signal_from_verdict(verdict), _meta_from_verdict(verdict)
 
 
 # =============================================================================================================

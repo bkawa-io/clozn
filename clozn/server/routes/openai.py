@@ -610,10 +610,24 @@ def try_post(h, p, body):
     # lands in the saved policy's ask OR abstain band (clozn eval --save). Never opt-in-gated -- it is
     # silent (no key at all) unless a matching, fitted calibration actually says "ask" or "abstain"; see
     # generation_gateway.policy_signal.
-    from clozn.server.generation_gateway import policy_signal
-    policy = policy_signal(trace_steps, selected_model, task=calibration_task)
+    from clozn.server.generation_gateway import policy_verdict_and_signal
+    # ONE _policy_verdict lookup feeds both the live ask/abstain-only signal below and the all-bands
+    # receipt persisted onto the run record -- policy_verdict_and_signal's own docstring explains why
+    # this must not be two separate calls.
+    policy, policy_meta = policy_verdict_and_signal(trace_steps, selected_model, task=calibration_task)
     if policy:
         resp["clozn_policy"] = policy
+    # Persist the ALL-BANDS verdict (including 'answer', which the live signal above never surfaces)
+    # onto the run record, so a later reader of THIS run can tell whether the policy would have
+    # answered, asked, or abstained -- not just live callers. After the fact because the run must
+    # already be logged (rid assigned above) before its own trace can be scored. Additive and
+    # best-effort: any hiccup here must never break the reply.
+    if rid and policy_meta:
+        try:
+            from clozn.runs.attachments import attach_policy_verdict
+            attach_policy_verdict(rid, policy_meta)
+        except Exception:
+            pass
     # CALIBRATION BACKLOG #10 action half (BK decision 2026-07-22: abstain/ask may become an ACTION, but
     # OPT-IN, DEFAULT OFF). `clozn_selective` on the request (or the server-wide `selective_generation`
     # setting when the request omits the field) opts in; absent/false on both keeps this response
