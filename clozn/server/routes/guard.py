@@ -44,6 +44,12 @@ ACCEPTED_FIELDS = frozenset({
 def try_post(h, p, body):
     if p != "/guard/mode":
         return False
+    concepts = body.get("concepts")
+    if isinstance(concepts, (list, tuple)) and len(concepts) > 64:
+        # Every concept resolves to a steer direction at generation time; an unbounded list is a
+        # self-DoS. 64 is far above any real use (the calibrated set is single digits).
+        h._json(400, {"error": f"too many concepts ({len(concepts)}); the guard accepts at most 64"})
+        return True
     unknown = sorted(k for k in body if k not in ACCEPTED_FIELDS)
     if unknown:
         h._json(400, {"error": {

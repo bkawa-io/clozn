@@ -39,6 +39,19 @@ def try_get(h, p):
     return False
 
 
+
+def _jlens_int(h, body, key, default):
+    """Strict int parse for /jlens params -> the value, or None after answering 400.
+    int() on user input crashed the connection ("deep" -> ValueError up through the dispatcher), and
+    bool/float coercion silently truncated (layer 14.7 read as 14 with no complaint)."""
+    v = body.get(key, default)
+    if v is None:
+        v = default
+    if isinstance(v, bool) or not isinstance(v, int):
+        h._json(400, {"error": f"{key} must be an integer (got {type(v).__name__}: {v!r})"})
+        return None
+    return v
+
 def try_post(h, p, body):
     if p.startswith("/runs/") and p.endswith("/explain"):   # M1: assemble the FREE signals -- zero generation
         rid = p[len("/runs/"):-len("/explain")]
@@ -186,7 +199,12 @@ def try_post(h, p, body):
             h._json(400, {"error": "need a 'text' to read"})
             return True
         layer = body.get("layer")
-        topk = int(body.get("topk", 5) or 5)
+        if layer is not None and (isinstance(layer, bool) or not isinstance(layer, int)):
+            h._json(400, {"error": f"layer must be an integer (got {type(layer).__name__}: {layer!r})"})
+            return True
+        topk = _jlens_int(h, body, "topk", 5)
+        if topk is None:
+            return True
         want_protocol = bool(body.get("protocol", False))
         if not (ctx.active_sub(h) and getattr(ctx.active_sub(h), "jlens", None)):
             h._json(200, {"available": False, "run_id": None,
@@ -212,7 +230,12 @@ def try_post(h, p, body):
                          "reason": "this run has no response/text to read"})
             return True
         layer = body.get("layer")
-        topk = int(body.get("topk", 5) or 5)
+        if layer is not None and (isinstance(layer, bool) or not isinstance(layer, int)):
+            h._json(400, {"error": f"layer must be an integer (got {type(layer).__name__}: {layer!r})"})
+            return True
+        topk = _jlens_int(h, body, "topk", 5)
+        if topk is None:
+            return True
         want_protocol = bool(body.get("protocol", False))
         res = ctx.active_sub(h).jlens(text, layer=layer, topk=topk)
         h._json(200, ctx._jlens_envelope(res, run_id=rid, text_source=text_source, want_protocol=want_protocol))

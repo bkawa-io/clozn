@@ -1049,7 +1049,18 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 return
             p = self.path.split("?")[0]
             for mod in _GET_ROUTES:
-                if mod.try_get(self, p):
+                try:
+                    if mod.try_get(self, p):
+                        return
+                except EngineUnavailable as e:
+                    self._json(502, {"error": str(e)})
+                    return
+                except Exception as e:
+                    # Same guard as _dispatch_post: a route exception must become an HTTP error,
+                    # never a dropped TCP connection. Traceback to the log, real error to the client.
+                    import traceback
+                    traceback.print_exc()
+                    self._json(500, {"error": f"{type(e).__name__}: {e}", "route": p})
                     return
             self._json(404, {"error": "GET " + p})
 
@@ -1124,7 +1135,22 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
 
         def _dispatch_post(self, p, body):
             for mod in _POST_ROUTES:
-                if mod.try_post(self, p, body):
+                try:
+                    if mod.try_post(self, p, body):
+                        return
+                except EngineUnavailable as e:
+                    self._json(502, {"error": str(e)})
+                    return
+                except Exception as e:
+                    # Without this, an exception inside a route module rode all the way up to
+                    # socketserver, which closed the TCP connection with NO HTTP response at all --
+                    # the client saw RemoteDisconnected, undiagnosable. (Pressure-test finding:
+                    # three live repros -- a firing guard whose counter-injection lacked its layer
+                    # calibration, and /runs/<id>/jlens with a non-numeric layer or topk.) The
+                    # traceback still lands in the gateway log; the client now gets a real error.
+                    import traceback
+                    traceback.print_exc()
+                    self._json(500, {"error": f"{type(e).__name__}: {e}", "route": p})
                     return
             # Generic fallback: whatever the active substrate's own per-action dispatch serves
             # (/memory/*, /steer/* -- Substrate._memory/_steer above, substrate-polymorphic domain
