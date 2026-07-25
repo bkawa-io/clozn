@@ -22,9 +22,9 @@ def _truthy(value) -> bool:
 
 
 def _association_error(h, exc):
-    h._json(400, {"error": {"message": str(exc), "type": "invalid_request_error",
-                             "param": getattr(exc, "field", "association"),
-                             "code": "invalid_association_id"}})
+    # Flat {"error": str} -- the codebase's dominant convention (~160 sites). The nested OpenAI shape
+    # lives ONLY in routes/openai.py, where it is wire-compat, not house style.
+    h._json(400, {"error": f"{exc} (field: {getattr(exc, 'field', 'association')})"})
 
 
 def _selectors(h, query: dict) -> dict:

@@ -52,13 +52,10 @@ def try_post(h, p, body):
         return True
     unknown = sorted(k for k in body if k not in ACCEPTED_FIELDS)
     if unknown:
-        h._json(400, {"error": {
-            "message": f"unknown field(s) for /guard/mode: {', '.join(unknown)}. Accepted: "
-                       f"{', '.join(sorted(ACCEPTED_FIELDS))}. (The per-request field on "
-                       f"/v1/chat/completions is named 'clozn_guard' and wraps these same keys; "
-                       f"here they go at the top level.)",
-            "type": "invalid_request_error", "param": unknown[0],
-        }})
+        h._json(400, {"error": f"unknown field(s) for /guard/mode: {', '.join(unknown)}. Accepted: "
+                               f"{', '.join(sorted(ACCEPTED_FIELDS))}. (The per-request field on "
+                               f"/v1/chat/completions is named 'clozn_guard' and wraps these same "
+                               f"keys; here they go at the top level.)"})
         return True
     before = generation_guard.get_persisted_guard_spec()
     enabled = body.get("enabled")
@@ -69,17 +66,15 @@ def try_post(h, p, body):
     else:
         raw = {k: v for k, v in body.items() if k != "enabled"}
         if enabled is True and not raw.get("concepts"):
-            h._json(400, {"error": {
-                "message": "enabling the guard requires at least one concept in 'concepts' (a list of "
-                           "non-empty strings) -- an empty/omitted concepts list is what turns it off, "
-                           "not what enables it with nothing to guard against.",
-                "type": "invalid_request_error", "param": "concepts",
-            }})
+            h._json(400, {"error": "enabling the guard requires at least one concept in 'concepts' "
+                                   "(a list of non-empty strings) -- an empty/omitted concepts list is "
+                                   "what turns it off, not what enables it with nothing to guard "
+                                   "against."})
             return True
     try:
         spec = generation_guard.set_persisted_guard_spec(raw)
     except ValueError as exc:
-        h._json(400, {"error": {"message": str(exc), "type": "invalid_request_error", "param": "clozn_guard"}})
+        h._json(400, {"error": str(exc)})
         return True
     # "changed" is MEASURED, not asserted. It used to be a hardcoded True, so a no-op write reported
     # a change that never happened -- a success signal that carried no information.
