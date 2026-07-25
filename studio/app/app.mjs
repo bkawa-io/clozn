@@ -44,7 +44,7 @@ pingRuntime();
 
 /* ---------- tiny hash router ---------- */
 const view = document.getElementById("view");
-const routes = { "/runs": Runs, "/model": Model, "/behavior": Behavior };
+const routes = { "/runs": Runs };
 async function route() {
   const path = location.hash.replace(/^#/, "") || "/runs";
   const runMatch = path.match(/^\/runs\/([A-Za-z0-9_-]+)$/);   // #/runs/<id> -> the Lens page (build 2)
@@ -59,6 +59,16 @@ async function route() {
   if (runMatch) {
     const { renderLens } = await import("./lens.mjs");
     await renderLens(view, runMatch[1], light);
+    return;
+  }
+  if (path === "/model") {
+    const { renderModel } = await import("./model.mjs");
+    await renderModel(view, light);
+    return;
+  }
+  if (path === "/behavior") {
+    const { renderBehavior } = await import("./behavior.mjs");
+    await renderBehavior(view, light);
     return;
   }
   const fn = routes[path] || Runs;
@@ -89,26 +99,5 @@ async function Runs() {
            : `<p class="quiet">no runs reachable — make one through the API and it lands here.</p>`}`;
 }
 
-async function Model() {
-  let h = null;
-  try { const r = await fetch("/engine/health"); if (r.ok) h = await r.json(); } catch {}
-  const kv = h ? `
-    <div class="kv pane" style="padding:14px 18px">
-      <span>model <b>${esc(h.model || h.model_path || "?")}</b></span>
-      <span>ctx <b>${esc(h.n_ctx ?? "?")}</b></span>
-      <span>layers <b>${esc(h.n_layer ?? "?")}</b></span>
-      <span>status <b>up</b></span>
-    </div>`
-    : `<p class="quiet">no engine reachable — the capability list (which lenses this model supports) arrives with it.</p>`;
-  return `
-    <h1 class="view-title">Model</h1>
-    <div class="view-sub">your model · your machine · any GGUF · nothing leaves the box</div>
-    ${kv}`;
-}
-
-async function Behavior() {
-  return `
-    <h1 class="view-title">Behavior</h1>
-    <div class="view-sub">dials · anchored memory · profiles — the one page that changes the model</div>
-    <p class="quiet">arriving in build 3 — every edit made here will be disclosed on the Influences lens.</p>`;
-}
+/* Model and Behavior are their own modules now (studio/app/model.mjs, studio/app/behavior.mjs),
+   dynamically imported by route() above -- same pattern as the Lens page's lens.mjs. */
