@@ -156,10 +156,11 @@
   .ab-preview{display:flex;flex-direction:column;gap:4px;font-size:var(--text-small);padding:6px 0}
   .ab-preview .label{margin-right:8px}
 
-  /* ================= Behavior + Model shared page rhythm (build 3) ================= */
-  .behavior-page,.model-page{display:flex;flex-direction:column;gap:6px}
-  .bhv-section,.mdl-section{margin:22px 0 6px;padding-top:18px;border-top:1px solid var(--line)}
-  .bhv-section:first-of-type,.mdl-section:first-of-type{border-top:none;padding-top:0;margin-top:8px}
+  /* ================= Behavior + Model + Observatory + Compare shared page rhythm (build 3/4) ================= */
+  .behavior-page,.model-page,.observatory-page,.compare-page{display:flex;flex-direction:column;gap:6px}
+  .bhv-section,.mdl-section,.obs-section,.cmp-section{margin:22px 0 6px;padding-top:18px;border-top:1px solid var(--line)}
+  .bhv-section:first-of-type,.mdl-section:first-of-type,.obs-section:first-of-type,.cmp-section:first-of-type{
+    border-top:none;padding-top:0;margin-top:8px}
   .bhv-h{margin:0 0 6px;font-size:var(--text-title);font-weight:600}
   .bhv-h3{margin:20px 0 8px;font-size:var(--text-body);font-weight:600;color:var(--ink-soft)}
   .bhv-sub{margin:0 0 14px;max-width:62ch}
@@ -246,6 +247,95 @@
   .cap-flags{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
   @media (max-width:700px){.cap-row{grid-template-columns:14px 1fr;row-gap:2px}
     .cap-state,.cap-reason{grid-column:2}}
+
+  /* ================= Observatory (build 4): THE CASTING hero + honest panels below it ================= */
+  .obs-hero-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+  .obs-hero-row select{font-family:var(--voice-machine);font-size:var(--text-small);color:var(--ink);
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--r-instrument);padding:6px 9px;
+    max-width:260px}
+  .obs-hero-wrap{position:relative;height:min(64vh,600px)}
+  .obs-hero-mount{width:100%;height:100%}
+  .obs-hero-note{margin:10px 0 0;font-size:var(--text-small);color:var(--ink-soft);max-width:86ch;line-height:1.65}
+  .obs-hero-note b{color:var(--ink)}
+
+  .obs-h{margin:0 0 6px;font-size:var(--text-title);font-weight:600}
+  .obs-sub{margin:0 0 14px;max-width:66ch;color:var(--ink-soft)}
+
+  .readout-table{width:100%;border-collapse:collapse;font-size:var(--text-small)}
+  .readout-table th{text-align:left;font-family:var(--voice-machine);font-size:var(--text-label);
+    letter-spacing:var(--track-label);text-transform:uppercase;color:var(--ink-faint);
+    font-weight:400;padding:4px 10px 6px 0;border-bottom:1px solid var(--line)}
+  .readout-table td{padding:5px 10px 5px 0;border-bottom:1px solid var(--line);color:var(--ink-soft)}
+  .readout-table td:first-child,.readout-table th:first-child{color:var(--ink);font-family:var(--voice-machine)}
+  .readout-table tr:last-child td{border-bottom:none}
+
+  .telem-row{display:grid;grid-template-columns:52px 1fr 62px;align-items:center;gap:10px;
+    padding:3px 0;font-size:var(--text-label);font-family:var(--voice-machine);color:var(--ink-faint)}
+  .telem-bar{height:6px;border-radius:3px;background:var(--line);overflow:hidden}
+  .telem-bar i{display:block;height:100%;background:var(--confidence);border-radius:3px}
+  .telem-val{text-align:right;color:var(--ink-faint)}
+
+  .wiring-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  .wiring-controls input{width:5em}
+  .trust-list{display:flex;flex-direction:column}
+  .trust-row{padding:10px 0;border-bottom:1px solid var(--line);display:flex;gap:12px;align-items:flex-start}
+  .trust-row:last-child{border-bottom:none}
+  .trust-row .cap-dot{margin-top:5px}
+  .trust-row-body{flex:1}
+  .trust-row-h{font-family:var(--voice-machine);font-size:var(--text-small);text-transform:uppercase;
+    letter-spacing:.03em;color:var(--ink);margin-bottom:2px}
+
+  .probe-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+  .probe-row input[type=text]{flex:1;min-width:220px}
+  .dial-tag-warn{color:var(--shaky);border-color:color-mix(in srgb,var(--shaky) 55%,var(--line))}
+
+  /* ================= Compare canvas (build 4): its own forking canvas, not a lens ================= */
+  .cmp-pick-list{display:flex;flex-direction:column;gap:6px;max-height:420px;overflow-y:auto;
+    list-style:none;margin:14px 0 0;padding:0}
+  .cmp-pick-row{display:flex;align-items:center;gap:10px;padding:8px 12px;transition:border-color var(--swift)}
+  .cmp-pick-row.cmp-pick-a{border-color:color-mix(in srgb,var(--evidence) 60%,var(--line))}
+  .cmp-pick-row.cmp-pick-b{border-color:color-mix(in srgb,var(--fork) 60%,var(--line))}
+  .cmp-pick-text{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--text-small)}
+  .cmp-pick-meta{font-family:var(--voice-machine);font-size:10px;color:var(--ink-faint);white-space:nowrap}
+
+  .cmp-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+  .cmp-toolbar .spacer{flex:1}
+  .cmp-mode-btn[aria-pressed="true"]{color:var(--ink);border-color:var(--fork);
+    background:color-mix(in srgb,var(--fork) 12%,transparent)}
+
+  .cmp-legend{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:14px;font-size:var(--text-label);color:var(--ink-soft)}
+  .cmp-legend span{display:inline-flex;align-items:center;gap:6px}
+  .cmp-legend i{width:10px;height:10px;border-radius:2px;flex:none}
+  .cmp-legend .lg-identical i{background:var(--line-strong)}
+  .cmp-legend .lg-latent i{background:color-mix(in srgb,var(--fork) 30%,transparent);border:1px solid var(--fork)}
+  .cmp-legend .lg-flip i{background:var(--almost)}
+
+  .cmp-prefix{line-height:2;font-size:var(--text-body);padding:14px 16px}
+  .cmp-tok{padding:1px 1px;border-radius:2px}
+  .cmp-tok-latent{background:color-mix(in srgb,var(--fork) 16%,transparent);
+    border-bottom:2px solid var(--fork);cursor:default}
+  .cmp-tok-flip{background:color-mix(in srgb,var(--almost) 18%,transparent);
+    border-bottom:2px solid var(--almost);cursor:default}
+
+  .cmp-fork-marker{display:flex;align-items:center;gap:12px;padding:12px 16px;margin:2px 0;
+    border-top:1px dashed var(--line-strong);border-bottom:1px dashed var(--line-strong);
+    font-family:var(--voice-machine);font-size:var(--text-small);color:var(--fork);flex-wrap:wrap}
+  .cmp-fork-marker b{font-weight:600}
+
+  .cmp-channels{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+  @media (max-width:800px){.cmp-channels{grid-template-columns:1fr}}
+  .cmp-channel .pane-body{line-height:1.85;padding:12px 16px}
+  .cmp-dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block}
+  .cmp-dot-a{background:var(--evidence)}
+  .cmp-dot-b{background:var(--fork)}
+
+  .cmp-inline-row{display:grid;grid-template-columns:26px 1fr 1fr;gap:10px;align-items:baseline;
+    padding:3px 16px;font-size:var(--text-small)}
+  .cmp-inline-row .idx{font-family:var(--voice-machine);color:var(--ink-faint);font-size:10px}
+  .cmp-inline-head{display:grid;grid-template-columns:26px 1fr 1fr;gap:10px;padding:10px 16px 6px;
+    font-family:var(--voice-machine);font-size:var(--text-label);color:var(--ink-faint);
+    letter-spacing:var(--track-label);text-transform:uppercase;border-bottom:1px solid var(--line);
+    margin-bottom:6px}
 </style>
 </head>
 <body>
@@ -259,6 +349,8 @@
   </header>
   <nav class="primary" id="nav">
     <a href="#/runs">runs</a>
+    <a href="#/observatory">observatory</a>
+    <a href="#/compare">compare</a>
     <a href="#/model">model</a>
     <a href="#/behavior">behavior</a>
   </nav>

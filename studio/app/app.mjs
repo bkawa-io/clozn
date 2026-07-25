@@ -45,11 +45,21 @@ pingRuntime();
 /* ---------- tiny hash router ---------- */
 const view = document.getElementById("view");
 const routes = { "/runs": Runs };
+let currentCleanup = null;   // a view may return a teardown fn (e.g. Observatory's casting.destroy()) --
+                              // called before every navigation so a WebGL/canvas RAF loop never leaks.
 async function route() {
+  if (typeof currentCleanup === "function") {
+    try { currentCleanup(); } catch { /* a teardown error must never block navigation */ }
+  }
+  currentCleanup = null;
   const path = location.hash.replace(/^#/, "") || "/runs";
-  const runMatch = path.match(/^\/runs\/([A-Za-z0-9_-]+)$/);   // #/runs/<id> -> the Lens page (build 2)
+  const runMatch = path.match(/^\/runs\/([A-Za-z0-9_-]+)$/);           // #/runs/<id> -> the Lens page (build 2)
+  const runObsMatch = path.match(/^\/runs\/([A-Za-z0-9_-]+)\/observatory$/); // #/runs/<id>/observatory
+  const compareMatch = path.match(/^\/compare(?:\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_-]+))?$/); // #/compare[/<a>/<b>]
   document.querySelectorAll("#nav a").forEach(a => {
-    const current = runMatch ? "#/runs" : "#" + path;         // a run detail still reads as "runs" in nav
+    // a run detail still reads as "runs" in nav; a run's Observatory reads as "observatory"
+    const current = runObsMatch ? "#/observatory" : compareMatch ? "#/compare"
+      : runMatch ? "#/runs" : "#" + path;
     a.getAttribute("href") === current
       ? a.setAttribute("aria-current", "page")
       : a.removeAttribute("aria-current");
@@ -59,6 +69,21 @@ async function route() {
   if (runMatch) {
     const { renderLens } = await import("./lens.mjs");
     await renderLens(view, runMatch[1], light);
+    return;
+  }
+  if (runObsMatch) {
+    const { renderObservatory } = await import("./observatory.mjs");
+    currentCleanup = await renderObservatory(view, runObsMatch[1], light);
+    return;
+  }
+  if (path === "/observatory") {
+    const { renderObservatory } = await import("./observatory.mjs");
+    currentCleanup = await renderObservatory(view, null, light);
+    return;
+  }
+  if (compareMatch) {
+    const { renderCompare } = await import("./compare.mjs");
+    currentCleanup = await renderCompare(view, compareMatch[1] || null, compareMatch[2] || null, light);
     return;
   }
   if (path === "/model") {
@@ -99,5 +124,8 @@ async function Runs() {
            : `<p class="quiet">no runs reachable — make one through the API and it lands here.</p>`}`;
 }
 
-/* Model and Behavior are their own modules now (studio/app/model.mjs, studio/app/behavior.mjs),
-   dynamically imported by route() above -- same pattern as the Lens page's lens.mjs. */
+/* Model, Behavior, Observatory and Compare are their own modules (studio/app/model.mjs,
+   studio/app/behavior.mjs, studio/app/observatory.mjs, studio/app/compare.mjs), dynamically imported by
+   route() above -- same pattern as the Lens page's lens.mjs. Observatory/Compare are the only views that
+   return a teardown fn (Observatory's casting.mjs owns a canvas RAF loop that must be destroy()ed on
+   navigation away; Compare has none today but returns undefined, which the router already guards). */
