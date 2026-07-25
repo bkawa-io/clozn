@@ -344,9 +344,11 @@ export async function assembleRealCast(run, state) {
 
 /* assembleRealCastUnsafe sets state.castUnavailableReason right before every early `return null` --
    a side channel (mirroring state.jlensTrajectory/jlensArgument) so the host can show a SPECIFIC
-   reason instead of one generic catch-all. Matters most for forked child runs: fork.py regenerates
-   through the engine's raw completion seam, not the traced generation path, so a child run's own
-   `trace` is genuinely {} -- worth saying plainly rather than folding into "no response text". */
+   reason instead of one generic catch-all. (Historical note: forked child runs used to land here
+   ALWAYS -- fork.py regenerated through the raw completion seam and recorded trace {}. fork.py now
+   splices an honest child trace whenever the prefix verifies token-exact, so a forked child normally
+   casts; a child still lands here when that verification failed -- fork records WHY in
+   changes_applied.fork.trace_provenance, and the message below points at it.) */
 async function assembleRealCastUnsafe(run, state) {
   state.castUnavailableReason = null;
   const text = String(run.response || "").trim();
@@ -384,8 +386,11 @@ async function assembleRealCastUnsafe(run, state) {
 
   const traceTokens = (run.trace && Array.isArray(run.trace.tokens)) ? run.trace.tokens : null;
   if (!traceTokens || !traceTokens.length) {
-    state.castUnavailableReason = "this run has no recorded per-token trace (a forked child run "
-      + "regenerates through a raw-completion path that doesn't capture one)";
+    state.castUnavailableReason = "this run has no recorded per-token trace"
+      + (run.parent_run_id
+         ? " (a forked child only gets one when its spliced prefix verified token-exact -- this "
+           + "one's fork record says why: changes_applied.fork.trace_provenance)"
+         : "");
     return null;
   }
   if (traceTokens.join("") !== text) {   // pieces don't reconstruct the measured text -- don't guess offsets
