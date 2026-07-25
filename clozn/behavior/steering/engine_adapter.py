@@ -3,11 +3,20 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 
 import numpy as np
 
 from . import axes
 from . import jlens_transport
+
+# Measured cliff (2026-07-24 usage-testing sweep, `concise` dial, temp 0, same prompt): 0.0/0.2/0.4/0.6
+# all render clean prose (596/829/405/360 chars, max repeated 6-gram = 1); 0.8 renders a repetition
+# loop (max repeated 6-gram = 8), broken capitalization, AND factual corruption (baseline
+# "syn-propanethial-S-oxide" became "sulfonic acid") -- A1.12's repetition attractor reaching the
+# shipped path. Deliberately NOT clamped here (that's a product-behavior call the user hasn't made) --
+# see EngineSteer.set()'s warning instead.
+UNSAFE_STRENGTH = 0.6
 
 
 class EngineSteer:
@@ -213,8 +222,26 @@ class EngineSteer:
             pass
 
     def set(self, name, value):
+        """Set a dial's strength (capped to its per-axis max) and return a warning string (or None) --
+        the single choke point every caller (`/steer/set`, `/steer/check`, profiles, replay nudges,
+        preference auto-apply) goes through, so the above-UNSAFE_STRENGTH warning reaches all of them
+        without duplicating the message. NEVER clamps to the safe band itself -- see UNSAFE_STRENGTH's
+        docstring: capping what a requested strength *does* is a product decision this function doesn't
+        get to make on its own."""
         mx = (axes.AXES.get(name) or self.custom.get(name) or {}).get("max", 1.5)
-        self.strength[name] = max(-mx, min(mx, float(value)))
+        capped = max(-mx, min(mx, float(value)))
+        self.strength[name] = capped
+        warning = None
+        if abs(capped) > UNSAFE_STRENGTH:
+            warning = (
+                f"'{name}' at {capped:+.2f} is above the validated working range (0.4-0.6): measured "
+                f"degradation (repetition loops, factual drift) begins above ~{UNSAFE_STRENGTH:.1f} "
+                f"(sweep on the 'concise' dial, temp 0 -- clean through 0.6, a repeated-6-gram loop + "
+                f"broken capitalization + factual corruption at 0.8). Not auto-capped -- lower it if you "
+                f"see garbled or repetitive output."
+            )
+            print(f"[steer] WARNING: {warning}", file=sys.stderr, flush=True)
+        return warning
 
     @staticmethod
     def _text(r):

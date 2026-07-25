@@ -324,10 +324,16 @@ class Substrate:
         if path == "/steer/compute":
             return {"ready": True, **self._steer_info}
         if path == "/steer/set":
-            self.steer.set(str(body["name"]), float(body.get("value", 0.0)))
+            warning = self.steer.set(str(body["name"]), float(body.get("value", 0.0)))
             if self._pers_steer:
                 self.steer.save_state(self._pers_steer)
-            return {"active": self.steer.active()}
+            result = {"active": self.steer.active()}
+            if warning:
+                # Same message EngineSteer.set() already put on stderr (visible to whoever's running
+                # `clozn serve`) -- also handed back on the wire so an HTTP/Studio caller with no
+                # terminal in view sees it too. One warning, computed once, two audiences.
+                result["warning"] = warning
+            return result
         if path == "/steer/check":              # A/B one dial: baseline vs steered (subclass _gen)
             prompt = str(body.get("prompt", ""))[:300]
             base = self._gen(prompt)
@@ -338,7 +344,7 @@ class Substrate:
             prior = dict(getattr(self.steer, "strength", {}) or {})
             was_engaged = bool(getattr(self.steer, "_engaged", False))
             self.steer.clear()
-            self.steer.set(str(body["name"]), float(body.get("value", 1.0)))
+            warning = self.steer.set(str(body["name"]), float(body.get("value", 1.0)))
             self.steer.engage()
             try:
                 steered = self._gen(prompt)
@@ -346,11 +352,15 @@ class Substrate:
                 self.steer.disengage()
                 self.steer.clear()
                 for name, value in prior.items():
-                    self.steer.set(name, value)
+                    self.steer.set(name, value)   # restoring prior state, not a new user action -- its
+                                                   # own warning (if any) already fired when it was set
                 if was_engaged:
                     self.steer.engage()
-            return {"prompt": prompt, "axis": body.get("name"), "value": body.get("value", 1.0),
-                    "baseline": base, "steered": steered}
+            result = {"prompt": prompt, "axis": body.get("name"), "value": body.get("value", 1.0),
+                      "baseline": base, "steered": steered}
+            if warning:
+                result["warning"] = warning
+            return result
         if path == "/steer/custom":             # USER-DEFINED dial: compute mean(+pole)-mean(-pole) live
             if not hasattr(self.steer, "add_custom"):
                 return {"error": "custom dials are not supported on this substrate yet"}
