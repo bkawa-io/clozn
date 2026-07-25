@@ -195,7 +195,11 @@ def add_subparser(subparsers):
     bundled.add_argument("--out", required=True, metavar="DIR", help="output bundle directory")
     bundled.add_argument("--engine-url", default=None, metavar="URL",
                          help="record this as the notebook's default engine URL for the optional "
-                              "live-reproduction cell (not contacted by this command itself)")
+                              "live-reproduction cell (not contacted by this command itself). NOTE: "
+                              "this must be the raw WORKER url (the WORKER column in `clozn ps`), not "
+                              "the gateway port -- the gateway does not serve /score over HTTP, so "
+                              "pointing the live check at it fails with a 409. The worker port is "
+                              "ephemeral: re-check `clozn ps` after any gateway restart")
     bundled.add_argument("--force", action="store_true",
                          help="allow writing into an existing non-empty --out directory")
     bundled.add_argument("--json", action="store_true")

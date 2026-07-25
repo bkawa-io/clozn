@@ -32,7 +32,16 @@ def try_get(h, p):
         return True
     if p == "/engine/health":
         try:
-            h._json(200, {"engine": ctx.ENGINE.health()})
+            info = ctx.ENGINE.health()
+            # The raw C++ worker's own base URL. The gateway never serves /score & friends over HTTP
+            # itself -- it calls the worker internally -- and this address was previously discoverable
+            # only by walking the OS process tree (the export-bundle live-check trap: pointing
+            # --engine-url at the GATEWAY port 409s). Ephemeral: changes on every gateway restart.
+            base = getattr(ctx.ENGINE, "base", None)
+            if isinstance(info, dict) and base:
+                info = dict(info)
+                info["worker_url"] = base
+            h._json(200, {"engine": info})
         except Exception as e:
             h._json(502, {"error": f"engine unreachable: {e}"})
         return True

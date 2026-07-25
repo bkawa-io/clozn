@@ -125,12 +125,27 @@ def cmd_ps(_args):
     if not live:
         print("no Clozn runtimes running.")
         return
-    print(f"{'MODEL':<14} {'PORT':>6}  {'BACKEND':<8} MODE")
+    print(f"{'MODEL':<14} {'PORT':>6}  {'BACKEND':<8} {'MODE':<16} WORKER")
     for port, entry in live:
         print(
             f"{_friendly(entry.get('model', '?')):<14} {port:>6}  "
-            f"{('GPU' if entry.get('gpu') else 'CPU'):<8} {entry.get('mode', '?')}"
+            f"{('GPU' if entry.get('gpu') else 'CPU'):<8} {entry.get('mode', '?'):<16} "
+            f"{_worker_url(int(port))}"
         )
+
+
+def _worker_url(port: int) -> str:
+    """The gateway's raw C++ worker base URL (serves /score etc. -- what export-bundle's live check
+    needs), read from /engine/health's worker_url. '-' when unavailable: the field is honest-absent on
+    older gateways and while the worker is down, and this must never make `clozn ps` slow or crash."""
+    try:
+        import json as _json
+        import urllib.request as _rq
+        with _rq.urlopen(f"http://127.0.0.1:{port}/engine/health", timeout=1.0) as r:
+            info = (_json.load(r) or {}).get("engine") or {}
+        return str(info.get("worker_url") or "-")
+    except Exception:
+        return "-"
 
 
 def cmd_stop(args):
