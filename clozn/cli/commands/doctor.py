@@ -56,10 +56,12 @@ def _check_protocol() -> dict:
 def _check_studio() -> dict:
     try:
         from clozn.server.config import DEMO
-        index = os.path.join(DEMO, "heavn", "index.html")
+        # Check the app the gateway actually redirects to (clozn.server.static.APP_INDEX), so this
+        # check can't drift into passing on assets nothing serves any more.
+        index = os.path.join(DEMO, "app", "index.html")
         if os.path.isfile(index):
             return _check("studio assets", _OK, DEMO)
-        return _check("studio assets", _WARN, f"{DEMO} exists but heavn/index.html is missing under it")
+        return _check("studio assets", _WARN, f"{DEMO} exists but app/index.html is missing under it")
     except Exception as error:
         return _check("studio assets", _WARN, f"could not resolve studio assets: {error}")
 

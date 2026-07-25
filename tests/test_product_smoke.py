@@ -254,8 +254,10 @@ class ProductSmokeTests(unittest.TestCase):
         worker_thread.start()
 
         studio = os.path.join(self.temp.name, "studio")
-        os.makedirs(os.path.join(studio, "heavn"), exist_ok=True)
-        with open(os.path.join(studio, "heavn", "index.html"), "w", encoding="utf-8") as handle:
+        # Mirror the real studio/ layout: the gateway redirects "/" to static.APP_INDEX
+        # ("/app/index.html"), so the fixture must provide the app/ subdir it points at.
+        os.makedirs(os.path.join(studio, "app"), exist_ok=True)
+        with open(os.path.join(studio, "app", "index.html"), "w", encoding="utf-8") as handle:
             handle.write("<!doctype html><title>Clozn</title>")
 
         old = (gateway_app.ENGINE, gateway_app.SUB, gateway_app.SUBNAME, static_routes.DEMO)
@@ -372,8 +374,9 @@ class ProductSmokeTests(unittest.TestCase):
             os.chmod(worker_path, 0o755)
 
         studio = os.path.join(self.temp.name, "managed-studio")
-        os.makedirs(os.path.join(studio, "heavn"), exist_ok=True)
-        with open(os.path.join(studio, "heavn", "index.html"), "w", encoding="utf-8") as handle:
+        # Same as above: "/" redirects to static.APP_INDEX, so app/index.html is what must exist.
+        os.makedirs(os.path.join(studio, "app"), exist_ok=True)
+        with open(os.path.join(studio, "app", "index.html"), "w", encoding="utf-8") as handle:
             handle.write("<!doctype html><title>Clozn</title>")
         model = os.path.join(self.temp.name, "fake.gguf")
         with open(model, "wb") as handle:
