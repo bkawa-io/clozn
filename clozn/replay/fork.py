@@ -201,6 +201,80 @@ def _complete_greedy(engine, prompt: str, max_new: int, extra_kw: dict):
     return str(ch[0].get("text", "")), ch[0].get("finish_reason")
 
 
+def _complete_traced(engine, prompt: str, max_new: int, extra_kw: dict):
+    """The same greedy completion, but through the server's traced seam so the child gets per-token
+    steps (the gap that left every forked child with trace {} -- unforkable-onward, uncastable,
+    invisible to the token timeline). Returns (continuation, steps, finish) or None when the seam is
+    unavailable or fails -- the caller then uses _complete_greedy, so a fork is NEVER lost to tracing.
+
+    The import is lazy and guarded: this module's contract is stdlib-only/unit-testable-with-a-fake-
+    substrate, and the server package imports THIS module (routes/fork.py), so a top-level import
+    would be a cycle. Under a fake substrate the import (or the seam itself) simply fails and the
+    plain path runs, exactly as before."""
+    try:
+        from clozn.server.substrates import _engine_complete_traced
+    except Exception:
+        return None
+    try:
+        reply, steps, finish, _div = _engine_complete_traced(
+            engine, prompt, int(max_new), dict(extra_kw), sample=None)
+    except Exception:
+        return None
+    if not isinstance(reply, str):
+        return None
+    return reply, steps, finish
+
+
+def _spliced_child_trace(parent_trace: dict, position: int, forced_piece: str, cont_steps) -> list | None:
+    """Assemble the CHILD's full-reply trace: parent's prefix steps + the forced step + the fresh
+    continuation steps. Returns a raw steps list for runlog.record(trace=...) or None when it cannot
+    be built honestly.
+
+    HONESTY PRECONDITIONS (the caller enforces the first):
+      * Only valid when the spliced prefix verified TOKEN-EXACT (retokenized is False): greedy decode
+        is deterministic, so an identical prompt + identical prefix tokens + the run's own dials
+        reproduce identical per-position distributions -- the parent's recorded measurements ARE the
+        child's, not an approximation of them.
+      * The forced step keeps the parent's distribution-level values (alternatives, topk_entropy):
+        the distribution at `position` depends only on the context BEFORE it, which is unchanged.
+        Its committed prob/token_id come from the parent's recorded alternative when the forced piece
+        is one; when it isn't (a custom token), they are simply ABSENT -- never invented."""
+    rich = parent_trace.get("steps")
+    if not isinstance(rich, list) or len(rich) <= position:
+        return None
+    out = []
+    for s in rich[:position]:
+        if not isinstance(s, dict):
+            return None
+        c = dict(s)
+        c.pop("pos", None)
+        out.append(c)
+    forced = dict(rich[position]) if isinstance(rich[position], dict) else {}
+    forced.pop("pos", None)
+    forced["piece"] = forced_piece
+    forced["text"] = forced_piece
+    for k in ("token_id", "prob", "confidence", "logprob"):   # the ORIGINAL committed token's, not ours
+        forced.pop(k, None)
+    for a in forced.get("alternatives") or []:
+        if isinstance(a, dict) and str(a.get("piece", a.get("text", ""))) == forced_piece:
+            if a.get("token_id") is not None:
+                forced["token_id"] = a["token_id"]
+            if a.get("prob") is not None:
+                forced["prob"] = a["prob"]
+            break
+    out.append(forced)
+    for s in cont_steps or []:
+        if isinstance(s, dict):
+            c = dict(s)
+            c.pop("pos", None)
+            out.append(c)
+    if len(out) <= position + 1:            # continuation contributed nothing usable
+        return None
+    for i, c in enumerate(out):             # one sequential index space; the parent's and the
+        c["index"] = i                      # continuation's own indices both restart at 0
+    return out
+
+
 # ------------------------------------------------------------------------------- the fork itself
 def fork(run: dict, sub, position, token=None, token_id=None, max_new: int = MAX_NEW) -> dict | None:
     """Fork `run`'s reply at trace `position` with the forced `token` (piece text) or `token_id`
@@ -245,13 +319,37 @@ def fork(run: dict, sub, position, token=None, token_id=None, max_new: int = MAX
         steer_kw = _steer_kwargs(sub, run)
         applied_dials = steer_kw.pop("_dials", {})
         t0 = time.time()
-        continuation, finish = _complete_greedy(engine, forked_prompt, max_new, steer_kw)
+        cont_steps = None
+        traced = _complete_traced(engine, forked_prompt, max_new, steer_kw)
+        if traced is not None:
+            continuation, cont_steps, finish = traced
+        else:
+            continuation, finish = _complete_greedy(engine, forked_prompt, max_new, steer_kw)
         if continuation is None:
             return None
         reply = prefix + forced_piece + continuation
 
+        # The child's own per-token trace -- only when it can be assembled honestly: fresh steps for
+        # the continuation AND a token-exact-verified prefix (retok is False; True/None means the
+        # parent's measurements cannot be claimed for this child's prefix, so no trace at all).
+        child_trace = None
+        trace_provenance = None
+        if cont_steps and retok is False:
+            child_trace = _spliced_child_trace(trace, position, forced_piece, cont_steps)
+            if child_trace is not None:
+                trace_provenance = ("spliced: prefix steps are the parent's own records (valid -- the "
+                                    "prefix verified token-exact and greedy decode is deterministic); "
+                                    "the forced step keeps the parent's distribution with the recorded "
+                                    "alternative's probability (absent if the token wasn't recorded); "
+                                    "the continuation is measured fresh")
+        elif cont_steps:
+            trace_provenance = ("omitted: continuation steps were captured, but the spliced prefix did "
+                                "not verify token-exact, so the parent's prefix measurements cannot be "
+                                "claimed for this child")
+
         changes = {"fork": {"position": position, "token": forced_piece,
-                            "was_recorded_alternative": bool(was_recorded)}}
+                            "was_recorded_alternative": bool(was_recorded),
+                            "trace_provenance": trace_provenance}}
         mem = getattr(sub, "memory", None) or getattr(sub, "_mem", None)
         try:
             strength = float(getattr(mem, "memory_strength", 1.0)) if mem is not None else 1.0
@@ -266,6 +364,7 @@ def fork(run: dict, sub, position, token=None, token_id=None, max_new: int = MAX
             model=run.get("model"), substrate=run.get("substrate"),
             messages=sanitize_messages(run.get("messages") or []), response=reply,
             memory=memd, behavior={"active_dials": applied_dials},
+            trace=child_trace,                              # None when it couldn't be built honestly
             final_prompt=forked_prompt,                     # the exact spliced string this child saw
             finish_reason=finish,
             parent_run_id=run.get("id"), changes_applied=changes, started=t0,
