@@ -10,13 +10,18 @@ HOME/CloznError live on `clozn.cli.main`; every function here that needs either 
 this module at its own module level, so a module-level back-reference would deadlock the first time
 something imports clozn.cli.commands.models before clozn.cli.main; see engine_process.py's docstring for
 the full trace).
+
+DISCOVERY IS SHARED WITH THE SERVER: `_model_dirs`/`_scan_models` below are now thin re-exports of
+clozn.models.inventory.model_dirs/scan_models (the server's GET /models/local route uses the same two
+functions -- see that module's docstring for why the scan itself had to move out of this CLI-only module
+rather than the server importing clozn.cli). Kept as the same private names here so every existing
+`from clozn.cli.commands.models import _model_dirs, _scan_models` call site (e.g. doctor.py) keeps working
+unchanged; behavior is byte-identical, not just equivalent (clozn.models.inventory.HOME/REPO/ENGINE_CORE
+resolve to the exact same strings this module's own copies used to).
 """
 from __future__ import annotations
 
-import glob
-import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -24,7 +29,8 @@ import urllib.error
 import urllib.request
 
 from clozn.cli import formatting as fmt
-from clozn.cli.engine_process import ENGINE_CORE, REPO, find_engine
+from clozn.cli.engine_process import find_engine
+from clozn.models.inventory import model_dirs as _model_dirs, quant_label as _quant_label, scan_models as _scan_models
 
 # Known models: a filename fragment -> friendly name + launch flags. mask/eos => diffusion; chat => wrap the
 # prompt in the chat template; AR models need no special flags (the engine auto-detects mode from the GGUF).
@@ -64,34 +70,9 @@ PULLABLE = {
 
 
 # ----------------------------------------------------------------------------- discovery
-
-def _model_dirs() -> list[str]:
-    from clozn.cli import main as ctx
-    dirs = []
-    if os.environ.get("CLOZN_MODELS"):
-        dirs += os.environ["CLOZN_MODELS"].split(os.pathsep)
-    cfg = os.path.join(ctx.HOME, "config.json")
-    if os.path.isfile(cfg):
-        try:
-            dirs += json.load(open(cfg)).get("model_dirs", [])
-        except Exception:
-            pass
-    dirs += [os.path.join(ctx.HOME, "models"), os.path.join(REPO, "models"),
-             os.path.join(ENGINE_CORE, "models")]
-    seen, out = set(), []
-    for d in dirs:
-        d = os.path.abspath(os.path.expanduser(d))
-        if d not in seen and os.path.isdir(d):
-            seen.add(d); out.append(d)
-    return out
-
-
-def _scan_models() -> list[str]:
-    found = []
-    for d in _model_dirs():
-        found += glob.glob(os.path.join(d, "*.gguf"))
-    return sorted(set(found))
-
+#
+# _model_dirs/_scan_models are imported from clozn.models.inventory above (see this module's docstring) --
+# no definitions here anymore, just the aliased names every existing call site already uses.
 
 def _flags_for(path: str) -> dict:
     base = os.path.basename(path).lower()
@@ -110,15 +91,17 @@ def _friendly(path: str) -> str:
     return os.path.splitext(os.path.basename(path))[0]
 
 
-_QUANT_TAG_RE = re.compile(r"(?:^|[.\-_])((?:IQ|Q|F|BF)\d[A-Z0-9_]*)$", re.IGNORECASE)
-
-
 def _quant_tag(path: str) -> str:
     """Best-effort quant label parsed off a GGUF's filename stem (e.g. 'Q2_K', 'Q4_K_M', 'Q8_0'), for the
-    disambiguation note only -- falls back to the file size when no recognizable tag is present."""
-    stem = os.path.splitext(os.path.basename(path))[0]
-    m = _QUANT_TAG_RE.search(stem)
-    return m.group(1).upper() if m else f"{os.path.getsize(path) / 1e9:.1f}G"
+    disambiguation note only -- falls back to the file size when no recognizable tag is present.
+
+    The tag parse itself is clozn.models.inventory.quant_label (shared with the server's inventory route);
+    this wrapper only adds the size-string fallback, which belongs here and not in the shared function --
+    that fallback exists purely for this module's disambiguation PRINTOUT sitting next to a real size
+    column, whereas the server's inventory reports size_bytes as its own separate field (see quant_label's
+    own docstring for why inventing "quant: 4.4G" there would be a mislabel, not a derived quant)."""
+    label = _quant_label(path)
+    return label if label is not None else f"{os.path.getsize(path) / 1e9:.1f}G"
 
 
 def _pick_best_quant(hits: list[str], arg: str) -> str:

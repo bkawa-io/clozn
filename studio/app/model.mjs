@@ -8,12 +8,14 @@
    LIVE-WIRED: /engine/health (serving block + capabilities.* + a live /steer/axes reuse for the
    calibration count in Health), POST /jlens (a real availability probe -- {available:false, reason} is
    the honest signal this route is built to give; used both to gate the Concepts-lens row and to read the
-   fitted J-lens's own provenance when it IS available).
-   DECLARED SKELETON (no backing route found -- see the commit message): local GGUF inventory + pull.
-   `clozn/cli/commands/models.py` (_scan_models/cmd_models/cmd_pull) is CLI-only -- no server route lists
-   or fetches models on disk, so this section names the CLI rather than drawing a fake "load"/"pull"
-   button. Likewise "last CI" / "drift": no server route surfaces `clozn test-model` / `clozn ci` /
-   `clozn quant-check` / `clozn diff-model` results -- named, not faked. */
+   fitted J-lens's own provenance when it IS available), GET /models/local (the local GGUF inventory --
+   path/filename/size/quant, + sha256 only when already cached).
+   LISTING ONLY, deliberately: /models/local has no load/switch/pull counterpart, and this page draws none
+   -- which model is actively served is a bigger decision than this build makes, so `clozn run`/`clozn pull`
+   are still named rather than faked with a button that would need to boot a whole engine process.
+   DECLARED SKELETON (no backing route found -- see the commit message): "last CI" / "drift" -- no server
+   route surfaces `clozn test-model` / `clozn ci` / `clozn quant-check` / `clozn diff-model` results --
+   named, not faked. */
 
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -44,10 +46,10 @@ function basename(p) { return String(p || "").split(/[\\/]/).pop() || ""; }
 
 export async function renderModel(view, light) {
   view.innerHTML = shell();
-  const state = { light, health: null, axes: [], jlens: { status: "idle", data: null } };
+  const state = { light, health: null, axes: [], jlens: { status: "idle", data: null }, localModels: null };
   wire(view, state);
   await loadHealth(view, state);
-  await Promise.all([loadCalibrationCount(view, state), probeJlens(view, state)]);
+  await Promise.all([loadCalibrationCount(view, state), probeJlens(view, state), loadLocalModels(view, state)]);
   renderCapabilities(view, state);
   renderHealthPanel(view, state);
 }
@@ -185,20 +187,55 @@ async function probeJlens(view, state) {
   }
 }
 
-/* ======================================================================== local models (skeleton) */
+/* ======================================================================== local models */
 
 function localModelsSkeleton() {
+  return `<p class="quiet breathing">scanning local models…</p>`;
+}
+
+async function loadLocalModels(view, state) {
+  const res = await getJSON("/models/local");
+  state.localModels = (res.ok && res.body && Array.isArray(res.body.models)) ? res.body.models : null;
+  renderLocalModels(view, state);
+}
+
+function localModelRowHTML(m, servingPath) {
+  const isServing = servingPath && m.path === servingPath;
+  const sizeG = (m.size_bytes / 1e9).toFixed(1);
+  const sha = m.sha256 ? `${esc(m.sha256.slice(0, 12))}…` : `<span class="quiet">not yet hashed</span>`;
   return `
-    <div class="skeleton-block">
-      <div class="drawer-row"><span class="label">what's here</span><span class="drawer-val">no server route
-        lists the GGUFs on this machine, or loads/pulls a different one -- this is CLI-only today
-        (<span class="machine">clozn/cli/commands/models.py</span>).</span></div>
-      <div class="drawer-row"><span class="label">list</span><span class="drawer-val machine">clozn models</span></div>
-      <div class="drawer-row"><span class="label">fetch</span><span class="drawer-val machine">clozn pull &lt;name&gt;</span></div>
-      <div class="drawer-row"><span class="label">fit check</span><span class="drawer-val machine">clozn plan &lt;name&gt;</span></div>
-      <p class="quiet drawer-arriving">a real inventory route (and the header model switcher it would
-        feed) is the honest next step here -- not invented in this build.</p>
-    </div>`;
+    <tr>
+      <td class="machine" title="${esc(m.path)}">${esc(m.filename)}${isServing ? ` <span class="dial-tag dial-tag-calib">serving</span>` : ""}</td>
+      <td class="machine">${sizeG}G</td>
+      <td class="machine">${esc(m.quant || "?")}</td>
+      <td class="machine" title="${m.sha256 ? esc(m.sha256) : ""}">${sha}</td>
+    </tr>`;
+}
+
+function renderLocalModels(view, state) {
+  const el = view.querySelector("#mdlLocal");
+  if (!el) return;
+  if (state.localModels === null) {
+    el.innerHTML = `<p class="quiet">local inventory unavailable -- could not reach
+      <span class="machine">GET /models/local</span>.</p>`;
+    return;
+  }
+  if (!state.localModels.length) {
+    el.innerHTML = `<p class="quiet">no local GGUFs found -- put one in
+      <span class="machine">~/.clozn/models</span> (or set <span class="machine">CLOZN_MODELS</span>),
+      or fetch a known one with <span class="machine">clozn pull &lt;name&gt;</span>.</p>`;
+    return;
+  }
+  const servingPath = state.health && state.health.model;
+  el.innerHTML = `
+    <table class="readout-table">
+      <thead><tr><th>file</th><th>size</th><th>quant</th><th>sha256</th></tr></thead>
+      <tbody>${state.localModels.map(m => localModelRowHTML(m, servingPath)).join("")}</tbody>
+    </table>
+    <p class="quiet small-note">listing only -- switching the served model is a bigger decision (a running
+      engine process, VRAM) than this page makes; run a different one with
+      <span class="machine">clozn run &lt;name&gt;</span> or <span class="machine">clozn serve &lt;name&gt;</span>,
+      fetch a new one with <span class="machine">clozn pull &lt;name&gt;</span>.</p>`;
 }
 
 /* ======================================================================== health panel */

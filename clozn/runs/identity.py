@@ -77,6 +77,21 @@ def _save_cache(cache: dict) -> None:
         pass
 
 
+def _cache_hit(entry, st) -> str | None:
+    """The cached sha256 for `entry` IF it matches `st` (an os.stat() result) on both size and mtime_ns,
+    else None. Shared by model_sha256 (which falls through to a real hash on a miss) and
+    cached_model_sha256 (which does not) so the two never drift on what counts as "still valid"."""
+    if (
+        isinstance(entry, dict)
+        and entry.get("size") == st.st_size
+        and entry.get("mtime_ns") == st.st_mtime_ns
+        and isinstance(entry.get("sha256"), str)
+        and entry["sha256"]
+    ):
+        return entry["sha256"]
+    return None
+
+
 def model_sha256(path) -> str | None:
     """SHA-256 hex digest of the model file at `path`, MANDATORY-cached by (absolute path, size,
     mtime_ns) at ~/.clozn/cache/model_hashes.json.
@@ -96,15 +111,9 @@ def model_sha256(path) -> str | None:
         return None
 
     cache = _load_cache()
-    entry = cache.get(resolved)
-    if (
-        isinstance(entry, dict)
-        and entry.get("size") == st.st_size
-        and entry.get("mtime_ns") == st.st_mtime_ns
-        and isinstance(entry.get("sha256"), str)
-        and entry["sha256"]
-    ):
-        return entry["sha256"]
+    hit = _cache_hit(cache.get(resolved), st)
+    if hit is not None:
+        return hit
 
     try:
         digest = sha256_file(resolved, chunk_size=_CHUNK_SIZE)
@@ -114,6 +123,27 @@ def model_sha256(path) -> str | None:
     cache[resolved] = {"size": st.st_size, "mtime_ns": st.st_mtime_ns, "sha256": digest}
     _save_cache(cache)
     return digest
+
+
+def cached_model_sha256(path) -> str | None:
+    """This exact file version's sha256 IF it is already sitting in the cache -- otherwise None, WITHOUT
+    ever reading (let alone hashing) the file itself. For callers that must never pay model_sha256()'s
+    multi-GB-file hashing cost inline -- e.g. a synchronous web request handler, see
+    clozn.models.inventory.inventory() -- where blocking on a full read of every local GGUF just to answer
+    a listing request would turn a fast page load into a multi-minute hang.
+
+    model_sha256() remains the only place that actually COMPUTES and populates this cache (at engine boot
+    or first CLI use); a miss here honestly means "nobody has hashed this exact file version yet," not
+    "this file can't be hashed" -- callers should render that as null/absent, never as an error. Never
+    raises: a missing file or a permission error on the stat both yield None, same as model_sha256."""
+    if not path:
+        return None
+    try:
+        resolved = os.path.abspath(os.fspath(path))
+        st = os.stat(resolved)
+    except Exception:
+        return None
+    return _cache_hit(_load_cache().get(resolved), st)
 
 
 def template_fingerprint(apply_template_fn) -> str | None:
