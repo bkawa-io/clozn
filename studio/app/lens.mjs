@@ -124,6 +124,8 @@ function identityStrip(run) {
     <span class="id-item"><span class="id-k">at</span><span class="machine">${esc(when)}</span></span>
     ${reproducible ? `<span class="id-item repro"><span class="machine">✓ reproducible</span></span>` : ""}
     <span class="spacer"></span>
+    <a class="permalink machine" href="#/runs/${esc(rid)}/observatory"
+      title="open this run in the Observatory -- the casting storm visualization">open the casting</a>
     <button class="permalink machine" data-copy-permalink="${esc(permalinkUrl)}"
       title="${esc(permalinkUrl)} — click to copy">/r/${esc(rid)}</button>
   </div>`;

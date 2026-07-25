@@ -11,21 +11,35 @@
    silently implies a measurement that wasn't taken.
 
    ============================================================================ per-panel status
-   HERO (the casting): LIVE, best-effort, from a real run's own records when one is picked --
+   HERO (the casting): LIVE, best-effort, from a real run's own records when one is picked -- the
+   real-cast assembly itself (getting from a run record to one castable.mjs data-contract object) now
+   lives in studio/app/cast-feed.mjs (split out once it grew a second live-computed layer below); this
+   file owns the shell, the panels, and turning a click into a real POST /runs/<id>/fork round trip.
      * sky + ground + per-token provenance threads: GET/POST /runs/<id>/influence-map (span excerpts
        stand in for individual "sky words"; this run's own recorded response is the ground).
      * per-token entropy: this run's own recorded trace.topk_entropy (a real, already-labeled top-k
        APPROXIMATION -- see clozn/runs/trace.py -- never full-vocabulary entropy).
-     * ghosts (almosts): this run's own recorded trace.alternatives; NOT forkable in this build (no
-       live branch/checkpoint route is wired here -- opts.onFork fires honestly and says so).
+     * ghosts (almosts): this run's own recorded trace.alternatives, each FORKABLE -- clicking one calls
+       handleFork() below, which POSTs /runs/<id>/fork (position + the alt's own piece text), and on
+       success re-assembles the cast from the returned CHILD run and casting.update()s with it in
+       place (via history.pushState, not a hash navigation, so the canvas/RAF loop never tears down
+       mid-storm); the fork-status line always shows the real route response, success or failure, and
+       a link back to the parent run. See cast-feed.mjs's buildAlmosts for why every alt qualifies.
      * cloud shape (entropyByDepth): POST /jlens, once per a capped, evenly-sampled subset of the
        engine's fitted J-lens layers, read at this reply's OWN final token position, entropy computed
        as a top-k(k=5) renormalized softmax over the RAW LENS LOGITS the engine returns -- a real,
        computable, HONESTLY-APPROXIMATE quantity (never full-vocabulary entropy, which /jlens's top-k
-       response cannot supply). Candidate cells / lead-changes / commit-layer are NOT computed in this
-       build (that needs a single decision position's per-layer full argmax history -- out of scope
-       here) -- omitted, not guessed; the component's own default (one uncontested cell) is the honest
-       result of that omission.
+       response cannot supply).
+     * candidate cells / lead-change arcs / commit stratum: LIVE where the J-lens's own tokenization of
+       this reply verifiably lines up with the recorded trace tokens -- cast-feed.mjs's buildArgument()
+       reads the SAME per-layer /jlens rows already fetched for the cloud shape above (they carry a
+       full per-POSITION readout, not just the last one -- confirmed live against a real run on the
+       :8131 gateway), at the K<=8 highest-recorded-entropy answer positions, merged into one capped,
+       labeled cell/arc set (see buildArgument's own comment for the exact cap counts and the honest
+       "a linear lens always emits something, even from noise" caveat -- shallow layers routinely
+       surface unrelated tokens). Genuinely unavailable (no J-lens, or the tokenization didn't align)
+       still omits rather than guesses -- the component's own default (one uncontested cell) is the
+       honest result of that omission, same as before.
      * PROVENANCE IS A HARD GATE: an empty tokens[].sources is a specific claim casting.mjs renders as
        "from the weights -- not from your words." This build never emits that claim without having
        actually computed and char-offset-verified the influence map against the run's own recorded
@@ -47,6 +61,7 @@
      "this run" (SS0.2/SS5's "Scope," folded in).
 */
 import { mountCasting, DEMO_CASTING } from "./casting.mjs";
+import { assembleRealCast } from "./cast-feed.mjs";
 
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -64,10 +79,9 @@ const postJSON = (url, payload) => getJSON(url, {
   method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload || {}),
 });
 
-const JLENS_TOPK = 5;
-const JLENS_TEXT_CAP = 600;     // chars -- bounds one cast assembly's /jlens calls on a long reply
-const MAX_JLENS_LAYERS = 6;     // cap on how many per-layer /jlens calls one cast assembly makes
 const TELEMETRY_TEXT_CAP = 1200;
+const JLENS_TOPK = 5;   // matches cast-feed.mjs's own copy -- the page-wide default topk for /jlens calls
+                        // made directly from this file (the readout-trajectory label + the free probe)
 
 function row(label, val) {
   return `<div class="drawer-row"><span class="label">${esc(label)}</span><span class="drawer-val">${esc(val)}</span></div>`;
@@ -194,7 +208,7 @@ async function mountHero(view, state) {
   const mount = view.querySelector("#obsHero");
   if (!mount) return () => {};
   state.casting = mountCasting(mount, {
-    onFork: (tokenIndex, altText) => noteFork(view, tokenIndex, altText),
+    onFork: (tokenIndex, altText) => handleFork(view, state, tokenIndex, altText),
   });
   const unwatch = state.casting ? watchTheme(state) : (() => {});
   await loadCast(view, state);
@@ -220,12 +234,25 @@ function watchTheme(state) {
   return () => { mq.removeEventListener("change", onChange); mo.disconnect(); };
 }
 
-function noteFork(view, tokenIndex, altText) {
+function setForkStatus(view, html) {
   const el = view.querySelector("#obsForkNote");
-  if (el) el.textContent = `⑂ forked at token ${tokenIndex} → "${altText}" -- opts.onFork fired `
-    + `correctly; no live branch/checkpoint route is wired to the Observatory yet (a demo cast with `
-    + `baked continuation data still self-animates locally -- a real run's fork would need one more `
-    + `route: bit-exact checkpoint + branch).`;
+  if (el) el.innerHTML = html;
+}
+
+/* Fetches state.runId's run record and assembles+shows its cast -- shared by the initial loadCast()
+   below and by handleFork() (whose child run record it already has in hand, no extra GET needed). */
+async function applyCastForRun(view, state, run) {
+  state.run = run;
+  const attempt = await assembleRealCast(run, state);
+  if (!attempt) {
+    const why = state.castUnavailableReason || "no response text, or its context-answer influence map "
+      + "couldn't be computed/verified against the recorded reply";
+    showDemoCast(view, state, DEMO_CASTING.fact,
+      `this run doesn't have what's needed to cast honestly (${why}) -- showing a scripted demo cast `
+      + `instead. The panels below still run live against this run where they can.`);
+    return;
+  }
+  showRealCast(view, state, attempt);
 }
 
 async function loadCast(view, state) {
@@ -239,16 +266,52 @@ async function loadCast(view, state) {
       `run "${state.runId}" not found -- showing a scripted demo cast instead.`);
     return;
   }
-  state.run = runRes.body;
-  const attempt = await assembleRealCast(state.run, state);
-  if (!attempt) {
-    showDemoCast(view, state, DEMO_CASTING.fact,
-      "this run doesn't have what's needed to cast honestly (no response text, or its context-answer "
-      + "influence map couldn't be computed/verified against the recorded reply) -- showing a scripted "
-      + "demo cast instead. The panels below still run live against this run where they can.");
+  await applyCastForRun(view, state, runRes.body);
+}
+
+/* THE PLAY FEATURE: turn a ⑂ ghost click into a real POST /runs/<id>/fork round trip. On success the
+   returned CHILD run's own cast replaces the hero IN PLACE (casting.update(), not a fresh mount --
+   history.pushState updates the address bar without firing the app.mjs hash router, so the canvas/RAF
+   loop never tears down mid-storm) and the below-hero panels re-render against the child. On failure
+   (engine down, bad position, ...) the route's own error message is shown verbatim -- this never
+   pretends a fork happened. */
+async function handleFork(view, state, tokenIndex, altText) {
+  const parentId = state.runId;
+  setForkStatus(view, esc(`forking at token ${tokenIndex} → "${altText}"…`));
+  const res = await postJSON(`/runs/${encodeURIComponent(parentId)}/fork`, { position: tokenIndex, token: altText });
+  const child = (res.body && typeof res.body === "object") ? res.body : null;
+  if (!res.ok || !child || child.error) {
+    const msg = (child && child.error) || res.networkError || `fork request failed (HTTP ${res.status})`;
+    setForkStatus(view, `⑂ fork at token ${esc(tokenIndex)} → "${esc(altText)}" `
+      + `<b>failed</b>: ${esc(msg)}`);
     return;
   }
-  showRealCast(view, state, attempt);
+  const childId = child.id;
+  if (!childId) {
+    setForkStatus(view, `⑂ fork at token ${esc(tokenIndex)} → "${esc(altText)}" `
+      + `<b>failed</b>: the server didn't return a child run id.`);
+    return;
+  }
+  history.pushState(null, "", `#/runs/${encodeURIComponent(childId)}/observatory`);
+  state.runId = childId;
+  state.wiring = { status: "idle", data: null, position: 0 };
+  state.spans = null; state.telemetry = null;
+  await applyCastForRun(view, state, child);
+  renderPanels(view, state);
+  loadRunPicker(view, state);
+  const parentRid = child.parent_run_id || parentId;
+  // child.note already says so when retokenization was UNVERIFIABLE; a real DETECTED shift (retok
+  // True from an actual mismatch, not just "couldn't check") isn't in that note's text, so it's
+  // called out here too -- never silently dropped either way.
+  const noteHasUnverified = /retokenization could not be verified/.test(child.note || "");
+  const retokCaveat = (child.retokenized && !noteHasUnverified)
+    ? " A token boundary shifted at the splice point (verified against the engine's own scorer)."
+    : "";
+  setForkStatus(view, `⑂ forked at token ${esc(tokenIndex)} → "${esc(altText)}" -- now viewing `
+    + `<a class="machine" href="#/runs/${esc(childId)}/observatory">${esc(childId)}</a>. `
+    + `${esc(child.note || "greedy what-if, not a sample.")}${esc(retokCaveat)} &middot; `
+    + `<a class="machine" href="#/runs/${esc(parentRid)}/observatory">back to the parent run</a>.`);
+  state.light && state.light.pulse(.5);
 }
 
 function showDemoCast(view, state, cast, reason) {
@@ -270,233 +333,9 @@ function setHeroNote(view, html) {
   if (el) el.innerHTML = html;
 }
 
-/* ======================================================================== real-cast assembly */
-
-async function getOrComputeInfluenceMap(runId) {
-  let res = await getJSON(`/runs/${encodeURIComponent(runId)}/influence-map`);
-  if (res.ok && res.body && res.body.available === true) return res.body;
-  res = await getJSON(`/runs/${encodeURIComponent(runId)}/influence-map`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
-  });
-  return (res.ok && res.body && res.body.available === true) ? res.body : null;
-}
-
-function sourceIdOf(spanId) { return String(spanId).split(".").slice(0, 2).join("."); }
-
-function displayableSpans(map) {
-  const refined = new Set(
-    (map.selection && map.selection.refinement && map.selection.refinement.refined_context_span_ids) || []
-  );
-  return (map.prompt_spans || []).filter(s => s && typeof s.start === "number"
-    && (s.level === "fine" || (s.level === "coarse" && !refined.has(s.id))));
-}
-
-function spanStrengthMap(map) {
-  const m = new Map();
-  for (const link of map.links || []) {
-    const cur = m.get(link.context_span_id) || 0;
-    if (link.abs_delta_nats > cur) m.set(link.context_span_id, link.abs_delta_nats);
-  }
-  return m;
-}
-
-function spanExcerpt(src, span, maxChars) {
-  if (!src || typeof src.text !== "string") return "…";
-  const raw = src.text.slice(span.start, span.end).replace(/\s+/g, " ").trim();
-  if (!raw) return "…";
-  return raw.length > maxChars ? raw.slice(0, maxChars - 1) + "…" : raw;
-}
-
-/* Maps each trace TOKEN INDEX to the sky indices/weights it was measured to draw on, by char-offset
-   overlap between that token's span in the response text and the influence map's answer_spans -- the
-   same "is this answer span clearly sourced" signal lens.mjs's buildAnswerMarks reads, just regrouped
-   per emitted token instead of per contiguous marked run. */
-function mapAnswerTokensToSky(influence, traceTokens, skyIndexById, strengths, maxStrength) {
-  const out = new Map();
-  const answerSpans = influence.answer_spans || [];
-  if (!answerSpans.length) return out;
-  const linkByAnswerSpan = new Map(
-    ((influence.summary && influence.summary.answer_to_context) || []).map(a => [a.answer_span_id, a])
-  );
-  let offset = 0;
-  const ranges = traceTokens.map(piece => {
-    const start = offset, end = offset + piece.length;
-    offset = end;
-    return [start, end];
-  });
-  for (const span of answerSpans) {
-    const info = linkByAnswerSpan.get(span.id);
-    if (!info || !info.clear_source || !(info.top_context_span_ids || []).length) continue;
-    const srcs = info.top_context_span_ids.map(cid => {
-      const idx = skyIndexById.get(cid);
-      if (idx == null) return null;
-      const w = maxStrength > 0 ? (strengths.get(cid) || 0) / maxStrength : 0;
-      return [idx, Math.max(0.1, w)];
-    }).filter(Boolean);
-    if (!srcs.length) continue;
-    ranges.forEach(([ts, te], i) => {
-      if (ts < span.end && te > span.start && !out.has(i)) out.set(i, srcs);
-    });
-  }
-  return out;
-}
-
-function buildAlmosts(alts) {
-  if (!Array.isArray(alts) || !alts.length) return [];
-  return alts.slice(0, 3).map(a => {
-    const text = String((a && (a.piece != null ? a.piece : a.text)) || "").trim();
-    let pull = null;
-    if (a && Number.isFinite(a.prob)) pull = a.prob;
-    else if (a && Number.isFinite(a.logprob)) pull = Math.exp(a.logprob);
-    return { text, pull: Number.isFinite(pull) ? Math.max(0, Math.min(1, pull)) : 0, forkable: false };
-  }).filter(a => a.text);
-}
-
-/* Cosmetic amplitude only (casting.mjs never displays "turbulence" as a number to the user) -- derived
-   from this reply's own recorded per-token entropy spread, not a separately measured signal. */
-function turbulenceFromEntropy(ent) {
-  const vals = ent.filter(Number.isFinite);
-  if (vals.length < 2) return 0.4;
-  const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
-  const variance = vals.reduce((a, b) => a + (b - mean) * (b - mean), 0) / vals.length;
-  return Math.max(0.15, Math.min(2.2, Math.sqrt(variance)));
-}
-
-function topKEntropyBits(row) {
-  if (!Array.isArray(row) || !row.length) return null;
-  const scores = row.map(r => Number(r && r.score)).filter(Number.isFinite);
-  if (!scores.length) return null;
-  const m = Math.max(...scores);
-  const exps = scores.map(s => Math.exp(s - m));
-  const sum = exps.reduce((a, b) => a + b, 0);
-  if (!(sum > 0)) return null;
-  const probs = exps.map(e => e / sum);
-  const bits = -probs.reduce((acc, p) => (p > 0 ? acc + p * Math.log2(p) : acc), 0);
-  return bits;
-}
-function lastPositionTopKEntropy(readouts) {
-  const bits = topKEntropyBits(readouts[readouts.length - 1]);
-  return Number.isFinite(bits) ? Math.round(bits * 100) / 100 : 0;
-}
-
-function pickLayers(all, max) {
-  if (all.length <= max) return all.slice();
-  const out = [];
-  for (let i = 0; i < max; i++) out.push(all[Math.round(i * (all.length - 1) / (max - 1))]);
-  return Array.from(new Set(out));
-}
-
-async function buildJlensTrajectory(text, state) {
-  const probe = await postJSON("/jlens", { text, topk: JLENS_TOPK });
-  state.jlensProbe = (probe.ok && probe.body) ? probe.body : null;
-  if (!probe.ok || !probe.body || !probe.body.available) {
-    return { available: false, reason: (probe.body && probe.body.reason) || "J-lens unavailable" };
-  }
-  const allLayers = Array.isArray(probe.body.available_layers)
-    ? probe.body.available_layers.slice().sort((a, b) => a - b) : [];
-  if (!allLayers.length) return { available: false, reason: "no J-lens layers reported" };
-  const layers = pickLayers(allLayers, MAX_JLENS_LAYERS);
-  const perLayer = [];
-  for (const L of layers) {
-    const res = await postJSON("/jlens", { text, layer: L, topk: JLENS_TOPK });
-    if (res.ok && res.body && res.body.available && Array.isArray(res.body.readouts) && res.body.readouts.length) {
-      perLayer.push({ layer: L, readouts: res.body.readouts, tokens: res.body.tokens || [] });
-    }
-  }
-  if (!perLayer.length) return { available: false, reason: "layer readouts unavailable" };
-  const entropyByDepth = perLayer.map(pl => lastPositionTopKEntropy(pl.readouts));
-  return { available: true, layers: perLayer.map(pl => pl.layer), entropyByDepth, perLayer };
-}
-
-/* Never raises: any unexpected shape from a route (malformed influence map, a trace field that isn't
-   the array it should be, etc.) falls back to null -> the caller shows a visibly-labeled demo cast
-   instead of leaving the page's render chain stuck on an uncaught rejection ("never raise" mirrors the
-   discipline clozn/receipts/*.py already hold themselves to). */
-async function assembleRealCast(run, state) {
-  try {
-    return await assembleRealCastUnsafe(run, state);
-  } catch {
-    return null;
-  }
-}
-
-async function assembleRealCastUnsafe(run, state) {
-  const text = String(run.response || "").trim();
-  if (!text) return null;
-
-  const influence = await getOrComputeInfluenceMap(state.runId);
-  if (!influence) return null;
-  state.influence = influence;
-
-  const ans = influence.answer;
-  const alignmentOk = !!(ans && ans.scored_text_matches_recorded && ans.recorded_text === text);
-  if (!alignmentOk) return null;   // can't honestly attribute answer-token provenance -- don't guess
-
-  const skySpans = displayableSpans(influence);
-  if (!skySpans.length) return null;
-  const strengths = spanStrengthMap(influence);
-  const maxStrength = Math.max(0, ...Array.from(strengths.values()));
-  const sourceById = new Map((influence.prompt_sources || []).map(s => [s.id, s]));
-  const skyIndexById = new Map();
-  const sky = skySpans.slice(0, 60).map((s, i) => {
-    skyIndexById.set(s.id, i);
-    const src = sourceById.get(sourceIdOf(s.id));
-    const w = maxStrength > 0 ? (strengths.get(s.id) || 0) / maxStrength : 0;
-    return { text: spanExcerpt(src, s, 26), weight: Math.max(0.05, w) };
-  });
-
-  const traceTokens = (run.trace && Array.isArray(run.trace.tokens)) ? run.trace.tokens : null;
-  if (!traceTokens || !traceTokens.length) return null;
-  if (traceTokens.join("") !== text) return null;   // pieces don't reconstruct the measured text -- don't guess offsets
-
-  const traceEnt = (run.trace && Array.isArray(run.trace.topk_entropy)) ? run.trace.topk_entropy : [];
-  const traceAlts = (run.trace && Array.isArray(run.trace.alternatives)) ? run.trace.alternatives : [];
-  const sourcesByTokenIdx = mapAnswerTokensToSky(influence, traceTokens, skyIndexById, strengths, maxStrength);
-
-  const tokens = traceTokens.map((piece, i) => ({
-    text: piece,
-    entropy: Number.isFinite(traceEnt[i]) ? traceEnt[i] : 0,
-    sources: sourcesByTokenIdx.get(i) || [],
-    almosts: buildAlmosts(traceAlts[i]),
-  }));
-
-  const cast = {
-    meta: { label: String(run.prompt_summary || state.runId || "this run").slice(0, 40), scripted: false },
-    turbulence: turbulenceFromEntropy(traceEnt),
-    width: 1,
-    crystalline: traceEnt.length > 0 && traceEnt.every(e => !e || e < 0.6),
-    cells: [], leadFlips: [],
-    sky, tokens,
-  };
-
-  const notes = [
-    "sky + ground + provenance threads: this run's own context-answer influence map (measured; span "
-      + "excerpts stand in for individual words).",
-    traceEnt.length
-      ? "per-token entropy: this run's own recorded top-k(approx) entropy."
-      : "per-token entropy: not recorded on this run -- every planted word reads as calm by default.",
-    "ghosts: this run's own recorded alternatives, by probability -- not forkable (no live branch "
-      + "backend wired to this page).",
-    "candidate cells / lead-changes / commit layer: NOT computed in this build -- the cloud renders as "
-      + "one uncontested blob rather than staging a contest it didn't measure.",
-  ];
-
-  const jl = await buildJlensTrajectory(text.slice(0, JLENS_TEXT_CAP), state);
-  state.jlensTrajectory = jl;
-  if (jl.available) {
-    cast.entropyByDepth = jl.entropyByDepth;
-    cast.meta.readoutLayers = jl.layers;
-    if (state.health && Number.isFinite(state.health.n_layer)) cast.meta.totalLayers = state.health.n_layer;
-    notes.push(`cloud shape: J-lens top-k(k=${JLENS_TOPK}) renormalized entropy at this reply's own `
-      + `final token position, at layers [${jl.layers.join(", ")}]`
-      + `${text.length > JLENS_TEXT_CAP ? ` (first ${JLENS_TEXT_CAP} chars only)` : ""} -- an `
-      + `approximation of full-vocabulary entropy, not the exact quantity.`);
-  } else {
-    notes.push(`cloud shape: generic (${jl.reason}) -- no per-layer entropy fed in.`);
-  }
-
-  return { cast, notes };
-}
+/* Real-cast assembly (influence map -> sky/tokens/provenance, J-lens -> cloud shape + the argument
+   cells/leadFlips/commitLayer) now lives in ./cast-feed.mjs -- see its own header comment for the full
+   per-field breakdown. */
 
 /* ======================================================================== below-hero panels */
 
