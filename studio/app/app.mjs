@@ -47,13 +47,21 @@ const view = document.getElementById("view");
 const routes = { "/runs": Runs, "/model": Model, "/behavior": Behavior };
 async function route() {
   const path = location.hash.replace(/^#/, "") || "/runs";
-  document.querySelectorAll("#nav a").forEach(a =>
-    a.getAttribute("href") === "#" + path
+  const runMatch = path.match(/^\/runs\/([A-Za-z0-9_-]+)$/);   // #/runs/<id> -> the Lens page (build 2)
+  document.querySelectorAll("#nav a").forEach(a => {
+    const current = runMatch ? "#/runs" : "#" + path;         // a run detail still reads as "runs" in nav
+    a.getAttribute("href") === current
       ? a.setAttribute("aria-current", "page")
-      : a.removeAttribute("aria-current"));
-  const fn = routes[path] || Runs;
+      : a.removeAttribute("aria-current");
+  });
   light && light.pulse(.4);                               // navigation is a real interaction
   view.innerHTML = `<p class="quiet breathing">…</p>`;
+  if (runMatch) {
+    const { renderLens } = await import("./lens.mjs");
+    await renderLens(view, runMatch[1], light);
+    return;
+  }
+  const fn = routes[path] || Runs;
   view.innerHTML = await fn();
 }
 addEventListener("hashchange", route);
@@ -70,13 +78,13 @@ async function Runs() {
     const id = esc(x.id || x.run_id || "?");
     const prompt = esc(x.prompt_summary || x.prompt || x.id || "(untitled run)");
     const when = esc(x.created_at || "");
-    return `<li class="panel"><a href="#/runs" title="the Lens page arrives in build 2">
+    return `<li class="panel"><a href="#/runs/${id}" title="open the lens">
       <div class="run-prompt">${prompt}</div>
       <div class="run-meta"><span>${id}</span><span>${when}</span></div></a></li>`;
   }).join("");
   return `
     <h1 class="view-title">Runs</h1>
-    <div class="view-sub">everything that flowed in — each opens into the lens page (build 2)</div>
+    <div class="view-sub">everything that flowed in — each opens into the lens page</div>
     ${rows ? `<ul class="run-list">${rows}</ul>`
            : `<p class="quiet">no runs reachable — make one through the API and it lands here.</p>`}`;
 }
