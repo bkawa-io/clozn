@@ -5,7 +5,8 @@ run, gate on the substrate, map SpanSpecError -> 400, exceptions -> 500, None ->
 
 Registered in clozn/server/app.py: imported as `_span_receipt_routes` and placed in `_POST_ROUTES`
 (POST-only -- it has no try_get). Live surface: Studio's span-forensics UI in Replay (`api.spanReceipt`
-in studio/heavn/api.mjs, called from replay.mjs).
+in the previous shell, studio/heavn -- no longer served from "/"). NO CALLER in the current
+studio/app UI: still reachable over HTTP, but nothing links to it -- rewire or retire is an open call.
 """
 from clozn.server import app as ctx
 

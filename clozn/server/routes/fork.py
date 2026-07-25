@@ -7,8 +7,8 @@ Body: {"position": <int, index into the reply's trace tokens>, "token": "<piece>
 Response: the child run record + prefix_kept / forked_from_piece / retokenized / note (see fork.py).
 
 Registered in clozn/server/app.py: imported as `_fork_routes` and placed in `_POST_ROUTES`. Live
-surface: Studio's Replay panel (`api.fork` in studio/heavn/api.mjs, called from replay.mjs's
-fork-at-token UI).
+surface: the casting's fork-a-ghost flow (studio/app/observatory.mjs handleFork). The previous shell's
+Replay panel (studio/heavn) also called it; that app is no longer served from "/".
 """
 from clozn.server import app as ctx
 

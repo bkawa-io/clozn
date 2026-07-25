@@ -23,7 +23,7 @@ Wire shapes:
 Registered in clozn/server/app.py: imported as `_diff_routes` and placed in BOTH `_GET_ROUTES` (before
 `_runs_fallback_routes`) and `_POST_ROUTES` (POST falls through to the generic SUB.handle after every
 registered family, and none of them claims "/diff/..."). Live surface: Studio's Atlas panel
-(`api.diffRuns` in studio/heavn/api.mjs, called from atlas.mjs) drives POST /diff/runs; GET /diff/suites
+(studio/app/compare.mjs) drives POST /diff/runs; GET /diff/suites
 has no Studio caller yet -- it's exercised via clozn/testkit/ci.py and its own tests.
 
 Unlike health.py, this module deliberately does NOT `from clozn.server import app as ctx`: it reads no

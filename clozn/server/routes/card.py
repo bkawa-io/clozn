@@ -8,7 +8,8 @@ carries them; otherwise the card states their honest absence.
 Registered in clozn/server/app.py: imported as `_card_routes` and placed in `_GET_ROUTES` BEFORE
 `_runs_fallback_routes` (the generic /runs/<id> fallback keeps last refusal, exactly like the other
 /runs/<id>/<suffix> families). Live surface: Studio's receipt-card link (`api.cardUrl` in
-studio/heavn/api.mjs, opened from evidence.mjs, replay.mjs, and read.mjs).
+the previous shell, studio/heavn -- no longer served from "/"). NO CALLER in the current
+studio/app UI: still reachable over HTTP, but nothing links to it -- rewire or retire is an open call.
 """
 
 

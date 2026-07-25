@@ -1,5 +1,6 @@
 """POST /engine/rewrite -- Route D ("Rewrite (AR)"), the second edit mode alongside Route A's diffusion
-Resolve (studio/heavn/modules/edit.mjs's pin-and-resolve, which calls the engine's /v1/revise directly).
+Resolve (the previous shell's pin-and-resolve; studio/heavn is no longer served from "/"). NO CALLER
+in the current studio/app UI: still reachable over HTTP -- rewire or retire is an open call.
 See notes/EDIT_INSTRUCTIONS_DESIGN.md's Route D: AR models follow instructions natively, where a base
 diffusion model cannot -- this is a SECOND, honestly-labeled edit mode, not a replacement for Resolve.
 
