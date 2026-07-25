@@ -30,9 +30,31 @@ def try_get(h, p):
     return False
 
 
+# Every key this route accepts: "enabled" (its own on/off shorthand) + exactly the spec fields
+# generation_guard._normalize_guard_spec reads. Kept explicit so an unknown key is REJECTED rather
+# than silently dropped -- same stance as the OpenAI compat normalizer (routes/openai.py). The trap
+# this closes: `clozn_guard` is the name of the PER-REQUEST field, so posting
+# {"clozn_guard": {...}} here is the natural mistake, and it used to return 200 + changed:true
+# while persisting nothing at all.
+ACCEPTED_FIELDS = frozenset({
+    "enabled", "concepts", "threshold", "counter_strength", "max_fires", "layer",
+})
+
+
 def try_post(h, p, body):
     if p != "/guard/mode":
         return False
+    unknown = sorted(k for k in body if k not in ACCEPTED_FIELDS)
+    if unknown:
+        h._json(400, {"error": {
+            "message": f"unknown field(s) for /guard/mode: {', '.join(unknown)}. Accepted: "
+                       f"{', '.join(sorted(ACCEPTED_FIELDS))}. (The per-request field on "
+                       f"/v1/chat/completions is named 'clozn_guard' and wraps these same keys; "
+                       f"here they go at the top level.)",
+            "type": "invalid_request_error", "param": unknown[0],
+        }})
+        return True
+    before = generation_guard.get_persisted_guard_spec()
     enabled = body.get("enabled")
     if enabled is False:
         # An explicit "turn it off" always wins over any other field in the same call -- mirrors
@@ -53,5 +75,7 @@ def try_post(h, p, body):
     except ValueError as exc:
         h._json(400, {"error": {"message": str(exc), "type": "invalid_request_error", "param": "clozn_guard"}})
         return True
-    h._json(200, {"enabled": spec is not None, "guard": spec, "changed": True})
+    # "changed" is MEASURED, not asserted. It used to be a hardcoded True, so a no-op write reported
+    # a change that never happened -- a success signal that carried no information.
+    h._json(200, {"enabled": spec is not None, "guard": spec, "changed": spec != before})
     return True
