@@ -203,14 +203,11 @@ class EngineSteer:
         self.strength.pop(name, None)
 
     def save_custom(self, path):
-        """Persist only user-created dials, not shipped-library metadata."""
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(
-                {k: {"pos": v["pos"], "neg": v["neg"], "max": v["max"]}
-                 for k, v in self.custom.items() if v.get("source") == "user"},
-                f,
-            )
+        """Persist only user-created dials, not shipped-library metadata. Atomic for the same reason
+        save_state is: open("w") truncates before a serialization failure can raise, and load_custom's
+        except-pass would then silently eat the user's custom dials."""
+        atomic_write_json(path, {k: {"pos": v["pos"], "neg": v["neg"], "max": v["max"]}
+                                 for k, v in self.custom.items() if v.get("source") == "user"})
 
     def load_custom(self, path):
         if not os.path.isfile(path):

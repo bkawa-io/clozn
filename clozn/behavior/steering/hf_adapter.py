@@ -6,6 +6,8 @@ import os
 
 import torch
 
+from clozn._io import atomic_write_json
+
 from . import axes
 
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
@@ -74,9 +76,10 @@ class SteeringControl:
         self.strength.pop(name, None)
 
     def save_custom(self, path: str):
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump({k: {"pos": v["pos"], "neg": v["neg"], "max": v["max"]} for k, v in self.custom.items()}, f)
+        # Atomic: same silent-data-loss class as the engine adapter's writers (open("w") truncates
+        # before json.dump can raise; load_custom's except-pass then eats the loss without a word).
+        atomic_write_json(path, {k: {"pos": v["pos"], "neg": v["neg"], "max": v["max"]}
+                                 for k, v in self.custom.items()})
 
     def load_custom(self, path: str):
         if not os.path.isfile(path):
@@ -132,9 +135,8 @@ class SteeringControl:
         return {k: v for k, v in self.strength.items() if v}
 
     def save_state(self, path: str):
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(self.strength, f)
+        # Atomic -- see save_custom.
+        atomic_write_json(path, self.strength)
 
     def load_state(self, path: str) -> bool:
         if not os.path.isfile(path):

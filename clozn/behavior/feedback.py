@@ -27,6 +27,8 @@ import json
 import os
 import time
 
+from clozn._io import atomic_write_json
+
 _PATH = os.path.join(os.path.expanduser("~"), ".clozn", "feedback.json")
 
 
@@ -49,10 +51,10 @@ def _load() -> list:
 
 
 def _save(signals: list) -> None:
-    p = _path()
-    os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
-    with open(p, "w", encoding="utf-8") as f:
-        json.dump(signals, f, indent=2)
+    # Atomic: one bad write used to leave a truncated file, and _load answers any parse error
+    # with [] -- erasing EVERY prior entry, not just the failed one. Same class, same remedy
+    # as the settings/cards/dials writers.
+    atomic_write_json(_path(), signals, indent=2)
 
 
 def record(run_id, kind: str, dial=None, direction=None, meta=None, _now=None) -> dict:
