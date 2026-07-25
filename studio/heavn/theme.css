@@ -3,7 +3,7 @@
    Pink returns at ACCENT level only (--pink: branch glow / selection sheen, never structure). */
 :root{
   --sky0:#EAF4F9; --sky1:#E4EAF8; --milk:#E8F7FA; --port:#A9D6E8;
-  --navy:#202947; --slate:#42516F; --mist:#73819D;
+  --navy:#1B2440; --slate:#3A4761; --mist:#586581;   /* legibility pass: darker secondary text for real contrast */
   --blue:#4C8DF0; --teal:#5FC8BC; --lilac:#B6B0DA; --lilac2:#9A92C8; --peri:#8FA8E8;
   --pink:#E48CD8;            /* accent only: branch glow, selection sheen */
   --coral:#F26D4F;           /* functional only: fail · truncated · playhead */
