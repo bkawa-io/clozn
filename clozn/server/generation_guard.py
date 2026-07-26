@@ -191,6 +191,45 @@ before any token is generated, where refusing costs nothing; this is the one nar
 caught at setup (see above) and must be handled once generation is already in flight.
 
 ===============================================================================================
+2026-07-25 UPDATE: guarded generation now carries a real per-token trace
+===============================================================================================
+Before this update, guarded_chat_completion's chunk loop drove the engine through plain, untraced
+engine.complete()/.intervene() calls, so `handler._log_run(...)` was called with no `trace` at all --
+EVERY reply generated while the guard was on recorded trace {}: the spans lens came back empty, fork
+refused ("no trace to fork from"), and nothing in the response signaled the gap.
+
+generate_chunk's two engine calls now go through this module's own traced seams, `_traced_complete` /
+`_traced_intervene` -- the SAME streaming-then-plain-fallback shape as substrates.py's
+_engine_complete_traced (prior art, not reinvented): each attempts the engine's own SSE stream first
+(POST .../v1/completions or .../intervene with stream:true, folded via runlog.accumulate_ar_events /
+finish_reason_from_frames -- the identical Event/tokens_committed/step_lens frames either route emits),
+and falls back to the plain call on ANY hiccup (no `engine.base`, a bad response, a network error) so a
+reply is NEVER lost to tracing -- it just carries no steps for that one chunk.
+
+Because the guard generates in CHUNKS with a possible discard-and-regenerate (read -> maybe counter-inject
+-> re-generate the SAME chunk), the closure commits one round's steps to the running trace only once the
+LOOP has moved on to requesting the NEXT chunk: a `counter=None` call always starts a new round in
+run_guarded_generation's own control flow (a corrected re-generation is always the SECOND call of the
+SAME round, immediately following an uncorrected first attempt at the identical prompt_so_far -- see its
+code), so the call order alone tells this closure when a round is truly final, without run_guarded_
+generation's tested pure contract changing at all: generate_chunk still returns a plain str, exactly as
+tests/test_generation_guard.py's fakes expect.
+
+HONESTY: if ANY committed round's capture fell back to untraced (the plain fallback ran for a chunk that
+was NOT legitimately empty), the WHOLE reply's trace is OMITTED (trace=None) -- never a partial trace
+pretending to be complete. This mirrors clozn.replay.fork's own _spliced_child_trace precedent
+(all-or-nothing: no trace with a silently-missing span) rather than inventing a new per-step "untraced"
+marker this codebase's trace schema (clozn.runs.trace.TRACE_KEYS) has no other consumer for.
+`clozn_guard_receipt['trace_captured']` says which happened; `trace_omitted_note` explains why when it's
+False.
+
+A counter-injection between chunks changes the residual stream mid-reply: the recorded trace is still the
+TRUE record of what was actually sampled (steps are never fabricated, reordered, or borrowed from the
+discarded pre-correction attempt), but the sampling regime itself changed at each fire's token_position
+(already on the receipt's own `fires` list) -- `trace_steering_note` says so once, generically, rather
+than repeating those positions.
+
+===============================================================================================
 SCOPE LIMITS OF THIS FIRST CUT (said honestly, not silently)
 ===============================================================================================
   * STREAMING IS DEFERRED. Guarded generation only supports the non-streaming
@@ -270,6 +309,21 @@ GUARD_COUNTER_FAILURE_NOTE = (
     "failure or a silent pass: the request was not refused and the reply was not aborted; run "
     "scripts/calibration/concept_dial_autocalibrate.py against this model/layer to close the gap (see the "
     "module docstring)."
+)
+
+# See the module docstring's 2026-07-25 "guarded generation now carries a real per-token trace" section.
+GUARD_TRACE_OMITTED_NOTE = (
+    "no per-token trace was captured for this reply: the engine's SSE streaming path (which this module "
+    "needs to fold per-chunk steps -- see _traced_complete/_traced_intervene) fell back to a plain, "
+    "untraced call for at least one chunk. Rather than record a PARTIAL trace that would silently omit "
+    "some spans while looking complete, the whole trace is omitted -- spans lens / fork / any other "
+    "per-token consumer will see no trace on this run, honestly, not a wrong one."
+)
+GUARD_TRACE_STEERING_NOTE = (
+    "this run's trace is the true record of what was actually sampled, but the sampling regime changed "
+    "mid-generation: at each fire's token_position (see 'fires' above), the residual stream was "
+    "counter-steered from that point onward. The trace is not re-labeled per span for this -- cross-"
+    "reference 'fires' for exactly where the regime changed, rather than duplicating those positions here."
 )
 
 # -- opt-in wiring -----------------------------------------------------------------------------------
@@ -860,7 +914,7 @@ def _coherence_note(corrected_texts: list) -> dict:
 
 
 def build_receipt(result: dict, spec: dict, *, layer: int, layer_source: str, topk: int,
-                  resolved_signals: dict) -> dict:
+                  resolved_signals: dict, trace_captured: Optional[bool] = None) -> dict:
     """The public `clozn_guard_receipt` shape -- one canonical builder so every caller (the production
     route, tests) constructs the identical fields. Only present on the response when the guard actually
     ran (opted in AND every calibrated concept resolved); see the module docstring's HONESTY LAW for
@@ -872,10 +926,15 @@ def build_receipt(result: dict, spec: dict, *, layer: int, layer_source: str, to
     actually used, the threshold used, and (when calibrated) the trigger representation" this receipt is
     required to carry per concept.
 
-    `counter_failure_note` (2026-07-25) rides whenever any fire below has counter_applied: false -- see
-    the module docstring's "counter-injection can fail MID-GENERATION" section; each fire's own
-    counter_error still carries the specific message, this is just the receipt-level flag that at least
-    one exists, so a caller scanning only top-level fields still can't miss it."""
+    `trace_captured` (2026-07-25): whether the run this receipt describes has a real per-token trace
+    attached (see the module docstring's "guarded generation now carries a real per-token trace" section).
+    None (the default, and every existing test's call shape) omits all trace_* fields entirely -- this
+    stays byte-identical to before that fix for any caller that never resolved a trace outcome. When the
+    production adapter passes an actual bool, `trace_captured` always rides the receipt; `trace_omitted_
+    note` explains a False; `trace_steering_note` accompanies a True when at least one fire happened (a
+    counter-injection changed the residual mid-reply -- see GUARD_TRACE_STEERING_NOTE). Separately,
+    `counter_failure_note` rides whenever any fire below has counter_applied: false, regardless of tracing
+    (see the module docstring's "counter-injection can fail MID-GENERATION" section)."""
     max_observed = result.get("max_observed_activation") or {}
     concepts_receipt = {}
     for concept in spec["concepts"]:
@@ -917,6 +976,15 @@ def build_receipt(result: dict, spec: dict, *, layer: int, layer_source: str, to
     }
     if result["cap_reached"]:
         receipt["cap_note"] = GUARD_CAP_NOTE
+    if trace_captured is not None:
+        receipt["trace_captured"] = bool(trace_captured)
+        if not trace_captured:
+            receipt["trace_omitted_note"] = GUARD_TRACE_OMITTED_NOTE
+        # trace_steering_note only when a correction was ACTUALLY applied at least once -- a fire whose
+        # counter_applied is False never touched the residual stream, so claiming "steering changed
+        # mid-generation" for a run with fires-but-no-applied-corrections would itself be dishonest.
+        elif any(f.get("counter_applied", True) for f in result["fires"]):
+            receipt["trace_steering_note"] = GUARD_TRACE_STEERING_NOTE
     if any(not f.get("counter_applied", True) for f in result["fires"]):
         receipt["counter_failure_note"] = GUARD_COUNTER_FAILURE_NOTE
     return receipt
@@ -940,6 +1008,107 @@ def _sampling_params(sub) -> dict:
         return {"temperature": float(samp["temperature"]), "rep_penalty": float(samp["repeat_penalty"]),
                "top_k": int(samp["top_k"]), "top_p": float(samp["top_p"]), "seed": int(samp["seed"])}
     return {"temperature": 0.0, "rep_penalty": 1.0, "top_k": 0, "top_p": 1.0, "seed": 0}
+
+
+# =================================================================================================
+# TRACED generate seams -- see the module docstring's 2026-07-25 "guarded generation now carries a real
+# per-token trace" section. Mirrors substrates.py's _engine_complete_traced (prior art, not reinvented):
+# try the engine's own SSE stream first, fold the frames into per-token steps, and fall back to the plain
+# call on ANY hiccup -- a reply is NEVER lost to tracing, it just carries no steps for that one chunk.
+# Not reused directly: _engine_complete_traced is built around ctx._resolve_sampling's on/off dict shape,
+# while this module already resolves a flat sampling kwargs dict via _sampling_params -- same idea, this
+# module's own shape, plus a SECOND seam for /intervene (which _engine_complete_traced has no notion of at
+# all -- ordinary chat's tone-dial steering rides /v1/completions' own steer_vec field instead).
+# =================================================================================================
+
+def _read_sse_frames(base: str, path: str, body: dict, timeout) -> list:
+    """POST `body` (stream:true already set by the caller) to `base + path` and collect its `data: ...`
+    SSE frames as parsed JSON objects, stopping at [DONE]. Raises on any transport/parse failure -- the
+    caller's own try/except is the fallback boundary (mirrors _engine_complete_traced's inline try)."""
+    import urllib.request
+    req = urllib.request.Request(base + path, data=json.dumps(body).encode("utf-8"),
+                                 headers={"Content-Type": "application/json"})
+    frames = []
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        for raw in resp:
+            line = raw.decode("utf-8", "replace").strip()
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if payload == "[DONE]":
+                break
+            frames.append(json.loads(payload))
+    return frames
+
+
+def _traced_complete(engine, prompt: str, max_tokens: int, engine_kw: dict):
+    """generate_chunk's UNCORRECTED path. Returns (text, steps, finish, traced) -- `traced` is True only
+    when the per-token trace was genuinely captured (steps may legitimately be [] when 0 tokens were
+    generated -- that is still "traced", just traced-empty); False means the plain, untraced engine.
+    complete() ran and steps is unconditionally [] (see build_receipt's `trace_captured` / the module
+    docstring for why one untraced chunk sinks the WHOLE reply's trace rather than being patched over)."""
+    try:
+        body = dict(engine_kw)
+        body["prompt"] = prompt
+        body["max_tokens"] = int(max_tokens)
+        body["stream"] = True
+        frames = _read_sse_frames(engine.base, "/v1/completions", body, getattr(engine, "timeout", 600))
+        import clozn.runs.store as runlog
+        text = ""
+        for obj in frames:
+            ch = obj.get("choices") if isinstance(obj, dict) else None
+            if ch and isinstance(ch, list) and ch[0].get("text"):
+                text = ch[0]["text"]
+        steps = runlog.accumulate_ar_events(frames)
+        finish = runlog.finish_reason_from_frames(frames)
+        if not text:
+            text = "".join(s.get("piece", "") for s in steps)
+        return text, steps, finish, True
+    except Exception:
+        pass
+    from clozn.behavior.steering.concept_dir import _text_of as _engine_text_of
+    resp = engine.complete(prompt, max_tokens=int(max_tokens), **engine_kw)
+    ch = resp.get("choices") if isinstance(resp, dict) else None
+    finish = ch[0].get("finish_reason") if (ch and isinstance(ch[0], dict)) else None
+    return _engine_text_of(resp), [], finish, False
+
+
+def _traced_intervene(engine, prompt: str, vector, coef: float, layer: int, max_tokens: int, engine_kw: dict):
+    """generate_chunk's CORRECTED (counter-steered) path -- same idea as _traced_complete, against
+    /intervene (kind:"steer", a raw vector+coef+layer -- concept_dir.ConceptSteer.steer_toward's own wire
+    shape; see cloze_engine.EngineClient.intervene). /intervene's streaming final frame carries the reply
+    text directly under "text" (engine/core/serve/routes_state.cpp), not OpenAI's choices[0].text -- the
+    one difference from _traced_complete's parsing. The per-token tokens_committed/step_lens frames are
+    the SAME Event stream either route emits (routes_state.cpp's /intervene handler reuses the identical
+    to_jsonl_line(Event) encoding /v1/completions' streaming path does), so runlog.accumulate_ar_events /
+    finish_reason_from_frames fold them identically regardless of which route produced them.
+
+    Returns (text, steps, finish, traced) -- see _traced_complete's docstring for the `traced` contract."""
+    try:
+        target = dict(engine_kw)
+        target["prompt"] = prompt
+        target["max_tokens"] = int(max_tokens)
+        body = {"kind": "steer", "coef": float(coef), "layer": int(layer),
+               "vector": list(vector), "target": target, "stream": True}
+        frames = _read_sse_frames(engine.base, "/intervene", body, getattr(engine, "timeout", 600))
+        import clozn.runs.store as runlog
+        text = ""
+        for obj in frames:
+            if isinstance(obj, dict) and isinstance(obj.get("text"), str):
+                text = obj["text"]
+        steps = runlog.accumulate_ar_events(frames)
+        finish = runlog.finish_reason_from_frames(frames)
+        if not text:
+            text = "".join(s.get("piece", "") for s in steps)
+        return text, steps, finish, True
+    except Exception:
+        pass
+    from clozn.behavior.steering.concept_dir import _text_of as _engine_text_of
+    resp = engine.intervene(prompt, vector=vector, coef=coef, layer=layer, max_tokens=int(max_tokens),
+                            **engine_kw)
+    ch = resp.get("choices") if isinstance(resp, dict) else None
+    finish = ch[0].get("finish_reason") if (ch and isinstance(ch[0], dict)) else None
+    return _engine_text_of(resp), [], finish, False
 
 
 def guarded_chat_completion(handler, messages: list, *, model: str, max_tokens: int, sample=True,
@@ -968,7 +1137,7 @@ def guarded_chat_completion(handler, messages: list, *, model: str, max_tokens: 
     caller's own error handling applies, matching every other engine-touching route)."""
     import time
     from clozn.server import app as ctx
-    from clozn.behavior.steering.concept_dir import ConceptSteer, _text_of as _engine_text_of
+    from clozn.behavior.steering.concept_dir import ConceptSteer
 
     started = time.time()
     sub = ctx.active_sub(handler)
@@ -995,16 +1164,35 @@ def guarded_chat_completion(handler, messages: list, *, model: str, max_tokens: 
     engine_kw = _sampling_params(sub)
     last_finish = {"reason": None}
 
+    # TRACE CAPTURE (2026-07-25) -- see the module docstring's "guarded generation now carries a real
+    # per-token trace" section. `pending` holds the MOST RECENT generate_chunk call's (steps, traced),
+    # not yet known to be final; `committed` holds one (steps, traced) per FINISHED round, in generation
+    # order. A `counter=None` call always starts a NEW round (run_guarded_generation's own control flow:
+    # a corrected regeneration is always the SECOND call of the SAME round, at the identical prompt_so_
+    # far, immediately superseding the first) -- so committing `pending` exactly when a `counter=None`
+    # call arrives, before overwriting it, correctly drops a discarded pre-correction attempt's steps and
+    # keeps only what actually rode into the final reply. generate_chunk's return type is unchanged (a
+    # plain str) -- tests/test_generation_guard.py's fakes keep working exactly as before.
+    pending: list = []          # [(steps, traced)] -- 0 or 1 entries
+    committed: list = []        # one (steps, traced) per finished round, in order
+
+    def _commit_pending():
+        if pending:
+            committed.append(pending[0])
+            pending.clear()
+
     def generate_chunk(prompt_so_far: str, max_new: int, *, counter=None) -> str:
         if counter is None:
-            resp = sub.engine.complete(prompt_so_far, max_tokens=int(max_new), **engine_kw)
+            _commit_pending()   # the previous round (if any) is now final -- lock in its steps
+            text, steps, finish, traced = _traced_complete(
+                sub.engine, prompt_so_far, int(max_new), engine_kw)
         else:
-            resp = sub.engine.intervene(prompt_so_far, vector=counter["vector"], coef=counter["coef"],
-                                        layer=layer, max_tokens=int(max_new), **engine_kw)
-        choices = resp.get("choices") if isinstance(resp, dict) else None
-        if choices:
-            last_finish["reason"] = choices[0].get("finish_reason")
-        return _engine_text_of(resp)
+            text, steps, finish, traced = _traced_intervene(
+                sub.engine, prompt_so_far, counter["vector"], counter["coef"], layer, int(max_new),
+                engine_kw)
+        last_finish["reason"] = finish
+        pending[:] = [(steps, traced)]   # replaces any earlier attempt from THIS round
+        return text
 
     def read_disposition(text_so_far: str) -> dict:
         jl = sub.engine.jlens(text_so_far, layer=layer, topk=topk)
@@ -1032,12 +1220,32 @@ def guarded_chat_completion(handler, messages: list, *, model: str, max_tokens: 
         concepts=spec["concepts"], correctable_concepts=correctable_concepts, thresholds=thresholds,
         counter_strength=spec["counter_strength"], max_fires=spec["max_fires"], layer=layer,
     )
+    _commit_pending()   # flush the final round
+
+    # HONEST all-or-nothing splice (mirrors clozn.replay.fork's _spliced_child_trace precedent): vacuously
+    # True when nothing was ever generated (committed == []) -- there is nothing to have failed tracing.
+    trace_captured = all(traced for _, traced in committed)
+    final_trace = None
+    if trace_captured and committed:
+        final_trace = []
+        for steps, _ in committed:
+            for s in steps:
+                if isinstance(s, dict):
+                    c = dict(s)
+                    c.pop("pos", None)          # per-round positions are meaningless across a splice
+                    final_trace.append(c)
+        for i, c in enumerate(final_trace):     # ONE sequential index space over the whole reply
+            c["index"] = i
+        if not final_trace:                     # every round traced OK but produced 0 steps overall
+            final_trace = None
+
     receipt = build_receipt(result, spec, layer=layer, layer_source=layer_source, topk=topk,
-                           resolved_signals=resolved_signals)
+                           resolved_signals=resolved_signals, trace_captured=trace_captured)
 
     meta = dict(extra_meta or {})
     meta["clozn_guard"] = receipt
-    rid = handler._log_run(source, messages, result["text"], model, started, extra_meta=meta)
+    rid = handler._log_run(source, messages, result["text"], model, started, extra_meta=meta,
+                           trace=final_trace)
 
     return {"ok": True, "reply": result["text"], "run_id": rid, "receipt": receipt,
            "finish_reason": last_finish["reason"]}
