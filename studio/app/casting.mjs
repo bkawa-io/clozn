@@ -608,6 +608,7 @@ export function mountCasting(container, opts = {}) {
 
   const reduce = opts.reducedMotion != null ? !!opts.reducedMotion
     : matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const onSelect = typeof opts.onSelect === "function" ? opts.onSelect : () => {};
 
   container.innerHTML = `
     <div class="cst-root">
@@ -814,9 +815,23 @@ export function mountCasting(container, opts = {}) {
     }
     for (const e of planted) {
       project([e.x, Y_GROUND, e.z], pr);
-      if (Math.abs(pr[0] - mx) < 26 && Math.abs(pr[1] - my) < 14) { sel = (sel === e ? null : e); if (reduce) renderOnce(); return; }
+      if (Math.abs(pr[0] - mx) < 26 && Math.abs(pr[1] - my) < 14) {
+        sel = (sel === e ? null : e);
+        if (sel) {
+          try { onSelect(sel.tokenIndex); } catch { /* host callbacks must not break canvas interaction */ }
+        }
+        if (reduce) renderOnce();
+        return;
+      }
     }
     sel = null; if (reduce) renderOnce();
+  }
+  function selectToken(index) {
+    const value = Number(index);
+    if (!Number.isFinite(value) || !planted.length) return;
+    const clamped = Math.max(0, Math.min(preset.tokens.length - 1, Math.trunc(value)));
+    sel = planted.find(entry => entry.tokenIndex === clamped) || null;
+    if (reduce) renderOnce();
   }
   canvas.addEventListener("pointerdown", onPointerDown);
   addEventListener("pointerup", onPointerUp);
@@ -1271,6 +1286,7 @@ export function mountCasting(container, opts = {}) {
   return {
     update,
     setNight,
+    selectToken,
     destroy() {
       dead = true;
       if (atmosphere) atmosphere.destroy();

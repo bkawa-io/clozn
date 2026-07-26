@@ -62,6 +62,8 @@
 */
 import { mountCasting, DEMO_CASTING } from "./casting.mjs";
 import { assembleRealCast } from "./cast-feed.mjs";
+import { mountCastingOptics } from "./casting-optics.mjs";
+import { mountObservatoryWorkspace } from "./observatory-workspace.mjs";
 
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -97,6 +99,7 @@ export async function renderObservatory(view, runId, light) {
   view.innerHTML = shell();
   const state = {
     light, runId, run: null, health: null, runsList: null, casting: null,
+    castingOptics: null, workspace: null, currentCast: null, currentCastIsDemo: false,
     influence: null, jlensProbe: null, jlensTrajectory: null, spans: null, telemetry: null,
     wiring: { status: "idle", data: null, position: 0 },
     probe: { status: "idle", data: null },
@@ -104,8 +107,20 @@ export async function renderObservatory(view, runId, light) {
   wire(view, state);
   await Promise.all([loadRunPicker(view, state), loadHealth(view, state)]);
   const unwatchTheme = await mountHero(view, state);
+  state.workspace = mountObservatoryWorkspace({
+    workspace: window.cloznWorkspace,
+    casting: state.casting,
+  });
+  if (state.currentCast) {
+    state.workspace.updateCast(state.currentCast, { isDemo: state.currentCastIsDemo });
+  }
   renderPanels(view, state);
-  return () => { unwatchTheme(); state.casting && state.casting.destroy(); };
+  return () => {
+    unwatchTheme();
+    state.castingOptics && state.castingOptics.destroy();
+    state.workspace && state.workspace.destroy();
+    state.casting && state.casting.destroy();
+  };
 }
 
 function shell() {
@@ -209,7 +224,11 @@ async function mountHero(view, state) {
   if (!mount) return () => {};
   state.casting = mountCasting(mount, {
     onFork: (tokenIndex, altText) => handleFork(view, state, tokenIndex, altText),
+    onSelect: tokenIndex => state.workspace && state.workspace.selectToken(tokenIndex, { source: "casting" }),
   });
+  if (state.casting) {
+    state.castingOptics = mountCastingOptics(mount, { activity: state.runId ? .68 : .28 });
+  }
   const unwatch = state.casting ? watchTheme(state) : (() => {});
   await loadCast(view, state);
   return unwatch;
@@ -315,12 +334,18 @@ async function handleFork(view, state, tokenIndex, altText) {
 }
 
 function showDemoCast(view, state, cast, reason) {
+  state.currentCast = cast;
+  state.currentCastIsDemo = true;
   state.casting && state.casting.update(cast);
+  state.workspace && state.workspace.updateCast(cast, { isDemo: true });
   setDemoBadge(view, true);
   setHeroNote(view, `<b>Scripted demo cast.</b> ${esc(reason)}`);
 }
 function showRealCast(view, state, { cast, notes }) {
+  state.currentCast = cast;
+  state.currentCastIsDemo = false;
   state.casting && state.casting.update(cast);
+  state.workspace && state.workspace.updateCast(cast, { isDemo: false });
   setDemoBadge(view, false);
   setHeroNote(view, `<b>Real cast, from this run's own records.</b> ${notes.map(esc).join(" ")}`);
 }

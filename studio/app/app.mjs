@@ -2,6 +2,9 @@
    notes/UX_INFORMATION_ARCHITECTURE.md). Build 1: tokens + shader core + shell + a live Runs list.
    No framework yet — the shell earns dependencies before it takes them. */
 import { mountLight } from "./light.mjs";
+import { mountWorkspace } from "./workspace.mjs";
+
+mountWorkspace(document.querySelector(".shell"));
 
 /* ---------- theme: OS preference by default, explicit choice wins, persisted ---------- */
 const prefersNight = matchMedia("(prefers-color-scheme: dark)");
