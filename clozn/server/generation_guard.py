@@ -151,6 +151,46 @@ promise to begin with. Also refused outright: no valid J-lens layer at all on th
 step 4), and `clozn_guard` together with `stream: true` (see SCOPE LIMITS).
 
 ===============================================================================================
+2026-07-25 UPDATE: a firing guard's counter-injection can fail MID-GENERATION -- degrade honestly,
+never crash, never refuse an in-flight reply
+===============================================================================================
+A hostile pressure pass found a gap THIS section's own check doesn't close: resolve_guard_signals's
+fail-closed gate (above) calls concept_steer.compute() to prove a calibrated concept's UNIT dir(c) can be
+built (J_l + W_U resolve) -- it does NOT call steer_toward(), which ALSO needs a per-model/per-layer
+median-residual-norm (concept_dir.py's own VALIDATED_MEDIAN_RESID_NORM / concept_dial_calibration.json) to
+scale that unit vector into a real `coef`. So a concept can pass setup clean and still fail the FIRST time
+it actually fires, when build_counter() finally calls steer_toward() and hits ConceptSteer.steer_toward's
+own "no_norm_calibration" block. Confirmed live: Qwen2.5-7B-Instruct Q4_K_M's guard-threshold calibration
+fires "violence" at layer 14 (guard_threshold_calibration.json), but neither VALIDATED_MEDIAN_RESID_NORM
+(only 16/21/25) nor a per-model concept_dial_calibration.json (none exists at all under this model's
+~/.clozn/models/<sha>/ as of this pass) covers layer 14 on this model -- so every real fire on this model/
+concept hits this exact gap. It closes the moment someone runs scripts/calibration/
+concept_dial_autocalibrate.py (--layers 14, or the model's other fitted layers) against a live engine with
+this model loaded: it measures median_resid_norm (and a usable dir(c) scale range) per layer and writes
+~/.clozn/models/<model_sha256>/concept_dial_calibration.json via concept_dir.save_concept_dial_calibration
+-- ConceptSteer reads it automatically the next time it's constructed, no code change needed.
+
+Before this update, that failure was an uncaught RuntimeError inside build_counter(), propagating out of
+run_guarded_generation and guarded_chat_completion into clozn.server.app's top-level dispatcher guard
+(commit 509dc2b) as a bare 500 -- the WHOLE reply lost (already-generated chunks discarded) over one
+concept's missing SCALE calibration, even though its dir(c) DIRECTION was perfectly fine.
+
+RESOLUTION: this is a MID-GENERATION failure, not a setup-time one -- by the time it happens, real tokens
+already exist, so refusing the whole request is no longer free the way it is at setup. GUARD_CAP_NOTE
+already establishes this module's answer to "the guard can't do everything it promised for the rest of
+this reply": say so honestly and keep going, never silently and never by crashing. run_guarded_generation
+now catches build_counter()'s exception PER FIRE: the fire is still recorded (never dropped from the
+receipt), with `counter_applied: false` and `counter_error` set to the real underlying message, and the
+flagged chunk rides UNCORRECTED into the reply exactly as it would without a guard at all -- the caller
+learns the guard SAW the content and could NOT counter-steer it, and why. This does NOT contradict
+FAIL-CLOSED DECISION's rationale above: that section's concern is a SILENT pass (a caller believing they
+got a guarded reply when they actually got an ordinary one, with nothing telling them so);
+`counter_applied: false` is the opposite of silent. FAIL-CLOSED DECISION's outright-refusal still governs
+every SETUP-time resolution failure (dir(c) itself unbuildable, no valid layer at all) -- those refuse
+before any token is generated, where refusing costs nothing; this is the one narrow case that cannot be
+caught at setup (see above) and must be handled once generation is already in flight.
+
+===============================================================================================
 SCOPE LIMITS OF THIS FIRST CUT (said honestly, not silently)
 ===============================================================================================
   * STREAMING IS DEFERRED. Guarded generation only supports the non-streaming
@@ -215,6 +255,21 @@ UNCALIBRATED_NOTE = (
     "is annotated (its observed activation is still reported) but cannot trigger a re-steer, since acting "
     "on an arbitrary threshold over a raw logit would be closer to noise than signal. Run "
     "scripts/calibration/guard_signal_calibrate.py against this exact model to calibrate it."
+)
+
+# See the module docstring's 2026-07-25 "counter-injection can fail MID-GENERATION" section: a calibrated
+# concept's dir(c) DIRECTION can build fine at setup while its SCALE (median-residual-norm) is missing for
+# this layer -- discovered only when build_counter() actually calls steer_toward() for a real fire. The
+# fire is still recorded (never dropped); this canned note is the RECEIPT-LEVEL flag that at least one fire
+# below has counter_applied: false -- the per-fire counter_error carries the real, specific message.
+GUARD_COUNTER_FAILURE_NOTE = (
+    "at least one fire below could not be counter-steered: the guard detected a guarded concept's "
+    "disposition crossing its calibrated threshold, but building the corrective counter-direction failed "
+    "for that specific fire (see each fire's own 'counter_error') -- that flagged chunk was NOT corrected "
+    "and rode into the reply exactly as originally generated. This is a per-fire degrade, not a guard "
+    "failure or a silent pass: the request was not refused and the reply was not aborted; run "
+    "scripts/calibration/concept_dial_autocalibrate.py against this model/layer to close the gap (see the "
+    "module docstring)."
 )
 
 # -- opt-in wiring -----------------------------------------------------------------------------------
@@ -642,6 +697,13 @@ class GuardFiring:
     threshold: float
     calibrated: bool = True   # only correctable (calibrated) concepts can ever fire -- see the module
                              # docstring's UNCALIBRATED CONCEPTS DO NOT FIRE section
+    # See the module docstring's 2026-07-25 "counter-injection can fail MID-GENERATION" section: the guard
+    # DETECTED this fire either way (it is always recorded), but the corrective counter-direction may have
+    # failed to build for THIS specific fire -- counter_applied=False + counter_error is the honest record
+    # of that, instead of a crash or a silently-uncorrected chunk. counter_applied defaults True (a normal
+    # fire) so every existing caller/test that only ever saw successful fires is unaffected.
+    counter_applied: bool = True
+    counter_error: Optional[str] = None
 
     def as_dict(self) -> dict:
         return {
@@ -649,6 +711,7 @@ class GuardFiring:
             "concept": self.concept, "pre_activation": self.pre_activation,
             "post_activation": self.post_activation, "counter_strength": self.counter_strength,
             "layer": self.layer, "threshold": self.threshold, "calibrated": self.calibrated,
+            "counter_applied": self.counter_applied, "counter_error": self.counter_error,
         }
 
 
@@ -673,7 +736,10 @@ def run_guarded_generation(
     build_counter(concept: str) -> Any
         the corrective payload for one concept (production: ConceptSteer.steer_toward's returned dict) --
         opaque here, passed straight through to `generate_chunk`'s `counter=`. Only ever called for a
-        concept in `correctable_concepts`.
+        concept in `correctable_concepts`. MAY RAISE (production: a calibrated concept's dir(c) direction
+        built fine at setup but its median-residual-norm SCALE is missing for this layer -- see the module
+        docstring's 2026-07-25 "counter-injection can fail MID-GENERATION" section): this loop catches
+        that per fire rather than letting it escape -- see the fire-handling below.
 
     `correctable_concepts`: the subset of `concepts` eligible to actually FIRE a correction (calibrated at
     the polled layer -- see the module docstring's UNCALIBRATED CONCEPTS DO NOT FIRE section). A concept
@@ -725,17 +791,33 @@ def run_guarded_generation(
         if fired_concept is not None:
             pre = activations.get(fired_concept)
             if len(fires) < max_fires:
-                counter = build_counter(fired_concept)
-                corrected = generate_chunk(prompt_so_far, this_chunk, counter=counter)
-                post_activations = read_disposition(prompt_so_far + corrected) or {}
-                _note_observed(post_activations)
-                post = post_activations.get(fired_concept)
+                # HONEST DEGRADE (module docstring, 2026-07-25 "counter-injection can fail MID-GENERATION"):
+                # build_counter() can raise even for a concept that resolved fine at setup (its dir(c)
+                # DIRECTION was buildable; its scale/coef was not). The fire is ALWAYS recorded below --
+                # only whether a correction was actually applied differs. Never a crash, never a silent
+                # drop, never a fabricated correction.
+                counter_error = None
+                try:
+                    counter = build_counter(fired_concept)
+                except Exception as exc:
+                    counter = None
+                    counter_error = str(exc)
+                if counter is not None:
+                    corrected = generate_chunk(prompt_so_far, this_chunk, counter=counter)
+                    post_activations = read_disposition(prompt_so_far + corrected) or {}
+                    _note_observed(post_activations)
+                    post = post_activations.get(fired_concept)
+                    piece = corrected
+                    counter_applied = True
+                else:
+                    post = None            # no corrected regeneration happened -- nothing new to read
+                    counter_applied = False
                 fires.append(GuardFiring(
                     chunk_index=chunk_index, token_position=token_position, concept=fired_concept,
                     pre_activation=pre, post_activation=post, counter_strength=counter_strength,
                     layer=layer, threshold=thresholds.get(fired_concept, DEFAULT_THRESHOLD),
+                    counter_applied=counter_applied, counter_error=counter_error,
                 ))
-                piece = corrected
             else:
                 cap_reached = True
 
@@ -788,7 +870,12 @@ def build_receipt(result: dict, spec: dict, *, layer: int, layer_source: str, to
     "layer", "threshold", "trigger_ids", "trigger_pieces", "max_observed_activation", "note", and (when
     calibrated) "catch"/"fp"/"n_battery"/"calibration_note"}} -- exactly the "calibrated: bool, the layer
     actually used, the threshold used, and (when calibrated) the trigger representation" this receipt is
-    required to carry per concept."""
+    required to carry per concept.
+
+    `counter_failure_note` (2026-07-25) rides whenever any fire below has counter_applied: false -- see
+    the module docstring's "counter-injection can fail MID-GENERATION" section; each fire's own
+    counter_error still carries the specific message, this is just the receipt-level flag that at least
+    one exists, so a caller scanning only top-level fields still can't miss it."""
     max_observed = result.get("max_observed_activation") or {}
     concepts_receipt = {}
     for concept in spec["concepts"]:
@@ -830,6 +917,8 @@ def build_receipt(result: dict, spec: dict, *, layer: int, layer_source: str, to
     }
     if result["cap_reached"]:
         receipt["cap_note"] = GUARD_CAP_NOTE
+    if any(not f.get("counter_applied", True) for f in result["fires"]):
+        receipt["counter_failure_note"] = GUARD_COUNTER_FAILURE_NOTE
     return receipt
 
 
@@ -923,12 +1012,17 @@ def guarded_chat_completion(handler, messages: list, *, model: str, max_tokens: 
                for concept in spec["concepts"]}
 
     def build_counter(concept: str):
+        """Raises on failure -- CAUGHT PER FIRE by run_guarded_generation, never crashes the request (see
+        the module docstring's 2026-07-25 "counter-injection can fail MID-GENERATION" section). A concept
+        that resolved fine at setup (resolve_guard_signals only proves its dir(c) DIRECTION builds, via
+        compute()) can still fail HERE if its median-residual-norm SCALE is missing for this layer --
+        ConceptSteer.steer_toward's own "no_norm_calibration" block. That is a real, foreseeable gap on a
+        model/layer with no concept_dial_calibration.json (see the module docstring), not a sign of
+        internal corruption -- it no longer needs to look like one."""
         corrected = concept_steer.steer_toward(concept, spec["counter_strength"], layer=layer)
         if not corrected.get("ok"):
-            # A build that succeeded at setup (resolve_guard_signals) but fails now is a genuine internal
-            # inconsistency, not a normal degrade path -- surface it rather than silently steering nothing.
             raise RuntimeError(
-                f"counter-direction for {concept!r} became unavailable mid-generation: {corrected.get('note')}"
+                f"counter-direction for {concept!r} unavailable at layer {layer}: {corrected.get('note')}"
             )
         return corrected
 
