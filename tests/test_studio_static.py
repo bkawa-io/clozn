@@ -95,6 +95,32 @@ class StudioStaticTests(unittest.TestCase):
                 self.assertTrue(handled, f"{resolved} (from {ref}) is not served by static.try_get")
                 self.assertEqual(sent[0], 200, f"{resolved} did not return 200")
 
+    def test_the_casting_is_served_and_self_contained(self):
+        """The casting is the project's art half, and it has no callers -- which is exactly how it got
+        deleted once: it lived inside the studio/app/ shell, and when that shell was retired the
+        "does anything break if this goes?" check came back clean, because nothing imports art.
+
+        This test IS its caller. It fails if the casting stops being served, so the next frontend
+        retirement cannot quietly take it along. Kept deliberately strict about the entry point and
+        its module graph; the demo page's one dangling href (casting-optics.css, never committed) is
+        pre-existing and not asserted on.
+        """
+        handled, sent = _serve("/casting")
+        self.assertTrue(handled, "/casting is not routed")
+        self.assertEqual(sent[0], 302)
+        self.assertEqual(sent[3].get("Location"), static_routes.CASTING_INDEX)
+
+        handled, sent = _serve(static_routes.CASTING_INDEX)
+        self.assertTrue(handled, f"{static_routes.CASTING_INDEX} is not served")
+        self.assertEqual(sent[0], 200)
+
+        # the module graph the entry point actually loads
+        for module in ("/casting/casting.mjs", "/casting/casting-optics.mjs", "/casting/tokens.css"):
+            with self.subTest(module=module):
+                handled, sent = _serve(module)
+                self.assertTrue(handled, f"{module} is not served")
+                self.assertEqual(sent[0], 200, f"{module} did not return 200")
+
     def test_the_retired_shell_is_gone(self):
         """studio/app/ was the previous frontend. Its absence is the point of the cutover; if it
         reappears, two apps are shipping and "/" is ambiguous again."""

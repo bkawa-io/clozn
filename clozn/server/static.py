@@ -23,6 +23,16 @@ from clozn.server.config import DEMO
 # the app loads a blank page with two 404s. Keep them in sync.
 APP_INDEX = "/next/index.html"
 
+# The casting: the project's art half -- a live-fed, forkable, WebGL-shaded rendering, kept because
+# clozn is an art project as much as a science one.
+#
+# It lives at its OWN url under studio/casting/, deliberately not inside any frontend. It was
+# previously a set of files inside the studio/app/ shell, and when that shell was retired the casting
+# went with it -- deleted as collateral, because the safety check asked only "does anything BREAK if
+# this goes?" (no tests pinned it, no routes called it) and art has no callers. Standalone is what
+# makes that mistake unrepeatable: retiring the next frontend cannot take it along.
+CASTING_INDEX = "/casting/casting-demo.html"
+
 
 def try_get(handler, path):
     """Studio static GETs: "/", "/index.html", "/next", "/next/" (and the legacy "/app", "/app/")
@@ -45,6 +55,9 @@ def try_get(handler, path):
     """
     if path in ("/", "/index.html", "/next", "/next/", "/app", "/app/"):
         handler._send(302, "", "text/plain; charset=utf-8", {"Location": APP_INDEX})
+        return True
+    if path in ("/casting", "/casting/"):
+        handler._send(302, "", "text/plain; charset=utf-8", {"Location": CASTING_INDEX})
         return True
     if path.endswith((".html", ".css", ".js", ".mjs")):
         root = os.path.abspath(DEMO)
