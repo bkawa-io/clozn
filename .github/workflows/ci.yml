@@ -3,8 +3,7 @@ name: CI
 # Monorepo CPU lanes (Roadmap 0.8). Independent gates, all CPU:
 #   cpp     — the backend-free engine (scheduler + runtime), built with gcc + ctest.
 #   python  — the real product suite (`tests/` + `clozn/`, 1678+ tests) as the primary gate,
-#             plus the lab goldens (real tiny checkpoint) and the kernel's CPU reference.
-#             GPU-only / GGML tests are out of scope here (no GPU runner).
+#             plus the kernel's CPU reference. GPU-only / GGML tests are out of scope here (no GPU runner).
 #   packaging — clean-room install proof: build the wheel with the root pyproject.toml, install it into a
 #             brand-new venv, and prove `import clozn` / `clozn version` / `clozn doctor` all work outside
 #             this checkout (no repo-path hacks). See scripts/release/clean_room_install_test.py.
@@ -34,7 +33,7 @@ jobs:
         run: ctest --test-dir engine/core/build-cpu --output-on-failure
 
   python:
-    name: product suite + lab goldens + kernel reference
+    name: product suite + kernel reference
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,33 +43,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Install CPU torch + the version-pinned golden deps
-        # Pinned to the environment the open-dCoder real-checkpoint goldens were generated against:
-        # library drift can shift a logit enough to flip a near-tie pick (the seam's invariant 3).
-        # The deterministic FakeAdapter oracle is version-independent and stays strict regardless.
-        #
-        # This one install also covers the product suite below: `clozn/server/config.py` puts
-        # `engine/lab` on sys.path so `clozn.substrates.denoise` (imported transitively by
-        # `clozn.server.app`) can `import cloze_lab` without a separate product-only dependency set.
+      - name: Install CPU torch + the pinned deps
         # Verified empirically (clean venv): pytest/numpy/torch/transformers is the full minimal set
         # for `tests/ clozn/ -q` -- no other runtime dependency is required.
         run: |
           python -m pip install --upgrade pip
           pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
-          pip install -e "engine/lab[dev]"
           pip install "transformers==4.57.6" "tokenizers==0.22.2" "numpy==2.4.6" \
             "openai==2.46.0" "ollama==0.6.2"
       - name: Install pinned official JavaScript client
         run: npm ci --prefix tests/clients
-      - name: Cache the open-dCoder checkpoint
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface
-          key: hf-open-dcoder-05b
       - name: Product suite — the real clozn CLI + server tests (primary gate)
         run: pytest tests/ clozn/ -q
-      - name: Lab goldens (FakeAdapter exact + open-dCoder within epsilon; Dream/LLaDA auto-skip)
-        run: pytest engine/lab/tests -q
       - name: Kernel — CPU reference parity vs the lab
         # Path fixed: the kernel moved from kernels/ to engine/kernels/ (reorg stage 5) and its test
         # file was later renamed test_reference.py -> test_confidence_select_reference.py.

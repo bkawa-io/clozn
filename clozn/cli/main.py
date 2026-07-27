@@ -148,7 +148,7 @@ def build_parser():
     pst.add_argument("--port", type=int, default=0); pst.add_argument("--open", action="store_true", help="open the UI in your browser")
     pst.set_defaults(fn=cmd_studio)
     plab = sub.add_parser("lab", help="launch an optional PyTorch workbench (never a product API)")
-    plab.add_argument("substrate", choices=("qwen", "dream"))
+    plab.add_argument("substrate", choices=("qwen",))
     plab.add_argument("--port", type=int, default=0)
     plab.add_argument("--open", action="store_true", help="open the workbench in your browser")
     plab.set_defaults(fn=cmd_lab)

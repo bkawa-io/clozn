@@ -17,13 +17,9 @@ if "clozn.server.app" not in sys.modules:
     os.environ.pop("CLOZN_ENGINE_PORT", None)
     os.environ["CLOZN_RUNTIME_KIND"] = "lab"
 
-# The lab -- and ONLY the lab -- needs the PyTorch research deps reachable: engine/lab so the Dream
-# substrate can `import cloze_lab`, plus the HF hub symlink workaround. These used to load at PRODUCT
-# import time (clozn/server/config.py); they moved here so a `clozn serve` process never pulls them in.
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-_ENGINE_LAB = os.path.join(_REPO_ROOT, "engine", "lab")
-if _ENGINE_LAB not in sys.path:
-    sys.path.insert(0, _ENGINE_LAB)
+# The lab -- and ONLY the lab -- needs the HF hub symlink workaround (Windows checkouts without symlink
+# privilege). This used to load at PRODUCT import time (clozn/server/config.py); it moved here so a
+# `clozn serve` process never pulls it in.
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS", "1")
 
 from clozn.server import app as ctx
@@ -65,7 +61,7 @@ def make_lab_handler(sub=None, subname=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Clozn's optional PyTorch workbench")
-    parser.add_argument("substrate", choices=("qwen", "dream"))
+    parser.add_argument("substrate", choices=("qwen",))
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8090)
     args = parser.parse_args(argv)
@@ -73,8 +69,8 @@ def main(argv=None):
     os.environ["CLOZN_RUNTIME_KIND"] = "lab"   # process env (memory_mode.set_mode reads it); NOT a product
     #                                            module global -- the substrate/kind are injected below.
     print(f"clozn lab: loading {args.substrate} ...", flush=True)
-    from clozn.lab.substrates import QwenSubstrate, DreamSubstrate
-    sub = QwenSubstrate() if args.substrate == "qwen" else DreamSubstrate()
+    from clozn.lab.substrates import QwenSubstrate
+    sub = QwenSubstrate()
     server = ThreadingHTTPServer((args.host, args.port), make_lab_handler(sub, args.substrate))
     print(f"\n  Clozn lab -> http://{args.host}:{args.port}/ ({args.substrate})\n", flush=True)
     server.serve_forever()

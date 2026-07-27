@@ -24,7 +24,6 @@ def main():
     (which would abort the collector). Run it directly for the smoke test; see the module docstring.
     """
     sys.path.insert(0, os.path.dirname(HERE))                          # repo root, for `from clozn import ...`
-    sys.path.insert(0, os.path.join(HERE, "..", "engine", "lab"))      # cloze_lab (dream substrate)
     sys.path.insert(0, os.path.join(HERE, "..", "engine", "client"))   # cloze_engine SDK
 
     _checks = []
@@ -41,18 +40,15 @@ def main():
     ok("product gateway import does not load torch", "torch" not in sys.modules)
 
     # Lab adapters now live in clozn/lab/substrates.py -- the product gateway must NOT expose them...
-    ok("product gateway does not expose lab substrates",
-       not hasattr(cs, "QwenSubstrate") and not hasattr(cs, "DreamSubstrate"))
+    ok("product gateway does not expose lab substrates", not hasattr(cs, "QwenSubstrate"))
     # ...and importing them stays Torch-free (optional deps load lazily, only on instantiation).
     from clozn.lab import substrates as lab_subs
     ok("lab substrate import stays torch-free", "torch" not in sys.modules)
     ok("QwenSubstrate(Substrate)", issubclass(lab_subs.QwenSubstrate, cs.Substrate))
-    ok("DreamSubstrate(Substrate)", issubclass(lab_subs.DreamSubstrate, cs.Substrate))
     ok("QwenSubstrate: chat + chat_stream + _gen + handle",
        has_all(lab_subs.QwenSubstrate, ("chat", "chat_stream", "_gen", "handle")))
-    ok("DreamSubstrate: _gen + handle", has_all(lab_subs.DreamSubstrate, ("_gen", "handle")))
 
-    # --- steering: the tone dials (AR + diffusion) -------------------------------------------------
+    # --- steering: the tone dials (AR) --------------------------------------------------------------
     import clozn.behavior.steering as steering
 
     ok("10 base tone axes", len(steering.AXES) == 10)
@@ -65,13 +61,6 @@ def main():
         ok("SteeringControl: compute/set/engage/save_state/load_state",
            has_all(steering.SteeringControl,
                    ("compute", "set", "engage", "disengage", "save_state", "load_state")))
-        ok("DreamSteering(SteeringControl)", issubclass(steering.DreamSteering, steering.SteeringControl))
-
-        import clozn.lab.substrates.dream_memory as dream_memory
-        ok("DreamMemory: consolidate/denoise/save/load/reset",
-           has_all(dream_memory.DreamMemory, ("consolidate", "denoise", "save", "load", "reset")))
-        ok("PrefixAdapter: forward + config",
-           has_all(dream_memory.PrefixAdapter, ("forward", "encode", "decode")))
 
         import clozn.lab.substrates.self_teach as self_teach_server
         ok("SelfTeach: say/consolidate/save/load/_generate",
@@ -83,9 +72,6 @@ def main():
 
         from clozn.readouts import sae7b
         ok("sae7b: GpuSAE/load7b/feats7b", has_all(sae7b, ("GpuSAE", "load7b", "feats7b")))
-
-        import clozn.lab.substrates.denoise as denoise_server
-        ok("denoise_server.trace_for", hasattr(denoise_server, "trace_for"))
     else:
         print("  SKIP  optional PyTorch lab modules (install lab dependencies to exercise)", flush=True)
 

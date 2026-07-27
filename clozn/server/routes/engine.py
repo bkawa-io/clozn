@@ -1,12 +1,11 @@
-"""Engine-backed chat + steering + model routing, and the two studio chat surfaces that log a run
-(POST /say for the HF/qwen memory model, POST /denoise for the Dream diffusion window). `/engine/*` here
-covers WRITE/generation calls (as opposed to the pure readouts in routes/readouts.py): observe (edit a
-residual, watch the prediction move), deprecated tone-dial compatibility aliases, and
-native GGUF chat with prompt-card memory. `/say` and
-`/denoise` dispatch to whichever substrate is active (SUB.handle) and additionally log the run -- unlike
-the fully generic SUB.handle(path, body) fallback (still in clozn.server.app's do_POST), these two shape
-a specific response AND capture a trace/memory record for the Run Inspector. Mechanical extraction of the
-matching branches out of do_POST; behavior unchanged. -> engine chat / substrate calls / model routing.
+"""Engine-backed chat + steering + model routing, and the studio chat surface that logs a run
+(POST /say for the HF/qwen memory model). `/engine/*` here covers WRITE/generation calls (as opposed to
+the pure readouts in routes/readouts.py): observe (edit a residual, watch the prediction move), deprecated
+tone-dial compatibility aliases, and native GGUF chat with prompt-card memory. `/say` dispatches to
+whichever substrate is active (SUB.handle) and additionally logs the run -- unlike the fully generic
+SUB.handle(path, body) fallback (still in clozn.server.app's do_POST), this shapes a specific response AND
+captures a trace/memory record for the Run Inspector. Mechanical extraction of the matching branches out
+of do_POST; behavior unchanged. -> engine chat / substrate calls / model routing.
 
 GET/POST /sampling/mode (REPRODUCE_AND_PROVE_PLAN S5): the interactive-chat sampling settings -- on/off +
 temperature/top_p/top_k/repeat_penalty -- read by EngineSubstrate.chat/chat_stream on every turn. Mirrors
@@ -250,28 +249,6 @@ def try_post(h, p, body):
         r["reply"] = sanitize_reply(
             raw_reply, implicit_open=prompt_opens_think(memout.get("final_prompt"))
         ).public_text
-        h._json(200, r)
-        return True
-    if p == "/denoise":   # Dream diffusion window -> capture it as a run
-        if not (ctx.active_sub(h) and getattr(ctx.active_sub(h), "handle", None)):
-            h._json(409, {"error": f"'{p}' isn't served by the '{ctx.active_subname(h)}' substrate",
-                         "need": "dream", "active": ctx.active_subname(h)})
-            return True
-        prompt = str(body.get("prompt", ""))
-        t0 = time.time()
-        try:
-            r = ctx.active_sub(h).handle(p, body)
-        except Exception as e:
-            h._log_run("denoise", [{"role": "user", "content": prompt}], "",
-                      "clozn-dream", t0, error=str(e))
-            h._json(500, {"error": f"{type(e).__name__}: {e}"})
-            return True
-        if r is None:
-            h._json(409, {"error": f"'{p}' isn't served by the '{ctx.active_subname(h)}' substrate",
-                         "need": "dream", "active": ctx.active_subname(h)})
-            return True
-        h._log_run("denoise", [{"role": "user", "content": prompt}],
-                  str(r.get("final_text", "")), "clozn-dream", t0)
         h._json(200, r)
         return True
     return False

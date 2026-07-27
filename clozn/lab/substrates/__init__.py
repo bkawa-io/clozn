@@ -1,21 +1,21 @@
-"""Model substrate adapters: PyTorch lab substrates -- Qwen-7B (AR) and Dream-7B (diffusion) workbenches.
+"""Model substrate adapters: PyTorch lab substrates -- the Qwen-7B (AR) workbench.
 
 This package holds both halves of the lab's torch-loading surface:
-  * the raw building blocks, one per submodule (qwen.py, dream_memory.py, denoise.py, self_teach.py) --
-    each importable on its own, torch-heavy internals lazily loaded inside their own functions/classes;
-  * QwenSubstrate / DreamSubstrate / _InternalizedRetrain, defined directly in this __init__ (folded in
-    from the former clozn/lab/substrates.py -- a package and a same-named sibling module can't coexist in
-    the same parent package; the package wins the import and the module becomes silently unreachable, so
-    the fix is one file, not two), the classes that compose those building blocks into the shared
-    Substrate contract (memory cards + tone dials) clozn/lab/app.py actually serves.
+  * the raw building blocks, one per submodule (qwen.py, self_teach.py) -- each importable on its own,
+    torch-heavy internals lazily loaded inside their own functions/classes;
+  * QwenSubstrate / _InternalizedRetrain, defined directly in this __init__ (folded in from the former
+    clozn/lab/substrates.py -- a package and a same-named sibling module can't coexist in the same parent
+    package; the package wins the import and the module becomes silently unreachable, so the fix is one
+    file, not two), the classes that compose those building blocks into the shared Substrate contract
+    (memory cards + tone dials) clozn/lab/app.py actually serves.
 
 Relocated out of clozn/server/substrates.py so the product package physically cannot reach a Torch
-adapter. QwenSubstrate/DreamSubstrate are instantiated only by `clozn lab` (clozn/lab/app.py); the product
-gateway serves EngineSubstrate exclusively. torch/transformers/cloze_lab stay lazily imported inside
-methods (including the submodule imports below -- self-referential but safe: they're all in-function, so
-by the time any of them run, this package's own __init__ has already finished executing and is cached in
-sys.modules; there is no circular import at load time), so importing this module is cheap -- but a
-product process never imports it at all.
+adapter. QwenSubstrate is instantiated only by `clozn lab` (clozn/lab/app.py); the product gateway serves
+EngineSubstrate exclusively. torch/transformers stay lazily imported inside methods (including the
+submodule imports below -- self-referential but safe: they're all in-function, so by the time any of them
+run, this package's own __init__ has already finished executing and is cached in sys.modules; there is no
+circular import at load time), so importing this module is cheap -- but a product process never imports
+it at all.
 
 They still lean on the shared studio surface: the Substrate base (memory cards + tone dials) and the
 prompt-memory / generation-meta helpers on clozn.server.app (`ctx`). That helper web is shared domain
@@ -50,8 +50,8 @@ def _render_final_prompt(memory, messages):
 
 class _InternalizedRetrain:
     """The internalized soft-prefix RETRAIN machinery, moved here VERBATIM out of clozn.server.app so the
-    PRODUCT module carries none of it. Mixed into QwenSubstrate/DreamSubstrate (before Substrate in the
-    MRO, so these OVERRIDE the base's trivial prompt-only versions).
+    PRODUCT module carries none of it. Mixed into QwenSubstrate (before Substrate in the MRO, so this
+    OVERRIDES the base's trivial prompt-only versions).
 
     Mutating a memory card in internalized mode retrains the soft-prefix via consolidate() -- ~4-5 min on
     the 4-bit 7B -- so we must NOT block the HTTP handler: the card STATUS flip (fast) stays synchronous
@@ -452,52 +452,3 @@ class QwenSubstrate(_InternalizedRetrain, Substrate):
 
     def state(self):
         return self.memory.state()
-
-
-class DreamSubstrate(_InternalizedRetrain, Substrate):
-    """Dream-7B diffusion: the denoise window, plus the SAME trait-card memory and tone dials as Qwen."""
-    name = "dream"
-
-    def __init__(self):
-        from cloze_lab.cli import build_adapter
-        from clozn.lab.substrates.denoise import trace_for
-        from clozn.behavior.steering.dream_adapter import DreamSteering
-        from clozn.lab.substrates.dream_memory import DreamMemory
-        self.adapter = build_adapter("dream", device="cuda", quant="nf4")
-        self._trace = trace_for
-        self.steer = DreamSteering(self.adapter)            # tone dials on the diffusion model
-        self._steer_ready, self._steer_info, self._steer_lock = False, {}, threading.Lock()
-        self._pers_steer = ctx._pers("studio_dream_personality.json")
-        self.steer.load_state(self._pers_steer)
-        self.dmem = DreamMemory(self.adapter,               # diffusion-native memory (trained soft prefix)
-                                persist_path=ctx._pers("studio_dream_memory.pt"))
-        self._mem = self.dmem
-
-    def handle(self, path, body):
-        if path == "/denoise":
-            prompt = str(body.get("prompt", ""))[:300]
-            with self._train_lock:                             # wait out a background retrain (it moves dmem.prefix)
-                self.steer.engage()                        # active dials steer every denoising pass
-                try:
-                    ad = self.adapter
-                    # In PROMPT mode the trained dream prefix is NOT applied: cards may have been edited
-                    # instantly (no consolidate), so the prefix can be stale vs the cards -- and denoise
-                    # is a raw completion window with no system slot for the block. Memory simply doesn't
-                    # ride here in prompt mode (honest omission beats a stale injection).
-                    if self.dmem.prefix is not None and ctx._memory_mode() != "prompt":
-                        from clozn.lab.substrates.dream_memory import PrefixAdapter   # memory present -> inject into the REAL scheduler
-                        ad = PrefixAdapter(self.adapter, self.dmem.prefix.detach())
-                    return self._trace(ad, prompt)         # the cloze_lab scheduler (+ the steering hook)
-                finally:
-                    self.steer.disengage()
-        if path.startswith("/memory/"):
-            return self._memory(path, body)
-        if path.startswith("/steer/"):
-            return self._steer(path, body)
-        return None
-
-    def _gen(self, prompt):                                # base denoise final text for the /steer/check A/B
-        return self._trace(self.adapter, str(prompt)[:200])["final_text"]
-
-    def state(self):
-        return {"dials": self.steer.active(), "cards": self.dmem.rules}

@@ -6,7 +6,6 @@ __all__ = [
     "AXES",
     "ConceptSteer",
     "DEV",
-    "DreamSteering",
     "EngineSteer",
     "SEED_PROMPTS",
     "SteeringControl",
@@ -28,9 +27,6 @@ def __getattr__(name: str):
     if name in {"DEV", "SteeringControl"}:
         from .hf_adapter import DEV, SteeringControl
         return {"DEV": DEV, "SteeringControl": SteeringControl}[name]
-    if name == "DreamSteering":
-        from .dream_adapter import DreamSteering
-        return DreamSteering
     if name == "EngineSteer":
         from .engine_adapter import EngineSteer
         return EngineSteer

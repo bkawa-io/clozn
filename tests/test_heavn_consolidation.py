@@ -17,7 +17,5 @@ def test_heavn_product_entrypoint_remains_packaged():
     assert (STUDIO / "heavn" / "app.mjs").is_file()
 
 
-def test_lab_denoise_page_has_no_links_to_cut_legacy_assets():
-    denoise = (STUDIO / "denoise.html").read_text(encoding="utf-8")
-    for dead in ("app.html", "brain.html", "engine.html", "pages/"):
-        assert dead not in denoise
+def test_diffusion_lab_denoise_page_is_removed():
+    assert not (STUDIO / "denoise.html").exists()
