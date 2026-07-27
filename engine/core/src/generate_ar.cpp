@@ -1,4 +1,4 @@
-#include "cloze/generate_ar.hpp"
+#include "clozn/generate_ar.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -10,10 +10,10 @@
 #include <string>
 #include <utility>
 
-#include "cloze/sample.hpp"
-#include "cloze/whitebox.hpp"  // features_from / lens_from (shared with the diffusion loop)
+#include "clozn/sample.hpp"
+#include "clozn/whitebox.hpp"  // features_from / lens_from (shared with the diffusion loop)
 
-namespace cloze {
+namespace clozn {
 
 namespace {
 
@@ -488,4 +488,4 @@ std::vector<BranchResult> generate_ar_branched(
     return results;
 }
 
-}  // namespace cloze
+}  // namespace clozn

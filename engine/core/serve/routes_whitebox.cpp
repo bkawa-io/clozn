@@ -7,7 +7,7 @@
 
 #include "server_context.hpp"
 
-namespace cloze {
+namespace clozn {
 
 namespace {
 
@@ -1114,4 +1114,4 @@ void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx) {
     });
 }
 
-}  // namespace cloze
+}  // namespace clozn

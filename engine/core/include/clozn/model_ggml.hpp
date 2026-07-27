@@ -1,6 +1,6 @@
-// cloze/model_ggml.hpp — the L0 ggml/llama.cpp ModelAdapter. This is the ONE place a model
+// clozn/model_ggml.hpp — the L0 ggml/llama.cpp ModelAdapter. This is the ONE place a model
 // backend lives on the C++ side (DESIGN invariant 1, the C++ analogue of torch living
-// only under lab/cloze_lab/models/). The scheduler/runtime never include this header.
+// only under lab/clozn_lab/models/). The scheduler/runtime never include this header.
 //
 // Diffusion forward (slice 1): load a GGUF, decode the board bidirectionally
 // (llama_set_causal_attn false), apply the Dream-family shift — logits for board position p
@@ -24,10 +24,10 @@
 #include <string>
 #include <vector>
 
-#include "cloze/model.hpp"
+#include "clozn/model.hpp"
 #include "llama.h"
 
-namespace cloze {
+namespace clozn {
 
 // The opaque KV handle threaded by the scheduler (invariant 4). The llama context holds one
 // stateful KV cache, so this is just a marker of how many board positions it now covers;
@@ -478,4 +478,4 @@ private:
     long long logits_d2h_floats_ = 0;  // logits floats copied device->host (the D2H the skip avoids)
 };
 
-}  // namespace cloze
+}  // namespace clozn

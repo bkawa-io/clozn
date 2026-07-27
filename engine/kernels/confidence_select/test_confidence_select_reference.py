@@ -3,8 +3,8 @@
 Two layers:
 
 * Self-contained unit tests of the kernel contract (shapes, greedy, top_p,
-  confidence variants, selection) — numpy only, no torch, no cloze_lab.
-* PARITY tests that import ``cloze_lab`` (TEST-ONLY) and assert the reference
+  confidence variants, selection) — numpy only, no torch, no clozn_lab.
+* PARITY tests that import ``clozn_lab`` (TEST-ONLY) and assert the reference
   reproduces ``generate.sample_candidates`` (token ids + confidences, greedy AND
   sampled, seeding both sides identically) and the ``ConfidenceTopK`` /
   ``Threshold`` selection policies exactly.
@@ -270,11 +270,11 @@ def _logits_with_max_probs(target_probs: list[float], vocab: int = VOCAB) -> np.
 
 
 # --------------------------------------------------------------------------- #
-# (f) PARITY tests against cloze_lab (TEST-ONLY imports)
+# (f) PARITY tests against clozn_lab (TEST-ONLY imports)
 # --------------------------------------------------------------------------- #
 
-from cloze_lab.generate import sample_candidates  # noqa: E402
-from cloze_lab.scheduler.policies import (  # noqa: E402
+from clozn_lab.generate import sample_candidates  # noqa: E402
+from clozn_lab.scheduler.policies import (  # noqa: E402
     Candidate,
     ConfidenceTopK,
     StepContext,

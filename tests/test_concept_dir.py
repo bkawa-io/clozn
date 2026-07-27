@@ -13,7 +13,7 @@ elsewhere; this module boots no engine):
     ../clozn-jlens-work/artifacts/dirc_selfconsistency_result.txt) -- this suite proves the CODE
     is wired right; it does not re-derive the science.
   * ConceptSteer is exercised against a FakeEngineClient (mirrors test_engine_add_custom.py's
-    _FakeEC pattern) -- no real cloze-server, no socket; FakeEngineClient now ALSO stands in for
+    _FakeEC pattern) -- no real clozn-server, no socket; FakeEngineClient now ALSO stands in for
     the engine's /jlens/unembed_row route (see its `unembed_rows` param) so the DEFAULT
     in-product path (no lab export at all) is covered without booting a real engine.
   * The FIX (engine/core/serve/routes_jlens.cpp's /jlens/unembed_row) is unit-tested for both the
@@ -83,7 +83,7 @@ def _write_unembed_fixture(tmp_path, *, d_model=32, vocab=32, seed=2):
 
 
 class FakeEngineClient:
-    """Stands in for cloze_engine.EngineClient: ConceptSteer.resolve_token_id calls
+    """Stands in for clozn_engine.EngineClient: ConceptSteer.resolve_token_id calls
     `.score(prompt=, continuation=, topk=)` (reusing /score as a tokenizer), and
     ConceptSteer.compute (via ConceptDirSource.unembed_row) calls `.unembed_row(token_id)` -- the
     NEW /jlens/unembed_row round trip that closed the W_U blocker (see the module docstring).

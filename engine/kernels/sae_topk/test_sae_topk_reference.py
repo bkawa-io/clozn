@@ -1,7 +1,7 @@
 """Tests for the SAE-sparsify top-k CPU reference (ROADMAP 3.3).
 
 Self-contained unit tests of the kernel contract (shapes, top-k correctness, tie rule,
-ReLU gating, k clamping, the dense round-trip) — numpy only, no torch, no cloze_lab. These
+ReLU gating, k clamping, the dense round-trip) — numpy only, no torch, no clozn_lab. These
 pin the semantics the CUDA kernel must reproduce; validate.py then proves the kernel matches.
 
 Run (from this directory, with the project venv active):

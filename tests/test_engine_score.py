@@ -2,7 +2,7 @@
 reachable from Python and shaped for the receipts stack (rederive.py, forced receipts -- not yet
 built here). Two layers under test:
 
-  * cloze_engine.EngineClient.score -- the thin SDK wrapper: request-body construction (prompt vs
+  * clozn_engine.EngineClient.score -- the thin SDK wrapper: request-body construction (prompt vs
     prompt_ids precedence, continuation_ids vs continuation precedence, steer/steer_vec passthrough).
   * clozn_server.EngineSubstrate.score_tokens -- assembles the prompt EXACTLY like chat() does
     (_inject_block + _qwen_tmpl) and the steer_vec EXACTLY like chat() does (self.steer.steer_vector),
@@ -12,8 +12,8 @@ built here). Two layers under test:
 
 Model-free throughout: EngineClient._post and EngineSubstrate.engine/.steer are faked (no C++ server, no
 GPU), mirroring test_engine_layers.py / test_engine_substrate.py's own conventions. The C++ /score route
-itself (engine/core/serve/cloze_server.cpp) and its self-consistency-vs-generation acceptance are
-validated separately against a live cloze-server (not exercised by this offline suite).
+itself (engine/core/serve/clozn_server.cpp) and its self-consistency-vs-generation acceptance are
+validated separately against a live clozn-server (not exercised by this offline suite).
 """
 import os
 import sys
@@ -23,7 +23,7 @@ REPO_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, os.path.join(REPO_ROOT, "engine", "client"))
 
-from cloze_engine import EngineClient          # noqa: E402
+from clozn_engine import EngineClient          # noqa: E402
 from clozn.server import app as cs           # noqa: E402
 
 
@@ -99,7 +99,7 @@ def test_score_returns_the_raw_engine_reply(monkeypatch):
 # ==================================================================================== EngineSubstrate.score_tokens
 
 class _FakeScoreEngine:
-    """Stands in for cloze_engine.EngineClient inside EngineSubstrate.score_tokens: .score() plus
+    """Stands in for clozn_engine.EngineClient inside EngineSubstrate.score_tokens: .score() plus
     .apply_template() (score_tokens now templates the prompt via the engine's per-model chat template,
     not a hardcoded Qwen string). This fake mimics a ChatML model, so the rendered prompt carries ChatML
     markers here; on a real engine the FORMAT follows the loaded GGUF (see the live cross-model proof)."""

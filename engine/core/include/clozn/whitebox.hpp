@@ -1,4 +1,4 @@
-// cloze/whitebox.hpp — backend-free white-box read helpers (Tier 1 + 2), shared by every
+// clozn/whitebox.hpp — backend-free white-box read helpers (Tier 1 + 2), shared by every
 // generation loop. They turn one forward pass's ForwardResult into the §5.1 observation events:
 //   features_from -> StepFeatures  (concept-probe scores per active position)
 //   lens_from     -> StepLens      (logit-lens top-k candidates per requested position)
@@ -13,11 +13,11 @@
 #include <string>
 #include <vector>
 
-#include "cloze/events.hpp"  // StepFeatures, StepLens
-#include "cloze/model.hpp"   // ForwardResult
-#include "cloze/probe.hpp"   // ConceptProbes
+#include "clozn/events.hpp"  // StepFeatures, StepLens
+#include "clozn/model.hpp"   // ForwardResult
+#include "clozn/probe.hpp"   // ConceptProbes
 
-namespace cloze {
+namespace clozn {
 
 // Concept-feature event for one pass: when the adapter filled activations (emit_activations on),
 // project each active-slot hidden state onto the concept probes (training-free diff-in-means) and
@@ -100,4 +100,4 @@ inline std::optional<StepLens> lens_from(const ForwardResult& fwd, const std::ve
     return sl;
 }
 
-}  // namespace cloze
+}  // namespace clozn

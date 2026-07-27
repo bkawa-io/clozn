@@ -1,10 +1,10 @@
-// cloze_probe_sweep — sweep all layers to find the best tap for concept probes.
+// clozn_probe_sweep — sweep all layers to find the best tap for concept probes.
 // For each layer, calibrates diff-in-means probes and scores them by mean inter-class
 // separation (higher = concepts are more distinguishable at that layer).
 //
-// usage: cloze-probe-sweep <model.gguf> [--gpu-layers N] [--mask-token ID]
-#include "cloze/model_ggml.hpp"
-#include "cloze/probe.hpp"
+// usage: clozn-probe-sweep <model.gguf> [--gpu-layers N] [--mask-token ID]
+#include "clozn/model_ggml.hpp"
+#include "clozn/probe.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -16,7 +16,7 @@
 #include <string>
 #include <vector>
 
-using namespace cloze;
+using namespace clozn;
 
 static const char* token_category(const std::string& piece) {
     std::string s, low;
@@ -61,7 +61,7 @@ struct LayerScore {
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::fprintf(stderr, "usage: cloze-probe-sweep <model.gguf> [--gpu-layers N] [--mask-token ID]\n");
+        std::fprintf(stderr, "usage: clozn-probe-sweep <model.gguf> [--gpu-layers N] [--mask-token ID]\n");
         return 1;
     }
     const char* model_path = argv[1];

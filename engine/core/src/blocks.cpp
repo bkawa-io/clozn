@@ -1,12 +1,12 @@
-// blocks.cpp — implementation of cloze/blocks.hpp. BlockPlan::blocks() (the diffusion semi-AR block
+// blocks.cpp — implementation of clozn/blocks.hpp. BlockPlan::blocks() (the diffusion semi-AR block
 // partitioner) was removed with the diffusion program (THE_CUT); block_id/attention_mask survive
 // because they're still called (always with block_len=0, fully bidirectional) by the concept-probe
-// calibration's one-shot sentence read (server_shared.hpp) and cloze-probe-sweep.
-#include "cloze/blocks.hpp"
+// calibration's one-shot sentence read (server_shared.hpp) and clozn-probe-sweep.
+#include "clozn/blocks.hpp"
 
 #include <algorithm>
 
-namespace cloze {
+namespace clozn {
 
 int block_id(int pos, int prompt_len, int block_len) {
     if (pos < prompt_len) return -1;
@@ -31,4 +31,4 @@ Mask attention_mask(int working_len, int prompt_len, int block_len) {
     return m;
 }
 
-}  // namespace cloze
+}  // namespace clozn

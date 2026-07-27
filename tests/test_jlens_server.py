@@ -29,7 +29,7 @@ import clozn.runs.store as runlog                # noqa: E402
 # =========================================================== EngineSubstrate.jlens (the /jlens proxy)
 
 class FakeEngineJlens:
-    """Stands in for cloze_engine.EngineClient inside EngineSubstrate.jlens: .health() (advertises the
+    """Stands in for clozn_engine.EngineClient inside EngineSubstrate.jlens: .health() (advertises the
     jlens block) + .jlens()."""
 
     PAYLOAD = {"layer": 25, "n_tokens": 2, "tokens": ["The", " boot"],

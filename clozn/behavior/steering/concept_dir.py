@@ -8,7 +8,7 @@ product module: type ANY concept word, get a steer direction, with ZERO contrast
 calibration prompts (unlike axes.py's tone dials, which need a harvested diff-of-means over a
 whole pole pair). This module builds and caches the vector; engine_adapter.py's EngineSteer
 remains the SEPARATE diff-of-means (tone-dial) mechanism -- the two compose (both ultimately ride
-the same steer_vec/coef/layer wire contract: cloze_engine.EngineClient.intervene / .score, and
+the same steer_vec/coef/layer wire contract: clozn_engine.EngineClient.intervene / .score, and
 EngineSubstrate.chat's kw["steer_vec"]), they are not the same math.
 
 Math (identical convention to dirc.py / oracle.py -- both are lab-only and NOT imported here; the
@@ -39,7 +39,7 @@ the full [vocab, d_model] matrix (~2 GB fp32) never has to leave the engine proc
 the DEFAULT path: ConceptDirSource.unembed_row() / fetch_unembed_row_from_engine() call it, and
 ConceptSteer.compute() uses it automatically via the engine_client it already holds (for
 resolve_token_id's /score round trip) -- no extra configuration needed to make dir(c) work
-end-to-end against a running cloze-server with a J-lens sidecar loaded.
+end-to-end against a running clozn-server with a J-lens sidecar loaded.
 The OLDER lab-export path (a directory holding norm_weight.npy [d_model] fp32, lm_head_weight.npy
 [vocab, d_model] fp32, unembed_meta.json {"rms_norm_eps": eps} -- the same shape
 ../clozn-jlens-work/artifacts already has) still works and still WINS if explicitly configured
@@ -416,7 +416,7 @@ def dir_c_from_row(w_c: np.ndarray, layer: int, J_by_layer: dict, *,
 def fetch_unembed_row_from_engine(engine_client, token_id: int) -> np.ndarray:
     """The DEFAULT in-product W_U source: POST /jlens/unembed_row -> W_U[token_id], the ONE
     unembed/lm_head row dir(c) needs (see engine/core/serve/routes_jlens.cpp, added to close the
-    gap this module's BLOCKER_NOTE used to describe). `engine_client` is a cloze_engine.EngineClient
+    gap this module's BLOCKER_NOTE used to describe). `engine_client` is a clozn_engine.EngineClient
     (or anything duck-typed against its `.unembed_row(token_id) -> {"vector": [float,...], ...}`).
 
     Propagates whatever `engine_client.unembed_row` itself raises on a network/HTTP failure (e.g.
@@ -502,7 +502,7 @@ class ConceptDirSource:
         tests with no engine running. Otherwise -- the DEFAULT in-product path -- fetches the row
         from the running engine's /jlens/unembed_row via `engine_client`
         (fetch_unembed_row_from_engine); this is what makes dir(c) work with nothing but the
-        shipped J-lens sidecar + a running cloze-server, no lab export needed at all.
+        shipped J-lens sidecar + a running clozn-server, no lab export needed at all.
 
         Raises UnembedUnavailable if neither an explicit export NOR an engine_client is available.
         An engine_client that IS given but fails propagates that failure unchanged -- the caller
@@ -533,7 +533,7 @@ class ConceptSteer:
     drives -- but each direction comes from dir(c), not diff-of-means harvesting, so there is no
     pos/neg calibration step: name a concept, get a direction.
 
-    `engine_client` is a cloze_engine.EngineClient (or anything duck-typed against its
+    `engine_client` is a clozn_engine.EngineClient (or anything duck-typed against its
     `.score(prompt=, continuation=, topk=)` method, used only to resolve a concept WORD to its
     single vocab token id -- see resolve_token_id). Every product-facing method here NEVER raises;
     on any failure (an unresolvable/multi-token concept, an unfitted layer, or the unembed
@@ -606,7 +606,7 @@ class ConceptSteer:
         """Resolve a concept WORD to its single leading-space vocab token id via the engine's own
         tokenizer, reusing the EXISTING /score route (no new engine route needed): /score
         retokenizes its `continuation` text server-side and returns one entry per token (see
-        cloze_engine.EngineClient.score's docstring). dir(c) needs exactly ONE vocab row, so a
+        clozn_engine.EngineClient.score's docstring). dir(c) needs exactly ONE vocab row, so a
         multi-token word is reported as unresolvable, not silently truncated to its first piece.
 
         Returns {"ok": True, "token_id": int, "piece": str} or {"ok": False, "note": "..."} --
@@ -779,10 +779,10 @@ class ConceptSteer:
 
 # ============================================================================== CLI: --selftest / --demo
 #
-# Mirrors engine/client/cloze_engine.py's own --selftest/--demo split: --selftest is offline (no
+# Mirrors engine/client/clozn_engine.py's own --selftest/--demo split: --selftest is offline (no
 # engine, no GPU, safe as this module's default with no flags -- exercised in spirit by
 # tests/test_concept_dir.py's fixture-based self-consistency checks, just runnable standalone
-# here too). --demo is the LIVE smoke -- it needs only a running cloze-server with a J-lens
+# here too). --demo is the LIVE smoke -- it needs only a running clozn-server with a J-lens
 # sidecar loaded (`--jlens <dir>` / CLOZN_JLENS_DIR); W_U comes from that same server's
 # /jlens/unembed_row route (see the BLOCKER-AND-FIX section above), so --unembed-dir is now
 # OPTIONAL (pass it only to force the older lab-export path instead, e.g. for a model whose
@@ -830,13 +830,13 @@ def _selftest() -> int:
 
 
 def _demo(args) -> int:
-    """LIVE smoke -- deferred: needs a running cloze-server (with --jlens) and a configured unembed
+    """LIVE smoke -- deferred: needs a running clozn-server (with --jlens) and a configured unembed
     export; never invoked automatically."""
     here = os.path.dirname(os.path.abspath(__file__))
     repo_root = os.path.abspath(os.path.join(here, "..", "..", ".."))
     import sys as _sys
     _sys.path.insert(0, os.path.join(repo_root, "engine", "client"))
-    from cloze_engine import EngineClient  # local import: only the --demo path needs the engine SDK
+    from clozn_engine import EngineClient  # local import: only the --demo path needs the engine SDK
 
     ec = EngineClient(host=args.host, port=args.port)
     print(f"server: {ec.health().get('model')}")
@@ -861,7 +861,7 @@ def main(argv=None) -> int:
 
     ap = argparse.ArgumentParser(description="concept_dir.py -- any-concept dial (dir(c))")
     ap.add_argument("--selftest", action="store_true", help="offline self-consistency proof (default, safe)")
-    ap.add_argument("--demo", action="store_true", help="LIVE smoke against a running cloze-server (DEFERRED)")
+    ap.add_argument("--demo", action="store_true", help="LIVE smoke against a running clozn-server (DEFERRED)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--jlens-dir", default=None, help="default: ~/.clozn/jlens or CLOZN_JLENS_DIR")

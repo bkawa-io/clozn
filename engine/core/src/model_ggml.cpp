@@ -1,4 +1,4 @@
-#include "cloze/model_ggml.hpp"
+#include "clozn/model_ggml.hpp"
 
 #include <cmath>
 #include <cstdlib>
@@ -8,7 +8,7 @@
 
 #include "ggml-backend.h"  // ggml_backend_buffer_is_host (device-residency guard)
 
-namespace cloze {
+namespace clozn {
 
 namespace {
 // llama_backend_init/free are process-global and refcount-free; init once on first
@@ -861,7 +861,7 @@ ForwardResult GgmlAdapter::forward(const std::vector<int>& board,
                              (!boundary_needed || !boundary_row_.empty());
     const bool skip_d2h = want_device && device_confirmed_;
 
-    if (skip_d2h) llama_set_skip_raw_logits(ctx_, true);  // CLOZE PATCH: no full-vocab D2H this decode
+    if (skip_d2h) llama_set_skip_raw_logits(ctx_, true);  // CLOZN PATCH: no full-vocab D2H this decode
     decode_only(board, active_start, n);
     if (skip_d2h) llama_set_skip_raw_logits(ctx_, false);
     // When not skipped, llama copied n_outputs*vocab logits floats to host during decode.
@@ -1091,4 +1091,4 @@ std::string GgmlAdapter::decode(const std::vector<int>& ids) const {
     return model_owner_->decode(ids);
 }
 
-}  // namespace cloze
+}  // namespace clozn

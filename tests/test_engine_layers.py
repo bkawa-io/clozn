@@ -1,4 +1,4 @@
-"""harvest_layers: the per-layer activation-summary client method (cloze_engine.EngineClient) + its parsing.
+"""harvest_layers: the per-layer activation-summary client method (clozn_engine.EngineClient) + its parsing.
 
 The engine's /harvest/layers (GgmlAdapter::layer_summary) returns per-token L2 norms at EVERY layer from one
 forward -- the depth x position "MRI" map. This checks the thin client wrapper parses that shape and
@@ -10,7 +10,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "engine", "client"))
 
-from cloze_engine import EngineClient  # noqa: E402
+from clozn_engine import EngineClient  # noqa: E402
 
 
 def test_harvest_layers_parses_the_summary(monkeypatch):

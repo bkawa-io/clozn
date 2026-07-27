@@ -9,7 +9,7 @@
 
 struct llama_model;
 
-namespace cloze {
+namespace clozn {
 
 inline constexpr const char* NATIVE_CHAT_EXECUTOR_ID =
     "clozn.chat_io.atomic_executor.v1";
@@ -108,4 +108,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace cloze
+}  // namespace clozn

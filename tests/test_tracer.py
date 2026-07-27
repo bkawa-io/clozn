@@ -1,6 +1,6 @@
 """Fixture tests for clozn.analysis.tracer's pure math (no engine, no network).
 
-The engine-facing orchestration (trace()) is exercised live (it needs a running cloze-server with
+The engine-facing orchestration (trace()) is exercised live (it needs a running clozn-server with
 a J-lens sidecar); everything below is the model-free seam: ablation algebra, candidate screening,
 the noise floor / verdict rules, the unexplained-mass accounting, and joint-write grouping.
 """

@@ -1,4 +1,4 @@
-// test_sae_encoder.cpp — the engine-vs-torch parity gate for the on-device SAE readout (cloze/sae.hpp).
+// test_sae_encoder.cpp — the engine-vs-torch parity gate for the on-device SAE readout (clozn/sae.hpp).
 //
 // Two receipts, both against artifacts produced by the research-side torch oracle:
 //   1. LOAD: the exported weight dir (tools/export_sae_weights.py) loads, shapes/layer match, and
@@ -13,7 +13,7 @@
 // SKIPS (returns 0) when the weight dir is absent — CI boxes without the 0.94 GB export stay green,
 // like test_ggml_state_write without a GGUF. Runs fully on this repo's RTX 5080 box:
 //   test_sae_encoder [sae_dir] [vectors_dir]
-//   (defaults: CLOZE_SAE_DIR / CLOZE_SAE_VECTORS, then ~/.clozn/sae/andyrdt_l15[/vectors])
+//   (defaults: CLOZN_SAE_DIR / CLOZN_SAE_VECTORS, then ~/.clozn/sae/andyrdt_l15[/vectors])
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -25,9 +25,9 @@
 #include <string>
 #include <vector>
 
-#include "cloze/sae.hpp"
+#include "clozn/sae.hpp"
 
-using namespace cloze;
+using namespace clozn;
 
 namespace {
 
@@ -61,10 +61,10 @@ std::vector<T> read_bin(const std::string& path, size_t count) {
 
 int main(int argc, char** argv) {
     const std::string sae_dir =
-        argc > 1 ? argv[1] : default_dir("CLOZE_SAE_DIR", "/.clozn/sae/andyrdt_l15");
+        argc > 1 ? argv[1] : default_dir("CLOZN_SAE_DIR", "/.clozn/sae/andyrdt_l15");
     if (sae_dir.empty() || !file_exists(sae_dir + "/meta.txt")) {
         std::printf("test_sae_encoder: SKIPPED (no exported SAE at '%s'; run "
-                    "tools/export_sae_weights.py or set CLOZE_SAE_DIR)\n", sae_dir.c_str());
+                    "tools/export_sae_weights.py or set CLOZN_SAE_DIR)\n", sae_dir.c_str());
         return 0;
     }
 
@@ -80,7 +80,7 @@ int main(int argc, char** argv) {
     if (failures) return 1;
 
     const std::string vec_dir =
-        argc > 2 ? argv[2] : default_dir("CLOZE_SAE_VECTORS", "/.clozn/sae/andyrdt_l15/vectors");
+        argc > 2 ? argv[2] : default_dir("CLOZN_SAE_VECTORS", "/.clozn/sae/andyrdt_l15/vectors");
     if (vec_dir.empty() || !file_exists(vec_dir + "/manifest.txt")) {
         std::printf("[2] encode parity: SKIPPED (no vectors at '%s'; run tools/dump_sae_vectors.py)\n"
                     "load-only PASS\n", vec_dir.c_str());

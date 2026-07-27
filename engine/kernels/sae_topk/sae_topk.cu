@@ -24,7 +24,7 @@
 #include <cuda_runtime.h>
 #endif
 
-namespace cloze {
+namespace clozn {
 
 #if defined(__CUDACC__)
 
@@ -159,7 +159,7 @@ void sae_topk(
     // Per-row "already picked" mask scratch. If the caller didn't bring its own
     // persistent buffer (picked_scratch == nullptr -- one-off callers: validate.cu,
     // the parity test), fall back to the original per-call alloc/free so those
-    // callers are untouched. A caller with a workspace (cloze/sae.hpp) passes its
+    // callers are untouched. A caller with a workspace (clozn/sae.hpp) passes its
     // own buffer and this path skips the cudaMalloc + forced sync + cudaFree
     // entirely -- exactly the hoist the caller-owned workspace calls for.
     char* d_picked = picked_scratch;
@@ -197,4 +197,4 @@ void sae_topk(
 
 #endif  // __CUDACC__
 
-}  // namespace cloze
+}  // namespace clozn

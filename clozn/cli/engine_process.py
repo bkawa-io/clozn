@@ -28,14 +28,14 @@ ENGINE_CORE = os.path.join(REPO, "engine", "core")
 BUILDS = [("build-gpu", True), ("build-cuda", True),
           ("build-ggml-cpu", False), ("build-serve", False), ("build-cpu", False)]
 
-# cloze-server.exe's own shared libraries (llama.cpp's split build: ggml*.dll + llama*.dll). Used as
+# clozn-server.exe's own shared libraries (llama.cpp's split build: ggml*.dll + llama*.dll). Used as
 # existence markers below -- a candidate directory only counts as a "DLL dir" if one of these is actually
 # in it, not merely because a plausibly-named subfolder happens to exist (see _dll_dirs_for).
 _ENGINE_DLL_MARKERS = ("llama.dll", "ggml.dll")
 
 
 def _dll_dirs_for(exe: str) -> list[str]:
-    """Directories to prepend to a spawned cloze-server's PATH so Windows can resolve its llama.dll /
+    """Directories to prepend to a spawned clozn-server's PATH so Windows can resolve its llama.dll /
     ggml-*.dll imports (STATUS_DLL_NOT_FOUND otherwise -- these DLLs live in a `bin` sibling, not next to
     the exe, so the OS's automatic "search the app directory first" behavior never finds them; PATH is
     the mechanism that does).
@@ -86,9 +86,9 @@ def find_engine(prefer_gpu=True) -> tuple[str, list[str], bool]:
     cands = []
     for sub, gpu in BUILDS:
         root = os.path.join(ENGINE_CORE, sub)
-        for exe in (os.path.join(root, "cloze-server.exe"),
-                    os.path.join(root, "Release", "cloze-server.exe"),
-                    os.path.join(root, "cloze-server")):       # posix
+        for exe in (os.path.join(root, "clozn-server.exe"),
+                    os.path.join(root, "Release", "clozn-server.exe"),
+                    os.path.join(root, "clozn-server")):       # posix
             if os.path.isfile(exe):
                 cands.append((exe, _dll_dirs_for(exe), gpu))
                 break
@@ -209,7 +209,7 @@ def spawn_engine(model: str, port: int, flags: dict, *, prefer_gpu=True, logf=No
             h = _health(port)
             if h and h.get("status") == "ok":
                 # Handshake: refuse a worker whose protocol MAJOR this supervisor can't drive, rather than
-                # proxy a stream it may no longer parse. The usual cause is a stale cloze-server binary that
+                # proxy a stream it may no longer parse. The usual cause is a stale clozn-server binary that
                 # predates the handshake -- the message says to rebuild. (A compatible worker proceeds.)
                 from clozn.protocol import check_worker_protocol
                 ok, reason = check_worker_protocol(h.get("protocol_version"))

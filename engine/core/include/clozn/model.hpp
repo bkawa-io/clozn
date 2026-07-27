@@ -1,5 +1,5 @@
-// cloze/model.hpp — the ModelAdapter seam in C++ (DESIGN invariant 1), the one
-// boundary the model lives behind. Mirrors lab/cloze_lab/models/base.py. The scheduler
+// clozn/model.hpp — the ModelAdapter seam in C++ (DESIGN invariant 1), the one
+// boundary the model lives behind. Mirrors lab/clozn_lab/models/base.py. The scheduler
 // (policies/stepper/blocks/cache) is pure logic against this interface; only the adapter
 // implementations (e.g. the ggml one) touch a model backend.
 #pragma once
@@ -9,10 +9,10 @@
 #include <string>
 #include <vector>
 
-#include "cloze/blocks.hpp"  // Mask
-#include "cloze/kv.hpp"      // KVState
+#include "clozn/blocks.hpp"  // Mask
+#include "clozn/kv.hpp"      // KVState
 
-namespace cloze {
+namespace clozn {
 
 struct ModelConfig {
     int vocab_size;
@@ -86,4 +86,4 @@ public:
                              const std::vector<float> & /*values*/) { return false; }
 };
 
-}  // namespace cloze
+}  // namespace clozn

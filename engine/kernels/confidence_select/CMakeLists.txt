@@ -1,4 +1,4 @@
-# CMakeLists.txt — confidence-select kernel (Cloze DESIGN.md §4.3)
+# CMakeLists.txt — confidence-select kernel (Clozn DESIGN.md §4.3)
 # =============================================================================
 #  GREEDY PATH COMPILED + VALIDATED on RTX 5080 / CUDA 13.3 (sm_120).
 #  reference.py is the tested oracle (run test_confidence_select_reference.py with pytest); the CUDA
@@ -12,7 +12,7 @@
 
 cmake_minimum_required(VERSION 3.18)  # 3.18+ for first-class CUDA language
 
-project(cloze_confidence_select LANGUAGES CXX)
+project(clozn_confidence_select LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

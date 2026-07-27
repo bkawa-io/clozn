@@ -20,7 +20,7 @@ What this proves, and why it is the honesty-critical test the whole feature was 
 Gated behind -m model: (A)/(B) load cross-encoder/nli-deberta-v3-base (~440MB, first run downloads it; CPU is
 fine). (C) additionally loads Qwen2.5-1.5B on the GPU. Each skips CLEANLY if its resource is missing (mirrors
 test_timetravel_determinism.py). Run:
-    C:/Users/brigi/src/cloze/.venv/Scripts/python.exe -m pytest \
+    C:/Users/brigi/src/clozn/.venv/Scripts/python.exe -m pytest \
         research/tests/test_semantic_matcher_gated.py -m model -q -s
 """
 from __future__ import annotations

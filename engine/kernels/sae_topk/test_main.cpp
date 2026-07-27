@@ -11,7 +11,7 @@
 #include <cstdio>
 
 int main() {
-    using namespace cloze;
+    using namespace clozn;
 
     // sparse_code_bytes is a pure host helper — exercisable with no GPU.
     const int rows = 8, k = 16;

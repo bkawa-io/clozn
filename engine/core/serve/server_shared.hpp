@@ -1,5 +1,5 @@
-// serve/server_shared.hpp -- shared white-box helpers + state structs for the split cloze-server.
-// Phase 12.4 of the repo reorg: the native serve monolith (cloze_server.cpp) split into server_main +
+// serve/server_shared.hpp -- shared white-box helpers + state structs for the split clozn-server.
+// Phase 12.4 of the repo reorg: the native serve monolith (clozn_server.cpp) split into server_main +
 // route-family TUs (routes_*.cpp) that read state through a ServerContext. This header carries the pieces
 // EVERY route family shares -- the JSON/SSE helpers (dump_json, sse_data, board_layout_json, tensor_json_f32,
 // ...), the config parsers (config_from/sample_from/...), and the white-box state structs (StateStepBuilder,
@@ -11,13 +11,13 @@
 
 #include "nlohmann/json.hpp"
 
-#include "cloze/events.hpp"
-#include "cloze/generate.hpp"
-#include "cloze/generate_ar.hpp"
-#include "cloze/model_ggml.hpp"
-#include "cloze/probe.hpp"
-#ifdef CLOZE_SAE
-#include "cloze/sae.hpp"  // on-device SAE feature readout (--sae; built with CLOZE_BUILD_SAE)
+#include "clozn/events.hpp"
+#include "clozn/generate.hpp"
+#include "clozn/generate_ar.hpp"
+#include "clozn/model_ggml.hpp"
+#include "clozn/probe.hpp"
+#ifdef CLOZN_SAE
+#include "clozn/sae.hpp"  // on-device SAE feature readout (--sae; built with CLOZN_BUILD_SAE)
 #endif
 
 #include "ggml.h"       // J-lens: standalone CPU ggml graph (J_l @ h -> rms_norm -> head)
@@ -47,7 +47,7 @@
 #include <utility>
 #include <vector>
 
-namespace cloze {
+namespace clozn {
 
 using json = nlohmann::json;
 
@@ -479,15 +479,15 @@ inline json board_layout_json(const GgmlModel& model, const std::vector<int>& bo
 
 // ---- on-device SAE feature readout (--sae <dir>; ROADMAP 3.3 wired into the server) ----
 // When active, every featureful request taps the residual at the SAE's OWN layer, encodes the
-// tapped rows on the GPU (cloze/sae.hpp: JumpReLU GEMV + the sae_topk kernel) and rides each pass's
+// tapped rows on the GPU (clozn/sae.hpp: JumpReLU GEMV + the sae_topk kernel) and rides each pass's
 // top-k features onto the stream as a SECOND StepFeatures event whose names are raw feature indices
 // ("sae:<id>") — the same positions-x-features wire shape the concept probes already use, so
 // StateStepBuilder / the inspector parse it unchanged. The Neuronpedia id -> label mapping stays
 // host/Python side (research/np_labels_l15.json via brain_readout.py), by design: the engine ships
 // indices, never a 131k-entry string table. The holder exists in every build so the run lambdas
-// capture it uniformly; without CLOZE_BUILD_SAE it is permanently off and --sae refuses at startup.
+// capture it uniformly; without CLOZN_BUILD_SAE it is permanently off and --sae refuses at startup.
 struct SaeServe {
-#ifdef CLOZE_SAE
+#ifdef CLOZN_SAE
     SaeEncoder enc;   // the device-resident encoder weights (loaded once at startup)
 #endif
     bool on = false;  // loaded + n_embd == d_in verified; readouts ride featureful requests
@@ -495,7 +495,7 @@ struct SaeServe {
     int k = 16;       // features kept per position (--sae-k)
 };
 
-#ifdef CLOZE_SAE
+#ifdef CLOZN_SAE
 // One pass's SAE readout: encode the raw-activation event's rows (chunked so the encoder workspace
 // stays bounded at ~16 MB regardless of diffusion block size) and fold every row's top-k into one
 // StepFeatures over the UNION of lit features (score 0 where a feature missed a row's top-k).
@@ -541,14 +541,14 @@ inline std::optional<StepFeatures> sae_features_from(const StepActivations& sa, 
         }
     return sf;
 }
-#endif  // CLOZE_SAE
+#endif  // CLOZN_SAE
 
 // Wrap a run's event sink so each StepActivations (emitted whenever the white-box tap is on) also
 // yields its SAE readout, BEFORE the activations event itself — both land in the same StateStep.
-// Identity when inactive (or in a CLOZE_SAE-less build), so the plain path is byte-identical.
+// Identity when inactive (or in a CLOZN_SAE-less build), so the plain path is byte-identical.
 inline std::function<void(const Event&)> with_sae_readout(const std::function<void(const Event&)>& on_event,
                                                    SaeServe& sae, bool active) {
-#ifdef CLOZE_SAE
+#ifdef CLOZN_SAE
     if (active && sae.on && on_event) {
         SaeEncoder* enc = &sae.enc;
         const int k = sae.k;
@@ -1247,4 +1247,4 @@ private:
 };
 
 
-}  // namespace cloze
+}  // namespace clozn

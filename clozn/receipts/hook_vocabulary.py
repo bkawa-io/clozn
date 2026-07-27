@@ -6,7 +6,7 @@ semantics -- pure, static, model-free.  Nothing here calls the engine; ``GET /co
 Every claim is cited to the exact comment or validated error message it came from, read from:
   * engine/core/serve/routes_whitebox.cpp  -- the /score write/capture/attn_knockout/attn_capture
     request bodies, their validation, and their response shapes (primary source).
-  * engine/core/include/cloze/model_ggml.hpp -- GgmlAdapter's WriteSpec, CaptureFrame, AttnKnockout,
+  * engine/core/include/clozn/model_ggml.hpp -- GgmlAdapter's WriteSpec, CaptureFrame, AttnKnockout,
     EngineCheckpoint, and the tap/capture-plane method contracts (primary source).
   * engine/core/serve/server_main.cpp -- ONLY for /v1/checkpoint, /v1/restore, /v1/branch, and
     GET /health's capabilities block. These routes were outside this task's originally-assigned
@@ -97,7 +97,7 @@ _L_OUT = {
             "ablated simultaneously' arm), riding a teacher-forced scoring pass",
             "POST /state -- standalone baseline-then-write-then-observe loop, no continuation scoring. "
             "NOTE: /state's own route body was NOT read for this document (outside the assigned files); "
-            "this entry is sourced only from engine/client/cloze_engine.py's EngineClient.write_state "
+            "this entry is sourced only from engine/client/clozn_engine.py's EngineClient.write_state "
             "docstring and clozn-client's REPLACE_RESIDUAL OperationSpec, not verified against the C++ "
             "route directly -- treat its exact validation behavior as UNSPECIFIED here.",
         ],
@@ -341,7 +341,7 @@ def hook_vocabulary() -> dict:
         ),
         "sources_read": [
             "engine/core/serve/routes_whitebox.cpp (primary -- /score, /harvest, /harvest/layers)",
-            "engine/core/include/cloze/model_ggml.hpp (primary -- GgmlAdapter method contracts)",
+            "engine/core/include/clozn/model_ggml.hpp (primary -- GgmlAdapter method contracts)",
             "engine/core/serve/server_main.cpp (secondary, read-only, for accuracy only -- "
             "/v1/checkpoint, /v1/restore, /v1/branch, GET /health.capabilities)",
             "clozn/experiments/stats.py (replay-class vocabulary, reused not reinvented)",

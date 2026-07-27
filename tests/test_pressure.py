@@ -51,7 +51,7 @@ from clozn.server.request_context import RequestContext, new_request_id  # noqa:
 from clozn.server.request_gate import RequestGate               # noqa: E402
 from clozn.server.routes import engine as engine_routes         # noqa: E402
 from clozn.server.routes import journal as journal_routes       # noqa: E402
-from cloze_engine import EngineClient                            # noqa: E402
+from clozn_engine import EngineClient                            # noqa: E402
 
 
 # ======================================================================================================

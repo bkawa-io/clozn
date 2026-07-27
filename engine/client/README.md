@@ -1,7 +1,7 @@
-# engine/client — Python SDK for the cloze-server white-box API
+# engine/client — Python SDK for the clozn-server white-box API
 
-`cloze_engine.py` is the thin Python seam over the C++ engine's HTTP interface
-(`engine/core/serve/cloze_server.cpp`). It exists so the research stack (SAE discovery,
+`clozn_engine.py` is the thin Python seam over the C++ engine's HTTP interface
+(`engine/core/serve/clozn_server.cpp`). It exists so the research stack (SAE discovery,
 feature circuits, concept probes, all numpy already) can read from and write into the
 **live** ggml/llama.cpp model instead of a separate HF copy.
 
@@ -26,7 +26,7 @@ server checks `len(values) == len(positions) * n_embd`).
 ## Use it
 
 ```python
-from cloze_engine import EngineClient
+from clozn_engine import EngineClient
 import numpy as np
 
 eng = EngineClient(port=8080)
@@ -44,8 +44,8 @@ print(obs.summary())     # moved_l2, baseline top-3, edited top-3, whether the t
 ## Validate
 
 ```
-python cloze_engine.py --selftest    # offline: the wire codec is exact, no server needed
-python cloze_engine.py --demo --port 8091   # live: a full round-trip against a running server
+python clozn_engine.py --selftest    # offline: the wire codec is exact, no server needed
+python clozn_engine.py --demo --port 8091   # live: a full round-trip against a running server
 ```
 
 The `--demo` prints an **identity-write control** next to the real edit: writing the
@@ -84,7 +84,7 @@ injects and garbles the output (it overwrites the row's own signal); ~0.25 is a 
 
 ```
 # from engine/core, with the ggml/llama DLLs on PATH (build-ggml-cpu/bin/Release):
-cloze-server <model.gguf> --port 8091 --ctx 512
+clozn-server <model.gguf> --port 8091 --ctx 512
 ```
 
 `/harvest` and `/state` work on either a diffusion (LLaDA/Dream/open-dcoder) or an

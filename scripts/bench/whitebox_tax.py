@@ -1,5 +1,5 @@
 # bench_whitebox_tax.py — Phase 1 of the local-efficiency investigation: measure decode tok/s on a
-# RUNNING cloze-server across white-box configurations, so the "white-box tax" is a number, not a
+# RUNNING clozn-server across white-box configurations, so the "white-box tax" is a number, not a
 # vibe. Zero deps (stdlib urllib): each config streams one /v1/completions request and reads the
 # engine's own GenFinished receipt (wall_ms, tok_per_s) off the SSE — the engine self-reports its
 # throughput (generate_ar.cpp emits it), so the number excludes client/HTTP noise but INCLUDES the

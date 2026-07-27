@@ -13,7 +13,7 @@
 #include <cstdio>
 
 int main() {
-    using namespace cloze;
+    using namespace clozn;
 
     // host_transfer_bytes is a pure host helper — exercisable with no GPU.
     const int n_masked = 12;

@@ -58,7 +58,7 @@ def test_parser_accepts_last_as_the_prompt_positional():
 
 # -------------------------------------------------------------------------------- fixture receipt render
 
-_BLOCKED = {"ok": False, "blocked": "engine lacks attn_knockout; start cloze-server with --no-flash-attn "
+_BLOCKED = {"ok": False, "blocked": "engine lacks attn_knockout; start clozn-server with --no-flash-attn "
                                     "(flash attention fuses the softmax, so the attention weights never "
                                     "materialize)"}
 

@@ -164,7 +164,7 @@ doesn't cover (or covers too thinly) keeps its instruction-derived vector -- an 
 per-dial in the saved report's dial_source/caa_pairs_used/caa_pairs_skipped fields, never silently assumed.
 
 Run (CUDA venv):
-    PY=C:/Users/brigi/src/cloze/.venv/Scripts/python.exe
+    PY=C:/Users/brigi/src/clozn/.venv/Scripts/python.exe
     $PY scripts/calibration/torch_autocalibrate.py --model Qwen/Qwen2.5-7B-Instruct --batch-size 8 --out research/runs/dial_autocalibrate.json
 Smoke first (prove the wiring cheaply -- NOT a finding):
     $PY scripts/calibration/torch_autocalibrate.py --smoke --out research/runs/dial_autocalibrate_smoke.json

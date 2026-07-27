@@ -9,13 +9,13 @@
 >
 > Done and tested so far:
 > - **The L1 scheduler, ported to C++** — `policies`, `stepper`, `blocks` (the one-way law), and the
->   Tier A/B/C `cache` manager — as `cloze_scheduler`, a pure-logic static lib with **no model/ggml
+>   Tier A/B/C `cache` manager — as `clozn_scheduler`, a pure-logic static lib with **no model/ggml
 >   dependency** (the seam, enforced at the build level). 4/4 unit tests green, mirroring the lab's.
 > - **The C++ `ModelAdapter` seam + the `generate` pass loop** — `model.hpp` (the seam), `sample`
 >   (greedy confidence reference), and `generate` (the whole-sequence fixed(T) loop) as
->   `cloze_runtime`, still backend-free (links only the scheduler, speaks to the abstract adapter).
+>   `clozn_runtime`, still backend-free (links only the scheduler, speaks to the abstract adapter).
 > - **The L0 ggml adapter, end-to-end, cross-checked against the lab goldens.** `GgmlAdapter` loads an
->   open-dCoder GGUF and drives the loop through the seam. `test_ggml_generate` (`-DCLOZE_BUILD_GGML=ON`)
+>   open-dCoder GGUF and drives the loop through the seam. `test_ggml_generate` (`-DCLOZN_BUILD_GGML=ON`)
 >   reproduces `lab/tests/golden/dcoder_add.json` (whole-sequence) **8/8 picks exact**, text/reason
 >   identical. (The raw `test_ggml_forward` smoke test — bidirectional decode + Dream shift → `' b'` —
 >   still stands underneath it.)
@@ -30,7 +30,7 @@
 >
 > - **The confidence-select kernel, wired into the commit step.** The loop's per-pass sample +
 >   confidence + select is now a `CommitSelector` seam (default `CpuCommitSelector`, backend-free).
->   `KernelCommitSelector` (`-DCLOZE_BUILD_CUDA=ON`) drives the Phase-2 CUDA kernel for that fusion;
+>   `KernelCommitSelector` (`-DCLOZN_BUILD_CUDA=ON`) drives the Phase-2 CUDA kernel for that fusion;
 >   `test_kernel_selector` proves it returns **identical picks** to the CPU selector on an RTX 5080
 >   (sm_120) — 5/5 parity cases incl. a 50k-vocab row.
 >
@@ -63,8 +63,8 @@
 >   to make the return correct). `test_infill` gates both sides preserved + gap filled + one-sided
 >   context + the event stream.
 >
-> - **`cloze` — the native runtime CLI.** `core/` is runnable, not just tested:
->   `cloze <model.gguf> "<prompt>" [--max-new --steps --block-len --cache delta --gpu-layers --stream
+> - **`clozn` — the native runtime CLI.** `core/` is runnable, not just tested:
+>   `clozn <model.gguf> "<prompt>" [--max-new --steps --block-len --cache delta --gpu-layers --stream
 >   --log FILE --suffix "<txt>" --gap N ...]` loads a GGUF diffusion LM and denoises (or infills)
 >   through the same adapter + loop the goldens pin, printing the completion + an honest stats line
 >   (`N tokens | P passes (steps/token) | tok/s | forward work`). `--stream` shows the live denoise
@@ -75,12 +75,12 @@
 > - **Runs at real scale — Dream-7B.** Dream-v0-Instruct-7B (converted HF→GGUF as Qwen2, Q8_0,
 >   7.6 GB) runs in the C++ runtime on the 16 GB GPU and produces correct, idiomatic code — e.g.
 >   `def reverse(s):` → `return s[::-1]` + driver code, at **0.62 steps/token**, 63 tok/s, clean EOS.
->   The `cloze-bench` quant sweep (open-dCoder) reports the honest quality column: Q8_0 ~half the
+>   The `clozn-bench` quant sweep (open-dCoder) reports the honest quality column: Q8_0 ~half the
 >   size near-lossless (92% greedy-token agreement vs f16), Q4 trades real quality; tok/s flat on a
 >   tiny model (overhead-bound, not bandwidth-bound — the quant *speed* win is on bigger models).
 >
-> - **The serving layer (L2) — `cloze-server`.** An HTTP server over the runtime
->   (`-DCLOZE_BUILD_SERVE=ON`, using the cpp-httplib + nlohmann/json llama.cpp already vendors):
+> - **The serving layer (L2) — `clozn-server`.** An HTTP server over the runtime
+>   (`-DCLOZN_BUILD_SERVE=ON`, using the cpp-httplib + nlohmann/json llama.cpp already vendors):
 >   `GET /health`, `POST /v1/completions`, `POST /v1/infill`. With `stream=true` it emits the §5.1
 >   events as Server-Sent Events (each event a `data:` frame, then a final OpenAI frame + `[DONE]`)
 >   — the native streaming protocol the spine was built for, so a client watches the denoise
@@ -95,7 +95,7 @@
 > structural-vs-wall-clock distinction — honesty is a core invariant (DESIGN invariant 5).
 
 `core/` is the eventual L0/L1 implementation from [`docs/DESIGN.md`](../docs/DESIGN.md): the single
-native `cloze` binary that embeds **ggml/llama.cpp** as a library, runs GGUF + quantized dLLM
+native `clozn` binary that embeds **ggml/llama.cpp** as a library, runs GGUF + quantized dLLM
 checkpoints, and drives them with the same denoising scheduler the lab already implements. Phase 2
 (the [`kernels/confidence_select`](../kernels/confidence_select) CUDA kernel) plugs into it.
 
@@ -103,9 +103,9 @@ checkpoints, and drives them with the same denoising scheduler the lab already i
 
 ## Why this is a translation, not a rewrite
 
-The single most important architectural fact about Cloze is **the ModelAdapter seam**
-([`lab/cloze_lab/models/base.py`](../lab/cloze_lab/models/base.py), DESIGN invariant 1).
-Everything under [`lab/cloze_lab/scheduler/`](../lab/cloze_lab/scheduler) is *pure logic* against
+The single most important architectural fact about Clozn is **the ModelAdapter seam**
+([`lab/clozn_lab/models/base.py`](../lab/clozn_lab/models/base.py), DESIGN invariant 1).
+Everything under [`lab/clozn_lab/scheduler/`](../lab/clozn_lab/scheduler) is *pure logic* against
 that interface — no torch, no transformers, numpy at most for mask arithmetic. The model side
 (PyTorch/HF) lives entirely behind the seam.
 
@@ -130,7 +130,7 @@ C++ work is therefore *bounded and well-specified*, not open-ended. That is the 
 
 ## The seam, mapped to C++
 
-The Python `ModelAdapter.forward` contract ([`base.py`](../lab/cloze_lab/models/base.py)) is:
+The Python `ModelAdapter.forward` contract ([`base.py`](../lab/clozn_lab/models/base.py)) is:
 
 ```
 board tokens + attention mask + (optional) cached KV + which positions to recompute
@@ -143,7 +143,7 @@ The C++ side mirrors this one-for-one:
 |---|---|---|
 | `board: int64[seq]` | `const llama_token* board, int n` | scheduler-owned token array |
 | `attn_mask: bool[seq,seq]` | block-causal mask built into the ggml graph | `blocks.attention_mask` → graph construction |
-| `kv: KVState` (opaque handle) | `llama_kv_cache` / a Cloze wrapper over ggml K/V tensors | llama.cpp KV cache |
+| `kv: KVState` (opaque handle) | `llama_kv_cache` / a Clozn wrapper over ggml K/V tensors | llama.cpp KV cache |
 | `recompute_kv: sorted positions` | positions to (re)decode this pass; rest reused | Tier A/B exact, Tier C delta |
 | `logits_for: positions` | rows of the logits to read back (or feed the kernel) | masked positions |
 | `ForwardResult.logits` | device logits buffer → **confidence-select kernel** → 2×n to host | Phase-2 kernel (§4.3) |
@@ -181,13 +181,13 @@ improvements then flow in for free; our small additions (the confidence-select k
 core/                              (planned)
   CMakeLists.txt                   top-level; add_subdirectory(third_party/llama.cpp)
   third_party/llama.cpp            git submodule, pinned SHA (NOT vendored/forked)
-  include/cloze/                   public headers (the seam, events, config)
+  include/clozn/                   public headers (the seam, events, config)
   src/
     model/                         L0 — the ModelAdapter seam in C++
       adapter.hpp                  forward(board, mask, kv, recompute, logits_for)
       dream.cpp  llada.cpp ...     family quirks (shifted head, EOS rule) behind seam
       gguf_meta.cpp                read diffusion.* keys (DESIGN §4.2)
-    scheduler/                     L1 — direct port of lab/cloze_lab/scheduler/
+    scheduler/                     L1 — direct port of lab/clozn_lab/scheduler/
       events.hpp  policies.cpp  stepper.cpp  blocks.cpp  cache.cpp
       generate.cpp                 the pass loop (port of generate.py)
     serve/                         L2 — OpenAI-compat + native streaming protocol; later
@@ -197,7 +197,7 @@ core/                              (planned)
 **The confidence-select kernel** ([`kernels/confidence_select`](../kernels/confidence_select),
 Phase 2) is the join between L0 and L1. In the lab, `generate.sample_candidates` ships the full
 `[n_masked × vocab]` logits to host and samples there (~87% of GPU wall time, DESIGN §4.3). In
-`core/`, the device-resident logits buffer is handed straight to `cloze::confidence_select`, which
+`core/`, the device-resident logits buffer is handed straight to `clozn::confidence_select`, which
 samples, scores, and selects on-device, so only `2 × n_masked` ints/floats cross to host (≈10,000×
 smaller). The kernel's contract is *already pinned* by `kernels/confidence_select/reference.py` and
 its parity tests, so the C++ scheduler calls the kernel exactly where the lab calls
@@ -217,7 +217,7 @@ which is why the slices above exist:
    CPU paths). On Windows: MSVC + CUDA toolkit; on Apple Silicon: the Metal toolchain.
 2. **The Python goldens stand as the cross-validation oracle.** The fixtures in
    [`lab/tests/golden/`](../lab/tests/golden) pin `(model, prompt, seed, policy, stepper, cache)` →
-   per-step commits + final board/text/reason, in a versioned `cloze-golden/1` format. The C++ port
+   per-step commits + final board/text/reason, in a versioned `clozn-golden/1` format. The C++ port
    is *correct* exactly when it reproduces them: **token picks must match exactly; confidences within
    epsilon** (float reduction order differs across devices — DESIGN invariant 3). These fixtures
    already validate the lab against the numpy `FakeAdapter`, and the kernel reference against the
@@ -230,20 +230,20 @@ which is why the slices above exist:
 
 ---
 
-## Original interface sketch (now realized in [`include/cloze/model.hpp`](include/cloze/model.hpp))
+## Original interface sketch (now realized in [`include/clozn/model.hpp`](include/clozn/model.hpp))
 
 > This block was the **uncompiled picture** drawn before the seam existed. The shipped seam now lives
-> in `include/cloze/model.hpp` (`ModelConfig` / `ForwardResult` / `ModelAdapter`) and the ggml
+> in `include/clozn/model.hpp` (`ModelConfig` / `ForwardResult` / `ModelAdapter`) and the ggml
 > implementation in `src/model_ggml.cpp`; they differ in surface detail from this sketch (the shipped
 > `ForwardResult` owns its logits in a `std::vector` rather than a raw device pointer — the
 > confidence-select kernel hand-off that the pointer anticipated is the still-pending Phase-2 wiring).
 > Kept here for the record of how the shape was reasoned out. The Python seam
-> ([`base.py`](../lab/cloze_lab/models/base.py)) and the goldens remain the source of truth.
+> ([`base.py`](../lab/clozn_lab/models/base.py)) and the goldens remain the source of truth.
 
 ```cpp
-// core/include/cloze/adapter.hpp  —  UNCOMPILED SKETCH (Phase 3, not started)
-// Mirrors lab/cloze_lab/models/base.py::ModelAdapter one-for-one.
-namespace cloze {
+// core/include/clozn/adapter.hpp  —  UNCOMPILED SKETCH (Phase 3, not started)
+// Mirrors lab/clozn_lab/models/base.py::ModelAdapter one-for-one.
+namespace clozn {
 
 struct ModelConfig {                 // == base.py ModelConfig (GGUF diffusion.* keys)
     Family   family;
@@ -278,7 +278,7 @@ public:
     virtual ~ModelAdapter() = default;
 };
 
-} // namespace cloze
+} // namespace clozn
 ```
 
 ---
@@ -288,7 +288,7 @@ public:
 - **It is not too late** — but the *easy* half ("run a diffusion LM locally at all") is converging to
   commodity. llama.cpp diffusion support sits in **unmerged PRs**; **Ollama cannot load dLLMs yet.**
   When those land, "first to run a diffusion model locally" stops being a differentiator.
-- **The differentiation is scheduler depth, not the loader.** Cloze's defensible value is the L1 scheduler the
+- **The differentiation is scheduler depth, not the loader.** Clozn's defensible value is the L1 scheduler the
   lab already implements: the model-agnostic seam, the Tier A/B/C cache with an *exposed exactness
   knob* and a shipped divergence bench, adaptive stopping with guard rails, token revision, and
   infill. `core/` exists to carry that scheduler — already built and tested in `lab/` — onto the fast

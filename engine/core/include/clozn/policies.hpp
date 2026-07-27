@@ -1,7 +1,7 @@
-// cloze/policies.hpp — shared per-candidate types (DESIGN §5.2 origin). The diffusion unmask/commit
-// POLICIES (confidence_topk/threshold/remask_lowconf, C++ port of lab/cloze_lab/scheduler/policies.py)
+// clozn/policies.hpp — shared per-candidate types (DESIGN §5.2 origin). The diffusion unmask/commit
+// POLICIES (confidence_topk/threshold/remask_lowconf, C++ port of lab/clozn_lab/scheduler/policies.py)
 // were removed with the diffusion program (THE_CUT) -- nothing implements them anymore. Candidate and
-// StepContext survive here because cloze/sample.hpp (the AR sampler) still returns/consumes them: one
+// StepContext survive here because clozn/sample.hpp (the AR sampler) still returns/consumes them: one
 // "a token proposal at a position, with confidence" shape serves both the old scheduler and the
 // surviving autoregressive sampler.
 //
@@ -10,7 +10,7 @@
 
 #include <vector>
 
-namespace cloze {
+namespace clozn {
 
 // One position's sampled proposal: token_id at pos, with confidence.
 struct Candidate {
@@ -37,4 +37,4 @@ struct Selection {
     std::vector<Candidate> revise;
 };
 
-}  // namespace cloze
+}  // namespace clozn

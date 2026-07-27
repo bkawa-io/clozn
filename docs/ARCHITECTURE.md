@@ -14,7 +14,7 @@ story, not the identity — it's one substrate the engine runs.)*
 
 ```
 clozn/ + studio/   →   protocol/   →   engine/
-  (the product)        (the seam)      (the runtime = "cloze")
+  (the product)        (the seam)      (the runtime = "clozn")
 ```
 
 - **`clozn/`** — the Python product package: the OpenAI-compatible serving layer, the run

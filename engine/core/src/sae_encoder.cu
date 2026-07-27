@@ -1,4 +1,4 @@
-// sae_encoder.cu — cloze/sae.hpp implementation: the JumpReLU SAE encoder + top-k readout on-device.
+// sae_encoder.cu — clozn/sae.hpp implementation: the JumpReLU SAE encoder + top-k readout on-device.
 // =============================================================================
 // The GEMV + epilogue in front of the validated kernels/sae_topk kernel (see sae.hpp for the
 // pipeline diagram and the numerics contract). Everything here is deliberately readout-shaped, not
@@ -13,7 +13,7 @@
 // accumulator, keeping engine-vs-torch differences to accumulation ORDER only — sub-ulp almost
 // everywhere once rounded (tests/test_sae_encoder.cpp measures the actual gap on real vectors).
 
-#include "cloze/sae.hpp"
+#include "clozn/sae.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -28,7 +28,7 @@
 
 #include "sae_topk.cuh"  // kernels/sae_topk — the validated per-row top-k over the feature dim
 
-namespace cloze {
+namespace clozn {
 
 namespace {
 
@@ -273,7 +273,7 @@ bool SaeEncoder::load(const std::string& dir) {
     im.error.clear();
 
     // meta.txt: whitespace-separated `key value` lines (export_sae_weights.py). Parsed with a plain
-    // map — no JSON dependency, so cloze_sae links into anything.
+    // map — no JSON dependency, so clozn_sae links into anything.
     std::ifstream mf(dir + "/meta.txt");
     if (!mf) { im.error = "cannot open " + dir + "/meta.txt"; return false; }
     std::map<std::string, std::string> meta;
@@ -377,4 +377,4 @@ bool SaeEncoder::encode_dense(const float* x, int rows, std::vector<float>& gate
     return true;
 }
 
-}  // namespace cloze
+}  // namespace clozn

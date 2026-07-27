@@ -21,7 +21,7 @@ fact-only in memory => baseline), SHUFFLED-KEY NULL (permuted keys => keyed addr
 SURGICAL DELETE (target drops, others bit-identical), paraphrase + gate behavior. One model, one seed;
 caveats loud.
 
-    C:\\Users\\brigi\\src\\cloze\\.venv\\Scripts\\python.exe research/slotmem_qwen.py [--smoke]
+    C:\\Users\\brigi\\src\\clozn\\.venv\\Scripts\\python.exe research/slotmem_qwen.py [--smoke]
 """
 from __future__ import annotations
 import math

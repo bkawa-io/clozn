@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """clozn -- a boring, reliable front door to the local model engine.
 
-The fast runtime is the C++ engine (cloze-server.exe). This wraps it so the daily path is one command:
+The fast runtime is the C++ engine (clozn-server.exe). This wraps it so the daily path is one command:
 
     clozn run   <model> "<prompt>"     one-shot, streams tokens to the terminal
     clozn serve <model> [--port 8080]  bring up the OpenAI-compatible endpoint, print the base URL

@@ -16,7 +16,7 @@
 #include <cstdint>
 #include <vector>
 
-using namespace cloze;
+using namespace clozn;
 
 int main() {
     struct Dim { int n; int vocab; const char* label; };

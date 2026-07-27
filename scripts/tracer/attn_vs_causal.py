@@ -17,7 +17,7 @@ Per prompt:
     overlap, and the sink diagnostic: position 0's attention rank vs causal rank (the measured
     trap: the sink dominates attention mass while carrying ~no causal weight once renormalized).
 
-Needs a cloze-server built with attn_capture (2026-07-22) and started with --no-flash-attn.
+Needs a clozn-server built with attn_capture (2026-07-22) and started with --no-flash-attn.
 Writes runs/experiments/attn_vs_causal_<tag>.json. Honesty scope: head-MEAN attention only (a
 per-head best-case is a different, harder-to-defend baseline: a viewer looking at 28x28 maps is
 not using any single head either); one model family per run; the causal side is the same

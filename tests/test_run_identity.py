@@ -193,11 +193,11 @@ def test_runtime_identity_falls_back_to_hashing_without_a_hint(tmp_path, iso_cac
 def test_runtime_identity_includes_template_fingerprint_engine_build_and_version():
     out = identity.runtime_identity(
         apply_template_fn=lambda messages: "rendered-prompt",
-        engine_health={"engine_build": "cloze-server-2026.07"},
+        engine_health={"engine_build": "clozn-server-2026.07"},
         clozn_version="9.9.9",
     )
     assert out["template_fingerprint"] == hashlib.sha256(b"rendered-prompt").hexdigest()[:16]
-    assert out["engine_build"] == "cloze-server-2026.07"
+    assert out["engine_build"] == "clozn-server-2026.07"
     assert out["clozn_version"] == "9.9.9"
 
 

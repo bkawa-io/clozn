@@ -328,8 +328,8 @@ def swap_receipt(run: dict, from_hint, to_concept: str, sub, *,
 # Real, runnable code -- but deferred: needs a running engine, so it is not exercised by this module's
 # own tests. tests/test_swap_receipt.py already
 # covers the whole receipt model-free/GPU-free against fixtures + a FakeEngineClient; this is only
-# for a human to run LATER against a real cloze-server, once BOTH exist:
-#   1. a running cloze-server, started with --jlens <dir> (a real J-lens sidecar loaded);
+# for a human to run LATER against a real clozn-server, once BOTH exist:
+#   1. a running clozn-server, started with --jlens <dir> (a real J-lens sidecar loaded);
 #   2. an unembed export for concept_dir.ConceptDirSource (see concept_dir.py's BLOCKER_NOTE) --
 #      e.g. --unembed-dir ../clozn-jlens-work/artifacts for local dev.
 # Then: `python -m clozn.receipts.swap_receipt --port 8095 --unembed-dir ../clozn-jlens-work/artifacts
@@ -340,7 +340,7 @@ def _demo(args) -> int:
     engine_client_dir = os.path.abspath(os.path.join(here, "..", "..", "engine", "client"))
     import sys as _sys
     _sys.path.insert(0, engine_client_dir)
-    from cloze_engine import EngineClient  # local import: only the --demo path needs the engine SDK
+    from clozn_engine import EngineClient  # local import: only the --demo path needs the engine SDK
 
     class _DemoSub:
         """The minimal duck-typed substrate swap_receipt needs: .engine + .jlens -- mirrors

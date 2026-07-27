@@ -39,12 +39,12 @@
 //            pre-activation is <= 0 emits a 0.0 value (a "dead" feature adds
 //            nothing to the reconstruction). Fixed [rows, k] output either way.
 
-#ifndef CLOZE_SAE_TOPK_CUH
-#define CLOZE_SAE_TOPK_CUH
+#ifndef CLOZN_SAE_TOPK_CUH
+#define CLOZN_SAE_TOPK_CUH
 
 #include <cstdint>
 
-namespace cloze {
+namespace clozn {
 
 // All scalar knobs for one fused call. Mirrors reference.sae_topk's arguments.
 struct SaeTopKParams {
@@ -71,7 +71,7 @@ struct SaeTopKOutputs {
 // "already selected" mask (see sae_topk.cu). Pass nullptr (the default) to have
 // the call cudaMalloc/cudaFree its own scratch, as before -- fine for one-off
 // callers (validate.cu, the parity test). A caller with a persistent workspace
-// (cloze/sae.hpp's grow-only reserve()) should allocate picked_scratch itself
+// (clozn/sae.hpp's grow-only reserve()) should allocate picked_scratch itself
 // ONCE, sized to its own [rows, n_features] ceiling, and pass it here every call
 // to avoid paying a cudaMalloc + forced cudaStreamSynchronize + cudaFree on
 // every readout -- exactly the fix this parameter exists for.
@@ -91,6 +91,6 @@ inline int sparse_code_bytes(int rows, int k) {
     return 2 * rows * k * bytes_per_value;
 }
 
-}  // namespace cloze
+}  // namespace clozn
 
-#endif  // CLOZE_SAE_TOPK_CUH
+#endif  // CLOZN_SAE_TOPK_CUH

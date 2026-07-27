@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <stdexcept>
 
-namespace cloze {
+namespace clozn {
 
 struct ChatTemplateRenderer::Impl {
     common_chat_templates_ptr templates;
@@ -208,4 +208,4 @@ ParsedChat ChatTemplateRenderer::parse(
     return result;
 }
 
-}  // namespace cloze
+}  // namespace clozn

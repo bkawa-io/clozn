@@ -1,13 +1,13 @@
-"""cloze_engine.py — the Python SDK for the cloze-server white-box HTTP API.
+"""clozn_engine.py — the Python SDK for the clozn-server white-box HTTP API.
 
-The C++ engine (engine/core/serve/cloze_server.cpp) exposes a model's interior over HTTP:
+The C++ engine (engine/core/serve/clozn_server.cpp) exposes a model's interior over HTTP:
 READ activations (`/harvest`), WRITE them back and observe the effect (`/state`), and
 STEER a generation (`/intervene`). Those endpoints close the read -> edit -> write ->
 observe loop on a live ggml/llama.cpp model. This module is the thin Python seam over
 them, so the research stack (SAE discovery, feature circuits, concept probes — all numpy
 already) can drive the production engine instead of a separate HF model:
 
-    from cloze_engine import EngineClient
+    from clozn_engine import EngineClient
     eng = EngineClient(port=8080)
     h = eng.harvest("The capital of France is")      # h.activations: [n_tokens, n_embd] f32
     # ... run a discovery harness on h.activations (SAE encode, PCA, a learned edit) ...
@@ -22,9 +22,9 @@ The wire format for tensors is SPEC.md's {dtype, shape, data}, where `data` is t
 base64 of the raw little-endian float32 bytes. x86 and CUDA are little-endian, so the
 in-memory floats ARE those bytes; decoding is a straight np.frombuffer(..., '<f4').
 
-Run `python cloze_engine.py --selftest` to validate the codec offline (no server), or
-`python cloze_engine.py --demo` to run a live read -> edit -> write -> observe round-trip
-against a running cloze-server.
+Run `python clozn_engine.py --selftest` to validate the codec offline (no server), or
+`python clozn_engine.py --demo` to run a live read -> edit -> write -> observe round-trip
+against a running clozn-server.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ ArrayLike = Union[np.ndarray, Sequence[float], Sequence[Sequence[float]]]
 def decode_tensor(obj: dict) -> np.ndarray:
     """Decode a wire tensor {dtype:"float32", shape:[...], data:base64-LE} to a numpy array.
 
-    Mirrors tensor_json_f32 in cloze_server.cpp: the bytes are little-endian float32, row
+    Mirrors tensor_json_f32 in clozn_server.cpp: the bytes are little-endian float32, row
     major, so np.frombuffer('<f4').reshape(shape) reconstructs the matrix exactly (no copy
     beyond the base64 decode). Raises on a non-float32 dtype or a shape/byte-count mismatch.
     """
@@ -340,7 +340,7 @@ def _validate_atomic_chat_response(value: object) -> dict[str, Any]:
 
 
 class EngineClient:
-    """A thin HTTP client for one running cloze-server.
+    """A thin HTTP client for one running clozn-server.
 
     All calls are synchronous. The server serializes generation on its context pool, so
     concurrent calls from multiple clients are fine (they queue on a free worker); within
@@ -720,7 +720,7 @@ def _selftest() -> int:
 
 
 def _demo(args) -> int:
-    """A live read -> edit -> write -> observe round-trip against a running cloze-server."""
+    """A live read -> edit -> write -> observe round-trip against a running clozn-server."""
     eng = EngineClient(host=args.host, port=args.port)
     info = eng.health()
     print(f"server: {info.get('model')}  mode={info.get('mode')}")
@@ -748,7 +748,7 @@ def _demo(args) -> int:
 
 
 def main(argv: Optional[list] = None) -> int:
-    ap = argparse.ArgumentParser(description="cloze-server white-box Python client")
+    ap = argparse.ArgumentParser(description="clozn-server white-box Python client")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--selftest", action="store_true", help="validate the wire codec offline (no server)")

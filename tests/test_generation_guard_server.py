@@ -80,7 +80,7 @@ def _write_unembed_fixture(tmp_path, *, d_model=D_MODEL, vocab=D_MODEL, seed=2):
 # ==================================================================================== fake engine + substrate
 
 class FakeGuardEngine:
-    """Stands in for cloze_engine.EngineClient for the guard's production adapter: `.health` (jlens fitted
+    """Stands in for clozn_engine.EngineClient for the guard's production adapter: `.health` (jlens fitted
     layers -- LAYER SELECTION reads this), `.score` (token resolution), `.complete`/`.intervene` (chunked
     generation, scripted per-call-order), `.jlens` (disposition read, driven by a marker substring so tests
     stay simple), `.apply_template` (prompt render)."""

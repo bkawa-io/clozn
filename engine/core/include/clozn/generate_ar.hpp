@@ -1,4 +1,4 @@
-// cloze/generate_ar.hpp — autoregressive generation with the white-box read+steer harness.
+// clozn/generate_ar.hpp — autoregressive generation with the white-box read+steer harness.
 //
 // Unlike generate()/infill()/denoise() (the backend-free diffusion scheduler validated against the
 // lab goldens), this is a thin left-to-right decode loop that lives in the ggml layer: it drives
@@ -17,12 +17,12 @@
 #include <string>
 #include <vector>
 
-#include "cloze/events.hpp"
-#include "cloze/generate.hpp"    // GenerateConfig, SampleConfig, GenerateResult
-#include "cloze/model_ggml.hpp"  // GgmlAdapter
-#include "cloze/probe.hpp"       // ConceptProbes
+#include "clozn/events.hpp"
+#include "clozn/generate.hpp"    // GenerateConfig, SampleConfig, GenerateResult
+#include "clozn/model_ggml.hpp"  // GgmlAdapter
+#include "clozn/probe.hpp"       // ConceptProbes
 
-namespace cloze {
+namespace clozn {
 
 // Backend-neutral copy of the grammar information emitted by llama.cpp's
 // common_chat_templates_apply(). The serving layer adapts common_chat_params to
@@ -112,4 +112,4 @@ std::vector<BranchResult> generate_ar_branched(
     int max_tokens,
     const SampleConfig& base_sample = {});
 
-}  // namespace cloze
+}  // namespace clozn

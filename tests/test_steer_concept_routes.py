@@ -306,7 +306,7 @@ def test_steer_concept_check_passes_the_built_vector_to_intervene(wired_concept_
 
 class _HarvestRefusingEngineClient(FakeEngineClient):
     """Identical to FakeEngineClient, except .harvest() always raises -- standing in for a fully
-    unreachable engine from _ensure_steer()'s point of view (mirrors cloze_engine.EngineClient's own
+    unreachable engine from _ensure_steer()'s point of view (mirrors clozn_engine.EngineClient's own
     behavior on a connection refusal: a raw urllib.error.URLError, never caught by _request())."""
 
     def harvest(self, text, layer=None):

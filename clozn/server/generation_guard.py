@@ -1076,7 +1076,7 @@ def _traced_complete(engine, prompt: str, max_tokens: int, engine_kw: dict):
 def _traced_intervene(engine, prompt: str, vector, coef: float, layer: int, max_tokens: int, engine_kw: dict):
     """generate_chunk's CORRECTED (counter-steered) path -- same idea as _traced_complete, against
     /intervene (kind:"steer", a raw vector+coef+layer -- concept_dir.ConceptSteer.steer_toward's own wire
-    shape; see cloze_engine.EngineClient.intervene). /intervene's streaming final frame carries the reply
+    shape; see clozn_engine.EngineClient.intervene). /intervene's streaming final frame carries the reply
     text directly under "text" (engine/core/serve/routes_state.cpp), not OpenAI's choices[0].text -- the
     one difference from _traced_complete's parsing. The per-token tokens_committed/step_lens frames are
     the SAME Event stream either route emits (routes_state.cpp's /intervene handler reuses the identical

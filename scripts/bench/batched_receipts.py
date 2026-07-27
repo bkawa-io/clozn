@@ -6,7 +6,7 @@
 # 2x. If wall(batch2) <= 1.3 * wall(batch1), receipts-are-nearly-free is CONFIRMED and wiring
 # batched ablation into replay.py is justified (not done here; this is the measurement).
 #
-#   C:/Users/brigi/src/cloze/.venv/Scripts/python.exe research/bench_batched_receipts.py \
+#   C:/Users/brigi/src/clozn/.venv/Scripts/python.exe research/bench_batched_receipts.py \
 #       [--models 1.5b,7b] [--new 128] [--reps 5] [--json-out runs/batched_receipts.json]
 #
 # Models mirror the studio's real configs: Qwen2.5-1.5B-Instruct bf16, Qwen2.5-7B-Instruct nf4.

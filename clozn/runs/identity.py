@@ -165,7 +165,7 @@ def template_fingerprint(apply_template_fn) -> str | None:
 
 
 # Speculative/forward-compatible only: as of this writing, engine/core/serve/server_main.cpp's /health
-# does NOT expose any build-hash/version field for the cloze-server BINARY itself (only model_sha256,
+# does NOT expose any build-hash/version field for the clozn-server BINARY itself (only model_sha256,
 # protocol_version, and model-shape fields -- see server_main.cpp's /health handler). None of these keys
 # are populated today; this list exists so a future engine health field is picked up automatically
 # without another edit here, never so this function can invent a value.

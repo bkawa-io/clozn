@@ -65,7 +65,7 @@ def _make_source(tmp_path, *, with_unembed=True, d_model=32, vocab=32, layer=21)
 # ==================================================================================== fake engine + substrate
 
 class FakeEngineClient:
-    """Mirrors test_engine_add_custom.py's _FakeEC pattern: no real cloze-server, no socket.
+    """Mirrors test_engine_add_custom.py's _FakeEC pattern: no real clozn-server, no socket.
     `.score()` serves TWO distinct call shapes the real EngineClient.score also serves: token
     RESOLUTION (continuation= text, used by ConceptSteer.resolve_token_id) and the quantitative
     logprob measure (continuation_ids=, used by swap_receipt itself)."""

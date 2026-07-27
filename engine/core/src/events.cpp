@@ -1,8 +1,8 @@
-#include "cloze/events.hpp"
+#include "clozn/events.hpp"
 
 #include <cstdio>
 
-namespace cloze {
+namespace clozn {
 
 namespace {
 
@@ -191,4 +191,4 @@ bool write_jsonl(const std::vector<Event>& events, const std::string& path) {
     return true;
 }
 
-}  // namespace cloze
+}  // namespace clozn

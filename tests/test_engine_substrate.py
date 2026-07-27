@@ -44,7 +44,7 @@ import clozn.memory.topic_gate as topic_gate             # noqa: E402
 from clozn.behavior.steering import EngineSteer   # noqa: E402
 
 
-# --- a stand-in for cloze_engine.EngineClient: .base points at a closed local port (127.0.0.1:1 --
+# --- a stand-in for clozn_engine.EngineClient: .base points at a closed local port (127.0.0.1:1 --
 # an IP literal, so no DNS lookup, and a reserved port nothing ever listens on) with a short .timeout,
 # so _engine_complete_traced's streaming attempt excepts out fast and every call below actually exercises
 # its pre-existing plain .complete() fallback. -------------------------------------------------------

@@ -1,7 +1,7 @@
 """The worker <-> supervisor wire-contract version.
 
 `clozn serve` (the product gateway + supervisor) speaks this contract to the private C++ worker
-(`cloze-server`). The version is a plain ``"MAJOR.MINOR"`` string:
+(`clozn-server`). The version is a plain ``"MAJOR.MINOR"`` string:
 
   * a **MAJOR** bump is breaking -- the supervisor refuses a worker whose major it does not support,
     rather than proxy a stream it can no longer parse;
@@ -42,7 +42,7 @@ def check_worker_protocol(version) -> "tuple[bool, str]":
     if version is None:
         return False, (
             f"worker announced no protocol_version (supervisor speaks {PROTOCOL_VERSION}); "
-            "the engine binary predates the handshake -- rebuild cloze-server"
+            "the engine binary predates the handshake -- rebuild clozn-server"
         )
     major = parse_major(version)
     if major is None:

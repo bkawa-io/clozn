@@ -163,7 +163,7 @@ def _influences_active(run: dict) -> dict:
 # -------------------------------------------------------------------------------------------------- concepts
 def _concepts(run: dict) -> dict:
     """Top SAE features per span, when the run happens to carry them (the engine path's sae:<id> readouts;
-    see engine/core/serve/cloze_server.cpp's StepFeatures). Honest as of this writing: NO current logging
+    see engine/core/serve/clozn_server.cpp's StepFeatures). Honest as of this writing: NO current logging
     path threads concept readouts onto the stored run record -- runlog._norm_trace only keeps
     tokens/confidence/alternatives (runlog.TRACE_KEYS), so this is, today, always the "not available"
     branch. Written forward-compatible (reads trace["concepts"], falling back to a top-level run["concepts"])

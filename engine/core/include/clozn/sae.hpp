@@ -1,4 +1,4 @@
-// cloze/sae.hpp — the on-device SAE feature readout (ROADMAP 3.3 wired into the engine).
+// clozn/sae.hpp — the on-device SAE feature readout (ROADMAP 3.3 wired into the engine).
 // =============================================================================
 // Runs the andyrdt-style JumpReLU SAE ENCODER on the GPU over tapped residuals and returns each
 // row's top-k (feature id, activation) pairs — the sparse code, on-device, using the validated
@@ -29,8 +29,8 @@
 // VRAM: the encoder for 131072 features x 3584 dims is ~0.94 GB fp16 (+ <2 MB of biases/thresholds
 // + a grow-only per-call workspace of ~0.6 MB/row). device_bytes() reports the honest total.
 //
-// The header is CUDA-free (pimpl) so cloze_server.cpp compiles against it untouched by nvcc; the
-// implementation (src/sae_encoder.cu) is CUDA and links the vendored cloze_sae_topk kernel.
+// The header is CUDA-free (pimpl) so clozn_server.cpp compiles against it untouched by nvcc; the
+// implementation (src/sae_encoder.cu) is CUDA and links the vendored clozn_sae_topk kernel.
 // Thread-safe: encode calls are serialized on an internal mutex (readout cadence, not a hot loop).
 #pragma once
 
@@ -39,7 +39,7 @@
 #include <string>
 #include <vector>
 
-namespace cloze {
+namespace clozn {
 
 class SaeEncoder {
 public:
@@ -79,4 +79,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace cloze
+}  // namespace clozn

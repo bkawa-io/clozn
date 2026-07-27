@@ -7,7 +7,7 @@ The consolidated map: the thesis, what's shipped, and where the open work lives.
 
 ## ✅ Done
 
-- **Engine white-box runtime** — AR + diffusion GGUF on the C++ `cloze-server`: `/harvest`,
+- **Engine white-box runtime** — AR + diffusion GGUF on the C++ `clozn-server`: `/harvest`,
   `/score`, `/apply_template`, steer taps, prompt-mode memory.
 - **Reproduce & prove** — teacher-forced `/score`, the SDK/substrate seam, rich per-token trace
   (`token_id` / `logprob` / top-k entropy) + reproducibility metadata, forced-mode receipts +

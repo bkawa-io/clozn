@@ -20,7 +20,7 @@ Gated behind -m model (loads Qwen2.5-1.5B on the GPU; ~1 min): mirrors test_prom
 cleanly with no CUDA. Pins the same stack kv_timetravel.py pins (cache internals are not a stable contract).
 
 Run as the gated test:
-    C:/Users/brigi/src/cloze/.venv/Scripts/python.exe -m pytest \
+    C:/Users/brigi/src/clozn/.venv/Scripts/python.exe -m pytest \
         research/tests/test_timetravel_determinism.py -m model -q
 """
 from __future__ import annotations

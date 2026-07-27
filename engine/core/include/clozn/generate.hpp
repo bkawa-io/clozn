@@ -1,19 +1,19 @@
-// cloze/generate.hpp — the shared generation types (DESIGN §5 origin: originally the diffusion pass
+// clozn/generate.hpp — the shared generation types (DESIGN §5 origin: originally the diffusion pass
 // loop's config/result structs). The diffusion generate()/infill()/denoise() functions and their
 // scheduler machinery (blocks/cache/policies/stepper/selector) were removed with the diffusion
 // program (THE_CUT); GenerateConfig/SampleConfig/GenerateResult survive here because generate_ar.cpp
 // (engine/core/src/generate_ar.cpp) -- the autoregressive white-box loop -- reuses them verbatim: one
 // request shape and one result shape for both eras kept the server/CLI/viz code that reads them
-// unchanged when AR became the only generator. See cloze/generate_ar.hpp for the actual entry point.
+// unchanged when AR became the only generator. See clozn/generate_ar.hpp for the actual entry point.
 #pragma once
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
-#include "cloze/events.hpp"
+#include "clozn/events.hpp"
 
-namespace cloze {
+namespace clozn {
 
 struct GenerateConfig {
     int max_new;        // tokens/masked-slots to generate after the prompt
@@ -56,4 +56,4 @@ struct GenerateResult {
     int diverged_at = -1;        // generation index of the first divergent token (-1 if none/inactive)
 };
 
-}  // namespace cloze
+}  // namespace clozn

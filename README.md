@@ -109,7 +109,7 @@ first: `cd engine/core && build_gpu.bat` (GPU, CUDA) or `build_serve.bat` (CPU).
 | Dir | What |
 |---|---|
 | `clozn/`    | the product Python package — server/API, runlog, memory, receipts, replay, steering, readouts, the J-lens proxy, the tiny-test harness (`python -m clozn`) |
-| `engine/`   | the runtime ("cloze"): C++/ggml core + `kernels/` (CUDA) + the Python `lab/` reference — runs models, emits the state-stream, harvests activations, applies steers, serves `/jlens` |
+| `engine/`   | the runtime ("clozn"): C++/ggml core + `kernels/` (CUDA) + the Python `lab/` reference — runs models, emits the state-stream, harvests activations, applies steers, serves `/jlens` |
 | `studio/`   | the white-box UI — the Run Inspector (receipts, trace, lineage, memory, tone dials, J-lens readouts), served by the backend |
 | `protocol/` | the one state-stream contract the engine emits and the studio consumes |
 | `docs/`     | architecture, the consolidated roadmap, and the honest technical account |

@@ -47,10 +47,10 @@ echo "$SHA  $MODEL" | sha256sum --check
 python engine/core/third_party/bootstrap_llama.py
 cmake -S engine/core -B engine/core/build-serve -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCLOZE_BUILD_GGML=ON \
-  -DCLOZE_BUILD_SERVE=ON \
+  -DCLOZN_BUILD_GGML=ON \
+  -DCLOZN_BUILD_SERVE=ON \
   -DGGML_CUDA=OFF
-cmake --build engine/core/build-serve --target cloze-server -j 2
+cmake --build engine/core/build-serve --target clozn-server -j 2
 
 python -m unittest -v tests.test_runtime_architecture tests.test_product_smoke
 python -m clozn smoke "$MODEL" --cpu --json --timeout 300 --startup-timeout 240

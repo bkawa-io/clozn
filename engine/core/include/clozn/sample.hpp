@@ -1,5 +1,5 @@
-// cloze/sample.hpp — the §4.3 confidence-select CPU reference, C++ side. Mirrors
-// lab/cloze_lab/generate.py::sample_candidates: per requested position, a token and its
+// clozn/sample.hpp — the §4.3 confidence-select CPU reference, C++ side. Mirrors
+// lab/clozn_lab/generate.py::sample_candidates: per requested position, a token and its
 // float64 softmax probability (the commit confidence).
 //
 // Default = greedy (temperature 0, no penalty): argmax token + its raw softmax prob, bit-for-bit
@@ -14,10 +14,10 @@
 #include <random>
 #include <vector>
 
-#include "cloze/model.hpp"     // ForwardResult
-#include "cloze/policies.hpp"  // Candidate
+#include "clozn/model.hpp"     // ForwardResult
+#include "clozn/policies.hpp"  // Candidate
 
-namespace cloze {
+namespace clozn {
 
 // A stateful, AR-only token constraint. `apply` runs on the raw logits before
 // repetition penalties, temperature, top-k/top-p, or token selection; `accept`
@@ -77,4 +77,4 @@ Candidate sample_committed_candidate(const ForwardResult& fwd,
                                      int position,
                                      const SampleOpts& opts = {});
 
-}  // namespace cloze
+}  // namespace clozn

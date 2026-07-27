@@ -80,7 +80,7 @@ class RequestContext:
                               EngineClient.cancel(), so a cancel request never has to already know the
                               worker's own id scheme.
       prompt_tokens         -- the engine's own `gen_started` frame reports `prompt_tokens` verbatim
-                              (engine/core/include/cloze/events.hpp); chat_stream() captures it off the
+                              (engine/core/include/clozn/events.hpp); chat_stream() captures it off the
                               first such frame it parses, the same way it already captures `engine_req`.
                               None until that frame arrives (or on a substrate/test double whose stream
                               never emits one) -- read by clozn.server.ndjson (the Ollama NDJSON shim,

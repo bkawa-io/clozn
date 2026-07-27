@@ -1,10 +1,10 @@
 """Server config -- path resolution + process-wide startup constants for clozn.server.app.
 
 Imported FIRST by app.py so REPO_ROOT/DEMO exist and engine/client is on sys.path by the time app.py
-goes on to `from cloze_engine import ...`. These side effects are deliberately module-load-time.
+goes on to `from clozn_engine import ...`. These side effects are deliberately module-load-time.
 
 TORCH-FREE BY CONSTRUCTION: this runs on the PRODUCT import path, so it must not pull in anything only
-the lab needs. The `engine/lab` sys.path entry (for the Dream substrate's cloze_lab) and the HF hub
+the lab needs. The `engine/lab` sys.path entry (for the Dream substrate's clozn_lab) and the HF hub
 symlink workaround used to live here; they moved to the `clozn lab` entry point (clozn/lab/app.py). A
 product `clozn serve` process needs neither, and keeping them off this path is part of what makes the
 product package physically unable to reach the Torch lab code.

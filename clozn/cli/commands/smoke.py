@@ -318,9 +318,9 @@ def _preflight(model: str, cpu: bool, report: Report) -> str | None:
     engine = None
     try:
         engine, _, gpu = find_engine(prefer_gpu=not cpu)
-        report.add("cloze-server build exists", True, f"{engine} ({'GPU' if gpu else 'CPU'})")
+        report.add("clozn-server build exists", True, f"{engine} ({'GPU' if gpu else 'CPU'})")
     except Exception as exc:
-        report.add("cloze-server build exists", False, str(exc))
+        report.add("clozn-server build exists", False, str(exc))
 
     studio_root = os.path.abspath(os.path.expanduser(
         os.environ.get("CLOZN_STUDIO_DIR", os.path.join(REPO, "studio"))

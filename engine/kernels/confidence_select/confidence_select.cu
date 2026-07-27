@@ -1,4 +1,4 @@
-// confidence_select.cu — Cloze confidence-select kernel (DESIGN.md §4.3)
+// confidence_select.cu — Clozn confidence-select kernel (DESIGN.md §4.3)
 // =============================================================================
 //  GREEDY PATH COMPILED + VALIDATED on RTX 5080 / CUDA 13.3 (sm_120).
 //  The deterministic surface (argmax pick; max_prob/margin/neg_entropy confidence;
@@ -49,7 +49,7 @@
 #include <curand_kernel.h>
 #endif
 
-namespace cloze {
+namespace clozn {
 
 #if defined(__CUDACC__)
 
@@ -310,4 +310,4 @@ void confidence_select(
 
 #endif  // __CUDACC__
 
-}  // namespace cloze
+}  // namespace clozn

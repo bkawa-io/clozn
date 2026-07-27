@@ -1,8 +1,8 @@
-# engine/ — the runtime ("cloze")
+# engine/ — the runtime ("clozn")
 
 The performant local model runtime. Runs real models on ggml/llama.cpp (diffusion ·
 autoregressive · later recurrent), **emits the state-stream**, **applies steers**, and hosts
-the interp primitives that must scale. This is what used to be the `cloze` repo.
+the interp primitives that must scale. This is what used to be the `clozn` repo.
 
 - `core/` — the C++/ggml runtime: scheduler, the L0 ggml adapter, the white-box server + viz,
   the CLI tools. The daily driver.

@@ -2,15 +2,15 @@
 (GGUF tokenizer.chat_template via llama_chat_apply_template) so clozn formats prompts per-model -- Qwen
 ChatML, Llama-3 headers, Gemma turns, ... -- instead of a hardcoded Qwen string. Two model-free layers:
 
-  * cloze_engine.EngineClient.apply_template -- the thin SDK wrapper (POST /apply_template body shape,
+  * clozn_engine.EngineClient.apply_template -- the thin SDK wrapper (POST /apply_template body shape,
     add_assistant default, return value).
   * clozn_server._engine_tmpl -- the module helper the EngineSubstrate generation paths call in place of
     the old _qwen_tmpl; it just delegates to engine.apply_template (errors propagate, no silent Qwen
     fallback).
 
-The C++ /apply_template route itself (engine/core/serve/cloze_server.cpp) and the actual per-model
+The C++ /apply_template route itself (engine/core/serve/clozn_server.cpp) and the actual per-model
 formatting (Qwen ChatML byte-identical to the old _qwen_tmpl; Llama-3 <|begin_of_text|><|start_header_id|>)
-are proved LIVE against a running cloze-server on both models -- not exercised by this offline suite.
+are proved LIVE against a running clozn-server on both models -- not exercised by this offline suite.
 """
 import os
 import sys
@@ -20,7 +20,7 @@ REPO_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, os.path.join(REPO_ROOT, "engine", "client"))
 
-from cloze_engine import EngineClient          # noqa: E402
+from clozn_engine import EngineClient          # noqa: E402
 from clozn.server import app as cs           # noqa: E402
 
 
@@ -72,7 +72,7 @@ def test_apply_template_info_accepts_an_older_worker_without_count(monkeypatch):
 
 
 def test_apply_template_info_rejects_a_malformed_worker_count(monkeypatch):
-    from cloze_engine import EngineError
+    from clozn_engine import EngineError
 
     ec = EngineClient(port=1)
     monkeypatch.setattr(ec, "_post", lambda path, body: {

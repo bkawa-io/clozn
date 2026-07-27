@@ -11,7 +11,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(REPO_ROOT, "engine", "client"))
 
-from cloze_engine import EngineClient, EngineError  # noqa: E402
+from clozn_engine import EngineClient, EngineError  # noqa: E402
 
 
 def _prepared(**updates):

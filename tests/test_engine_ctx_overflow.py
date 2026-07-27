@@ -14,7 +14,7 @@ Two bugs this locks down:
      token on the 7B); see the manual repro in the task report. This test focuses on the fast, deterministic
      overflow case, which is the one that reproduces cheaply.
 
-Gated behind -m model: it launches the REAL cloze-server.exe on the GPU (needs the build + the Llama-1B
+Gated behind -m model: it launches the REAL clozn-server.exe on the GPU (needs the build + the Llama-1B
 GGUF). Skips cleanly when either is missing. Mirrors test_timetravel_determinism.py's -m model gating.
 
     python -m pytest tests/test_engine_ctx_overflow.py -m model -q
@@ -65,7 +65,7 @@ def _post(base, path, body, timeout=60):
 
 @pytest.fixture(scope="module")
 def engine():
-    """Launch the real cloze-server on Llama-1B at --ctx 128; skip cleanly if the build/model is missing."""
+    """Launch the real clozn-server on Llama-1B at --ctx 128; skip cleanly if the build/model is missing."""
     try:
         from clozn.cli import find_engine, _env_with_dlls
     except Exception as e:                                    # pragma: no cover

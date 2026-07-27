@@ -19,7 +19,7 @@ Two things this file proves, model-free (no C++ engine process, no GPU, no real 
       mechanism un-gated) in test_steer_concept_routes.py; this file's custom_delete test proves the same
       un-gating here, directly against a FakeEngine whose harvest() would blow up if ever called.
 
-FakeEngine.harvest() always raises urllib.error.URLError -- the exact exception cloze_engine.EngineClient
+FakeEngine.harvest() always raises urllib.error.URLError -- the exact exception clozn_engine.EngineClient
 lets propagate on a connection refusal (EngineClient._request only translates an HTTPError, i.e. the
 engine responding with a JSON 4xx, into EngineError; a plain connection failure is a raw URLError). Drives
 the real do_POST handler via the object.__new__(H) no-socket trick (mirrors test_rewrite_route.py's

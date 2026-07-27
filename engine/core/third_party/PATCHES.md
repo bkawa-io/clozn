@@ -30,7 +30,7 @@ patch to be reverse-applied. An unverifiable or drifted tree is refused and must
 
 ## The patch (`patches/0001-llama_get_logits_tensor.patch`)
 
-One small **additive** change (marked `CLOZE PATCH` in-source across `include/llama.h` +
+One small **additive** change (marked `CLOZN PATCH` in-source across `include/llama.h` +
 `src/llama-context.{cpp,h}`): `llama_get_logits_tensor` + `llama_set_skip_raw_logits`. They let the §4.3
 confidence-select kernel read the per-step logits **on-device** and skip llama's decode-time device→host
 copy — the enabler for a zero-copy multi-position (diffusion) speedup.
@@ -49,5 +49,5 @@ host-logits path (see the flag-guard note below). Defaults unchanged either way.
 
 - Upstream the accessors as a proper PR — ideally a **multi-position** GPU logits interface — so the
   feature needs no private patch at all (keeps the fork at zero). WIP.
-- Optionally gate the `model_ggml.cpp` call sites behind a `CLOZE_ZEROCOPY` CMake flag (default off), so a
+- Optionally gate the `model_ggml.cpp` call sites behind a `CLOZN_ZEROCOPY` CMake flag (default off), so a
   fully-stock llama.cpp with **no** patch also builds cleanly.

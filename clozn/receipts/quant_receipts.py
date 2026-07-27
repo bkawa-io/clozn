@@ -6,7 +6,7 @@ broke exactly these refusal/formatting behaviors, at these tokens."
 
 Model-free and GPU-free by construction: this module never talks to a model. Its whole surface is a pure
 function of two already-computed /score outputs (EngineClient.score / EngineSubstrate.score_tokens
-responses -- see engine/client/cloze_engine.py's `score()` docstring and
+responses -- see engine/client/clozn_engine.py's `score()` docstring and
 engine/core/serve/routes_whitebox.cpp's /score handler for the exact wire shape reproduced in fixtures
 here: `[{"id","piece","logprob","topk"?: [{"id","piece","logprob"}, ...]}, ...]`, topk sorted DESCENDING
 by logprob so `topk[0]` IS that arm's argmax at that forced step). Mirrors receipts/rederive.py's own

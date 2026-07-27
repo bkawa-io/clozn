@@ -4,7 +4,7 @@ Imports the modules that make up the live clozn studio and checks their key stru
 any model (no GPU, no weights), so it catches import/syntax/refactor regressions in seconds. The live
 backend is the clozn/ package -- everything left in research/ is research spikes from the journey.
 
-    cloze .venv python tests/test_studio.py        # exits 0 if green, 1 if anything regressed
+    clozn .venv python tests/test_studio.py        # exits 0 if green, 1 if anything regressed
 """
 import os
 import sys
@@ -24,7 +24,7 @@ def main():
     (which would abort the collector). Run it directly for the smoke test; see the module docstring.
     """
     sys.path.insert(0, os.path.dirname(HERE))                          # repo root, for `from clozn import ...`
-    sys.path.insert(0, os.path.join(HERE, "..", "engine", "client"))   # cloze_engine SDK
+    sys.path.insert(0, os.path.join(HERE, "..", "engine", "client"))   # clozn_engine SDK
 
     _checks = []
 

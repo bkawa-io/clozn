@@ -35,7 +35,7 @@ exactly like clozn_server.py's own boot does (same load7b() nf4 backbone, same s
 same studio_custom_qwen.json / studio_library.json loads), so run it in the same environment the studio
 itself runs in:
 
-    cloze .venv python research/deploy_dial_library.py
+    clozn .venv python research/deploy_dial_library.py
 
 --check (no model, no GPU, no ~/.clozn writes -- reads only the two small JSON files this script cares
 about) prints the plan: which of the 27 are already deployed, which would be (re)computed, and any name

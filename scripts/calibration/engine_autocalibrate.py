@@ -80,8 +80,8 @@ engine generations (real dose + shuffled-null dose; dose 0 is shared, one genera
 call per generated reply for engine_alignment. --smoke (1-2 dials, 3 doses, 2 prompts) proves the wiring in
 a handful of HTTP round-trips -- NOT a finding.
 
-Run (needs a live cloze-server; see engine_steer_spike.py for the same connection convention):
-    PY=/c/Users/brigi/src/cloze/.venv/Scripts/python.exe   (any numpy-having interpreter works too)
+Run (needs a live clozn-server; see engine_steer_spike.py for the same connection convention):
+    PY=/c/Users/brigi/src/clozn/.venv/Scripts/python.exe   (any numpy-having interpreter works too)
     $PY research/dial_autocalibrate_engine.py --smoke --port 8092 --layer 14 \\
         --out research/runs/dial_autocalibrate_engine_smoke.json
 Full shipped-library sweep:
@@ -636,7 +636,7 @@ def main(argv=None):
     args = build_arg_parser().parse_args(argv)
 
     sys.path.insert(0, os.path.join(HERE, "..", "..", "engine", "client"))
-    from cloze_engine import EngineClient   # noqa: E402 -- deferred: keeps a bare module import client-free
+    from clozn_engine import EngineClient   # noqa: E402 -- deferred: keeps a bare module import client-free
     from clozn.behavior.steering.engine_adapter import EngineSteer        # noqa: E402 -- deferred: keeps bare import engine-client-free
 
     ec = EngineClient(host=args.host, port=args.port, timeout=240)

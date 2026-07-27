@@ -1,11 +1,11 @@
-// cloze_ar — autoregressive white-box CLI. Decode a prompt left-to-right through any llama.cpp AR
+// clozn_ar — autoregressive white-box CLI. Decode a prompt left-to-right through any llama.cpp AR
 // GGUF (Llama/Qwen/Mistral/...) and print, per generated token, the logit-lens (top-k next-token
 // candidates) + the activation read. Proves the AR read harness — GgmlAdapter::ar_forward +
-// generate_ar + the shared white-box helpers — end-to-end, the AR counterpart of `cloze`.
+// generate_ar + the shared white-box helpers — end-to-end, the AR counterpart of `clozn`.
 //
-//   cloze-ar <model.gguf> [--gpu-layers N] [--new N] [--prompt "..."] [--temp T] [--no-features]
-#include "cloze/generate_ar.hpp"
-#include "cloze/model_ggml.hpp"
+//   clozn-ar <model.gguf> [--gpu-layers N] [--new N] [--prompt "..."] [--temp T] [--no-features]
+#include "clozn/generate_ar.hpp"
+#include "clozn/model_ggml.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -14,7 +14,7 @@
 #include <variant>
 #include <vector>
 
-using namespace cloze;
+using namespace clozn;
 
 int main(int argc, char** argv) {
     if (argc < 2) {

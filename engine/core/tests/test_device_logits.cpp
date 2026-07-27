@@ -1,6 +1,6 @@
 // test_device_logits.cpp — the resolving experiment for the zero-copy §4.3 path (Phase 3).
 // Gates the whole device-logits integration: with GPU offload (GGML_CUDA), does
-// llama_get_logits_tensor (the CLOZE PATCH accessor) return a tensor that (1) lives in DEVICE
+// llama_get_logits_tensor (the CLOZN PATCH accessor) return a tensor that (1) lives in DEVICE
 // memory (ggml_backend_buffer_is_host == false) so tensor->data is a usable CUDA pointer, and
 // (2) IS the logits — a row D2H'd from it byte-matches the same row of llama_get_logits? If both
 // hold, the kernel can read the logits in place with no full-vocab D2H. If (1) fails, the logits
@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
     }
     if (llama_decode(ctx, batch) != 0) { std::fprintf(stderr, "decode failed\n"); return 1; }
 
-    // The CLOZE PATCH accessor: the device-resident logits graph-output tensor.
+    // The CLOZN PATCH accessor: the device-resident logits graph-output tensor.
     ggml_tensor* t = llama_get_logits_tensor(ctx);
     if (!t) { std::fprintf(stderr, "llama_get_logits_tensor returned null\n"); return 2; }
     const bool is_host = ggml_backend_buffer_is_host(t->buffer);

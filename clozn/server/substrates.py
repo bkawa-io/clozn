@@ -1161,7 +1161,7 @@ class EngineSubstrate(Substrate):
                         req.engine_req = str(engine_req)
                 if req.prompt_tokens is None and obj.get("type") == "gen_started":
                     # roadmap Phase 2 #1 (Ollama NDJSON streaming): the engine's own accounting of how
-                    # many prompt tokens this generation evaluated (engine/core/include/cloze/events.hpp),
+                    # many prompt tokens this generation evaluated (engine/core/include/clozn/events.hpp),
                     # captured once off the first gen_started frame -- honest source for the Ollama shim's
                     # `prompt_eval_count` (clozn.server.ndjson), never derived/guessed elsewhere.
                     prompt_tokens = obj.get("prompt_tokens")

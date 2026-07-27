@@ -3,8 +3,8 @@ ENGINE-side dial usable-range calibration -- see that module's own docstring for
 from dial_autocalibrate.py's PyTorch rig).
 
 No engine, no model, no GPU, no torch: every test drives the module through a FAKE engine client (_FakeEC,
-a stand-in for cloze_engine.EngineClient) and a FAKE steer object (_FakeSteer, a stand-in for
-steering.EngineSteer) -- NEITHER imports steering.py or cloze_engine.py, so this file exercises exactly the
+a stand-in for clozn_engine.EngineClient) and a FAKE steer object (_FakeSteer, a stand-in for
+steering.EngineSteer) -- NEITHER imports steering.py or clozn_engine.py, so this file exercises exactly the
 same "numpy + a harvest/generate duck-type, no torch" surface dial_autocalibrate_engine.py itself promises
 to run on.
 
@@ -42,7 +42,7 @@ import engine_autocalibrate as dae   # noqa: E402
 # fakes
 # ================================================================================================
 class _FakeHarvest:
-    """Stands in for cloze_engine.Harvest: dial_autocalibrate_engine only ever reads `.activations`."""
+    """Stands in for clozn_engine.Harvest: dial_autocalibrate_engine only ever reads `.activations`."""
     def __init__(self, activations):
         self.activations = activations
 

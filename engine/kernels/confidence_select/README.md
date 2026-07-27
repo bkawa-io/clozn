@@ -1,6 +1,6 @@
 # confidence-select kernel
 
-The one new kernel Cloze ships (DESIGN.md §4.3). It fuses, **per masked
+The one new kernel Clozn ships (DESIGN.md §4.3). It fuses, **per masked
 position** in a denoise step:
 
 1. sample a token (greedy argmax, or a draw from the temperature/top_p-shaped
@@ -39,7 +39,7 @@ Confidence variants (DESIGN open question #3, mirroring open-dCoder's
 | `margin`      | top1 − top2 probability                     |
 | `neg_entropy` | Σ p·log p (already negative; higher = peakier)|
 
-Selection variants (mirroring `cloze_lab.scheduler.policies`):
+Selection variants (mirroring `clozn_lab.scheduler.policies`):
 
 - **top-k** (`k_commit`): the `min(k, n_masked)` highest-confidence positions,
   ties broken toward the **lower** index.
@@ -51,7 +51,7 @@ Selection variants (mirroring `cloze_lab.scheduler.policies`):
 
 | file | status | what it is |
 |---|---|---|
-| `reference.py` | **TESTED oracle** | self-contained numpy implementation of the full contract. Does not import `cloze_lab`. |
+| `reference.py` | **TESTED oracle** | self-contained numpy implementation of the full contract. Does not import `clozn_lab`. |
 | `test_reference.py` | **TESTED** | pytest suite: contract/shape, greedy, top_p, confidence variants, selection, and parity against the lab. |
 | `confidence_select.cuh` / `.cu` | **greedy paths validated** | CUDA implementation of the contract. Compiled on RTX 5080 / CUDA 13.3 (`sm_120`); its deterministic paths match `reference.py` exactly (see `validate.py`). The sampled (curand) path and the `top_p` filter are still scaffold/unverified. |
 | `validate.cu` / `validate.py` | **validation harness** | feed identical logits to the CUDA kernel and the numpy reference and diff picks / selected / confidences across every deterministic combo. |
@@ -77,7 +77,7 @@ tested on CPU, and is upstreamed when the GPU path is verified.
 python -m pytest test_reference.py -q   # from kernels/confidence_select, with the project venv active
 ```
 
-The parity tests (group `f`) import `cloze_lab` (numpy-only paths) and assert the
+The parity tests (group `f`) import `clozn_lab` (numpy-only paths) and assert the
 reference reproduces `generate.sample_candidates` (token ids + confidences,
 greedy and sampled, seeding both sides identically) and the `ConfidenceTopK` /
 `Threshold` policy selections exactly. If a parity test fails, fix

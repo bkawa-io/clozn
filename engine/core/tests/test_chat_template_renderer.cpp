@@ -24,9 +24,9 @@ std::string read_file(const std::string& path) {
     return contents.str();
 }
 
-cloze::ChatTemplateRenderer ministral_renderer() {
-    const std::string source_dir = CLOZE_SOURCE_DIR;
-    return cloze::ChatTemplateRenderer(read_file(
+clozn::ChatTemplateRenderer ministral_renderer() {
+    const std::string source_dir = CLOZN_SOURCE_DIR;
+    return clozn::ChatTemplateRenderer(read_file(
         source_dir + "/third_party/llama.cpp/models/templates/"
                      "mistralai-Ministral-3-14B-Reasoning-2512.jinja"));
 }
@@ -51,7 +51,7 @@ void test_plain_content() {
     auto renderer = ministral_renderer();
     require(renderer.available(), "template override should be available");
 
-    cloze::ChatTemplateRequest request;
+    clozn::ChatTemplateRequest request;
     request.messages_json = R"json([{"role":"user","content":"Hello"}])json";
     const auto prepared = renderer.prepare(request);
     require(!prepared.prompt.empty(), "plain request should render a prompt");
@@ -68,7 +68,7 @@ void test_plain_content() {
 
 void test_tools_and_history() {
     auto renderer = ministral_renderer();
-    cloze::ChatTemplateRequest request;
+    clozn::ChatTemplateRequest request;
     request.messages_json = R"json([
       {"role":"system","content":"Be concise."},
       {"role":"user","content":"Weather in Rome?"},
@@ -114,7 +114,7 @@ void test_tools_and_history() {
 
 void test_json_schema() {
     auto renderer = ministral_renderer();
-    cloze::ChatTemplateRequest request;
+    clozn::ChatTemplateRequest request;
     request.messages_json = R"json([{"role":"user","content":"Give an invoice."}])json";
     request.json_schema_json = R"json({
       "type":"object",
@@ -141,7 +141,7 @@ void test_json_schema() {
 
 void test_fail_closed_request_validation() {
     auto renderer = ministral_renderer();
-    cloze::ChatTemplateRequest request;
+    clozn::ChatTemplateRequest request;
     request.messages_json = R"json([{"role":"user","content":"Hello"}])json";
     request.tools_json = weather_tools;
     request.tool_choice_json =
@@ -166,7 +166,7 @@ void test_fail_closed_request_validation() {
 
     // A syntactically valid template that ignores tool metadata must not silently turn an active
     // structured request into unconstrained text generation.
-    cloze::ChatTemplateRenderer plain_renderer(
+    clozn::ChatTemplateRenderer plain_renderer(
         R"jinja({% for message in messages %}{{ message['content'] }}{% endfor %})jinja");
     request.messages_json = R"json([{"role":"user","content":"Hello"}])json";
     request.tools_json = weather_tools;

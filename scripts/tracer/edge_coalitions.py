@@ -45,7 +45,7 @@ def main():
     from clozn.cli.engine_process import spawn_engine
     from clozn.cli.commands.models import _flags_for
 
-    subprocess.run(["taskkill", "/F", "/IM", "cloze-server.exe"], capture_output=True); time.sleep(1)
+    subprocess.run(["taskkill", "/F", "/IM", "clozn-server.exe"], capture_output=True); time.sleep(1)
     # boot with knockout support (no flash attn) via the flags dict's extra_args passthrough
     flags = _flags_for(GGUF)
     flags["extra_args"] = ["--no-flash-attn"]
@@ -126,7 +126,7 @@ def main():
             print(f"{prompt[:34]!r:<36} k={k} set {min_delta:+.2f} vs rand {ctl_max:.2f} "
                   f"({row['separation_vs_random']}x) | best span(k) {best_span:+.2f}", flush=True)
     finally:
-        subprocess.run(["taskkill", "/F", "/IM", "cloze-server.exe"], capture_output=True)
+        subprocess.run(["taskkill", "/F", "/IM", "clozn-server.exe"], capture_output=True)
 
     seps = [r["separation_vs_random"] for r in results if r["separation_vs_random"]]
     beats = sum(1 for s in seps if s >= 2.0)

@@ -51,7 +51,7 @@ _RECEIPT = {
     "best_control_ratio": 20.0, "span": [1], "span_tokens": ["Japan"],
 }
 
-_BLOCKED = {"ok": False, "blocked": "engine lacks attn_knockout; start cloze-server with --no-flash-attn"}
+_BLOCKED = {"ok": False, "blocked": "engine lacks attn_knockout; start clozn-server with --no-flash-attn"}
 
 
 # --------------------------------------------------------------------------------------------- 404 / 400

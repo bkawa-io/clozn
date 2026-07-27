@@ -13,7 +13,7 @@ This module owns ONLY the CLI shell around that machinery:
   * the two-engine boot (clozn.cli.engine_process.spawn_engine -- the SAME boot path `clozn run`/`clozn
     serve` already use -- on two separate ports, one process per quant file),
   * a lightweight duct-typed substrate (`_EngineScoreSub`) that exposes the `.score_tokens(...)` contract
-    `quant_receipt_for_run` needs, backed by ONE `EngineClient` (engine/client/cloze_engine.py) per port,
+    `quant_receipt_for_run` needs, backed by ONE `EngineClient` (engine/client/clozn_engine.py) per port,
   * gathering runs (fresh generation under A's engine, or `clozn.runs.store`'s run journal),
   * aggregating N per-run receipts into one ladder, and rendering it.
 All the HONESTY machinery -- argmax-flip vs dependence-shift, the "unknown" bucket, the caveat text --
@@ -29,7 +29,7 @@ FakeScoreSub, `aggregate_receipts`/`format_ladder` against FIXTURE receipts (bui
 `quant_receipts.diff_quant_scores` on fixture score arrays, exactly like that module's own tests), and
 `add_subparser`'s argparse wiring.
 
-DEFERRED: the actual LIVE two-engine smoke -- `cmd_quant_check` really booting two `cloze-server.exe`
+DEFERRED: the actual LIVE two-engine smoke -- `cmd_quant_check` really booting two `clozn-server.exe`
 processes and scoring a real model over the wire. It is written and reachable, but needs a free GPU and
 two engine processes, so it is never invoked by this module's own tests. Once a GPU is free:
 
@@ -77,7 +77,7 @@ _TOP_FLIPS_ACROSS_RUNS = 20
 # ------------------------------------------------------------------------------------- the engine substrate
 
 class _EngineScoreSub:
-    """Duct-typed substrate over ONE `EngineClient` (engine/client/cloze_engine.py -- one quant file's own
+    """Duct-typed substrate over ONE `EngineClient` (engine/client/clozn_engine.py -- one quant file's own
     engine process/port), exposing exactly the `.score_tokens(messages, continuation_ids=None, *,
     continuation=None, block=None, steer_strengths=None, steer_vec=None, topk=0)` contract
     `clozn.receipts.rederive.score_arm` / `quant_receipts.quant_receipt_for_run` call -- mirrors
@@ -148,7 +148,7 @@ def _import_engine_client():
     client_dir = os.path.join(REPO, "engine", "client")
     if client_dir not in sys.path:
         sys.path.insert(0, client_dir)
-    from cloze_engine import EngineClient
+    from clozn_engine import EngineClient
     return EngineClient
 
 

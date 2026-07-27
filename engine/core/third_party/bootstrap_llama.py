@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproducibly reconstruct the vendored llama.cpp from a PINNED upstream commit + the local CLOZE patches.
+"""Reproducibly reconstruct the vendored llama.cpp from a PINNED upstream commit + the local CLOZN patches.
 
 `third_party/llama.cpp` is a build dependency that is GITIGNORED (local-only) -- it is NOT committed. Only
 this script, PATCHES.md, and patches/*.patch are tracked, so the whole ~340k-line upstream tree stays out
@@ -89,7 +89,7 @@ def _verify() -> bool:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Reconstruct vendored llama.cpp @ pinned commit + CLOZE patches.")
+    ap = argparse.ArgumentParser(description="Reconstruct vendored llama.cpp @ pinned commit + CLOZN patches.")
     ap.add_argument("--force", action="store_true", help="remove any existing llama.cpp and re-clone")
     args = ap.parse_args(argv)
 

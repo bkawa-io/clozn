@@ -1,5 +1,5 @@
-// cloze/events.hpp — typed generation events (DESIGN §5.1), the event-sourced spine, C++ port
-// of lab/cloze_lab/scheduler/events.py. The scheduler emits these; the CLI, benchmarks, logs, and
+// clozn/events.hpp — typed generation events (DESIGN §5.1), the event-sourced spine, C++ port
+// of lab/clozn_lab/scheduler/events.py. The scheduler emits these; the CLI, benchmarks, logs, and
 // the future server are consumers only (DESIGN invariant 2). Field names are the §5.1 wire keys
 // verbatim (t/type/pos/id/conf/old/span/...), so JSONL logs are these structs serialized with no
 // mapping layer — replayable across the lab and the C++ core.
@@ -11,7 +11,7 @@
 #include <variant>
 #include <vector>
 
-namespace cloze {
+namespace clozn {
 
 // One inked token, as it appears in tokens_committed items.
 struct CommitItem {
@@ -150,4 +150,4 @@ std::string to_jsonl_line(const Event& event);
 // Flight-recorder log: one event per line, replayable. Returns false if the file can't be opened.
 bool write_jsonl(const std::vector<Event>& events, const std::string& path);
 
-}  // namespace cloze
+}  // namespace clozn

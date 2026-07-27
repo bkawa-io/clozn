@@ -2,7 +2,7 @@
 memory ("verify with a causal receipt" for the fit -> whatlearned -> recall -> delete_term demo).
 
 Model-free and GPU-free (mirrors tests/test_swap_receipt.py's own style, this module's template): the
-engine is a FakeEngineClient (no real cloze-server, no socket) wired through a FakeSub exposing
+engine is a FakeEngineClient (no real clozn-server, no socket) wired through a FakeSub exposing
 `.engine` -- the same duck-typed shape clozn.server.app.EngineSubstrate presents. Anchored bags are
 hand-built dicts written straight into an isolated `anchored.BAGS_PATH` (no fit_bag/DirProvider needed --
 the receipt only ever READS the store; fitting is covered by tests/test_anchored_routes.py).

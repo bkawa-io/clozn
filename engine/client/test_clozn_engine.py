@@ -4,7 +4,7 @@ Covers the two things that can silently corrupt the read -> edit -> write -> obs
 the base64 LE-float32 wire codec, and the request shapes EngineClient sends. The transport
 is stubbed (the client's _request is replaced), so these never open a socket.
 
-Run with pytest (`pytest test_cloze_engine.py -q`) or directly (`python test_cloze_engine.py`).
+Run with pytest (`pytest test_clozn_engine.py -q`) or directly (`python test_clozn_engine.py`).
 """
 
 from __future__ import annotations
@@ -13,11 +13,11 @@ import base64
 
 import numpy as np
 
-from cloze_engine import EngineClient, EngineError, Observation, decode_tensor, flatten_values
+from clozn_engine import EngineClient, EngineError, Observation, decode_tensor, flatten_values
 
 
 def _wire(arr: np.ndarray) -> dict:
-    """Encode a numpy array the way cloze_server.cpp's tensor_json_f32 does."""
+    """Encode a numpy array the way clozn_server.cpp's tensor_json_f32 does."""
     a = np.ascontiguousarray(arr, dtype="<f4")
     return {"dtype": "float32", "shape": list(a.shape),
             "data": base64.b64encode(a.tobytes()).decode("ascii")}

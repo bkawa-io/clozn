@@ -1,17 +1,17 @@
-// cloze_bench.cpp — the §9 quant-calibration sweep: the honest quality column for the
+// clozn_bench.cpp — the §9 quant-calibration sweep: the honest quality column for the
 // quantization axis (DESIGN invariant 5). Quantizes an f16 GGUF to several levels in-process
 // (llama_model_quantize), runs a fixed prompt set through each under greedy/deterministic
 // decoding, and reports per quant: file size, token-AGREEMENT vs the f16 reference, and tok/s.
 // Greedy makes the picks deterministic, so divergence is exact token disagreement — no speed
 // number without its quality column.
 //
-//   cloze-bench <model-f16.gguf> [--gpu-layers N] [--max-new N] [--steps T] [--ctx N]
+//   clozn-bench <model-f16.gguf> [--gpu-layers N] [--max-new N] [--steps T] [--ctx N]
 //
 // Runs the autoregressive generator (generate_ar); the diffusion generate() this tool used to call
 // was removed with the diffusion program (THE_CUT) -- quant calibration now measures the same AR
 // models the product actually serves.
-#include "cloze/generate_ar.hpp"
-#include "cloze/model_ggml.hpp"
+#include "clozn/generate_ar.hpp"
+#include "clozn/model_ggml.hpp"
 #include "llama.h"
 
 #include <chrono>
@@ -21,7 +21,7 @@
 #include <string>
 #include <vector>
 
-using namespace cloze;
+using namespace clozn;
 namespace fs = std::filesystem;
 
 namespace {
@@ -110,7 +110,7 @@ int main(int argc, char** argv) {
     llama_log_set(quiet_log, nullptr);
     llama_backend_init();
 
-    std::fprintf(stderr, "[cloze-bench] %s, %zu prompts, max_new=%d steps=%d (greedy)\n",
+    std::fprintf(stderr, "[clozn-bench] %s, %zu prompts, max_new=%d steps=%d (greedy)\n",
                  gpu_layers > 0 ? "GPU" : "CPU", prompts.size(), cfg.max_new, cfg.steps);
 
     // Reference: the f16 model.
@@ -121,7 +121,7 @@ int main(int argc, char** argv) {
 
     const fs::path dir = fs::path(ref_path).parent_path();
     for (const QuantSpec& q : quants) {
-        const std::string out_path = (dir / ("cloze-bench-" + std::string(q.name) + ".gguf")).string();
+        const std::string out_path = (dir / ("clozn-bench-" + std::string(q.name) + ".gguf")).string();
         if (!fs::exists(out_path)) {
             llama_model_quantize_params qp = llama_model_quantize_default_params();
             qp.ftype = q.ftype;

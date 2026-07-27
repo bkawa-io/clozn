@@ -5,7 +5,7 @@
 
 #include "server_context.hpp"
 
-namespace cloze {
+namespace clozn {
 
 void register_jlens_routes(httplib::Server& svr, ServerContext& ctx) {
     auto& model = ctx.model;
@@ -167,4 +167,4 @@ void register_jlens_routes(httplib::Server& svr, ServerContext& ctx) {
     });
 }
 
-}  // namespace cloze
+}  // namespace clozn

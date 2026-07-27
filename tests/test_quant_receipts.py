@@ -3,7 +3,7 @@ model?"
 
 Model-free throughout, on FIXTURE /score-shaped arrays (`[{"id","piece","logprob","topk"?}, ...]` --
 exactly what engine/core/serve/routes_whitebox.cpp's /score handler and
-engine/client/cloze_engine.py's score() return) -- no C++ engine, no GPU, no real socket. The live-path
+engine/client/clozn_engine.py's score() return) -- no C++ engine, no GPU, no real socket. The live-path
 seam (`quant_receipt_for_run`) is exercised only against a FakeScoreSub (mirrors test_rederive.py's own
 fake), never against a real engine -- the two-real-quant-files run stays deferred.
 

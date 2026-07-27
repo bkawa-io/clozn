@@ -33,7 +33,7 @@ TWO THINGS THAT WILL GIVE YOU A WRONG ANSWER IF YOU SKIP THEM, both measured the
      Greedy accumulation finds sets that are jointly decisive and individually invisible (measured:
      best single +0.11 vs the greedy span's +7.60 on the same prompt).
 
-Requires a cloze-server started with --no-flash-attn (flash attention fuses the softmax so the
+Requires a clozn-server started with --no-flash-attn (flash attention fuses the softmax so the
 weights never materialize); `available()` checks, and the engine refuses rather than silently
 no-opping. House style: the product-facing call never raises -- it returns a labeled
 {"ok": False, "blocked": ...} dict.
@@ -51,7 +51,7 @@ DEFAULT_ENGINE = "http://127.0.0.1:8080"
 # clozn/server/routes/provenance.py; changes nothing about trace_provenance's own logic or its 41/41
 # battery). States what this capability is, what it needs, and the maturity caveat that stays true no
 # matter which verdict comes back, so a CONTEXT_CARRIED verdict is never read as louder than it is.
-SCOPE_NOTE = ("attention-knockout provenance -- requires a cloze-server started with --no-flash-attn "
+SCOPE_NOTE = ("attention-knockout provenance -- requires a clozn-server started with --no-flash-attn "
              "(flash attention fuses the softmax, so attention weights never materialize) -- validated "
              "two-family (Qwen2.5-7B + Llama-3.1-8B, 41/41 UNDER THE CURRENT GRADING; the stored "
              "provenance_battery_*.json summary blocks predate a grading change and read 23/23 + 21/26 "
@@ -151,7 +151,7 @@ def trace_provenance(prompt: str, continuation=None, *, engine_url: str = DEFAUL
         health = json.loads(urllib.request.urlopen(engine_url.rstrip("/") + "/health",
                                                    timeout=10).read())
         if not health.get("capabilities", {}).get("attn_knockout"):
-            return {"ok": False, "blocked": "engine lacks attn_knockout; start cloze-server with "
+            return {"ok": False, "blocked": "engine lacks attn_knockout; start clozn-server with "
                                             "--no-flash-attn (flash attention fuses the softmax, so "
                                             "the attention weights never materialize)"}
         n_layer = int(health["n_layer"])

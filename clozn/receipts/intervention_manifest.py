@@ -13,7 +13,7 @@ the two hashes match byte-for-byte.
 
 Execution is duck-typed against an ``engine`` object exposing ``.score(prompt=, prompt_ids=,
 continuation=, continuation_ids=, topk=, steer=, steer_vec=, attn_knockout=) -> dict`` -- the exact
-shape ``engine.client.cloze_engine.EngineClient.score`` now exposes (extended by this same roadmap item
+shape ``engine.client.clozn_engine.EngineClient.score`` now exposes (extended by this same roadmap item
 to forward ``attn_knockout``; see that module's docstring). This is NEVER generation and NEVER
 sampling beyond what the manifest's own ``steer``/``steer_vec`` arms ask for -- every arm is one
 teacher-forced ``/score`` call, matching ``clozn.experiments.stats``'s own definition of a

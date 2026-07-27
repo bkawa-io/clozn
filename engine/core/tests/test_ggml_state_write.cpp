@@ -12,9 +12,9 @@
 #include <string>
 #include <vector>
 
-#include "cloze/model_ggml.hpp"
+#include "clozn/model_ggml.hpp"
 
-using namespace cloze;
+using namespace clozn;
 
 static double l2diff(const std::vector<float>& a, const std::vector<float>& b) {
     if (a.size() != b.size()) return 1e30;

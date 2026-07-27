@@ -57,7 +57,7 @@ def _no_block(mem, last_user, strength=None):
 
 
 class FakeEngine:
-    """Just enough of cloze_engine.EngineClient's surface for chat_stream: .base (the URL it POSTs to),
+    """Just enough of clozn_engine.EngineClient's surface for chat_stream: .base (the URL it POSTs to),
     .timeout (the urlopen timeout), and .apply_template (chat_stream now templates the prompt via the
     engine's per-model chat template, not a hardcoded Qwen string). chat_stream has no .complete()
     fallback, so unlike test_engine_substrate.py's FakeEngine, that method is never exercised here. This

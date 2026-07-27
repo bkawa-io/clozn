@@ -1,6 +1,6 @@
 """Fixture tests for clozn.analysis.provenance's pure logic (no engine, no network).
 
-trace_provenance() itself needs a live cloze-server started with --no-flash-attn; everything
+trace_provenance() itself needs a live clozn-server started with --no-flash-attn; everything
 below is the model-free seam: the dependence score and the verdict rules, both of which encode
 findings that cost real measurements to establish.
 """

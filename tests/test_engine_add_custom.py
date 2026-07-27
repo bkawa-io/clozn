@@ -51,10 +51,10 @@ import clozn.memory.mode as memory_mode                 # noqa: E402
 from clozn.behavior.steering import EngineSteer   # noqa: E402
 
 
-# --- a stand-in for cloze_engine.EngineClient (identical to test_engine_library_dials.py's) ---------
+# --- a stand-in for clozn_engine.EngineClient (identical to test_engine_library_dials.py's) ---------
 
 class _FakeHarvest:
-    """Stands in for engine.client.cloze_engine.Harvest: add_custom/compute() only read `.activations`
+    """Stands in for engine.client.clozn_engine.Harvest: add_custom/compute() only read `.activations`
     ([n_tokens, n_embd]) via `.activations.mean(0)`."""
 
     def __init__(self, activations):

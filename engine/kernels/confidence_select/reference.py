@@ -1,7 +1,7 @@
-"""Confidence-select kernel — CPU numpy reference oracle (Cloze DESIGN.md §4.3).
+"""Confidence-select kernel — CPU numpy reference oracle (Clozn DESIGN.md §4.3).
 
-This is the *tested* reference path for the one new kernel Cloze ships. It is
-self-contained numpy (it deliberately does NOT import ``cloze_lab``) so the
+This is the *tested* reference path for the one new kernel Clozn ships. It is
+self-contained numpy (it deliberately does NOT import ``clozn_lab``) so the
 correctness contract lives independently of the lab and can later validate a
 Metal/CUDA port the same way the golden tests validate the scheduler.
 
@@ -29,13 +29,13 @@ Default "max_prob"; "margin" (top1 - top2 prob) and "neg_entropy"
 Semantics are pinned to two lab sources, mirrored exactly (see test_reference.py
 for the parity assertions):
 
-* ``cloze_lab.generate.sample_candidates`` — the sample + max_prob confidence
+* ``clozn_lab.generate.sample_candidates`` — the sample + max_prob confidence
   step. Greedy (temperature == 0): token = argmax, confidence = its softmax
   prob. Sampled (temperature > 0): draw from softmax(logits / T) with the rng;
   confidence = the drawn token's post-temperature probability. The softmax is
   computed in float64. NOTE: ``sample_candidates`` does NOT apply top_p, so the
   greedy/sampled *parity* path here also leaves top_p unset.
-* ``cloze_lab.scheduler.policies`` — the selection step. ``ConfidenceTopK(k)``
+* ``clozn_lab.scheduler.policies`` — the selection step. ``ConfidenceTopK(k)``
   commits ``min(k, n_masked)`` highest-confidence positions, ties broken toward
   the LOWER index (``sorted(key=(-conf, pos))``). ``Threshold(tau, min_commit)``
   commits every position with ``conf >= tau``; if fewer than ``min_commit``

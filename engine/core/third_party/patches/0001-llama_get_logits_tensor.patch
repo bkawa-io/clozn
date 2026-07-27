@@ -6,7 +6,7 @@ index 27e4806..123f7b9 100644
      // TODO: deprecate in favor of llama_get_logits_ith() (ref: https://github.com/ggml-org/llama.cpp/pull/14853#issuecomment-3113143522)
      LLAMA_API float * llama_get_logits(struct llama_context * ctx);
  
-+    // CLOZE PATCH (additive; see core/third_party/PATCHES.md). The device-resident logits
++    // CLOZN PATCH (additive; see core/third_party/PATCHES.md). The device-resident logits
 +    // graph-output tensor from the last llama_decode(). On a GPU backend (GGML_CUDA) its ->data
 +    // is a raw device pointer to the [n_outputs, n_vocab] logits — for a zero-copy on-device
 +    // confidence-select that avoids the full-vocab D2H copy. Valid after llama_decode (the call
@@ -14,7 +14,7 @@ index 27e4806..123f7b9 100644
 +    // no decode has run. Guard residency with ggml_backend_buffer_is_host(t->buffer).
 +    LLAMA_API struct ggml_tensor * llama_get_logits_tensor(struct llama_context * ctx);
 +
-+    // CLOZE PATCH (additive; see core/third_party/PATCHES.md). When skip=true, subsequent
++    // CLOZN PATCH (additive; see core/third_party/PATCHES.md). When skip=true, subsequent
 +    // llama_decode() calls skip the device->host raw-logits copy — for callers that consume
 +    // llama_get_logits_tensor() on-device (zero-copy confidence-select), so the full-vocab logits
 +    // never cross the bus. While set, llama_get_logits()/_ith() return stale data. Default false.
@@ -31,7 +31,7 @@ index 168dbab..d465447 100644
      return logits.data;
  }
  
-+// CLOZE PATCH (additive; see core/third_party/PATCHES.md): the device-resident t_logits
++// CLOZN PATCH (additive; see core/third_party/PATCHES.md): the device-resident t_logits
 +// graph-output tensor from the previous decode, or nullptr if none. Does NOT reorder/copy —
 +// returns the raw graph output (rows in graph order, not output_ids order). The caller pairs it
 +// with the active-block positions it requested and reads tensor->data after a synchronize.
@@ -47,7 +47,7 @@ index 168dbab..d465447 100644
  
          // extract logits
 -        if (logits.data && t_logits && n_outputs > 0 && needs_raw_logits(ubatch, sampling.samplers)) {
-+        // CLOZE PATCH: !skip_raw_logits_ lets a caller suppress the device->host logits copy when
++        // CLOZN PATCH: !skip_raw_logits_ lets a caller suppress the device->host logits copy when
 +        // it will consume llama_get_logits_tensor() on-device (zero-copy confidence-select).
 +        if (logits.data && t_logits && n_outputs > 0 && !skip_raw_logits_ && needs_raw_logits(ubatch, sampling.samplers)) {
              ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
@@ -57,7 +57,7 @@ index 168dbab..d465447 100644
      return ctx->get_logits();
  }
  
-+// CLOZE PATCH (additive; see core/third_party/PATCHES.md). Synchronize (so the compute that
++// CLOZN PATCH (additive; see core/third_party/PATCHES.md). Synchronize (so the compute that
 +// produced the logits has finished), then hand back the device-resident graph-output tensor
 +// instead of the host copy. The caller reads tensor->data (a device pointer under GGML_CUDA)
 +// and must consume it before the next llama_decode reuses the buffer.
@@ -67,7 +67,7 @@ index 168dbab..d465447 100644
 +    return ctx->get_logits_tensor();
 +}
 +
-+// CLOZE PATCH (additive; see core/third_party/PATCHES.md).
++// CLOZN PATCH (additive; see core/third_party/PATCHES.md).
 +void llama_set_skip_raw_logits(llama_context * ctx, bool skip) {
 +    ctx->set_skip_raw_logits(skip);
 +}
@@ -83,10 +83,10 @@ index 853052b..5a54100 100644
      float * get_logits();
      float * get_logits_ith(int32_t i);
  
-+    // CLOZE PATCH (additive; see core/third_party/PATCHES.md): the device-resident t_logits
++    // CLOZN PATCH (additive; see core/third_party/PATCHES.md): the device-resident t_logits
 +    // graph-output tensor (gf_res_prev->get_logits()), for zero-copy on-device confidence-select.
 +    ggml_tensor * get_logits_tensor() const;
-+    // CLOZE PATCH: when set, decode() skips the device->host raw-logits copy — the caller consumes
++    // CLOZN PATCH: when set, decode() skips the device->host raw-logits copy — the caller consumes
 +    // get_logits_tensor() on the device instead. While set, get_logits()/_ith return stale data.
 +    void set_skip_raw_logits(bool skip) { skip_raw_logits_ = skip; }
 +
@@ -97,7 +97,7 @@ index 853052b..5a54100 100644
      ggml_backend_sched_ptr sched;
  
      bool sched_need_reserve = true;
-+    bool skip_raw_logits_ = false;  // CLOZE PATCH: skip the decode-time logits D2H when set
++    bool skip_raw_logits_ = false;  // CLOZN PATCH: skip the decode-time logits D2H when set
  
      ggml_backend_t backend_cpu = nullptr;
      std::vector<ggml_backend_ptr> backends;

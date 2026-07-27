@@ -31,10 +31,10 @@ On Linux or macOS, a portable CPU build is:
 ```bash
 cmake -S engine/core -B engine/core/build-serve \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCLOZE_BUILD_GGML=ON \
-  -DCLOZE_BUILD_SERVE=ON \
+  -DCLOZN_BUILD_GGML=ON \
+  -DCLOZN_BUILD_SERVE=ON \
   -DGGML_CUDA=OFF
-cmake --build engine/core/build-serve --target cloze-server -j
+cmake --build engine/core/build-serve --target clozn-server -j
 ```
 
 On Windows, `engine/core/build_serve.bat` performs the equivalent build. For CUDA, use
@@ -42,7 +42,7 @@ On Windows, `engine/core/build_serve.bat` performs the equivalent build. For CUD
 toolchain. `clozn` discovers `build-serve`, `build-gpu`, and the other supported build directories
 automatically.
 
-For a nonstandard or test build, `CLOZN_ENGINE_BIN=/absolute/path/to/cloze-server` selects the worker
+For a nonstandard or test build, `CLOZN_ENGINE_BIN=/absolute/path/to/clozn-server` selects the worker
 explicitly; set `CLOZN_ENGINE_GPU=1` when that binary should receive GPU offload flags. A packaged Studio
 outside the repository can be selected with `CLOZN_STUDIO_DIR=/absolute/path/to/studio`.
 

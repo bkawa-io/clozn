@@ -1,5 +1,5 @@
 """commands.trace_circuit -- `clozn causal-trace`: intervention-validated CAUSAL tracing
-(S0-S4; notes/CIRCUIT_TRACER_DESIGN.md). Drives clozn.analysis.tracer against a live cloze-server:
+(S0-S4; notes/CIRCUIT_TRACER_DESIGN.md). Drives clozn.analysis.tracer against a live clozn-server:
 screen -> solo ablations + controls -> joint -> path patching -> generation arms, then a receipt
 JSON + a terminal rendering with the honesty accounting front and center (verdict, noise floor,
 interaction gap, per-node control ratio, dead candidates).
@@ -28,7 +28,7 @@ def add_subparser(sub):
     mirrors commands.quant_check.add_subparser)."""
     pt = _build("causal-trace", sub,
                 help="causal trace: which (layer, position) sites causally support continuation "
-                     "token N? measured by ablation, not attention (needs a running cloze-server "
+                     "token N? measured by ablation, not attention (needs a running clozn-server "
                      "with a J-lens sidecar)")
     return pt
 
@@ -51,7 +51,7 @@ def _build(name, sub, help):
                          "screen-null finding (scripts/tracer/screen_null.py) for why this matters.")
     pt.add_argument("--concepts", default="",
                     help="comma-separated extra concept words to screen with (beyond the target token)")
-    pt.add_argument("--engine", default="http://127.0.0.1:8080", help="cloze-server base URL")
+    pt.add_argument("--engine", default="http://127.0.0.1:8080", help="clozn-server base URL")
     pt.add_argument("--jlens-dir", default=None,
                     help="J-lens sidecar dir (default: CLOZN_JLENS_DIR or ~/.clozn/jlens)")
     pt.add_argument("--screen-mode", default="auto", choices=("auto", "jlens", "ablate"),

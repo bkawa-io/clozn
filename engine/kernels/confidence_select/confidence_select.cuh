@@ -1,4 +1,4 @@
-// confidence_select.cuh — Cloze confidence-select kernel (DESIGN.md §4.3)
+// confidence_select.cuh — Clozn confidence-select kernel (DESIGN.md §4.3)
 // =============================================================================
 //  GREEDY PATH COMPILED + VALIDATED on RTX 5080 / CUDA 13.3 (sm_120).
 //  The deterministic surface — argmax pick, all three confidence variants
@@ -26,18 +26,18 @@
 //   MARGIN      : top1 - top2 probability
 //   NEG_ENTROPY : sum_v p_v * log p_v   (already negative; higher = more peaked)
 //
-// Selection variants (mirror cloze_lab.scheduler.policies):
+// Selection variants (mirror clozn_lab.scheduler.policies):
 //   TOP_K     : commit the min(k_commit, n_masked) highest-confidence positions,
 //               ties broken toward the LOWER position index.
 //   THRESHOLD : commit positions with conf >= tau; if fewer than min_commit
 //               clear tau, commit the top min_commit by confidence (the rail).
 
-#ifndef CLOZE_CONFIDENCE_SELECT_CUH
-#define CLOZE_CONFIDENCE_SELECT_CUH
+#ifndef CLOZN_CONFIDENCE_SELECT_CUH
+#define CLOZN_CONFIDENCE_SELECT_CUH
 
 #include <cstdint>
 
-namespace cloze {
+namespace clozn {
 
 // Selectable confidence definition (DESIGN open question #3).
 enum class ConfidenceKind : int {
@@ -100,6 +100,6 @@ inline int host_transfer_bytes(int n_masked) {
     return 2 * n_masked * bytes_per_value;
 }
 
-}  // namespace cloze
+}  // namespace clozn
 
-#endif  // CLOZE_CONFIDENCE_SELECT_CUH
+#endif  // CLOZN_CONFIDENCE_SELECT_CUH

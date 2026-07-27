@@ -14,7 +14,7 @@
 
 cmake_minimum_required(VERSION 3.18)  # 3.18+ for first-class CUDA language
 
-project(cloze_sae_topk LANGUAGES CXX)
+project(clozn_sae_topk LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

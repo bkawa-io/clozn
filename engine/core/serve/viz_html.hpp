@@ -1,4 +1,4 @@
-// viz_html.hpp — the real-time denoise visualization, served by cloze-server at GET /. A
+// viz_html.hpp — the real-time denoise visualization, served by clozn-server at GET /. A
 // self-contained page (no build step, no external deps) that renders the §5.1 event spine live.
 // ONE editable panel is the whole UI:
 //   - highlight a span -> POST /v1/revise: re-mask + re-predict it in place, with `grow` extra slots
@@ -14,10 +14,10 @@
 // token color (peach=low -> mint=high), the masked slots are sunken form fields.
 #pragma once
 
-namespace cloze {
+namespace clozn {
 
 inline const char* VIZ_HTML = R"HTML(<!doctype html>
-<html><head><meta charset="utf-8"><title>cloze &mdash; watch it denoise</title>
+<html><head><meta charset="utf-8"><title>clozn &mdash; watch it denoise</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Inconsolata:wght@400;500;600;700&display=swap">
@@ -120,7 +120,7 @@ R"HTML(<body>
 <div class="win">
   <div class="win-bar">
     <span class="planet"></span>
-    <span class="win-title">cloze.exe &mdash; <span id="modetag">watch it denoise</span></span>
+    <span class="win-title">clozn.exe &mdash; <span id="modetag">watch it denoise</span></span>
     <span class="win-dots"><i></i><i></i></span>
     <span class="win-x">&times;</span>
   </div>
@@ -344,4 +344,4 @@ updateLabel();
 </body></html>
 )HTML";
 
-}  // namespace cloze
+}  // namespace clozn

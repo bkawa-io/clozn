@@ -2,7 +2,7 @@
 scripts/calibration/concept_dial_autocalibrate.py's PURE math (median_resid_norm_from_harvests,
 _compute_scale_calibration). No engine, no GPU, no model: the live-measurement functions
 (measure_median_resid_norm, measure_concept_scale_sweep, calibrate_layer, main) all talk to a real
-cloze-server and are deliberately DEFERRED from this suite -- see the module's own docstring for why (the
+clozn-server and are deliberately DEFERRED from this suite -- see the module's own docstring for why (the
 same "live path deferred, pure math model-free tested" split this codebase already uses for quant-check and
 research/dial_autocalibrate_engine.py's own _compute_calibration).
 """

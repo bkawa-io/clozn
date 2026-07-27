@@ -1,4 +1,4 @@
-#include "cloze/sample.hpp"
+#include "clozn/sample.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-namespace cloze {
+namespace clozn {
 
 ReasoningBlockGate::ReasoningBlockGate(std::vector<int> start_tokens,
                                        std::vector<int> end_tokens)
@@ -155,4 +155,4 @@ Candidate sample_committed_candidate(const ForwardResult& fwd,
     return candidates.front();
 }
 
-}  // namespace cloze
+}  // namespace clozn

@@ -4,7 +4,7 @@ CLI front door for clozn.analysis.provenance.trace_provenance (attention-edge kn
 module's docstring for the measurement itself -- this file only parses args, resolves 'last' against
 the run journal the same way `diagnose last`/`context last` do, and renders the receipt).
 
-Requires a cloze-server started with --no-flash-attn. When it isn't, trace_provenance never raises --
+Requires a clozn-server started with --no-flash-attn. When it isn't, trace_provenance never raises --
 it returns {"ok": False, "blocked": "..."} -- and this command prints that message verbatim (a clean
 typed refusal) and exits 1, never a crash.
 """
@@ -20,7 +20,7 @@ def add_subparser(subparsers) -> None:
     parser = subparsers.add_parser(
         "provenance",
         help="did the answer come from the context or the model's weights? attention-knockout "
-             "receipt (needs a cloze-server started with --no-flash-attn)")
+             "receipt (needs a clozn-server started with --no-flash-attn)")
     parser.add_argument(
         "prompt", help="prompt text to trace, or 'last' to use the latest journal run's own "
                        "rendered prompt + recorded answer")
@@ -33,7 +33,7 @@ def add_subparser(subparsers) -> None:
         help="restrict the question to one span of prompt TOKEN positions [START, END) -- 'did the "
              "answer use THIS region?' (the RAG document-level question; experimental, see the focus "
              "caveats in the JSON 'focus_trim'/'focus_null' fields)")
-    parser.add_argument("--engine", default=DEFAULT_ENGINE, help="cloze-server base URL")
+    parser.add_argument("--engine", default=DEFAULT_ENGINE, help="clozn-server base URL")
     parser.add_argument("--seed", type=int, default=0, help="rng seed for the matched-random-control arms")
     parser.add_argument("--json", action="store_true", help="print the raw receipt JSON")
     parser.set_defaults(fn=cmd_provenance)

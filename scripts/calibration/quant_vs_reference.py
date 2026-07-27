@@ -72,7 +72,7 @@ def capture_quant(gguf, ref, layers):
     import urllib.request
     from clozn.cli.engine_process import spawn_engine
     from clozn.cli.commands.models import _flags_for
-    subprocess.run(["taskkill", "/F", "/IM", "cloze-server.exe"], capture_output=True); time.sleep(1)
+    subprocess.run(["taskkill", "/F", "/IM", "clozn-server.exe"], capture_output=True); time.sleep(1)
     proc, health, _ = spawn_engine(gguf, PORT, _flags_for(gguf), prefer_gpu=True)
     base = f"http://127.0.0.1:{PORT}"
 
@@ -98,7 +98,7 @@ def capture_quant(gguf, ref, layers):
                 for pos in positions:
                     per_layer[L].append(cosine(r["resid"][str(L)][pos], cap[str(L)][str(pos)]))
     finally:
-        subprocess.run(["taskkill", "/F", "/IM", "cloze-server.exe"], capture_output=True)
+        subprocess.run(["taskkill", "/F", "/IM", "clozn-server.exe"], capture_output=True)
     time.sleep(2)
     stats = {L: {"mean_cos": round(float(np.mean(per_layer[L])), 4),
                  "min_cos": round(float(np.min(per_layer[L])), 4),

@@ -1,15 +1,15 @@
-// cloze/blocks.hpp — the shared attention-mask type + builder. The diffusion block manager
-// (Block/BlockPlan, C++ port of lab/cloze_lab/scheduler/blocks.py's semi-autoregressive block
+// clozn/blocks.hpp — the shared attention-mask type + builder. The diffusion block manager
+// (Block/BlockPlan, C++ port of lab/clozn_lab/scheduler/blocks.py's semi-autoregressive block
 // diffusion) was removed with the diffusion program (THE_CUT) -- nothing partitions output into
-// blocks any more. Mask/block_id/attention_mask survive: cloze/model.hpp's ModelAdapter::forward()
+// blocks any more. Mask/block_id/attention_mask survive: clozn/model.hpp's ModelAdapter::forward()
 // still takes a Mask (the generic whole-board forward the concept-probe calibration and
-// cloze-probe-sweep drive with a fully-bidirectional one, block_len=0, to read a sentence's
+// clozn-probe-sweep drive with a fully-bidirectional one, block_len=0, to read a sentence's
 // activations in one shot -- an AR-relevant white-box read, not a diffusion generation).
 #pragma once
 
 #include <vector>
 
-namespace cloze {
+namespace clozn {
 
 // [n, n] row-major boolean mask; at(q, k) true means query q may attend to key k.
 struct Mask {
@@ -28,4 +28,4 @@ int block_id(int pos, int prompt_len, int block_len);
 // absence; no surviving caller passes a non-zero block_len.
 Mask attention_mask(int working_len, int prompt_len, int block_len);
 
-}  // namespace cloze
+}  // namespace clozn

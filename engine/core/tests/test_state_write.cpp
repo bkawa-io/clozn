@@ -17,10 +17,10 @@
 #include <string>
 #include <vector>
 
-#include "cloze/model.hpp"
+#include "clozn/model.hpp"
 #include "fake_adapter.hpp"   // the existing non-writable FakeAdapter (default write_state == false)
 
-using namespace cloze;
+using namespace clozn;
 
 // A minimal WRITABLE adapter: n_embd == vocab with an identity unembedding, so a hidden-state row IS a
 // logit row. Baseline state at position p is one-hot at (p % (vocab-1)) (same picks as FakeAdapter);

@@ -16,7 +16,7 @@
 #include <cstdint>
 #include <vector>
 
-using namespace cloze;
+using namespace clozn;
 
 static void check(cudaError_t e, const char* what) {
     if (e != cudaSuccess) { fprintf(stderr, "CUDA error (%s): %s\n", what, cudaGetErrorString(e)); exit(2); }

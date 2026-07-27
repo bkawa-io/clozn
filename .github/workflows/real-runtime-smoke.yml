@@ -76,10 +76,10 @@ jobs:
         run: |
           cmake -S engine/core -B engine/core/build-serve -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCLOZE_BUILD_GGML=ON \
-            -DCLOZE_BUILD_SERVE=ON \
+            -DCLOZN_BUILD_GGML=ON \
+            -DCLOZN_BUILD_SERVE=ON \
             -DGGML_CUDA=OFF
-          cmake --build engine/core/build-serve --target cloze-server -j 2
+          cmake --build engine/core/build-serve --target clozn-server -j 2
 
       - name: Run the P0 model-free contracts
         run: python -m unittest -v tests.test_runtime_architecture tests.test_product_smoke
@@ -102,10 +102,10 @@ jobs:
         run: |
           mkdir -p smoke-logs
           python -m clozn ps | tee smoke-logs/clozn-ps.txt
-          if pgrep -af 'cloze-server|clozn\.server\.app|python.*-m clozn serve' \
+          if pgrep -af 'clozn-server|clozn\.server\.app|python.*-m clozn serve' \
               > smoke-logs/residual-processes.txt; then
             cat smoke-logs/residual-processes.txt
-            pkill -TERM -f 'cloze-server|clozn\.server\.app|python.*-m clozn serve' || true
+            pkill -TERM -f 'clozn-server|clozn\.server\.app|python.*-m clozn serve' || true
             exit 1
           fi
           echo "No Clozn process remains." | tee smoke-logs/residual-processes.txt

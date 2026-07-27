@@ -107,7 +107,7 @@ class BrainReadout:
     @torch.no_grad()
     def concepts_from_engine(self, text, ec, layer=15):
         """The SAME concept readout, but the activations are HARVESTED from the real C++ engine (a
-        cloze-server on the Qwen GGUF) instead of the Python model -- concepts read from the actual
+        clozn-server on the Qwen GGUF) instead of the Python model -- concepts read from the actual
         ggml runtime. Verified: dragon -> dragon/fear/RPG, grief at a funeral -> crying/funeral/grief."""
         h = ec.harvest(text, layer=layer)
         f = self.sae.encode(torch.tensor(np.asarray(h.activations), device=DEV)).cpu().numpy()

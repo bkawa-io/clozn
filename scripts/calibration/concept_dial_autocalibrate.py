@@ -1,5 +1,5 @@
 """concept_dial_autocalibrate.py -- per-model calibration for the any-concept dial (dir(c),
-clozn/behavior/steering/concept_dir.py), against a LIVE cloze-server.
+clozn/behavior/steering/concept_dir.py), against a LIVE clozn-server.
 
 WHY THIS EXISTS: concept_dir.py's VALIDATED_MEDIAN_RESID_NORM ({16: 40.71, 21: 146.68, 25: 343.14}) and
 VALIDATED_SCALE_RANGE (0.25, 0.5) are pinned to ONE exact model (Qwen2.5-7B-Instruct Q4_K_M) -- the same
@@ -16,7 +16,7 @@ via concept_dir.save_concept_dial_calibration.
 WHAT'S MEASURED, PRECISELY:
   * median_resid_norm(layer): harvest a small sample of NEUTRAL prompts at `layer`
     (engine_client.harvest(text, layer=layer).activations, one causal forward per prompt -- see
-    cloze_engine.EngineClient.harvest), take the L2 norm of every token row across every harvested
+    clozn_engine.EngineClient.harvest), take the L2 norm of every token row across every harvested
     prompt, and report the MEDIAN of that pooled sample -- the exact quantity
     ../clozn-jlens-work/scripts/run_j5a_swap.py's MEDIAN_NORM measured for the one model
     VALIDATED_MEDIAN_RESID_NORM is pinned to (see concept_dir.py's own docstring).
@@ -34,14 +34,14 @@ WHAT'S MEASURED, PRECISELY:
     `_compute_scale_calibration` (pure, no I/O) turns one dial's (scale, logprob_delta,
     degenerate_rate) curve into {usable_scale_range, derail_point, works} -- the ONLY part of this module
     unit-tested directly (tests/test_concept_dial_autocalibrate.py); everything that actually talks to an
-    engine is deliberately DEFERRED from the test suite (needs a live cloze-server + a loaded J-lens
+    engine is deliberately DEFERRED from the test suite (needs a live clozn-server + a loaded J-lens
     sidecar + a real GPU-resident model), the same "live path is deferred, the pure math/schema is
     model-free tested" split this codebase already uses for quant-check and
     research/dial_autocalibrate_engine.py's own _compute_calibration.
 
-Run (needs a live cloze-server with a J-lens sidecar loaded -- see engine_steer_spike.py for the same
+Run (needs a live clozn-server with a J-lens sidecar loaded -- see engine_steer_spike.py for the same
 connection convention concept_dir.py's own --demo path uses):
-    PY=/c/Users/brigi/src/cloze/.venv/Scripts/python.exe   (any numpy-having interpreter works too)
+    PY=/c/Users/brigi/src/clozn/.venv/Scripts/python.exe   (any numpy-having interpreter works too)
     $PY scripts/calibration/concept_dial_autocalibrate.py --port 8095 --concept ocean
 A subset of layers, or a quick smoke:
     $PY scripts/calibration/concept_dial_autocalibrate.py --port 8095 --layers 21 --smoke
@@ -110,7 +110,7 @@ def median_resid_norm_from_harvests(activations_list: list) -> float:
     """The MEDIAN L2 row-norm pooled across every harvested prompt's token activations -- pure numpy, no
     I/O, so this is unit-testable with plain synthetic arrays (tests/test_concept_dial_autocalibrate.py).
     `activations_list` is a list of [n_tokens_i, n_embd] arrays (one per harvested prompt, as returned by
-    cloze_engine.Harvest.activations); rows across every prompt are pooled into ONE sample before taking the
+    clozn_engine.Harvest.activations); rows across every prompt are pooled into ONE sample before taking the
     median -- exactly what VALIDATED_MEDIAN_RESID_NORM's own "measured over cached hf_hidden activations"
     provenance describes (concept_dir.py's module docstring). Empty input -> 0.0 (nothing measured), never
     a NaN/crash."""
@@ -159,7 +159,7 @@ def _compute_scale_calibration(curve: list, degen_threshold: float, logprob_rise
 
 # ================================================================================================ live measurement
 # Everything below talks to a real engine_client -- DEFERRED from this module's own test suite (needs a
-# running cloze-server with a J-lens sidecar loaded and a real GPU-resident model); only the pure functions
+# running clozn-server with a J-lens sidecar loaded and a real GPU-resident model); only the pure functions
 # above are unit-tested.
 
 def measure_median_resid_norm(engine_client, layer: int, prompts: list = NEUTRAL_PROMPTS) -> float:
@@ -264,7 +264,7 @@ def main(argv=None):
     args = build_arg_parser().parse_args(argv)
 
     sys.path.insert(0, os.path.join(REPO_ROOT, "engine", "client"))
-    from cloze_engine import EngineClient   # noqa: E402 -- deferred: keeps a bare module import client-free
+    from clozn_engine import EngineClient   # noqa: E402 -- deferred: keeps a bare module import client-free
 
     ec = EngineClient(host=args.host, port=args.port, timeout=240)
     health = ec.health()

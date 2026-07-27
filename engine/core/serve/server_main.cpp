@@ -1,9 +1,9 @@
-// cloze_server.cpp — the L2 serving layer: an HTTP server over the cloze runtime. Loads one GGUF
+// clozn_server.cpp — the L2 serving layer: an HTTP server over the clozn runtime. Loads one GGUF
 // diffusion LM and serves completions + infill, with SSE streaming that emits the §5.1 event spine
 // directly (the native streaming protocol the events were designed for). Uses the single-header
 // cpp-httplib + nlohmann/json that llama.cpp already vendors — no new dependencies.
 //
-//   cloze-server <model.gguf> [--port N] [--host H] [--gpu-layers N] [--diffusion --mask-token ID]
+//   clozn-server <model.gguf> [--port N] [--host H] [--gpu-layers N] [--diffusion --mask-token ID]
 //
 // Endpoints:
 //   GET  /health           -> {"status":"ok","model":...}
@@ -17,12 +17,12 @@
 #include "httplib.h"
 #include "nlohmann/json.hpp"
 
-#include "cloze/events.hpp"
-#include "cloze/generate.hpp"
-#include "cloze/generate_ar.hpp"
-#include "cloze/model_ggml.hpp"
-#ifdef CLOZE_SAE
-#include "cloze/sae.hpp"  // on-device SAE feature readout (--sae; built with CLOZE_BUILD_SAE)
+#include "clozn/events.hpp"
+#include "clozn/generate.hpp"
+#include "clozn/generate_ar.hpp"
+#include "clozn/model_ggml.hpp"
+#ifdef CLOZN_SAE
+#include "clozn/sae.hpp"  // on-device SAE feature readout (--sae; built with CLOZN_BUILD_SAE)
 #endif
 #include "readout_plane.hpp"  // Phase 2.3: multi-observer readout plane (includes server_shared.hpp)
 #include "viz_html.hpp"
@@ -57,7 +57,7 @@
 #include "server_context.hpp"  // ServerContext + register_*_routes declarations
 
 using json = nlohmann::json;
-using namespace cloze;
+using namespace clozn;
 
 int main(int argc, char** argv) {
     if (argc < 2) {
@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
     auto model = std::make_shared<GgmlModel>(model_path, mask_token, eos, gpu_layers);
     ContextPool pool(model, workers, n_ctx, flash_attn);
     if (!flash_attn)
-        std::fprintf(stderr, "[cloze-server] flash attention DISABLED: attention weights "
+        std::fprintf(stderr, "[clozn-server] flash attention DISABLED: attention weights "
                              "materialize, /score attn_knockout available (slower decode)\n");
 
     // --sae: load the on-device SAE encoder BEFORE probe calibration (the read tap must move to the
@@ -118,18 +118,18 @@ int main(int argc, char** argv) {
     SaeServe sae_serve;
     sae_serve.k = sae_k;
     if (!sae_dir.empty()) {
-#ifdef CLOZE_SAE
+#ifdef CLOZN_SAE
         if (!sae_serve.enc.load(sae_dir)) {
-            std::fprintf(stderr, "[cloze-server] --sae load failed: %s\n", sae_serve.enc.error().c_str());
+            std::fprintf(stderr, "[clozn-server] --sae load failed: %s\n", sae_serve.enc.error().c_str());
             return 1;
         }
         sae_serve.layer = sae_serve.enc.layer();
         sae_serve.on = true;  // n_embd-vs-d_in verified against the model below (calibration block)
-        std::fprintf(stderr, "[cloze-server] SAE ready: %d features, d_in %d, layer %d, k %d (%.0f MB device)\n",
+        std::fprintf(stderr, "[clozn-server] SAE ready: %d features, d_in %d, layer %d, k %d (%.0f MB device)\n",
                      sae_serve.enc.d_sae(), sae_serve.enc.d_in(), sae_serve.layer, sae_serve.k,
                      sae_serve.enc.device_bytes() / 1e6);
 #else
-        std::fprintf(stderr, "[cloze-server] --sae requires a server built with -DCLOZE_BUILD_SAE=ON "
+        std::fprintf(stderr, "[clozn-server] --sae requires a server built with -DCLOZN_BUILD_SAE=ON "
                              "(this binary has no CUDA SAE encoder)\n");
         return 1;
 #endif
@@ -152,7 +152,7 @@ int main(int argc, char** argv) {
     ConceptProbes concept_probes;  // READ: sharp early-layer tap, drives the white-box display
     ConceptProbes steer_probes;    // WRITE: mid-depth tap, drives the steering control vector
     {
-        std::fprintf(stderr, "[cloze-server] calibrating white-box concept probes (%s)...\n",
+        std::fprintf(stderr, "[clozn-server] calibrating white-box concept probes (%s)...\n",
                      ar_mode ? "causal/AR" : "bidirectional/diffusion");
         GgmlAdapter cal(model, 512);
         // AR models read activations under CAUSAL attention; calibrate the probe directions in the
@@ -161,12 +161,12 @@ int main(int argc, char** argv) {
         // the per-token causal hidden states the AR tap also sees.
         if (ar_mode) cal.set_causal(true);
         cal.set_emit_activations(true);
-#ifdef CLOZE_SAE
+#ifdef CLOZN_SAE
         if (sae_serve.on) {
             // The SAE only reads the residual space it was trained on: n_embd must equal d_in (the
             // cached andyrdt L15 SAE is Qwen2.5-7B-Instruct's 3584 — a Llama-1B GGUF can't serve it).
             if (cal.n_embd() != sae_serve.enc.d_in()) {
-                std::fprintf(stderr, "[cloze-server] --sae mismatch: model n_embd %d != SAE d_in %d "
+                std::fprintf(stderr, "[clozn-server] --sae mismatch: model n_embd %d != SAE d_in %d "
                                      "(this SAE targets Qwen2.5-7B-Instruct layer %d residuals)\n",
                              cal.n_embd(), sae_serve.enc.d_in(), sae_serve.layer);
                 return 1;
@@ -175,7 +175,7 @@ int main(int argc, char** argv) {
             // THERE (a diff-in-means direction only reads in the space it was calibrated in). Costs
             // the early-tap sharpness; keeping the display honest matters more than the sharpness.
             cal.set_tap_layer(sae_serve.layer);
-            std::fprintf(stderr, "[cloze-server] --sae active: read tap + concept probes move to layer %d\n",
+            std::fprintf(stderr, "[clozn-server] --sae active: read tap + concept probes move to layer %d\n",
                          sae_serve.layer);
         }
 #endif
@@ -184,7 +184,7 @@ int main(int argc, char** argv) {
         const int steer_tap = cal.n_layer() * 2 / 3;
         cal.set_tap_layer(steer_tap);
         steer_probes = calibrate_concept_probes(cal, *model);    // mid-depth (steer-effective)
-        std::fprintf(stderr, "[cloze-server] %d concept probe(s) ready:", concept_probes.size());
+        std::fprintf(stderr, "[clozn-server] %d concept probe(s) ready:", concept_probes.size());
         for (const auto& nm : concept_probes.names) std::fprintf(stderr, " %s", nm.c_str());
         std::fprintf(stderr, " (read tap %d, steer tap %d)\n", read_tap, steer_tap);
     }
@@ -197,14 +197,14 @@ int main(int argc, char** argv) {
         int jl_n_embd = 0;
         { ContextPool::Lease lease = pool.acquire(); jl_n_embd = (*lease).n_embd(); }
         if (jlens.load(jlens_dir, model_path, jl_n_embd, model->config().vocab_size)) {
-            std::fprintf(stderr, "[cloze-server] J-lens ready: d_model %d, vocab %d, eps %.1e, layers",
+            std::fprintf(stderr, "[clozn-server] J-lens ready: d_model %d, vocab %d, eps %.1e, layers",
                          jlens.d_model, jlens.vocab, jlens.eps);
             for (int L : jlens.layers()) std::fprintf(stderr, " %d", L);
             std::fprintf(stderr, " (default %d), compute %s, from %s\n", jlens.default_layer,
                          jlens.dev_backend ? "DEVICE (weights resident)" : "cpu (thread-capped fallback)",
                          jlens_dir.c_str());
         } else {
-            std::fprintf(stderr, "[cloze-server] J-lens off: %s\n", jlens.err.c_str());
+            std::fprintf(stderr, "[clozn-server] J-lens off: %s\n", jlens.err.c_str());
         }
     }
 
@@ -215,7 +215,7 @@ int main(int argc, char** argv) {
     try {
         chat_templates = std::make_unique<ChatTemplateRenderer>(model->handle());
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "[cloze-server] embedded chat template is invalid: %s\n", e.what());
+        std::fprintf(stderr, "[clozn-server] embedded chat template is invalid: %s\n", e.what());
         return 2;
     }
 
@@ -258,7 +258,7 @@ int main(int argc, char** argv) {
         // dimensions, while capabilities carries only the booleans. Keep the KEYS in lockstep with
         // protocol/fixtures/handshake.json (the golden-fixture test guards this).
         bool sae_on = false;
-#ifdef CLOZE_SAE
+#ifdef CLOZN_SAE
         sae_on = sae_serve.on;
 #endif
         json capabilities{
@@ -298,7 +298,7 @@ int main(int argc, char** argv) {
             {"atomic", true},
             {"buffered", true},
         };
-#ifdef CLOZE_SAE
+#ifdef CLOZN_SAE
         if (sae_serve.on)
             h["sae"] = {{"d_sae", sae_serve.enc.d_sae()}, {"layer", sae_serve.layer}, {"k", sae_serve.k}};
 #endif
@@ -1330,7 +1330,7 @@ int main(int argc, char** argv) {
     // which no longer exists in this engine build. studio/heavn's Resolve edit mode degrades
     // honestly (it already gates on engine mode == "diffusion", which this build never reports).
 
-    std::fprintf(stderr, "[cloze-server] %s %s, %d worker(s) on http://%s:%d  (model: %s)\n",
+    std::fprintf(stderr, "[clozn-server] %s %s, %d worker(s) on http://%s:%d  (model: %s)\n",
                  ar_mode ? "autoregressive" : "diffusion",
                  gpu_layers > 0 ? "GPU" : "CPU", pool.size(), host.c_str(), port, model_path.c_str());
     if (!svr.listen(host, port)) {

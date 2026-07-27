@@ -135,9 +135,9 @@ def _check_engine() -> dict:
         exe, _dll_dirs, gpu = find_engine(prefer_gpu=True)
     except CloznError:
         return _check("engine binary", _WARN,
-                      "no cloze-server build found. Pip installs the Python supervisor only -- build the "
+                      "no clozn-server build found. Pip installs the Python supervisor only -- build the "
                       "C++ worker separately: see docs/DEVELOPMENT.md, or set CLOZN_ENGINE_BIN to a "
-                      "prebuilt cloze-server(.exe).")
+                      "prebuilt clozn-server(.exe).")
     detail = f"{exe} ({'GPU' if gpu else 'CPU'} build)"
     pin = _bootstrap_llama_pin(REPO)
     if pin:

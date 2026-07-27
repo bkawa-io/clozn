@@ -25,7 +25,7 @@ import sys
 
 import numpy as np
 
-from cloze_engine import EngineClient
+from clozn_engine import EngineClient
 
 # Token pieces can be arbitrary UTF-8 (a perturbed prediction may land on CJK/jamo); the
 # Windows console defaults to cp1252 and would crash on them. Print through UTF-8 with a

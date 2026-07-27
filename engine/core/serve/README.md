@@ -1,4 +1,4 @@
-# cloze-server — the white-box local-LM runtime
+# clozn-server — the white-box local-LM runtime
 
 A local HTTP server with white-box read **and** write: read named concepts + token candidates off
 each position live; steer concepts into the residual stream. Two generation paradigms, one harness —
@@ -19,13 +19,13 @@ the interpretability is model-agnostic (it sits on a hidden state, not on the de
 ```
 core\build_gpu.bat          # vcvars64 + cmake -G Ninja -DGGML_CUDA=ON + ggml/serve
 ```
-→ `build-gpu\cloze-server.exe` (+ `ggml-cuda.dll` and friends in `build-gpu\bin\`).
+→ `build-gpu\clozn-server.exe` (+ `ggml-cuda.dll` and friends in `build-gpu\bin\`).
 
 **CPU only:**
 ```
-core\build_serve.bat        # vcvars64 + cmake -G Ninja -DCLOZE_BUILD_GGML=ON -DCLOZE_BUILD_SERVE=ON
+core\build_serve.bat        # vcvars64 + cmake -G Ninja -DCLOZN_BUILD_GGML=ON -DCLOZN_BUILD_SERVE=ON
 ```
-→ `build-serve\cloze-server.exe` (+ its `ggml`/`llama` DLLs in `build-serve\bin\`).
+→ `build-serve\clozn-server.exe` (+ its `ggml`/`llama` DLLs in `build-serve\bin\`).
 
 ## Get a model (GGUF)
 
@@ -42,25 +42,25 @@ HF checkpoint:
 **GPU** (LLaDA-8B Q8_0, all layers offloaded — ~333 ms/short completion, ~20 tok/s):
 ```
 set PATH=%CD%\build-gpu\bin;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3\bin\x64;%PATH%
-build-gpu\cloze-server.exe core\models\LLaDA-8B-Instruct-q8_0.gguf ^
+build-gpu\clozn-server.exe core\models\LLaDA-8B-Instruct-q8_0.gguf ^
     --mask-token 126336 --eos 126081 --port 8080 --gpu-layers 99
 ```
 
 **CPU** (~10 s/short completion — proves the stack):
 ```
 set PATH=%CD%\build-serve\bin;%PATH%
-build-serve\cloze-server.exe core\models\LLaDA-8B-Instruct-q8_0.gguf ^
+build-serve\clozn-server.exe core\models\LLaDA-8B-Instruct-q8_0.gguf ^
     --mask-token 126336 --eos 126081 --port 8080
 ```
 Open **http://127.0.0.1:8080/** — type a prompt, hit generate, watch it denoise.
 
 **Autoregressive** (any AR GGUF — no `--mask-token`; mode auto-detects, EOS from the vocab):
 ```
-build-gpu\cloze-server.exe core\models\Qwen2.5-0.5B-Instruct-q8_0.gguf --gpu-layers 99 --port 8080
+build-gpu\clozn-server.exe core\models\Qwen2.5-0.5B-Instruct-q8_0.gguf --gpu-layers 99 --port 8080
 ```
 Convert one first via the vendored converter, e.g. Qwen (native Qwen2 support):
 `.venv\Scripts\python core\third_party\llama.cpp\convert_hf_to_gguf.py <qwen-snapshot> --outfile core\models\Qwen2.5-0.5B-Instruct-q8_0.gguf --outtype q8_0`.
-The viz switches to a left-to-right token stream; `cloze-ar <model.gguf>` is the AR CLI (per-token lens + read).
+The viz switches to a left-to-right token stream; `clozn-ar <model.gguf>` is the AR CLI (per-token lens + read).
 
 ## Endpoints
 

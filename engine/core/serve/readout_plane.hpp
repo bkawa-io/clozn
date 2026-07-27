@@ -25,7 +25,7 @@
 #include <chrono>
 #include <deque>
 
-namespace cloze {
+namespace clozn {
 
 struct ReadoutObserverConfig {
     std::vector<int> layers;     // capture set (validated + defaulted by the route)
@@ -245,4 +245,4 @@ private:
     long long skipped_prompt_ = 0;
 };
 
-}  // namespace cloze
+}  // namespace clozn

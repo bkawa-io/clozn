@@ -22,14 +22,14 @@ INCONCLUSIVE never counts as agreement; it is tallied separately -- a high INCON
 its own finding (the guard fires too easily), and a zero rate across 30 cases leaves the guard
 unexercised, which the report says out loud.
 
-Needs a cloze-server started with --no-flash-attn (attn weights must materialize). Any AR GGUF;
+Needs a clozn-server started with --no-flash-attn (attn weights must materialize). Any AR GGUF;
 no J-lens, no sidecars -- run it on a second family for free:
 
-    cloze-server ~/.clozn/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf --port 8091 --gpu-layers 99 \
+    clozn-server ~/.clozn/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf --port 8091 --gpu-layers 99 \
         --workers 2 --no-flash-attn
     python scripts/tracer/provenance_battery.py --engine http://127.0.0.1:8091 --tag qwen2.5-7b
 
-    cloze-server ~/.clozn/models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf --port 8092 ... same flags
+    clozn-server ~/.clozn/models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf --port 8092 ... same flags
     python scripts/tracer/provenance_battery.py --engine http://127.0.0.1:8092 --tag llama3.1-8b
 
 Writes runs/experiments/provenance_battery_<tag>.json (full receipts + the summary table it
@@ -355,7 +355,7 @@ def main():
     args = ap.parse_args()
 
     if not available(args.engine):
-        print(f"engine at {args.engine} lacks attn_knockout -- start cloze-server with "
+        print(f"engine at {args.engine} lacks attn_knockout -- start clozn-server with "
               "--no-flash-attn (see module docstring)", file=sys.stderr)
         return 2
     budget = ProvenanceBudget(max_span=args.max_span, candidates=args.candidates)

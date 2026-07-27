@@ -80,7 +80,7 @@ def main():
         os.makedirs(os.path.dirname(cache), exist_ok=True); json.dump(ref, open(cache, "w"))
 
     gguf = glob.glob(Q2_GLOB)[0]
-    subprocess.run(["taskkill", "/F", "/IM", "cloze-server.exe"], capture_output=True); time.sleep(1)
+    subprocess.run(["taskkill", "/F", "/IM", "clozn-server.exe"], capture_output=True); time.sleep(1)
     proc, health, _ = spawn_engine(gguf, PORT, _flags_for(gguf), prefer_gpu=True)
     base = f"http://127.0.0.1:{PORT}"
 
@@ -121,7 +121,7 @@ def main():
                             "fp_fixed_by": fp_fixed, "random_fixed_by": rand_fixed})
             print(f"FLIP {p[:32]!r:<34} q2={q2} fp={r['fp_top1']} -> FP fixes {fp_fixed} | RANDOM fixes {rand_fixed}", flush=True)
     finally:
-        subprocess.run(["taskkill", "/F", "/IM", "cloze-server.exe"], capture_output=True)
+        subprocess.run(["taskkill", "/F", "/IM", "clozn-server.exe"], capture_output=True)
 
     n_flip = len(results)
     n_fp = sum(1 for r in results if r["fp_fixed_by"])

@@ -56,7 +56,7 @@ class FakeScoreSub:
 
 
 class FakeEngine:
-    """Stands in for engine/client/cloze_engine.py's EngineClient: exposes apply_template/score/complete
+    """Stands in for engine/client/clozn_engine.py's EngineClient: exposes apply_template/score/complete
     with the SAME call shapes _EngineScoreSub and the fresh-generation helpers use. Records every call so
     tests can assert on what was actually sent (prompt string, topk, continuation vs continuation_ids)."""
 

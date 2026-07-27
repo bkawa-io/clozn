@@ -155,7 +155,7 @@ class RuntimeBoundaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="clozn-engine-select-") as root:
             gpu_root = os.path.join(root, "build-gpu")
             os.makedirs(gpu_root)
-            open(os.path.join(gpu_root, "cloze-server.exe"), "wb").close()
+            open(os.path.join(gpu_root, "clozn-server.exe"), "wb").close()
             with mock.patch.object(engine_process, "ENGINE_CORE", root):
                 with self.assertRaisesRegex(Exception, "no CPU engine build"):
                     engine_process.find_engine(prefer_gpu=False)
@@ -165,13 +165,13 @@ class RuntimeBoundaryTests(unittest.TestCase):
             for build in ("build-gpu", "build-serve"):
                 build_root = os.path.join(root, build)
                 os.makedirs(build_root)
-                open(os.path.join(build_root, "cloze-server.exe"), "wb").close()
+                open(os.path.join(build_root, "clozn-server.exe"), "wb").close()
             with mock.patch.object(engine_process, "ENGINE_CORE", root):
                 executable, _dlls, gpu = engine_process.find_engine(prefer_gpu=False)
             self.assertFalse(gpu)
             self.assertIn("build-serve", executable)
 
-    # ---- task #103: cloze-server.exe's own llama.dll/ggml-*.dll dir must land on a spawned child's PATH,
+    # ---- task #103: clozn-server.exe's own llama.dll/ggml-*.dll dir must land on a spawned child's PATH,
     # derived from the exe's own location -- never a hardcoded absolute path, never a mutation of the
     # parent's os.environ. See engine_process._dll_dirs_for / _env_with_dlls.
 
@@ -180,7 +180,7 @@ class RuntimeBoundaryTests(unittest.TestCase):
             build_root = os.path.join(root, "build-gpu")
             bin_dir = os.path.join(build_root, "bin")
             os.makedirs(bin_dir)
-            exe = os.path.join(build_root, "cloze-server.exe")
+            exe = os.path.join(build_root, "clozn-server.exe")
             open(exe, "wb").close()
             open(os.path.join(bin_dir, "llama.dll"), "wb").close()
             open(os.path.join(bin_dir, "ggml.dll"), "wb").close()
@@ -200,7 +200,7 @@ class RuntimeBoundaryTests(unittest.TestCase):
             build_root = os.path.join(root, "build-gpu")
             empty_bin = os.path.join(build_root, "bin")
             os.makedirs(empty_bin)
-            exe = os.path.join(build_root, "cloze-server.exe")
+            exe = os.path.join(build_root, "clozn-server.exe")
             open(exe, "wb").close()
             open(os.path.join(empty_bin, "unrelated.txt"), "wb").close()
 
@@ -219,7 +219,7 @@ class RuntimeBoundaryTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "nt", "STATUS_DLL_NOT_FOUND / PATH-based DLL search is Windows-specific")
     def test_scrubbed_path_reproduces_dll_not_found_and_the_fix_resolves_it(self):
-        """Live probe for task #103, run with NO model argument so cloze-server.exe prints its usage line
+        """Live probe for task #103, run with NO model argument so clozn-server.exe prints its usage line
         and exits immediately (argc<2 in server_main.cpp) -- never loads a model, never touches the GPU.
         Skips cleanly when no engine build is present, mirroring test_engine_ctx_overflow.py's own
         find_engine-missing skip.
@@ -239,7 +239,7 @@ class RuntimeBoundaryTests(unittest.TestCase):
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.communicate()
-                self.fail("cloze-server.exe (no model arg) did not exit on its own -- killed the probe")
+                self.fail("clozn-server.exe (no model arg) did not exit on its own -- killed the probe")
             return proc.returncode, out, err
 
         # Repro: a fresh-shell-like PATH with no build-gpu/bin (or CUDA toolkit) on it hits

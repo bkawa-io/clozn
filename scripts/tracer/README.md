@@ -2,7 +2,7 @@
 
 Reproduction scripts for the numbers quoted in `notes/CIRCUIT_TRACER_DESIGN.md` §5b–§5h (local
 notes) and formerly tracked as `docs/BACKLOG.md` item 9 (retired — see `docs/PRODUCT_ROADMAP.md`).
-All of them drive a **live cloze-server** over HTTP; none of them need
+All of them drive a **live clozn-server** over HTTP; none of them need
 torch (the one exception is the W_dec export, which is a one-shot in `engine/core/tools/`).
 
 | script | what it measures | needs |
@@ -21,7 +21,7 @@ torch (the one exception is the W_dec export, which is a one-shot in `engine/cor
 
 ```bash
 # engine, matched to the artifact you're testing
-cloze-server ~/.clozn/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf --port 8080 --gpu-layers 99 \
+clozn-server ~/.clozn/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf --port 8080 --gpu-layers 99 \
     --workers 2 --jlens ~/.clozn/artifacts/jlens/qwen2.5-7b-v1
 
 python scripts/tracer/sae_fidelity_vs_concentration.py

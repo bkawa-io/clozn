@@ -9,9 +9,9 @@
 #include <string>
 #include <vector>
 
-#include "cloze/model.hpp"
+#include "clozn/model.hpp"
 
-namespace cloze {
+namespace clozn {
 
 struct FakeKV : KVState {
     int n;
@@ -60,4 +60,4 @@ private:
     int eos_at_;
 };
 
-}  // namespace cloze
+}  // namespace clozn

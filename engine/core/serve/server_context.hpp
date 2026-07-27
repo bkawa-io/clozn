@@ -1,4 +1,4 @@
-// serve/server_context.hpp -- the shared-state seam for the split cloze-server (Phase 12.4).
+// serve/server_context.hpp -- the shared-state seam for the split clozn-server (Phase 12.4).
 //
 // Every route lambda in the old monolith captured main()'s locals by [&] (the model, the ContextPool,
 // the white-box state structs, n_ctx/mask/config). To relocate handlers into their own translation units
@@ -13,7 +13,7 @@
 
 namespace httplib { class Server; }  // fwd-decl: the header needn't pull in the single-header httplib
 
-namespace cloze {
+namespace clozn {
 
 // The state the route families share. Reference members alias main()'s locals (which outlive the server
 // for the whole svr.listen()), so nothing is copied; the model is a shared_ptr (used as *model / model->).
@@ -37,4 +37,4 @@ void register_jlens_routes(httplib::Server& svr, ServerContext& ctx);
 void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx);  // /harvest, /harvest/layers, /score, /apply_template
 void register_state_routes(httplib::Server& svr, ServerContext& ctx);     // /state, /intervene
 
-}  // namespace cloze
+}  // namespace clozn

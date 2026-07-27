@@ -55,7 +55,7 @@ POST_GATE = RequestGate.from_env()
 _GATE_EXEMPT_POSTS = frozenset({"/capture/tier", "/substrate", "/cancel"})
 
 try:
-    from cloze_engine import EngineClient, EngineError
+    from clozn_engine import EngineClient, EngineError
     # Product startup has exactly one model worker.  Requiring the supervisor-provided port here avoids
     # silently constructing clients for two guessed ports and makes a directly-launched gateway fail
     # closed.  Offline imports/tests still work with ENGINE=None.

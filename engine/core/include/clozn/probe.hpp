@@ -1,4 +1,4 @@
-// cloze/probe.hpp — training-free concept probes over hidden states (white-box Tier 2).
+// clozn/probe.hpp — training-free concept probes over hidden states (white-box Tier 2).
 // A probe is a unit direction in the model's (standardized) activation space; projecting a
 // position's hidden state onto it scores how strongly that concept is present THIS pass. These
 // are diff-in-means probes — the model-agnostic, gradient-free probe: per-concept labeled
@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-namespace cloze {
+namespace clozn {
 
 struct ConceptProbes {
     std::vector<std::string> names;  // K concept names (become the StepFeatures `features`)
@@ -55,4 +55,4 @@ struct ConceptProbes {
     }
 };
 
-}  // namespace cloze
+}  // namespace clozn

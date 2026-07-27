@@ -1,6 +1,6 @@
 """export_sae_weights.py -- andyrdt_l15_sae.pt -> raw blobs the C++ SaeEncoder loads (no torch on the C++ side).
 
-The engine-side SAE readout (cloze/sae.hpp) wants flat, mmap-simple weight files, not a pickled
+The engine-side SAE readout (clozn/sae.hpp) wants flat, mmap-simple weight files, not a pickled
 torch checkpoint. This one-shot exporter writes them next to the models dir convention:
 
     python export_sae_weights.py [--pt ~/hf_models/andyrdt_l15_sae.pt] [--out ~/.clozn/sae/andyrdt_l15]

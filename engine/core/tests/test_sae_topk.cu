@@ -2,7 +2,7 @@
 // sae_topk must produce the SAME per-row sparse code as a straightforward in-process CPU
 // reference on identical pre-activations. Selected feature indices must match EXACTLY (per
 // row, ascending; tie -> lower index); values within float32 epsilon. Runs on the GPU; build
-// with -DCLOZE_BUILD_CUDA=ON. (kernels/sae_topk/validate.py independently checks the kernel
+// with -DCLOZN_BUILD_CUDA=ON. (kernels/sae_topk/validate.py independently checks the kernel
 // against the numpy oracle; this proves it drops into the engine build with identical picks.)
 #include "sae_topk.cuh"
 
@@ -13,7 +13,7 @@
 
 #include <cuda_runtime.h>
 
-using namespace cloze;
+using namespace clozn;
 
 namespace {
 

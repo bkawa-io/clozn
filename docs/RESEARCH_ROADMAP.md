@@ -181,7 +181,7 @@ Can the model identify "which J-lens readout stream is mine" above chance?
 
 **A3.3 ran same day (results: `runs/experiments/a3_3_validation_results.json`):** the position-averaged operator fix is **VALIDATED** — containment 0.08 → **0.798**, singular values match dense (22.83 vs 22.97), rank50-vs-rank50 transported dirs cosine 0.82. Honest fit time: **86 min**, not 20. And a decisive new finding: the 0.95 dir-cosine gate was unpassable by construction — even a PERFECT rank-50 truncation of the dense J agrees with the full-rank transport at only 0.28, because **dir(c) draws ~92% of its mass from J's spectral tail**. Consequence: rank-50 compact lenses suffice for subspace features (live-energy/EEG) but **cannot author concept dials** — dial authoring needs the dense J. The k=50 Llama port is therefore moot (not a failure — mathematically out of reach). Cross-family port path: overnight dense-class Llama fit, then re-run. Fast-J's product niche narrows to subspace features; sweep n_power/n_prompts for the cost/quality curve (checkpoint each power round in one fit to get the curve free).
 
-**Incidental infra bug found:** `cloze-server.exe` requires `engine/core/build-gpu/bin` on PATH for its `llama.dll`/`ggml-*` dependencies — any fresh shell hits STATUS_DLL_NOT_FOUND. Fix belongs in `clozn/cli/engine_process.py` (set the DLL path when spawning).
+**Incidental infra bug found:** `clozn-server.exe` requires `engine/core/build-gpu/bin` on PATH for its `llama.dll`/`ggml-*` dependencies — any fresh shell hits STATUS_DLL_NOT_FOUND. Fix belongs in `clozn/cli/engine_process.py` (set the DLL path when spawning).
 
 #### A3.1 — Fast-J fresh fit on Qwen3.5-9B
 

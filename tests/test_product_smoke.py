@@ -285,9 +285,9 @@ class ProductSmokeTests(unittest.TestCase):
             gateway_app.ENGINE, gateway_app.SUB, gateway_app.SUBNAME, static_routes.DEMO = old
 
     def test_managed_smoke_owns_restarts_and_cleans_the_real_process_tree(self):
-        worker_script = os.path.join(self.temp.name, "fake-cloze-server.py")
+        worker_script = os.path.join(self.temp.name, "fake-clozn-server.py")
         worker_path = os.path.join(
-            self.temp.name, "fake-cloze-server.cmd" if os.name == "nt" else "fake-cloze-server"
+            self.temp.name, "fake-clozn-server.cmd" if os.name == "nt" else "fake-clozn-server"
         )
         worker_source = textwrap.dedent(r'''
             #!/usr/bin/env python3
