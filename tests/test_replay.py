@@ -17,6 +17,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # research/ on path
 import clozn.memory.mode as memory_mode  # noqa: E402
+import clozn.settings as clozn_settings          # noqa: E402
 from clozn import replay  # noqa: E402
 import clozn.runs.store as runlog  # noqa: E402
 
@@ -86,7 +87,7 @@ def store(tmp_path, monkeypatch):
     semantics (whole-memory suppression; per-card ids an honest "not applied" note), which the mode swap
     keeps intact. Prompt-mode replay (REAL per-card ablation) is covered in test_memory_mode."""
     monkeypatch.setenv("CLOZN_RUNTIME_KIND", "lab")   # internalized/soft-prefix memory is a LAB feature now
-    monkeypatch.setattr(memory_mode, "SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "no_such.pt")])
     assert memory_mode.set_mode("internalized")
     original = runlog.RUNS_DIR

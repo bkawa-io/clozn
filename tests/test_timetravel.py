@@ -22,6 +22,7 @@ RESEARCH = os.path.dirname(HERE)
 sys.path.insert(0, RESEARCH)
 
 import clozn.memory.mode as memory_mode  # noqa: E402
+import clozn.settings as clozn_settings          # noqa: E402
 import clozn.runs.store as runlog  # noqa: E402
 import clozn.replay.timetravel as tt  # noqa: E402
 
@@ -31,7 +32,7 @@ import clozn.replay.timetravel as tt  # noqa: E402
 # ===================================================================================================
 @pytest.fixture
 def iso_settings(tmp_path, monkeypatch):
-    monkeypatch.setattr(memory_mode, "SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     return tmp_path
 
 

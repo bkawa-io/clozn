@@ -13,13 +13,14 @@ RESEARCH = os.path.dirname(HERE)
 sys.path.insert(0, RESEARCH)
 
 from clozn.runs import capture_mode        # noqa: E402
+import clozn.settings as clozn_settings          # noqa: E402
 from clozn.server import app as cs  # noqa: E402
 import clozn.memory.mode as memory_mode         # noqa: E402
 
 
 @pytest.fixture
 def settings(tmp_path, monkeypatch):
-    monkeypatch.setattr(memory_mode, "SETTINGS_PATH", str(tmp_path / "studio_settings.json"))
+    monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "studio_settings.json"))
     return tmp_path
 
 

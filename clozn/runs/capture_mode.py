@@ -18,7 +18,7 @@ setting lives in the SAME studio_settings.json via memory_mode's never-raise get
 """
 from __future__ import annotations
 
-from clozn.memory import mode as memory_mode  # the single settings file + its never-raise get/set helpers
+import clozn.settings as settings  # the single settings file + its never-raise get/set helpers
 
 TIERS = ("light", "standard", "deep", "lab")
 DEFAULT = "standard"
@@ -27,7 +27,7 @@ _KEY = "capture_tier"
 
 def tier() -> str:
     """The active capture tier; absent / unknown / garbage -> "standard" (the everyday default)."""
-    v = str(memory_mode.get_setting(_KEY, DEFAULT) or "").strip().lower()
+    v = str(settings.get_setting(_KEY, DEFAULT) or "").strip().lower()
     return v if v in TIERS else DEFAULT
 
 
@@ -37,7 +37,7 @@ def set_tier(name: str) -> bool:
     name = str(name or "").strip().lower()
     if name not in TIERS:
         return False
-    return memory_mode.set_setting(_KEY, name)
+    return settings.set_setting(_KEY, name)
 
 
 def captures_trace(name: str | None = None) -> bool:

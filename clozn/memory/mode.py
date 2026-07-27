@@ -31,13 +31,11 @@ to the migration default, never to a crashed request.
 """
 from __future__ import annotations
 
-import json
 import os
 
-from clozn._io import atomic_write_json
+from clozn.settings import _load_settings, get_setting, set_setting   # noqa: F401  (re-exported)
 
 _CLOZN = os.path.expanduser("~/.clozn")
-SETTINGS_PATH = os.path.join(_CLOZN, "studio_settings.json")
 
 # A trained prefix on disk == a live personality someone invested minutes of TTT in. Its existence is
 # the migration signal: with no explicit choice recorded, keep serving it (internalized) rather than
@@ -50,18 +48,6 @@ PRODUCT_MODES = ("prompt",)
 
 BLOCK_STYLES = ("soft", "strict")
 DEFAULT_BLOCK_STYLE = "soft"      # unchanged wording; strict is opt-in (see module docstring)
-
-
-def _load_settings() -> dict:
-    """The whole settings dict; {} if missing or unreadable (never raises)."""
-    try:
-        if not os.path.isfile(SETTINGS_PATH):
-            return {}
-        with open(SETTINGS_PATH, encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
 
 
 def get_mode() -> str:
@@ -101,29 +87,6 @@ def set_block_style(style: str) -> bool:
     if style not in BLOCK_STYLES:
         return False
     return set_setting("block_style", style)
-
-
-def get_setting(key: str, default=None):
-    """Read one settings key; `default` when missing/unreadable. (Prompt mode parks small scalars here
-    that internalized mode kept inside the .pt -- e.g. memory_strength, which .pt-save refuses without
-    a trained prefix and a fresh prompt-mode install never has one.)"""
-    return _load_settings().get(key, default)
-
-
-def set_setting(key: str, value) -> bool:
-    """Persist one settings key (merge-write); False on IO failure (never raises).
-
-    Atomic (see clozn._io): a non-serializable `value` raises out of json.dumps before the real
-    SETTINGS_PATH is ever opened for writing, and the on-disk write is temp-file-then-rename, so a bad
-    call here can never truncate/corrupt the settings file -- every other already-persisted key (mode,
-    block_style, memory_facts, active_profile, ...) survives untouched."""
-    try:
-        settings = _load_settings()
-        settings[key] = value
-        atomic_write_json(SETTINGS_PATH, settings)
-        return True
-    except Exception:
-        return False
 
 
 def active_cards(exclude_ids=(), request_scope=None) -> list[dict] | None:

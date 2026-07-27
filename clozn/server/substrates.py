@@ -175,8 +175,8 @@ class Substrate:
                     except Exception:
                         pass
                 try:                                         # mirror to settings so the dial survives a
-                    import clozn.memory.mode as memory_mode                       # restart in prompt mode (no .pt to carry it)
-                    memory_mode.set_setting("memory_strength", float(m.memory_strength))
+                    import clozn.settings as settings                       # restart in prompt mode (no .pt to carry it)
+                    settings.set_setting("memory_strength", float(m.memory_strength))
                 except Exception:
                     pass
             return {"strength": float(getattr(m, "memory_strength", 1.0)), "has_prefix": m.prefix is not None,
@@ -397,8 +397,8 @@ class _EngineMemory:
         self._exclude_card_ids = None
         self.lock = threading.Lock()
         try:
-            import clozn.memory.mode as memory_mode                    # 0.35 == the shipped product default (commit f3e9f60, the
-            self.memory_strength = float(memory_mode.get_setting("memory_strength", 0.0))    # off by default;
+            import clozn.settings as settings                    # 0.35 == the shipped product default (commit f3e9f60, the
+            self.memory_strength = float(settings.get_setting("memory_strength", 0.0))    # off by default;
         except Exception:                          # cards are opt-in via the UI strength slider, not always-on
             self.memory_strength = 0.0             # prompt injection into unrelated topics.
 

@@ -22,6 +22,7 @@ RESEARCH = os.path.dirname(HERE)
 sys.path.insert(0, RESEARCH)
 
 from clozn.server import app as cs                # noqa: E402
+import clozn.settings as clozn_settings          # noqa: E402
 from clozn.eval import store as eval_store         # noqa: E402
 from clozn.memory import mode as memory_mode       # noqa: E402
 import clozn.memory.cards as memory_cards          # noqa: E402
@@ -104,7 +105,7 @@ def _post(path, body_obj):
 def iso(tmp_path, monkeypatch):
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
-    monkeypatch.setattr(memory_mode, "SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "no_such.pt")])
     monkeypatch.setattr(eval_store, "_PATH", str(tmp_path / "eval_report.json"))
     monkeypatch.delattr(eval_store, "load_profile", raising=False)

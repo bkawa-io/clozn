@@ -27,6 +27,7 @@ REPO_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, REPO_ROOT)
 
 from clozn.server import app as cs                # noqa: E402
+import clozn.settings as clozn_settings          # noqa: E402
 from clozn.server import generation_guard as gg    # noqa: E402
 from clozn.memory import mode as memory_mode       # noqa: E402
 import clozn.memory.cards as memory_cards          # noqa: E402
@@ -210,7 +211,7 @@ def _body(**extra):
 def iso(tmp_path, monkeypatch):
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
-    monkeypatch.setattr(memory_mode, "SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "no_such.pt")])
     monkeypatch.delenv("CLOZN_JLENS_DIR", raising=False)
     monkeypatch.delenv("CLOZN_DIRC_UNEMBED_DIR", raising=False)

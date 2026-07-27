@@ -32,6 +32,7 @@ RESEARCH = os.path.dirname(HERE)
 sys.path.insert(0, RESEARCH)
 
 from clozn.server import app as cs      # noqa: E402
+import clozn.settings as clozn_settings          # noqa: E402
 import clozn.lab.substrates as lab_substrates       # noqa: E402  (the _InternalizedRetrain mixin lives here)
 import clozn.memory.cards as memory_cards            # noqa: E402
 import clozn.memory.mode as memory_mode             # noqa: E402
@@ -116,7 +117,7 @@ def iso(tmp_path, monkeypatch):
     monkeypatch.setenv("CLOZN_RUNTIME_KIND", "lab")
     monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(memory_mode, "SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "legacy.pt")])
     # retrain state is PER-SUBSTRATE now (moved off the app module onto _InternalizedRetrain); each test
     # builds its own sub via _substrate(), so there's nothing process-global to reset -- just make sure no
@@ -150,7 +151,7 @@ def test_mode_round_trips_through_the_settings_file(iso):
     assert memory_mode.get_mode() == "internalized"
     assert memory_mode.set_mode("prompt")
     assert memory_mode.get_mode() == "prompt"
-    with open(memory_mode.SETTINGS_PATH, encoding="utf-8") as f:
+    with open(clozn_settings.SETTINGS_PATH, encoding="utf-8") as f:
         assert json.load(f)["memory_mode"] == "prompt"
 
 
@@ -182,7 +183,7 @@ def test_set_setting_bad_value_raises_cleanly_and_prior_settings_survive(iso):
     assert memory_mode.get_block_style() == "strict"
     assert memory_mode.get_setting("memory_strength") == 0.7
     assert memory_mode.get_setting("bad_key") is None        # the bad write never landed
-    with open(memory_mode.SETTINGS_PATH, encoding="utf-8") as f:
+    with open(clozn_settings.SETTINGS_PATH, encoding="utf-8") as f:
         on_disk = json.load(f)
     assert on_disk == {"memory_mode": "internalized", "block_style": "strict", "memory_strength": 0.7}
 
@@ -199,7 +200,7 @@ def test_block_style_round_trips_through_the_settings_file(iso):
     assert memory_mode.get_block_style() == "strict"
     assert memory_mode.set_block_style("soft")
     assert memory_mode.get_block_style() == "soft"
-    with open(memory_mode.SETTINGS_PATH, encoding="utf-8") as f:
+    with open(clozn_settings.SETTINGS_PATH, encoding="utf-8") as f:
         assert json.load(f)["block_style"] == "soft"
 
 

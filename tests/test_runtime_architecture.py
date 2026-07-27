@@ -13,6 +13,7 @@ import unittest
 from unittest import mock
 
 from clozn.cli import engine_process, runtime_process
+import clozn.settings as clozn_settings
 from clozn.memory import mode as memory_mode
 from clozn.runs import store
 from clozn.server import app
@@ -412,10 +413,10 @@ class RuntimeBoundaryTests(unittest.TestCase):
 
     def test_lab_retains_internalized_memory_experiments(self):
         old_kind = app.RUNTIME_KIND
-        old_path = memory_mode.SETTINGS_PATH
+        old_path = clozn_settings.SETTINGS_PATH
         temp = tempfile.TemporaryDirectory(prefix="clozn-lab-memory-")
         app.RUNTIME_KIND = "lab"
-        memory_mode.SETTINGS_PATH = os.path.join(temp.name, "settings.json")
+        clozn_settings.SETTINGS_PATH = os.path.join(temp.name, "settings.json")
         try:
             with mock.patch.dict(os.environ, {"CLOZN_RUNTIME_KIND": "lab"}):
                 self.assertTrue(memory_mode.set_mode("internalized"))
@@ -424,7 +425,7 @@ class RuntimeBoundaryTests(unittest.TestCase):
                 self.assertIn(" 200 ", head)
                 self.assertEqual(set(json.loads(payload)["modes"]), {"prompt", "internalized"})
         finally:
-            memory_mode.SETTINGS_PATH = old_path
+            clozn_settings.SETTINGS_PATH = old_path
             app.RUNTIME_KIND = old_kind
             temp.cleanup()
 
@@ -593,14 +594,14 @@ class PostGateScopeTests(unittest.TestCase):
         calls = []
         original = app.POST_GATE.acquire
         app.POST_GATE.acquire = lambda *a, **kw: calls.append(1) or original()
-        old_settings = memory_mode.SETTINGS_PATH
+        old_settings = clozn_settings.SETTINGS_PATH
         temp = tempfile.TemporaryDirectory(prefix="clozn-capture-tier-")
         try:
-            memory_mode.SETTINGS_PATH = os.path.join(temp.name, "studio_settings.json")
+            clozn_settings.SETTINGS_PATH = os.path.join(temp.name, "studio_settings.json")
             head, payload, _ = raw_gateway_request("POST", path="/capture/tier", body=b'{"tier": "deep"}')
         finally:
             app.POST_GATE.acquire = original
-            memory_mode.SETTINGS_PATH = old_settings
+            clozn_settings.SETTINGS_PATH = old_settings
             temp.cleanup()
         self.assertIn(" 200 ", head)
         self.assertEqual(json.loads(payload.decode("utf-8")), {"ok": True, "tier": "deep"})

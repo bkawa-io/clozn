@@ -13,14 +13,14 @@
 The footer itself is appended in routes/openai.py (non-stream) + sse.py (stream); see
 clozn/runs/receipt_footer.py for its shape + honesty rules.
 """
-import clozn.memory.mode as memory_mode
+import clozn.settings as settings
 from clozn.server.static import APP_INDEX
 
 RECEIPT_SETTING = "receipt_footer"
 
 
 def receipt_enabled() -> bool:
-    return bool(memory_mode.get_setting(RECEIPT_SETTING, False))
+    return bool(settings.get_setting(RECEIPT_SETTING, False))
 
 
 def _safe_run_id(raw: str) -> str:
@@ -49,7 +49,7 @@ def try_post(h, p, body):
     if p == "/receipt/mode":
         changed = "receipt_footer" in body
         if changed:
-            memory_mode.set_setting(RECEIPT_SETTING, bool(body.get("receipt_footer")))
+            settings.set_setting(RECEIPT_SETTING, bool(body.get("receipt_footer")))
         h._json(200, {"receipt_footer": receipt_enabled(), "changed": changed})
         return True
     return False

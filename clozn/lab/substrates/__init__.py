@@ -190,8 +190,8 @@ class QwenSubstrate(_InternalizedRetrain, Substrate):
             self.memory.sync_cards()
             self._cards_migrated = True
             try:                                            # in prompt mode the strength dial persists in
-                import clozn.memory.mode as memory_mode                          # settings (the .pt needs a prefix to save; a
-                s = memory_mode.get_setting("memory_strength")            # fresh install has none)
+                import clozn.settings as settings                                # the .pt needs a prefix to save; a
+                s = settings.get_setting("memory_strength")               # fresh install has none
                 if s is not None:
                     self.memory.memory_strength = max(0.0, min(2.0, float(s)))
             except Exception:

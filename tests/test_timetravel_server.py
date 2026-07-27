@@ -24,6 +24,7 @@ RESEARCH = os.path.dirname(HERE)
 sys.path.insert(0, RESEARCH)
 
 from clozn.server import app as cs   # noqa: E402
+import clozn.settings as clozn_settings          # noqa: E402
 import clozn.memory.mode as memory_mode          # noqa: E402
 import clozn.runs.store as runlog               # noqa: E402
 import clozn.replay.timetravel as timetravel           # noqa: E402
@@ -100,7 +101,7 @@ CONV = [
 def iso(tmp_path, monkeypatch):
     """Isolate settings + the run store; install a fake substrate + a fresh snapshot store. The gate
     starts OFF (the real default)."""
-    monkeypatch.setattr(memory_mode, "SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "no_such.pt")])
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
     sub = FakeSub()

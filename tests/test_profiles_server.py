@@ -4,7 +4,7 @@ No model, no GPU. We drive the REAL clozn_server.do_GET/do_POST handler (the sam
 no-socket trick test_propose_memory.py uses) against:
   * a FAKE substrate exposing ._mem (rules/consolidate/reset, like test_memory_wiring.FakeMem) and
     .steer (clear/set/add_custom, like SteeringControl's duck type profiles.apply_dials expects);
-  * an isolated profiles.DEFAULT_DIR, memory_cards.CARDS_PATH, memory_mode.SETTINGS_PATH, runlog.RUNS_DIR.
+  * an isolated profiles.DEFAULT_DIR, memory_cards.CARDS_PATH, clozn_settings.SETTINGS_PATH, runlog.RUNS_DIR.
 
 The load-bearing invariant under test: **profiles.switch() semantics, server-side.** A switch REPLACES
 the studio's active cards (never merges -- disjoint personas must not bleed), replaces dial values via
@@ -27,6 +27,7 @@ RESEARCH = os.path.dirname(HERE)
 sys.path.insert(0, RESEARCH)
 
 from clozn.server import app as cs      # noqa: E402
+import clozn.settings as clozn_settings          # noqa: E402
 import clozn.lab.substrates as lab_substrates       # noqa: E402  (the _InternalizedRetrain mixin lives here)
 import clozn.memory.cards as memory_cards            # noqa: E402
 import clozn.memory.mode as memory_mode             # noqa: E402
@@ -154,7 +155,7 @@ def iso(tmp_path, monkeypatch):
     monkeypatch.setattr(P.ProfileStore.__init__, "__defaults__", (str(tmp_path / "profiles"),))
     monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(memory_mode, "SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "no_such.pt")])
     assert memory_mode.set_mode("prompt")
     monkeypatch.setattr(cs, "SUBNAME", "qwen")

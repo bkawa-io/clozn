@@ -31,6 +31,7 @@ RESEARCH = os.path.dirname(HERE)
 sys.path.insert(0, RESEARCH)
 
 import clozn.memory.cards as memory_cards      # noqa: E402
+import clozn.settings as clozn_settings          # noqa: E402
 import clozn.memory.mode as memory_mode       # noqa: E402
 from clozn import receipts          # noqa: E402
 import clozn.runs.store as runlog             # noqa: E402
@@ -104,7 +105,7 @@ def iso(tmp_path, monkeypatch):
     """Isolate every flat-file store replay.py / memory_mode.py / memory_cards.py touch (mirrors
     test_replay.py's `store` + test_memory_mode.py's `iso`). Mode starts UNSET (fresh-install default is
     "prompt"); tests that care pin it explicitly."""
-    monkeypatch.setattr(memory_mode, "SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "no_such.pt")])
     monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))

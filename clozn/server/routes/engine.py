@@ -68,22 +68,22 @@ def try_post(h, p, body):
         h._json(200, result)
         return True
     if p == "/sampling/mode":   # S5: adjust/toggle interactive-chat sampling (on/off + the 4 params)
-        import clozn.memory.mode as memory_mode
+        import clozn.settings as settings
         changed = False
         if "sampling" in body:
-            memory_mode.set_setting("sampling", bool(body.get("sampling")))
+            settings.set_setting("sampling", bool(body.get("sampling")))
             changed = True
         for key in ("sample_temperature", "sample_top_p", "sample_repeat_penalty"):
             if key in body:
                 try:
-                    memory_mode.set_setting(key, float(body[key]))
+                    settings.set_setting(key, float(body[key]))
                     changed = True
                 except (TypeError, ValueError):
                     h._json(400, {"error": f"{key} must be a number"})
                     return True
         if "sample_top_k" in body:
             try:
-                memory_mode.set_setting("sample_top_k", int(body["sample_top_k"]))
+                settings.set_setting("sample_top_k", int(body["sample_top_k"]))
                 changed = True
             except (TypeError, ValueError):
                 h._json(400, {"error": "sample_top_k must be an integer"})

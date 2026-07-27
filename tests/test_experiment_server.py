@@ -24,6 +24,7 @@ RESEARCH = os.path.dirname(HERE)
 sys.path.insert(0, RESEARCH)
 
 from clozn.server import app as cs                    # noqa: E402
+import clozn.settings as clozn_settings          # noqa: E402
 import clozn.experiments.experiment as clozn_experiment  # noqa: E402
 import clozn.memory.cards as memory_cards         # noqa: E402
 import clozn.memory.mode as memory_mode          # noqa: E402
@@ -100,7 +101,7 @@ def _get(path):
 def iso(tmp_path, monkeypatch):
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
-    monkeypatch.setattr(memory_mode, "SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "no_such.pt")])
     monkeypatch.setattr(cs, "SUB", FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.5})))
     return tmp_path

@@ -17,6 +17,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from clozn.eval import store as eval_store                     # noqa: E402
+import clozn.settings as clozn_settings          # noqa: E402
 from clozn.memory import mode as memory_mode                   # noqa: E402
 from clozn.server import generation_gateway as gw               # noqa: E402
 
@@ -54,19 +55,19 @@ def test_enabled_false_when_request_field_is_explicitly_false():
 
 
 def test_enabled_false_when_field_and_setting_both_absent(monkeypatch, tmp_path):
-    monkeypatch.setattr(memory_mode, "SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     assert gw.selective_generation_enabled({}) is False
     assert gw.selective_generation_enabled(None) is False
 
 
 def test_enabled_true_via_server_setting_when_field_absent(monkeypatch, tmp_path):
-    monkeypatch.setattr(memory_mode, "SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     memory_mode.set_setting(gw.SELECTIVE_SETTING, True)
     assert gw.selective_generation_enabled({}) is True
 
 
 def test_explicit_false_field_wins_over_server_setting_on(monkeypatch, tmp_path):
-    monkeypatch.setattr(memory_mode, "SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     memory_mode.set_setting(gw.SELECTIVE_SETTING, True)
     assert gw.selective_generation_enabled({"clozn_selective": False}) is False
 

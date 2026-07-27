@@ -42,7 +42,7 @@ from __future__ import annotations
 import inspect
 import time
 
-import clozn.memory.mode as memory_mode  # the single settings file (studio_settings.json) + its never-raise get/set helpers
+import clozn.settings as settings  # the single settings file (studio_settings.json) + its never-raise get/set helpers
 import clozn.runs.store as runlog
 
 # --------------------------------------------------------------------------------------------- the gate
@@ -58,7 +58,7 @@ DEFAULT_BUDGET_MB = 512           # ... and never exceed this many MB of offload
 def enabled() -> bool:
     """Is per-turn KV snapshotting ON? Default OFF (the RAM rule) -- absent/garbage setting => False.
     Accepts a bool or the strings "on"/"true"/"1"/"yes" (UI persists a bool; be liberal reading)."""
-    v = memory_mode.get_setting(_ENABLED_KEY, False)
+    v = settings.get_setting(_ENABLED_KEY, False)
     if isinstance(v, bool):
         return v
     return str(v).strip().lower() in ("on", "true", "1", "yes")
@@ -67,14 +67,14 @@ def enabled() -> bool:
 def set_enabled(on: bool) -> bool:
     """Persist the on/off choice into studio_settings.json (merge-write). False on IO failure (never
     raises) -- the caller reports, the request survives."""
-    return memory_mode.set_setting(_ENABLED_KEY, bool(on))
+    return settings.set_setting(_ENABLED_KEY, bool(on))
 
 
 def get_config() -> dict:
     """The active ring config {cap, budget_mb}. Reads the persisted overrides if present, else the
     defaults. Values are clamped to sane ranges so a garbage setting can't make the store useless."""
-    cap = memory_mode.get_setting("timetravel_cap", DEFAULT_CAP)
-    budget = memory_mode.get_setting("timetravel_budget_mb", DEFAULT_BUDGET_MB)
+    cap = settings.get_setting("timetravel_cap", DEFAULT_CAP)
+    budget = settings.get_setting("timetravel_budget_mb", DEFAULT_BUDGET_MB)
     return {"cap": _clamp_int(cap, DEFAULT_CAP, 1, 128),
             "budget_mb": _clamp_int(budget, DEFAULT_BUDGET_MB, 8, 8192)}
 
@@ -84,9 +84,9 @@ def set_config(cap=None, budget_mb=None) -> bool:
     failure. Only writes the keys actually provided."""
     ok = True
     if cap is not None:
-        ok = memory_mode.set_setting("timetravel_cap", _clamp_int(cap, DEFAULT_CAP, 1, 128)) and ok
+        ok = settings.set_setting("timetravel_cap", _clamp_int(cap, DEFAULT_CAP, 1, 128)) and ok
     if budget_mb is not None:
-        ok = memory_mode.set_setting("timetravel_budget_mb",
+        ok = settings.set_setting("timetravel_budget_mb",
                                      _clamp_int(budget_mb, DEFAULT_BUDGET_MB, 8, 8192)) and ok
     return ok
 

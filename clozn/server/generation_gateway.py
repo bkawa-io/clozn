@@ -414,8 +414,8 @@ def selective_generation_enabled(body: Mapping | None) -> bool:
     if isinstance(body, Mapping) and SELECTIVE_FIELD in body:
         return bool(body.get(SELECTIVE_FIELD))
     try:
-        from clozn.memory import mode as memory_mode
-        return bool(memory_mode.get_setting(SELECTIVE_SETTING, False))
+        import clozn.settings as settings
+        return bool(settings.get_setting(SELECTIVE_SETTING, False))
     except Exception:
         return False
 

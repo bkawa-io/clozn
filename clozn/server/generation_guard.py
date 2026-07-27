@@ -423,8 +423,8 @@ def parse_guard_spec(body: Any) -> Optional[dict]:
         raw = body.get(GUARD_FIELD)
         return _normalize_guard_spec(raw if raw else {})
     try:
-        from clozn.memory import mode as memory_mode
-        saved = memory_mode.get_setting(GUARD_SETTING, None)
+        import clozn.settings as settings
+        saved = settings.get_setting(GUARD_SETTING, None)
     except Exception:
         saved = None
     if not saved:
@@ -449,8 +449,8 @@ def get_persisted_guard_spec() -> Optional[dict]:
     clozn.memory.mode's own never-raise-on-load discipline; the only place a malformed guard spec is ever
     surfaced as an error is set_persisted_guard_spec, at the moment someone tries to WRITE it."""
     try:
-        from clozn.memory import mode as memory_mode
-        saved = memory_mode.get_setting(GUARD_SETTING, None)
+        import clozn.settings as settings
+        saved = settings.get_setting(GUARD_SETTING, None)
     except Exception:
         saved = None
     if not saved:
@@ -475,9 +475,9 @@ def set_persisted_guard_spec(raw: Any) -> Optional[dict]:
     the caller (clozn.server.routes.guard) must turn that into an HTTP 400, never swallow it, exactly like
     parse_guard_spec's own contract for a live request. Returns the normalized spec that was persisted
     (None when turned off)."""
-    from clozn.memory import mode as memory_mode
+    import clozn.settings as settings
     spec = _normalize_guard_spec(raw if raw else {})
-    memory_mode.set_setting(GUARD_SETTING, spec)
+    settings.set_setting(GUARD_SETTING, spec)
     return spec
 
 

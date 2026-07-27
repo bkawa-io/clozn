@@ -14,6 +14,7 @@ import pytest
 openai = pytest.importorskip("openai")
 
 from clozn.server import app as cs  # noqa: E402
+import clozn.settings as clozn_settings          # noqa: E402
 import clozn.memory.cards as memory_cards  # noqa: E402
 import clozn.memory.mode as memory_mode  # noqa: E402
 import clozn.runs.store as runlog  # noqa: E402
@@ -65,7 +66,7 @@ class _Substrate:
 def openai_gateway(tmp_path, monkeypatch):
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
-    monkeypatch.setattr(memory_mode, "SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     monkeypatch.setattr(cs, "SUB", _Substrate())
     server = ThreadingHTTPServer(("127.0.0.1", 0), cs.make_handler())
     thread = threading.Thread(target=server.serve_forever, daemon=True)

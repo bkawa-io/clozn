@@ -24,6 +24,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
 from clozn.cli.main import build_parser              # noqa: E402
+import clozn.settings as clozn_settings          # noqa: E402
 from clozn.cli.commands.eval import cmd_eval          # noqa: E402
 from clozn.eval import bench, policy, store as eval_store  # noqa: E402
 from clozn.server import app as cs                    # noqa: E402
@@ -129,7 +130,7 @@ def test_wizard_fit_and_save_then_a_live_reply_carries_the_same_thresholds(tmp_p
     # --- isolate every store this touches -- never the real ~/.clozn ---
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
-    monkeypatch.setattr(memory_mode, "SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "no_such.pt")])
     monkeypatch.setattr(eval_store, "_PATH", str(tmp_path / "eval_report.json"))
 

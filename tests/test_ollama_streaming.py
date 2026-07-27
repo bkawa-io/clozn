@@ -16,6 +16,7 @@ import json
 import pytest
 
 import clozn.memory.cards as memory_cards
+import clozn.settings as clozn_settings
 import clozn.memory.mode as memory_mode
 import clozn.runs.store as runlog
 from clozn.server import app as cs
@@ -172,7 +173,7 @@ def _ndjson_lines(raw: bytes) -> list:
 def isolated_runlog(tmp_path, monkeypatch):
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
-    monkeypatch.setattr(memory_mode, "SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "missing.pt")])
     return monkeypatch
 

@@ -32,6 +32,7 @@ RESEARCH = os.path.dirname(HERE)
 sys.path.insert(0, RESEARCH)
 
 from clozn.server import app as cs          # noqa: E402
+import clozn.settings as clozn_settings          # noqa: E402
 import clozn.memory.cards as memory_cards                # noqa: E402
 import clozn.memory.mode as memory_mode                 # noqa: E402
 import urllib.request               # noqa: E402
@@ -43,7 +44,7 @@ def iso(tmp_path, monkeypatch):
     machine (mirrors test_engine_substrate.py's own iso fixture)."""
     monkeypatch.setattr(cs, "CLOZN_DIR", str(tmp_path))
     monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
-    monkeypatch.setattr(memory_mode, "SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     return tmp_path
 
 

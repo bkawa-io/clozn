@@ -38,6 +38,7 @@ REPO = os.path.dirname(HERE)                                 # repo root (clozn/
 sys.path.insert(0, REPO)
 
 import clozn.cli.main as clozn_cli                                            # noqa: E402
+import clozn.settings as clozn_settings          # noqa: E402
 import clozn.cli.commands.explain as explain_cmd                                     # noqa: E402
 from clozn.server import app as cs                                    # noqa: E402
 import clozn.memory.cards as memory_cards                                          # noqa: E402
@@ -191,7 +192,7 @@ def iso(tmp_path, monkeypatch):
     loads (the NLI path is test_semantic_matcher_gated.py's job). Mirrors test_narrate_server.py's `iso`."""
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
-    monkeypatch.setattr(memory_mode, "SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "no_such.pt")])
     monkeypatch.setattr(semantic_matcher, "available", lambda: False)
     monkeypatch.setattr(cs, "SUB", NarrateFakeSub())

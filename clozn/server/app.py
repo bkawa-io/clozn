@@ -192,21 +192,21 @@ def _resolve_sampling(want_sample):
     if not want_sample:
         return None
     overrides = want_sample if isinstance(want_sample, dict) else {}
-    import clozn.memory.mode as memory_mode
+    import clozn.settings as settings
     # The persisted switch controls Clozn's own default behavior. An OpenAI request that explicitly names
     # sampling fields is a per-call contract and must win; otherwise we would accept temperature/top_p and
     # silently run greedy because somebody toggled Studio's global setting earlier.
-    if not overrides and not bool(memory_mode.get_setting("sampling", _SAMPLING_DEFAULTS["sampling"])):
+    if not overrides and not bool(settings.get_setting("sampling", _SAMPLING_DEFAULTS["sampling"])):
         return None
     resolved = {
         "on": True,
-        "temperature": float(overrides.get("temperature", memory_mode.get_setting(
+        "temperature": float(overrides.get("temperature", settings.get_setting(
             "sample_temperature", _SAMPLING_DEFAULTS["sample_temperature"]))),
-        "top_p": float(overrides.get("top_p", memory_mode.get_setting(
+        "top_p": float(overrides.get("top_p", settings.get_setting(
             "sample_top_p", _SAMPLING_DEFAULTS["sample_top_p"]))),
-        "top_k": int(overrides.get("top_k", memory_mode.get_setting(
+        "top_k": int(overrides.get("top_k", settings.get_setting(
             "sample_top_k", _SAMPLING_DEFAULTS["sample_top_k"]))),
-        "repeat_penalty": float(overrides.get("repeat_penalty", memory_mode.get_setting(
+        "repeat_penalty": float(overrides.get("repeat_penalty", settings.get_setting(
             "sample_repeat_penalty", _SAMPLING_DEFAULTS["sample_repeat_penalty"]))),
         # A FRESH seed every turn (not a fixed one) -- what makes a sampled reply vary turn to turn while
         # still being independently reproducible: re-POSTing /v1/completions with this same seed+params
@@ -220,8 +220,8 @@ def _sampling_settings():
     """The persisted S5 sampling settings (on/off + the four params) for the GET/POST /sampling/mode
     route -- what's actually configured, not what one specific turn resolved to. Unlike _resolve_sampling,
     this never generates a seed (a GET must never mutate anything)."""
-    import clozn.memory.mode as memory_mode
-    return {k: memory_mode.get_setting(k, v) for k, v in _SAMPLING_DEFAULTS.items()}
+    import clozn.settings as settings
+    return {k: settings.get_setting(k, v) for k, v in _SAMPLING_DEFAULTS.items()}
 
 
 def _engine_generation_meta(max_new=None, stream=None, sample=None):
@@ -526,8 +526,8 @@ from clozn.server.memory_assembly import (                                      
 def _active_profile_name():
     """The name of the last-switched-to profile, or None (nothing switched yet this install). Persisted
     in studio_settings.json alongside memory_mode -- one small settings file, not a new one."""
-    import clozn.memory.mode as memory_mode
-    return memory_mode.get_setting("active_profile")
+    import clozn.settings as settings
+    return settings.get_setting("active_profile")
 
 
 def _profiles_switch(sub, p) -> dict:
@@ -591,8 +591,8 @@ def _profiles_switch(sub, p) -> dict:
     #    lab-only research module now, clozn/lab/slotmem_qwen). A profile's fact pairs still travel in
     #    the bundle (export/import stays lossless), but the product server never compiles them into a
     #    live store -- facts_note says so honestly, always.
-    import clozn.memory.mode as memory_mode
-    memory_mode.set_setting("active_profile", p["name"])
+    import clozn.settings as settings
+    settings.set_setting("active_profile", p["name"])
 
     facts_note = None
     if p.get("facts"):
