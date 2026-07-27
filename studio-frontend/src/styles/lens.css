@@ -195,7 +195,7 @@
   position: relative;
   z-index: 3;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   border-bottom: 1px solid var(--line);
 }
 
@@ -223,6 +223,282 @@
     linear-gradient(180deg, color-mix(in srgb, var(--signal-violet) 11%, transparent), transparent),
     color-mix(in srgb, var(--panel-raised) 52%, transparent);
   box-shadow: inset 0 -2px var(--signal-violet);
+}
+
+.lens-modes .lens-performance-toggle {
+  color: color-mix(in srgb, var(--signal-cyan) 48%, var(--ink-faint));
+}
+
+.lens-modes .lens-performance-toggle.is-active {
+  color: var(--ink);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--signal-cyan) 12%, transparent), transparent),
+    color-mix(in srgb, var(--panel-raised) 52%, transparent);
+  box-shadow: inset 0 -2px var(--signal-cyan);
+}
+
+.lens-performance {
+  position: relative;
+  z-index: 3;
+  display: grid;
+  flex: 0 0 auto;
+  min-height: 178px;
+  max-height: 210px;
+  grid-template-columns: 118px minmax(0, 1fr);
+  grid-template-rows: 68px minmax(108px, 1fr);
+  border-bottom: 1px solid var(--line);
+  background:
+    linear-gradient(115deg, color-mix(in srgb, var(--signal-cyan) 5%, transparent), transparent 42%),
+    color-mix(in srgb, var(--panel) 91%, transparent);
+}
+
+.lens-performance-head {
+  display: grid;
+  grid-column: 1;
+  grid-row: 1 / -1;
+  align-content: space-between;
+  padding: 11px;
+  border-right: 1px solid var(--line);
+}
+
+.lens-performance-head > div {
+  display: grid;
+  gap: 4px;
+}
+
+.lens-performance-head span,
+.lens-performance-head strong {
+  font-family: var(--font-machine);
+  font-weight: 500;
+}
+
+.lens-performance-head span {
+  color: var(--ink-faint);
+  font-size: 5.5px;
+  letter-spacing: .08em;
+}
+
+.lens-performance-head strong {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.lens-performance-head > div:first-child strong {
+  color: var(--ink);
+  font-size: 11px;
+  text-transform: none;
+}
+
+.lens-performance-metrics {
+  display: grid;
+  grid-column: 2;
+  grid-row: 1;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  border-bottom: 1px solid var(--line);
+}
+
+.lens-performance-metric {
+  display: grid;
+  min-width: 0;
+  align-content: center;
+  gap: 2px;
+  padding: 7px 9px;
+  border-right: 1px solid var(--line);
+}
+
+.lens-performance-metric:last-child {
+  border-right: 0;
+}
+
+.lens-performance-metric span,
+.lens-performance-metric strong,
+.lens-performance-metric small {
+  overflow: hidden;
+  font-family: var(--font-machine);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lens-performance-metric span,
+.lens-performance-metric small {
+  color: var(--ink-faint);
+  font-size: 5.5px;
+  letter-spacing: .07em;
+}
+
+.lens-performance-metric strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.lens-performance-diagnosis {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-column: 2;
+  grid-row: 2;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.lens-performance-diagnosis > nav {
+  display: grid;
+  min-width: 0;
+  overflow-x: auto;
+  border-right: 1px solid var(--line);
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.lens-performance-diagnosis > nav button {
+  display: grid;
+  min-width: 0;
+  align-content: center;
+  justify-items: start;
+  gap: 3px;
+  padding: 7px;
+  border-right: 1px solid var(--line);
+  color: var(--ink-faint);
+  background: transparent;
+  text-align: left;
+}
+
+.lens-performance-diagnosis > nav button:last-child {
+  border-right: 0;
+}
+
+.lens-performance-diagnosis > nav button:hover,
+.lens-performance-diagnosis > nav button.is-selected {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel-raised) 62%, transparent);
+}
+
+.lens-performance-diagnosis > nav button.is-selected {
+  box-shadow: inset 0 -2px var(--signal-cyan);
+}
+
+.lens-performance-diagnosis > nav i {
+  width: 5px;
+  height: 5px;
+  background: var(--ink-faint);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--ink-faint) 58%, transparent);
+}
+
+.lens-performance-diagnosis > nav .status-observed i {
+  background: var(--signal-mint);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--signal-mint) 75%, transparent);
+}
+
+.lens-performance-diagnosis > nav .status-not-observed i {
+  background: var(--signal-cyan);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--signal-cyan) 65%, transparent);
+}
+
+.lens-performance-diagnosis > nav span,
+.lens-performance-diagnosis > nav small {
+  font-family: var(--font-machine);
+  font-size: 5.5px;
+  letter-spacing: .06em;
+  white-space: nowrap;
+}
+
+.lens-performance-diagnosis > nav span {
+  color: var(--ink-soft);
+}
+
+.lens-performance-diagnosis > nav small {
+  color: var(--ink-faint);
+}
+
+.lens-performance-detail {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 9px 11px;
+  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.lens-performance-detail > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lens-performance-detail > header strong,
+.lens-performance-detail > header span {
+  font-family: var(--font-machine);
+  font-size: 6px;
+  font-weight: 500;
+  letter-spacing: .07em;
+}
+
+.lens-performance-detail > header strong {
+  color: var(--ink-soft);
+}
+
+.lens-performance-detail > header span {
+  color: var(--ink-faint);
+}
+
+.lens-performance-detail > header span.status-observed {
+  color: color-mix(in srgb, var(--signal-mint) 66%, var(--ink));
+}
+
+.lens-performance-detail > header span.status-not-observed {
+  color: color-mix(in srgb, var(--signal-cyan) 62%, var(--ink));
+}
+
+.lens-performance-detail p {
+  margin: 6px 0 0;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 6.5px;
+  line-height: 1.45;
+}
+
+.lens-performance-detail dl {
+  display: grid;
+  gap: 3px;
+  margin: 7px 0 0;
+}
+
+.lens-performance-detail dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lens-performance-detail dt,
+.lens-performance-detail dd {
+  margin: 0;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 5.5px;
+}
+
+.lens-performance-detail dd {
+  color: var(--ink-soft);
+}
+
+.lens-performance-state {
+  display: grid;
+  min-height: 100%;
+  place-items: center;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .08em;
+}
+
+.lens-performance-state.is-error {
+  color: var(--danger);
 }
 
 .lens-response-stage {
@@ -908,6 +1184,15 @@
   .lens-run-picker select {
     width: 150px;
   }
+
+  .lens-performance-diagnosis > nav {
+    display: flex;
+  }
+
+  .lens-performance-diagnosis > nav button {
+    min-width: 58px;
+    flex: 1 0 58px;
+  }
 }
 
 @media (max-width: 860px) {
@@ -939,6 +1224,15 @@
   .lens-response-stage {
     min-height: 440px;
     padding: 30px 24px;
+  }
+
+  .lens-performance {
+    max-height: none;
+    grid-template-columns: 96px minmax(0, 1fr);
+  }
+
+  .lens-performance-diagnosis {
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr);
   }
 
   .lens-head {
@@ -985,12 +1279,67 @@
     grid-template-columns: repeat(2, 1fr);
   }
 
-  .lens-modes button:nth-child(2) {
+  .lens-modes button:nth-child(even) {
     border-right: 0;
   }
 
   .lens-modes button:nth-child(-n + 2) {
     border-bottom: 1px solid var(--line);
+  }
+
+  .lens-modes .lens-performance-toggle {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--line);
+  }
+
+  .lens-performance {
+    display: flex;
+    min-height: 0;
+    max-height: none;
+    flex-direction: column;
+  }
+
+  .lens-performance-head {
+    display: flex;
+    min-height: 42px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .lens-performance-head > div {
+    gap: 2px;
+  }
+
+  .lens-performance-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .lens-performance-metric {
+    min-height: 56px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .lens-performance-metric:nth-child(even) {
+    border-right: 0;
+  }
+
+  .lens-performance-diagnosis {
+    display: flex;
+    min-height: 186px;
+    flex-direction: column;
+  }
+
+  .lens-performance-diagnosis > nav {
+    min-height: 62px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .lens-performance-detail {
+    min-height: 116px;
   }
 
   .lens-response-text,

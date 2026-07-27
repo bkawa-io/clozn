@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { loadRunInspection } from "../../data/api";
 import type { ForkState, ObservatoryData, RuntimeState } from "../../data/types";
 import { alignTokens } from "../compare/alignment";
 import { ConfidencePlot } from "./ConfidencePlot";
 import { LayerScope } from "./LayerScope";
-import { SignalPlot } from "./SignalPlot";
 import { TraceScope } from "./TraceScope";
 import { VariantDeltaPlot } from "./VariantDeltaPlot";
 import { VariantScope } from "./VariantScope";
@@ -55,12 +54,10 @@ export function Observatory({
   onFork,
   initialTokenIndex,
 }: ObservatoryProps) {
-  const [selectedLayer, setSelectedLayer] = useState(data.layers[3]?.layer ?? data.layers[0]?.layer ?? 0);
+  const [selectedLayer, setSelectedLayer] = useState(0);
   const [selectedToken, setSelectedToken] = useState(() => initialToken(data));
-  const [view, setView] = useState<ScopeView>(data.layers.length ? "layers" : "trace");
+  const [view, setView] = useState<ScopeView>("trace");
   const [forkToken, setForkToken] = useState("");
-  const [zoom, setZoom] = useState(62);
-  const [rotation, setRotation] = useState(38);
   const [variantReferenceId, setVariantReferenceId] = useState(() => defaultReferenceId(data, runtime));
   const [variantReference, setVariantReference] = useState<ObservatoryData | null>(null);
   const [variantStatus, setVariantStatus] = useState<"idle" | "loading" | "error">("idle");
@@ -71,17 +68,14 @@ export function Observatory({
         ? initialToken(data)
         : Math.max(0, Math.min(data.tokens.length - 1, initialTokenIndex)),
     );
-    setSelectedLayer(data.layers[3]?.layer ?? data.layers[0]?.layer ?? 0);
-    setView(data.layers.length ? "layers" : "trace");
+    setSelectedLayer(0);
+    setView("trace");
     setVariantReferenceId(defaultReferenceId(data, runtime));
     setVariantReference(null);
   }, [data, initialTokenIndex]);
 
-  const layer = useMemo(
-    () => data.layers.find((item) => item.layer === selectedLayer) ?? data.layers[0],
-    [data.layers, selectedLayer],
-  );
-  const activeView: ScopeView = view === "layers" && !data.layers.length
+  const layersAvailable = data.mode === "run" && Boolean(data.response?.trim());
+  const activeView: ScopeView = view === "layers" && !layersAvailable
     ? "trace"
     : view === "variants" && data.mode !== "run"
       ? "trace"
@@ -110,6 +104,12 @@ export function Observatory({
   const variantConfidenceDelta = token && variantReferenceToken
     ? (token.confidence ?? 0) - (variantReferenceToken.confidence ?? 0)
     : undefined;
+  const tapeLimit = 120;
+  const tapeStart = data.tokens.length > tapeLimit
+    ? Math.max(0, Math.min(data.tokens.length - tapeLimit, selectedToken - Math.floor(tapeLimit / 2)))
+    : 0;
+  const tapeEnd = Math.min(data.tokens.length, tapeStart + tapeLimit);
+  const tapeTokens = data.tokens.slice(tapeStart, tapeEnd);
 
   useEffect(() => {
     if (!variantReferenceId || variantReferenceId === data.id) {
@@ -160,11 +160,11 @@ export function Observatory({
                 ? "Token sources"
                 : activeView === "variants"
                   ? "Variant provenance"
-                  : "Active layer influence"}
+                  : "Layer evidence"}
             </h1>
           </div>
           <div className="head-metrics">
-            <span><b>LAYERS</b>{data.layers.length || "—"}</span>
+            <span><b>LAYERS</b>{runtime.engine?.layerCount ?? "—"}</span>
             <span><b>TOKENS</b>{data.tokens.length}</span>
             <span><b>DURATION</b>{data.duration}</span>
           </div>
@@ -204,21 +204,23 @@ export function Observatory({
             <button
               className={activeView === "layers" ? "is-active" : ""}
               type="button"
-              disabled={!data.layers.length}
+              disabled={!layersAvailable}
               aria-pressed={activeView === "layers"}
-              title={!data.layers.length ? data.layerReason : undefined}
+              title={!layersAvailable ? "A completed run response is required" : undefined}
               onClick={() => setView("layers")}
             >
               LAYERS
             </button>
           </nav>
 
-          {activeView === "layers" && layer ? (
+          {activeView === "layers" ? (
             <LayerScope
-              layers={data.layers}
+              runId={data.id}
+              text={data.response ?? ""}
+              engine={runtime.engine}
+              workspaceReadouts={data.workspaceReadouts ?? []}
+              selectedToken={selectedToken}
               selectedLayer={selectedLayer}
-              rotation={rotation}
-              zoom={zoom}
               onSelectLayer={setSelectedLayer}
             />
           ) : activeView === "variants" ? (
@@ -236,7 +238,8 @@ export function Observatory({
             />
           ) : (
             <TraceScope
-              sources={data.sources}
+              sources={data.contextSources ?? data.sources}
+              coverage={data.contextCoverage}
               tokens={data.tokens}
               selectedToken={selectedToken}
               onSelectToken={setSelectedToken}
@@ -244,25 +247,12 @@ export function Observatory({
           )}
         </div>
 
-        {activeView === "layers" && layer ? (
-          <footer className="scope-controls">
-            <label>
-              <span>ROTATION</span>
-              <output>{rotation}°</output>
-              <input type="range" min="0" max="80" value={rotation} onChange={(event) => setRotation(Number(event.target.value))} />
-            </label>
-            <label>
-              <span>ZOOM</span>
-              <output>{zoom}%</output>
-              <input type="range" min="30" max="100" value={zoom} onChange={(event) => setZoom(Number(event.target.value))} />
-            </label>
-            <label className="focus-select">
-              <span>FOCUS</span>
-              <select value={selectedLayer} onChange={(event) => setSelectedLayer(Number(event.target.value))}>
-                {data.layers.map((item) => <option key={item.layer} value={item.layer}>L{item.layer}</option>)}
-              </select>
-            </label>
-            <span className="measurement-chip">{data.layerEvidence === "measured" ? "MEASURED" : "DEMO DATA"}</span>
+        {activeView === "layers" ? (
+          <footer className="scope-controls trace-controls layer-controls">
+            <span><b>RECORDED POSITION</b>{selectedToken + 1} / {data.tokens.length}</span>
+            <span><b>SELECTED LAYER</b>L{selectedLayer}</span>
+            <span><b>WORKER</b>{runtime.engine?.model ?? "UNAVAILABLE"}</span>
+            <span className="measurement-chip">POST-HOC</span>
           </footer>
         ) : activeView === "variants" ? (
           <footer className="scope-controls trace-controls variant-controls">
@@ -299,20 +289,19 @@ export function Observatory({
                     : "Token inspector"}
               </h2>
             </div>
-            <strong className="layer-number">{activeView === "layers" && layer ? `L${layer.layer}` : `#${selectedToken + 1}`}</strong>
+            <strong className="layer-number">{activeView === "layers" ? `L${selectedLayer}` : `#${selectedToken + 1}`}</strong>
           </header>
 
-          {activeView === "layers" && layer ? (
+          {activeView === "layers" ? (
             <section className="inspector-section layer-summary">
-              <div className="layer-orb" style={{ "--orb-level": layer.activation } as CSSProperties}>
-                <i /><i /><i />
-              </div>
               <dl className="metric-list">
-                <div><dt>Stage</dt><dd>{layer.stage}</dd></div>
-                <div><dt>Activation</dt><dd>{layer.activation.toFixed(2)}</dd></div>
-                <div><dt>Energy</dt><dd>{layer.energy.toFixed(2)}</dd></div>
-                <div><dt>Stability</dt><dd>{formatPercent(layer.stability)}</dd></div>
-                <div><dt>Features</dt><dd>{layer.features}</dd></div>
+                <div><dt>Recorded token</dt><dd>{token?.text || "∅"}</dd></div>
+                <div><dt>Recorded position</dt><dd>{selectedToken + 1} / {data.tokens.length}</dd></div>
+                <div><dt>Selected layer</dt><dd>L{selectedLayer}</dd></div>
+                <div><dt>Analysis</dt><dd>POST-HOC · CURRENT WORKER</dd></div>
+                <div><dt>Worker model</dt><dd>{runtime.engine?.model ?? "UNAVAILABLE"}</dd></div>
+                <div><dt>J-lens</dt><dd>{runtime.engine?.jlens ? "LOADED" : "NOT LOADED"}</dd></div>
+                <div><dt>SAE</dt><dd>{runtime.engine?.sae ? "LOADED" : "NOT LOADED"}</dd></div>
               </dl>
             </section>
           ) : activeView === "variants" && token ? (
@@ -351,7 +340,10 @@ export function Observatory({
           ) : null}
 
           <section className="inspector-section">
-            <div className="section-title"><h3>Token distribution</h3><span>TOP-K</span></div>
+            <div className="section-title">
+              <h3>{activeView === "layers" ? "Recorded token distribution" : "Token distribution"}</h3>
+              <span>TOP-K</span>
+            </div>
             <div className="candidate-list">
               {candidates.map((candidate, index) => (
                 <button
@@ -445,24 +437,22 @@ export function Observatory({
       <section className="instrument residual-panel" aria-labelledby="residual-title">
         <header className="instrument-head compact">
           <div>
-            <span className="eyebrow">{activeView === "layers" ? "SIGNAL" : activeView === "variants" ? "ALIGNED TOKENS" : "TOKENS"}</span>
+            <span className="eyebrow">{activeView === "variants" ? "ALIGNED TOKENS" : "TOKENS"}</span>
             <h2 id="residual-title">
               {activeView === "layers"
-                ? "Residual stream"
+                ? "Recorded confidence trace"
                 : activeView === "variants"
                   ? "Confidence difference"
                   : "Confidence trace"}
             </h2>
           </div>
           <div className="legend">
-            <span className="violet">{activeView === "layers" ? "ENERGY" : activeView === "variants" ? "CURRENT − REFERENCE" : "CONFIDENCE"}</span>
-            <span className="cyan">{activeView === "layers" ? "ACTIVATION" : activeView === "variants" ? "ZERO" : "TOP-K ENTROPY"}</span>
+            <span className="violet">{activeView === "variants" ? "CURRENT − REFERENCE" : "CONFIDENCE"}</span>
+            <span className="cyan">{activeView === "variants" ? "ZERO" : "TOP-K ENTROPY"}</span>
           </div>
         </header>
         <div className="plot-wrap">
-          {activeView === "layers"
-            ? <SignalPlot layers={data.layers} selectedLayer={selectedLayer} />
-            : activeView === "variants"
+          {activeView === "variants"
               ? (
                   <VariantDeltaPlot
                     current={data}
@@ -473,9 +463,7 @@ export function Observatory({
                 )
               : <ConfidencePlot tokens={data.tokens} selectedToken={selectedToken} />}
           <div className="plot-axis">
-            {activeView === "layers"
-              ? data.layers.map((item) => <span key={item.layer}>L{item.layer}</span>)
-              : <><span>1</span><span>{Math.max(1, Math.ceil(data.tokens.length / 2))}</span><span>{data.tokens.length}</span></>}
+            <><span>1</span><span>{Math.max(1, Math.ceil(data.tokens.length / 2))}</span><span>{data.tokens.length}</span></>
           </div>
         </div>
       </section>
@@ -488,8 +476,15 @@ export function Observatory({
           </div>
           <span className="token-count">{selectedToken + 1} / {data.tokens.length}</span>
         </header>
-        <div className={`token-tape ${data.tokens.length > 16 ? "is-dense" : ""}`} role="listbox" aria-label="Output tokens">
-          {data.tokens.map((item, index) => (
+        <div
+          className={`token-tape ${data.tokens.length > 16 ? "is-dense" : ""} ${data.tokens.length > tapeLimit ? "is-windowed" : ""}`}
+          role="listbox"
+          aria-label="Output tokens"
+        >
+          {tapeStart > 0 && <span className="tape-gap" aria-hidden="true">1–{tapeStart}</span>}
+          {tapeTokens.map((item, offset) => {
+            const index = tapeStart + offset;
+            return (
             <button
               type="button"
               role="option"
@@ -505,7 +500,11 @@ export function Observatory({
               <span>{item.text || "∅"}</span>
               <i style={{ height: `${Math.max(8, Math.min(100, item.entropy / 1.6 * 100))}%` }} />
             </button>
-          ))}
+            );
+          })}
+          {tapeEnd < data.tokens.length && (
+            <span className="tape-gap" aria-hidden="true">{tapeEnd + 1}–{data.tokens.length}</span>
+          )}
         </div>
         <div className="tape-scrubber">
           <input

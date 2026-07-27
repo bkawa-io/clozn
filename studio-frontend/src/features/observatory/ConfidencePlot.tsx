@@ -1,14 +1,23 @@
 import type { TokenReading } from "../../data/types";
 
 export function ConfidencePlot({ tokens, selectedToken }: { tokens: TokenReading[]; selectedToken: number }) {
-  const maxEntropy = Math.max(...tokens.map((token) => token.entropy), 0.001);
+  const maxEntropy = tokens.reduce((maximum, token) => Math.max(maximum, token.entropy), 0.001);
+  const sampleLimit = 512;
+  const step = Math.max(1, Math.ceil(tokens.length / sampleLimit));
+  const sampleIndexes = new Set<number>([0, Math.max(0, tokens.length - 1), selectedToken]);
+  for (let index = 0; index < tokens.length; index += step) sampleIndexes.add(index);
+  const sampled = [...sampleIndexes].sort((a, b) => a - b);
   const point = (index: number, value: number) => {
     const x = 4 + index * (92 / Math.max(1, tokens.length - 1));
     const y = 92 - value * 78;
     return `${x},${y}`;
   };
-  const confidencePoints = tokens.map((token, index) => point(index, token.confidence ?? 0)).join(" ");
-  const entropyPoints = tokens.map((token, index) => point(index, token.entropy / maxEntropy)).join(" ");
+  const confidencePoints = sampled
+    .map((index) => point(index, tokens[index]?.confidence ?? 0))
+    .join(" ");
+  const entropyPoints = sampled
+    .map((index) => point(index, (tokens[index]?.entropy ?? 0) / maxEntropy))
+    .join(" ");
   const selectedX = 4 + selectedToken * (92 / Math.max(1, tokens.length - 1));
   const selectedY = 92 - (tokens[selectedToken]?.confidence ?? 0) * 78;
 
