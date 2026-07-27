@@ -125,9 +125,6 @@ def ndjson_stream(handler, messages, max_new, model, *, operation, sample=True, 
         params = inspect.signature(sub.chat_stream).parameters
     except Exception:
         params = {}
-    if "memory_scope" in params:
-        from clozn.server.generation_gateway import request_memory_scope
-        stream_kw["memory_scope"] = request_memory_scope(handler)
     gen = sub.chat_stream(messages, max_new, **stream_kw)
     disconnect_error = None
     think_stream = None

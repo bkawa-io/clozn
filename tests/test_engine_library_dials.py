@@ -38,8 +38,8 @@ sys.path.insert(0, RESEARCH)
 
 from clozn.server import app as cs          # noqa: E402
 import clozn.settings as clozn_settings          # noqa: E402
-import clozn.memory.cards as memory_cards                # noqa: E402
-import clozn.memory.mode as memory_mode                 # noqa: E402
+
+
 from clozn.behavior.steering import AXES, EngineSteer   # noqa: E402
 
 
@@ -261,7 +261,6 @@ def iso(tmp_path, monkeypatch):
     """Isolate every path this suite's server-level tests might touch, mirroring
     test_engine_substrate.py's own `iso` fixture exactly."""
     monkeypatch.setattr(cs, "CLOZN_DIR", str(tmp_path))
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     return tmp_path
 

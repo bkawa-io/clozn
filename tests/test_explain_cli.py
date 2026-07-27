@@ -36,7 +36,7 @@ sys.path.insert(0, REPO)
 
 import clozn.cli.main as clozn_cli                                            # noqa: E402
 from clozn.server import app as cs                                    # noqa: E402
-import clozn.memory.cards as memory_cards                                          # noqa: E402
+
 import clozn.runs.store as runlog                                                # noqa: E402
 
 _PCT_RE = re.compile(r"\d+(\.\d+)?\s*%")   # any aggregate-percentage-shaped substring -- must NEVER appear
@@ -194,30 +194,10 @@ def iso(tmp_path, monkeypatch):
     """Isolate the run log + card store (mirrors test_explain_server.py's `iso`); SUB stays None -- explain
     needs no substrate, so this exercises the exact same "free" path a real Studio would take."""
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(cs, "SUB", None)
     return tmp_path
 
 
-def test_format_explain_renders_a_genuine_server_response(iso):
-    card = memory_cards.create("Keep it brief.", status="active", source_run_id="run_src",
-                               source_turn=1, quoted_span="please keep it brief")
-    rid = runlog.record(
-        source="engine_chat", model="clozn-qwen",
-        messages=[{"role": "user", "content": "explain gravity"}],
-        response="Mass attracts mass.",
-        trace={"tokens": ["Mass", " attracts", " mass", "."], "confidence": [0.95, 0.2, 0.9, 0.99],
-               "alternatives": [[], [{"piece": " pulls", "prob": 0.4}], [], []]},
-        memory={"cards_applied": ["Keep it brief."], "applied_ids": [card["id"]], "gate": 0.77, "mode": "prompt"},
-        behavior={"active_dials": {"concise": 0.5}},
-    )
-    expl = _post(f"/runs/{rid}/explain")
-    out = clozn_cli.format_explain(expl)
-    assert rid in out
-    assert "1 hesitation" in out
-    assert "pulls" in out and "0.40" in out
-    assert "please keep it brief" in out
-    assert not _PCT_RE.search(out)
 
 
 def test_format_explain_renders_a_genuine_404_shape(iso):

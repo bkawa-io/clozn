@@ -328,7 +328,7 @@ GUARD_TRACE_STEERING_NOTE = (
 
 # -- opt-in wiring -----------------------------------------------------------------------------------
 GUARD_FIELD = "clozn_guard"                 # request-body extension field (an object, not a boolean)
-GUARD_SETTING = "generation_guard"          # server-wide default spec (clozn.memory.mode's settings store)
+GUARD_SETTING = "generation_guard"          # server-wide default spec (clozn.settings, the product's settings store)
 
 # -- defaults, documented as placeholders where calibration doesn't exist yet ------------------------
 DEFAULT_COUNTER_STRENGTH = -0.5             # A1.1's own validated counter_strength (steers AWAY -- negative)
@@ -416,7 +416,7 @@ def parse_guard_spec(body: Any) -> Optional[dict]:
     """The request's guard spec, or None (OFF -- byte-identical to today). An explicit `clozn_guard` on
     the request always wins (including an explicit falsy value, which means "opted out" even when the
     server default is on); only when the request omits the field entirely does the server-wide
-    `generation_guard` setting (GUARD_SETTING, clozn.memory.mode's generic settings store) apply. Raises
+    `generation_guard` setting (GUARD_SETTING, clozn.settings, the product's settings store) apply. Raises
     ValueError on a structurally malformed explicit value (see _normalize_guard_spec) -- callers should
     turn that into an HTTP 400, never swallow it."""
     if isinstance(body, Mapping) and GUARD_FIELD in body:
@@ -446,7 +446,7 @@ def get_persisted_guard_spec() -> Optional[dict]:
     """The currently persisted server-wide guard default, fully normalized (same shape parse_guard_spec
     returns for a request-level spec), or None when off/absent/corrupt. A corrupt or stale persisted value
     (e.g. hand-edited settings file) degrades to None -- treated as off -- rather than raising, mirroring
-    clozn.memory.mode's own never-raise-on-load discipline; the only place a malformed guard spec is ever
+    clozn.settings' own never-raise-on-load discipline; the only place a malformed guard spec is ever
     surfaced as an error is set_persisted_guard_spec, at the moment someone tries to WRITE it."""
     try:
         import clozn.settings as settings
@@ -462,7 +462,7 @@ def get_persisted_guard_spec() -> Optional[dict]:
 
 
 def set_persisted_guard_spec(raw: Any) -> Optional[dict]:
-    """Validate and persist the server-wide guard default via clozn.memory.mode.set_setting -- which
+    """Validate and persist the server-wide guard default via clozn.settings.set_setting -- which
     writes through clozn._io.atomic_write_json (temp-file-then-rename), never a bare open().write() that
     could truncate the settings file on a bad value (see clozn._io's own module docstring for the bug this
     closes). `raw` uses the exact same shape as a request's `clozn_guard` field (concepts + optional

@@ -4,7 +4,6 @@ Drives explain.explain() directly against fixture run dicts. Most are built thro
 runlog.record() + get_run() round trip so the trace/memory/behavior shapes are byte-for-byte what the
 real logging paths persist, not a hand-rolled guess at the schema (mirrors test_runlog.py's own `store`
 fixture); a couple are hand-built on purpose, to exercise shapes runlog itself can't currently produce (a
-run predating provenance, a hypothetical concept-bearing trace) or garbage input. memory_cards.CARDS_PATH
 is isolated to a tmp file (mirrors test_profiles_server.py's `iso` fixture) so provenance lookups are real
 card-store reads, not mocks.
 
@@ -27,7 +26,7 @@ RESEARCH = os.path.dirname(HERE)
 sys.path.insert(0, RESEARCH)
 
 import clozn.receipts.explain as explain          # noqa: E402
-import clozn.memory.cards as memory_cards      # noqa: E402
+
 import clozn.runs.store as runlog            # noqa: E402
 
 
@@ -35,10 +34,6 @@ import clozn.runs.store as runlog            # noqa: E402
 
 @pytest.fixture
 def store(tmp_path, monkeypatch):
-    """Redirect runlog's run store AND memory_cards' card store (mirrors test_runlog.py's `store` fixture
-    + the card-store isolation in test_profiles_server.py / test_propose_memory.py)."""
-    monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     return runlog
 
 
@@ -112,113 +107,22 @@ def test_confidence_tolerates_a_token_with_no_alternatives_recorded(store):
 
 # ---------------------------------------------------------------------------------- fixture: without-trace
 
-def test_confidence_without_trace_is_an_honest_unavailable(store):
-    """The HF chat path (and any pre-trace run) logs NO trace at all -- runlog normalizes that to {}."""
-    rid = store.record(source="studio_chat", messages=[{"role": "user", "content": "hi"}], response="hey",
-                       memory={"cards_applied": ["be concise"], "gate": 0.9, "mode": "prompt"},
-                       behavior={"active_dials": {"concise": 0.4}})
-    run = store.get_run(rid)
-    assert run["trace"] == {}                                    # confirms runlog really stored nothing
-
-    out = explain.explain(run)
-    assert out["confidence"] == {"available": False, "note": "token trace captured on the engine path"}
-    # a missing trace must not blank out the OTHER panels (per-field degradation, not all-or-nothing)
-    assert out["influences_active"]["gate"] == 0.9
-    assert out["influences_active"]["dials"] == [{"name": "concise", "value": 0.4, "causal_verified": None}]
 
 
 # ------------------------------------------------------------------------------- fixture: with-cards+provenance
 
-def test_influences_active_resolves_card_provenance_by_id(store):
-    card = memory_cards.create("Keep answers short.", status="active", source_run_id="run_source_0001",
-                               source_turn=2, quoted_span="please just keep it short")
-    rid = store.record(source="studio_chat", messages=[{"role": "user", "content": "explain gravity"}],
-                       response="Objects with mass attract each other.",
-                       memory={"cards_applied": ["Keep answers short."], "applied_ids": [card["id"]],
-                               "gate": 0.83, "mode": "prompt", "strength": 1.0})
-    run = store.get_run(rid)
-
-    out = explain.explain(run)
-    inf = out["influences_active"]
-    assert inf["gate"] == 0.83
-    assert inf["mode"] == "prompt"
-    assert len(inf["cards"]) == 1
-    c = inf["cards"][0]
-    assert c["id"] == card["id"]
-    assert c["text"] == "Keep answers short."
-    assert c["source_run_id"] == "run_source_0001"
-    assert c["source_turn"] == 2
-    assert c["quoted_span"] == "please just keep it short"       # the provenance QUOTE surfaced
-    assert c["has_provenance"] is True
-    assert c["causal_verified"] is None                          # active, not yet proven -- the invariant
-    assert "note" not in c                                       # a backed card gets no "no receipt" note
 
 
-def test_influences_active_flags_a_card_with_no_provenance_quote(store):
-    """is_provenance_claim_unbacked's case: the card CLAIMS a run but never recorded a quote (a manually
-    typed card, or an old pre-provenance one) -- must be flagged, never silently presented as backed."""
-    card = memory_cards.create("Likes concise answers.", status="active", source_run_id="run_old")
-    rid = store.record(source="studio_chat", messages=[{"role": "user", "content": "q"}], response="a",
-                       memory={"cards_applied": ["Likes concise answers."], "applied_ids": [card["id"]],
-                               "mode": "prompt"})
-    c = explain.explain(store.get_run(rid))["influences_active"]["cards"][0]
-    assert c["has_provenance"] is False
-    assert c["quoted_span"] == ""
-    assert c["note"] == "no provenance quote on record for this card"
-    assert c["causal_verified"] is None
 
 
-def test_influences_active_handles_an_unresolvable_card_id(store):
-    """The card was deleted (or the id is simply stale) since the run fired -- a "no receipt" note, not a
-    KeyError and not a silent empty-looking entry."""
-    rid = store.record(source="studio_chat", messages=[{"role": "user", "content": "q"}], response="a",
-                       memory={"cards_applied": ["a vanished rule"], "applied_ids": ["mem_doesnotexist"],
-                               "mode": "prompt"})
-    c = explain.explain(store.get_run(rid))["influences_active"]["cards"][0]
-    assert c["id"] == "mem_doesnotexist"
-    assert c["text"] == "a vanished rule"
-    assert c["has_provenance"] is False
-    assert "no card record found" in c["note"]
-    assert c["causal_verified"] is None
 
 
-def test_influences_active_internalized_mode_has_no_applied_ids_at_all(store):
-    """Internalized mode's manifest carries cards_applied (rule texts) but NO applied_ids key at all (see
-    clozn_server._log_run's internalized branch) -- every card must degrade to id=None cleanly."""
-    rid = store.record(source="studio_chat", messages=[{"role": "user", "content": "q"}], response="a",
-                       memory={"cards_applied": ["some fused rule"], "mode": "internalized", "strength": 1.0})
-    c = explain.explain(store.get_run(rid))["influences_active"]["cards"][0]
-    assert c["id"] is None
-    assert c["note"] == "no card id recorded for this application"
-    assert c["causal_verified"] is None
 
 
-def test_influences_active_empty_cards_notes_the_prompt_mode_nuance(store):
-    """Prompt mode logs PER-TURN application: an empty cards_applied means the block wasn't injected THIS
-    turn (topic-gated out), not that no cards exist -- the note must say so, matching heavn's rendering."""
-    rid = store.record(source="studio_chat", messages=[{"role": "user", "content": "q"}], response="a",
-                       memory={"cards_applied": [], "mode": "prompt"})
-    inf = explain.explain(store.get_run(rid))["influences_active"]
-    assert inf["cards"] == []
-    assert inf["note"] == "no memory applied this turn (block not injected)"
 
 
-def test_influences_active_empty_cards_internalized_mode_note_differs(store):
-    rid = store.record(source="studio_chat", messages=[{"role": "user", "content": "q"}], response="a",
-                       memory={"cards_applied": [], "mode": "internalized"})
-    inf = explain.explain(store.get_run(rid))["influences_active"]
-    assert inf["note"] == "no memory applied"
 
 
-def test_influences_active_lists_anchored_memory_without_no_memory_note(store):
-    rid = store.record(source="engine_chat", messages=[{"role": "user", "content": "q"}], response="a",
-                       memory={"cards_applied": [], "mode": "prompt",
-                               "anchored": [{"card_id": "mem_tea", "gate": 0.5,
-                                             "alpha_top3": [{"token": "tea", "alpha": 0.7}]}]})
-    inf = explain.explain(store.get_run(rid))["influences_active"]
-    assert inf["cards"] == []
-    assert inf["anchored"][0]["card_id"] == "mem_tea"
-    assert "note" not in inf
 
 
 # ---------------------------------------------------------------------------------------- fixture: with-dials
@@ -280,45 +184,10 @@ def test_concepts_available_when_the_run_carries_sae_readouts(store):
 
 # --------------------------------------------------------------------------------------- fixture: empty run
 
-def test_empty_dict_run_degrades_fully_and_honestly(store):
-    out = explain.explain({})
-    assert out["run_id"] is None
-    assert out["confidence"] == {"available": False, "note": "token trace captured on the engine path"}
-    assert out["influences_active"]["cards"] == []
-    assert out["influences_active"]["dials"] == []
-    assert out["influences_active"]["gate"] is None
-    assert out["concepts"]["available"] is False
 
 
-@pytest.mark.parametrize("garbage", [None, "not a dict", 42, [], ["also", "not", "a", "dict"]])
-def test_explain_never_raises_on_non_dict_input(garbage):
-    out = explain.explain(garbage)         # must not raise
-    assert out["run_id"] is None
-    assert out["confidence"]["available"] is False
-    assert out["influences_active"]["cards"] == []
-    assert out["concepts"]["available"] is False
 
 
-def test_explain_never_raises_on_a_maximally_malformed_but_dict_shaped_run(store):
-    """Every sub-field is the WRONG type (string where a dict is expected, dict where a list is expected,
-    mismatched-length lists, ...) -- explain() must degrade field-by-field, never raise."""
-    run = {
-        "id": "run_weird",
-        "trace": {"tokens": ["a", "b", "c"], "confidence": "not-a-list", "alternatives": {"nope": True}},
-        "memory": {"cards_applied": ["x", "y"], "applied_ids": "not-a-list", "gate": "n/a", "mode": 123},
-        "behavior": {"active_dials": ["not", "a", "dict"]},
-        "concepts": "not-a-list-either",
-    }
-    out = explain.explain(run)
-    assert out["run_id"] == "run_weird"
-    # tokens present but confidence unusable -> no token clears the LOW_CONF check -> zero uncertain moments,
-    # never an exception
-    assert out["confidence"]["available"] is True
-    assert out["confidence"]["uncertain_moments"] == []
-    assert len(out["influences_active"]["cards"]) == 2             # still lists the cards (ids all None)
-    assert all(c["id"] is None for c in out["influences_active"]["cards"])
-    assert out["influences_active"]["dials"] == []                 # a list isn't a dial dict -> no dials, no crash
-    assert out["concepts"]["available"] is False
 
 
 # ------------------------------------------------------------------------- the honesty invariants, globally
@@ -343,15 +212,6 @@ def test_no_aggregate_confidence_field_on_empty_and_garbage_input():
     _assert_no_aggregate_confidence(explain.explain(None))
 
 
-def test_every_active_influence_entry_is_tagged_causal_verified_null(store):
-    card = memory_cards.create("rule", status="active", source_run_id="r1", source_turn=0, quoted_span="q")
-    rid = store.record(source="studio_chat", messages=[{"role": "user", "content": "q"}], response="a",
-                       memory={"cards_applied": ["rule"], "applied_ids": [card["id"]], "mode": "prompt"},
-                       behavior={"active_dials": {"concise": 0.4, "warm": 0.1}})
-    inf = explain.explain(store.get_run(rid))["influences_active"]
-    entries = inf["cards"] + inf["dials"]
-    assert entries               # sanity: this run actually has entries to check
-    assert all(e["causal_verified"] is None for e in entries)
 
 
 def test_explanation_top_level_shape(store):

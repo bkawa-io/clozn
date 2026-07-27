@@ -16,7 +16,7 @@ Two pieces, both in clozn_server.py:
 No model, no GPU, no socket: _dial_calibration/_with_calibration are pure functions exercised directly;
 Substrate._steer is exercised on a BARE instance built via object.__new__(cs.Substrate) (Substrate has no
 __init__ of its own -- subclasses set self.steer/self.name/self._steer_ready post-construction, per its own
-docstring -- so this needs no heavy QwenSubstrate/DreamSubstrate model load, the same
+docstring -- so this needs no heavy torch model load, the same
 no-heavy-__init__ spirit as test_bridge_server.py's object.__new__(H) handler trick). CLOZN_DIR is
 monkeypatched to a tmp_path so a real calibration file on this machine can never leak into a test.
 

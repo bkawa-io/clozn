@@ -72,7 +72,6 @@ from clozn.cli.commands.test_model import cmd_test_model, add_subparser as _add_
 from clozn.cli.commands.trace_circuit import cmd_trace_circuit, add_subparser as _add_causal_trace  # noqa: E402
 from clozn.cli.commands.ci_check import cmd_ci_baseline, cmd_ci_check, add_subparser as _add_ci_check  # noqa: E402,F401
 from clozn.cli.commands.experiment_suite import add_subparser as _add_experiment_suite                  # noqa: E402
-from clozn.cli.commands.lab import cmd_lab                                                      # noqa: E402
 from clozn.cli.commands.smoke import cmd_smoke                                                  # noqa: E402
 from clozn.cli.commands.version import cmd_version                                              # noqa: E402
 from clozn.cli.commands.doctor import cmd_doctor                                                # noqa: E402
@@ -139,11 +138,6 @@ def build_parser():
     pst = sub.add_parser("studio", help="attach to the Studio served by a running Clozn runtime")
     pst.add_argument("--port", type=int, default=0); pst.add_argument("--open", action="store_true", help="open the UI in your browser")
     pst.set_defaults(fn=cmd_studio)
-    plab = sub.add_parser("lab", help="launch an optional PyTorch workbench (never a product API)")
-    plab.add_argument("substrate", choices=("qwen",))
-    plab.add_argument("--port", type=int, default=0)
-    plab.add_argument("--open", action="store_true", help="open the workbench in your browser")
-    plab.set_defaults(fn=cmd_lab)
     psmoke = sub.add_parser("smoke", help="live acceptance test for the one-gateway product runtime")
     psmoke.add_argument("model", nargs="?", help="model name/path; omitted when attaching with --url")
     psmoke.add_argument("--url", default=None, help="attach to an existing gateway instead of launching one")

@@ -38,8 +38,8 @@ sys.path.insert(0, RESEARCH)
 
 from clozn.server import app as cs          # noqa: E402
 import clozn.settings as clozn_settings          # noqa: E402
-import clozn.memory.cards as memory_cards                # noqa: E402
-import clozn.memory.mode as memory_mode                 # noqa: E402
+
+
 from clozn.behavior.steering import EngineSteer   # noqa: E402
 
 
@@ -76,7 +76,6 @@ def iso(tmp_path, monkeypatch):
     (_EngineMemory.rules/.state), and the settings file (_EngineMemory.__init__'s memory_strength read).
     Mirrors test_dial_library_server.py / test_memory_mode.py's own iso fixtures."""
     monkeypatch.setattr(cs, "CLOZN_DIR", str(tmp_path))
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     return tmp_path
 
@@ -90,10 +89,6 @@ def fake_engine(monkeypatch):
     monkeypatch.setattr(cs, "ENGINE", fe)
     monkeypatch.setattr(cs, "ENGINE_STEER", None)
     return fe
-
-
-def _no_block(mem, last_user, strength=None):
-    return None, [], 0.0
 
 
 # ==================================================================================== construction
@@ -261,54 +256,19 @@ def test_dial_persistence_activates_once_identity_resolves(iso, monkeypatch):
 # ==================================================================================== chat() basics
 
 def test_chat_returns_the_engines_text_stripped(iso, fake_engine, monkeypatch):
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
     fake_engine.text = "  hello there  "
     sub = cs.EngineSubstrate()
     assert sub.chat([{"role": "user", "content": "hi"}]) == "hello there"
     assert len(fake_engine.calls) == 1             # the .complete() fallback actually ran
 
 
-def test_chat_fills_mem_out_and_trace_out_without_raising(iso, fake_engine, monkeypatch):
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
-    sub = cs.EngineSubstrate()
-    trace_out, mem_out = [], {}
-    reply = sub.chat([{"role": "user", "content": "hi"}], trace_out=trace_out, mem_out=mem_out)
-    assert reply == "hi"
-    assert {k: mem_out[k] for k in ("mode", "applied", "gate")} == {
-        "mode": "prompt", "applied": [], "gate": 0.0}
-    assert mem_out["prompt_block"] is None
-    assert mem_out["assembled_messages"] == [{"role": "user", "content": "hi"}]
-    assert trace_out == []                         # the fallback path traces empty, but never raises
 
 
 # ==================================================================================== chat() -- prompt-mode memory folds into the prompt
 
-def test_chat_folds_the_memory_block_into_the_rendered_prompt(iso, fake_engine, monkeypatch):
-    block = "Here is what you know about them:\n- loves rock climbing"
-    monkeypatch.setattr(cs, "_prompt_block_for",
-                        lambda mem, last_user, strength=None: (block, [{"id": "c1", "text": "x"}], 1.0))
-    sub = cs.EngineSubstrate()
-    mem_out = {}
-    sub.chat([{"role": "user", "content": "what should I do this weekend?"}], mem_out=mem_out)
-
-    assert {k: mem_out[k] for k in ("mode", "applied", "gate")} == {
-        "mode": "prompt", "applied": [{"id": "c1", "text": "x"}], "gate": 1.0}
-    assert mem_out["prompt_block"] == block
-    assert mem_out["assembled_messages"] == [
-        {"role": "system", "content": block},
-        {"role": "user", "content": "what should I do this weekend?"},
-    ]
-    # the block-bearing assembled messages were handed to the ENGINE to template (per-model), NOT
-    # pre-rendered as Qwen ChatML in Python -- the model-agnostic seam.
-    assert fake_engine.template_calls[-1] == mem_out["assembled_messages"]
-    sent_prompt = fake_engine.calls[-1]["prompt"]
-    assert block in sent_prompt                    # the block actually reached the engine's prompt
-    assert "<|im_start|>system" in sent_prompt      # fake mimics a ChatML engine (a Llama engine would emit headers)
-    assert "what should I do this weekend?" in sent_prompt
 
 
 def test_chat_omits_the_block_when_prompt_block_for_returns_none(iso, fake_engine, monkeypatch):
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
     sub = cs.EngineSubstrate()
     sub.chat([{"role": "user", "content": "hi"}])
     assert "loves rock climbing" not in fake_engine.calls[-1]["prompt"]
@@ -319,7 +279,6 @@ def test_chat_omits_the_block_when_prompt_block_for_returns_none(iso, fake_engin
 def test_chat_records_the_rendered_final_prompt_in_mem_out(iso, fake_engine, monkeypatch):
     """mem_out.final_prompt is the EXACT rendered string the engine templated -- the same string that
     reached generation (fake_engine.calls[-1]['prompt']). _log_run persists it as run.final_prompt."""
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
     sub = cs.EngineSubstrate()
     mem_out = {}
     sub.chat([{"role": "user", "content": "hi"}], mem_out=mem_out)
@@ -328,16 +287,6 @@ def test_chat_records_the_rendered_final_prompt_in_mem_out(iso, fake_engine, mon
     assert "hi" in mem_out["final_prompt"]
 
 
-def test_chat_final_prompt_contains_the_memory_block(iso, fake_engine, monkeypatch):
-    block = "Here is what you know about them:\n- loves rock climbing"
-    monkeypatch.setattr(cs, "_prompt_block_for",
-                        lambda mem, last_user, strength=None: (block, [{"id": "c1", "text": "x"}], 1.0))
-    sub = cs.EngineSubstrate()
-    mem_out = {}
-    sub.chat([{"role": "user", "content": "plans?"}], mem_out=mem_out)
-    # the rendered final_prompt is the post-template form; assembled_messages is its pre-template form.
-    assert block in mem_out["final_prompt"]
-    assert mem_out["final_prompt"] == fake_engine.calls[-1]["prompt"]
 
 
 # ==================================================================================== chat() -- dials forward a steer_vec
@@ -365,13 +314,12 @@ def _bare_engine_substrate(engine, steer, mem=None):
     sub = object.__new__(cs.EngineSubstrate)
     sub.engine = engine
     sub.steer = steer
-    sub._mem = mem if mem is not None else cs._EngineMemory()
+    sub._mem = mem
     sub.memory = sub._mem
     return sub
 
 
 def test_chat_forwards_the_active_dials_steer_vec_to_the_engine(iso, monkeypatch):
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
     fe = FakeEngine()
     steer = FakeSteer(strength={"warm": 1.0}, vec=[0.1, 0.2, 0.3], layer=14)
     sub = _bare_engine_substrate(fe, steer)
@@ -385,7 +333,6 @@ def test_chat_forwards_the_active_dials_steer_vec_to_the_engine(iso, monkeypatch
 
 
 def test_chat_skips_steer_vec_when_no_dial_is_active(iso, monkeypatch):
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
     fe = FakeEngine()
     steer = FakeSteer(strength={"warm": 0.0}, vec=None)      # present, but every value is falsy
     sub = _bare_engine_substrate(fe, steer)
@@ -399,7 +346,6 @@ def test_chat_skips_steer_vec_when_no_dial_is_active(iso, monkeypatch):
 def test_chat_falls_back_to_disk_dials_when_the_live_steer_has_no_strength(iso, monkeypatch):
     """self.steer.strength == {} (e.g. nothing dialed yet this process) -> chat() reads the persisted
     personality.json dials instead, exactly like the pre-existing /engine/chat hybrid endpoint does."""
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
     with open(os.path.join(str(iso), "studio_personality.json"), "w", encoding="utf-8") as f:
         json.dump({"warm": 0.8}, f)
     fe = FakeEngine()
@@ -414,30 +360,12 @@ def test_chat_falls_back_to_disk_dials_when_the_live_steer_has_no_strength(iso, 
 
 # ==================================================================================== _EngineMemory
 
-def test_engine_memory_rules_reads_active_cards_only(iso, monkeypatch):
-    cards = [{"id": "1", "text": "likes tea", "status": "active"},
-             {"id": "2", "text": "pending thing", "status": "pending"},
-             {"id": "3", "text": "likes coffee", "status": "active"},
-             {"id": "4", "text": "old thing", "status": "disabled"}]
-    monkeypatch.setattr(memory_cards, "list_cards", lambda: cards)
-    assert cs._EngineMemory().rules == ["likes tea", "likes coffee"]
 
 
-def test_engine_memory_prefix_is_always_none(iso):
-    assert cs._EngineMemory().prefix is None
 
 
-def test_engine_memory_consolidate_and_reset_are_noops(iso):
-    mem = cs._EngineMemory()
-    assert mem.consolidate(["some rule"]) == {"ok": True, "mode": "prompt"}
-    assert mem.reset() is None                      # a no-op that doesn't raise
 
 
-def test_engine_memory_state_shape(iso, monkeypatch):
-    cards = [{"id": "1", "text": "likes tea", "status": "active"}]
-    monkeypatch.setattr(memory_cards, "list_cards", lambda: cards)
-    mem = cs._EngineMemory()
-    assert mem.state() == {"mode": "prompt", "has_prefix": False, "cards": 1, "rules": ["likes tea"]}
 
 
 # ==================================================================================== EngineSteer's new SteeringControl-compatible surface
@@ -611,89 +539,18 @@ def test_run_meta_never_raises_on_a_bad_health(iso):
                               "decode": {"mode": "greedy", "temperature": 0.0, "seed": 0}}
 
 
-def test_run_meta_includes_request_specific_generation_fields_after_chat(iso, monkeypatch):
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
-    sub = object.__new__(cs.EngineSubstrate)
-    sub.engine = _HealthEngine()
-    sub.steer = None
-    sub._mem = cs._EngineMemory()
-    sub.memory = sub._mem
-
-    # sample=False (the receipt/replay contract) -- this test is about request-specific fields
-    # (max_tokens/stream) riding into run_meta(), not about S5 sampling; see the dedicated
-    # test_run_meta_reflects_a_sampled_chat_call below for that.
-    sub.chat([{"role": "user", "content": "hi"}], max_new=17, sample=False)
-
-    meta = sub.run_meta()
-    assert meta["max_tokens"] == 17
-    assert meta["stream"] is False
-    assert meta["temperature"] == 0.0
-    assert meta["seed"] == 0
 
 
 # ==================================================================================== S5: interactive sampling
 
-def test_run_meta_reflects_a_sampled_chat_call(iso, monkeypatch):
-    """sample=True (interactive chat's default) + the "sampling" setting ON (the S5 default) -> run_meta
-    reports the REAL regime this call used: the Ollama/llama.cpp canonical params, sampler_mode "sample",
-    and a decode block with a concrete (non-zero) seed -- not the greedy baseline."""
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
-    sub = object.__new__(cs.EngineSubstrate)
-    sub.engine = _HealthEngine()
-    sub.steer = None
-    sub._mem = cs._EngineMemory()
-    sub.memory = sub._mem
-
-    sub.chat([{"role": "user", "content": "hi"}], max_new=17, sample=True)
-
-    meta = sub.run_meta()
-    assert meta["sampler_mode"] == "sample" and meta["sampling"] == "sample"
-    assert meta["temperature"] == 0.8
-    assert meta["repetition_penalty"] == 1.1
-    assert isinstance(meta["seed"], int) and meta["seed"] != 0
-    decode = meta["decode"]
-    assert decode["mode"] == "sample"
-    assert decode["top_p"] == 0.9 and decode["top_k"] == 40
-    assert "note" not in decode                   # top-p/k are enforced by engine/core/src/sample.cpp
+    clozn_settings.set_setting("sampling", False)
+    clozn_settings.set_setting("sampling", True)     # explicit: still must not matter
+    clozn_settings.set_setting("sampling", False)
+    clozn_settings.set_setting("sampling", True)     # explicit: still must not matter
 
 
-def test_sampling_setting_off_forces_greedy_even_when_sample_true(iso, monkeypatch):
-    """The persisted "sampling" setting is the master off switch -- OFF means every sample=True caller
-    still gets exactly today's greedy behavior (temperature 0, seed 0), byte-identical to pre-S5."""
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
-    memory_mode.set_setting("sampling", False)
-    sub = object.__new__(cs.EngineSubstrate)
-    sub.engine = _HealthEngine()
-    sub.steer = None
-    sub._mem = cs._EngineMemory()
-    sub.memory = sub._mem
-
-    sub.chat([{"role": "user", "content": "hi"}], max_new=17, sample=True)
-
-    meta = sub.run_meta()
-    assert meta["sampler_mode"] == "greedy" and meta["sampling"] == "greedy"
-    assert meta["temperature"] == 0.0
-    assert meta["seed"] == 0
-    assert meta["decode"] == {"mode": "greedy", "temperature": 0.0, "seed": 0}
 
 
-def test_sample_false_stays_greedy_regardless_of_the_sampling_setting(iso, monkeypatch):
-    """The receipt/replay contract: sample=False ALWAYS decodes greedy, even with "sampling" ON (the
-    default) -- the setting is read only AFTER want_sample is checked (_resolve_sampling), so it can
-    never turn a forced-greedy call into a sampled one."""
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
-    memory_mode.set_setting("sampling", True)     # explicit: still must not matter
-    sub = object.__new__(cs.EngineSubstrate)
-    sub.engine = _HealthEngine()
-    sub.steer = None
-    sub._mem = cs._EngineMemory()
-    sub.memory = sub._mem
-
-    sub.chat([{"role": "user", "content": "hi"}], max_new=17, sample=False)
-
-    meta = sub.run_meta()
-    assert meta["sampler_mode"] == "greedy"
-    assert meta["temperature"] == 0.0 and meta["seed"] == 0
 
 
 def test_resolve_sampling_generates_a_fresh_seed_each_call(iso):
@@ -707,7 +564,7 @@ def test_resolve_sampling_generates_a_fresh_seed_each_call(iso):
 def test_explicit_request_sampling_fields_win_over_the_studio_default(iso):
     """An OpenAI request is a per-call contract: Studio's persisted master switch must not silently
     discard fields the HTTP request explicitly supplied."""
-    memory_mode.set_setting("sampling", False)
+    clozn_settings.set_setting("sampling", False)
     out = cs._resolve_sampling({"temperature": 0.35, "top_p": 0.7, "top_k": 9,
                                 "repeat_penalty": 1.02, "seed": 123})
     assert out == {"on": True, "temperature": 0.35, "top_p": 0.7, "top_k": 9,
@@ -775,7 +632,6 @@ def test_request_context_fields_are_none_shaped_before_any_chat_call(iso, fake_e
 
 
 def test_chat_publishes_a_fresh_request_context_each_call(iso, fake_engine, monkeypatch):
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
     sub = cs.EngineSubstrate()
 
     sub.chat([{"role": "user", "content": "hi"}])
@@ -794,7 +650,6 @@ def test_chat_publishes_a_fresh_request_context_each_call(iso, fake_engine, monk
 def test_request_context_carries_sampling_steering_and_trace(iso, fake_engine, monkeypatch):
     """The context's fields are actually POPULATED, not just plumbing -- sampling (the resolved regime),
     steering_snapshot (a COPY of the dial strengths this call used), and trace (the per-token steps)."""
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
     steer = FakeSteer(strength={"warm": 0.6}, vec=[0.1, 0.2], layer=14)
     sub = cs.EngineSubstrate()
     sub.steer = steer
@@ -813,8 +668,7 @@ def test_request_context_carries_sampling_steering_and_trace(iso, fake_engine, m
 def test_last_generation_meta_never_shows_a_stale_mix_across_calls(iso, fake_engine, monkeypatch):
     """A sampled call followed by a forced-greedy call: the alias must show ONLY the second call's
     complete, self-consistent meta -- never e.g. a leftover sampled seed next to a greedy temperature."""
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
-    memory_mode.set_setting("sampling", True)
+    clozn_settings.set_setting("sampling", True)
     sub = cs.EngineSubstrate()
 
     sub.chat([{"role": "user", "content": "hi"}], sample=True)

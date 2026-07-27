@@ -20,7 +20,6 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from clozn.memory import mode as memory_mode                    # noqa: E402
 import clozn.settings as clozn_settings          # noqa: E402
 from clozn.server import generation_guard as gg                  # noqa: E402
 
@@ -95,14 +94,14 @@ def test_parse_guard_spec_rejects_malformed_values(bad, why):
 
 def test_parse_guard_spec_falls_back_to_server_setting_when_field_absent(monkeypatch, tmp_path):
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    memory_mode.set_setting(gg.GUARD_SETTING, {"concepts": ["violence"]})
+    clozn_settings.set_setting(gg.GUARD_SETTING, {"concepts": ["violence"]})
     spec = gg.parse_guard_spec({})
     assert spec is not None and spec["concepts"] == ["violence"]
 
 
 def test_parse_guard_spec_explicit_field_wins_over_server_setting(monkeypatch, tmp_path):
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    memory_mode.set_setting(gg.GUARD_SETTING, {"concepts": ["violence"]})
+    clozn_settings.set_setting(gg.GUARD_SETTING, {"concepts": ["violence"]})
     assert gg.parse_guard_spec({"clozn_guard": False}) is None
     spec = gg.parse_guard_spec({"clozn_guard": {"concepts": ["self-harm"]}})
     assert spec["concepts"] == ["self-harm"]

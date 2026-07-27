@@ -1,6 +1,6 @@
 """test_generation_meta -- honest reproducibility metadata (backlog #1): the pure per-substrate
 generation-meta builders in clozn/clozn_server.py (_qwen_generation_meta, _engine_generation_meta,
-_without_unknowns) and QwenSubstrate.run_meta()'s use of them.
+_without_unknowns).
 
 Model-free: these are plain dict builders, no torch/HF/engine process involved. EngineSubstrate.run_meta()
 already has thorough coverage in test_engine_substrate.py (health-derived n_ctx/device/gpu_layers, greedy
@@ -21,7 +21,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
 from clozn.server import app as cs   # noqa: E402
-from clozn.lab.substrates import QwenSubstrate   # noqa: E402  (relocated out of the product server)
 
 
 def test_without_unknowns_drops_none_but_keeps_honest_falsy_values():
@@ -72,27 +71,6 @@ def test_engine_generation_meta_forced_greedy_regime_is_honest():
     # top_p/top_k do not participate in the forced-greedy path; no_repeat_ngram_size is not an engine knob
     # at all. None should be fabricated in the metadata for this call.
     assert "top_p" not in meta and "top_k" not in meta and "no_repeat_ngram_size" not in meta
-
-
-def test_qwen_substrate_run_meta_uses_the_honest_generation_meta_before_any_chat_call():
-    """Before any chat()/chat_stream() call, run_meta() falls back to _qwen_generation_meta(sample=True) --
-    the substrate's default regime -- rather than an empty or fabricated dict."""
-    sub = object.__new__(QwenSubstrate)
-    meta = sub.run_meta()
-    assert meta["temperature"] == 0.7 and meta["top_p"] == 0.9
-    assert meta["repetition_penalty"] == 1.3 and meta["no_repeat_ngram_size"] == 3
-    assert "seed" not in meta and "top_k" not in meta
-
-
-def test_qwen_substrate_run_meta_reflects_the_actual_last_call(monkeypatch):
-    """run_meta() after a chat() call reports what THAT call actually used, not the module default --
-    e.g. a caller who requested greedy (sample=False) sees temperature 0.0 reflected honestly."""
-    sub = object.__new__(QwenSubstrate)
-    sub._last_generation_meta = cs._qwen_generation_meta(40, sample=False, stream=False)
-    meta = sub.run_meta()
-    assert meta["temperature"] == 0.0
-    assert meta["sampler_mode"] == "greedy"
-    assert meta["max_tokens"] == 40
 
 
 def test_engine_decode_block_is_the_reproducible_greedy_regime():

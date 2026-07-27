@@ -28,8 +28,8 @@ import clozn.settings as clozn_settings          # noqa: E402
 from clozn.cli.commands.eval import cmd_eval          # noqa: E402
 from clozn.eval import bench, policy, store as eval_store  # noqa: E402
 from clozn.server import app as cs                    # noqa: E402
-import clozn.memory.cards as memory_cards              # noqa: E402
-import clozn.memory.mode as memory_mode                # noqa: E402
+
+
 import clozn.runs.store as runlog                      # noqa: E402
 
 
@@ -129,9 +129,7 @@ def test_fixture_pairs_fit_a_real_two_band_policy():
 def test_wizard_fit_and_save_then_a_live_reply_carries_the_same_thresholds(tmp_path, monkeypatch):
     # --- isolate every store this touches -- never the real ~/.clozn ---
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "no_such.pt")])
     monkeypatch.setattr(eval_store, "_PATH", str(tmp_path / "eval_report.json"))
 
     # --- the ONE necessarily-faked piece: the live probe run itself needs a real gateway. Everything

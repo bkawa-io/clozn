@@ -2,7 +2,7 @@
 test_engine_substrate.py for chat()'s own coverage). Before this existed, `getattr(SUB, "chat_stream",
 None)` was None on the pure-engine substrate, so /v1/chat/completions's SSE branch (_sse_chat) never
 fired there -- a `stream: true` request silently fell through to one blocking chat() reply. chat_stream
-gives the engine substrate the same live-token UX QwenSubstrate.chat_stream already has.
+gives the engine substrate a live-token UX.
 
 Model-free throughout -- no C++ engine process, no GPU, no real socket. urllib.request.urlopen is
 monkeypatched directly to a fake response object iterable over canned SSE byte-lines, exercising
@@ -33,8 +33,8 @@ sys.path.insert(0, RESEARCH)
 
 from clozn.server import app as cs          # noqa: E402
 import clozn.settings as clozn_settings          # noqa: E402
-import clozn.memory.cards as memory_cards                # noqa: E402
-import clozn.memory.mode as memory_mode                 # noqa: E402
+
+
 import urllib.request               # noqa: E402
 
 
@@ -43,13 +43,8 @@ def iso(tmp_path, monkeypatch):
     """Isolate every path this suite might touch so nothing reads or writes the real ~/.clozn on this
     machine (mirrors test_engine_substrate.py's own iso fixture)."""
     monkeypatch.setattr(cs, "CLOZN_DIR", str(tmp_path))
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     return tmp_path
-
-
-def _no_block(mem, last_user, strength=None):
-    return None, [], 0.0
 
 
 class FakeEngine:
@@ -74,7 +69,7 @@ def _bare_engine_substrate(engine, steer=None, mem=None):
     sub = object.__new__(cs.EngineSubstrate)
     sub.engine = engine
     sub.steer = steer
-    sub._mem = mem if mem is not None else cs._EngineMemory()
+    sub._mem = mem
     sub.memory = sub._mem
     return sub
 
@@ -144,24 +139,11 @@ def fake_urlopen(monkeypatch):
 
 # ==================================================================================== yields + mem_out
 
-def test_chat_stream_yields_pieces_in_order(iso, monkeypatch, fake_urlopen):
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
-    sub = _bare_engine_substrate(FakeEngine())
-    mem_out = {}
-
-    pieces = list(sub.chat_stream([{"role": "user", "content": "capital of France?"}], mem_out=mem_out))
-
-    assert pieces == [" Par", "is", "."]
-    assert {k: mem_out[k] for k in ("mode", "applied", "gate")} == {
-        "mode": "prompt", "applied": [], "gate": 0.0}
-    assert mem_out["prompt_block"] is None
-    assert mem_out["assembled_messages"] == [{"role": "user", "content": "capital of France?"}]
 
 
 def test_chat_stream_records_the_rendered_final_prompt(iso, monkeypatch, fake_urlopen):
     """backlog #5: chat_stream fills mem_out.final_prompt with the EXACT rendered string it POSTed to
     /v1/completions -- kept in lockstep with chat()'s own final_prompt capture."""
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
     sub = _bare_engine_substrate(FakeEngine())
     mem_out = {}
     list(sub.chat_stream([{"role": "user", "content": "hi"}], mem_out=mem_out))
@@ -171,7 +153,6 @@ def test_chat_stream_records_the_rendered_final_prompt(iso, monkeypatch, fake_ur
 
 
 def test_chat_stream_skips_empty_pieces(iso, monkeypatch):
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
     lines = [
         _sse_line({"type": "tokens_committed", "items": [{"piece": "", "conf": 0.5, "pos": 0}]}),
         _sse_line({"type": "tokens_committed", "items": [{"piece": "ok", "conf": 0.5, "pos": 1}]}),
@@ -186,7 +167,6 @@ def test_chat_stream_skips_empty_pieces(iso, monkeypatch):
 
 
 def test_chat_stream_omits_the_block_when_prompt_block_for_returns_none(iso, monkeypatch, fake_urlopen):
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
     sub = _bare_engine_substrate(FakeEngine())
 
     list(sub.chat_stream([{"role": "user", "content": "hi"}]))
@@ -197,7 +177,6 @@ def test_chat_stream_omits_the_block_when_prompt_block_for_returns_none(iso, mon
 # ==================================================================================== last_stream_trace
 
 def test_chat_stream_last_stream_trace_after_exhausting_the_generator(iso, monkeypatch, fake_urlopen):
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
     sub = _bare_engine_substrate(FakeEngine())
 
     list(sub.chat_stream([{"role": "user", "content": "hi"}]))          # drain it fully
@@ -216,7 +195,6 @@ def test_last_stream_trace_is_empty_before_any_stream_ran(iso):
 def test_last_stream_trace_returns_a_copy_not_a_live_reference(iso, monkeypatch, fake_urlopen):
     """Mirrors QwenSubstrate.last_stream_trace's contract: callers get list(...) of the stored steps, so
     mutating the returned list can't corrupt the substrate's own record."""
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
     sub = _bare_engine_substrate(FakeEngine())
     list(sub.chat_stream([{"role": "user", "content": "hi"}]))
 
@@ -228,7 +206,6 @@ def test_last_stream_trace_returns_a_copy_not_a_live_reference(iso, monkeypatch,
 # ==================================================================================== the engine connection is always closed
 
 def test_chat_stream_closes_the_connection_after_a_normal_stream(iso, monkeypatch, fake_urlopen):
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
     sub = _bare_engine_substrate(FakeEngine())
 
     list(sub.chat_stream([{"role": "user", "content": "hi"}]))
@@ -240,7 +217,6 @@ def test_chat_stream_closes_the_connection_on_early_generator_close(iso, monkeyp
     """The studio's SSE handler stops consuming early on a client disconnect; the generator's own
     .close() sends GeneratorExit in at the `yield` -- it must not be swallowed (close() must not raise
     RuntimeError: generator ignored GeneratorExit), and the engine connection must still be released."""
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
     sub = _bare_engine_substrate(FakeEngine())
 
     gen = sub.chat_stream([{"role": "user", "content": "hi"}])
@@ -259,7 +235,6 @@ def test_chat_stream_closes_the_connection_on_early_generator_close(iso, monkeyp
 # instead of draining the rest of a reply nobody wants.
 
 def test_chat_stream_stops_pulling_from_the_worker_once_cancelled(iso, monkeypatch, fake_urlopen):
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
     sub = _bare_engine_substrate(FakeEngine())
 
     gen = sub.chat_stream([{"role": "user", "content": "capital of France?"}])
@@ -277,7 +252,6 @@ def test_chat_stream_stops_pulling_from_the_worker_once_cancelled(iso, monkeypat
 def test_chat_stream_cancellation_flag_is_false_by_default(iso, monkeypatch, fake_urlopen):
     """A normal, uncancelled stream's context reports is_cancelled() False throughout -- cancellation is
     opt-in, never a side effect of ordinary completion."""
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
     sub = _bare_engine_substrate(FakeEngine())
 
     pieces = list(sub.chat_stream([{"role": "user", "content": "hi"}]))
@@ -291,8 +265,7 @@ def test_chat_stream_cancellation_flag_is_false_by_default(iso, monkeypatch, fak
 def test_chat_stream_request_body_mirrors_engine_complete_traced(iso, monkeypatch, fake_urlopen):
     """With S5's "sampling" setting off, chat_stream's body is byte-identical to pre-S5: temperature 0,
     rep_penalty 1, seed 0 -- exactly what _engine_complete_traced's greedy fallback sends too."""
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
-    memory_mode.set_setting("sampling", False)
+    clozn_settings.set_setting("sampling", False)
     sub = _bare_engine_substrate(FakeEngine())
 
     list(sub.chat_stream([{"role": "user", "content": "capital of France?"}], max_new=64))
@@ -315,7 +288,6 @@ def test_chat_stream_request_body_mirrors_engine_complete_traced(iso, monkeypatc
 def test_chat_stream_samples_by_default(iso, monkeypatch, fake_urlopen):
     """The default-True `sample` arg inherits the persisted Ollama/llama.cpp params + a real seed:
     temperature, rep_penalty, AND the top_k/top_p nucleus."""
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
     sub = _bare_engine_substrate(FakeEngine())
 
     list(sub.chat_stream([{"role": "user", "content": "capital of France?"}], max_new=64))
@@ -332,8 +304,7 @@ def test_chat_stream_samples_by_default(iso, monkeypatch, fake_urlopen):
 
 
 def test_chat_stream_honors_per_request_sampling_override(iso, monkeypatch, fake_urlopen):
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
-    memory_mode.set_setting("sampling", False)  # explicit HTTP fields must still win
+    clozn_settings.set_setting("sampling", False)  # explicit HTTP fields must still win
     sub = _bare_engine_substrate(FakeEngine())
 
     sample = {"temperature": 0.4, "top_p": 0.65, "top_k": 12, "repeat_penalty": 1.03, "seed": 77}
@@ -345,8 +316,7 @@ def test_chat_stream_honors_per_request_sampling_override(iso, monkeypatch, fake
 
 
 def test_chat_stream_sampling_off_is_byte_identical_to_pre_s5(iso, monkeypatch, fake_urlopen):
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
-    memory_mode.set_setting("sampling", False)
+    clozn_settings.set_setting("sampling", False)
     sub = _bare_engine_substrate(FakeEngine())
 
     list(sub.chat_stream([{"role": "user", "content": "hi"}]))
@@ -374,7 +344,6 @@ class FakeSteer:
 
 
 def test_chat_stream_forwards_the_active_dials_steer_vec(iso, monkeypatch, fake_urlopen):
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
     steer = FakeSteer(strength={"warm": 1.0}, vec=[0.1, 0.2, 0.3], layer=14)
     sub = _bare_engine_substrate(FakeEngine(), steer=steer)
 
@@ -387,7 +356,6 @@ def test_chat_stream_forwards_the_active_dials_steer_vec(iso, monkeypatch, fake_
 
 
 def test_chat_stream_skips_steer_vec_when_no_dial_is_active(iso, monkeypatch, fake_urlopen):
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
     steer = FakeSteer(strength={"warm": 0.0}, vec=None)      # present, but every value is falsy
     sub = _bare_engine_substrate(FakeEngine(), steer=steer)
 

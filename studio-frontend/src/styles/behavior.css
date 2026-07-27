@@ -80,7 +80,6 @@
 
 .behavior-stack-state > header,
 .behavior-session-concepts > header,
-.behavior-memory-section > header,
 .behavior-runtime-block > header,
 .behavior-preview-output > header,
 .behavior-selected-control > header,
@@ -97,8 +96,6 @@
 .behavior-stack-state > header b,
 .behavior-session-concepts > header span,
 .behavior-session-concepts > header b,
-.behavior-memory-section > header span,
-.behavior-memory-section > header b,
 .behavior-runtime-block > header span,
 .behavior-runtime-block > header b,
 .behavior-preview-output > header span,
@@ -218,8 +215,7 @@
 .behavior-preview-control > button,
 .behavior-runtime-fields > button,
 .behavior-profile-create button,
-.behavior-profile-list article > button,
-.behavior-card > button {
+.behavior-profile-list article > button {
   min-height: 29px;
   border: 1px solid var(--line);
   padding: 5px 9px;
@@ -236,8 +232,7 @@
 .behavior-preview-control > button:hover:not(:disabled),
 .behavior-runtime-fields > button:hover:not(:disabled),
 .behavior-profile-create button:hover:not(:disabled),
-.behavior-profile-list article > button:hover:not(:disabled),
-.behavior-card > button:hover:not(:disabled) {
+.behavior-profile-list article > button:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--signal-violet) 44%, var(--line));
   color: var(--ink);
 }
@@ -411,7 +406,6 @@
 }
 
 .behavior-concept-stage,
-.behavior-memory-stage,
 .behavior-runtime-stage,
 .behavior-profile-stage {
   position: relative;
@@ -530,51 +524,6 @@
   text-align: center;
 }
 
-.behavior-memory-stage {
-  display: grid;
-  grid-template-columns: 1fr;
-  align-content: start;
-}
-
-.behavior-memory-section {
-  min-width: 0;
-  border-right: 1px solid var(--line);
-}
-
-.behavior-memory-section:last-child {
-  border-right: 0;
-}
-
-.behavior-card {
-  display: grid;
-  min-height: 64px;
-  gap: 10px;
-  padding: 12px;
-  border-bottom: 1px solid var(--line);
-}
-
-.behavior-card > div {
-  display: grid;
-  gap: 4px;
-}
-
-.behavior-card strong {
-  overflow: hidden;
-  color: var(--ink);
-  font-family: var(--font-machine);
-  font-size: 8px;
-  font-weight: 500;
-  line-height: 1.4;
-  text-overflow: ellipsis;
-}
-
-.behavior-card > div span {
-  color: var(--ink-faint);
-  font-family: var(--font-machine);
-  font-size: 5.5px;
-  letter-spacing: .06em;
-}
-
 .behavior-toggle {
   display: inline-flex;
   align-items: center;
@@ -582,11 +531,6 @@
   color: var(--ink-soft);
   font-family: var(--font-machine);
   font-size: 6px;
-}
-
-.behavior-card {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
 }
 
 .behavior-runtime-stage {
@@ -932,14 +876,12 @@
   }
 
   .behavior-concept-stage,
-  .behavior-memory-stage,
   .behavior-runtime-stage,
   .behavior-profile-stage {
     grid-template-columns: 1fr;
   }
 
   .behavior-concept-form,
-  .behavior-memory-section,
   .behavior-runtime-block,
   .behavior-profile-create {
     border-right: 0;

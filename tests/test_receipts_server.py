@@ -3,7 +3,6 @@
 
 No model, no GPU: drives the REAL clozn_server do_POST handler (the object.__new__(H) no-socket trick used
 by test_explain_server.py / test_profiles_server.py / test_timetravel_server.py) against an isolated
-runlog store + memory_cards store + memory_mode settings, with a FAKE substrate standing in for the qwen
 one. receipts.py itself (both-arms-greedy generation, the metric math, the redundancy guard) is exhaustively
 unit-tested in test_receipts.py against fixture dicts; this file only proves the THIN endpoint wiring: the
 routes match, a missing run is a clean 404, no substrate is a clean 503 (both endpoints regenerate, so --
@@ -26,8 +25,8 @@ sys.path.insert(0, RESEARCH)
 
 from clozn.server import app as cs   # noqa: E402
 import clozn.settings as clozn_settings          # noqa: E402
-import clozn.memory.cards as memory_cards         # noqa: E402
-import clozn.memory.mode as memory_mode          # noqa: E402
+
+
 import clozn.runs.store as runlog                # noqa: E402
 
 
@@ -120,9 +119,7 @@ def iso(tmp_path, monkeypatch):
     """Isolate the run/card/settings stores; SUB starts as a FakeSub (tests that want the 503 path
     override it to None explicitly)."""
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "no_such.pt")])
     monkeypatch.setattr(cs, "SUB", FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.5})))
     return tmp_path
 
@@ -222,11 +219,6 @@ def test_receipt_happy_path_dial_ablation_over_http(iso):
     assert "cost_note" in out
 
 
-def test_receipt_memory_off_ablation_over_http(iso):
-    rid = _seed_run()
-    out = _post(f"/runs/{rid}/receipt", {"influence": {"memory_off": True}})
-    assert out["causal_verified"] is True
-    assert out["ablated_reply"] == "Generic reply, memory off."
 
 
 # =========================================================================================== /receipts (all)
@@ -243,31 +235,10 @@ def test_receipts_needs_the_substrate_503(iso, monkeypatch):
     assert out == {"error": "receipts require a ready product model worker"}
 
 
-def test_receipts_prove_all_happy_path_over_http_finds_the_redundant_pair(iso, monkeypatch):
-    memory_mode.set_mode("prompt")
-    card_a, card_b = "mem_a", "mem_b"
-    monkeypatch.setattr(cs, "SUB", FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.5}),
-                                          concise_card_ids=[card_a, card_b]))
-    rid = runlog.record(source="studio_chat", client="studio", model="clozn-qwen", substrate="QwenSubstrate",
-                        messages=[{"role": "user", "content": "how's it going"}],
-                        response="SAMPLED, never a baseline",
-                        memory={"cards_applied": ["Be concise.", "Keep it short."],
-                               "applied_ids": [card_a, card_b], "mode": "prompt", "gate": 0.8},
-                        behavior={"active_dials": {"warm": 0.5}})
-    out = _post(f"/runs/{rid}/receipts", {})
-    assert "error" not in out
-    assert out["run_id"] == rid
-    assert len(out["receipts"]) == 3                       # card_a, card_b, warm
-    assert all(r["causal_verified"] is True for r in out["receipts"])
-    assert len(out["redundant_pairs"]) == 1
-    assert set(out["redundant_pairs"][0]["redundant"]) == {f"card:{card_a}", f"card:{card_b}"}
-    assert out["redundant_pairs"][0]["note"] == "together they drive this; individually neither is load-bearing"
-    assert "approximation_note" in out and "perf_note" in out   # the documented-approximation SAY-SO
 
 
 def test_receipts_omits_coalitions_key_by_default(iso, monkeypatch):
     """The opt-in flag (docs/PRODUCT_ROADMAP.md §8 tail) must never change the default response shape."""
-    memory_mode.set_mode("prompt")
     card_a, card_b = "mem_a", "mem_b"
     monkeypatch.setattr(cs, "SUB", FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.5}),
                                           concise_card_ids=[card_a, card_b]))
@@ -281,26 +252,6 @@ def test_receipts_omits_coalitions_key_by_default(iso, monkeypatch):
     assert "coalitions" not in out
 
 
-def test_receipts_coalitions_opt_in_returns_a_report_over_http(iso, monkeypatch):
-    memory_mode.set_mode("prompt")
-    card_a, card_b = "mem_a", "mem_b"
-    monkeypatch.setattr(cs, "SUB", FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.5}),
-                                          concise_card_ids=[card_a, card_b]))
-    rid = runlog.record(source="studio_chat", client="studio", model="clozn-qwen", substrate="QwenSubstrate",
-                        messages=[{"role": "user", "content": "how's it going"}],
-                        response="SAMPLED, never a baseline",
-                        memory={"cards_applied": ["Be concise.", "Keep it short."],
-                               "applied_ids": [card_a, card_b], "mode": "prompt", "gate": 0.8},
-                        behavior={"active_dials": {"warm": 0.5}})
-    out = _post(f"/runs/{rid}/receipts", {"coalitions": True})
-    assert "error" not in out
-    coalitions = out["coalitions"]
-    assert coalitions["available"] is True
-    assert coalitions["n_influences"] == 3
-    assert set(coalitions["keys"]) == {f"card:{card_a}", f"card:{card_b}", "dial:warm"}
-    assert coalitions["shapley"]["class"] == "exact"          # N=3 <= EXACT_SHAPLEY_MAX_N
-    assert "interaction_gap" in coalitions and "note" in coalitions["interaction_gap"]
-    assert coalitions["batch_report"]["attempted"] is False    # FakeSub has no branch_coalitions
 
 
 def test_receipts_rejects_bad_coalitions_batch_value(iso):
@@ -359,14 +310,6 @@ def test_receipts_rejects_an_unrecognized_mode_with_400(iso):
     assert "error" in out
 
 
-def test_receipt_mode_forced_does_not_need_the_qwen_substrate_gate(iso, monkeypatch):
-    """forced mode never regenerates -- unlike regen/both, it must not 503 just because SUB is None."""
-    monkeypatch.setattr(cs, "SUB", None)
-    rid = _seed_run()
-    out = _post(f"/runs/{rid}/receipt", {"influence": {"memory_off": True}, "mode": "forced"})
-    assert "error" not in out
-    assert out["causal_verified"] is False                 # honestly degrades: no substrate to score with
-    assert "score_tokens" in out["note"]
 
 
 def test_receipts_mode_forced_does_not_need_the_qwen_substrate_gate(iso, monkeypatch):

@@ -36,8 +36,8 @@ sys.path.insert(0, RESEARCH)
 
 import clozn.replay.counterfactual as counterfactual    # noqa: E402
 import clozn.settings as clozn_settings          # noqa: E402
-import clozn.memory.cards as memory_cards       # noqa: E402
-import clozn.memory.mode as memory_mode        # noqa: E402
+
+
 from clozn import receipts           # noqa: E402
 import clozn.runs.store as runlog              # noqa: E402
 
@@ -110,12 +110,7 @@ RUN = {"id": "run_parent0", "model": "clozn-qwen", "substrate": "QwenSubstrate",
 
 @pytest.fixture
 def iso(tmp_path, monkeypatch):
-    """Isolate every flat-file store replay.py / memory_mode.py / memory_cards.py touch (mirrors
-    test_receipts.py's `iso`) -- replay.replay() unconditionally calls runlog.record() and reads
-    memory_mode's settings, so these must never land on the real ~/.clozn during a test run."""
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "no_such.pt")])
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
     return tmp_path
 

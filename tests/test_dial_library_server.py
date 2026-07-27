@@ -10,7 +10,7 @@ loaded 7B/GPU -- NOT run here). This file covers everything about that deploy th
     33 -> 27 split, computed from steering.AXES, never a hardcoded count), already_deployed_names /
     existing_user_custom_names (both plain JSON-file reads), plan() (the to_add/skip_deployed/
     skip_collision partition), and the --check CLI path (main(["--check"]) touches NO files and loads NO
-    model). deploy() itself (the GPU path: boots QwenSubstrate, calls steer.add_custom, writes
+    model). deploy() itself (the GPU path: boots a substrate, calls steer.add_custom, writes
     studio_library.json) is intentionally NOT exercised here -- that needs the real backbone, and is the
     "GPU deploy-run pending" this test suite explicitly does not attempt.
 
@@ -23,7 +23,7 @@ loaded 7B/GPU -- NOT run here). This file covers everything about that deploy th
     test_dial_calibration_server.py's own no-calibration-file regression test).
 
 No model, no GPU, no socket: exercised the same way test_dial_calibration_server.py is -- a BARE Substrate
-via object.__new__(cs.Substrate) + a FakeSteer stub (Substrate/QwenSubstrate.__init__ itself, and its own
+via object.__new__(cs.Substrate) + a FakeSteer stub (Substrate.__init__ itself, and its own
 new studio_library.json load line, are NOT constructed here; that boot-time wiring is a 1-line addition
 that mirrors the pre-existing studio_custom_<name>.json load immediately above it, and is exercised for
 real only by the GPU deploy run). CLOZN_DIR is monkeypatched to a tmp_path so a real ~/.clozn on this
@@ -43,7 +43,6 @@ sys.path.insert(0, REPO_ROOT)                                    # repo root, fo
 sys.path.insert(0, os.path.join(REPO_ROOT, "scripts", "calibration"))  # deploy_dial_library.py lives in scripts/calibration/
 
 from clozn.server import app as cs          # noqa: E402
-from clozn.lab.substrates import QwenSubstrate   # noqa: E402  (relocated out of the product server)
 import deploy_dial_library as ddl  # noqa: E402
 from clozn.behavior.steering import AXES          # noqa: E402
 
@@ -69,7 +68,7 @@ def _write_library(tmp_path, table):
 
 
 def _write_user_customs(tmp_path, table):
-    _write_json(os.path.join(str(tmp_path), f"studio_custom_{QwenSubstrate.name}.json"), table)
+    _write_json(os.path.join(str(tmp_path), f"studio_custom_{cs.EngineSubstrate.name}.json"), table)
 
 
 # ==================================================================================== load_shipped_library
@@ -145,7 +144,7 @@ def test_existing_user_custom_names_reads_the_written_keys(iso, tmp_path):
 
 
 def test_existing_user_custom_names_corrupt_file_is_empty_set_never_raises(iso, tmp_path):
-    with open(os.path.join(str(tmp_path), f"studio_custom_{QwenSubstrate.name}.json"), "w",
+    with open(os.path.join(str(tmp_path), f"studio_custom_{cs.EngineSubstrate.name}.json"), "w",
               encoding="utf-8") as f:
         f.write("{not valid json")
     assert ddl.existing_user_custom_names() == set()

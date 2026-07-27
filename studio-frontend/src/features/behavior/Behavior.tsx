@@ -15,7 +15,6 @@ import {
   type BehaviorProfile,
   type ConceptPreview,
   type GuardSettings,
-  type MemoryCard,
   type SamplingSettings,
 } from "./api";
 
@@ -24,7 +23,7 @@ interface BehaviorProps {
   inspectorOpen: boolean;
 }
 
-type BehaviorView = "dials" | "concepts" | "memory" | "runtime" | "profiles";
+type BehaviorView = "dials" | "concepts" | "runtime" | "profiles";
 type LoadStatus = "loading" | "ready" | "error";
 type OperationStatus = "idle" | "draft" | "pending" | "applied" | "failed" | "reverted";
 
@@ -37,7 +36,6 @@ interface OperationState {
 const modules: Array<{ id: BehaviorView; label: string }> = [
   { id: "dials", label: "TONE DIALS" },
   { id: "concepts", label: "CONCEPT STEERING" },
-  { id: "memory", label: "MEMORY CARDS" },
   { id: "runtime", label: "RUNTIME DEFAULTS" },
   { id: "profiles", label: "PROFILES" },
 ];
@@ -63,7 +61,6 @@ function errorMessage(error: unknown) {
 function profileCounts(profile: BehaviorProfile) {
   return {
     dials: Object.keys(profile.dials).length,
-    cards: profile.cards.length,
   };
 }
 
@@ -77,7 +74,6 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
   const [samplingDraft, setSamplingDraft] = useState<SamplingSettings>();
   const [guard, setGuard] = useState<GuardSettings>();
   const [guardDraft, setGuardDraft] = useState<GuardSettings>();
-  const [cards, setCards] = useState<MemoryCard[]>([]);
   const [profiles, setProfiles] = useState<BehaviorProfile[]>([]);
   const [activeProfile, setActiveProfile] = useState<string>();
   const [errors, setErrors] = useState<Awaited<ReturnType<typeof loadBehaviorWorkspace>>["errors"]>({});
@@ -103,7 +99,6 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
     setSamplingDraft(next.sampling);
     setGuard(next.guard);
     setGuardDraft(next.guard);
-    setCards(next.cards);
     setProfiles(next.profiles);
     setActiveProfile(next.activeProfile);
     setErrors(next.errors);
@@ -125,7 +120,6 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
   const selectedAxis = axes.find((axis) => axis.name === selectedAxisName);
   const dirtyAxes = axes.filter((axis) => changed(axis.value, drafts[axis.name]));
   const activeAxes = axes.filter((axis) => Math.abs(axis.value) > 0.0001);
-  const activeCards = cards.filter((card) => card.status === "active");
   const samplingDirty = Boolean(
     sampling
     && samplingDraft
@@ -372,7 +366,7 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
     if (!name) return;
     setOperation({ status: "pending", action: "SAVING PROFILE", detail: name });
     try {
-      await saveProfile(name, profileDescription.trim(), axes, cards);
+      await saveProfile(name, profileDescription.trim(), axes);
       const next = await loadBehaviorWorkspace();
       installWorkspace(next);
       setProfileName("");
@@ -420,20 +414,17 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
                   ? activeAxes.length
                   : module.id === "concepts"
                     ? Object.keys(activeConcepts).length
-                    : module.id === "memory"
-                      ? activeCards.length
-                      : module.id === "profiles" ? profiles.length : sampling ? 1 : 0}
+                    : module.id === "profiles" ? profiles.length : sampling ? 1 : 0}
               </b>
             </button>
           ))}
         </nav>
         <section className="behavior-stack-state">
-          <header><span>ACTIVE STACK</span><b>{activeAxes.length + activeCards.length}</b></header>
+          <header><span>ACTIVE STACK</span><b>{activeAxes.length}</b></header>
           <dl>
             <div><dt>Model</dt><dd>{basename(runtime.engine?.model)}</dd></div>
             <div><dt>Tone dials</dt><dd>{activeAxes.length}</dd></div>
             <div><dt>Concept dials</dt><dd>{Object.keys(activeConcepts).length}</dd></div>
-            <div><dt>Memory cards</dt><dd>{activeCards.length}</dd></div>
             <div><dt>Profile</dt><dd>{activeProfile || "—"}</dd></div>
           </dl>
           <div className="behavior-active-dials">
@@ -566,30 +557,6 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
               </section>
             </div>
           </>
-        ) : view === "memory" ? (
-          <>
-            <header className="instrument-head behavior-console-head">
-              <div>
-                <span className="eyebrow">MEMORY INTERVENTION</span>
-                <h1 id="behavior-console-title">Memory cards</h1>
-              </div>
-              <div className="behavior-head-stats">
-                <span><b>CARDS</b>{cards.length}</span>
-              </div>
-            </header>
-            <div className="behavior-memory-stage">
-              {errors.memory && <div className="behavior-unavailable">{errors.memory}</div>}
-              <section className="behavior-memory-section">
-                <header><span>MEMORY CARDS</span><b>{cards.length}</b></header>
-                {cards.map((card) => (
-                  <article className="behavior-card" key={card.id}>
-                    <div><strong>{card.text}</strong><span>{card.status.toUpperCase()}</span></div>
-                  </article>
-                ))}
-                {!cards.length && <div className="behavior-empty-row">0 MEMORY CARDS</div>}
-              </section>
-            </div>
-          </>
         ) : view === "runtime" ? (
           <>
             <header className="instrument-head behavior-console-head">
@@ -706,7 +673,7 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
                 <label><span>NAME</span><input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="profile-name" /></label>
                 <label><span>DESCRIPTION</span><input value={profileDescription} onChange={(event) => setProfileDescription(event.target.value)} /></label>
                 <div>
-                  <span>{axes.length} DIALS · {activeCards.length} ACTIVE CARDS</span>
+                  <span>{axes.length} DIALS</span>
                   <button type="button" className="is-primary" disabled={!profileName.trim() || operation.status === "pending"} onClick={() => void createProfile()}>SAVE CURRENT</button>
                 </div>
               </section>
@@ -722,7 +689,6 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
                       </div>
                       <dl>
                         <div><dt>DIALS</dt><dd>{counts.dials}</dd></div>
-                        <div><dt>CARDS</dt><dd>{counts.cards}</dd></div>
                       </dl>
                       <button type="button" disabled={active || operation.status === "pending"} onClick={() => void activateProfile(profile.name)}>
                         {active ? "ACTIVE" : "SWITCH"}
@@ -810,7 +776,6 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
                 <div><dt>MODEL</dt><dd>{basename(runtime.engine?.model)}</dd></div>
                 <div><dt>PENDING DRAFTS</dt><dd>{pendingCount}</dd></div>
                 <div><dt>ACTIVE DIALS</dt><dd>{activeAxes.length}</dd></div>
-                <div><dt>ACTIVE CARDS</dt><dd>{activeCards.length}</dd></div>
                 <div><dt>ACTIVE PROFILE</dt><dd>{activeProfile || "—"}</dd></div>
               </dl>
             </section>

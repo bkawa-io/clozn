@@ -199,25 +199,6 @@ def test_log_run_forwards_final_prompt_to_the_record(store, monkeypatch):
     assert store.get_run(rid)["final_prompt"] == rendered
 
 
-def test_log_run_records_applied_scope_kinds_without_opaque_keys(store, monkeypatch):
-    import time
-    from clozn.server import app as cs
-    monkeypatch.setattr(cs, "SUB", None)
-    h = object.__new__(cs.make_handler())
-    h.headers = {"User-Agent": "pytest"}
-
-    rid = h._log_run(
-        "openai_api", [{"role": "user", "content": "hi"}], "hey", "clozn-engine", time.time(),
-        mem_out={"mode": "prompt", "applied": [
-            {"id": "mem_global", "text": "Global preference", "scope_kind": "global"},
-            {"id": "mem_project", "text": "Project convention", "scope_kind": "project",
-             "scope_key": "project_secret"},
-        ]},
-    )
-
-    memory = store.get_run(rid)["memory"]
-    assert memory["applied_scope_kinds"] == ["global", "project"]
-    assert "project_secret" not in repr(memory)
 
 
 def test_log_run_honors_surface_reported_dials_instead_of_claiming_live_state(store, monkeypatch):

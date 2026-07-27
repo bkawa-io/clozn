@@ -16,8 +16,8 @@ import pytest
 
 from clozn.server import app as cs
 import clozn.settings as clozn_settings
-import clozn.memory.cards as memory_cards
-import clozn.memory.mode as memory_mode
+
+
 import clozn.runs.store as runlog
 
 
@@ -74,7 +74,6 @@ class _Substrate:
 def aider_gateway(tmp_path, monkeypatch, request):
     answer = request.param
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     monkeypatch.setattr(cs, "SUB", _Substrate(answer))
     server = ThreadingHTTPServer(("127.0.0.1", 0), cs.make_handler())

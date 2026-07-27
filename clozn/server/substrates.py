@@ -3,8 +3,8 @@
 ``EngineSubstrate`` is the only product-serving adapter (it talks to the C++ worker over HTTP -- no
 Torch). ``Substrate`` is the shared base carrying the studio surface (prompt-card memory + tone dials),
 inherited by both the product adapter here and the PyTorch lab adapters. The Torch lab adapters
-``QwenSubstrate``/``DreamSubstrate`` have been relocated to ``clozn/lab/substrates.py`` so a product
-process can never import a Torch adapter; the product gateway has no loader or route that activates them.
+The Torch lab adapters were deleted with the memory program on 2026-07-27; a product process has no
+Torch adapter to import, and the gateway has no loader or route that could activate one.
 The app module remains the seam:
 mutable server state (SUB/SUBNAME/ENGINE*/SLOTS/...) and the helpers routes and tests patch live there,
 and this module reads them through `ctx` (late-bound, so a monkeypatch on the app module is always
@@ -53,200 +53,7 @@ class Substrate:
     and defines _gen(prompt) -- a one-shot generate used by the /steer/check A/B (AR generate vs denoise).
     So memory + dials are written ONCE and work identically on Qwen and Dream."""
 
-    @staticmethod
-    def _requested_card_scope(body):
-        """Resolve a public scope *kind* against gateway-injected private request context.
 
-        JSON callers may say only ``scope: global|app|project``.  The opaque key is copied exclusively
-        from a real ``MemoryScope`` under the private ``_memory_scope`` seam; a JSON object cannot
-        impersonate that frozen dataclass.  This keeps association keys out of the public mutation
-        contract and makes a missing gateway association fail closed instead of widening the card.
-        """
-        from clozn.memory.scope import MemoryScope, app_scope, global_scope, project_scope
-
-        if not isinstance(body, dict):
-            return None, "memory request body must be an object"
-        if any(field in body for field in ("key", "scope_key", "app_key", "project_key")):
-            return None, "raw memory scope keys are not accepted"
-
-        trusted = body.get("_memory_scope")
-        if "_memory_scope" in body and not isinstance(trusted, MemoryScope):
-            return None, "memory scope context was not injected by the gateway"
-        requested = body.get("scope", "global")
-        if not isinstance(requested, str) or requested.strip().lower() not in ("global", "app", "project"):
-            return None, "scope must be global, app, or project"
-        requested = requested.strip().lower()
-        if requested == "global":
-            return global_scope(), None
-        if not isinstance(trusted, MemoryScope):
-            return None, f"{requested} scope is unavailable for this request"
-        if requested == "app":
-            if trusted.app_key is None:
-                return None, "app scope is unavailable for this request"
-            return app_scope(trusted.app_key), None
-        if trusted.project_key is None:
-            return None, "project scope is unavailable for this request"
-        return project_scope(trusted.project_key), None
-
-    def _memory(self, path, body):
-        """Card-backed memory (D2 + E1). Cards carry the metadata + review status; m.rules stays == the
-        ACTIVE-card texts and drives the prefix via consolidate(). Status changes go through _mem_sync_rules,
-        which only retrains when the active set actually moved -- so pending/no-op edits never touch the prefix."""
-        import clozn.memory.cards as memory_cards
-        m = self._mem
-        self._ensure_cards_migrated()           # one-time seed of legacy rules -> active cards (no retrain)
-
-        if path == "/memory/cards":             # OBJECTS now (not bare strings) -- the review layer
-            return {"cards": memory_cards.list_cards(), "has_prefix": m.prefix is not None,
-                    "mode": ctx._memory_mode(),     # the UI adapts its copy / hides retrain chrome on this
-                    "retraining": self._retrain_status_mode()}   # fold the in-flight signal in (one reload sees it)
-
-        if path == "/memory/retrain-status":    # the poll target: is a background consolidate() running?
-            return self._retrain_status_mode()      # prompt mode: never ({active:false, mode:"prompt"})
-
-        if path == "/memory/add":               # propose a card as PENDING -> does NOT affect the prefix
-            text = str(body.get("text", "")).strip()
-            if not text:
-                return {"ok": False, "reason": "empty trait"}
-            scope, scope_error = self._requested_card_scope(body)
-            if scope_error:
-                return {"ok": False, "reason": scope_error}
-            card = memory_cards.create(text, status="pending", kind="preference",
-                                       risk=ctx._risk_of(text), source_run_id=body.get("source_run_id"),
-                                       evidence=str(body.get("evidence", "")), scope=scope)
-            if not card:
-                return {"ok": False, "reason": "could not create card"}
-            # If this is really a STYLE preference, surface the tone DIAL that delivers it (the trained
-            # prefix carries topical prefs well but style ones weakly). Card is still created + pending;
-            # this only SUGGESTS the better mechanism -- null when the text isn't a style match.
-            return {**card, "dial_suggestion": ctx._dial_suggestion(text)}
-
-        if path == "/memory/scope":             # rebind by kind; opaque key comes only from private context
-            cid = str(body.get("id", "")).strip()
-            if not cid:
-                return {"ok": False, "reason": "need a card id"}
-            if "scope" not in body:
-                return {"ok": False, "reason": "need scope: global, app, or project"}
-            scope, scope_error = self._requested_card_scope(body)
-            if scope_error:
-                return {"ok": False, "reason": scope_error}
-            if memory_cards.get(cid) is None:
-                return {"ok": False, "reason": "no such card"}
-            card = memory_cards.update(cid, scope=scope)
-            if card is None:
-                return {"ok": False, "reason": "could not update card scope"}
-            return card
-
-        if path == "/memory/remove":            # delete by id -> if it was active, rebuild from the rest
-            cid = str(body.get("id", "")).strip()
-            if not cid:                          # (index removed -- ids are the stable handle now)
-                return {"ok": False, "reason": "need a card id"}
-            was_active = (memory_cards.get(cid) or {}).get("status") == "active"
-            ok = memory_cards.delete(cid)
-            if not ok:
-                return {"ok": False, "reason": "no such card"}
-            # delete is synchronous+fast; the retrain (only if an ACTIVE card left the set) is backgrounded.
-            resync = self._start_retrain(m, "remove", cid) if was_active else {"retraining": False}
-            return {"ok": True, "removed": cid, "resync": resync}
-
-        if path in ("/memory/approve", "/memory/reject", "/memory/disable", "/memory/enable"):
-            return self._card_status(path.rsplit("/", 1)[1], str(body.get("id", "")).strip())
-
-        if path == "/memory/edit":              # change a card's text; if active, retrain on the new text
-            cid = str(body.get("id", "")).strip()
-            new_text = str(body.get("text", "")).strip()
-            if not (cid and new_text):
-                return {"ok": False, "reason": "need id and text"}
-            card = memory_cards.update(cid, text=new_text, risk=ctx._risk_of(new_text))
-            if card is None:
-                return {"ok": False, "reason": "no such card"}
-            if card.get("status") == "active":   # editing an active card's text retrains -> in the background
-                card = {**card, "resync": self._start_retrain(m, "edit", cid)}
-            return card
-
-        if path == "/memory/strength":          # the memory dial. Internalized: scales how hard the prefix
-            # bites (0 = off, >1 = stronger). PROMPT mode: on/off only -- 0 never injects the block, any
-            # >0 injects when the topic gate lets it in (nothing scales continuously; the UI hint says so).
-            if "value" in body and hasattr(m, "memory_strength"):
-                m.memory_strength = max(0.0, min(2.0, float(body["value"])))
-                if hasattr(m, "save"):
-                    try:
-                        m.save()                             # persists inside the .pt (needs a prefix)
-                    except Exception:
-                        pass
-                try:                                         # mirror to settings so the dial survives a
-                    import clozn.settings as settings                       # restart in prompt mode (no .pt to carry it)
-                    settings.set_setting("memory_strength", float(m.memory_strength))
-                except Exception:
-                    pass
-            return {"strength": float(getattr(m, "memory_strength", 1.0)), "has_prefix": m.prefix is not None,
-                    "mode": ctx._memory_mode()}
-
-        # (/memory/gatecheck lived here -- a live-calibration debug view of clozn.memory.topic_gate's
-        # relevance bands. Removed 2026-07-27 with the gate itself: it needed sentence-transformers, which
-        # is not a product dependency, so the shipped route only ever reported its own fallback.)
-        return None
-
-    # ---- E1 review lifecycle: a status change rebuilds m.rules from the active set, retrains iff it moved -
-    def _card_status(self, action, cid):
-        """approve->active, reject->rejected, disable->disabled, enable->active. The STATUS flip (fast) is
-        synchronous; the RETRAIN it may trigger (rebuild the prefix from active_texts) is backgrounded so
-        the response returns immediately. The card keeps its FINAL status; a separate _RETRAIN flag carries
-        the in-flight signal. self._start_retrain no-ops when the active set didn't actually move (prefix safe).
-
-        PROVENANCE GATE: 'approve' is refused for a card that CLAIMS a run (source_run_id
-        set) but carries no quoted_span to back that claim up -- memory_cards.is_provenance_claim_unbacked.
-        This is never auto-approvable; the reviewer sees why via the reason string (the Memory page also
-        flags it so this should rarely even be attempted). reject/disable/enable are NOT gated -- you must
-        always be able to discard or de-activate a card regardless of its provenance."""
-        import clozn.memory.cards as memory_cards
-        if not cid:
-            return {"ok": False, "reason": "need a card id"}
-        if action == "approve":
-            existing = memory_cards.get(cid)
-            if existing is not None and memory_cards.is_provenance_claim_unbacked(existing):
-                return {"ok": False, "reason": "no provenance -- this card cites a run but has no quoted "
-                                                "span backing it up, so it can't be approved"}
-        target = {"approve": "active", "reject": "rejected",
-                  "disable": "disabled", "enable": "active"}[action]
-        card = memory_cards.set_status(cid, target)
-        if card is None:
-            return {"ok": False, "reason": "no such card"}
-        resync = self._start_retrain(self._mem, action, cid)  # retrains on a thread iff the active set changed
-        return {**card, "resync": resync}
-
-    def _ensure_cards_migrated(self):
-        """Seed the card store from this substrate's legacy rule-strings exactly once per process."""
-        if getattr(self, "_cards_migrated", False):
-            return
-        ctx._mem_migrate(self._mem)
-        self._cards_migrated = True
-
-    # ---- retrain dispatch: PRODUCT path (prompt mode -- never retrains) -----------------------------
-    # The internalized soft-prefix RETRAIN machinery (background consolidate + the in-flight banner) is a
-    # LAB thing now: it lives on clozn/lab/substrates.py's _InternalizedRetrain mixin, which QwenSubstrate/
-    # DreamSubstrate inherit and which OVERRIDES these four. The product (EngineSubstrate) carries only the
-    # trivial prompt-mode versions below -- the cards ARE the memory, so a mutation is instant bookkeeping,
-    # no thread, no _TRAIN_LOCK, no retrain banner. _memory/_card_status dispatch through self.<method>, so
-    # the same call site is instant here and a backgrounded consolidate on the lab substrates.
-    def _retrain_status_mode(self):
-        """The retrain signal the UI polls. Prompt mode never retrains -> a constant idle
-        ({active: false, mode: "prompt"}). Byte-identical to the old app-module helper's prompt branch."""
-        return {"active": False, "mode": "prompt"}
-
-    def _start_retrain(self, m, action, card_id, force=False):
-        """Prompt-mode card mutation: ONLY bookkeeping -- sync m.rules to the active-card texts (runlog +
-        /state read it), instantly. No consolidate, no thread, no _TRAIN_LOCK, no retrain banner; a trained
-        prefix (if one exists from a lab session) is left completely untouched. Byte-identical to the old
-        app-module _start_retrain's prompt short-circuit (which also ignored `force`)."""
-        r = ctx._mem_sync_rules(m, reconsolidate=False)      # instant: rules bookkeeping only
-        return {"retraining": False, "changed": r["changed"], "mode": "prompt"}
-
-    def _retrain_in_flight(self):
-        return False
-
-    def _join_retrain(self, timeout=None):
-        return True
 
     def _ensure_steer(self):
         """Compute the axis vectors once, race-safe (double-checked lock). Two dial calls racing on first
@@ -384,50 +191,6 @@ class Substrate:
         return None
 
 
-class _EngineMemory:
-    """Thin prompt-mode memory for the engine substrate: the CARD STORE *is* the memory. No model, no
-    learned prefix (the soft-prefix TTT is a lab experiment now, not shipped in the engine product -- see
-    RUNTIME_SPLIT.md). Exposes exactly the surface the base Substrate._memory handler, ctx._prompt_block_for,
-    and the receipts/replay stack read: .rules (active-card texts), .prefix (always None), .memory_strength,
-    ._exclude_card_ids (replay sets this for per-card receipts), .consolidate/.reset (no-ops -- prompt mode
-    never trains), .state(), .lock."""
-
-    def __init__(self):
-        self.prefix = None
-        self._exclude_card_ids = None
-        self.lock = threading.Lock()
-        try:
-            import clozn.settings as settings                    # 0.35 == the shipped product default (commit f3e9f60, the
-            self.memory_strength = float(settings.get_setting("memory_strength", 0.0))    # off by default;
-        except Exception:                          # cards are opt-in via the UI strength slider, not always-on
-            self.memory_strength = 0.0             # prompt injection into unrelated topics.
-
-    @property
-    def rules(self):
-        import clozn.memory.cards as memory_cards
-        return [c["text"] for c in (memory_cards.list_cards() or []) if c.get("status") == "active"]
-
-    @rules.setter
-    def rules(self, _value):
-        # The card store IS the memory here, so `rules` is derived and has nothing to set. The shared
-        # _mem_sync_rules() assigns m.rules for the soft-prefix (SelfTeach) backend; make that a harmless
-        # no-op on the engine substrate instead of an AttributeError -- otherwise every approve/reject/
-        # disable/enable/remove crashed AFTER already mutating the store (scrappy error toast, action
-        # silently succeeded). The store stays the single source of truth.
-        pass
-
-    def consolidate(self, rules):
-        return {"ok": True, "mode": "prompt"}      # prompt mode never trains a prefix
-
-    def reset(self):
-        pass
-
-    def state(self):
-        import clozn.memory.cards as memory_cards
-        return {"mode": "prompt", "has_prefix": False,
-                "cards": len(memory_cards.list_cards() or []), "rules": self.rules}
-
-
 class EngineSubstrate(Substrate):
     """PURE-ENGINE substrate: chat + prompt-mode memory + tone dials on the C++ GGUF runtime, NO PyTorch
     model resident. THIS is the class that brings the whole torch-free Server tier -- /v1/chat/completions,
@@ -458,8 +221,10 @@ class EngineSubstrate(Substrate):
                 # model's numbers). It loads once this exact GGUF's sha256 is known.
             except Exception:
                 pass
-        self._mem = _EngineMemory()
-        self.memory = self._mem                 # the studio reads SUB.memory in a few places
+        # (self._mem / self.memory held _EngineMemory, a card-store-backed memory object, until the
+        # 2026-07-27 cards cut. Nothing personalizes a reply through memory now -- steering does.)
+        self._mem = None
+        self.memory = None
         self._steer_ready = False
         self._steer_info = {}
         self._steer_lock = threading.Lock()
@@ -587,7 +352,7 @@ class EngineSubstrate(Substrate):
     # properties below are the back-compat SEAM: every existing reader of sub._last_generation_meta /
     # _last_finish_reason / _last_diverged / _last_diverged_at / _last_stream_trace keeps working
     # unchanged, unaware that the piecemeal attributes became views onto self._request. Deliberately
-    # EngineSubstrate-only (not on the shared Substrate base): QwenSubstrate/DreamSubstrate (clozn/lab/
+    # EngineSubstrate-only (not on the shared Substrate base): the retired torch lab adapters (
     # substrates.py) still WRITE these same names as plain instance attributes -- putting a property with
     # no setter on the shared base would break that assignment with `AttributeError: can't set attribute`
     # the moment a lab substrate's chat() ran. Read-only on purpose: the only legitimate writers are
@@ -630,9 +395,9 @@ class EngineSubstrate(Substrate):
         return req.prompt_tokens if req is not None else None
 
     def chat(self, messages, max_new=256, sample=True, trace_out=None, mem_out=None,
-             reference_tokens=None, memory_scope=None):
+             reference_tokens=None):
         """One stateless chat completion on the engine with memory (prompt-mode card block) + tone dials
-        applied. Mirrors QwenSubstrate.chat's contract EXACTLY (same signature, same trace_out/mem_out
+        applied. Keeps the historical chat contract EXACTLY (same signature, same trace_out/mem_out
         fill) so the receipts/replay stack is backend-agnostic.
 
         `sample`: the caller's request to sample (True), force greedy (False), or override this request's
@@ -660,27 +425,14 @@ class EngineSubstrate(Substrate):
         samp = ctx._resolve_sampling(sample)
         req.sampling = samp
         req.generation_meta = ctx._engine_generation_meta(max_new, stream=False, sample=samp)
-        # MEMORY: the active cards as a topic-gated system block (omitted off-topic / when strength 0).
-        decision = (ctx._prompt_block_for(self.memory, ctx._last_user(messages))
-                    if memory_scope is None else
-                    ctx._prompt_block_for(
-                        self.memory, ctx._last_user(messages), request_scope=memory_scope))
-        block, applied, gate = decision
-        ctx._capture_prompt_decision(mem_out, decision)
-        if applied and mem_out is not None:
-            baseline_tokens = ctx._baseline_prompt_tokens(self.engine, messages)
-            if baseline_tokens is not None:
-                mem_out["baseline_prompt_tokens"] = baseline_tokens
-        assembled = ctx._inject_block(messages, block)
+        # (A topic-gated memory-card block was composed and injected here until the 2026-07-27 cards cut.
+        # Nothing prepends a system block on this path now, so the messages reach the template as given.)
         template_usage = {}
-        prompt = ctx._engine_tmpl(self.engine, assembled, usage_out=template_usage)
-        if mem_out is not None and isinstance(template_usage.get("prompt_tokens"), int):
-            mem_out["actual_prompt_tokens"] = template_usage["prompt_tokens"]
+        prompt = ctx._engine_tmpl(self.engine, messages, usage_out=template_usage)
         if mem_out is not None:
             # final_prompt = the EXACT rendered string the model saw (backlog #5); assembled_messages is its
             # pre-template form. Both recorded so the run is inspectable at either level.
-            mem_out.update(mode="prompt", applied=applied, gate=gate,
-                           prompt_block=block, assembled_messages=assembled, final_prompt=prompt)
+            mem_out.update(assembled_messages=list(messages), final_prompt=prompt)
         # TONE: dials from self.steer.strength (replay toggles this in place), falling back to disk.
         kw = {}
         st = (getattr(self.steer, "strength", None) if self.steer is not None else None) or ctx._disk_dials()
@@ -723,7 +475,7 @@ class EngineSubstrate(Substrate):
                               parallel_tool_calls=False, max_new=256, sample=True,
                               trace_out=None, mem_out=None,
                               add_generation_prompt=True, enable_thinking=True,
-                              reasoning_format="none", memory_scope=None) -> dict:
+                              reasoning_format="none") -> dict:
         """Private atomic model-native structured chat on the C++ worker.
 
         This is deliberately a substrate seam, not an OpenAI route or a qualification claim.  The
@@ -747,28 +499,13 @@ class EngineSubstrate(Substrate):
         req.sampling = samp
         req.generation_meta = ctx._engine_generation_meta(max_new, stream=False, sample=samp)
 
-        decision = (ctx._prompt_block_for(self.memory, ctx._last_user(messages))
-                    if memory_scope is None else
-                    ctx._prompt_block_for(
-                        self.memory, ctx._last_user(messages), request_scope=memory_scope))
-        block, applied, gate = decision
-        assembled = ctx._inject_block(messages, block)
-        memory_manifest = {
-            "mode": "prompt",
-            "applied": applied,
-            "gate": gate,
-            "prompt_block": block,
-            "assembled_messages": assembled,
-        }
-        ctx._capture_prompt_decision(memory_manifest, decision)
-        if applied:
-            # Native structured chat adds tools/schema material inside its atomic renderer.  A plain
-            # apply_template(messages) baseline would charge that unrelated material to memory, so leave
-            # the per-card token delta unavailable until the atomic endpoint exposes a matched baseline.
-            memory_manifest["prompt_token_cost_unavailable_reason"] = \
-                "structured_prompt_baseline_not_captured"
-        if mem_out is not None:
-            mem_out.update(memory_manifest)
+        # (The memory-card block was composed and injected here until the 2026-07-27 cards cut. The
+        # manifest survives as the record of what was ASSEMBLED for this request -- published below even
+        # when the worker fails, because it describes the assembly, not a claim that generation worked.)
+        # `assembled` was `_inject_block(messages, block)` -- the card block folded in as system context.
+        # With cards gone the worker renders the caller's messages exactly as given.
+        assembled = list(messages)
+        memory_manifest = {"assembled_messages": list(assembled)}
 
         options = {}
         st = (getattr(self.steer, "strength", None) if self.steer is not None else None) or ctx._disk_dials()
@@ -948,7 +685,7 @@ class EngineSubstrate(Substrate):
 
     def last_stream_trace(self):
         """The per-token trace captured during the most recent chat_stream (raw step list, or []) --
-        same contract as QwenSubstrate.last_stream_trace: the SSE handler reads this AFTER the generator
+        same contract as the historical last_stream_trace: the SSE handler reads this AFTER the generator
         is exhausted, to log the run's Run Inspector timeline."""
         return list(getattr(self, "_last_stream_trace", []) or [])
 
@@ -1045,7 +782,7 @@ class EngineSubstrate(Substrate):
         return dict(getattr(self, "_identity_meta_val", None) or {})
 
     def chat_stream(self, messages, max_new=256, mem_out=None, lens=None, on_frame=None, sample=True,
-                    memory_scope=None):
+                    ):
         """Streaming twin of chat(): the SAME memory-block + tone-dial construction
         (kept in lockstep -- see chat()'s comments; do not let this drift from that logic), but opens the engine's
         /v1/completions with stream:True (mirrors _engine_complete_traced's request) and yields text as
@@ -1062,7 +799,7 @@ class EngineSubstrate(Substrate):
         generator's yields are text pieces and must stay that way for every existing consumer. A
         failing on_frame is dropped (never kills generation).
 
-        Per-token trace (mirrors QwenSubstrate.chat_stream's B3 contract): every parsed SSE frame is
+        Per-token trace (the B3 contract): every parsed SSE frame is
         collected, then folded into self._last_stream_trace via runlog.accumulate_ar_events once the
         stream ends -- normal completion OR an early GeneratorExit (the consumer stopped early) -- so a
         partial stream still logs whatever trace it managed. Wrapped so any parse hiccup just leaves it
@@ -1088,26 +825,13 @@ class EngineSubstrate(Substrate):
         samp = ctx._resolve_sampling(sample)
         req.sampling = samp
         req.generation_meta = ctx._engine_generation_meta(max_new, stream=True, sample=samp)
-        # MEMORY + TONE: built EXACTLY as chat() builds them.
-        decision = (ctx._prompt_block_for(self.memory, ctx._last_user(messages))
-                    if memory_scope is None else
-                    ctx._prompt_block_for(
-                        self.memory, ctx._last_user(messages), request_scope=memory_scope))
-        block, applied, gate = decision
-        ctx._capture_prompt_decision(mem_out, decision)
-        if applied and mem_out is not None:
-            baseline_tokens = ctx._baseline_prompt_tokens(self.engine, messages)
-            if baseline_tokens is not None:
-                mem_out["baseline_prompt_tokens"] = baseline_tokens
-        assembled = ctx._inject_block(messages, block)
+        # TONE: built EXACTLY as chat() builds it. (The memory-card block chat() used to compose here
+        # went with the 2026-07-27 cards cut; the two paths stay in lockstep, both now block-free.)
         template_usage = {}
-        prompt = ctx._engine_tmpl(self.engine, assembled, usage_out=template_usage)
-        if mem_out is not None and isinstance(template_usage.get("prompt_tokens"), int):
-            mem_out["actual_prompt_tokens"] = template_usage["prompt_tokens"]
+        prompt = ctx._engine_tmpl(self.engine, messages, usage_out=template_usage)
         if mem_out is not None:
             # final_prompt = the EXACT rendered string the model saw (backlog #5); kept in lockstep with chat().
-            mem_out.update(mode="prompt", applied=applied, gate=gate,
-                           prompt_block=block, assembled_messages=assembled, final_prompt=prompt)
+            mem_out.update(assembled_messages=list(messages), final_prompt=prompt)
         kw = {}
         st = (getattr(self.steer, "strength", None) if self.steer is not None else None) or ctx._disk_dials()
         req.steering_snapshot = dict(st) if st else {}      # what THIS call used, decoupled from the live dict
@@ -1216,15 +940,10 @@ class EngineSubstrate(Substrate):
                 req.memory_manifest = dict(mem_out)
 
     def handle(self, path, body):
-        r = self._memory(path, body)
-        if r is not None:
-            return r
         return self._steer(path, body)
 
     def state(self):
-        import clozn.memory.cards as memory_cards
-        return {"dials": dict(getattr(self.steer, "strength", {}) or {}),
-                "cards": len(memory_cards.list_cards() or [])}
+        return {"dials": dict(getattr(self.steer, "strength", {}) or {})}
 
 
 def _quant_from_name(name):

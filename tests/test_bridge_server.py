@@ -8,8 +8,6 @@ returning the run id it already computes, and `_json`/`_send` gaining an optiona
 so this file is where that logic actually gets exercised end to end.
 
 No model, no GPU: drives the REAL clozn_server do_POST handler (the object.__new__(H) no-socket trick used
-by test_counterfactual_server.py / test_narrate_server.py) against an isolated runlog store + memory_cards
-store + memory_mode settings, with a FAKE qwen-shaped substrate. Proves: a /v1/chat/completions POST returns
 an otherwise-untouched OpenAI chat.completion body that ALSO carries "clozn_run_id"; that id resolves via
 runlog.get_run() to the exact run just logged; the raw HTTP response carries an X-Clozn-Run-Id header with
 the same value; a logging failure (runlog.record -> None) omits both cleanly rather than emitting a literal
@@ -31,8 +29,8 @@ sys.path.insert(0, RESEARCH)
 
 from clozn.server import app as cs   # noqa: E402
 import clozn.settings as clozn_settings          # noqa: E402
-import clozn.memory.cards as memory_cards         # noqa: E402
-import clozn.memory.mode as memory_mode          # noqa: E402
+
+
 import clozn.runs.store as runlog                # noqa: E402
 
 
@@ -177,9 +175,7 @@ def iso(tmp_path, monkeypatch):
     """Isolate the run/card/settings stores; SUB starts as a FakeSub (tests that want the 503 path
     override it to None explicitly)."""
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "no_such.pt")])
     monkeypatch.setattr(cs, "SUB", FakeSub())
     return tmp_path
 
@@ -220,40 +216,8 @@ def test_chat_completions_carries_clozn_run_id_that_resolves_to_the_logged_run(i
     assert logged["messages"] == [{"role": "user", "content": "hi there"}]
 
 
-def test_prompt_mode_logs_the_exact_assembled_messages(iso, monkeypatch):
-    memory_mode.set_mode("prompt")
-    monkeypatch.setattr(cs, "SUB", PromptCaptureSub())
-    out = _post("/v1/chat/completions", {"model": "clozn-qwen",
-                                         "messages": [{"role": "user", "content": "hi"}]})
-    logged = runlog.get_run(out["clozn_run_id"])
-
-    assert logged["response"] == "Brief reply."
-    assert logged["assembled_messages"] == [
-        {"role": "system", "content": "You are a helpful assistant talking with a returning user.\n- Keep it brief."},
-        {"role": "user", "content": "hi"},
-    ]
-    assert logged["memory"]["mode"] == "prompt"
-    assert logged["memory"]["prompt_block"].endswith("- Keep it brief.")
-    assert logged["memory"]["cards_applied"] == ["Keep it brief."]
-    assert logged["memory"]["relevance"] == [0.82]
-    assert logged["memory"]["candidate_cards"] == [{"id": None, "text": "Keep it brief."}]
-    assert logged["memory"]["omitted_cards"] == []
-    assert logged["memory"]["baseline_prompt_tokens"] == 7
-    assert logged["memory"]["prompt_token_cost"] == 6
 
 
-def test_internalized_mode_does_not_fabricate_an_assembled_prompt(iso, monkeypatch):
-    monkeypatch.setenv("CLOZN_RUNTIME_KIND", "lab")
-    memory_mode.set_mode("internalized")
-    monkeypatch.setattr(cs, "SUB", InternalizedSub())
-    out = _post("/v1/chat/completions", {"model": "clozn-qwen",
-                                         "messages": [{"role": "user", "content": "hi"}]})
-    logged = runlog.get_run(out["clozn_run_id"])
-
-    assert logged["response"] == "Prefix-shaped reply."
-    assert logged["assembled_messages"] is None
-    assert logged["memory"]["mode"] == "internalized"
-    assert logged["memory"]["has_prefix"] is True
 
 
 def test_chat_completions_uses_real_length_finish_reason_end_to_end(iso, monkeypatch):

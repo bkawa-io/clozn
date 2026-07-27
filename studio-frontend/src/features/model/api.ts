@@ -21,11 +21,6 @@ export interface ModelAxis {
   calibrated: boolean;
 }
 
-export interface ModelMemoryState {
-  cards: number;
-  activeCards: number;
-}
-
 export interface LocalModel {
   path: string;
   filename: string;
@@ -37,10 +32,9 @@ export interface LocalModel {
 export interface ModelWorkspaceData {
   engine?: EngineModel;
   axes: ModelAxis[];
-  memory: ModelMemoryState;
   localModels?: LocalModel[];
   activeProfile?: string;
-  errors: Partial<Record<"engine" | "axes" | "memory" | "inventory" | "profiles", string>>;
+  errors: Partial<Record<"engine" | "axes" | "inventory" | "profiles", string>>;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -143,21 +137,16 @@ export async function loadModelWorkspace(signal?: AbortSignal): Promise<ModelWor
   const results = await Promise.allSettled([
     get("/engine/health", signal),
     post("/steer/axes", {}, signal),
-    post("/memory/cards", {}, signal),
     get("/models/local", signal),
     get("/profiles/list", signal),
   ]);
-  const [engine, axes, cards, inventory, profiles] = results;
+  const [engine, axes, inventory, profiles] = results;
   const errors: ModelWorkspaceData["errors"] = {};
   if (engine.status === "rejected") errors.engine = message(engine.reason, "Engine health unavailable");
   if (axes.status === "rejected") errors.axes = message(axes.reason, "Steering axes unavailable");
-  if (cards.status === "rejected") {
-    errors.memory = message(cards.reason, "Memory cards unavailable");
-  }
   if (inventory.status === "rejected") errors.inventory = message(inventory.reason, "Model inventory unavailable");
   if (profiles.status === "rejected") errors.profiles = message(profiles.reason, "Profiles unavailable");
 
-  const cardRows = cards.status === "fulfilled" ? records(cards.value.cards) : [];
   const profileBody = profiles.status === "fulfilled" ? profiles.value : {};
   return {
     engine: engine.status === "fulfilled" ? engineFromBody(engine.value) : undefined,
@@ -168,10 +157,6 @@ export async function loadModelWorkspace(signal?: AbortSignal): Promise<ModelWor
           calibrated: axis.calibrated === true,
         })).filter((axis) => axis.name)
       : [],
-    memory: {
-      cards: cardRows.length,
-      activeCards: cardRows.filter((card) => card.status === "active").length,
-    },
     localModels: inventory.status === "fulfilled" ? localModelsFromBody(inventory.value) : undefined,
     activeProfile: typeof profileBody.active === "string" ? profileBody.active : undefined,
     errors,

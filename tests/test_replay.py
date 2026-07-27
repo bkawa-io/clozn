@@ -16,7 +16,6 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # research/ on path
-import clozn.memory.mode as memory_mode  # noqa: E402
 import clozn.settings as clozn_settings          # noqa: E402
 from clozn import replay  # noqa: E402
 import clozn.runs.store as runlog  # noqa: E402
@@ -85,11 +84,9 @@ RUN = {"id": "run_parent0", "model": "clozn-qwen", "substrate": "QwenSubstrate",
 def store(tmp_path, monkeypatch):
     """Isolated run log + memory mode PINNED to internalized: this suite asserts the prefix-era replay
     semantics (whole-memory suppression; per-card ids an honest "not applied" note), which the mode swap
-    keeps intact. Prompt-mode replay (REAL per-card ablation) is covered in test_memory_mode."""
+    keeps intact."""
     monkeypatch.setenv("CLOZN_RUNTIME_KIND", "lab")   # internalized/soft-prefix memory is a LAB feature now
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "no_such.pt")])
-    assert memory_mode.set_mode("internalized")
     original = runlog.RUNS_DIR
     runlog.RUNS_DIR = str(tmp_path / "runs")
     try:
@@ -100,16 +97,6 @@ def store(tmp_path, monkeypatch):
 
 # --- (a) memory_off: strength 0 during chat, restored after -----------------------------------------------
 
-def test_memory_off_suppresses_then_restores(store):
-    sub = FakeSub(mem=FakeMem(strength=1.0))
-    child = replay.replay(RUN, {"memory_off": True}, sub)
-    assert child is not None
-    assert sub.seen["memory_strength"] == 0.0              # suppressed DURING generation
-    assert sub.memory.memory_strength == 1.0               # restored EXACTLY afterward
-    assert child["parent_run_id"] == "run_parent0"
-    assert child["changes_applied"] == {"memory_off": True}
-    assert child["memory"]["strength"] == 0.0
-    assert child["memory"]["cards_applied"] == []
 
 
 def test_memory_off_restores_nonstandard_strength(store):
@@ -170,38 +157,13 @@ def test_plain_reroll_records_child(store):
 
 class _ScopedSub(FakeSub):
     def chat(self, messages, max_new=256, sample=True, trace_out=None, mem_out=None,
-             memory_scope=None):
-        self.seen_scope = memory_scope
+             ):
         return super().chat(messages, max_new=max_new, sample=sample, trace_out=trace_out,
                             mem_out=mem_out)
 
 
-def test_replay_reuses_only_explicit_client_scope_and_inherits_project_on_child(store):
-    parent = {
-        **RUN,
-        "client_key": "client_0123456789abcdef01234567",
-        "client_key_source": "header",
-        "project_key": "project_0123456789abcdef01234567",
-    }
-    sub = _ScopedSub()
-
-    child = replay.replay(parent, {}, sub)
-
-    assert sub.seen_scope.app_key == parent["client_key"]
-    assert sub.seen_scope.project_key == parent["project_key"]
-    assert child["client_key"] == parent["client_key"]
-    assert child["client_key_source"] == "header"
-    assert child["project_key"] == parent["project_key"]
 
 
-def test_replay_does_not_activate_user_agent_client_scope(store):
-    parent = {**RUN, "client_key": "client_ua_fingerprint", "client_key_source": "user_agent"}
-    sub = _ScopedSub()
-
-    child = replay.replay(parent, {}, sub)
-
-    assert child is not None
-    assert sub.seen_scope.app_key is None
 
 
 # --- best-effort card toggles: no-op with a note ----------------------------------------------------------
@@ -228,11 +190,6 @@ def test_child_is_persisted_and_flagged_replayed(store):
     assert "replayed" in fetched["flags"]                 # runlog._flags sets this from parent_run_id
 
 
-def test_reply_differs_when_memory_toggled(store):
-    """The whole point: a change yields a different reply (here the fake echoes the state it saw)."""
-    plain = replay.replay(RUN, {}, FakeSub(mem=FakeMem(strength=1.0)))
-    off = replay.replay(RUN, {"memory_off": True}, FakeSub(mem=FakeMem(strength=1.0)))
-    assert plain["response"] != off["response"]
 
 
 # --- per-token trace + repro fields on the child run (the data a baseline-vs-replay diff needs) -----------

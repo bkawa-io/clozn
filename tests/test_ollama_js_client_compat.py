@@ -19,8 +19,8 @@ import pytest
 
 from clozn.server import app as cs
 import clozn.settings as clozn_settings
-import clozn.memory.cards as memory_cards
-import clozn.memory.mode as memory_mode
+
+
 import clozn.runs.store as runlog
 
 
@@ -112,9 +112,7 @@ def node_with_ollama_sdk():
 @pytest.fixture
 def ollama_gateway(tmp_path, monkeypatch, node_with_ollama_sdk):
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "missing.pt")])
     monkeypatch.setattr(cs, "SUB", _Substrate())
     monkeypatch.setattr(cs, "SUBNAME", "engine")
     monkeypatch.setattr(cs, "ENGINE", _Engine())

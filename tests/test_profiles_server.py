@@ -4,7 +4,6 @@ No model, no GPU. We drive the REAL clozn_server.do_GET/do_POST handler (the sam
 no-socket trick test_propose_memory.py uses) against:
   * a FAKE substrate exposing ._mem (rules/consolidate/reset, like test_memory_wiring.FakeMem) and
     .steer (clear/set/add_custom, like SteeringControl's duck type profiles.apply_dials expects);
-  * an isolated profiles.DEFAULT_DIR, memory_cards.CARDS_PATH, clozn_settings.SETTINGS_PATH, runlog.RUNS_DIR.
 
 The load-bearing invariant under test: **profiles.switch() semantics, server-side.** A switch REPLACES
 the studio's active cards (never merges -- disjoint personas must not bleed), replaces dial values via
@@ -28,10 +27,9 @@ sys.path.insert(0, RESEARCH)
 
 from clozn.server import app as cs      # noqa: E402
 import clozn.settings as clozn_settings          # noqa: E402
-import clozn.lab.substrates as lab_substrates       # noqa: E402  (the _InternalizedRetrain mixin lives here)
-import clozn.memory.cards as memory_cards            # noqa: E402
-import clozn.memory.mode as memory_mode             # noqa: E402
-from clozn.memory.scope import app_scope, project_scope, scope_for_card  # noqa: E402
+
+
+
 from clozn.profiles import store as P           # noqa: E402
 import clozn.runs.store as runlog                  # noqa: E402
 
@@ -90,7 +88,7 @@ class FakeSteer:
         self.saved_custom_paths.append(path)
 
 
-class FakeSub(lab_substrates._InternalizedRetrain, cs.Substrate):
+class FakeSub(cs.Substrate):
     """A qwen-like substrate: ._mem for cards/rules, .steer for dials. Subclasses the real cs.Substrate
     (zero-arg, __init__ skipped) so /memory/* still runs through the REAL Substrate._memory dispatch if a
     test needs it -- mirrors test_propose_memory.FakeSub. Mixes in _InternalizedRetrain (same MRO as the
@@ -153,11 +151,8 @@ def iso(tmp_path, monkeypatch):
     the bound default tuple itself so every no-arg ProfileStore() this test creates lands in tmp_path;
     monkeypatch restores it automatically."""
     monkeypatch.setattr(P.ProfileStore.__init__, "__defaults__", (str(tmp_path / "profiles"),))
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "no_such.pt")])
-    assert memory_mode.set_mode("prompt")
     monkeypatch.setattr(cs, "SUBNAME", "qwen")
     return tmp_path
 
@@ -236,113 +231,12 @@ def test_save_is_an_update_when_the_name_already_exists(iso):
 
 # ---- /profiles/switch: THE persona switch (cards replace, dials replace, prompt mode = instant) -------
 
-def test_switch_replaces_cards_and_dials_and_is_instant_in_prompt_mode(iso, monkeypatch):
-    _mk_store().save(_friend_bundle())
-    mem = FakeMem(["some stale rule"])
-    steer = FakeSteer()
-    sub = FakeSub(mem=mem, steer=steer)
-    monkeypatch.setattr(cs, "SUB", sub)
-
-    out = _post("/profiles/switch", {"name": "friend"})
-    assert out["ok"] is True
-    assert out["name"] == "friend"
-    assert "sci-fi" in out["prompt_block"]
-
-    # cards: the new active set is EXACTLY the profile's cards
-    assert {c["text"] for c in memory_cards.list_cards(status="active")} == {"Loves sci-fi"}
-    assert out["cards"]["added"] == 1
-
-    # dials: cleared then set to exactly the profile's values
-    assert steer.cleared == 1
-    assert steer.strength == {"warm": 0.7}
-    assert steer.saved_state_paths                          # persisted, like a manual /steer/set
-
-    # PROMPT MODE: instant -- no retrain, no consolidate call
-    assert out["resync"]["retraining"] is False
-    assert out["resync"]["mode"] == "prompt"
-    assert mem.consolidate_calls == []
-
-    # facts: a profile's facts are NAMED, not silently dropped. There is no longer any "tier on" state
-    # to wait for -- slot-memory is a lab-only research module and reorg Stage B removed the product-side
-    # facts surface entirely (no SlotBox, no /facts/* routes; see the switch handler's docstring in
-    # clozn/server/app.py). So the honest note is that they travel in the bundle and are compiled
-    # NOWHERE, which is what this asserts. The older wording ("...until the tier is on", cross-referencing
-    # a test_facts_server that no longer exists) implied a product on-path that does not exist.
-    note = out["facts_note"]
-    assert note is not None                      # never silently dropped
-    assert "fact" in note                        # says WHAT is uncompiled
-    assert "not compiled" in note                # and that it is not compiled -- the honest part
-    assert "lab" in note                         # and where it actually lives
-
-    # the active-profile name is now readable back
-    assert cs._active_profile_name() == "friend"
 
 
-def test_switching_between_two_disjoint_personas_never_bleeds(iso, monkeypatch):
-    """The done-criterion: two personas with disjoint cards/dials switch instantly with zero carry-over."""
-    _mk_store().save(_friend_bundle())
-    _mk_store().save(_work_bundle())
-    mem, steer = FakeMem(), FakeSteer()
-    sub = FakeSub(mem=mem, steer=steer)
-    monkeypatch.setattr(cs, "SUB", sub)
-
-    r1 = _post("/profiles/switch", {"name": "friend"})
-    assert {c["text"] for c in memory_cards.list_cards(status="active")} == {"Loves sci-fi"}
-    assert steer.strength == {"warm": 0.7}
-    assert "sci-fi" in r1["prompt_block"] and "bullet points" not in r1["prompt_block"]
-
-    r2 = _post("/profiles/switch", {"name": "work"})
-    # friend's card is GONE (not just disabled) -- disjoint personas keep disjoint cards
-    active_texts = {c["text"] for c in memory_cards.list_cards(status="active")}
-    assert active_texts == {"Prefers bullet points"}
-    assert "Loves sci-fi" not in {c["text"] for c in memory_cards.list_cards()}
-    # dials fully replaced -- warm is gone, concise is set, and the custom recipe compiled
-    assert steer.strength == {"concise": 0.8}
-    assert "warm" not in steer.strength
-    assert steer.customs == [("brisk", "curt and efficient", "rambling", 0.4)]
-    assert "bullet points" in r2["prompt_block"] and "sci-fi" not in r2["prompt_block"]
-    # both switches cleared the dials (never blended) and neither retrained (prompt mode both times)
-    assert steer.cleared == 2
-    assert mem.consolidate_calls == []
-    assert cs._active_profile_name() == "work"
 
 
-def test_switch_replaces_only_global_cards_and_preserves_scoped_overlays(iso, monkeypatch):
-    _mk_store().save(_friend_bundle())
-    old_global = memory_cards.create("Old persona", status="active")
-    app_card = memory_cards.create(
-        "Editor overlay", status="active", scope=app_scope("editor"))
-    project_card = memory_cards.create(
-        "Repo overlay", status="disabled", scope=project_scope("repo"))
-    monkeypatch.setattr(cs, "SUB", FakeSub())
-
-    out = _post("/profiles/switch", {"name": "friend"})
-
-    stored = memory_cards.list_cards()
-    by_id = {card["id"]: card for card in stored}
-    assert old_global["id"] not in by_id
-    assert by_id[app_card["id"]] == app_card
-    assert by_id[project_card["id"]] == project_card
-    globals_ = [card for card in stored if scope_for_card(card)["kind"] == "global"]
-    assert [card["text"] for card in globals_] == ["Loves sci-fi"]
-    assert out["cards"] == {"removed": 1, "added": 1}
 
 
-def test_switch_in_internalized_mode_kicks_the_normal_background_retrain(iso, monkeypatch):
-    """Off the "instant" contract on purpose: internalized mode still goes through the SAME async
-    consolidate() path a card add/remove already uses -- not reimplemented, not skipped."""
-    monkeypatch.setenv("CLOZN_RUNTIME_KIND", "lab")
-    assert memory_mode.set_mode("internalized")
-    _mk_store().save(_friend_bundle())
-    mem, steer = FakeMem(["stale"]), FakeSteer()
-    sub = FakeSub(mem=mem, steer=steer)
-    monkeypatch.setattr(cs, "SUB", sub)
-    # retrain state is per-substrate now; this fresh sub starts idle, so there's nothing to reset.
-
-    out = _post("/profiles/switch", {"name": "friend"})
-    assert out["resync"]["retraining"] is True
-    assert sub._join_retrain(timeout=5.0)                    # await the background consolidate
-    assert mem.consolidate_calls and mem.consolidate_calls[-1] == ["Loves sci-fi"]
 
 
 def test_switch_unknown_profile_is_a_clean_404(iso, monkeypatch):
@@ -364,17 +258,6 @@ def test_switch_with_no_substrate_loaded_is_a_503(iso, monkeypatch):
     assert "error" in out
 
 
-def test_switch_a_profile_with_no_cards_empties_the_active_set(iso, monkeypatch):
-    empty = P.new_profile("blank")
-    _mk_store().save(empty)
-    mem, steer = FakeMem(["stale one", "stale two"]), FakeSteer()
-    sub = FakeSub(mem=mem, steer=steer)
-    monkeypatch.setattr(cs, "SUB", sub)
-
-    out = _post("/profiles/switch", {"name": "blank"})
-    assert memory_cards.list_cards(status="active") == []
-    assert out["prompt_block"] == ""
-    assert out["facts_note"] is None                          # no facts in this bundle -> nothing to note
 
 
 # ---- /profiles/export + /profiles/import -----------------------------------------------------------
@@ -387,20 +270,6 @@ def test_export_returns_the_bundle_as_json(iso):
     assert out["profile"]["custom_dials"] == []
 
 
-def test_profile_snapshot_and_export_include_only_global_cards(iso):
-    global_card = memory_cards.create("Global preference", status="active")
-    app_card = memory_cards.create(
-        "Editor-only preference", status="active", scope=app_scope("editor"))
-    project_card = memory_cards.create(
-        "Repo-only preference", status="active", scope=project_scope("repo"))
-    profile = P.new_profile("snapshot")
-    profile["cards"] = [global_card, app_card, project_card]
-
-    saved = _post("/profiles/save", profile)["profile"]
-    exported = _post("/profiles/export", {"name": "snapshot"})["profile"]
-
-    assert saved["cards"] == [{"text": "Global preference", "status": "active"}]
-    assert exported["cards"] == saved["cards"]
 
 
 def test_export_unknown_profile_is_a_clean_404(iso):

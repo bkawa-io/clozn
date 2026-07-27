@@ -9,8 +9,6 @@ can be a thin client over a single endpoint (POST /runs/<id>/experiment, wired i
 clozn/server/routes/receipts.py) instead of six different shapes.
 
 Registry (`REGISTRY`, also served read-only via `catalog()` / GET /experiments/types):
-  ablate_card    {card_id}                -> receipt(mode)      -- real causal receipt (both-arms-greedy)
-  ablate_memory  {}                       -> receipt(mode)      -- real causal receipt
   ablate_dial    {dial}                   -> receipt(mode)      -- real causal receipt
   set_dial       {dial, value}            -> counterfactual     -- what-if dial regen (decode-time, cheap)
   swap_concept   {to_concept, from_hint?} -> swap_receipt       -- read disposition, inject a concept dir,
@@ -50,20 +48,6 @@ _RECEIPT_MODES = ("regen", "forced", "both")
 # (which underlying function this dispatches to, for the catalog only -- never consulted by the dispatcher,
 # which switches on `type` explicitly below so a typo here can't silently misroute a real request).
 REGISTRY: dict = {
-    "ablate_card": {
-        "label": "remove one memory card",
-        "needs": ["card_id"],
-        "substrate": "chat",
-        "cost_hint": "expensive: a front-of-context memory ablation re-prefills the whole context (no KV reuse)",
-        "op": "receipt (mode: regen|forced|both, default regen)",
-    },
-    "ablate_memory": {
-        "label": "turn memory off entirely",
-        "needs": [],
-        "substrate": "chat",
-        "cost_hint": "expensive: a front-of-context memory ablation re-prefills the whole context (no KV reuse)",
-        "op": "receipt (mode: regen|forced|both, default regen)",
-    },
     "ablate_dial": {
         "label": "zero one behavior dial",
         "needs": ["dial"],
@@ -114,8 +98,6 @@ _SUBSTRATE_CHECKS = {
 }
 
 _CONTROL_BY_TYPE = {
-    "ablate_card": "with/without intervention; forced mode adds a matched filler control when available",
-    "ablate_memory": "with/without intervention; forced mode adds a matched block filler control when available",
     "ablate_dial": "with/without intervention; forced mode adds an equal-norm random-vector control when available",
     "set_dial": "direct baseline comparison; no null control",
     "swap_concept": "equal-norm random-direction null control",
@@ -243,10 +225,6 @@ def _plain_for(ctype: str, label: str, p: dict) -> str:
 
 
 def _question_for(ctype: str, change: dict, target) -> str:
-    if ctype == "ablate_card":
-        return f"What if memory card {target} had not been applied?"
-    if ctype == "ablate_memory":
-        return "What if memory had been off entirely?"
     if ctype == "ablate_dial":
         return f"What if the '{target}' dial had not been applied?"
     if ctype == "set_dial":
@@ -339,19 +317,6 @@ def _ablate(run, method, sub, *, influence: dict, target, label: str) -> dict | 
         "cost_passes": 2 + (forced_passes or 0), "cost_note": note,
         "cost_est_seconds": _grounded_est_seconds(run, 2),   # only the regen portion is duration-comparable
     }
-
-
-def _handle_ablate_card(run, change, method, sub):
-    card_id = change.get("card_id")
-    if not card_id:
-        raise ValueError("ablate_card needs a 'card_id'")
-    return _ablate(run, method, sub, influence={"card_id": str(card_id)}, target=str(card_id),
-                   label=f"removing memory card {card_id}")
-
-
-def _handle_ablate_memory(run, change, method, sub):
-    return _ablate(run, method, sub, influence={"memory_off": True}, target=None,
-                   label="turning memory off")
 
 
 def _handle_ablate_dial(run, change, method, sub):
@@ -480,8 +445,6 @@ def _handle_toggle_greedy(run, change, method, sub):
 
 
 _HANDLERS = {
-    "ablate_card": _handle_ablate_card,
-    "ablate_memory": _handle_ablate_memory,
     "ablate_dial": _handle_ablate_dial,
     "set_dial": _handle_set_dial,
     "swap_concept": _handle_swap_concept,

@@ -14,7 +14,7 @@ from unittest import mock
 
 from clozn.cli import engine_process, runtime_process
 import clozn.settings as clozn_settings
-from clozn.memory import mode as memory_mode
+
 from clozn.runs import store
 from clozn.server import app
 from clozn.server import generation_gateway
@@ -22,7 +22,6 @@ from clozn.server import http_policy
 from clozn.server import sse
 from clozn.server.request_gate import RequestGate
 from clozn.server.routes import health
-from clozn.lab import app as lab_app
 
 
 class FakeProcess:
@@ -392,42 +391,7 @@ class RuntimeBoundaryTests(unittest.TestCase):
         self.assertTrue(health.try_post(handler, "/substrate", {"name": "qwen"}))
         self.assertEqual(handler.code, 410)
 
-    def test_product_memory_is_prompt_only_and_never_loads_prefix_artifacts(self):
-        old_kind = app.RUNTIME_KIND
-        app.RUNTIME_KIND = "product"
-        try:
-            with mock.patch.dict(os.environ, {"CLOZN_RUNTIME_KIND": "product"}):
-                head, payload, _ = raw_gateway_request("GET", path="/memory/mode")
-                self.assertIn(" 200 ", head)
-                self.assertEqual(json.loads(payload), {"mode": "prompt", "modes": ["prompt"]})
 
-                body = json.dumps({"mode": "internalized"}).encode("utf-8")
-                head, payload, _ = raw_gateway_request("POST", path="/memory/mode", body=body)
-                self.assertIn(" 410 ", head)
-                self.assertIn("lab-only", json.loads(payload)["error"])
-                self.assertEqual(memory_mode.get_mode(), "prompt")
-                self.assertFalse(memory_mode.set_mode("internalized"))
-            self.assertFalse(hasattr(app, "_disk_memory"))
-        finally:
-            app.RUNTIME_KIND = old_kind
-
-    def test_lab_retains_internalized_memory_experiments(self):
-        old_kind = app.RUNTIME_KIND
-        old_path = clozn_settings.SETTINGS_PATH
-        temp = tempfile.TemporaryDirectory(prefix="clozn-lab-memory-")
-        app.RUNTIME_KIND = "lab"
-        clozn_settings.SETTINGS_PATH = os.path.join(temp.name, "settings.json")
-        try:
-            with mock.patch.dict(os.environ, {"CLOZN_RUNTIME_KIND": "lab"}):
-                self.assertTrue(memory_mode.set_mode("internalized"))
-                self.assertEqual(memory_mode.get_mode(), "internalized")
-                head, payload, _ = raw_gateway_request("GET", path="/memory/mode")
-                self.assertIn(" 200 ", head)
-                self.assertEqual(set(json.loads(payload)["modes"]), {"prompt", "internalized"})
-        finally:
-            clozn_settings.SETTINGS_PATH = old_path
-            app.RUNTIME_KIND = old_kind
-            temp.cleanup()
 
     def test_openai_completion_stream_uses_instrumented_substrate_and_standard_chunks(self):
         class CompletionSubstrate:
@@ -503,16 +467,6 @@ class RuntimeBoundaryTests(unittest.TestCase):
         self.assertTrue(all(frame.get("object") == "chat.completion.chunk" for frame in frames))
         self.assertTrue(all(isinstance(frame.get("created"), int) for frame in frames))
         self.assertTrue(all(isinstance(frame.get("choices"), list) and frame["choices"] for frame in frames))
-
-    def test_lab_workbench_refuses_product_apis(self):
-        handler_type = lab_app.make_lab_handler()
-        handler = object.__new__(handler_type)
-        handler.path = "/v1/chat/completions"
-        captured = {}
-        handler._json = lambda code, value: captured.update(code=code, value=value)
-        handler.do_POST()
-        self.assertEqual(captured["code"], 404)
-        self.assertIn("does not expose", captured["value"]["error"])
 
 
 class GatewayHTTPPolicyTests(unittest.TestCase):

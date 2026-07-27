@@ -155,27 +155,9 @@ def try_post(h, p, body):
         try:
             mx = int(body.get("max_tokens", 220))
             kw = {}
-            mem = getattr(ctx.active_sub(h), "memory", None) if ctx.active_sub(h) else None
-            # Product memory is always the legible card block. Soft-prefix training/application lives
-            # only in the lab, so this route cannot import Torch or inject a stale .pt artifact.
-            ms = float(getattr(mem, "memory_strength", 1.0)) if mem is not None else 1.0
-            from clozn.server.generation_gateway import request_memory_scope
-            memory_scope = request_memory_scope(h)
-            decision = ctx._prompt_block_for(
-                mem, ctx._last_user(msgs), strength=ms, request_scope=memory_scope)
-            block, applied, gate = decision
-            ctx._capture_prompt_decision(memout, decision)
-            if applied:
-                baseline_tokens = ctx._baseline_prompt_tokens(ctx.ENGINE, msgs)
-                if baseline_tokens is not None:
-                    memout["baseline_prompt_tokens"] = baseline_tokens
-            assembled = ctx._inject_block(msgs, block)
-            memout.update(mode="prompt", applied=applied, gate=gate, strength=ms,
-                          prompt_block=block, assembled_messages=assembled)
-            template_usage = {}
-            prompt = ctx._engine_tmpl(ctx.ENGINE, assembled, usage_out=template_usage)
-            if isinstance(template_usage.get("prompt_tokens"), int):
-                memout["actual_prompt_tokens"] = template_usage["prompt_tokens"]
+            # (A memory-card block was composed and injected here until the 2026-07-27 cards cut.)
+            memout["assembled_messages"] = list(msgs)
+            prompt = ctx._engine_tmpl(ctx.ENGINE, msgs)
             # backlog #5: record the EXACT rendered chat-template string the model saw (both memory
             # modes render one). _log_run reads memout["final_prompt"] -> the run record's final_prompt.
             memout["final_prompt"] = prompt
@@ -195,8 +177,6 @@ def try_post(h, p, body):
             usage = {}
             reply_raw, steps, finish, _divinfo = ctx._engine_complete_traced(
                 ctx.ENGINE, prompt, mx, kw, usage_out=usage)
-            if isinstance(usage.get("prompt_tokens"), int):
-                memout["actual_prompt_tokens"] = usage["prompt_tokens"]
             from clozn.runs.think_tags import prompt_opens_think, sanitize_reply
             reply = sanitize_reply(
                 reply_raw, implicit_open=prompt_opens_think(prompt)
@@ -204,9 +184,7 @@ def try_post(h, p, body):
             # Pass the raw step list; runlog.record normalizes it -> {tokens, confidence, alternatives}.
             h._log_run("engine_chat", msgs, reply_raw, "clozn-qwen (engine)", t0, trace=steps,
                        mem_out=memout, finish_reason=finish)
-            # "memory" == did the prompt-card block actually ride this reply.
             h._json(200, {"reply": reply,
-                         "memory": bool(memout.get("applied")),
                          "tone": bool(kw.get("steer_vec")), "via": "engine (GGUF)"})
         except Exception as e:
             h._log_run("engine_chat", msgs, "", "clozn-qwen (engine)", t0, error=str(e), mem_out=memout)
@@ -220,7 +198,7 @@ def try_post(h, p, body):
         t0 = time.time()
         # HF studio chat: capture a per-token trace (B3) + the per-turn memory record. We hand
         # SUB.handle collectors via body["_trace_out"] / body["_mem_out"] (server-side only, never
-        # echoed); QwenSubstrate's /say fills them through say()/_say_prompt -> _generate's
+        # echoed); the retired torch lab substrate's /say filled them through say() -> _generate's
         # pass-through recorder. Reply text is byte-identical with or without them.
         trace_steps = []
         body["_trace_out"] = trace_steps

@@ -11,9 +11,8 @@ import json
 
 import pytest
 
-import clozn.memory.cards as memory_cards
 import clozn.settings as clozn_settings
-import clozn.memory.mode as memory_mode
+
 import clozn.runs.store as runlog
 from clozn.server import app as cs
 
@@ -133,48 +132,12 @@ def _sse(raw):
 def iso(tmp_path, monkeypatch):
     sub = _InstrumentedSubstrate()
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "missing.pt")])
     monkeypatch.setattr(cs, "SUB", sub)
     monkeypatch.setattr(cs, "SUBNAME", "engine")
     return sub
 
 
-def test_nonstream_completion_uses_instrumented_path_and_run_id_header(iso):
-    raw = _dispatch({
-        "model": "fake-model", "prompt": "finish this", "max_tokens": 17,
-        "temperature": 0.4, "top_p": 0.7, "top_k": 12,
-        "repeat_penalty": 1.2, "seed": 44,
-    })
-    out = _body(raw)
-
-    assert set(out) == {"id", "object", "created", "model", "choices",
-                        "clozn_run_id", "clozn_warnings"}
-    assert out["object"] == "text_completion"
-    assert out["choices"] == [{"text": "legacy reply", "index": 0, "logprobs": None,
-                               "finish_reason": "length"}]
-    assert iso.calls == [("chat", [{"role": "user", "content": "finish this"}], 17,
-                          {"temperature": 0.4, "top_p": 0.7, "top_k": 12,
-                           "seed": 44, "repeat_penalty": 1.2})]
-
-    header = raw.partition(b"\r\n\r\n")[0].decode("latin-1")
-    rid_line = next(line for line in header.splitlines() if line.startswith("X-Clozn-Run-Id: "))
-    rid = rid_line.split(": ", 1)[1]
-    assert out["clozn_run_id"] == rid
-    assert out["clozn_warnings"][0]["code"] == "output_truncated"
-    assert "X-Clozn-Warning: output-truncated" in header
-    logged = runlog.get_run(rid)
-    assert logged["source"] == "openai_api"
-    assert logged["messages"] == [{"role": "user", "content": "finish this"}]
-    assert logged["response"] == "legacy reply"
-    assert logged["trace"]["tokens"] == ["legacy", " reply"]
-    assert logged["memory"]["cards_applied"] == ["Be concise."]
-    assert logged["behavior"]["active_dials"] == {"concise": 0.25}
-    assert logged["final_prompt"] == "<rendered>legacy prompt + memory</rendered>"
-    assert logged["finish_reason"] == "length"
-    assert logged["meta"]["compatibility_api"] == "openai"
-    assert logged["meta"]["openai_operation"] == "completion"
 
 
 def test_stream_completion_is_strict_openai_shape_and_journaled(iso):

@@ -47,7 +47,6 @@ export function Model({ inspectorOpen }: ModelProps) {
   const [view, setView] = useState<ModelView>("stack");
   const [data, setData] = useState<ModelWorkspaceData>({
     axes: [],
-    memory: { cards: 0, activeCards: 0 },
     errors: {},
   });
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
@@ -81,7 +80,7 @@ export function Model({ inspectorOpen }: ModelProps) {
   };
   const navigationCounts: Record<ModelView, string | number> = {
     capabilities: capabilityRows.filter(([, available]) => available).length,
-    stack: 1 + activeAxes.length + data.memory.activeCards,
+    stack: 1 + activeAxes.length,
     inventory: data.localModels?.length ?? "—",
   };
 
@@ -211,11 +210,6 @@ export function Model({ inspectorOpen }: ModelProps) {
                 <div><span>CONCEPT READOUT</span><strong>{engine?.capabilities.jlens ? "J-LENS AVAILABLE" : "J-LENS UNAVAILABLE"}</strong></div>
                 <output>{engine?.capabilities.jlens ? "ON" : "OFF"}</output>
               </article>
-              <article className={`model-stack-row ${data.memory.activeCards ? "is-active" : ""}`}>
-                <b>05</b>
-                <div><span>MEMORY</span><strong>{data.memory.activeCards} CARDS</strong></div>
-                <output>{data.activeProfile || "NO PROFILE"}</output>
-              </article>
             </div>
           </>
         ) : (
@@ -304,7 +298,6 @@ export function Model({ inspectorOpen }: ModelProps) {
                 <div><dt>Adapter identity</dt><dd>UNREPORTED</dd></div>
                 <div><dt>Active tone axes</dt><dd>{activeAxes.length}</dd></div>
                 <div><dt>Calibrated axes</dt><dd>{calibratedAxes.length} / {data.axes.length}</dd></div>
-                <div><dt>Active memory</dt><dd>{data.memory.activeCards}</dd></div>
                 <div><dt>Profile</dt><dd>{data.activeProfile || "—"}</dd></div>
               </dl>
               <a className="model-inspector-action" href="#/behavior">EDIT INTERVENTIONS</a>

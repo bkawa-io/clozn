@@ -1,7 +1,7 @@
 """Generation-guard persisted default: GET/POST /guard/mode.
 
 Reads/writes the server-wide `generation_guard` setting (clozn.server.generation_guard.GUARD_SETTING,
-persisted through clozn.memory.mode's atomic settings store -- see clozn._io.atomic_write_json) that
+persisted through clozn.settings' atomic settings store -- see clozn._io.atomic_write_json) that
 generation_guard.parse_guard_spec falls back to on every /v1/chat/completions request whose body omits
 `clozn_guard` entirely. Before this route existed, GUARD_SETTING was only ever READ by that fallback, never
 WRITTEN by any HTTP route -- there was no way to toggle the guard and have it stick (see

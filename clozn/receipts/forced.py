@@ -92,29 +92,9 @@ def _forced_ablation(run: dict, influence: dict, sub, conditions: dict):
 
     cid = influence.get("card_id")
     if cid:
-        mem = run.get("memory") or {}
-        ids = mem.get("applied_ids") or []
-        texts = mem.get("cards_applied") or []
-        pairs = list(zip(ids, texts))
-        match = next((t for i, t in pairs if str(i) == str(cid)), None)
-        if match is None:
-            return {"without": None, "control": None,
-                    "note": "this card was not recorded as applied on this run (internalized memory "
-                            "mode fuses cards into a trained prefix, or the card simply wasn't active "
-                            "this turn) -- nothing to ablate"}
-        import clozn.memory.mode as memory_mode
-        without_texts = [t for i, t in pairs if str(i) != str(cid)]
-        without_block = memory_mode.compile_prompt_block(without_texts)
-        control_texts = [t if str(i) != str(cid) else _matched_length_filler(len(match)) for i, t in pairs]
-        control_block = memory_mode.compile_prompt_block(control_texts)
-        return {"without": {"block": without_block, "steer_strengths": with_strengths},
-                "control": {"block": control_block, "steer_strengths": with_strengths}, "note": None}
-
-    if influence.get("memory_off"):
-        control = ({"block": _matched_length_filler(len(with_block)), "steer_strengths": with_strengths}
-                  if with_block else None)
-        return {"without": {"block": None, "steer_strengths": with_strengths}, "control": control,
-                "note": None if with_block else "no active memory block on this run -- nothing to ablate"}
+        return {"without": None, "control": None,
+                "note": "memory cards were removed from the product on 2026-07-27; a card influence "
+                        "can no longer be ablated, and nothing emits one"}
 
     dial = influence.get("dial")
     if dial:

@@ -21,7 +21,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 RESEARCH = os.path.dirname(HERE)
 sys.path.insert(0, RESEARCH)
 
-import clozn.memory.mode as memory_mode  # noqa: E402
 import clozn.settings as clozn_settings          # noqa: E402
 import clozn.runs.store as runlog  # noqa: E402
 import clozn.replay.timetravel as tt  # noqa: E402
@@ -48,16 +47,16 @@ def test_gate_round_trips(iso_settings):
 
 
 def test_gate_garbage_reads_off(iso_settings):
-    memory_mode.set_setting(tt._ENABLED_KEY, "banana")
+    clozn_settings.set_setting(tt._ENABLED_KEY, "banana")
     assert tt.enabled() is False
 
 
 def test_gate_string_truthy(iso_settings):
     for v in ("on", "true", "1", "yes", "On", "TRUE"):
-        memory_mode.set_setting(tt._ENABLED_KEY, v)
+        clozn_settings.set_setting(tt._ENABLED_KEY, v)
         assert tt.enabled() is True, v
     for v in ("off", "false", "0", "no", ""):
-        memory_mode.set_setting(tt._ENABLED_KEY, v)
+        clozn_settings.set_setting(tt._ENABLED_KEY, v)
         assert tt.enabled() is False, v
 
 
@@ -65,12 +64,14 @@ def test_config_defaults_and_clamp(iso_settings):
     cfg = tt.get_config()
     assert cfg == {"cap": tt.DEFAULT_CAP, "budget_mb": tt.DEFAULT_BUDGET_MB}
     # garbage / out-of-range persisted config clamps to the sane band, never breaks the store
-    memory_mode.set_setting("timetravel_cap", 9999)
-    memory_mode.set_setting("timetravel_budget_mb", 1)
+    clozn_settings.set_setting("timetravel_cap", 9999)
+    clozn_settings.set_setting("timetravel_budget_mb", 1)
+    clozn_settings.set_setting("timetravel_cap", 9999)
+    clozn_settings.set_setting("timetravel_budget_mb", 1)
     cfg = tt.get_config()
     assert cfg["cap"] == 128            # clamped to the max
     assert cfg["budget_mb"] == 8        # clamped to the min
-    memory_mode.set_setting("timetravel_cap", "nope")
+    clozn_settings.set_setting("timetravel_cap", "nope")
     assert tt.get_config()["cap"] == tt.DEFAULT_CAP   # unparseable -> default
 
 
@@ -380,31 +381,6 @@ def test_branch_records_child_with_parent_and_turn(store):
     assert sub.seen["messages"][-1]["content"] == "u1"
     assert len(sub.seen["messages"]) == 3
     assert sub.seen["sample"] is False                   # greedy by default (the receipt path)
-
-
-def test_branch_live_regeneration_inherits_exact_memory_scope_and_associations(store):
-    parent = {
-        **PARENT,
-        "session_key": "session_0123456789abcdef01234567",
-        "client_key": "client_0123456789abcdef01234567",
-        "client_key_source": "header",
-        "project_key": "project_0123456789abcdef01234567",
-    }
-
-    class ScopedSub(FakeSub):
-        def chat(self, messages, max_new=256, sample=True, memory_scope=None):
-            self.seen_scope = memory_scope
-            return super().chat(messages, max_new=max_new, sample=sample)
-
-    sub = ScopedSub()
-    child = tt.branch(parent, 1, sub)
-
-    assert sub.seen_scope.app_key == parent["client_key"]
-    assert sub.seen_scope.project_key == parent["project_key"]
-    assert child["session_key"] == parent["session_key"]
-    assert child["client_key"] == parent["client_key"]
-    assert child["client_key_source"] == "header"
-    assert child["project_key"] == parent["project_key"]
 
 
 def test_branch_with_alt_user_notes_edit(store):

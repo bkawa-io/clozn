@@ -25,8 +25,6 @@ sys.path.insert(0, RESEARCH)
 from clozn.server import app as cs                # noqa: E402
 import clozn.settings as clozn_settings          # noqa: E402
 from clozn.eval import store as eval_store         # noqa: E402
-import clozn.memory.cards as memory_cards          # noqa: E402
-import clozn.memory.mode as memory_mode            # noqa: E402
 import clozn.runs.store as runlog                  # noqa: E402
 
 
@@ -88,7 +86,7 @@ class TraceSub:
 
 
 class StreamTraceSub(TraceSub):
-    def chat_stream(self, messages, max_new=256, mem_out=None, sample=True, memory_scope=None):
+    def chat_stream(self, messages, max_new=256, mem_out=None, sample=True):
         self._run_meta.update(max_tokens=int(max_new), stream=True)
         if mem_out is not None:
             mem_out.update(applied=[], gate=None)
@@ -119,9 +117,7 @@ def _post(path, body_obj):
 @pytest.fixture
 def iso(tmp_path, monkeypatch):
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "no_such.pt")])
     monkeypatch.setattr(eval_store, "_PATH", str(tmp_path / "eval_report.json"))
     # Existing cases pin legacy single-active-report compatibility. Tests for
     # task-index selection install load_profile explicitly.

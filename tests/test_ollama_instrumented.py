@@ -13,9 +13,8 @@ import json
 
 import pytest
 
-import clozn.memory.cards as memory_cards
 import clozn.settings as clozn_settings
-import clozn.memory.mode as memory_mode
+
 import clozn.runs.store as runlog
 from clozn.server import app as cs
 
@@ -121,9 +120,7 @@ def _payload(raw: bytes) -> dict:
 def iso(tmp_path, monkeypatch):
     sub = InstrumentedSub()
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "missing.pt")])
     monkeypatch.setattr(cs, "SUB", sub)
     monkeypatch.setattr(cs, "SUBNAME", "engine")
     return sub
@@ -134,42 +131,6 @@ def test_ollama_routes_are_registered_on_the_real_handler(iso):
     assert out == {"version": "0.0.0-clozn"}
 
 
-def test_ollama_chat_uses_instrumented_substrate_and_returns_resolvable_run_id(iso):
-    raw = _dispatch("POST", "/api/chat", {
-        "model": "qwen3.5:9b",
-        "messages": [{"role": "user", "content": "hello"}],
-        "stream": False,
-        "options": {"num_predict": 7, "temperature": 0.3, "top_p": 0.8,
-                    "top_k": 24, "repeat_penalty": 1.15, "seed": 17},
-    })
-    out = _payload(raw)
-    rid = out["clozn_run_id"]
-
-    assert out == {"model": "qwen3.5:9b",
-                   "message": {"role": "assistant", "content": "Observed reply."},
-                   "done": True, "clozn_run_id": rid}
-    assert f"X-Clozn-Run-Id: {rid}".encode() in raw.partition(b"\r\n\r\n")[0]
-    assert iso.calls == [{
-        "messages": [{"role": "user", "content": "hello"}],
-        "max_new": 7,
-        "sample": {"temperature": 0.3, "top_p": 0.8, "top_k": 24,
-                   "repeat_penalty": 1.15, "seed": 17},
-    }]
-
-    logged = runlog.get_run(rid)
-    assert logged["source"] == "ollama_api"
-    assert logged["client"] == "ollama-python/0.test"
-    assert logged["response"] == "Observed reply."
-    assert logged["trace"]["tokens"] == ["Observed", " reply."]
-    assert logged["trace"]["confidence"] == [0.93, 0.47]
-    assert logged["trace"]["alternatives"][1][0]["piece"] == " answer."
-    assert logged["memory"]["cards_applied"] == ["Prefer grounded answers."]
-    assert logged["memory"]["gate"] == 0.73
-    assert logged["behavior"]["active_dials"] == {"grounded": 0.4}
-    assert logged["final_prompt"] == "<rendered>grounded prompt</rendered>"
-    assert logged["finish_reason"] == "stop"
-    assert logged["meta"]["compatibility_api"] == "ollama"
-    assert logged["meta"]["ollama_operation"] == "chat"
 
 
 def test_ollama_generate_enters_the_same_path_as_a_user_turn(iso):

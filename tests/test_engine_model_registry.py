@@ -19,8 +19,8 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "engine", "client"))
 
 from clozn.server import app as cs          # noqa: E402
 import clozn.settings as clozn_settings          # noqa: E402
-import clozn.memory.cards as memory_cards                # noqa: E402
-import clozn.memory.mode as memory_mode                 # noqa: E402
+
+
 
 
 # ==================================================================================== family derivation
@@ -103,7 +103,6 @@ class _FakeSteerLayer:
 @pytest.fixture
 def iso(tmp_path, monkeypatch):
     monkeypatch.setattr(cs, "CLOZN_DIR", str(tmp_path))
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     return tmp_path
 

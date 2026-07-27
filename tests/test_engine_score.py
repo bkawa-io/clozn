@@ -139,13 +139,11 @@ def _bare_engine_substrate(engine, steer):
 
 
 def test_score_tokens_assembles_prompt_from_explicit_block_not_live_memory(monkeypatch):
-    """block is an EXPLICIT input; score_tokens must never consult live memory (_prompt_block_for)."""
+    """block is an EXPLICIT input, never read from anywhere else."""
     fe = _FakeScoreEngine()
     sub = _bare_engine_substrate(fe, steer=None)
-    # sabotage _prompt_block_for so a live-memory read would be caught if score_tokens used it
     def _boom(*a, **k):
         raise AssertionError("score_tokens must not read live memory")
-    monkeypatch.setattr(cs, "_prompt_block_for", _boom)
 
     block = "Here is what you know about them:\n- loves rock climbing"
     sub.score_tokens([{"role": "user", "content": "hi"}], [1, 2, 3], block=block)

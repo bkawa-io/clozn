@@ -43,18 +43,16 @@ RESEARCH = os.path.dirname(HERE)
 sys.path.insert(0, RESEARCH)
 
 import clozn.receipts.explain as explain          # noqa: E402
-import clozn.memory.cards as memory_cards      # noqa: E402
+
 import clozn.receipts.narrate as narrate           # noqa: E402
 import clozn.runs.store as runlog             # noqa: E402
 
 
-# --- isolation: point runlog's run store AND memory_cards' card store at tmp paths (mirrors --------------
 # --- test_explain.py's `store` fixture) -------------------------------------------------------------------
 
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     return runlog
 
 
@@ -125,38 +123,6 @@ def test_lexical_default_never_raises_on_empty_or_garbage_input():
 
 # ==================================================================================== confabulation_diff
 
-def test_confabulation_diff_flags_exactly_the_known_unsupported_claim_and_passes_the_backed_one(store):
-    """The core acceptance case: one claim genuinely backed by a real card, one claim crediting an
-    influence that is NOT anywhere in the manifest (a fabricated interest in chess) -- confabulation_diff
-    must flag exactly the second, not the first."""
-    card = memory_cards.create("Keep answers short.", status="active", source_run_id="run_src",
-                               source_turn=1, quoted_span="please keep it short")
-    rid = store.record(source="studio_chat", messages=[{"role": "user", "content": "how was your day"}],
-                       response="Fine, thanks.",
-                       memory={"cards_applied": ["Keep answers short."], "applied_ids": [card["id"]],
-                               "gate": 0.9, "mode": "prompt", "strength": 1.0},
-                       behavior={"active_dials": {"warm": 0.5}})
-    explanation = explain.explain(store.get_run(rid))
-
-    unconstrained_text = ("I answered briefly because you asked me to keep it short. "
-                          "I also brought up my love of competitive chess because it felt relevant.")
-    out = narrate.confabulation_diff(unconstrained_text, explanation)
-
-    assert len(out["claims"]) == 2
-    assert out["claims"][0]["supported"] is True
-    assert out["claims"][0]["flag"] is None
-    assert out["claims"][1]["supported"] is False
-
-    assert len(out["unsupported_claims"]) == 1
-    assert "chess" in out["unsupported_claims"][0]["claim"]
-    assert out["unsupported_claims"][0]["flag"] == out["claims"][1]["flag"]
-    assert "WARNING" in out["unsupported_claims"][0]["flag"]
-    assert "no receipt for that" in out["unsupported_claims"][0]["flag"]
-
-    # the backed claim renders untouched; only the fabricated one is annotated
-    assert "I answered briefly because you asked me to keep it short." in out["flagged_rendering"]
-    assert out["flagged_rendering"].count("WARNING") == 1
-    assert out["matcher"] == "lexical_default"
 
 
 def test_confabulation_diff_splits_multiple_sentences_into_separate_claims():
@@ -302,33 +268,6 @@ def test_constrained_narration_with_no_citations_returns_an_empty_receipt_id_lis
     assert out["receipt_ids"] == []
 
 
-def test_constrained_narration_prompt_lists_every_fact_category_and_calls_greedy(store):
-    rid = store.record(source="engine_chat", model="clozn-qwen",
-                       messages=[{"role": "user", "content": "what color is the sky?"}],
-                       response="The sky is blue.",
-                       trace={"tokens": ["The", " sky", " is", " blue", "."],
-                              "confidence": [0.95, 0.30, 0.92, 0.41, 0.99],
-                              "alternatives": [[], [{"piece": " sea", "prob": 0.22}], [], [], []]},
-                       memory={"cards_applied": ["Keep it brief."], "applied_ids": ["mem_9"],
-                               "gate": 0.8, "mode": "prompt"},
-                       behavior={"active_dials": {"concise": 0.4}})
-    run = store.get_run(rid)
-    run["trace"]["concepts"] = [{"position": 1, "piece": " sky",
-                                "features": [{"id": "sae:42", "label": "sky-color", "score": 0.9}]}]
-    explanation = explain.explain(run)
-
-    sub = FakeSub(["A narration grounded only in the facts above."])
-    narrate.constrained_narration(explanation, sub)
-
-    assert sub.calls == 1
-    call = sub.seen[0]
-    assert call["sample"] is False                       # greedy: reproducible given the same explanation
-    prompt_text = " ".join(m["content"] for m in call["messages"])
-    assert "hesitation:1" in prompt_text                 # the uncertain moment at token index 1
-    assert "mem_9" in prompt_text                        # the fired card
-    assert "dial:concise" in prompt_text                 # the active dial
-    assert "sae:42" in prompt_text                       # the concept feature
-    assert "what color is the sky" not in prompt_text.lower()   # NEVER the run's own transcript
 
 
 def test_constrained_narration_on_a_fully_empty_explanation_still_produces_an_honest_prompt():
@@ -385,56 +324,6 @@ def test_unconstrained_why_never_raises_when_the_substrate_throws():
 
 # ================================================================================================== narrate
 
-def test_narrate_full_pipeline_flags_the_fabricated_claim_and_passes_the_real_one_via_fakesub(store):
-    """The end-to-end acceptance test: a FakeSub scripted to return, unconstrained, a "why" that credits a
-    REAL influence (the concise card) correctly AND a fabricated one (a made-up love of chess) that is
-    nowhere in the explanation manifest. narrate() must flag exactly the fabricated claim."""
-    card = memory_cards.create("Keep answers short.", status="active", source_run_id="run_src",
-                               source_turn=1, quoted_span="please keep it short")
-    rid = store.record(source="studio_chat", messages=[{"role": "user", "content": "how was your day"}],
-                       response="Fine, thanks.",
-                       memory={"cards_applied": ["Keep answers short."], "applied_ids": [card["id"]],
-                               "gate": 0.9, "mode": "prompt", "strength": 1.0},
-                       behavior={"active_dials": {"warm": 0.5}})
-    run = store.get_run(rid)
-
-    constrained_text = (f"I kept the reply short because of a stored preference [{card['id']}], and a "
-                        f"warm dial was active [dial:warm]. I also apparently relied on [not_a_real_id].")
-    unconstrained_text = ("I answered briefly because you asked me to keep it short. "
-                          "I also brought up my love of competitive chess because it felt relevant.")
-    sub = FakeSub([constrained_text, unconstrained_text])
-
-    out = narrate.narrate(run, sub)
-
-    # -- call shape: exactly two greedy calls; constrained first (facts only), unconstrained second
-    #    (transcript only) -- the structural half of the trap guard.
-    assert sub.calls == 2
-    assert all(call["sample"] is False for call in sub.seen)
-    constrained_sent = " ".join(m["content"] for m in sub.seen[0]["messages"])
-    unconstrained_sent = " ".join(m["content"] for m in sub.seen[1]["messages"])
-    assert "how was your day" not in constrained_sent            # constrained call never sees the transcript
-    assert card["id"] in constrained_sent                        # ... but does see the facts
-    assert "how was your day" in unconstrained_sent               # unconstrained call sees the transcript ...
-    assert card["id"] not in unconstrained_sent                  # ... and never the facts
-
-    # -- top-level shape: exactly the four documented keys, nothing that reads like "the answer"
-    assert set(out.keys()) == {"constrained_narration", "flags", "unsupported_claims", "note"}
-
-    # -- the constrained narration only cites ids that actually resolve in the manifest
-    assert out["constrained_narration"]["narration"] == constrained_text
-    assert set(out["constrained_narration"]["receipt_ids"]) == {card["id"], "dial:warm"}
-    assert "not_a_real_id" not in out["constrained_narration"]["receipt_ids"]
-
-    # -- confabulation diff: flags exactly the fabricated claim, passes the real one
-    assert len(out["flags"]) == 1
-    assert "chess" in out["flags"][0]
-    assert "WARNING" in out["flags"][0] and "no receipt for that" in out["flags"][0]
-    assert len(out["unsupported_claims"]) == 1
-    assert "chess" in out["unsupported_claims"][0]["claim"]
-
-    # -- THE TRAP GUARD: the raw unconstrained text is never returned as the answer / anywhere verbatim
-    assert unconstrained_text not in out.values()
-    assert out["constrained_narration"]["narration"] != unconstrained_text
 
 
 def test_narrate_trap_guard_never_surfaces_the_raw_unconstrained_text_as_the_answer():

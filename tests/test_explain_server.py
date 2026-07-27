@@ -4,7 +4,6 @@ No model, no GPU: the endpoint does zero generation, so unlike /runs/<id>/replay
 substrate at all -- SUB can be None and the assembly still works (a point one test asserts directly, since
 it's the whole reason M1 is "free"). Drives the REAL clozn_server do_GET/do_POST handler (the
 object.__new__(H) no-socket trick used by test_propose_memory.py / test_profiles_server.py /
-test_timetravel_server.py) against an isolated runlog.RUNS_DIR + memory_cards.CARDS_PATH.
 
 explain.py itself (the assembly logic, every honesty invariant) is unit-tested exhaustively in
 test_explain.py against fixture dicts; this file only proves the THIN endpoint wiring: the route matches,
@@ -25,7 +24,7 @@ RESEARCH = os.path.dirname(HERE)
 sys.path.insert(0, RESEARCH)
 
 from clozn.server import app as cs   # noqa: E402
-import clozn.memory.cards as memory_cards         # noqa: E402
+
 import clozn.runs.store as runlog                # noqa: E402
 
 
@@ -53,7 +52,6 @@ def _post(path, body_obj=None):
 def iso(tmp_path, monkeypatch):
     """Isolate the run log + card store; SUB stays None -- the endpoint must not need a substrate."""
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(cs, "SUB", None)
     return tmp_path
 
@@ -72,32 +70,3 @@ def test_explain_needs_no_substrate_at_all(iso):
     assert out["run_id"] == rid
 
 
-def test_explain_happy_path_assembles_confidence_influence_and_concepts(iso):
-    card = memory_cards.create("Keep it brief.", status="active", source_run_id="run_src",
-                               source_turn=1, quoted_span="please keep it brief")
-    rid = runlog.record(
-        source="engine_chat", model="clozn-qwen",
-        messages=[{"role": "user", "content": "explain gravity"}],
-        response="Mass attracts mass.",
-        trace={"tokens": ["Mass", " attracts", " mass", "."], "confidence": [0.95, 0.2, 0.9, 0.99],
-               "alternatives": [[], [{"piece": " pulls", "prob": 0.4}], [], []]},
-        memory={"cards_applied": ["Keep it brief."], "applied_ids": [card["id"]], "gate": 0.77,
-                "mode": "prompt"},
-        behavior={"active_dials": {"concise": 0.5}},
-    )
-    out = _post(f"/runs/{rid}/explain")
-
-    assert out["run_id"] == rid
-    # confidence: one hesitation, with its alternative, never an aggregate number
-    assert out["confidence"]["available"] is True
-    assert out["confidence"]["summary"] == "1 hesitation"
-    assert out["confidence"]["uncertain_moments"][0]["alternatives"] == [{"piece": " pulls", "prob": 0.4}]
-    # influence: the card's provenance quote came back over the wire, tagged unverified
-    inf = out["influences_active"]
-    assert inf["gate"] == 0.77
-    assert inf["cards"][0]["quoted_span"] == "please keep it brief"
-    assert inf["cards"][0]["source_turn"] == 1
-    assert inf["cards"][0]["causal_verified"] is None            # JSON null, round-tripped
-    assert inf["dials"] == [{"name": "concise", "value": 0.5, "causal_verified": None}]
-    # concepts: honestly unavailable (no producer wires sae:<id> onto the stored run today)
-    assert out["concepts"]["available"] is False

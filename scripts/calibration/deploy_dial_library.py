@@ -15,7 +15,7 @@ direction; see steering.SteeringControl.add_custom, untouched by this script). T
 dial must not do is read as a user's OWN "make your own dial" creation on the Behavior page (that UI
 already tags every steer.custom entry "yours" + gives it a delete button). So this script persists the 27
 to their OWN file, ~/.clozn/studio_library.json -- separate from studio_custom_<name>.json (the user's
-file, never written by this script) -- and clozn_server.py's QwenSubstrate boot now ALSO loads that file
+file, never written by this script) -- and the substrate boot now ALSO loads that file
 (steer.load_custom), so the library survives a studio restart exactly like a user custom does.
 clozn_server.py's /steer/axes reads studio_library.json's KEYS (_library_dial_names) to flag those
 entries "library": true instead of "custom": true -- see that module for the read side; this script only
@@ -30,7 +30,7 @@ USER custom dial (same name, already in ~/.clozn/studio_custom_qwen.json from th
 your own dial" panel) is SKIPPED WITH A WARNING, never silently overwritten -- pass --force to override
 (this replaces that dial's direction under the shared name; the user's original recipe is gone).
 
-NEEDS THE LOADED MODEL/GPU (add_custom runs real forward passes) -- this constructs a full QwenSubstrate
+NEEDS A RUNNING ENGINE (add_custom runs real forward passes) -- this constructs an EngineSubstrate
 exactly like clozn_server.py's own boot does (same load7b() nf4 backbone, same steering.SteeringControl,
 same studio_custom_qwen.json / studio_library.json loads), so run it in the same environment the studio
 itself runs in:
@@ -53,7 +53,6 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))   # repo root -- clozn_server/steering moved into the clozn/ package
 
 from clozn.server import app as cs      # noqa: E402  -- cheap: no model load at import time (mirrors test_dial_*.py)
-from clozn.lab.substrates import QwenSubstrate   # noqa: E402  -- lab adapter (relocated); import is torch-free, .name/() only
 from clozn.behavior.steering.axes import AXES      # noqa: E402  -- AXES-only; no CUDA/model needed
 
 SHIPPED_LIBRARY_PATH = os.path.join(HERE, "..", "..", "clozn", "data", "dial_library_shipped.json")
@@ -101,7 +100,7 @@ def existing_user_custom_names() -> set:
     the Behavior page's "make your own dial" panel / POST /steer/custom), read directly with no model
     needed. Used only to detect a name COLLISION before deploying a library dial of the same name -- this
     script never writes to this file. Missing/broken file -> empty set."""
-    path = cs._pers(f"studio_custom_{QwenSubstrate.name}.json")
+    path = cs._pers(f"studio_custom_{cs.EngineSubstrate.name}.json")
     if not os.path.isfile(path):
         return set()
     try:
@@ -144,7 +143,7 @@ def _print_plan(to_add, skip_deployed, skip_collision):
 
 
 def deploy(force: bool = False) -> dict:
-    """Boot the real QwenSubstrate (loads the nf4 7B -- the GPU cost), register every not-yet-deployed
+    """Connect to the running engine, register every not-yet-deployed
     library-only dial via steer.add_custom, and persist the full up-to-date set to
     ~/.clozn/studio_library.json. Returns a receipt: {"added", "skipped_deployed", "skipped_collision",
     "total_library_dials"} -- never just printed and discarded."""
@@ -157,8 +156,11 @@ def deploy(force: bool = False) -> dict:
         skip_collision = []
     _print_plan(to_add, skip_deployed, skip_collision)
 
-    print("[deploy] booting the studio substrate (loads the nf4 7B -- may take a minute)...", flush=True)
-    sub = QwenSubstrate()      # __init__ already loads studio_custom_qwen.json + studio_library.json
+    # The torch QwenSubstrate booted an nf4 7B here until the 2026-07-27 memory cut deleted the lab
+    # adapters. EngineSubstrate is the only substrate now: add_custom's forward passes go over HTTP to
+    # the running C++ worker, so `clozn serve <model>` must already be up.
+    print("[deploy] connecting to the running engine (start it with `clozn serve <model>`)...", flush=True)
+    sub = cs.EngineSubstrate()
     sub._ensure_steer()           # calibrate steer.base/resid_norm before any add_custom call (matches
                                    # how the live /steer/custom endpoint always runs _ensure_steer first)
 
@@ -169,7 +171,7 @@ def deploy(force: bool = False) -> dict:
     # Persist the FULL up-to-date library set (freshly added + already-deployed from a prior run) to its
     # OWN file -- never via steer.save_custom() (that dumps the WHOLE steer.custom dict, user dials
     # included); this writes ONLY genuinely-library names, so the file stays the authoritative "these are
-    # shipped-library" set for both the next boot's load (QwenSubstrate.__init__) and /steer/axes's
+    # shipped-library" set for both the next boot's load and /steer/axes's
     # "library" flag (clozn_server._library_dial_names).
     payload = {}
     for d in to_register:

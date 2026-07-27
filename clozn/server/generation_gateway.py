@@ -43,12 +43,6 @@ class InstrumentedChatResult:
     structured: Any = None
 
 
-def request_memory_scope(handler):
-    """Resolve exact request-local memory scope; User-Agent never activates app memory."""
-    from clozn.memory.scope import MemoryScope
-    from clozn.runs.association import request_explicit_client, request_project
-    headers = getattr(handler, "headers", None)
-    return MemoryScope(app_key=request_explicit_client(headers), project_key=request_project(headers))
 
 
 def apply_corrective_policy(handler, messages: list) -> tuple[list, dict | None]:
@@ -100,8 +94,6 @@ def instrumented_chat(handler, messages: list, *, model: str, max_tokens: int = 
     memout = {}
     logged_messages = journal_messages if journal_messages is not None else messages
     chat_kw = {"trace_out": trace_steps, "mem_out": memout}
-    if isinstance(sub, ctx.EngineSubstrate):
-        chat_kw["memory_scope"] = request_memory_scope(handler)
     native_result = None
     try:
         if native_structured is not None:
@@ -116,7 +108,6 @@ def instrumented_chat(handler, messages: list, *, model: str, max_tokens: int = 
                 trace_out=trace_steps, mem_out=memout,
                 enable_thinking=True,
                 reasoning_format="none",
-                memory_scope=request_memory_scope(handler),
             )
             reply = native_result["raw_model_output"]
         else:
@@ -384,7 +375,7 @@ def policy_verdict_and_signal(trace_steps, model: str | None,
 # the server-wide default below, so one caller can opt in/out regardless of the server's setting.
 SELECTIVE_FIELD = "clozn_selective"
 
-# The server-wide default (clozn.memory.mode's generic settings store -- the same mechanism
+# The server-wide default (clozn.settings, the product's settings store -- the same mechanism
 # clozn.server.routes.receipt_link.RECEIPT_SETTING uses for the receipt-footer default), read only when the
 # request omits SELECTIVE_FIELD entirely. Off by default, exactly like the receipt-footer setting.
 SELECTIVE_SETTING = "selective_generation"
@@ -408,7 +399,7 @@ def selective_generation_enabled(body: Mapping | None) -> bool:
     OFF (BK decision). True only when:
       * the request body carries `clozn_selective` (SELECTIVE_FIELD) and it is truthy, OR
       * the request omits that field entirely AND the server-wide `selective_generation` setting
-        (SELECTIVE_SETTING, clozn.memory.mode's generic settings store) is on.
+        (SELECTIVE_SETTING, clozn.settings, the product's settings store) is on.
     An explicit `clozn_selective: false` on the request always wins over an ON server default (lets one
     caller opt back out). Never raises -- a settings-store hiccup degrades to False (the safe default)."""
     if isinstance(body, Mapping) and SELECTIVE_FIELD in body:
@@ -632,8 +623,6 @@ def _stream_completion(handler, messages: list, *, model: str, max_tokens: int,
             stream_kw = {"mem_out": memout}
             if "sample" in params:
                 stream_kw["sample"] = sample
-            if "memory_scope" in params:
-                stream_kw["memory_scope"] = request_memory_scope(handler)
             gen = sub.chat_stream(messages, max_tokens, **stream_kw)
             for piece in gen:
                 raw_text = str(piece)

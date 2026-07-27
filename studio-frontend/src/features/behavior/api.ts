@@ -27,16 +27,9 @@ export interface GuardSettings {
   } | null;
 }
 
-export interface MemoryCard {
-  id: string;
-  text: string;
-  status: string;
-}
-
 export interface BehaviorProfile {
   name: string;
   description: string;
-  cards: Array<{ text: string; status: string }>;
   dials: Record<string, number>;
 }
 
@@ -44,10 +37,9 @@ export interface BehaviorWorkspaceData {
   axes: BehaviorAxis[];
   sampling?: SamplingSettings;
   guard?: GuardSettings;
-  cards: MemoryCard[];
   profiles: BehaviorProfile[];
   activeProfile?: string;
-  errors: Partial<Record<"axes" | "sampling" | "guard" | "memory" | "profiles", string>>;
+  errors: Partial<Record<"axes" | "sampling" | "guard" | "profiles", string>>;
 }
 
 export interface AxisPreview {
@@ -167,22 +159,10 @@ function guardFromBody(body: JsonRecord): GuardSettings {
   };
 }
 
-function cardsFromBody(body: JsonRecord): MemoryCard[] {
-  return records(body.cards).map((card) => ({
-    id: String(card.id || ""),
-    text: String(card.text || ""),
-    status: String(card.status || "inactive"),
-  })).filter((card) => card.id && card.text);
-}
-
 function profilesFromBody(body: JsonRecord): BehaviorProfile[] {
   return records(body.profiles).map((profile) => ({
     name: String(profile.name || ""),
     description: String(profile.description || ""),
-    cards: records(profile.cards).map((card) => ({
-      text: String(card.text || ""),
-      status: String(card.status || "active"),
-    })).filter((card) => card.text),
     dials: Object.fromEntries(
       Object.entries(record(profile.dials))
         .map(([name, value]) => [name, Number(value)])
@@ -196,17 +176,13 @@ export async function loadBehaviorWorkspace(signal?: AbortSignal): Promise<Behav
     post("/steer/axes", {}, signal),
     get("/sampling/mode", signal),
     get("/guard/mode", signal),
-    post("/memory/cards", {}, signal),
     get("/profiles/list", signal),
   ]);
-  const [axes, sampling, guard, cards, profiles] = results;
+  const [axes, sampling, guard, profiles] = results;
   const errors: BehaviorWorkspaceData["errors"] = {};
   if (axes.status === "rejected") errors.axes = axes.reason instanceof Error ? axes.reason.message : "Axes unavailable";
   if (sampling.status === "rejected") errors.sampling = sampling.reason instanceof Error ? sampling.reason.message : "Sampling unavailable";
   if (guard.status === "rejected") errors.guard = guard.reason instanceof Error ? guard.reason.message : "Guard unavailable";
-  if (cards.status === "rejected") {
-    errors.memory = cards.reason instanceof Error ? cards.reason.message : "Cards unavailable";
-  }
   if (profiles.status === "rejected") {
     errors.profiles = profiles.reason instanceof Error ? profiles.reason.message : "Profiles unavailable";
   }
@@ -218,7 +194,6 @@ export async function loadBehaviorWorkspace(signal?: AbortSignal): Promise<Behav
       : [],
     sampling: sampling.status === "fulfilled" ? samplingFromBody(sampling.value) : undefined,
     guard: guard.status === "fulfilled" ? guardFromBody(guard.value) : undefined,
-    cards: cards.status === "fulfilled" ? cardsFromBody(cards.value) : [],
     profiles: profilesFromBody(profileBody),
     activeProfile: typeof profileBody.active === "string" ? profileBody.active : undefined,
     errors,
@@ -298,16 +273,12 @@ export async function saveProfile(
   name: string,
   description: string,
   axes: BehaviorAxis[],
-  cards: MemoryCard[],
 ) {
   const body = await post("/profiles/save", {
     version: 1,
     name,
     description,
     dials: Object.fromEntries(axes.map((axis) => [axis.name, axis.value])),
-    cards: cards
-      .filter((card) => card.status === "active")
-      .map((card) => ({ text: card.text, status: "active" })),
   });
   return record(body.profile);
 }

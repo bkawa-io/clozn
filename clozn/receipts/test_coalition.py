@@ -23,9 +23,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, ROOT)
 
-import clozn.memory.cards as memory_cards      # noqa: E402
 import clozn.settings as clozn_settings          # noqa: E402
-import clozn.memory.mode as memory_mode        # noqa: E402
+
 import clozn.runs.store as runlog              # noqa: E402
 from clozn.receipts import coalition           # noqa: E402
 from clozn.receipts.metrics import receipt_metrics  # noqa: E402
@@ -104,9 +103,7 @@ RUN = {"id": "run_x", "messages": [{"role": "user", "content": "hi"}], "response
 @pytest.fixture
 def iso(tmp_path, monkeypatch):
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "no_such.pt")])
     return tmp_path
 
 
@@ -145,74 +142,6 @@ def test_exact_shapley_purely_additive_fixture_matches_solo_values(iso):
     assert report["interaction_gap"]["gap"] == pytest.approx(0.0, abs=1e-6)
 
 
-def test_exact_shapley_redundant_pair_hand_computed(iso):
-    """N=3, one genuinely redundant pair (card_a/card_b) plus one independent influence (warm) with zero
-    interaction with the other two -- the exact Shapley numbers are computed BY HAND here from the
-    standard weighted-marginal-contribution formula (not copied from the module), and cross-checked
-    against coalition_report's output, the efficiency property, and shapley_taylor's closed form (which
-    must coincide, since N=3's solo+pairs+joint IS the full power set already)."""
-    card_a, card_b = "mem_a", "mem_b"
-    sub = RedundantSub([card_a, card_b])
-    baseline = sub.chat([])
-
-    def _ablate(ids):
-        sub.memory._exclude_card_ids = [str(i) for i in ids]
-        out = sub.chat([])
-        sub.memory._exclude_card_ids = []
-        return out
-
-    solo_a_reply = _ablate([card_a])
-    solo_b_reply = _ablate([card_b])
-    pair_ab_reply = _ablate([card_a, card_b])
-
-    key_a, key_b = f"card:{card_a}", f"card:{card_b}"
-    solo = {
-        key_a: {**coalition._arm_value(baseline, solo_a_reply), "_influence": {"card_id": card_a}},
-        key_b: {**coalition._arm_value(baseline, solo_b_reply), "_influence": {"card_id": card_b}},
-    }
-    # "warm" ablated via the dial path (RedundantSub reads steer.strength directly).
-    sub.steer.set("warm", 0.0)
-    solo_warm_reply = sub.chat([])
-    sub.steer.set("warm", 0.4)
-    solo["dial:warm"] = {**coalition._arm_value(baseline, solo_warm_reply), "_influence": {"dial": "warm"}}
-
-    assert solo[key_a]["value"] == 0.0 and solo[key_b]["value"] == 0.0    # neither alone has an effect
-    assert solo["dial:warm"]["value"] > 0.0                               # warm alone genuinely does
-
-    report = coalition.coalition_report(RUN, sub, solo_results=solo, baseline_reply=baseline)
-    assert report["available"] is True and report["shapley"]["class"] == "exact"
-
-    # Hand-compute every coalition value directly via receipt_metrics (never through coalition.py).
-    def _v(reply):
-        return round(receipt_metrics(baseline, reply)["changed"] / 100.0, 6)
-
-    v_ab = _v(pair_ab_reply)
-    v_aw = _v(solo_warm_reply)          # card_a alone does nothing, so {card_a, warm} == {warm} in text
-    v_bw = _v(solo_warm_reply)          # same reasoning for card_b
-    v_s = solo["dial:warm"]["value"]
-    v_joint = report["joint"]["value"]
-
-    # The standard exact-Shapley formula for N=3, applied by hand:
-    phi_a = (1 / 6) * v_ab + (1 / 3) * (v_joint - v_s)
-    phi_b = (1 / 6) * v_ab + (1 / 3) * (v_joint - v_s)
-    phi_warm = (2 / 3) * v_s + (1 / 3) * (v_joint - v_ab)
-
-    got = report["shapley"]["values"]
-    assert got[key_a] == pytest.approx(phi_a, abs=1e-6)
-    assert got[key_b] == pytest.approx(phi_b, abs=1e-6)
-    assert got["dial:warm"] == pytest.approx(phi_warm, abs=1e-6)
-    assert sum(got.values()) == pytest.approx(v_joint, abs=1e-6)   # efficiency property
-
-    # NOTE: shapley_taylor is NOT expected to match exact Shapley here -- this fixture's redundant pair
-    # has a genuine 3-way term (the joint value isn't decomposable from pairwise interactions alone), and
-    # shapley_taylor is explicitly only a 2nd-order estimate (see its docstring: it reduces to exact only
-    # when there is NO 3-way-or-higher effect, which the purely-additive fixture below demonstrates).
-
-    # A genuine, nonzero interaction gap -- the redundant pair means joint != sum-of-solos.
-    gap = report["interaction_gap"]
-    assert gap["sum_solo"] == pytest.approx(v_s, abs=1e-6)      # the other two solos are exactly 0
-    assert gap["gap"] != 0.0
-    assert "OVERCOUNT" in gap["note"].upper() or "overcount" in gap["note"]
 
 
 def test_exact_shapley_n4_needs_and_uses_the_extra_triples(iso):

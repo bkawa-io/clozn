@@ -64,7 +64,7 @@ class SlotMem:
     def from_shared(cls, model, tok, layer: int) -> "SlotMem":
         """Build a SlotMem on an ALREADY-LOADED backbone (the studio's Qwen-7B nf4: SUB.memory.model /
         .tok) -- one model behind the concept readout, the memory prefix AND the fact store, exactly the
-        SelfTeach(model=..., tok=...) share. No second 7B, no second HF download. The model must expose
+        another torch consumer can share. No second 7B, no second HF download. The model must expose
         `.model.layers[layer]` and `.lm_head.weight` (Qwen2.5 does; the slotmem findings validated L18 on
         this exact nf4 config). The caller keeps ownership of the model; only close() removes OUR hook."""
         self = cls.__new__(cls)                                  # skip __init__'s model load

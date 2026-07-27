@@ -68,13 +68,10 @@ def validate(p: dict) -> dict:
     p.setdefault("description", "")
     cards_in = p.get("cards")
     cards_in = cards_in if isinstance(cards_in, list) else []   # a non-list container degrades to empty too
-    # Profiles are the global persona layer.  A Studio snapshot may contain app/project overlay cards
-    # alongside its global cards; those overlays belong to the card store, not to a portable profile
-    # bundle.  Missing/malformed legacy scope reads global by the scope contract, while valid scoped
-    # cards are omitted rather than accidentally promoted to global when we strip card metadata below.
-    from clozn.memory.scope import scope_for_card
-    cards_in = [c for c in cards_in
-                if not isinstance(c, dict) or scope_for_card(c)["kind"] == "global"]
+    # Cards are CARRIED, never applied: memory cards were cut from the product on 2026-07-27, and a
+    # bundle keeps them only so an export/import round-trip stays lossless. The global-vs-app/project
+    # scope filter that used to run here went with the card store -- there is no longer an overlay tier
+    # for a card to belong to, so every recorded card is preserved verbatim.
     p["cards"] = [{"text": str(c.get("text", c) if isinstance(c, dict) else c),
                    "status": str(c.get("status", "active")) if isinstance(c, dict) else "active"}
                   for c in cards_in if (c.get("text") if isinstance(c, dict) else c)]
@@ -191,7 +188,6 @@ class ProfileStore:
 
 def prompt_block(p: dict) -> str:
     """Cards -> the system block (same wording the prefix was trained to imitate -- see
-    SelfTeach.consolidate's sys_rule -- so prompt-mode behaviour stays maximally comparable).
     Active cards only; empty string when there are none (callers omit the block entirely)."""
     texts = [c["text"] for c in p.get("cards", []) if c.get("status", "active") == "active"]
     if not texts:

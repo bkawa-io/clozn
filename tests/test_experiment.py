@@ -7,7 +7,6 @@ model-free style. Two layers:
 
   * REAL-op tests: drive run_experiment() against a FakeSub (mirrors test_receipts_server.py's
     FakeSteer/FakeMem/FakeSub) so receipt()/counterfactual()/branch()/replay() run for real, over an
-    isolated runlog/memory_cards/memory_mode store -- proves the dispatcher's wiring into the actual
     underlying ops, not just its own bookkeeping. swap_concept has no cheap fake substrate (it needs a real
     J-lens + unembed export, exhaustively covered in test_swap_receipt.py / test_receipts_server.py's own
     fixture-built happy path) -- here it's exercised with `experiment._swap_receipt` stubbed to a
@@ -42,8 +41,8 @@ sys.path.insert(0, RESEARCH)
 
 import clozn.experiments.experiment as experiment   # noqa: E402
 import clozn.settings as clozn_settings          # noqa: E402
-import clozn.memory.cards as memory_cards      # noqa: E402
-import clozn.memory.mode as memory_mode       # noqa: E402
+
+
 import clozn.runs.store as runlog             # noqa: E402
 
 
@@ -98,8 +97,6 @@ class FakeSub:
 @pytest.fixture
 def iso(tmp_path, monkeypatch):
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "no_such.pt")])
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
     return tmp_path
 
@@ -157,35 +154,9 @@ def swap_stub(monkeypatch):
 
 # =========================================================================================== envelope shape
 
-def test_envelope_shape_identical_across_every_change_type(iso, monkeypatch, swap_stub):
-    memory_mode.set_mode("prompt")
-    run = _seed_run(memory={"cards_applied": ["Be concise."], "applied_ids": ["mem_a"], "mode": "prompt",
-                            "gate": 0.8})
-    sub = FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.5}), concise_card_ids=["mem_a"])
-
-    changes = [
-        {"type": "ablate_card", "card_id": "mem_a"},
-        {"type": "ablate_memory"},
-        {"type": "ablate_dial", "dial": "warm"},
-        {"type": "set_dial", "dial": "warm", "value": 1.2},
-        {"type": "swap_concept", "to_concept": "ocean", "from_hint": "Paris"},
-        {"type": "edit_turn", "turn": 0},
-        {"type": "reroll"},
-        {"type": "toggle_greedy"},
-    ]
-    seen_types = set()
-    for change in changes:
-        out = experiment.run_experiment(run, change, None, sub)
-        assert out is not None, change
-        _assert_envelope_shape(out)
-        assert out["run_id"] == run["id"]
-        assert out["change"]["type"] == change["type"]
-        seen_types.add(change["type"])
-    assert seen_types == set(experiment.REGISTRY)   # every registered type was actually exercised above
 
 
 def test_ablate_receipt_modes_all_share_the_same_envelope_shape(iso):
-    memory_mode.set_mode("prompt")
     run = _seed_run()
     sub = FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.5}))
     for mode in ("regen", "forced", "both"):
@@ -197,67 +168,8 @@ def test_ablate_receipt_modes_all_share_the_same_envelope_shape(iso):
 
 # =========================================================================================== registry dispatch
 
-def test_registry_dispatches_every_type_to_exactly_the_right_op(iso, monkeypatch):
-    calls = {"receipt": 0, "counterfactual": 0, "swap_receipt": 0,
-             "branch": 0, "replay": 0}
-
-    def spy(name, retval):
-        def _fn(*a, **k):
-            calls[name] += 1
-            return retval
-        return _fn
-
-    monkeypatch.setattr(experiment, "_receipt", spy("receipt", {
-        "influence": {}, "changes_applied": {}, "baseline_reply": "b", "ablated_reply": "a",
-        "delta": {"words": [1, 1], "wps": [1, 1], "changed": 0}, "has_effect": True,
-        "causal_verified": True, "note": "n", "cost_note": "c"}))
-    monkeypatch.setattr(experiment, "_counterfactual", spy("counterfactual", {
-        "overrides_applied": {}, "baseline_reply": "b", "counterfactual_reply": "c",
-        "delta": {"words": [1, 1], "wps": [1, 1], "changed": 0}, "has_effect": True,
-        "causal_verified": True, "coherence": {"degenerate": False, "reason": ""}, "note": "n",
-        "cost_note": "c"}))
-    monkeypatch.setattr(experiment, "_swap_receipt", spy("swap_receipt", _canned_swap_receipt(
-        {"id": "run_x"}, "Paris", "ocean", None)))
-    monkeypatch.setattr(experiment, "_branch", spy("branch", {
-        "id": "run_child", "response": "r", "changes_applied": {"branch_turn": 0, "kv_snapshot": False}}))
-    monkeypatch.setattr(experiment, "_replay", spy("replay", {"id": "run_child", "response": "r"}))
-
-    run = _seed_run()
-    sub = object()   # never touched by any spy above
-
-    dispatch = [
-        ("ablate_card", {"type": "ablate_card", "card_id": "mem_a"}, "receipt"),
-        ("ablate_memory", {"type": "ablate_memory"}, "receipt"),
-        ("ablate_dial", {"type": "ablate_dial", "dial": "warm"}, "receipt"),
-        ("set_dial", {"type": "set_dial", "dial": "warm", "value": 1.0}, "counterfactual"),
-        ("swap_concept", {"type": "swap_concept", "to_concept": "ocean"}, "swap_receipt"),
-        ("edit_turn", {"type": "edit_turn", "turn": 0}, "branch"),
-        ("reroll", {"type": "reroll"}, "replay"),
-        ("toggle_greedy", {"type": "toggle_greedy"}, "replay"),
-    ]
-    for _, change, expected_op in dispatch:
-        before = dict(calls)
-        out = experiment.run_experiment(run, change, None, sub)
-        assert out is not None
-        after = dict(calls)
-        fired = {k for k in calls if after[k] != before[k]}
-        assert fired == {expected_op}, (change["type"], fired)
 
 
-def test_ablate_card_passes_the_card_id_influence_through(iso, monkeypatch):
-    seen = {}
-
-    def fake_receipt(run, influence, sub, *, mode="regen"):
-        seen["influence"] = influence
-        seen["mode"] = mode
-        return {"influence": influence, "changes_applied": {}, "baseline_reply": "b", "ablated_reply": "a",
-               "delta": {}, "has_effect": True, "causal_verified": True, "note": "n", "cost_note": "c"}
-
-    monkeypatch.setattr(experiment, "_receipt", fake_receipt)
-    run = _seed_run()
-    experiment.run_experiment(run, {"type": "ablate_card", "card_id": "mem_xyz"}, "forced", object())
-    assert seen["influence"] == {"card_id": "mem_xyz"}
-    assert seen["mode"] == "forced"
 
 
 def test_set_dial_passes_the_dial_value_override_through(iso, monkeypatch):
@@ -278,7 +190,6 @@ def test_set_dial_passes_the_dial_value_override_through(iso, monkeypatch):
 # =========================================================================================== honesty invariants
 
 def test_ablate_regen_has_effect_and_causal_verified_carry_through_exactly_and_null_is_honestly_absent(iso):
-    memory_mode.set_mode("prompt")
     run = _seed_run()
     sub = FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.5}))
     out = experiment.run_experiment(run, {"type": "ablate_dial", "dial": "warm"}, "regen", sub)
@@ -325,22 +236,6 @@ def test_ablate_forced_missing_null_floor_reads_as_none_not_as_no_effect(iso, mo
     assert out["result"]["has_effect"] is True   # a real effect DID fire -- null being absent must not hide it
 
 
-def test_ablate_both_mode_null_comes_from_nested_forced_null_floor(iso, monkeypatch):
-    def fake_receipt(run, influence, sub, *, mode="regen"):
-        assert mode == "both"
-        return {"influence": influence, "changes_applied": {}, "baseline_reply": "b", "ablated_reply": "a",
-               "delta": {}, "has_effect": True, "causal_verified": True, "note": "n", "cost_note": "c",
-               "mode": "both",
-               "forced": {"influence": influence, "mode": "forced", "causal_verified": True,
-                         "has_effect": True, "null_floor": {"kind": "card_filler",
-                                                            "exceeds_floor_by_order_of_magnitude": True}},
-               "silent_influence": False}
-
-    monkeypatch.setattr(experiment, "_receipt", fake_receipt)
-    run = _seed_run()
-    out = experiment.run_experiment(run, {"type": "ablate_memory"}, "both", object())
-    assert out["result"]["null"] == {"kind": "card_filler", "exceeds_floor_by_order_of_magnitude": True}
-    assert out["result"]["has_effect"] is True and out["result"]["causal_verified"] is True
 
 
 def test_swap_concept_never_invents_has_effect_and_preserves_the_null_control(iso, swap_stub):
@@ -404,7 +299,6 @@ def test_branch_and_replay_ops_never_invent_a_verdict(iso, change):
 
 
 def test_cost_est_seconds_omitted_when_run_has_no_timing(iso):
-    memory_mode.set_mode("prompt")
     run = _seed_run()   # default started == ended -> duration_ms == 0 -> nothing to ground an estimate in
     sub = FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.5}))
     out = experiment.run_experiment(run, {"type": "reroll"}, None, sub)

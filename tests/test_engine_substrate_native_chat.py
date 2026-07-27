@@ -90,89 +90,9 @@ def _substrate(engine, steer=None):
     return sub
 
 
-def test_private_native_chat_preserves_clozn_layers_and_real_worker_evidence(monkeypatch):
-    block = "Known user context:\n- Prefers concise weather answers."
-    applied = [{"id": "mem_weather", "text": "Prefers concise weather answers.",
-                "relevance": 0.88}]
-    monkeypatch.setattr(cs, "_prompt_block_for", lambda mem, user: (block, applied, 0.88))
-    monkeypatch.setattr(cs, "_disk_dials", lambda: pytest.fail("live tone strengths must win"))
-    engine = _AtomicEngine()
-    sub = _substrate(engine, _Steer())
-    messages = [
-        {"role": "system", "content": "Client policy"},
-        {"role": "user", "content": "Weather in Kyoto?"},
-    ]
-    tools = [{"type": "function", "function": {"name": "weather"}}]
-    sampling = {"temperature": 0.3, "top_p": 0.75, "top_k": 12,
-                "repeat_penalty": 1.04, "seed": 987}
-    trace_out = []
-    mem_out = {}
-
-    result = sub._complete_chat_native(
-        messages,
-        tools=tools,
-        tool_choice="required",
-        parallel_tool_calls=False,
-        max_new=41,
-        sample=sampling,
-        trace_out=trace_out,
-        mem_out=mem_out,
-        enable_thinking=False,
-    )
-
-    assert messages[0]["content"] == "Client policy"  # memory assembly never mutates caller input
-    assert engine.calls == [{
-        "messages": [
-            {"role": "system", "content": f"Client policy\n\n{block}"},
-            {"role": "user", "content": "Weather in Kyoto?"},
-        ],
-        "options": {
-            "tools": tools,
-            "tool_choice": "required",
-            "json_schema": None,
-            "parallel_tool_calls": False,
-            "add_generation_prompt": True,
-            "enable_thinking": False,
-            "reasoning_format": "none",
-            "max_tokens": 41,
-            "steer_vec": [0.25, -0.5],
-            "steer": {"coef": 1.0, "layer": 14},
-            "temperature": 0.3,
-            "rep_penalty": 1.04,
-            "top_k": 12,
-            "top_p": 0.75,
-            "seed": 987,
-        },
-    }]
-
-    # No stripping or JSON reserialization: this is the worker's actual model output and parsed message.
-    assert result["raw_model_output"].startswith("  <tool_call>")
-    assert result["raw_model_output"].endswith("  ")
-    assert result["message"] == _native_response()["chat_io"]["message"]
-    assert result["parse_error"] is None
-    assert result["pipeline"] == _native_response()["chat_io"]["pipeline"]
-    assert result["rendered_prompt"] == mem_out["final_prompt"]
-    assert result["model_sha256"] == "a" * 64
-    assert result["finish_reason"] == "stop"
-    assert result["usage"] == {"prompt_tokens": 18, "completion_tokens": 2, "steps_total": 2}
-
-    assert [step["piece"] for step in trace_out] == ["<tool_call>", "{"]
-    assert trace_out == result["trace"] == sub._request.trace
-    assert trace_out[0]["alts"] == [{"token_id": 99, "piece": "<think>", "prob": 0.04}]
-    assert sub._request.finish_reason == "stop"
-    assert sub._request.prompt_tokens == 18
-    assert sub._request.sampling["seed"] == 987
-    assert sub._request.generation_meta["max_tokens"] == 41
-    assert sub._request.generation_meta["stream"] is False
-    assert sub._request.steering_snapshot == {"warm": 0.65}
-    assert sub._request.memory_manifest == mem_out
-    assert mem_out["prompt_block"] == block
-    assert mem_out["assembled_messages"] == engine.calls[0]["messages"]
-    assert mem_out["final_prompt"] == "<s>[INST] Weather? [/INST]"
 
 
 def test_private_native_chat_greedy_and_missing_native_trace_stay_explicitly_empty(monkeypatch):
-    monkeypatch.setattr(cs, "_prompt_block_for", lambda mem, user: (None, [], 0.0))
     monkeypatch.setattr(cs, "_disk_dials", lambda: {})
     engine = _AtomicEngine(_native_response(trace=False))
     sub = _substrate(engine)
@@ -208,7 +128,6 @@ def test_private_native_chat_greedy_and_missing_native_trace_stay_explicitly_emp
 
 
 def test_private_native_chat_retains_raw_trace_and_usage_when_native_parse_fails(monkeypatch):
-    monkeypatch.setattr(cs, "_prompt_block_for", lambda mem, user: (None, [], 0.0))
     monkeypatch.setattr(cs, "_disk_dials", lambda: {})
     parse_error = {"code": "native_parse_failed", "message": "expected a tool close tag"}
     engine = _AtomicEngine(_native_response(parse_error=parse_error))
@@ -234,7 +153,6 @@ def test_private_native_chat_retains_raw_trace_and_usage_when_native_parse_fails
 
 
 def test_private_native_chat_keeps_request_memory_manifest_when_worker_fails(monkeypatch):
-    monkeypatch.setattr(cs, "_prompt_block_for", lambda mem, user: ("MEMORY", [{"id": "m1"}], 0.7))
     monkeypatch.setattr(cs, "_disk_dials", lambda: {})
     sub = _substrate(_AtomicEngine(error=RuntimeError("native parse failed")))
     mem_out = {}

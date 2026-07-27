@@ -42,8 +42,6 @@ def test_full_run_ordered_events_with_pluralization_and_hesitations(store):
         messages=[{"role": "user", "content": "what color is the sky?"}],
         response="The sky is blue.",
         trace={"tokens": tokens, "confidence": confidence, "alternatives": alternatives},
-        memory={"cards_applied": ["Keep it brief.", "Be nice"], "applied_ids": ["c1", "c2"],
-                "relevance": [0.81, None], "gate": 0.77, "mode": "prompt"},
         behavior={"active_dials": {"concise": 0.5, "warm": -0.2}},
         finish_reason="length",
     )
@@ -51,7 +49,7 @@ def test_full_run_ordered_events_with_pluralization_and_hesitations(store):
 
     events = run_timeline.timeline(run)
     types = [e["type"] for e in events]
-    assert types == ["run_started", "memory_applied", "dials_applied", "generation",
+    assert types == ["run_started", "dials_applied", "generation",
                       "hesitation", "hesitation", "finished"]
 
     started = events[0]
@@ -59,25 +57,17 @@ def test_full_run_ordered_events_with_pluralization_and_hesitations(store):
     assert started["model"] == "clozn-qwen" and started["at"] == run["created_at"]
     assert started["label"] == "Run started"
 
-    mem_ev = events[1]
-    assert mem_ev["label"] == "2 memory cards applied"        # pluralized (N != 1)
-    assert mem_ev["count"] == 2
-    assert mem_ev["gate"] == 0.77 and mem_ev["mode"] == "prompt"
-    assert mem_ev["cards"] == [
-        {"text": "Keep it brief.", "id": "c1", "relevance": 0.81},
-        {"text": "Be nice", "id": "c2", "relevance": None},
-    ]
 
-    dial_ev = events[2]
+    dial_ev = events[1]
     assert dial_ev["label"] == "2 behavior dials"              # pluralized
     assert dial_ev["dials"] == {"concise": 0.5, "warm": -0.2}
 
-    gen_ev = events[3]
+    gen_ev = events[2]
     assert gen_ev["label"] == "Generated 5 tokens"
     assert gen_ev["n_tokens"] == 5
     assert gen_ev["duration_ms"] == run["timing"]["duration_ms"]
 
-    h1, h2 = events[4], events[5]
+    h1, h2 = events[3], events[4]
     assert h1["index"] == 1 and h1["token"] == " sky" and h1["confidence"] == 0.30
     assert h1["prob"] == 0.30 and h1["logprob"] == -1.203973
     assert h1["alternatives"] == [{"piece": " sea", "text": " sea", "prob": 0.22, "logprob": -1.514128}]
@@ -88,7 +78,7 @@ def test_full_run_ordered_events_with_pluralization_and_hesitations(store):
     # the two mid-confidence tokens (0.92, 0.95, 0.99) never cross LOW_CONF -- no hesitation for them
     assert {h1["index"], h2["index"]} == {1, 3}
 
-    finished = events[6]
+    finished = events[5]
     assert finished == {"type": "finished", "label": "Finished (length)",
                         "finish_reason": "length", "truncated": True}
 
@@ -130,13 +120,9 @@ def test_hesitation_events_omit_new_fields_on_a_legacy_trace(store):
 
 def test_singular_card_and_dial_labels_are_not_pluralized(store):
     rid = store.record(source="cli", messages=[{"role": "user", "content": "q"}], response="a",
-                       memory={"cards_applied": ["only one"], "mode": "prompt"},
                        behavior={"active_dials": {"warm": 0.2}})
     events = run_timeline.timeline(store.get_run(rid))
-    mem_ev = next(e for e in events if e["type"] == "memory_applied")
     dial_ev = next(e for e in events if e["type"] == "dials_applied")
-    assert mem_ev["label"] == "1 memory card applied"
-    assert mem_ev["count"] == 1
     assert dial_ev["label"] == "1 behavior dial"
 
 
@@ -201,7 +187,6 @@ def test_a_run_with_no_parent_has_no_branched_from_event(store):
 def test_no_trace_run_has_no_hesitations_and_a_word_count_not_a_fabricated_token_count(store):
     rid = store.record(source="studio_chat", messages=[{"role": "user", "content": "hi"}],
                        response="hey there friend",
-                       memory={"cards_applied": ["be concise"], "gate": 0.9, "mode": "prompt"},
                        behavior={"active_dials": {"concise": 0.4}})
     run = store.get_run(rid)
     assert run["trace"] == {}                                     # confirms runlog really stored nothing
@@ -211,9 +196,6 @@ def test_no_trace_run_has_no_hesitations_and_a_word_count_not_a_fabricated_token
     assert "hesitation" not in types
     gen = next(e for e in events if e["type"] == "generation")
     assert gen["n_tokens"] == 3                # word-count fallback, never a fabricated trace token count
-    mem_ev = next(e for e in events if e["type"] == "memory_applied")
-    assert mem_ev["cards"][0]["id"] is None                       # no applied_ids logged -> None, no guess
-    assert mem_ev["cards"][0]["relevance"] is None
 
 
 def test_no_response_and_no_trace_means_no_generation_event(store):
@@ -248,9 +230,6 @@ def test_never_raises_on_a_maximally_malformed_but_dict_shaped_run():
     assert types[0] == "run_started"
     # tokens present but confidence unusable -> no token ever clears the LOW_CONF check -> zero hesitations
     assert "hesitation" not in types
-    mem_ev = next(e for e in events if e["type"] == "memory_applied")
-    assert len(mem_ev["cards"]) == 2
-    assert all(c["id"] is None and c["relevance"] is None for c in mem_ev["cards"])
     assert "dials_applied" not in types                 # a list isn't a dial dict -> no dials, no crash
     gen_ev = next(e for e in events if e["type"] == "generation")
     assert gen_ev["n_tokens"] == 3                      # tokens list still usable even though confidence isn't

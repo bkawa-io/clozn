@@ -19,9 +19,8 @@ import json
 
 import pytest
 
-import clozn.memory.cards as memory_cards
 import clozn.settings as clozn_settings
-import clozn.memory.mode as memory_mode
+
 import clozn.runs.store as runlog
 from clozn.receipts.forced import (
     _FILLER_TEXT,
@@ -136,12 +135,6 @@ def _injection_lp(messages):
 
 @pytest.fixture
 def iso(tmp_path, monkeypatch):
-    """Isolate every flat-file store replay.py / memory_mode.py / memory_cards.py touch (mirrors
-    tests/test_receipts.py's iso fixture) -- replay persists child runs, so RUNS_DIR must never be real."""
-    monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "no_such.pt")])
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
-    monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
     return tmp_path
 
 

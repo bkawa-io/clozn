@@ -79,16 +79,13 @@ def sse_chat(handler, messages, max_new, model, lens=None, receipt=False, sample
     stream_kw = {}
     if "sample" in params:
         stream_kw["sample"] = sample
-    if "memory_scope" in params:
-        from clozn.server.generation_gateway import request_memory_scope
-        stream_kw["memory_scope"] = request_memory_scope(handler)
     if lens:
         if "lens" in params and "on_frame" in params:
             stream_kw.update(lens=(lens if isinstance(lens, dict) else {}), on_frame=side_frame)
         else:
             side_frame({"error": "live lens needs the engine substrate (post-hoc: POST /runs/<id>/jlens)"})
 
-    # HF chat stream (QwenSubstrate.chat_stream): a pure pass-through recorder rides along and the
+    # An HF chat stream: a pure pass-through recorder rides along and the
     # per-token trace is assembled after the stream (SUB.last_stream_trace()) -- so the run gets the
     # Run Inspector timeline while the streamed chunks stay byte-identical (B3). runlog.record
     # normalizes the raw step list; on any hiccup last_stream_trace() is [] -> a clean empty trace.

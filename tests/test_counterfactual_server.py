@@ -2,8 +2,6 @@
 (EXPLAIN_THIS_ANSWER_SPEC.md).
 
 No model, no GPU: drives the REAL clozn_server do_POST handler (the object.__new__(H) no-socket trick used
-by test_receipts_server.py / test_explain_server.py) against an isolated runlog store + memory_cards store
-+ memory_mode settings, with a FAKE substrate standing in for the qwen one. counterfactual.py itself
 (both-arms-greedy generation, the coherence axis, the unapplied-override guard, dose_sweep) is exhaustively
 unit-tested in test_counterfactual.py against fixture dicts; this file only proves the THIN endpoint
 wiring: the route matches, a missing run is a clean 404, no substrate is a clean 503 (both arms
@@ -26,8 +24,8 @@ sys.path.insert(0, RESEARCH)
 
 from clozn.server import app as cs   # noqa: E402
 import clozn.settings as clozn_settings          # noqa: E402
-import clozn.memory.cards as memory_cards         # noqa: E402
-import clozn.memory.mode as memory_mode          # noqa: E402
+
+
 from clozn import receipts             # noqa: E402
 import clozn.runs.store as runlog                 # noqa: E402
 
@@ -95,9 +93,7 @@ def iso(tmp_path, monkeypatch):
     """Isolate the run/card/settings stores; SUB starts as a FakeSub (tests that want the 503 path
     override it to None explicitly)."""
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "no_such.pt")])
     monkeypatch.setattr(cs, "SUB", FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.2})))
     return tmp_path
 

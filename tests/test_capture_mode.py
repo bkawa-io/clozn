@@ -15,7 +15,7 @@ sys.path.insert(0, RESEARCH)
 from clozn.runs import capture_mode        # noqa: E402
 import clozn.settings as clozn_settings          # noqa: E402
 from clozn.server import app as cs  # noqa: E402
-import clozn.memory.mode as memory_mode         # noqa: E402
+
 
 
 @pytest.fixture
@@ -49,7 +49,7 @@ def test_captures_trace_only_light_drops_it(settings):
 
 
 def test_garbage_setting_degrades_to_standard(settings):
-    memory_mode.set_setting("capture_tier", "nonsense")
+    clozn_settings.set_setting("capture_tier", "nonsense")
     assert capture_mode.tier() == "standard"
 
 

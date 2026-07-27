@@ -24,9 +24,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, REPO)
 
-import clozn.memory.cards as memory_cards      # noqa: E402
 import clozn.settings as clozn_settings          # noqa: E402
-import clozn.memory.mode as memory_mode       # noqa: E402
+
 import clozn.receipts.bundle as receipt_bundle    # noqa: E402
 import clozn.runs.store as runlog            # noqa: E402
 from clozn import testkit           # noqa: E402
@@ -36,8 +35,6 @@ from clozn import testkit           # noqa: E402
 def iso(tmp_path, monkeypatch):
     """Isolate every flat-file store testkit/receipts/replay touch (mirrors test_receipts.py's `iso`)."""
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "no_such.pt")])
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
     return tmp_path
 
@@ -336,27 +333,8 @@ def test_leans_on_min_effect_threshold_too_high_fails_not_skips(iso):
     assert a["actual"]["has_effect"] is True                # verified effect -- just below the bar
 
 
-def test_leans_on_card_ablation_with_no_effect_is_a_verified_fail_not_a_skip(iso):
-    """card_a alone shows no effect (card_b alone keeps it concise) -- receipts.py DID verify the ablation
-    (prompt mode, real per-card removal); a leans_on assertion on card_a must FAIL honestly, not skip."""
-    memory_mode.set_mode("prompt")
-    sub = FakeSub(mem=FakeMem(1.0), steer=FakeSteer({}), concise_card_ids=["card_a", "card_b"])
-    r = testkit.evaluate(CAUSAL_RUN, _test_spec({"check": "leans_on", "card": "card_a"}, run="run_causal1"), sub)
-    a = r["assertions"][0]
-    assert a["status"] == "fail"
-    assert a["actual"]["has_effect"] is False
 
 
-def test_leans_on_internalized_mode_is_an_honest_skip_never_a_false_pass(iso, monkeypatch):
-    """replay.py can't ablate one card out of a fused internalized prefix -- causal_verified comes back
-    False with an honest ablation_note. A leans_on assertion on top of that MUST skip, not pass or fail."""
-    monkeypatch.setenv("CLOZN_RUNTIME_KIND", "lab")
-    memory_mode.set_mode("internalized")
-    sub = FakeSub(mem=FakeMem(1.0), steer=FakeSteer({}), concise_card_ids=["card_a"])
-    r = testkit.evaluate(CAUSAL_RUN, _test_spec({"check": "leans_on", "card": "card_a"}, run="run_causal1"), sub)
-    a = r["assertions"][0]
-    assert a["status"] == "skip"
-    assert "internalized" in a["note"] and "fused" in a["note"]
 
 
 def test_leans_on_with_no_substrate_and_no_fetch_receipt_is_an_honest_skip(iso):

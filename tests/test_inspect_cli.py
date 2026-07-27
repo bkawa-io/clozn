@@ -5,14 +5,13 @@ import pytest
 
 from clozn.cli import main as cli
 from clozn.cli.commands import explain as explain_cmd
-import clozn.memory.cards as memory_cards
+
 import clozn.runs.store as runlog
 
 
 @pytest.fixture
 def iso(tmp_path, monkeypatch):
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     return tmp_path
 
 

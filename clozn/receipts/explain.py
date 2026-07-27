@@ -1,6 +1,6 @@
 """explain.py -- "Explain this answer" Milestone 1 (EXPLAIN_THIS_ANSWER_SPEC.md): assemble a run's
 ALREADY-LOGGED free signals into one structured `explanation` object. ZERO model calls, zero generation --
-pure read + reshape of what `runlog`/`memory_cards`/`behavior` already captured for that turn. Per the
+pure read + reshape of what `runlog`/`behavior` already captured for that turn. Per the
 spec: "the missing work is assembly ... not new primitives" -- this module is exactly that assembly, done
 once in a single testable place so the endpoint (clozn_server.py) stays a thin dispatcher.
 
@@ -12,7 +12,7 @@ be trusted to answer about itself):
                           every scale -- a measured dead end). {"available": false, ...}
                           when the run carries no per-token trace at all (the HF chat path may not).
   * influences_active -- the memory manifest's cards (each resolved to its provenance quote + turn via
-                          memory_cards, by id) and gate value, plus the active tone dials. Every entry is
+                          the run's own record) and gate value, plus the active tone dials. Every entry is
                           tagged causal_verified:null -- ACTIVE is not PROOF; only M2's on-demand ablation
                           receipt may ever set this true. This module never runs that receipt.
   * concepts           -- the engine's sae:<id> feature readouts, when a run happens to carry them.
@@ -27,14 +27,13 @@ Honesty invariants enforced HERE (so the endpoint can't drift from the spec by c
   * a missing signal is an explicit {"available": false, "note": "..."} field -- never a silently absent
     key ("no receipt for that" is a first-class answer, per the spec).
 
-Mirrors replay.py: stdlib-only, imports its sibling flat-file module (memory_cards) directly -- no model,
+Mirrors replay.py: stdlib-only -- no model,
 no substrate, no GPU. This whole module runs on a plain `run` dict (e.g. from runlog.get_run()) and is
 fully unit-testable against fixture dicts. Never raises: `explain()` degrades field-by-field on anything
 missing or malformed, so one bad field can't blank out the panels that DID assemble cleanly.
 """
 from __future__ import annotations
 
-import clozn.memory.cards as memory_cards
 from clozn.runs import close_calls
 
 # Matches the run timeline and confidence-span `LOW_CONF` values -- one convention, so every recorded
@@ -99,67 +98,18 @@ def _confidence(run: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------------------- influences_active
-def _lookup_card(card_id):
-    """memory_cards.get, guarded -- a card-store hiccup must degrade this ONE entry, never the whole explain
-    (memory_cards.get already never raises, but this is the module's own boundary, kept explicit)."""
-    if not card_id:
-        return None
-    try:
-        return memory_cards.get(card_id)
-    except Exception:
-        return None
-
-
-def _card_entry(text: str, card_id) -> dict:
-    """One fired card, resolved to its provenance (source_run_id/source_turn/quoted_span) by looking it up
-    in memory_cards -- never trusting the run's own cards_applied text as its own proof. causal_verified is
-    always None here: this module only ASSEMBLES what's logged as active; it never runs the ablation that
-    could prove causation (that's M2). A card id that no longer resolves (edited/deleted since the run) is
-    reported as an explicit "no receipt" note, not silently dropped."""
-    entry = {"id": card_id, "text": text, "causal_verified": None}
-    card = _lookup_card(card_id)
-    if card is None:
-        entry.update(has_provenance=False, source_run_id=None, source_turn=None, quoted_span="",
-                     note=("no card id recorded for this application" if not card_id else
-                           "no card record found for this id (may have been edited or deleted since)"))
-        return entry
-    entry.update(
-        source_run_id=card.get("source_run_id"),
-        source_turn=card.get("source_turn"),
-        quoted_span=card.get("quoted_span") or "",
-        has_provenance=memory_cards.has_provenance(card),
-    )
-    if not entry["has_provenance"]:
-        entry["note"] = "no provenance quote on record for this card"
-    return entry
-
-
 def _influences_active(run: dict) -> dict:
-    """Everything logged as having ridden this reply: memory cards (with provenance, resolved by id) + the
-    topic-relevance gate value, and the active tone dials. Every entry -- card or dial -- is tagged
-    causal_verified:null: ACTIVE is not PROOF, and only M2's on-demand ablation receipt may ever flip it."""
-    mem = _as_dict(run.get("memory"))
+    """The active tone dials logged as having ridden this reply.
+
+    Memory cards and anchored memory were cut from the product on 2026-07-27, so dials are the whole
+    story: steering is the only thing that shapes a reply. Every entry is tagged causal_verified:null --
+    ACTIVE is not PROOF, and only an on-demand ablation receipt may ever flip it."""
     behavior = _as_dict(run.get("behavior"))
-
-    texts = _as_list(mem.get("cards_applied"))
-    ids = _as_list(mem.get("applied_ids"))
-    cards = [_card_entry(_card_text(t), ids[i] if i < len(ids) else None) for i, t in enumerate(texts)]
-    # `anchored` is always [] on runs recorded since the 2026-07-27 anchored-memory removal -- kept
-    # because this reads the RUN's own record, and pre-cut runs really did have bags ride the turn
-    # (same reasoning as runs/memory_usage.py::_anchored).
-    anchored = [a for a in _as_list(mem.get("anchored")) if isinstance(a, dict)]
-
     dials_raw = _as_dict(behavior.get("active_dials"))
     dials = [{"name": k, "value": v, "causal_verified": None} for k, v in dials_raw.items()]
-
-    out = {"cards": cards, "anchored": anchored, "gate": mem.get("gate"),
-           "mode": mem.get("mode"), "dials": dials}
-    if not cards and not anchored:
-        # Prompt mode logs PER-TURN application: "none" there means the block wasn't injected on THIS turn
-        # (topic-gated out, or strength 0) -- not that no cards exist at all. Say so explicitly rather than
-        # let an empty list misread as "memory is unconfigured" (mirrors the Explain influence note).
-        out["note"] = ("no memory applied this turn (block not injected)" if mem.get("mode") == "prompt"
-                       else "no memory applied")
+    out = {"dials": dials}
+    if not dials:
+        out["note"] = "no dial was active on this turn"
     return out
 
 

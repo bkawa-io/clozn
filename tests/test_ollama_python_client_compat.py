@@ -23,9 +23,8 @@ import pytest
 
 ollama = pytest.importorskip("ollama")
 
-import clozn.memory.cards as memory_cards  # noqa: E402
 import clozn.settings as clozn_settings          # noqa: E402
-import clozn.memory.mode as memory_mode  # noqa: E402
+
 import clozn.runs.store as runlog  # noqa: E402
 from clozn.server import app as cs  # noqa: E402
 
@@ -118,9 +117,7 @@ class _Engine:
 def ollama_gateway(tmp_path, monkeypatch):
     substrate = _Substrate()
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    monkeypatch.setattr(memory_mode, "LEGACY_PREFIX_PATHS", [str(tmp_path / "missing.pt")])
     monkeypatch.setattr(cs, "SUB", substrate)
     monkeypatch.setattr(cs, "SUBNAME", "engine")
     monkeypatch.setattr(cs, "ENGINE", _Engine())

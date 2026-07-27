@@ -369,7 +369,7 @@ def _qwen_tmpl(messages):
     """Render chat messages into Qwen's chat-template STRING (ChatML). LEGACY: kept only as a documented
     reference / last-ditch fallback -- the engine generation paths now template PER-MODEL via
     _engine_tmpl (the GGUF's own embedded chat template), so a non-Qwen model gets its correct format.
-    The torch QwenSubstrate never used this (it applies the HF tokenizer's template internally)."""
+    A torch substrate would not use this (HF applies the tokenizer's template internally)."""
     sysmsg = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
     for m in messages:
         if m.get("role") == "system" and m.get("content"):
@@ -508,14 +508,9 @@ def _library_dial_names() -> set:
         return set()
 
 
-# ------- memory assembly: extracted to clozn/server/memory_assembly.py; re-exported (the seam) ------
-from clozn.server.memory_assembly import (                                               # noqa: E402
-    _SUSPICIOUS, QUOTE_SPAN_MAX, PROMPT_GATE_MIN,
-    _risk_of, _dial_suggestion, _provenance_of, _memory_mode, _last_user,
-    _prompt_gate, _prompt_relevance, _prompt_mem_cards, _prompt_block_for,
-    PromptBlockDecision, _capture_prompt_decision, _baseline_prompt_tokens,
-    _inject_block,
-    _mem_migrate, _export_markdown, _runs_for_card, _mem_sync_rules,
+# ------- message assembly: extracted to clozn/server/message_assembly.py; re-exported (the seam) ----
+from clozn.server.message_assembly import (                                              # noqa: E402
+    _last_user, _inject_block, _export_markdown,
 )
 
 # ------- profiles: named persona bundles -> cards + dials on the LIVE substrate ---------------------
@@ -531,45 +526,21 @@ def _active_profile_name():
 
 
 def _profiles_switch(sub, p) -> dict:
-    """Apply profile bundle `p` to the live substrate `sub`: global cards REPLACE the studio's global
-    set (a profile switch is a replacement, never a merge -- disjoint personas must not bleed), while
-    app/project cards remain as request-selected overlays,
-    dials replace via profiles.apply_dials (steer.clear() then set()), and the prompt-mode/internalized
-    resync goes through the SAME _start_retrain machinery every other card mutation uses: instant in
-    prompt mode (the cards ARE the memory there), a backgrounded consolidate() in internalized mode.
+    """Apply profile bundle `p` to the live substrate `sub`.
+
+    A profile is a named DIAL bundle: dials replace via profiles.apply_dials (steer.clear() then set())
+    and persist exactly like /steer/set and /steer/custom already do, so the switched-to persona survives
+    a restart the same way a manually-set dial would.
+
+    Profiles used to carry memory cards too, and a switch REPLACED the global card set (a replacement,
+    never a merge, so disjoint personas could not bleed). Memory cards were cut on 2026-07-27; a
+    bundle's `cards` are no longer applied to anything. They still travel in the bundle so an
+    export/import round-trip stays lossless -- reported via `cards_note`, never silently dropped.
 
     Facts: the slot-memory store (clozn/lab/slotmem_qwen) is a lab-only research module -- it was
     never wired to change the product reply, and reorg Stage B removed the product-side facts surface
-    entirely (no SlotBox, no /facts/* routes here). A profile's facts still travel in the bundle but
-    are never compiled into anything on the product server -- reported honestly via `facts_note`,
-    never silently dropped. Returns {name, prompt_block, cards:{removed,added}, dials, resync, facts_note}."""
-    import clozn.memory.cards as memory_cards
-
-    # 1) CARDS: delete the current GLOBAL set, then create the profile's cards fresh as global+active.
-    #    App/project cards are independent overlays and survive switches byte-for-byte. Deleting the old
-    #    globals (not just disabling them) still keeps disjoint profile personas isolated.
-    from clozn.memory.scope import global_scope, scope_for_card
-    removed = 0
-    for c in memory_cards.list_cards():
-        if scope_for_card(c)["kind"] == "global" and memory_cards.delete(c["id"]):
-            removed += 1
-    added = 0
-    for c in p.get("cards", []):
-        if c.get("status", "active") != "active":     # a disabled card in the bundle stays inert here too
-            continue
-        if memory_cards.create(c["text"], status="active", kind="preference",
-                               evidence=f"profile:{p['name']}", scope=global_scope()) is not None:
-            added += 1
-
-    # 2) SYNC the memory mechanism from the new active set. force=True: the pre-check inside
-    #    _start_retrain compares m.rules to memory_cards.active_texts(), and since we just rewrote the
-    #    store out from under it, that comparison alone isn't trustworthy for a switch -- force skips it
-    #    and always resyncs, exactly as the mode-switch catch-up (POST /memory/mode) already does.
-    resync = {"retraining": False}
-    m = getattr(sub, "_mem", None)
-    if m is not None:
-        resync = sub._start_retrain(m, "profile-switch", None, force=True)
-
+    entirely. Same deal: carried in the bundle, compiled nowhere, reported via `facts_note`.
+    Returns {name, dials, cards_note, facts_note}."""
     # 3) DIALS: replace via profiles.apply_dials (clear() then set(); custom-dial recipes recompute if
     #    not already present) -- persist exactly like /steer/set and /steer/custom already do, so the
     #    switched-to persona survives a restart the same way a manually-set dial would.
@@ -598,16 +569,12 @@ def _profiles_switch(sub, p) -> dict:
     if p.get("facts"):
         facts_note = (f"{len(p['facts'])} fact(s) travel in the bundle but are not compiled anywhere -- "
                       "the facts/slot-memory tier is a lab-only research module, not part of the product.")
-    return {"name": p["name"], "prompt_block": prompt_block_preview(p),
-            "cards": {"removed": removed, "added": added}, "dials": dials,
-            "resync": resync, "facts_note": facts_note}
-
-
-def prompt_block_preview(p) -> str:
-    """The system block this profile WOULD inject (profiles.prompt_block) -- for the switch response's
-    receipt only; the live chat path still compiles fresh from the card store every gated-in turn."""
-    from clozn.profiles import store as profiles
-    return profiles.prompt_block(p)
+    cards_note = None
+    if p.get("cards"):
+        cards_note = (f"{len(p['cards'])} memory card(s) travel in the bundle but are not applied -- "
+                      "memory cards were removed from the product; steering is the personalization surface.")
+    return {"name": p["name"], "dials": dials,
+            "cards_note": cards_note, "facts_note": facts_note}
 
 
 ARGS = None
@@ -639,7 +606,7 @@ def _snap_store():
 # ------- substrates: extracted to clozn/server/substrates.py; re-exported here (the seam) -----------
 # app.py remains the canonical module: routes read ctx.<name> and tests patch cs.<name> on THIS module.
 from clozn.server.substrates import (                                                    # noqa: E402
-    Substrate, EngineSubstrate, _EngineMemory,      # Qwen/Dream lab substrates now live in clozn/lab/substrates.py
+    Substrate, EngineSubstrate,      # Qwen/Dream lab substrates now live in clozn/lab/substrates.py
     _quant_from_name, _model_family_from_name,
     _engine_model_info, _engine_complete_traced, _ENGINE_MODELS, _ENGINE_MODEL_DEFAULT,
 )
@@ -659,7 +626,6 @@ import types as _types                                                # noqa: E4
 from clozn.server import static as _static_routes                     # noqa: E402
 from clozn.server.routes import health as _health_routes              # noqa: E402
 from clozn.server.routes import runs as _runs_routes                  # noqa: E402
-from clozn.server.routes import memory as _memory_routes              # noqa: E402
 from clozn.server.routes import receipts as _receipts_routes          # noqa: E402
 from clozn.server.routes import replay as _replay_routes              # noqa: E402
 from clozn.server.routes import corrective_retries as _corrective_retry_routes  # noqa: E402
@@ -685,12 +651,12 @@ from clozn.server.routes import contracts as _contracts_routes         # noqa: E
 
 _runs_fallback_routes = _types.SimpleNamespace(try_get=_runs_routes.try_get_fallback)
 
-_GET_ROUTES = [_static_routes, _health_routes, _runs_routes, _memory_routes, _receipts_routes,
+_GET_ROUTES = [_static_routes, _health_routes, _runs_routes, _receipts_routes,
               _timetravel_routes, _profiles_routes, _ollama_routes, _openai_routes, _engine_routes,
               _guard_routes, _models_routes,
               _journal_routes, _diff_routes, _receipt_link_routes,
               _influence_map_routes, _contracts_routes, _runs_fallback_routes]
-_POST_ROUTES = [_health_routes, _memory_routes, _receipts_routes,
+_POST_ROUTES = [_health_routes, _receipts_routes,
                _corrective_retry_routes, _replay_routes,
                _timetravel_routes, _profiles_routes, _preferences_routes, _feedback_routes,
                _ollama_routes, _openai_routes, _engine_routes, _guard_routes, _readouts_routes,
@@ -846,73 +812,15 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 session_key = request_session(self.headers)
                 client_key, client_key_source = request_client(self.headers)
                 project_key = request_project(self.headers)
-                mem = getattr(_sub(), "_mem", None) if _sub() else None
                 mo = mem_out or {}
                 from clozn.runs.think_tags import prompt_opens_think, sanitize_messages, sanitize_reply
                 messages = sanitize_messages(messages)
                 think = sanitize_reply(response, implicit_open=prompt_opens_think(mo.get("final_prompt")))
                 response = think.public_text
                 reasoning = think.journal()
-                mode = mo.get("mode") or _memory_mode()
-                if mode == "prompt":
-                    # cards_applied == what was INJECTED this turn -- the per-turn honesty prompt mode
-                    # buys (internalized can only report the whole active set). applied_ids ride along so
-                    # the Run Inspector can offer per-card receipts. A path that filled nothing (or
-                    # errored before generating) honestly records an empty application.
-                    applied = [c for c in (mo.get("applied") or []) if isinstance(c, dict)]
-                    strength = mo.get("strength",
-                                      getattr(mem, "memory_strength", 1.0) if mem is not None else 1.0)
-                    memd = {"cards_applied": [c.get("text", "") for c in applied],
-                            "applied_ids": [c.get("id") for c in applied],
-                            "strength": float(strength),
-                            "has_prefix": (getattr(mem, "prefix", None) is not None) if mem is not None else False,
-                            "mode": mode, "proposed_cards": []}
-                    applied_scope_kinds = [c.get("scope_kind") for c in applied]
-                    if any(kind in {"global", "app", "project"} for kind in applied_scope_kinds):
-                        memd["applied_scope_kinds"] = [
-                            kind if kind in {"global", "app", "project"} else "global"
-                            for kind in applied_scope_kinds
-                        ]
-                    rel = [c.get("relevance") for c in applied]   # per-card topic cosine, aligned with cards_applied
-                    if any(r is not None for r in rel):           # omit entirely when the embedder was unavailable
-                        memd["relevance"] = [round(float(r), 4) if r is not None else None for r in rel]
-                    if mo.get("gate") is not None:
-                        memd["gate"] = round(float(mo["gate"]), 4)
-                    if mo.get("prompt_block"):
-                        memd["prompt_block"] = str(mo["prompt_block"])
-                    for key in ("candidate_cards", "omitted_cards", "selection_stage", "omission_reason",
-                                "prompt_token_cost_unavailable_reason"):
-                        if key in mo:
-                            value = mo[key]
-                            memd[key] = ([dict(card) for card in value if isinstance(card, dict)]
-                                         if key.endswith("_cards") and isinstance(value, list) else value)
-                    if applied:                                  # bump exactly the cards that rode this turn
-                        try:
-                            import clozn.memory.cards as memory_cards
-                            for c in applied:
-                                if c.get("id"):
-                                    memory_cards.bump_usage(c["id"])
-                        except Exception:
-                            pass
-                elif mem is not None:
-                    # INTERNALIZED: cards_applied == the ACTIVE-card texts. Post-D2, SUB._mem.rules is kept
-                    # in sync with the active cards (see _mem_sync_rules), so reading .rules still reports
-                    # exactly what shaped the reply. Reading SUB.memory would miss the dream cards -- use
-                    # _mem (self.memory on qwen, self.dmem on dream). Only ACTIVE cards feed the prefix.
-                    cards = getattr(mem, "rules", None) or getattr(mem, "cards", None) or []
-                    memd = {"cards_applied": list(cards),
-                            "strength": float(getattr(mem, "memory_strength", 1.0)),
-                            "has_prefix": getattr(mem, "prefix", None) is not None,
-                            "mode": mode, "proposed_cards": []}
-                    if cards:                                    # record that the active cards influenced a run
-                        try:
-                            import clozn.memory.cards as memory_cards
-                            for c in memory_cards.list_cards(status="active"):
-                                memory_cards.bump_usage(c["id"])
-                        except Exception:
-                            pass
-                else:
-                    memd = {"mode": mode}                        # runlog records the mode on EVERY run
+                # (The memory manifest -- cards_applied / applied_ids / strength / gate / prompt_block
+                # -- was assembled here until the 2026-07-27 cards cut. Runs carry no `memory` block at
+                # all now, and the readers of the old shape were removed with it.)
                 # only meaningfully-nonzero dials (|v| >= 0.05); steer.active() drops exact-zeros but a
                 # slider nudged to a hair (e.g. 0.02) still slips through and would clutter the record.
                 if "active_dials" in mo:
@@ -945,17 +853,8 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                     meta["prompt_tokens"] = actual_prompt_tokens
                 if extra_meta:
                     meta.update({k: v for k, v in extra_meta.items() if v is not None})
-                if mode == "prompt":
-                    if not memd.get("cards_applied"):
-                        memd["prompt_token_cost"] = 0
-                    else:
-                        baseline_tokens = mo.get("baseline_prompt_tokens")
-                        prompt_tokens = mo.get("actual_prompt_tokens", meta.get("prompt_tokens"))
-                        if (isinstance(baseline_tokens, int) and not isinstance(baseline_tokens, bool)
-                                and isinstance(prompt_tokens, int) and not isinstance(prompt_tokens, bool)
-                                and prompt_tokens >= baseline_tokens):
-                            memd["baseline_prompt_tokens"] = baseline_tokens
-                            memd["prompt_token_cost"] = prompt_tokens - baseline_tokens
+                # (memory prompt_token_cost -- the with-vs-without-block token delta -- was computed
+                # here; there is no block to charge for since the 2026-07-27 cards cut.)
                 git = _git_commit()
                 if git:
                     meta.setdefault("build_git_commit", git)
@@ -973,10 +872,11 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 except Exception:
                     pass
                 workspace_provider = self._workspace_lens_provider(messages, response, error)
-                assembled_messages = mo.get("assembled_messages") if mode == "prompt" else None
+                # The pre-template message list the substrate actually handed to the renderer. It was
+                # gated on prompt-memory mode; with memory gone the substrate records it unconditionally.
+                assembled_messages = mo.get("assembled_messages")
                 # backlog #5: the EXACT rendered chat-template string the engine produced (mem_out fills it
-                # on the engine chat paths). Captured in ANY memory mode -- the internalized/engine path
-                # still renders a prompt even without a block. None -> consumers fall back to assembled_messages.
+                # on the engine chat paths). None -> consumers fall back to assembled_messages.
                 final_prompt = mo.get("final_prompt")
                 # roadmap S4.3: immutable reproduction identity (model_sha256, template_fingerprint,
                 # engine_build, clozn_version) -- see clozn.runs.identity's module docstring for why this
@@ -991,7 +891,7 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                     identity = None
                 rid = runlog.record(source=source, client=self._client(self.headers.get("User-Agent", "")),
                                     model=str(model), substrate=_subname(), messages=messages, response=response,
-                                    memory=memd, behavior={"active_dials": dials}, started=started, error=error,
+                                    behavior={"active_dials": dials}, started=started, error=error,
                                     trace=trace, finish_reason=finish_reason, meta=meta,
                                     assembled_messages=assembled_messages, final_prompt=final_prompt,
                                     workspace_provider=workspace_provider, identity=identity,
@@ -1008,7 +908,7 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
             """TIME-TRAVEL (#6): when the snapshot gate is ON, register this turn in the bounded ring so the
             Run Inspector's rewind/branch reflects real recorded turns and the ring's bounded eviction runs
             in production. Fully guarded + gated OFF by default (the RAM rule). NOTE: the studio chat path is
-            STATELESS (SelfTeach._generate builds its own cache via generate() and discards it), so v1
+            STATELESS (an HF generate() builds its own cache and discards it), so v1
             records a DESCRIPTOR-only snapshot (turn index + token count, zero offloaded bytes) -- honest,
             and enough for the branch bookkeeping. Capturing the live KV payload here (the re-prefill fast
             path) needs the generation path to hand back its cache: the documented next rung."""
@@ -1146,15 +1046,7 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
             # (/memory/*, /steer/* -- Substrate._memory/_steer above, substrate-polymorphic domain
             # dispatch, not per-path HTTP routing, so it stays here rather than in a route module).
             try:
-                routed_body = body
-                if p in ("/memory/add", "/memory/scope") and isinstance(body, dict):
-                    # The public body selects only the kind. Exact opaque keys come from validated
-                    # request headers and cross the substrate boundary as an unforgeable Python object;
-                    # JSON callers cannot inject this private value themselves.
-                    from clozn.server.generation_gateway import request_memory_scope
-                    routed_body = dict(body)
-                    routed_body["_memory_scope"] = request_memory_scope(self)
-                r = _sub().handle(p, routed_body) if _sub() else None
+                r = _sub().handle(p, body) if _sub() else None
                 if r is None:
                     return self._json(409, {"error": f"'{p}' isn't served by the '{_subname()}' substrate",
                                             "need": "dream" if p == "/denoise" else "qwen", "active": _subname()})

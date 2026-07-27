@@ -71,8 +71,6 @@ def test_timeline_happy_path_returns_ordered_events_over_http(iso):
         response="Mass attracts mass.",
         trace={"tokens": ["Mass", " attracts", " mass", "."], "confidence": [0.95, 0.2, 0.9, 0.99],
                "alternatives": [[], [{"piece": " pulls", "prob": 0.4}], [], []]},
-        memory={"cards_applied": ["Keep it brief."], "applied_ids": ["c1"], "relevance": [0.81],
-                "gate": 0.77, "mode": "prompt"},
         behavior={"active_dials": {"concise": 0.5}},
         finish_reason="stop",
     )
@@ -81,13 +79,11 @@ def test_timeline_happy_path_returns_ordered_events_over_http(iso):
     data = json.loads(body)
     assert data["run_id"] == rid
     types = [e["type"] for e in data["events"]]
-    assert types == ["run_started", "memory_applied", "dials_applied", "generation", "hesitation", "finished"]
+    assert types == ["run_started", "dials_applied", "generation", "hesitation", "finished"]
     # spot-check a couple of fields actually round-tripped over the wire (JSON null, floats intact)
     hes = data["events"][types.index("hesitation")]
     assert hes["token"] == " attracts"
     assert hes["alternatives"] == [{"piece": " pulls", "text": " pulls", "prob": 0.4, "logprob": -0.916291}]
-    mem_ev = data["events"][types.index("memory_applied")]
-    assert mem_ev["cards"][0]["relevance"] == 0.81
     assert data["events"][-1]["finish_reason"] == "stop"
     assert data["events"][-1]["truncated"] is False
 
