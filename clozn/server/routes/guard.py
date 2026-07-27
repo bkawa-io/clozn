@@ -5,7 +5,7 @@ persisted through clozn.memory.mode's atomic settings store -- see clozn._io.ato
 generation_guard.parse_guard_spec falls back to on every /v1/chat/completions request whose body omits
 `clozn_guard` entirely. Before this route existed, GUARD_SETTING was only ever READ by that fallback, never
 WRITTEN by any HTTP route -- there was no way to toggle the guard and have it stick (see
-studio/app/behavior.mjs's prior "declared skeleton" note for the disposition-guard section).
+studio-frontend/src/features/behavior/Behavior.tsx's "declared skeleton" note for the disposition-guard section).
 
 PRECEDENCE (see generation_guard.parse_guard_spec's own docstring -- restated here since it is exactly
 what this route can and cannot change): a request's own explicit `clozn_guard` field on

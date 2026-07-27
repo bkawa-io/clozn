@@ -3,7 +3,7 @@
 Returns clozn.models.inventory.inventory() -- path, filename, size_bytes, quant (best-effort, from the
 filename), and sha256 (only when already cached; never computed inline -- see that module's docstring for
 why a web request must not hash a multi-GB file). Before this route existed, no server route listed the
-GGUFs on disk at all; studio/app/model.mjs named the CLI (`clozn models`) instead of drawing a fake list
+GGUFs on disk at all; the Model surface named the CLI (`clozn models`) instead of drawing a fake list
 (see that file's prior "declared skeleton" note).
 
 LISTING ONLY. There is deliberately no load/switch/pull route here -- which model is actively being served

@@ -435,7 +435,7 @@ def parse_guard_spec(body: Any) -> Optional[dict]:
 # =================================================================================================
 # PERSISTED SERVER-WIDE DEFAULT -- clozn.server.routes.guard's GET/POST /guard/mode reads and writes
 # through these two functions. Added so the guard has a toggle that STICKS (previously GUARD_SETTING was
-# only ever read here, never written by any HTTP route -- see studio/app/behavior.mjs's prior "declared
+# only ever read here, never written by any HTTP route -- see the Behavior surface's "declared
 # skeleton" note). Nothing about parse_guard_spec's own precedence changes: an explicit per-request
 # `clozn_guard` field on /v1/chat/completions ALWAYS wins over whatever is persisted here, including an
 # explicit falsy value meaning "opted out this one call even though the server default is on" -- this

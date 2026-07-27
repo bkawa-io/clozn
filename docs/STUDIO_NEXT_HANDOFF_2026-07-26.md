@@ -289,12 +289,24 @@ estimate. Add schema and route tests before drawing it in Studio.
 ## 6. Known limitations
 
 1. `clozn studio --open` still opens the legacy app.
-   - `clozn/server/static.py` sets `APP_INDEX = "/app/index.html"`.
-   - `clozn/cli/commands/studio.py` opens the server root.
-   - The new app is explicitly opened at `/next/index.html`.
-   - Promote the new app only after packaging and static-serving tests cover the compiled assets.
-2. The old framework-free frontend under `studio/app/` is still present and remains the default.
-   Do not delete it as part of an unrelated UI change.
+   - ~~`clozn/server/static.py` sets `APP_INDEX = "/app/index.html"`.~~
+     **DONE (2026-07-26):** `APP_INDEX = "/next/index.html"`. "/" now serves this app.
+   - `clozn/cli/commands/studio.py` opens the server root, so it inherits the redirect.
+   - ~~Promote the new app only after packaging and static-serving tests cover the compiled assets.~~
+     **Both preconditions were met before promoting, not waived:**
+     *Packaging* — verified against a CLEAN `pip wheel` build: `clozn/studio/next/index.html` and both
+     hashed assets are in the wheel. (setup.py's `_asset_subpackages()` walks the tree, so it picked
+     up `next/` with no config change. Note: the first check was contaminated by a stale `build/lib/`
+     that shipped a file deleted commits earlier — always `rm -rf build/` before trusting a wheel.)
+     *Static-serving* — `tests/test_studio_static.py` reads the committed `index.html`, resolves every
+     asset reference the way a browser would, and requires each to be served. It also asserts the
+     references stay RELATIVE, which is what makes serving from `/next/` work at all.
+2. ~~The old framework-free frontend under `studio/app/` is still present and remains the default.~~
+   **REMOVED (2026-07-26), deliberately, not as a side effect.** BK chose this app as the one going
+   forward. Before deleting: confirmed no test pinned `studio/app/` (unlike the heavn shell, which had
+   18 contract tests), and confirmed all 21 endpoints this app calls are served — including
+   `/runs/<id>/fork`, which had been kept back for exactly this reason. The five backend docstrings
+   that named `studio/app/*.mjs` as their caller now name the `studio-frontend/` surface instead.
 3. Model Inventory depends on `GET /models/local`. Some running gateways do not expose the route; the
    UI reports it unavailable and does not fabricate load or switch controls.
 4. There is no model load/switch route, so Model Inventory is read-only.
@@ -388,7 +400,7 @@ pnpm build
 
 cd ..
 .venv/bin/python tests/test_studio.py
-node --check studio/app/*.mjs
+python -m pytest tests/test_studio_static.py -q    # the committed bundle is actually servable
 git diff --check
 ```
 
