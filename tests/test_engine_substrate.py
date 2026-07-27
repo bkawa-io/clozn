@@ -934,6 +934,33 @@ def test_engine_complete_traced_sends_the_resolved_sampler_params(iso, fake_engi
     assert params["top_k"] == 40 and params["top_p"] == 0.9
 
 
+def test_engine_complete_traced_refuses_to_synthesize_text_from_a_malformed_reply(iso):
+    """REGRESSION: a worker reply with no usable `choices` must raise, never become model text.
+
+    The fallback path used to end `return (ch[0].get("text","") if ch else str(r)), ...` -- so an
+    engine reply like {"nope": True} came back as the literal string "{'nope': True}" AS THE
+    MODEL'S ANSWER. fork() then built and STORED a child run whose response was parent-prefix +
+    forced token + that repr, reported as a successful fork. Fabricating output is the one failure
+    mode this codebase cannot have; a malformed reply is a protocol violation and must fail loudly."""
+    class MalformedEngine:
+        timeout = 5
+        base = "http://127.0.0.1:9"          # unroutable -> the streaming attempt fails, fallback runs
+        def complete(self, prompt, **params):
+            return {"nope": True}
+
+    with pytest.raises(ValueError, match="no usable 'choices'"):
+        cs._engine_complete_traced(MalformedEngine(), "hello", 16, {})
+
+    class NoChoicesButOtherwiseSane:
+        timeout = 5
+        base = "http://127.0.0.1:9"
+        def complete(self, prompt, **params):
+            return {"choices": [], "usage": {"prompt_tokens": 3}}
+
+    with pytest.raises(ValueError, match="no usable 'choices'"):
+        cs._engine_complete_traced(NoChoicesButOtherwiseSane(), "hello", 16, {})
+
+
 # ==================================================================================== RequestContext (backlog #2: request isolation)
 # chat()'s piecemeal self._last_generation_meta/_last_finish_reason/_last_diverged/_last_diverged_at
 # writes were consolidated onto ONE clozn.server.request_context.RequestContext, published as

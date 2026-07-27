@@ -118,8 +118,12 @@ def test_fork_mid_position_splices_prefix_and_forced_piece(store):
     assert child["parent_run_id"] == "run_parent0"
     assert child["source"] == "fork"
     assert child["client"] == "studio"
+    # trace_provenance records WHY the child did or didn't get a spliced trace. Under a fake
+    # substrate the traced seam is unavailable, so no continuation steps are captured and there is
+    # nothing to explain -- None is the honest value here, not a missing key.
     assert child["changes_applied"] == {"fork": {"position": 1, "token": " 2",
-                                                 "was_recorded_alternative": True}}
+                                                 "was_recorded_alternative": True,
+                                                 "trace_provenance": None}}
     assert child["prefix_kept"] == "One"
     assert child["forked_from_piece"] == " two"
     assert "greedy" in child["note"]
@@ -331,7 +335,8 @@ def test_route_happy_path_returns_child(served):
     assert h.body["prefix_kept"] == "One"
     assert h.body["forked_from_piece"] == " two"
     assert h.body["changes_applied"]["fork"] == {"position": 1, "token": " 2",
-                                                 "was_recorded_alternative": True}
+                                                 "was_recorded_alternative": True,
+                                                 "trace_provenance": None}
     assert h.body["retokenized"] is True                   # FakeSub has no score seam -> flagged
     assert sub.engine.calls[-1]["prompt"] == FINAL_PROMPT + "One" + " 2"
 

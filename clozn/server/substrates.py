@@ -1383,4 +1383,16 @@ def _engine_complete_traced(engine, prompt, max_tokens, kw, sample=None, usage_o
     ch = r.get("choices") if isinstance(r, dict) else None
     finish = ch[0].get("finish_reason") if (ch and isinstance(ch[0], dict)) else None
     divinfo = (r.get("diverged"), r.get("diverged_at")) if isinstance(r, dict) else (None, None)
-    return (ch[0].get("text", "") if ch else str(r)), [], finish, divinfo
+    if not (isinstance(ch, list) and ch and isinstance(ch[0], dict)):
+        # A reply with no usable `choices` is a worker protocol violation, not a generation. This
+        # used to `return str(r)` -- which handed the caller a stringified dict AS THE MODEL'S TEXT,
+        # so a malformed engine reply became a plausible-looking answer (and, via fork(), a stored
+        # child run built on it). Fabricating output is the one thing this codebase must not do:
+        # fail loudly instead. Callers that can degrade gracefully already catch (fork() falls back
+        # to _complete_greedy, which independently rejects this shape); the rest surface a clean
+        # error rather than a confident lie.
+        raise ValueError(
+            "engine reply has no usable 'choices' -- refusing to synthesize text from "
+            f"{type(r).__name__}"
+        )
+    return ch[0].get("text", ""), [], finish, divinfo
