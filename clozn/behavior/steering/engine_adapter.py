@@ -45,6 +45,11 @@ class EngineSteer:
         self.vecs = {}
         self.custom = {}
         self.strength = {}
+        # This exact model's dial calibration, installed by load_calibration(). EMPTY IS THE SAFE
+        # DEFAULT and is what an unswept model keeps: ceiling_for() then enforces UNSAFE_STRENGTH
+        # instead of the axis's declared max. Nothing here is inferred from another model -- a
+        # calibration is only ever valid for the exact GGUF it was swept on.
+        self.calibration: dict = {}
         self.base, self.resid_norm = 1.0, 0.0
         self.ready = False
         # J-transport config: OFF by default (see class docstring) -- enable_j_transport() flips
@@ -220,24 +225,79 @@ class EngineSteer:
         except Exception:
             pass
 
+    def ceiling_for(self, name):
+        """The strength ceiling actually enforced for one dial, and why. Returns (max, calibrated).
+
+        THREE cases, in order:
+          1. This exact model has a calibration entry with a usable_max -> use it. That number came
+             from a coherence-gated sweep ON THIS MODEL and is the only trustworthy ceiling.
+          2. Calibrated but swept-and-found-unusable (usable_max None) -> fall back to case 3 rather
+             than the axis's optimistic declared max.
+          3. NO calibration for this model -> UNSAFE_STRENGTH, not the axis's declared max.
+
+        Case 3 is the fix for a real fail-open: axes.AXES declares max 1.5 for every dial, that 1.5
+        was only ever validated on the model it was calibrated against, and the uncalibrated path
+        served it anyway. Measured on Qwen2.5-7B-Q4 with no calibration: 0.25 was coherent but inert,
+        0.5 already showed a repeated-4gram rate of 0.215, and 1.5 produced pure repetition loops
+        while LOOKING like a 50% length reduction. Offering 1.5 to a model nobody swept is offering a
+        number known to break some models.
+
+        UNSAFE_STRENGTH (0.6) is a CEILING, NOT A GUARANTEE -- it is this codebase's own documented
+        "validated working range" bound, and the 7B measurement above suggests some models derail
+        below it. It is used here because inventing a lower number without a sweep would be making up
+        evidence. The real answer is a per-model calibration; this only stops the worst case."""
+        entry = self.calibration.get(name) or {}
+        usable = entry.get("usable_max")
+        if usable is not None:
+            return float(usable), True
+        return float(UNSAFE_STRENGTH), False
+
+    def load_calibration(self, table):
+        """Install this exact model's dial calibration ({dial: {"usable_max", ...}}). Anything falsy
+        or malformed leaves the table empty, which means every dial takes the uncalibrated ceiling --
+        the safe direction to fail."""
+        self.calibration = dict(table) if isinstance(table, dict) else {}
+        return self.calibration
+
     def set(self, name, value):
-        """Set a dial's strength (capped to its per-axis max) and return a warning string (or None) --
-        the single choke point every caller (`/steer/set`, `/steer/check`, profiles, replay nudges,
-        preference auto-apply) goes through, so the above-UNSAFE_STRENGTH warning reaches all of them
-        without duplicating the message. NEVER clamps to the safe band itself -- see UNSAFE_STRENGTH's
-        docstring: capping what a requested strength *does* is a product decision this function doesn't
-        get to make on its own."""
-        mx = (axes.AXES.get(name) or self.custom.get(name) or {}).get("max", 1.5)
-        capped = max(-mx, min(mx, float(value)))
+        """Set a dial's strength (capped to the ceiling from ceiling_for()) and return a warning
+        string (or None) -- the single choke point every caller (`/steer/set`, `/steer/check`,
+        profiles, replay nudges) goes through, so the message reaches all of them without duplication.
+
+        Clamping to the uncalibrated ceiling IS now this function's job. That was previously deferred
+        as "a product-behavior call the user hasn't made"; the call has since been made -- fail
+        closed. A request above the ceiling is honoured up to the ceiling and warned about, never
+        silently applied at full strength."""
+        declared = float((axes.AXES.get(name) or self.custom.get(name) or {}).get("max", 1.5))
+        ceiling, calibrated = self.ceiling_for(name)
+        mx = min(declared, ceiling)
+        requested = float(value)
+        capped = max(-mx, min(mx, requested))
+        # Warn ONLY when the uncalibrated ceiling is what bit -- i.e. this dial's own declared max
+        # would have allowed the request and the missing calibration is the reason it didn't. Clamping
+        # to a dial's OWN declared max was always silent and stays silent; that is not the bug being
+        # fixed here, and making it noisy would change a contract callers already depend on.
+        if not calibrated and ceiling < declared and abs(requested) > ceiling + 1e-9:
+            msg = (f"'{name}' requested at {requested:+.2f}, clamped to {capped:+.2f}: no calibration "
+                   f"exists for this exact model, so its declared max ({declared}) is not trusted and "
+                   f"the ceiling is {UNSAFE_STRENGTH}. Calibrate this model to unlock its real range.")
+            print(f"[steer] {msg}", file=sys.stderr, flush=True)
+            self.strength[name] = capped
+            return msg
         self.strength[name] = capped
         warning = None
         if abs(capped) > UNSAFE_STRENGTH:
+            # Only reachable now when THIS model's own calibration set a usable_max above 0.6 -- the
+            # uncalibrated path can no longer get here, it clamps at UNSAFE_STRENGTH above. So this is
+            # no longer "you may be about to break your model": it is "your sweep said this is fine,
+            # here is the generic caution anyway". Deliberately not a clamp: a measured usable_max on
+            # this exact model outranks the generic bound.
             warning = (
-                f"'{name}' at {capped:+.2f} is above the validated working range (0.4-0.6): measured "
-                f"degradation (repetition loops, factual drift) begins above ~{UNSAFE_STRENGTH:.1f} "
-                f"(sweep on the 'concise' dial, temp 0 -- clean through 0.6, a repeated-6-gram loop + "
-                f"broken capitalization + factual corruption at 0.8). Not auto-capped -- lower it if you "
-                f"see garbled or repetitive output."
+                f"'{name}' at {capped:+.2f} is above the generic validated band (0.4-0.6), but within "
+                f"THIS model's calibrated usable_max. Degradation (repetition loops, factual drift) is "
+                f"where the generic bound comes from (sweep on 'concise', temp 0 -- clean through 0.6, "
+                f"repeated-6-gram loop + broken capitalization + factual corruption at 0.8). Your "
+                f"model's own sweep takes precedence; lower it if you see garbled output."
             )
             print(f"[steer] WARNING: {warning}", file=sys.stderr, flush=True)
         return warning

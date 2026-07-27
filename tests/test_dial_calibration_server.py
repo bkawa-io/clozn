@@ -120,10 +120,22 @@ def test_dial_calibration_skips_a_malformed_entry_not_the_whole_table(iso, tmp_p
 
 # ==================================================================================== _with_calibration()
 
-def test_with_calibration_no_entry_only_adds_calibrated_false():
+def test_with_calibration_no_entry_caps_max_to_the_enforced_uncalibrated_ceiling():
+    """No calibration for this model -> the slider must advertise the ceiling the API will ENFORCE.
+
+    This previously asserted the axis was returned untouched but for calibrated:False -- i.e. the
+    slider still offered max 1.5 on a model nobody had ever swept, while EngineSteer.set() would
+    later clamp it. A slider that offers a value the API silently refuses is a lie about the
+    instrument, and on a real model (Qwen2.5-7B-Q4) dragging it there produced repetition loops."""
+    from clozn.behavior.steering.engine_adapter import UNSAFE_STRENGTH
     axis = {"name": "warm", "poles": ("warm", "detached"), "value": 0.0, "max": 1.5}
     out = cs._with_calibration(dict(axis), None)
-    assert out == {**axis, "calibrated": False}
+    assert out["calibrated"] is False
+    assert out["max"] == UNSAFE_STRENGTH        # the enforced ceiling, not the declared 1.5
+    assert out["declared_max"] == 1.5           # what it WOULD be if this model were calibrated
+    assert "uncalibrated" in out                # and a reason a UI can actually show
+    # everything else about the axis is untouched
+    assert out["name"] == "warm" and out["poles"] == ("warm", "detached") and out["value"] == 0.0
 
 
 def test_with_calibration_working_dial_caps_max_and_adds_hint_fields():
@@ -148,31 +160,36 @@ def test_with_calibration_never_worked_falls_back_to_declared_max():
 
 # ==================================================================================== /steer/axes end to end
 
-def test_steer_axes_with_no_calibration_file_is_a_strict_noop(iso):
-    """The core regression: with no ~/.clozn/dial_calibration.json, every axis (built-in AND custom) must
-    carry EXACTLY the fields it always has, plus only the additive "calibrated": False -- no regression for
-    a model/install that has never been calibrated."""
+def test_steer_axes_with_no_calibration_file_caps_only_the_over_ceiling_dials(iso):
+    """No ~/.clozn/dial_calibration.json -> every dial is capped at the ENFORCED uncalibrated ceiling.
+
+    Surgical by construction: a dial whose own declared max is already at or under the ceiling is
+    returned untouched, because min(declared, ceiling) == declared. Only the optimistic 1.5 dials
+    move. (This test previously asserted the opposite -- that an uncalibrated install was a strict
+    no-op and warm still advertised 1.5 -- which is precisely the fail-open being fixed.)"""
+    from clozn.behavior.steering.engine_adapter import UNSAFE_STRENGTH
     sub = _bare_substrate(strength={"warm": 0.3},
                           custom={"skeptical": {"poles": ["skeptical", "neutral"], "max": 0.5}})
     result = sub._steer("/steer/axes", {})
     axes = _axes_by_name(result)
 
-    warm = axes["warm"]
-    assert warm["max"] == 1.5                 # AXES["warm"] declares no "max" -> the 1.5 default, unchanged
+    warm = axes["warm"]                        # declares no "max" -> the 1.5 default -> CAPPED
+    assert warm["max"] == UNSAFE_STRENGTH
+    assert warm["declared_max"] == 1.5
     assert warm["value"] == 0.3
     assert warm["poles"] == AXES["warm"]["poles"]
     assert warm["calibrated"] is False
-    assert set(warm.keys()) == {"name", "poles", "value", "max", "calibrated"}
+    assert set(warm.keys()) == {"name", "poles", "value", "max", "calibrated",
+                                "declared_max", "uncalibrated"}
 
-    candid = axes["candid"]
-    assert candid["max"] == 0.45              # its own declared cap, untouched
+    candid = axes["candid"]                    # 0.45 <= ceiling -> genuinely untouched
+    assert candid["max"] == 0.45
     assert candid["calibrated"] is False
 
-    skeptical = axes["skeptical"]
+    skeptical = axes["skeptical"]              # 0.5 <= ceiling -> genuinely untouched
     assert skeptical["max"] == 0.5
     assert skeptical["custom"] is True
     assert skeptical["calibrated"] is False
-    assert set(skeptical.keys()) == {"name", "poles", "value", "max", "custom", "calibrated"}
 
     assert result["ready"] is True
     assert result["substrate"] == "faketest"

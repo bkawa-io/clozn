@@ -191,10 +191,37 @@ def test_set_still_caps_a_builtin_axis_by_its_own_axes_max():
     assert es.strength["candid"] == 0.45
 
 
-def test_set_still_falls_back_to_1_5_for_a_builtin_axis_with_no_explicit_max():
+def test_uncalibrated_model_clamps_to_the_ceiling_not_the_declared_max():
+    """An axis with no explicit max declares 1.5 -- but on a model with NO calibration, 1.5 is a
+    number nobody has ever validated here, and shipping it produced repetition loops on a real GGUF.
+    Uncalibrated therefore clamps to UNSAFE_STRENGTH and says so, rather than honouring 1.5."""
+    from clozn.behavior.steering.engine_adapter import UNSAFE_STRENGTH
     es = EngineSteer(_FakeEC())
-    es.set("warm", 99.0)             # AXES["warm"] has no "max" key -> generic default
-    assert es.strength["warm"] == 1.5
+    assert es.calibration == {}                      # nothing swept this model
+    warning = es.set("warm", 99.0)
+    assert es.strength["warm"] == UNSAFE_STRENGTH
+    assert warning and "no calibration exists for this exact model" in warning
+
+
+def test_a_calibrated_model_gets_its_own_measured_ceiling_back():
+    """The whole point of calibrating: the per-model sweep OUTRANKS the generic bound, in both
+    directions -- it can raise a dial above 0.6 or hold it below."""
+    es = EngineSteer(_FakeEC())
+    es.load_calibration({"warm": {"usable_max": 1.1}, "formal": {"usable_max": 0.3}})
+    es.set("warm", 99.0)
+    assert es.strength["warm"] == 1.1                # raised above the generic 0.6, on evidence
+    es.set("formal", 99.0)
+    assert es.strength["formal"] == 0.3              # held below it, also on evidence
+
+
+def test_calibration_is_never_inherited_from_another_model():
+    """load_calibration(garbage) must leave the table empty so the SAFE ceiling applies. A
+    calibration is only ever valid for the exact GGUF it was swept on."""
+    es = EngineSteer(_FakeEC())
+    for junk in (None, [], "concise", 42):
+        es.load_calibration(junk)
+        assert es.calibration == {}
+    assert es.ceiling_for("warm") == (0.6, False)
 
 
 # ==================================================================================== steer_vector()

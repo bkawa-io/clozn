@@ -466,7 +466,20 @@ def _with_calibration(axis, c):
     None (a dial swept but never found usable), plus "usable_range"/"derail_point"/"works" for the UI to
     grey out a dead dial or show its working range."""
     if not c:
+        # UNCALIBRATED -> advertise the ceiling that EngineSteer.set() will actually ENFORCE, not the
+        # axis's declared max. These two used to disagree: the slider offered 1.5 while nothing had
+        # ever swept this model, and a user who dragged it there got repetition loops. (Measured on
+        # Qwen2.5-7B-Q4: coherent at 0.25, already degenerate at 0.5, pure loops at 1.5 while looking
+        # like a 50% length win.) A slider must never offer a value the API will silently clamp.
+        from clozn.behavior.steering.engine_adapter import UNSAFE_STRENGTH
         axis["calibrated"] = False
+        axis["declared_max"] = axis.get("max")
+        axis["max"] = min(float(axis.get("max", 1.5)), float(UNSAFE_STRENGTH))
+        axis["uncalibrated"] = (
+            f"No calibration for this exact model, so this dial is capped at {UNSAFE_STRENGTH} "
+            f"instead of its declared {axis['declared_max']}. Calibrate this model to unlock its "
+            f"real range."
+        )
         return axis
     axis["max"] = c["usable_max"] if c.get("usable_max") is not None else axis["max"]
     axis["usable_range"] = c.get("usable_range")

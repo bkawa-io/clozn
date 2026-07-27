@@ -21,6 +21,29 @@ import time
 
 from clozn.server.config import REPO_ROOT, DEMO                        # noqa: F401
 from clozn.server import app as ctx   # the seam: live server state + patchable helpers (see docstring)
+
+
+def _load_calibration_file(path: str) -> dict:
+    """Read ONE exact model's dial calibration off disk. Deliberately takes a full path instead of a
+    dial name + global lookup: the caller already knows which GGUF it is asking about, and routing
+    through global state is what let one model inherit another's ceilings. Missing/broken -> {},
+    which means "uncalibrated" and therefore the conservative ceiling -- the safe direction to fail.
+
+    Accepts either a flat {dial: {...}} file or the raw sweep's {"dials": {dial: {...}}} shape, and
+    keeps only what a ceiling decision needs."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except Exception:
+        return {}
+    table = raw.get("dials", raw) if isinstance(raw, dict) else {}
+    out = {}
+    for name, entry in (table or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        works = entry.get("works", entry.get("range_valid", True))
+        out[str(name)] = {"usable_max": entry.get("usable_max"), "works": bool(works)}
+    return out
 from clozn.server.request_context import RequestContext   # backlog #2: per-request isolation (see EngineSubstrate)
 
 class Substrate:
@@ -442,6 +465,10 @@ class EngineSubstrate(Substrate):
             try:                                  # they show up in /steer/axes immediately (their direction
                 self.steer.load_library(ctx._pers("studio_library.json"))   # vectors are computed lazily by compute())
                 self.steer.load_custom(ctx._pers(f"studio_custom_{self.name}.json"))  # + the user's own custom dials
+                # NOTE: the dial CALIBRATION is deliberately NOT loaded here -- see the identity
+                # resolver below. At construction time the model digest is unknown, and
+                # _dial_calibration() would silently fall back to the legacy root file (another
+                # model's numbers). It loads once this exact GGUF's sha256 is known.
             except Exception:
                 pass
         self._mem = _EngineMemory()
@@ -495,6 +522,24 @@ class EngineSubstrate(Substrate):
                 self.steer.load_state(self._pers_steer_val)
             except Exception:
                 pass
+            try:
+                # Resolve the calibration from THIS substrate's OWN sha256, explicitly -- never via
+                # ctx._dial_calibration(), and never via _model_scoped_path().
+                #
+                # Why: _model_scoped_path() reads the MODULE-GLOBAL ctx.SUB to find the digest. While
+                # this substrate is still resolving its own identity, ctx.SUB is not yet bound to it,
+                # so the digest reads as None and the lookup silently falls back to the legacy root
+                # ~/.clozn/dial_calibration.json -- i.e. whatever model was calibrated last.
+                #
+                # Caught live: a Qwen2.5-7B-Q4 with no calibration of its own inherited the 9B's
+                # `concise: usable_max 1.5` and accepted 1.5 as "within THIS model's calibrated
+                # usable_max", while /steer/axes (called later, once ctx.SUB was bound) correctly
+                # reported calibrated:false. Cross-model contamination is the exact failure this
+                # whole change exists to prevent, so the path must not depend on global state.
+                path = ctx._pers(os.path.join("models", sha256, "dial_calibration.json"))
+                self.steer.load_calibration(_load_calibration_file(path))
+            except Exception:
+                self.steer.load_calibration({})      # unreadable -> uncalibrated -> safe ceiling
             # J-TRANSPORT (engine_adapter.EngineSteer's class docstring / jlens_transport.py, see
             # notes/JLENS_SAE_FINDINGS.md finding #1): auto-enable using the running engine's OWN
             # reported model digest -- the strongest identity this substrate actually has (no local

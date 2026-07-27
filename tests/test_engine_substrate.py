@@ -252,11 +252,14 @@ def test_dial_persistence_activates_once_identity_resolves(iso, monkeypatch):
     path = sub._pers_steer
     assert path is not None
 
-    sub.steer.set("warm", 0.7)
+    # 0.5 is inside the uncalibrated ceiling (0.6); this test is about PERSISTENCE, not caps, so it
+    # uses a value the cap will not touch. (It used to set 0.7, which now clamps -- see
+    # test_engine_library_dials.py for the cap's own coverage.)
+    sub.steer.set("warm", 0.5)
     sub.steer.save_state(sub._pers_steer)                # exactly what /steer/set's route code does
     assert os.path.isfile(path)
     with open(path, encoding="utf-8") as f:
-        assert json.load(f)["warm"] == 0.7
+        assert json.load(f)["warm"] == 0.5
 
 
 # ==================================================================================== chat() basics
