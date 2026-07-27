@@ -266,8 +266,9 @@ int main(int argc, char** argv) {
             {"state_stream", true},       // protocol:true reshapes frames to StateStep
             {"sampling", true},           // temperature/top_k/top_p/rep_penalty/seed
             {"steering", true},           // steer:{concept,coef,layer} control vector
-            {"infill", !ar_mode},         // /v1/infill (fill-in-the-middle) -- diffusion only
-            {"revise", !ar_mode},         // /v1/revise -- diffusion only
+            {"infill", false},            // /v1/infill (fill-in-the-middle) was diffusion-only; the
+                                          // diffusion generator was removed (THE_CUT) -- always off now
+            {"revise", false},            // /v1/revise was diffusion-only; the route itself was removed
             {"sae", sae_on},              // on-device SAE feature readout (--sae build)
             {"jlens", jlens.on},          // live Jacobian-lens "disposed to say" readout
             {"readout", true},            // Phase 2.3 multi-observer readout plane (readout:{...})
@@ -340,9 +341,12 @@ int main(int argc, char** argv) {
             res.set_content(json{{"error", "invalid JSON body"}}.dump(), "application/json");
             return;
         }
-        if (ar_mode && is_infill) {  // infill (fill-in-the-middle) is structurally diffusion-only
+        if (is_infill) {  // infill (fill-in-the-middle) was structurally diffusion-only; the diffusion
+            // generator was removed with the diffusion program (THE_CUT) -- there is no longer any
+            // mode this can succeed in.
             res.status = 400;
-            res.set_content(json{{"error", "infill requires a diffusion model; this is autoregressive"}}.dump(),
+            res.set_content(json{{"error", "infill is no longer supported -- diffusion generation was "
+                                           "removed from this engine build"}}.dump(),
                             "application/json");
             return;
         }
@@ -499,8 +503,6 @@ int main(int argc, char** argv) {
             }
         }
         const GenerateConfig cfg = config_from(body);
-        const CacheConfig cache = cache_from(body);
-        const ReviseConfig revise = revise_from(body);
         const SampleConfig sample = sample_from(body);
         const bool stream = body.value("stream", false);
         // Phase 1.2 state-stream protocol: protocol:true reshapes the SSE frames to StateStep; state:"full"
@@ -720,7 +722,7 @@ int main(int argc, char** argv) {
 
         // One call into the runtime on a POOLED context (acquire blocks until one is free, so N
         // workers run N requests concurrently; the Lease releases it on any exit).
-        auto run = [&pool, &concept_probes, &steer_probes, &sae_serve, prompt_ids, suffix_ids, gap, cfg, cache, revise, sample, is_infill, ar_mode, features, steer_concept, steer_coef, steer_layer, prefix_embd, prefix_rows, steer_vec, reference_tokens, lens_on, lens_layer, plane, readout_layers, write_reqs, chat_grammar, want_ckpt, ckpt_id_out, &ckpt_mtx, &checkpoints](
+        auto run = [&pool, &concept_probes, &steer_probes, &sae_serve, prompt_ids, suffix_ids, gap, cfg, sample, is_infill, ar_mode, features, steer_concept, steer_coef, steer_layer, prefix_embd, prefix_rows, steer_vec, reference_tokens, lens_on, lens_layer, plane, readout_layers, write_reqs, chat_grammar, want_ckpt, ckpt_id_out, &ckpt_mtx, &checkpoints](
                        const std::function<void(const Event&)>& on_event) {
             ContextPool::Lease lease = pool.acquire();
             // white-box tap on for this request (off by default); the live lens implies it — the
@@ -801,14 +803,19 @@ int main(int argc, char** argv) {
                 (*lease).set_emit_activations(false);  // reset before returning the pooled context
             };
             try {
-                GenerateResult r = ar_mode
-                       ? generate_ar(*lease, prompt_ids, cfg, ev, sample, probes,
+                // Diffusion generation was removed from this engine build (THE_CUT): is_infill is
+                // already rejected above, and ar_mode is the only mode with a generator left. A model
+                // loaded with --diffusion/--mask-token has no generator to fall back to any more --
+                // fail honestly rather than silently misbehave.
+                if (!ar_mode) {
+                    throw std::invalid_argument(
+                        "diffusion generation was removed from this engine build; only autoregressive "
+                        "models are supported");
+                }
+                GenerateResult r = generate_ar(*lease, prompt_ids, cfg, ev, sample, probes,
                                      prefix_embd.empty() ? nullptr : &prefix_embd, prefix_rows,
                                      reference_tokens.empty() ? nullptr : &reference_tokens,
-                                     chat_grammar ? &*chat_grammar : nullptr)
-                       : (is_infill
-                            ? infill(*lease, prompt_ids, suffix_ids, gap, cfg, nullptr, ev, revise, sample, probes)
-                            : generate(*lease, prompt_ids, cfg, cache, nullptr, ev, revise, sample, probes));
+                                     chat_grammar ? &*chat_grammar : nullptr);
                 if (want_ckpt && ar_mode) {
                     // Top-up: the loop's final committed token may not be decoded into the KV
                     // yet (it breaks before the decode when max_new is reached). Decode it with
@@ -1318,346 +1325,10 @@ int main(int argc, char** argv) {
     svr.Post("/v1/infill",
              [&](const httplib::Request& req, httplib::Response& res) { handle(req, res, true); });
 
-    // Revise a selection: {text, spans:[{start,end} byte offsets], steps, topk, revise, tau_revise}.
-    // The highlighted token spans are re-masked and re-predicted in place under full bidirectional
-    // attention (the generalized cloze op, denoise()). SSE streams the §5.1 spine with a board layout.
-    svr.Post("/v1/revise", [&](const httplib::Request& req, httplib::Response& res) {
-        if (ar_mode) {  // in-place re-mask + re-predict needs bidirectional attention (diffusion-only)
-            res.status = 400;
-            res.set_content(json{{"error", "revise requires a diffusion model; this is autoregressive"}}.dump(),
-                            "application/json");
-            return;
-        }
-        json body = json::parse(req.body, nullptr, /*allow_exceptions=*/false);
-        if (body.is_discarded()) {
-            res.status = 400;
-            res.set_content(json{{"error", "invalid JSON body"}}.dump(), "application/json");
-            return;
-        }
-        const std::string text = body.value("text", std::string());
-        if (text.empty()) {
-            res.status = 400;
-            res.set_content(json{{"error", "empty text"}}.dump(), "application/json");
-            return;
-        }
-        std::vector<std::pair<int, int>> spans;
-        if (body.contains("spans") && body["spans"].is_array())
-            for (const auto& s : body["spans"]) {
-                const int a = s.value("start", 0), b = s.value("end", 0);
-                if (b > a) spans.emplace_back(a, b);
-            }
-        if (spans.empty()) {
-            res.status = 400;
-            res.set_content(json{{"error", "no spans selected to revise"}}.dump(), "application/json");
-            return;
-        }
-        int grow = body.value("grow", 0);
-        if (grow < 0) grow = 0;
-        std::vector<int> board = masked_board_from_spans(*model, text, spans, mask_token, grow);
-        int holes = 0;
-        for (int id : board)
-            if (id == mask_token) ++holes;
-        if (holes == 0) {
-            res.status = 400;
-            res.set_content(json{{"error", "selection covered no whole token"}}.dump(),
-                            "application/json");
-            return;
-        }
-        const GenerateConfig cfg = config_from(body);
-        const ReviseConfig revise = revise_from(body);
-        const SampleConfig sample = sample_from(body);
-        const bool stream = body.value("stream", false);
-        const bool features = body.value("features", false);
-        std::string steer_concept; double steer_coef = 0.0; int steer_layer = 0;
-        if (body.contains("steer") && body["steer"].is_object()) {
-            steer_concept = body["steer"].value("concept", std::string());
-            steer_coef = body["steer"].value("coef", 0.0);
-            steer_layer = body["steer"].value("layer", 0);
-        }
-        std::vector<float> steer_vec;
-        if (body.contains("steer_vec") && body["steer_vec"].is_array()) {
-            steer_vec = body["steer_vec"].get<std::vector<float>>();
-        }
-
-        auto run = [&pool, &concept_probes, &steer_probes, &sae_serve, board, cfg, revise, sample, features, steer_concept, steer_coef, steer_layer, steer_vec](const std::function<void(const Event&)>& on_event) {
-            ContextPool::Lease lease = pool.acquire();
-            (*lease).set_emit_activations(features);
-            const bool sae_on = features && sae_serve.on;
-            const int default_tap = (*lease).tap_layer();
-            if (sae_on) (*lease).set_tap_layer(sae_serve.layer);
-            const std::function<void(const Event&)> ev = with_sae_readout(on_event, sae_serve, sae_on);
-            const ConceptProbes* probes = (features && concept_probes.ready()) ? &concept_probes : nullptr;
-            const bool steering = !steer_concept.empty() && steer_coef != 0.0 && steer_probes.ready();
-            const bool raw_steer = !steer_vec.empty();
-            if (steering || raw_steer) {
-                const int nl = (*lease).n_layer();
-                int lo, hi;
-                if (steer_layer >= 1) { lo = hi = (steer_layer < nl ? steer_layer : nl - 1); }
-                else { const int tl = nl * 2 / 3;
-                       lo = (tl - 2 > 1 ? tl - 2 : 1); hi = (tl + 2 < nl ? tl + 2 : nl - 1); }
-                if (lo < 1) lo = 1;
-                if (steering) {
-                    (*lease).set_steer(build_steer_cvec(steer_probes, steer_concept, steer_coef, lo, hi, nl), lo, hi);
-                } else {
-                    const int ne = static_cast<int>(steer_vec.size());
-                    std::vector<float> cvec(static_cast<size_t>(ne) * nl, 0.0f);
-                    const double c = steer_coef != 0.0 ? steer_coef : 1.0;
-                    for (int L = lo; L <= hi; ++L) {
-                        if (L < 1 || L >= nl) continue;
-                        float* slice = cvec.data() + static_cast<size_t>(L - 1) * ne;
-                        for (int i = 0; i < ne; ++i) slice[i] = static_cast<float>(c * steer_vec[i]);
-                    }
-                    (*lease).set_steer(cvec, lo, hi);
-                }
-            }
-            auto cleanup = [&]() {
-                if (steering || raw_steer) (*lease).clear_steer();
-                if (sae_on) (*lease).set_tap_layer(default_tap);
-                (*lease).set_emit_activations(false);
-            };
-            try {
-                auto r = denoise(*lease, board, cfg, nullptr, ev, revise, sample, probes);
-                cleanup();
-                return r;
-            } catch (...) {
-                cleanup();
-                throw;
-            }
-        };
-        const std::string id = make_id("revise-");
-
-        if (stream) {
-            res.set_chunked_content_provider(
-                "text/event-stream",
-                [run, id, model, board, mask_token, &cancel_registry](size_t, httplib::DataSink& sink) {
-                    auto write = [&](const std::string& s) { return sink.write(s.data(), s.size()); };
-                    StreamEnvelope env{id, write};        // stamps req + monotonic seq on every frame
-                    env.cancel = cancel_registry.register_request(id);      // cooperative cancel (see
-                    CancelRegistry::Guard cancel_guard{cancel_registry, id};  // server_shared.hpp); unregisters on any exit
-                    try {                                 // a generator throw here would otherwise escape into
-                                                          // httplib's worker thread -> abort(); catch it below.
-                    auto on_event = [&](const Event& e) {
-                        env.check_cancelled();
-                        env.frame_str(sse_data_revise(e, *model, board, mask_token));
-                    };
-                    GenerateResult r = run(on_event);
-                    json final_frame = {{"id", id}, {"object", "revise"},
-                                        {"choices", json::array({{{"text", r.text}, {"index", 0},
-                                                     {"finish_reason", finish_reason(r.reason)}}})}};
-                    env.frame(final_frame);
-                    env.done();
-                    sink.done();
-                    return true;
-                    } catch (const GenerationCancelled&) {
-                        // Cooperative cancel fired -- stop, and say so honestly (never "generation
-                        // failed"); run() already restored the pooled context via its own catch(...).
-                        env.frame(json{{"cancelled", true}, {"id", id}});
-                        env.done();
-                        sink.done();
-                        return true;
-                    } catch (const std::exception& e) {
-                        // The generator threw (n_ctx exceeded, decode failure, ...). Emit a clean error frame
-                        // and close the stream gracefully, mirroring /v1/completions' streaming guard.
-                        env.frame(json{{"error", std::string("generation failed: ") + e.what()}});
-                        env.done();
-                        sink.done();
-                        return true;
-                    } catch (...) {
-                        env.frame(json{{"error", "generation failed"}});
-                        env.done();
-                        sink.done();
-                        return true;
-                    }
-                });
-            return;
-        }
-
-        // Non-streaming: run() can throw on a genuinely exceptional decode state (a prompt that exceeds
-        // n_ctx, a llama_decode failure). Catch it here so it becomes a clean 400 JSON error, NEVER an
-        // uncaught throw that cpp-httplib turns into an empty-body 500 (mirrors /v1/completions' guard).
-        try {
-            GenerateResult r = run({});
-            json resp = {
-                {"id", id}, {"object", "revise"},
-                {"choices", json::array({{{"text", r.text}, {"index", 0},
-                             {"finish_reason", finish_reason(r.reason)}}})},
-                {"usage", {{"completion_tokens", r.new_tokens}, {"steps_total", r.steps_total}}},
-            };
-            res.set_content(dump_json(resp), "application/json");
-        } catch (const std::exception& e) {
-            res.status = 400;
-            res.set_content(dump_json(json{{"error", std::string("generation failed: ") + e.what()}}),
-                            "application/json");
-        }
-    });
-
-    // /v1/board — restore/branch a board SNAPSHOT. Accepts a raw board (token ids; mask_token marks
-    // holes), denoises it under full bidirectional attention, returns the resolved board. The
-    // white-box "restore" verb: snapshot a board from any response, edit positions (set a slot to the
-    // mask id to re-open it), POST it here to re-resolve. The raw-board generalization of /v1/revise
-    // (which derives the masked board from text + byte spans). {board:[ids], steps, topk, block_len,
-    // revise, tau_revise, temperature, seed, stream}.
-    svr.Post("/v1/board", [&](const httplib::Request& req, httplib::Response& res) {
-        if (ar_mode) {  // restoring/denoising a masked board needs bidirectional attention (diffusion-only)
-            res.status = 400;
-            res.set_content(json{{"error", "board restore requires a diffusion model; this is autoregressive"}}.dump(),
-                            "application/json");
-            return;
-        }
-        json body = json::parse(req.body, nullptr, /*allow_exceptions=*/false);
-        if (body.is_discarded()) {
-            res.status = 400;
-            res.set_content(json{{"error", "invalid JSON body"}}.dump(), "application/json");
-            return;
-        }
-        if (!body.contains("board") || !body["board"].is_array() || body["board"].empty()) {
-            res.status = 400;
-            res.set_content(json{{"error", "'board' must be a non-empty array of token ids"}}.dump(),
-                            "application/json");
-            return;
-        }
-        std::vector<int> board;
-        board.reserve(body["board"].size());
-        for (const auto& v : body["board"]) board.push_back(v.get<int>());
-        int holes = 0;
-        for (int tid : board)
-            if (tid == mask_token) ++holes;
-        if (holes == 0) {
-            res.status = 400;
-            res.set_content(json{{"error", "board has no MASK positions to resolve"}}.dump(),
-                            "application/json");
-            return;
-        }
-        const GenerateConfig cfg = config_from(body);
-        const ReviseConfig revise = revise_from(body);
-        const SampleConfig sample = sample_from(body);
-        const bool stream = body.value("stream", false);
-        const bool features = body.value("features", false);
-        std::string steer_concept; double steer_coef = 0.0; int steer_layer = 0;
-        if (body.contains("steer") && body["steer"].is_object()) {
-            steer_concept = body["steer"].value("concept", std::string());
-            steer_coef = body["steer"].value("coef", 0.0);
-            steer_layer = body["steer"].value("layer", 0);
-        }
-        std::vector<float> steer_vec;
-        if (body.contains("steer_vec") && body["steer_vec"].is_array()) {
-            steer_vec = body["steer_vec"].get<std::vector<float>>();
-        }
-
-        auto run = [&pool, &concept_probes, &steer_probes, &sae_serve, board, cfg, revise, sample, features, steer_concept, steer_coef, steer_layer, steer_vec](const std::function<void(const Event&)>& on_event) {
-            ContextPool::Lease lease = pool.acquire();
-            (*lease).set_emit_activations(features);
-            const bool sae_on = features && sae_serve.on;
-            const int default_tap = (*lease).tap_layer();
-            if (sae_on) (*lease).set_tap_layer(sae_serve.layer);
-            const std::function<void(const Event&)> ev = with_sae_readout(on_event, sae_serve, sae_on);
-            const ConceptProbes* probes = (features && concept_probes.ready()) ? &concept_probes : nullptr;
-            const bool steering = !steer_concept.empty() && steer_coef != 0.0 && steer_probes.ready();
-            const bool raw_steer = !steer_vec.empty();
-            if (steering || raw_steer) {
-                const int nl = (*lease).n_layer();
-                int lo, hi;
-                if (steer_layer >= 1) { lo = hi = (steer_layer < nl ? steer_layer : nl - 1); }
-                else { const int tl = nl * 2 / 3;
-                       lo = (tl - 2 > 1 ? tl - 2 : 1); hi = (tl + 2 < nl ? tl + 2 : nl - 1); }
-                if (lo < 1) lo = 1;
-                if (steering) {
-                    (*lease).set_steer(build_steer_cvec(steer_probes, steer_concept, steer_coef, lo, hi, nl), lo, hi);
-                } else {
-                    const int ne = static_cast<int>(steer_vec.size());
-                    std::vector<float> cvec(static_cast<size_t>(ne) * nl, 0.0f);
-                    const double c = steer_coef != 0.0 ? steer_coef : 1.0;
-                    for (int L = lo; L <= hi; ++L) {
-                        if (L < 1 || L >= nl) continue;
-                        float* slice = cvec.data() + static_cast<size_t>(L - 1) * ne;
-                        for (int i = 0; i < ne; ++i) slice[i] = static_cast<float>(c * steer_vec[i]);
-                    }
-                    (*lease).set_steer(cvec, lo, hi);
-                }
-            }
-            auto cleanup = [&]() {
-                if (steering || raw_steer) (*lease).clear_steer();
-                if (sae_on) (*lease).set_tap_layer(default_tap);
-                (*lease).set_emit_activations(false);
-            };
-            try {
-                auto r = denoise(*lease, board, cfg, nullptr, ev, revise, sample, probes);
-                cleanup();
-                return r;
-            } catch (...) {
-                cleanup();
-                throw;
-            }
-        };
-        const std::string id = make_id("board-");
-
-        if (stream) {
-            res.set_chunked_content_provider(
-                "text/event-stream",
-                [run, id, model, board, mask_token, &cancel_registry](size_t, httplib::DataSink& sink) {
-                    auto write = [&](const std::string& s) { return sink.write(s.data(), s.size()); };
-                    StreamEnvelope env{id, write};        // stamps req + monotonic seq on every frame
-                    env.cancel = cancel_registry.register_request(id);      // cooperative cancel (see
-                    CancelRegistry::Guard cancel_guard{cancel_registry, id};  // server_shared.hpp); unregisters on any exit
-                    try {                                 // a generator throw here would otherwise escape into
-                                                          // httplib's worker thread -> abort(); catch it below.
-                    auto on_event = [&](const Event& e) {
-                        env.check_cancelled();
-                        env.frame_str(sse_data_revise(e, *model, board, mask_token));
-                    };
-                    GenerateResult r = run(on_event);
-                    json final_frame = {{"id", id}, {"object", "board"}, {"board", r.board},
-                                        {"layout", board_layout_json(*model, r.board, mask_token)},
-                                        {"choices", json::array({{{"text", r.text}, {"index", 0},
-                                                     {"finish_reason", finish_reason(r.reason)}}})}};
-                    env.frame(final_frame);
-                    env.done();
-                    sink.done();
-                    return true;
-                    } catch (const GenerationCancelled&) {
-                        // Cooperative cancel fired -- stop, and say so honestly (never "generation
-                        // failed"); run() already restored the pooled context via its own catch(...).
-                        env.frame(json{{"cancelled", true}, {"id", id}});
-                        env.done();
-                        sink.done();
-                        return true;
-                    } catch (const std::exception& e) {
-                        // The generator threw (n_ctx exceeded, decode failure, ...). Emit a clean error frame
-                        // and close the stream gracefully, mirroring /v1/completions' streaming guard.
-                        env.frame(json{{"error", std::string("generation failed: ") + e.what()}});
-                        env.done();
-                        sink.done();
-                        return true;
-                    } catch (...) {
-                        env.frame(json{{"error", "generation failed"}});
-                        env.done();
-                        sink.done();
-                        return true;
-                    }
-                });
-            return;
-        }
-
-        // Non-streaming: run() can throw on a genuinely exceptional decode state (a prompt that exceeds
-        // n_ctx, a llama_decode failure). Catch it here so it becomes a clean 400 JSON error, NEVER an
-        // uncaught throw that cpp-httplib turns into an empty-body 500 (mirrors /v1/completions' guard).
-        try {
-            GenerateResult r = run({});
-            json resp = {
-                {"id", id}, {"object", "board"}, {"board", r.board},
-                {"layout", board_layout_json(*model, r.board, mask_token)},
-                {"choices", json::array({{{"text", r.text}, {"index", 0},
-                             {"finish_reason", finish_reason(r.reason)}}})},
-                {"usage", {{"completion_tokens", r.new_tokens}, {"steps_total", r.steps_total}}},
-            };
-            res.set_content(dump_json(resp), "application/json");
-        } catch (const std::exception& e) {
-            res.status = 400;
-            res.set_content(dump_json(json{{"error", std::string("generation failed: ") + e.what()}}),
-                            "application/json");
-        }
-    });
-
+    // /v1/revise and /v1/board (the diffusion "resolve a selection"/board-restore routes) were
+    // removed with the diffusion generator (THE_CUT): both required full bidirectional re-masking,
+    // which no longer exists in this engine build. studio/heavn's Resolve edit mode degrades
+    // honestly (it already gates on engine mode == "diffusion", which this build never reports).
 
     std::fprintf(stderr, "[cloze-server] %s %s, %d worker(s) on http://%s:%d  (model: %s)\n",
                  ar_mode ? "autoregressive" : "diffusion",

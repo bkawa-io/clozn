@@ -6,7 +6,11 @@
 // number without its quality column.
 //
 //   cloze-bench <model-f16.gguf> [--gpu-layers N] [--max-new N] [--steps T] [--ctx N]
-#include "cloze/generate.hpp"
+//
+// Runs the autoregressive generator (generate_ar); the diffusion generate() this tool used to call
+// was removed with the diffusion program (THE_CUT) -- quant calibration now measures the same AR
+// models the product actually serves.
+#include "cloze/generate_ar.hpp"
 #include "cloze/model_ggml.hpp"
 #include "llama.h"
 
@@ -49,7 +53,7 @@ RunResult run_model(const std::string& path, int mask, int eos, int n_ctx, int g
     for (const std::string& p : prompts) {
         const std::vector<int> ids = adapter.encode(p);
         const auto t0 = std::chrono::steady_clock::now();
-        GenerateResult r = generate(adapter, ids, cfg);
+        GenerateResult r = generate_ar(adapter, ids, cfg);
         const auto t1 = std::chrono::steady_clock::now();
         total_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
         total_tokens += r.new_tokens;

@@ -1,29 +1,12 @@
-// blocks.cpp — implementation of cloze/blocks.hpp, mirroring blocks.py.
+// blocks.cpp — implementation of cloze/blocks.hpp. BlockPlan::blocks() (the diffusion semi-AR block
+// partitioner) was removed with the diffusion program (THE_CUT); block_id/attention_mask survive
+// because they're still called (always with block_len=0, fully bidirectional) by the concept-probe
+// calibration's one-shot sentence read (server_shared.hpp) and cloze-probe-sweep.
 #include "cloze/blocks.hpp"
 
 #include <algorithm>
-#include <stdexcept>
 
 namespace cloze {
-
-std::vector<Block> BlockPlan::blocks() const {
-    if (prompt_len < 1) throw std::invalid_argument("prompt_len must be >= 1");
-    if (max_new < 1) throw std::invalid_argument("max_new must be >= 1");
-    if (block_len < 0) throw std::invalid_argument("block_len must be >= 0 (0 = whole-sequence)");
-
-    const int start = prompt_len;
-    const int end = prompt_len + max_new;
-    std::vector<Block> out;
-    if (block_len == 0) {
-        out.push_back(Block{0, start, end});
-        return out;
-    }
-    for (int pos = start; pos < end; pos += block_len) {
-        const int b_end = (pos + block_len < end) ? pos + block_len : end;
-        out.push_back(Block{static_cast<int>(out.size()), pos, b_end});
-    }
-    return out;
-}
 
 int block_id(int pos, int prompt_len, int block_len) {
     if (pos < prompt_len) return -1;

@@ -82,22 +82,6 @@ inline GenerateConfig config_from(const json& body) {
     return cfg;
 }
 
-inline CacheConfig cache_from(const json& body) {
-    CacheConfig cache;
-    cache.mode = body.value("cache", std::string("off"));
-    if (cache.mode == "delta") cache.full_refresh_every = 1;
-    return cache;
-}
-
-// §5.2 revision: opt-in "the model changes its mind". Off by default => the commit path is unchanged.
-inline ReviseConfig revise_from(const json& body) {
-    ReviseConfig revise;
-    revise.enabled = body.value("revise", false);
-    revise.tau_revise = body.value("tau_revise", 0.5);
-    revise.max_revisions = body.value("max_revisions", 1);
-    return revise;
-}
-
 // Sampling: opt-in temperature + repetition penalty. Defaults (T=0, penalty=1) keep greedy decoding,
 // so omitting them is byte-identical to before.
 inline SampleConfig sample_from(const json& body) {
@@ -253,72 +237,6 @@ inline std::string sse_data(const Event& e, const GgmlModel& model, const std::v
     return to_jsonl_line(e);
 }
 
-// Map a list of [start, end) UTF-8 BYTE ranges in `text` onto a token board with those tokens
-// MASKED — the "revise this selection" lowering. A token is masked when its byte span overlaps any
-// requested range, so a partial selection expands to whole tokens (you revise whole tokens, never
-// sub-token bytes). Each token's byte span is its detokenized piece length, summed left to right;
-// this reconstructs the text exactly for the byte-level Qwen2/Dream BPE vocab (special tokens, which
-// detok to empty, are the only drift source and don't occur in ordinary pasted text).
-// `grow` adds that many EXTRA mask slots after each selected run, giving the model headroom to
-// rewrite a span into a different length: it fills what it needs and pads the rest (an EOS/empty
-// piece renders blank), so a K-token selection can become anywhere from short to K+grow tokens.
-inline std::vector<int> masked_board_from_spans(const GgmlModel& model, const std::string& text,
-                                         const std::vector<std::pair<int, int>>& byte_spans,
-                                         int mask_token, int grow) {
-    const std::vector<int> toks = model.encode(text);
-    std::vector<int> board;
-    board.reserve(toks.size() + static_cast<size_t>(grow > 0 ? grow * 4 : 0));
-    int cum = 0;
-    bool prev_selected = false;
-    for (size_t i = 0; i < toks.size(); ++i) {
-        const int start = cum;
-        cum += static_cast<int>(model.decode({toks[i]}).size());
-        const int end = cum;  // token i spans bytes [start, end)
-        bool selected = false;
-        for (const auto& sp : byte_spans)
-            if (start < sp.second && end > sp.first) { selected = true; break; }
-        if (!selected && prev_selected)
-            for (int g = 0; g < grow; ++g) board.push_back(mask_token);  // headroom after a selected run
-        board.push_back(selected ? mask_token : toks[i]);
-        prev_selected = selected;
-    }
-    if (prev_selected)
-        for (int g = 0; g < grow; ++g) board.push_back(mask_token);  // selection ran to the end
-    return board;
-}
-
-// SSE payload for the revise stream. gen_started is enriched with `layout`: one entry per board
-// position ({pos, masked, piece}) so the browser can render the full interleaved board — fixed
-// tokens as text, masked tokens as empty slots — without a tokenizer. Other events match sse_data.
-inline std::string sse_data_revise(const Event& e, const GgmlModel& model, const std::vector<int>& board,
-                            int mask_token) {
-    if (const auto* gs = std::get_if<GenStarted>(&e)) {
-        json layout = json::array();
-        for (size_t pos = 0; pos < board.size(); ++pos) {
-            const bool masked = board[pos] == mask_token;
-            layout.push_back({{"pos", static_cast<int>(pos)}, {"masked", masked},
-                              {"piece", masked ? std::string() : model.decode({board[pos]})}});
-        }
-        return json{{"t", gs->t}, {"type", "gen_started"}, {"prompt_tokens", gs->prompt_tokens},
-                    {"block_len", gs->block_len}, {"max_new", gs->max_new}, {"layout", layout}}.dump();
-    }
-    if (const auto* tc = std::get_if<TokensCommitted>(&e)) {
-        json items = json::array();
-        for (const auto& it : tc->items)
-            items.push_back({{"pos", it.pos}, {"id", it.id}, {"conf", it.conf},
-                             {"piece", model.decode({it.id})}});
-        return dump_json(json{{"t", tc->t}, {"type", "tokens_committed"}, {"block", tc->block},
-                    {"items", items}});
-    }
-    if (const auto* sl = std::get_if<StepLens>(&e)) {
-        json pieces = json::array();
-        for (int id : sl->ids) pieces.push_back(model.decode({id}));     // decode candidates (viz has no tokenizer)
-        return dump_json(json{{"t", sl->t}, {"type", "step_lens"}, {"block", sl->block}, {"k", sl->k},
-                    {"positions", sl->positions}, {"ids", sl->ids}, {"probs", sl->probs},
-                    {"pieces", pieces}});
-    }
-    return to_jsonl_line(e);
-}
 
 // ============================ state-stream protocol (phase 1.2) ============================
 // The inspector-facing wire form (protocol/SPEC.md). The engine's §5.1 events FOLD into canonical
@@ -545,8 +463,10 @@ private:
     json readouts_ = json::array();
 };
 
-// Per-position board layout for the white-box SNAPSHOT: {pos,id,masked,piece}. Lets a client save
-// the exact board state from any response and POST it back to /v1/board to restore/branch.
+// Per-position board layout for the white-box SNAPSHOT: {pos,id,masked,piece}. Read-only introspection
+// on every completion response; there is no restore endpoint any more (/v1/board was diffusion-only
+// and was removed with the diffusion program -- an AR board never carries a real mask token anyway, so
+// `masked` is honestly false for every position here).
 inline json board_layout_json(const GgmlModel& model, const std::vector<int>& board, int mask_token) {
     json layout = json::array();
     for (size_t pos = 0; pos < board.size(); ++pos) {

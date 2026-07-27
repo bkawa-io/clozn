@@ -179,7 +179,6 @@ void register_state_routes(httplib::Server& svr, ServerContext& ctx) {
         if (target.is_object())
             for (auto it = target.begin(); it != target.end(); ++it) gen[it.key()] = it.value();
         const GenerateConfig cfg = config_from(gen);
-        const ReviseConfig revise = revise_from(gen);
         const SampleConfig sample = sample_from(gen);
         const bool stream = body.value("stream", false);
         const bool protocol = body.value("protocol", false);
@@ -203,7 +202,7 @@ void register_state_routes(httplib::Server& svr, ServerContext& ctx) {
         // lambdas (same fix shape as raw_vec below, which only needs to be read, so a by-value copy suffices).
         auto applied_layers = std::make_shared<json>(json::array());
         auto run = [&pool, &steer_probes, &concept_probes, &sae_serve, raw_vec, concept, coef, req_layer, prompt_ids,
-                    cfg, revise, sample, features, ar_mode, applied_layers](
+                    cfg, sample, features, ar_mode, applied_layers](
                        const std::function<void(const Event&)>& on_event) {
             ContextPool::Lease lease = pool.acquire();
             (*lease).set_emit_activations(features);
@@ -234,8 +233,15 @@ void register_state_routes(httplib::Server& svr, ServerContext& ctx) {
             }
             *applied_layers = json::array({lo, hi});
             (*lease).set_steer(cvec, lo, hi);
-            auto r = ar_mode ? generate_ar(*lease, prompt_ids, cfg, ev, sample, probes)
-                             : generate(*lease, prompt_ids, cfg, CacheConfig{}, nullptr, ev, revise, sample, probes);
+            // Diffusion generation was removed from this engine build (THE_CUT); ar_mode is the only
+            // mode with a generator left. Fail honestly rather than call a function that no longer exists.
+            if (!ar_mode) {
+                (*lease).clear_steer();
+                throw std::invalid_argument(
+                    "diffusion generation was removed from this engine build; only autoregressive "
+                    "models are supported");
+            }
+            auto r = generate_ar(*lease, prompt_ids, cfg, ev, sample, probes);
             (*lease).clear_steer();
             if (sae_on) (*lease).set_tap_layer(default_tap);
             (*lease).set_emit_activations(false);
