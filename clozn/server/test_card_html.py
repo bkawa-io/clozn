@@ -261,17 +261,24 @@ def test_structure_smoke():
     assert out.count("<html") == 1 and out.count("</html>") == 1
     # sections, in order
     for section in ("run receipt", "the exchange", "influences &amp; receipts",
-                    "lens readouts", "lineage", "measured, not asserted"):
+                    "lens readouts", "lineage"):
         assert section in out, section
     # masthead + footer both carry the run id
     assert out.count("run_test0000001_abc123") >= 2
-    # the CRT (twilight indigo, never black) and phosphor text are present
-    assert "#2B3160" in out and "#1E2447" in out and "#B8F5E4" in out
+    # The receipt carries both Studio themes without a script or external dependency.
+    assert 'class="receipt-shell"' in out
+    assert 'class="theme-toggle-input"' in out
+    assert "halo" in out and "cathedral" in out
+    for signal in ("--signal-cyan", "--signal-mint", "--signal-violet",
+                   "--signal-pink", "--signal-peach"):
+        assert signal in out
+    # Studio uses square instrument geometry throughout.
+    assert "border-radius" not in out
     # per-token confidence shading: opacity varies with conf, low-conf gets the dotted class
     assert 'class="tk lo"' in out
-    # captured/derived legend
-    assert "recorded at generation time" in out
-    assert "computed afterwards from the record" in out
+    # Captured and derived remain explicit, but the legend is compact.
+    assert "run record" in out
+    assert "post-run computation" in out
 
 
 # ------------------------------------------------------------------------------- lens readouts
@@ -324,4 +331,4 @@ def test_degenerate_bundles_never_raise():
                    receipt_bundle.build(None)):
         out = render_card(bundle)
         assert out.startswith("<!doctype html>")
-        assert "measured, not asserted" in out
+        assert "run receipt" in out

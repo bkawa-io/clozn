@@ -1,15 +1,20 @@
 import type {
   CandidateReading,
   ConceptCandidate,
+  ContextCoverage,
   ObservatoryData,
   RunConfiguration,
   RunConcepts,
+  RunDiagnosis,
+  RunDiagnosisFinding,
   RunFacts,
+  RunPerformance,
   RunSummary,
   RuntimeState,
   SourceReading,
   TokenReading,
   TokenSourceReading,
+  WorkspaceReadout,
 } from "./types";
 
 type JsonRecord = Record<string, unknown>;
@@ -120,6 +125,7 @@ export async function loadRuntimeState(signal?: AbortSignal): Promise<RuntimeSta
       model: modelName(engine.model),
       layerCount: Number.isFinite(layerCount) ? layerCount : undefined,
       jlens: capabilities.jlens === true,
+      sae: capabilities.sae === true,
     } : undefined,
   };
 }
@@ -140,6 +146,153 @@ export async function loadRunFacts(runId: string, signal?: AbortSignal): Promise
   return {
     tokenCount,
     traceAvailable: tokenCount > 0,
+  };
+}
+
+function nonnegativeNumber(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) continue;
+    return value;
+  }
+  return undefined;
+}
+
+function performanceValue(source: string, ...values: unknown[]) {
+  const value = nonnegativeNumber(...values);
+  return value == null ? undefined : { value, source };
+}
+
+function diagnosisFinding(value: unknown): RunDiagnosisFinding | undefined {
+  const item = record(value);
+  const status = item.status;
+  if (
+    typeof item.id !== "string"
+    || typeof item.text !== "string"
+    || (status !== "observed" && status !== "not_observed" && status !== "unavailable")
+  ) {
+    return undefined;
+  }
+  return {
+    id: item.id,
+    status,
+    text: item.text,
+    evidence: records(item.evidence).flatMap((entry) => {
+      if (typeof entry.path !== "string") return [];
+      return [{
+        path: entry.path,
+        value: entry.value,
+        meaning: typeof entry.meaning === "string" ? entry.meaning : undefined,
+      }];
+    }),
+  };
+}
+
+function runDiagnosis(value: unknown): RunDiagnosis | undefined {
+  const body = record(value);
+  const whySlow = record(body.why_slow);
+  const findings = records(whySlow.findings).flatMap((item) => {
+    const finding = diagnosisFinding(item);
+    return finding ? [finding] : [];
+  });
+  if (!findings.length && typeof whySlow.summary !== "string") return undefined;
+  return {
+    schema: typeof body.schema === "string" ? body.schema : "—",
+    summary: typeof whySlow.summary === "string" ? whySlow.summary : "",
+    findings,
+    cutoff: diagnosisFinding(record(body.why_cut_off).finding),
+    auxiliary: diagnosisFinding(body.client_auxiliary_calls),
+  };
+}
+
+export async function loadRunPerformance(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<RunPerformance> {
+  const encoded = encodeURIComponent(runId);
+  const [runBody, diagnosisBody] = await Promise.all([
+    getJSON(`/runs/${encoded}`, signal),
+    getJSON(`/runs/${encoded}/diagnosis`, signal),
+  ]);
+  if (!runBody) throw new Error("Run not found");
+
+  const run = record(runBody);
+  const timing = record(run.timing);
+  const meta = record(run.meta);
+  const trace = record(run.trace);
+  const limits = record(record(run.context_receipt).limits);
+  const totalDuration = performanceValue("timing.duration_ms", timing.duration_ms);
+  const promptTokens = performanceValue(
+    typeof limits.prompt_tokens === "number"
+      ? "context_receipt.limits.prompt_tokens"
+      : "meta.prompt_tokens",
+    limits.prompt_tokens,
+    meta.prompt_tokens,
+  );
+  const traceTokens = Array.isArray(trace.tokens) ? trace.tokens.length : undefined;
+  const generatedTokens = performanceValue(
+    typeof limits.generated_tokens === "number"
+      ? "context_receipt.limits.generated_tokens"
+      : typeof meta.generation_tokens === "number"
+        ? "meta.generation_tokens"
+        : "trace.tokens.length",
+    limits.generated_tokens,
+    meta.generation_tokens,
+    traceTokens,
+  );
+  const generationDuration = performanceValue(
+    typeof timing.generation_duration_ms === "number"
+      ? "timing.generation_duration_ms"
+      : typeof meta.generation_duration_ms === "number"
+        ? "meta.generation_duration_ms"
+        : typeof timing.eval_duration_ms === "number"
+          ? "timing.eval_duration_ms"
+          : "meta.eval_duration_ms",
+    timing.generation_duration_ms,
+    meta.generation_duration_ms,
+    timing.eval_duration_ms,
+    meta.eval_duration_ms,
+  );
+  const measuredThroughput = performanceValue(
+    typeof timing.generation_tokens_per_second === "number"
+      ? "timing.generation_tokens_per_second"
+      : "meta.generation_tokens_per_second",
+    timing.generation_tokens_per_second,
+    meta.generation_tokens_per_second,
+  );
+  const derivedThroughput = !measuredThroughput
+    && generatedTokens
+    && totalDuration
+    && totalDuration.value > 0
+      ? {
+          value: generatedTokens.value * 1000 / totalDuration.value,
+          source: `${generatedTokens.source} / ${totalDuration.source}`,
+        }
+      : undefined;
+  const gpuLayers = nonnegativeNumber(meta.gpu_layers);
+
+  return {
+    totalDuration,
+    promptTokens,
+    generatedTokens,
+    generationDuration,
+    contextWindowTokens: performanceValue(
+      "context_receipt.limits.context_window_tokens",
+      limits.context_window_tokens,
+    ),
+    throughput: measuredThroughput
+      ? { ...measuredThroughput, kind: "measured_decode" }
+      : derivedThroughput
+        ? { ...derivedThroughput, kind: "derived_end_to_end" }
+        : undefined,
+    finishReason: typeof run.finish_reason === "string" ? run.finish_reason : undefined,
+    device: typeof meta.device === "string" ? meta.device : undefined,
+    gpuLayers,
+    samplerMode: typeof meta.sampler_mode === "string"
+      ? meta.sampler_mode
+      : typeof meta.sampling === "string"
+        ? meta.sampling
+        : undefined,
+    diagnosis: runDiagnosis(diagnosisBody),
   };
 }
 
@@ -241,18 +394,105 @@ function spanBands(spansBody: unknown): Map<number, TokenReading["band"]> {
 
 interface InfluenceIndex {
   sources: SourceReading[];
+  contextSources: SourceReading[];
+  coverage: ContextCoverage;
   tokenSources: Map<number, TokenSourceReading[]>;
 }
 
-function influenceIndex(body: unknown): InfluenceIndex {
-  const influence = record(body);
-  if (influence.available !== true) return { sources: [], tokenSources: new Map() };
+function promptTokenCount(run: JsonRecord): number | undefined {
+  const rawValue = record(record(run.context_receipt).limits).prompt_tokens;
+  if (rawValue == null || rawValue === "") return undefined;
+  const value = Number(rawValue);
+  return Number.isFinite(value) && value >= 0 ? value : undefined;
+}
 
-  const sources: SourceReading[] = records(influence.prompt_spans).map((span) => ({
-    id: String(span.id || ""),
-    text: String(span.text || "").trim(),
-    role: String(span.role || ""),
-  })).filter((source) => source.id && source.text);
+function messageContextSources(run: JsonRecord): SourceReading[] {
+  return records(run.messages).flatMap((message, index) => {
+    if (typeof message.content !== "string" || !message.content.trim()) return [];
+    const role = String(message.role || "unknown");
+    const name = typeof message.name === "string" ? message.name : "";
+    return [{
+      id: `context.m${String(index).padStart(3, "0")}`,
+      text: message.content,
+      role,
+      kind: role === "tool" ? "tool_result" : "message",
+      label: name || undefined,
+      groupId: `context.m${String(index).padStart(3, "0")}`,
+      messageIndex: index,
+      measured: false,
+      start: 0,
+      end: message.content.length,
+    }];
+  });
+}
+
+function sourceReading(source: JsonRecord, measured: boolean): SourceReading | null {
+  const id = String(source.id || "");
+  const text = typeof source.text === "string" ? source.text : "";
+  if (!id || !text.trim()) return null;
+  const messageIndex = Number(source.message_index);
+  const start = Number(source.start);
+  const end = Number(source.end);
+  const label = source.name ?? source.external_source_id;
+  return {
+    id,
+    text,
+    role: String(source.role || "unknown"),
+    kind: String(source.source_kind || source.kind || "message"),
+    label: typeof label === "string" && label ? label : undefined,
+    groupId: String(source.parent_id || source.id || ""),
+    messageIndex: Number.isInteger(messageIndex) ? messageIndex : undefined,
+    measured,
+    start: Number.isInteger(start) ? start : undefined,
+    end: Number.isInteger(end) ? end : undefined,
+  };
+}
+
+function influenceIndex(body: unknown, run: JsonRecord): InfluenceIndex {
+  const influence = record(body);
+  const fallbackSources = messageContextSources(run);
+  if (influence.available !== true) {
+    return {
+      sources: [],
+      contextSources: fallbackSources,
+      coverage: {
+        totalSources: fallbackSources.length,
+        measuredSources: 0,
+        omittedSources: fallbackSources.length,
+        measuredSpans: 0,
+        complete: false,
+        promptTokens: promptTokenCount(run),
+      },
+      tokenSources: new Map(),
+    };
+  }
+
+  const promptSourceRows = records(influence.prompt_sources);
+  const selection = record(influence.selection);
+  const selectedSourceIds = new Set(
+    Array.isArray(selection.selected_source_ids) ? selection.selected_source_ids.map(String) : [],
+  );
+  const omittedSourceIds = new Set(
+    Array.isArray(selection.omitted_source_ids) ? selection.omitted_source_ids.map(String) : [],
+  );
+  const sources = records(influence.prompt_spans).flatMap((span) => {
+    const reading = sourceReading(span, true);
+    return reading ? [reading] : [];
+  });
+  const measuredParents = new Set(sources.map((source) => source.groupId || source.id));
+  const omittedSources = promptSourceRows.flatMap((source) => {
+    const id = String(source.id || "");
+    if (selectedSourceIds.has(id) || measuredParents.has(id)) return [];
+    const reading = sourceReading(source, false);
+    return reading ? [reading] : [];
+  });
+  const contextSources = [...sources, ...omittedSources].sort((a, b) => {
+    const messageDelta = (a.messageIndex ?? -1) - (b.messageIndex ?? -1);
+    if (messageDelta) return messageDelta;
+    const startDelta = (a.start ?? 0) - (b.start ?? 0);
+    if (startDelta) return startDelta;
+    return a.id.localeCompare(b.id);
+  });
   const sourceById = new Map(sources.map((source) => [source.id, source]));
 
   const tokenByAnswerId = new Map<string, number>();
@@ -292,7 +532,26 @@ function influenceIndex(body: unknown): InfluenceIndex {
       .filter((item): item is TokenSourceReading => item !== null);
     if (linked.length) tokenSources.set(tokenIndex, linked);
   }
-  return { sources, tokenSources };
+  const totalSources = promptSourceRows.length || new Set(
+    contextSources.map((source) => source.groupId || source.id),
+  ).size;
+  const measuredSources = selectedSourceIds.size || measuredParents.size;
+  const omittedSourcesCount = omittedSourceIds.size || Math.max(0, totalSources - measuredSources);
+  return {
+    sources,
+    contextSources,
+    coverage: {
+      totalSources,
+      measuredSources,
+      omittedSources: omittedSourcesCount,
+      measuredSpans: sources.length,
+      complete: omittedSourcesCount === 0
+        && selection.complete_for_selected_spans !== false,
+      strategy: typeof selection.strategy === "string" ? selection.strategy : undefined,
+      promptTokens: promptTokenCount(run),
+    },
+    tokenSources,
+  };
 }
 
 function candidateReadings(piece: string, confidence: number, rawAlternatives: unknown): CandidateReading[] {
@@ -385,6 +644,30 @@ function runConfiguration(run: JsonRecord): RunConfiguration {
   };
 }
 
+function workspaceReadouts(trace: JsonRecord): WorkspaceReadout[] {
+  return records(trace.workspace_readouts).flatMap((item) => {
+    if (typeof item.provider !== "string" || !item.provider) return [];
+    const tokenIndex = Number(item.token_index);
+    const layer = Number(item.layer);
+    const position = Number(item.position);
+    const topReadouts = records(item.top_readouts).flatMap((readout) => {
+      const score = Number(readout.score);
+      if (typeof readout.label !== "string" || !Number.isFinite(score)) return [];
+      return [{ label: readout.label, score }];
+    });
+    return [{
+      tokenIndex: Number.isInteger(tokenIndex) ? tokenIndex : undefined,
+      tokenText: typeof item.token_text === "string" ? item.token_text : undefined,
+      layer: Number.isInteger(layer) ? layer : undefined,
+      position: Number.isInteger(position) ? position : undefined,
+      provider: item.provider,
+      providerType: typeof item.provider_type === "string" ? item.provider_type : undefined,
+      readoutKind: typeof item.readout_kind === "string" ? item.readout_kind : undefined,
+      topReadouts,
+    }];
+  });
+}
+
 export async function loadRunInspection(runId: string, signal?: AbortSignal): Promise<ObservatoryData> {
   const encoded = encodeURIComponent(runId);
   const [runBody, spansBody, influenceBody] = await Promise.all([
@@ -401,7 +684,7 @@ export async function loadRunInspection(runId: string, signal?: AbortSignal): Pr
     ? trace.tokens.map((token) => String(token))
     : stepRows.map((step) => String(step.piece ?? step.text ?? ""));
   const bands = spanBands(spansBody);
-  const influence = influenceIndex(influenceBody);
+  const influence = influenceIndex(influenceBody, run);
 
   const tokens: TokenReading[] = tokenPieces.map((text, index) => {
     const confidence = numberAt(trace.confidence, index, Number(stepRows[index]?.confidence) || 0);
@@ -433,12 +716,12 @@ export async function loadRunInspection(runId: string, signal?: AbortSignal): Pr
     response: String(run.response || run.response_summary || ""),
     parentRunId: typeof run.parent_run_id === "string" ? run.parent_run_id : undefined,
     flags: Array.isArray(run.flags) ? run.flags.map(String) : [],
-    layerEvidence: "unavailable",
-    layerReason: "J-lens unavailable",
-    layers: [],
     tokens,
     candidates: tokens[0]?.alternatives ?? [],
     sources: influence.sources,
+    contextSources: influence.contextSources,
+    contextCoverage: influence.coverage,
+    workspaceReadouts: workspaceReadouts(trace),
     configuration: runConfiguration(run),
   };
 }

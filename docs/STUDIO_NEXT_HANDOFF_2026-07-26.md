@@ -99,6 +99,9 @@ Read `studio-frontend/docs/SURFACES.md` before changing page ownership.
 - Response-first reading surface.
 - Context and response are independently usable.
 - Selection-aware evidence for confidence, sources, concepts, and claim structure.
+- Progressive Performance panel wired to `GET /runs/<id>/diagnosis`.
+- Shows measured wall time, worker-measured decode throughput when recorded, a labeled derived
+  end-to-end fallback, token counts, phase status, and raw evidence paths.
 - Lens owns reading and claim structure. It does not duplicate layer navigation or full provenance.
 
 ### Model Scope
@@ -106,7 +109,32 @@ Read `studio-frontend/docs/SURFACES.md` before changing page ownership.
 - Output tokens are rendered as text rather than anonymous circles.
 - Clicking an output token shows the context that influenced it.
 - Clicking a context span shows the output tokens it influenced.
+- Large records use a bounded overview/detail layout:
+  - the context list is fixed-row virtualized;
+  - long output is grouped into deterministic text regions;
+  - the selected token keeps a 73-token local neighborhood;
+  - the shared token tape renders at most 120 token buttons;
+  - only the active provenance links are drawn, capped at 12 paths.
+- Short records retain direct context-span-to-output-token threads. The threaded view is selected
+  only when the context, output, source count, link count, and viewport all fit fixed limits.
+- Large-record context browsing opens on a quick view of the most and least influential measured
+  spans. Ranking is aggregate `Σ |Δ nats|`; unmeasured and unlinked spans are excluded.
+- The short-record threaded view exposes the same ranking behind `RANKED SPANS` so the thread field
+  remains clear by default.
+- Recorded context omitted from the influence calculation remains visible as `NOT MEASURED`.
+- Coverage reports recorded sources, measured sources, output tokens, and prompt tokens when the
+  latter was recorded.
 - Token selection, candidate readout, confidence plot, trace, and fork entry are synchronized.
+- Layers no longer uses the synthetic demo planes or invented activation, energy, stability, and
+  feature counts for real runs.
+- `POST /engine/layers` drives a post-hoc residual-norm layer × worker-token map. The first 300
+  response characters are re-tokenized by the current worker and labeled as such.
+- A compatible J-lens adds candidate trajectories across up to six sampled fitted layers. The panel
+  remains explicitly unavailable when no lens is loaded.
+- Stored SAE/concept features are parsed from `trace.workspace_readouts`; no readout is synthesized
+  from engine capability alone.
+- `POST /runs/<id>/causal-trace` remains an explicit, on-demand action for the selected recorded
+  token because it performs controlled interventions.
 - Variant view aligns a reference and current run using structural token identity.
 - Adapter and LoRA identity is shown only when recorded.
 - The variant view labels structural alignment as structural evidence; it does not call it causal.
@@ -198,25 +226,22 @@ trace.steps[*].dt_ms
 Availability varies by substrate and run. The frontend must not replace missing worker measurements
 with a derived value under the same label.
 
-### Recommended first performance slice
+### Implemented performance slice
 
-Implement this without changing backend behavior:
+The frontend now:
 
-1. Add frontend types and a loader for `GET /runs/<id>/diagnosis`.
-2. Add a compact Performance section to Lens for the selected run.
-3. Show recorded values first:
-   - end-to-end duration
-   - prompt tokens
-   - generated tokens
-   - worker-measured generation tok/s
-   - worker-measured generation duration
-   - finish reason
-4. Render the diagnosis findings as a phase list with their status:
-   - observed
-   - not observed
-   - unavailable
-5. Put raw evidence paths in the inspector or an expandable detail, not in the reading surface.
-6. Add performance to Compare only after the single-run view is clear. A useful first comparison is:
+1. Parses `GET /runs/<id>/diagnosis`.
+2. Loads recorded performance facts for the selected Lens run.
+3. Shows end-to-end duration, prompt and generated token counts, worker-measured generation tok/s,
+   generation duration, and finish reason when available.
+4. Labels a generated-tokens/end-to-end-duration fallback as `DERIVED END TO END`; it is never
+   presented as decode throughput.
+5. Renders observed, not-observed, and unavailable phase statuses.
+6. Keeps the diagnosis progressively disclosed so the response remains the Lens hero.
+7. Shows one selected phase explanation and its raw evidence paths instead of repeating every
+   explanation at once.
+
+The next performance step is Compare. A useful first comparison is:
    - total duration A/B
    - measured decode tok/s A/B
    - prompt/generated token counts A/B
@@ -302,9 +327,12 @@ estimate. Add schema and route tests before drawing it in Studio.
    `UNREPORTED`.
 6. Model Scope Variants is token-identity alignment, not causal parameter attribution.
 7. A base-versus-tuned provenance view requires comparable runs and recorded adapter identity.
-8. J-lens and other model-interior panels must remain unavailable when the engine capability is
-   false.
+8. Residual summaries can run on any compatible current worker. J-lens and SAE panels remain
+   unavailable unless their compatible artifact is loaded or a run stored its feature readouts.
+   Post-hoc reads are not the original generation trajectory.
 9. Live memory and utilization telemetry are not exposed by the current engine health contract.
+10. The current context-answer influence producer selects at most eight prompt sources. Scope shows
+    the remaining recorded context, but it cannot draw links that were never measured.
 
 ## 7. LoRA and steering provenance direction
 
@@ -367,15 +395,17 @@ It proxies product API requests to `http://127.0.0.1:8080`.
 8. `studio-frontend/src/features/model/Model.tsx`
 9. `studio-frontend/src/features/model/api.ts`
 10. `studio-frontend/src/features/observatory/Observatory.tsx`
-11. `studio-frontend/src/features/observatory/VariantScope.tsx`
-12. `studio-frontend/src/features/compare/alignment.ts`
-13. `studio-frontend/src/styles/tokens.css`
-14. `studio-frontend/src/styles/workspace.css`
-15. `clozn/runs/diagnosis.py`
-16. `clozn/runs/trace.py`
-17. `clozn/server/routes/runs.py`
-18. `clozn/server/static.py`
-19. `clozn/cli/commands/studio.py`
+11. `studio-frontend/src/features/observatory/TraceScope.tsx`
+12. `studio-frontend/src/features/observatory/VariantScope.tsx`
+13. `studio-frontend/src/data/stress.ts`
+14. `studio-frontend/src/features/compare/alignment.ts`
+15. `studio-frontend/src/styles/tokens.css`
+16. `studio-frontend/src/styles/workspace.css`
+17. `clozn/runs/diagnosis.py`
+18. `clozn/runs/trace.py`
+19. `clozn/server/routes/runs.py`
+20. `clozn/server/static.py`
+21. `clozn/cli/commands/studio.py`
 
 ## 10. Verification
 
@@ -408,6 +438,18 @@ At minimum assert:
 - unavailable evidence stays visibly unavailable;
 - token selection and provenance remain synchronized;
 - route navigation does not leave stale selection state.
+
+Scope has deterministic browser-only QA fixtures:
+
+```text
+/next/index.html#/scope?fixture=code
+/next/index.html#/scope?fixture=rag
+/next/index.html#/scope?fixture=agent
+/next/index.html#/scope?fixture=thread
+```
+
+They exercise long code output, retrieved-document context, multi-step tool traffic, and the compact
+word-threading path. They are not listed in product navigation and are labeled as demo data.
 
 ## 11. Suggested next sequence
 

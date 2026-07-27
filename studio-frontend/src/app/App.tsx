@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Icon } from "../components/Icon";
 import { createFork, loadRunInspection, loadRuntimeState } from "../data/api";
 import { DEMO_OBSERVATORY } from "../data/demo";
+import { stressFixture } from "../data/stress";
 import type { ForkState, ObservatoryData, RuntimeState, Theme } from "../data/types";
 import { Behavior } from "../features/behavior/Behavior";
 import { Compare } from "../features/compare/Compare";
@@ -22,7 +23,7 @@ const nav = [
 type Route =
   | { kind: "runs" }
   | { kind: "lens"; runId?: string }
-  | { kind: "scope"; runId?: string; tokenIndex?: number }
+  | { kind: "scope"; runId?: string; tokenIndex?: number; fixture?: string }
   | { kind: "compare"; runA?: string; runB?: string }
   | { kind: "behavior" }
   | { kind: "model" };
@@ -38,11 +39,13 @@ function readRoute(): Route {
   }
   if (/^#\/runs\/?$/.test(location.hash)) return { kind: "runs" };
   const scope = location.hash.match(/^#\/runs\/([^/]+)\/scope(?:\?token=(\d+))?$/);
-  if (scope || /^#\/scope\/?$/.test(location.hash)) {
+  const scopeFixture = location.hash.match(/^#\/scope\/?\?fixture=([^&]+)$/);
+  if (scope || scopeFixture || /^#\/scope\/?$/.test(location.hash)) {
     return {
       kind: "scope",
       runId: scope ? decodeURIComponent(scope[1]) : undefined,
       tokenIndex: scope?.[2] == null ? undefined : Number(scope[2]),
+      fixture: scopeFixture ? decodeURIComponent(scopeFixture[1]) : undefined,
     };
   }
   if (/^#\/lens\/?$/.test(location.hash)) return { kind: "lens" };
@@ -88,12 +91,21 @@ export function App() {
   useEffect(() => {
     if (route.kind !== "scope") return;
     if (route.runId) void selectRun(route.runId);
+    else if (route.fixture) {
+      setData(stressFixture(route.fixture) ?? DEMO_OBSERVATORY);
+      setRunStatus("idle");
+      setForkState({ status: "idle" });
+    }
     else {
       setData(DEMO_OBSERVATORY);
       setRunStatus("idle");
       setForkState({ status: "idle" });
     }
-  }, [route.kind, route.kind === "scope" ? route.runId : undefined]);
+  }, [
+    route.kind,
+    route.kind === "scope" ? route.runId : undefined,
+    route.kind === "scope" ? route.fixture : undefined,
+  ]);
 
   async function selectRun(runId: string) {
     setForkState({ status: "idle" });

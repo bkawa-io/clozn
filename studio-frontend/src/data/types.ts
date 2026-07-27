@@ -1,15 +1,5 @@
 export type Theme = "halo" | "cathedral";
 
-export interface LayerReading {
-  layer: number;
-  stage: string;
-  activation: number;
-  energy: number;
-  stability: number;
-  features: number;
-  hue: "cyan" | "mint" | "violet" | "pink" | "magenta" | "peach";
-}
-
 export interface TokenReading {
   text: string;
   entropy: number;
@@ -30,6 +20,23 @@ export interface SourceReading {
   id: string;
   text: string;
   role: string;
+  kind?: string;
+  label?: string;
+  groupId?: string;
+  messageIndex?: number;
+  measured?: boolean;
+  start?: number;
+  end?: number;
+}
+
+export interface ContextCoverage {
+  totalSources: number;
+  measuredSources: number;
+  omittedSources: number;
+  measuredSpans: number;
+  complete: boolean;
+  strategy?: string;
+  promptTokens?: number;
 }
 
 export interface TokenSourceReading {
@@ -37,6 +44,17 @@ export interface TokenSourceReading {
   label: string;
   effect: "supports" | "suppresses" | "neutral";
   deltaNats: number;
+}
+
+export interface WorkspaceReadout {
+  tokenIndex?: number;
+  tokenText?: string;
+  layer?: number;
+  position?: number;
+  provider: string;
+  providerType?: string;
+  readoutKind?: string;
+  topReadouts: Array<{ label: string; score: number }>;
 }
 
 export interface RunConfiguration {
@@ -59,12 +77,12 @@ export interface ObservatoryData {
   response?: string;
   parentRunId?: string;
   flags?: string[];
-  layerEvidence: "demo" | "measured" | "unavailable";
-  layerReason?: string;
-  layers: LayerReading[];
   tokens: TokenReading[];
   candidates: CandidateReading[];
   sources: SourceReading[];
+  contextSources?: SourceReading[];
+  contextCoverage?: ContextCoverage;
+  workspaceReadouts?: WorkspaceReadout[];
   configuration: RunConfiguration;
 }
 
@@ -94,6 +112,52 @@ export interface RunFacts {
   traceAvailable: boolean;
 }
 
+export type DiagnosisStatus = "observed" | "not_observed" | "unavailable";
+
+export interface DiagnosisEvidence {
+  path: string;
+  value: unknown;
+  meaning?: string;
+}
+
+export interface RunDiagnosisFinding {
+  id: string;
+  status: DiagnosisStatus;
+  text: string;
+  evidence: DiagnosisEvidence[];
+}
+
+export interface RunDiagnosis {
+  schema: string;
+  summary: string;
+  findings: RunDiagnosisFinding[];
+  cutoff?: RunDiagnosisFinding;
+  auxiliary?: RunDiagnosisFinding;
+}
+
+export interface RecordedPerformanceValue {
+  value: number;
+  source: string;
+}
+
+export interface RunThroughput extends RecordedPerformanceValue {
+  kind: "measured_decode" | "derived_end_to_end";
+}
+
+export interface RunPerformance {
+  totalDuration?: RecordedPerformanceValue;
+  promptTokens?: RecordedPerformanceValue;
+  generatedTokens?: RecordedPerformanceValue;
+  generationDuration?: RecordedPerformanceValue;
+  contextWindowTokens?: RecordedPerformanceValue;
+  throughput?: RunThroughput;
+  finishReason?: string;
+  device?: string;
+  gpuLayers?: number;
+  samplerMode?: string;
+  diagnosis?: RunDiagnosis;
+}
+
 export interface ConceptCandidate {
   piece: string;
   score: number;
@@ -116,6 +180,7 @@ export interface RuntimeState {
     model: string;
     layerCount?: number;
     jlens: boolean;
+    sae: boolean;
   };
 }
 

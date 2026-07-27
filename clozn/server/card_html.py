@@ -5,10 +5,10 @@ person can save or post anywhere. Pure function: dict in, string out — zero mo
 zero network. The card is a RENDERING of what the bundle already carries, never a new computation: a
 receipt that was never computed renders as its honest absence, not as a blank or a guess.
 
-Visual language: heavnOS (studio/heavn/theme.css is the color reference — values are inlined here, the
-file is never imported): pearly sky washes on an off-white ground, frosted light panels, uppercase
-micro-labels, square status LEDs, and ONE dark panel — the twilight-indigo CRT (#2B3160 -> #1E2447,
-never black) whose pale-mint phosphor text carries the reply with per-token confidence shading.
+Visual language: the current Clozn Studio instrument system. The default Halo theme uses an
+opal/mother-of-pearl field; the optional Cathedral theme uses freshwater-black-pearl surfaces. Both
+use square geometry, compact evidence hierarchy, and the same cyan/mint/violet/pink/peach signal
+palette. The values are inlined because the receipt must remain completely self-contained.
 
 Injection-proof by construction: every string that originated outside this module (prompt, reply,
 tokens, card texts, ids, lens labels) passes through html.escape before it touches the document, and
@@ -35,8 +35,7 @@ _ABSENT_INFLUENCE = ("no context-answer influence map computed for this run — 
                      "the map is measured on demand, never inferred")
 _ABSENT_LENS = ("no lens readout recorded on this run — the lens reads on demand from the engine "
                 "substrate, and none was captured here")
-_FOOTER_CREDO = ("measured, not asserted — every number above comes from a recorded run or an "
-                 "explicit computation")
+_FOOTER_LABEL = "run receipt"
 # Mirrors clozn.server.app._JLENS_NOTE — the shipped, unskippable J-lens honesty caption.
 _JLENS_CAPTION = ("fitted linear Jacobian lens, transferred to this GGUF; a per-token 'disposed to "
                   "say' read, NOT the model's literal thought — a linear lens always emits something.")
@@ -69,149 +68,212 @@ def _num(v, nd: int = 3, signed: bool = False) -> str:
 
 
 # ------------------------------------------------------------------------------------ inline stylesheet
-# heavnOS values (reference: studio/heavn/theme.css; UX doc §11.2). Inlined, never imported.
+# Studio Next values are inlined because receipts cannot depend on the running Studio.
 _CSS = """
 *{box-sizing:border-box;margin:0;padding:0}
-html{background:#E4EAF8}
-body{font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;color:#2A3252;font-size:12.5px;
- line-height:1.55;padding:28px 14px;min-height:100vh;-webkit-font-smoothing:antialiased;
+:root{color-scheme:light dark}
+html,body{min-height:100%;background:#e9edf5}
+body{font-family:ui-monospace,"SFMono-Regular","Cascadia Mono",Consolas,monospace;
+ font-size:12px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.receipt-shell{
+ --page:#e9edf5;--panel:rgba(248,249,252,.88);--panel-strong:rgba(255,255,255,.94);
+ --panel-soft:rgba(237,241,247,.74);--ink:#181c28;--ink-soft:#50596d;--ink-faint:#7a8499;
+ --line:rgba(72,82,108,.23);--line-soft:rgba(72,82,108,.13);--shadow:rgba(73,82,111,.18);
+ --signal-cyan:#5edbe5;--signal-mint:#78e4cc;--signal-violet:#a78cf7;
+ --signal-pink:#ee91cf;--signal-peach:#f1b28e;--danger:#b94e43;
+ --captured:#197b71;--derived:#276fa6;--response-ink:#202638;--response-label:#566176;
+ --response-bg:
+  radial-gradient(90% 120% at 8% 20%,rgba(94,219,229,.23),transparent 62%),
+  radial-gradient(80% 110% at 76% 15%,rgba(167,140,247,.25),transparent 62%),
+  radial-gradient(70% 100% at 96% 85%,rgba(238,145,207,.21),transparent 66%),
+  linear-gradient(112deg,rgba(252,253,255,.96),rgba(241,243,251,.93));
+ --support-bg:rgba(120,228,204,.28);--support-ink:#155e55;
+ --suppress-bg:rgba(167,140,247,.24);--suppress-ink:#52447f;
+ --neutral-bg:rgba(122,132,153,.17);--neutral-ink:#50596d;
+ min-height:100vh;padding:20px 14px 36px;color:var(--ink);
  background:
-  radial-gradient(1000px 600px at 8% -5%,rgba(127,180,240,.34),transparent 60%),
-  radial-gradient(900px 560px at 96% 2%,rgba(182,176,218,.36),transparent 56%),
-  radial-gradient(820px 620px at 50% 108%,rgba(95,200,188,.26),transparent 60%),
-  linear-gradient(165deg,#F3F5FC 0%,#EAEFF9 50%,#E9EDF8 100%)}
-.card{max-width:840px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
-.mod{position:relative;border-radius:16px;border:1px solid rgba(255,255,255,.8);
- background:linear-gradient(180deg,rgba(255,255,255,.62),rgba(240,246,252,.42));
- box-shadow:0 10px 30px rgba(100,115,160,.14),inset 0 1px 0 rgba(255,255,255,.95)}
-.mod-h{display:flex;align-items:center;gap:9px;padding:12px 16px 8px;flex-wrap:wrap}
-.cap{font-family:"Segoe UI",system-ui,sans-serif;font-weight:600;letter-spacing:.22em;
- text-transform:uppercase;font-size:10px;color:#4A5878}
-.led{width:7px;height:7px;background:#5FC8BC;box-shadow:0 0 8px #5FC8BC;flex:none;
- animation:heartbeat 4s ease-in-out infinite}
-.led.blue{background:#4C8DF0;box-shadow:0 0 8px #4C8DF0}
-.led.lilac{background:#B6B0DA;box-shadow:0 0 8px #B6B0DA}
-@keyframes heartbeat{0%,100%{opacity:.55}50%{opacity:1}}
-@media (prefers-reduced-motion:reduce){.led{animation:none;opacity:.85}}
-.tag{font-family:"Segoe UI",system-ui,sans-serif;font-size:8.5px;letter-spacing:.12em;
- text-transform:uppercase;padding:2px 7px;border-radius:4px;white-space:nowrap}
-.tag.cap-t{color:#1B7F74;background:rgba(95,200,188,.14);border:1px solid rgba(95,200,188,.5)}
-.tag.der-t{color:#1B87A8;background:rgba(44,191,232,.12);border:1px solid rgba(44,191,232,.45)}
-.tag.warn-t{color:#C24A31;background:rgba(242,109,79,.10);border:1px solid rgba(242,109,79,.45)}
-.mod-b{padding:4px 16px 14px}
-.wordmark{font-family:"Segoe UI",system-ui,sans-serif;font-weight:700;font-size:18px;
- letter-spacing:.16em;color:#4A5878}
-.wordmark b{color:#36AEC4}
-.mast-sub{font-family:"Segoe UI",system-ui,sans-serif;font-size:8.5px;letter-spacing:.26em;
- text-transform:uppercase;color:#8290AC}
-.meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:7px 18px;
- padding:8px 16px 6px}
-.meta .k{font-family:"Segoe UI",system-ui,sans-serif;font-size:8px;letter-spacing:.18em;
- text-transform:uppercase;color:#8290AC;display:block}
-.meta .v{font-size:11.5px;color:#2A3252;word-break:break-all}
-.meta .v.warn{color:#C24A31;font-weight:600}
-.legend{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 16px 13px;
- font-family:"Segoe UI",system-ui,sans-serif;font-size:9.5px;color:#8290AC}
-.well{border:1px solid rgba(128,142,190,.16);border-radius:9px;padding:9px 12px;
- background:rgba(255,255,255,.5);white-space:pre-wrap;word-break:break-word;color:#4A5878}
-.turnnote{font-size:9px;color:#8290AC;font-style:italic;padding:4px 2px 0}
-.crt{position:relative;border-radius:10px;margin:10px 0 6px;padding:30px 16px 14px;overflow:hidden;
- border:1px solid rgba(182,176,218,.6);
+  radial-gradient(720px 420px at 4% 0%,rgba(94,219,229,.19),transparent 67%),
+  radial-gradient(760px 440px at 55% -8%,rgba(167,140,247,.15),transparent 68%),
+  radial-gradient(680px 430px at 98% 8%,rgba(238,145,207,.15),transparent 67%),
+  linear-gradient(150deg,#f5f7fb 0%,var(--page) 52%,#eef0f7 100%)}
+.theme-toggle-input{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);
+ clip-path:inset(50%);white-space:nowrap}
+.receipt-shell:has(.theme-toggle-input:checked){
+ --page:#080a11;--panel:rgba(14,17,26,.92);--panel-strong:rgba(18,21,32,.96);
+ --panel-soft:rgba(9,12,20,.76);--ink:#edf1f7;--ink-soft:#aeb7c8;--ink-faint:#737e94;
+ --line:rgba(175,188,219,.23);--line-soft:rgba(175,188,219,.12);--shadow:rgba(0,0,0,.45);
+ --signal-cyan:#6de6ee;--signal-mint:#85ebd2;--signal-violet:#af99ff;
+ --signal-pink:#f19bd7;--signal-peach:#f5b995;--danger:#ff8c80;
+ --captured:#85ebd2;--derived:#79cfea;--response-ink:#f0f3f9;--response-label:#97a2b8;
+ --response-bg:
+  radial-gradient(90% 130% at 8% 22%,rgba(94,219,229,.17),transparent 60%),
+  radial-gradient(75% 120% at 64% 0%,rgba(167,140,247,.20),transparent 62%),
+  radial-gradient(70% 100% at 96% 90%,rgba(238,145,207,.14),transparent 65%),
+  linear-gradient(118deg,#111521,#090c14);
+ --support-bg:rgba(120,228,204,.23);--support-ink:#b8f5e6;
+ --suppress-bg:rgba(167,140,247,.25);--suppress-ink:#ded6ff;
+ --neutral-bg:rgba(174,183,200,.13);--neutral-ink:#c3cada;
  background:
-  radial-gradient(120% 100% at 50% 0%,rgba(95,200,188,.20),transparent 60%),
-  radial-gradient(90% 80% at 85% 100%,rgba(143,168,232,.26),transparent 62%),
-  linear-gradient(180deg,#2B3160,#1E2447);
- box-shadow:inset 0 0 46px rgba(22,26,64,.55),inset 0 0 70px rgba(127,180,240,.12),
-  0 2px 0 rgba(255,255,255,.6)}
-.crt::after{content:"";position:absolute;inset:0;pointer-events:none;opacity:.18;
- background:repeating-linear-gradient(180deg,rgba(0,0,0,0) 0 2px,rgba(18,22,56,.6) 2px 3px)}
-.crt-st{position:absolute;top:8px;left:13px;font-family:"Segoe UI",system-ui,sans-serif;font-size:8px;
- letter-spacing:.16em;text-transform:uppercase;color:#5FC8BC}
-.crt-id{position:absolute;top:8px;right:13px;font-size:8.5px;letter-spacing:.12em;color:#8A94C4}
-.crt-text{position:relative;font-size:15px;line-height:1.55;color:#B8F5E4;
- text-shadow:0 0 6px rgba(122,235,214,.5);white-space:pre-wrap;word-break:break-word}
-.tk.lo{border-bottom:1px dotted rgba(184,245,228,.75)}
-.conf-legend{font-family:"Segoe UI",system-ui,sans-serif;font-size:8.5px;letter-spacing:.08em;
- color:#8290AC;padding:6px 2px 0}
-.absent{padding:10px 2px 6px;color:#8290AC;font-style:italic}
-.rrow{border-top:1px solid rgba(128,142,190,.16);padding:10px 0 12px}
-.rrow:first-child{border-top:none}
-.r-inf{font-size:12px;color:#2A3252}
-.r-chips{display:flex;gap:8px;margin:5px 0 7px;flex-wrap:wrap;align-items:center}
-.chip{font-family:"Segoe UI",system-ui,sans-serif;font-size:8.5px;letter-spacing:.1em;
- text-transform:uppercase;padding:1.5px 8px;border-radius:8px;
- border:1px solid rgba(128,142,190,.32);color:#4A5878}
-.chip.eff{color:#1B7F74;border-color:rgba(95,200,188,.6);background:rgba(95,200,188,.12)}
-.chip.noeff{color:#8290AC}
-.chip.cv{color:#1B87A8;border-color:rgba(44,191,232,.5);background:rgba(44,191,232,.08)}
-.nats{font-size:11px;color:#1B87A8;font-weight:600}
-.dep{display:grid;grid-template-columns:minmax(80px,150px) 58px 1fr;gap:3px 10px;align-items:center;
- max-width:480px;margin-top:3px}
-.dep .p{white-space:pre;overflow:hidden;text-overflow:ellipsis;font-size:11px;color:#2A3252}
-.dep .d{font-size:10px;text-align:right;color:#4A5878}
-.bar{height:6px;border-radius:3px;background:rgba(90,130,155,.16);overflow:hidden}
-.bar i{display:block;height:100%;background:linear-gradient(90deg,#4C8DF0,#5FC8BC)}
-.bar.neg i{background:linear-gradient(90deg,#B6B0DA,#9A92C8)}
-.small-note{font-size:9px;color:#8290AC;padding-top:5px;line-height:1.6}
-.imap-intro{font-size:10px;color:#4A5878;padding:0 0 9px;line-height:1.65}
-.imap-legend{display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:0 0 10px;
- font-family:"Segoe UI",system-ui,sans-serif;font-size:9px;color:#8290AC}
-.imap-key{display:inline-block;width:12px;height:9px;border-radius:3px;border:1px solid transparent}
-.imap-key.sel{background:#4C8DF0;border-color:#3975CE}.imap-key.sup{background:#B9EDDF;border-color:#5FC8BC}
-.imap-key.suppress{background:#DDD7F1;border-color:#9A92C8}
-.imap-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}
-.imap-side{min-width:0;border:1px solid rgba(128,142,190,.16);border-radius:10px;padding:9px 10px;
- background:rgba(255,255,255,.42)}
-.imap-side-h{font-family:"Segoe UI",system-ui,sans-serif;font-size:8.5px;letter-spacing:.16em;
- text-transform:uppercase;color:#4A5878;padding-bottom:7px}
-.imap-source{border-top:1px solid rgba(128,142,190,.13);padding:7px 0}
-.imap-source:first-of-type{border-top:none;padding-top:0}
-.imap-source-k{font-family:"Segoe UI",system-ui,sans-serif;font-size:8px;letter-spacing:.1em;
- text-transform:uppercase;color:#8290AC;padding-bottom:3px}
-.im-answer{font-size:13px;line-height:1.75;color:#2A3252;white-space:pre-wrap;word-break:break-word}
-.im-span{border-radius:3px;transition:background-color .1s,color .1s,box-shadow .1s;
- cursor:help;outline:none}
+  radial-gradient(680px 430px at 4% 0%,rgba(94,219,229,.09),transparent 67%),
+  radial-gradient(760px 450px at 56% -8%,rgba(167,140,247,.10),transparent 68%),
+  radial-gradient(680px 430px at 100% 10%,rgba(238,145,207,.08),transparent 67%),
+  linear-gradient(150deg,#10131d 0%,var(--page) 56%,#0b0e17 100%)}
+.card{width:min(1240px,100%);margin:0 auto;display:grid;
+ grid-template-columns:minmax(0,1.55fr) minmax(320px,.7fr);gap:1px;
+ border:1px solid var(--line);background:var(--line);box-shadow:0 22px 58px var(--shadow)}
+.mod{position:relative;min-width:0;background:var(--panel);border:0}
+.masthead,.exchange,.influence,.lineage,.receipt-footer{grid-column:1/-1}
+.receipts{grid-column:1}.lens{grid-column:2}
+.mod-h{min-height:37px;display:flex;align-items:center;gap:9px;padding:9px 13px;
+ border-bottom:1px solid var(--line-soft);flex-wrap:wrap}
+.cap{font-family:system-ui,sans-serif;font-weight:650;letter-spacing:.18em;
+ text-transform:uppercase;font-size:9px;color:var(--ink-soft)}
+.led{width:5px;height:5px;background:var(--signal-mint);
+ box-shadow:0 0 9px var(--signal-mint);flex:none}
+.led.blue{background:var(--signal-cyan);box-shadow:0 0 9px var(--signal-cyan)}
+.led.lilac{background:var(--signal-violet);box-shadow:0 0 9px var(--signal-violet)}
+.tag{font-family:system-ui,sans-serif;font-size:7.5px;letter-spacing:.11em;text-transform:uppercase;
+ padding:2px 5px;white-space:nowrap;border:1px solid var(--line)}
+.tag.cap-t{color:var(--captured);background:rgba(120,228,204,.10);border-color:currentColor}
+.tag.der-t{color:var(--derived);background:rgba(94,219,229,.09);border-color:currentColor}
+.tag.warn-t{color:var(--danger);background:rgba(241,178,142,.09);border-color:currentColor}
+.mod-b{padding:12px 13px 14px}
+.wordmark{font-family:system-ui,sans-serif;font-weight:760;font-size:17px;letter-spacing:.14em;
+ color:var(--ink)}
+.wordmark b{color:var(--signal-cyan)}
+.mast-sub{font-family:system-ui,sans-serif;font-size:8px;letter-spacing:.23em;
+ text-transform:uppercase;color:var(--ink-faint)}
+.theme-toggle{margin-left:auto;display:flex;align-items:center;gap:7px;padding:4px 6px;
+ border:1px solid var(--line);color:var(--ink-faint);cursor:pointer;
+ font-family:system-ui,sans-serif;font-size:7px;letter-spacing:.14em;text-transform:uppercase}
+.theme-toggle b{font-size:8px;color:var(--ink-soft);font-weight:650}
+.theme-toggle b::after{content:"halo"}
+.theme-toggle:hover{border-color:var(--signal-cyan);color:var(--ink)}
+.theme-toggle-input:focus-visible~.card .theme-toggle{outline:2px solid var(--signal-cyan);
+ outline-offset:2px}
+.receipt-shell:has(.theme-toggle-input:checked) .theme-toggle b::after{content:"cathedral"}
+.meta{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));border-top:1px solid var(--line-soft);
+ border-bottom:1px solid var(--line-soft)}
+.meta>div{min-width:0;padding:8px 10px;border-right:1px solid var(--line-soft)}
+.meta>div:last-child{border-right:0}
+.meta .k{font-family:system-ui,sans-serif;font-size:7px;letter-spacing:.15em;text-transform:uppercase;
+ color:var(--ink-faint);display:block;margin-bottom:2px}
+.meta .v{font-size:9.5px;color:var(--ink);word-break:break-all}
+.meta .v.warn{color:var(--danger);font-weight:650}
+.legend{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:8px 10px;
+ font-family:system-ui,sans-serif;font-size:8px;color:var(--ink-faint)}
+.legend .legend-copy{margin-right:7px;letter-spacing:.05em;text-transform:uppercase}
+.well{border-left:2px solid var(--signal-cyan);padding:9px 11px;background:var(--panel-soft);
+ white-space:pre-wrap;word-break:break-word;color:var(--ink-soft)}
+.turnnote{font-size:8px;color:var(--ink-faint);padding:4px 2px 0}
+.crt{position:relative;margin:10px 0 0;padding:30px 14px 13px;overflow:hidden;
+ border:1px solid var(--line);background:var(--response-bg)}
+.crt::after{content:"";position:absolute;inset:0;pointer-events:none;opacity:.16;
+ background:linear-gradient(105deg,transparent 20%,rgba(255,255,255,.7) 43%,transparent 61%)}
+.crt-st{position:absolute;top:8px;left:12px;font-family:system-ui,sans-serif;font-size:7px;
+ letter-spacing:.16em;text-transform:uppercase;color:var(--response-label)}
+.crt-id{position:absolute;top:8px;right:12px;font-size:8px;letter-spacing:.08em;
+ color:var(--response-label)}
+.crt-text{position:relative;z-index:1;font-size:15px;line-height:1.58;color:var(--response-ink);
+ white-space:pre-wrap;word-break:break-word}
+.tk.lo{border-bottom:1px dotted var(--signal-pink)}
+.conf-legend{position:relative;z-index:1;font-family:system-ui,sans-serif;font-size:7.5px;
+ letter-spacing:.06em;color:var(--response-label);padding:7px 2px 0}
+.absent{padding:8px 1px;color:var(--ink-faint);font-style:italic}
+.rrow{border-top:1px solid var(--line-soft);padding:9px 0 11px}
+.rrow:first-child{border-top:0}
+.r-inf{font-size:11px;color:var(--ink)}
+.r-chips{display:flex;gap:6px;margin:5px 0 7px;flex-wrap:wrap;align-items:center}
+.chip{font-family:system-ui,sans-serif;font-size:7.5px;letter-spacing:.09em;text-transform:uppercase;
+ padding:2px 6px;border:1px solid var(--line);color:var(--ink-soft)}
+.chip.eff{color:var(--captured);border-color:currentColor;background:rgba(120,228,204,.10)}
+.chip.noeff{color:var(--ink-faint)}
+.chip.cv{color:var(--derived);border-color:currentColor;background:rgba(94,219,229,.08)}
+.nats{font-size:10px;color:var(--derived);font-weight:650}
+.dep{display:grid;grid-template-columns:minmax(80px,150px) 58px 1fr;gap:3px 10px;
+ align-items:center;max-width:480px;margin-top:3px}
+.dep .p{white-space:pre;overflow:hidden;text-overflow:ellipsis;font-size:10px;color:var(--ink)}
+.dep .d{font-size:9px;text-align:right;color:var(--ink-soft)}
+.bar{height:5px;background:var(--line-soft);overflow:hidden}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--signal-cyan),var(--signal-mint))}
+.bar.neg i{background:linear-gradient(90deg,var(--signal-violet),var(--signal-pink))}
+.small-note{font-size:8px;color:var(--ink-faint);padding-top:5px;line-height:1.6}
+.imap-intro{font-size:9px;color:var(--ink-soft);padding:0 0 8px;line-height:1.6}
+.imap-legend{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:0 0 9px;
+ font-family:system-ui,sans-serif;font-size:8px;color:var(--ink-faint)}
+.imap-key{display:inline-block;width:11px;height:8px;border:1px solid transparent}
+.imap-key.sel{background:var(--signal-cyan);border-color:var(--derived)}
+.imap-key.sup{background:var(--support-bg);border-color:var(--signal-mint)}
+.imap-key.suppress{background:var(--suppress-bg);border-color:var(--signal-violet)}
+.imap-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:1px;
+ border:1px solid var(--line);background:var(--line)}
+.imap-side{min-width:0;padding:9px 10px;background:var(--panel-strong)}
+.imap-side-h{font-family:system-ui,sans-serif;font-size:7.5px;letter-spacing:.14em;
+ text-transform:uppercase;color:var(--ink-soft);padding-bottom:7px}
+.imap-source{border-top:1px solid var(--line-soft);padding:7px 0}
+.imap-source:first-of-type{border-top:0;padding-top:0}
+.imap-source-k{font-family:system-ui,sans-serif;font-size:7px;letter-spacing:.09em;
+ text-transform:uppercase;color:var(--ink-faint);padding-bottom:3px}
+.im-answer{font-size:12px;line-height:1.75;color:var(--ink);white-space:pre-wrap;word-break:break-word}
+.im-span{transition:background-color .1s,color .1s;cursor:help;outline:none}
 .im-p{display:block;white-space:pre-wrap;word-break:break-word;padding:2px 3px;margin:0 -3px}
 .im-a{display:inline;border-bottom:1px solid transparent}
-.im-no-clear{border-bottom:1px dotted #9EA8BD}
+.im-no-clear{border-bottom:1px dotted var(--ink-faint)}
 .im-pin{display:none}
-.im-pin:checked+.im-span{background:#4C8DF0!important;color:#fff!important;
- box-shadow:0 0 0 2px rgba(76,141,240,.22);border-bottom-color:transparent}
-.imap-clear{display:inline-block;margin:0 0 9px;padding:2px 7px;border-radius:7px;
- border:1px solid rgba(128,142,190,.28);font-family:"Segoe UI",system-ui,sans-serif;
- font-size:8.5px;color:#4A5878;cursor:pointer}
-.imap-clear:hover,.imap-clear:focus{border-color:#4C8DF0;outline:none;color:#285EAE}
-.imap:has(#ic:checked) .im-span:is(:hover,:focus){background:#4C8DF0!important;color:#fff!important;
- box-shadow:0 0 0 2px rgba(76,141,240,.22);border-bottom-color:transparent}
-.imap-state{margin-top:9px;padding:7px 9px;border-left:3px solid #B6B0DA;
- background:rgba(182,176,218,.09);font-size:9.5px;color:#4A5878}
-.imap-cut{color:#8290AC;font-style:italic}
-@media(max-width:620px){.imap-grid{grid-template-columns:1fr}}
-@media print{.imap-clear{display:none}}
-.active-line{font-size:10.5px;color:#4A5878;padding:2px 0 8px}
-.jgroup{padding:7px 0 3px;border-top:1px solid rgba(128,142,190,.16)}
-.jgroup:first-child{border-top:none}
-.jlayer{font-family:"Segoe UI",system-ui,sans-serif;font-size:8.5px;letter-spacing:.16em;
- text-transform:uppercase;color:#4A5878;padding-bottom:5px}
+.im-pin:checked+.im-span{background:var(--signal-cyan)!important;color:#071014!important;
+ box-shadow:inset 0 -2px 0 var(--signal-violet);border-bottom-color:transparent}
+.imap-clear{display:inline-block;margin:0 0 9px;padding:2px 6px;border:1px solid var(--line);
+ font-family:system-ui,sans-serif;font-size:7.5px;color:var(--ink-soft);cursor:pointer}
+.imap-clear:hover,.imap-clear:focus{border-color:var(--signal-cyan);outline:none;color:var(--ink)}
+.imap:has(#ic:checked) .im-span:is(:hover,:focus){background:var(--signal-cyan)!important;
+ color:#071014!important;box-shadow:inset 0 -2px 0 var(--signal-violet);
+ border-bottom-color:transparent}
+.imap-state{margin-top:9px;padding:7px 9px;border-left:2px solid var(--signal-violet);
+ background:rgba(167,140,247,.09);font-size:8.5px;color:var(--ink-soft)}
+.imap-cut{color:var(--ink-faint);font-style:italic}
+.active-line{font-size:9.5px;color:var(--ink-soft);padding:2px 0 8px}
+.jgroup{padding:7px 0 3px;border-top:1px solid var(--line-soft)}
+.jgroup:first-child{border-top:0}
+.jlayer{font-family:system-ui,sans-serif;font-size:7.5px;letter-spacing:.14em;text-transform:uppercase;
+ color:var(--ink-soft);padding-bottom:5px}
 .jchips{display:flex;flex-wrap:wrap;gap:4px}
-.jchip{font-size:9.5px;padding:1px 7px;border-radius:8px;border:1px solid rgba(154,146,200,.5);
- color:#5F5794;background:rgba(182,176,218,.16);white-space:nowrap;max-width:100%;
+.jchip{font-size:8.5px;padding:1px 6px;border:1px solid var(--signal-violet);
+ color:var(--suppress-ink);background:var(--suppress-bg);white-space:nowrap;max-width:100%;
  overflow:hidden;text-overflow:ellipsis}
-.provenance{font-size:8.5px;color:#8290AC;line-height:1.7;padding-top:8px}
-.tree{font-size:11px;color:#4A5878;white-space:pre;overflow-x:auto;padding:6px 2px}
-.tree b{color:#2A3252}
-.foot{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:11px 16px}
-.flowbar{height:7px;flex:1;min-width:160px;border-radius:4px;opacity:.85;
- background:linear-gradient(90deg,#4C8DF0,#2CBFE8 34%,#5FC8BC 62%,#B6B0DA)}
-.credo{font-family:"Segoe UI",system-ui,sans-serif;font-size:8.5px;letter-spacing:.1em;
- text-transform:uppercase;color:#4A5878}
-.foot .rid{font-size:9px;color:#8290AC}
+.provenance{font-size:7.5px;color:var(--ink-faint);line-height:1.7;padding-top:8px}
+.tree{font-size:10px;color:var(--ink-soft);white-space:pre;overflow-x:auto;padding:5px 1px}
+.tree b{color:var(--ink)}
+.foot{display:grid;grid-template-columns:auto minmax(120px,1fr) auto;align-items:center;gap:12px;
+ padding:10px 13px}
+.flowbar{height:5px;background:linear-gradient(90deg,var(--signal-cyan),var(--signal-mint),
+ var(--signal-violet),var(--signal-pink),var(--signal-peach))}
+.credo{font-family:system-ui,sans-serif;font-size:7.5px;letter-spacing:.13em;
+ text-transform:uppercase;color:var(--ink-soft)}
+.foot .rid{font-size:8px;color:var(--ink-faint)}
+@media(max-width:900px){
+ .card{grid-template-columns:1fr}.receipts,.lens{grid-column:1}
+ .meta{grid-template-columns:repeat(3,minmax(0,1fr))}
+ .meta>div:nth-child(3n){border-right:0}}
+@media(max-width:620px){
+ .receipt-shell{padding:0}.card{border-left:0;border-right:0;box-shadow:none}
+ .imap-grid{grid-template-columns:1fr}.meta{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .meta>div:nth-child(3n){border-right:1px solid var(--line-soft)}
+ .meta>div:nth-child(2n){border-right:0}.crt-id{display:none}
+ .foot{grid-template-columns:1fr}.flowbar{order:-1}.theme-toggle{margin-left:0}}
+@media print{
+ html,body{background:#fff}.receipt-shell{padding:0;background:#fff;--panel:#fff;--panel-strong:#fff;
+  --panel-soft:#f6f7f9;--ink:#111;--ink-soft:#333;--ink-faint:#666;--line:#aaa;
+  --line-soft:#ddd;--shadow:transparent;--response-ink:#111;--response-label:#555;
+  --response-bg:#f6f7f9}
+ .card{width:100%;box-shadow:none}.theme-toggle{display:none}.imap-clear{display:none}
+ .mod{break-inside:avoid}.influence{break-inside:auto}}
 """
 
 
 # ------------------------------------------------------------------------------------------- sections
-def _mod(led: str, title: str, tag_html: str, body_html: str) -> str:
-    return (f'<section class="mod"><div class="mod-h"><span class="led {led}"></span>'
+def _mod(led: str, title: str, tag_html: str, body_html: str, kind: str = "") -> str:
+    classes = f"mod {kind}".rstrip()
+    return (f'<section class="{classes}"><div class="mod-h"><span class="led {led}"></span>'
             f'<span class="cap">{_esc(title)}</span>{tag_html}</div>'
             f'<div class="mod-b">{body_html}</div></section>')
 
@@ -243,15 +305,17 @@ def _masthead(run: dict, rid: str) -> str:
                    f'<span class="v{" " + cls if cls else ""}">{_esc(v)}</span></div>'
                    for k, v, cls in rows)
     return (
-        '<header class="mod">'
+        '<header class="mod masthead">'
         '<div class="mod-h"><span class="led"></span>'
         '<span class="wordmark">cloz<b>n</b></span>'
-        '<span class="mast-sub">run receipt</span></div>'
+        '<span class="mast-sub">run receipt</span>'
+        '<label class="theme-toggle" for="receipt-theme"><span>theme</span>'
+        '<b aria-hidden="true"></b></label></div>'
         f'<div class="meta">{meta}</div>'
         '<div class="legend"><span class="tag cap-t">captured</span>'
-        '<span>recorded at generation time</span>'
+        '<span class="legend-copy">run record</span>'
         '<span class="tag der-t">derived</span>'
-        '<span>computed afterwards from the record — never assumed</span></div>'
+        '<span class="legend-copy">post-run computation</span></div>'
         '</header>')
 
 
@@ -308,7 +372,7 @@ def _exchange(run: dict, trace: dict, rid: str) -> str:
            f'{_phosphor(trace, str(run.get("response") or ""))}</div>')
     parts.append(crt)
     tag = '<span class="tag cap-t">captured</span>'
-    return _mod("blue", "the exchange", tag, "".join(parts))
+    return _mod("blue", "the exchange", tag, "".join(parts), "exchange")
 
 
 def _influence_delta(link: dict):
@@ -344,9 +408,9 @@ def _influence_css(prompt_relations: list[list], answer_relations: list[list]) -
     hover and keyboard focus without script, network access, or active content.
     """
     colors = {
-        "s": ("#B9EDDF", "#174E48"),
-        "x": ("#DDD7F1", "#514879"),
-        "n": ("#E4E8F1", "#4A5878"),
+        "s": ("var(--support-bg)", "var(--support-ink)"),
+        "x": ("var(--suppress-bg)", "var(--suppress-ink)"),
+        "n": ("var(--neutral-bg)", "var(--neutral-ink)"),
     }
     rules = []
     for prefix, relations in (("p", prompt_relations), ("a", answer_relations)):
@@ -367,18 +431,18 @@ def _influence_section(bundle: dict) -> tuple[str, str]:
     tag = '<span class="tag der-t">derived &middot; on demand</span>'
     if not influence:
         return (_mod("blue", "context ↔ answer influence", tag,
-                     f'<div class="absent">{_esc(_ABSENT_INFLUENCE)}</div>'), "")
+                     f'<div class="absent">{_esc(_ABSENT_INFLUENCE)}</div>', "influence"), "")
     if influence.get("schema") != "clozn.context_answer_influence.v1":
         body = ('<div class="absent">no compatible context-answer influence map is included in '
                 'this receipt</div>')
-        return _mod("blue", "context ↔ answer influence", tag, body), ""
+        return _mod("blue", "context ↔ answer influence", tag, body, "influence"), ""
     if influence.get("status") != "ok" or influence.get("available") is not True:
         error = _dict(influence.get("error"))
         code = str(error.get("code") or influence.get("status") or "unavailable")[:80]
         message = str(error.get("message") or "the measurement did not complete")[:500]
         body = (f'<div class="absent">map unavailable — {_esc(code)}: '
                 f'{_esc(message)}</div>')
-        return _mod("blue", "context ↔ answer influence", tag, body), ""
+        return _mod("blue", "context ↔ answer influence", tag, body, "influence"), ""
 
     raw_prompt_spans = [span for span in _list(influence.get("prompt_spans")) if isinstance(span, dict)]
     # Coarse-to-fine refinement (Phase 3.7) can push the measured span count above the display cap --
@@ -437,7 +501,7 @@ def _influence_section(bundle: dict) -> tuple[str, str]:
     if not prompt_items or not answer_items:
         body = ('<div class="absent">the influence artifact contains no renderable measured '
                 'context and answer spans</div>')
-        return _mod("blue", "context ↔ answer influence", tag, body), ""
+        return _mod("blue", "context ↔ answer influence", tag, body, "influence"), ""
 
     prompt_index = {item["id"]: index for index, item in enumerate(prompt_items)}
     answer_index = {item["id"]: index for index, item in enumerate(answer_items)}
@@ -575,7 +639,7 @@ def _influence_section(bundle: dict) -> tuple[str, str]:
     state = "".join(f'<div class="imap-state">{_esc(note)}</div>' for note in notes)
     measured_tag = '<span class="tag der-t">derived &middot; matched replacement</span>'
     body = intro + grid + state + "</div>"
-    return (_mod("blue", "context ↔ answer influence", measured_tag, body),
+    return (_mod("blue", "context ↔ answer influence", measured_tag, body, "influence"),
             _influence_css(prompt_relations, answer_relations))
 
 
@@ -663,7 +727,7 @@ def _receipts_section(bundle: dict) -> str:
     if not rows:
         tag = '<span class="tag der-t">derived · on demand</span>'
         body = active + f'<div class="absent">{_esc(_ABSENT_RECEIPTS)}</div>'
-        return _mod("lilac", "influences & receipts", tag, body)
+        return _mod("lilac", "influences & receipts", tag, body, "receipts")
     when = receipts_obj.get("computed_at") or "on demand"
     tag = (f'<span class="tag der-t">derived — computed {_esc(when)} by leave-one-out + '
            'forced scoring</span>')
@@ -672,14 +736,15 @@ def _receipts_section(bundle: dict) -> str:
     if skipped:
         body += (f'<div class="small-note">{len(skipped)} influence'
                  f'{"" if len(skipped) == 1 else "s"} skipped — reasons in the JSON export</div>')
-    return _mod("lilac", "influences & receipts", tag, body)
+    return _mod("lilac", "influences & receipts", tag, body, "receipts")
 
 
 def _lens_section(bundle: dict) -> str:
     readouts = [r for r in _list(bundle.get("workspace_readouts")) if isinstance(r, dict)]
     if not readouts:
         tag = '<span class="tag der-t">derived · on demand</span>'
-        return _mod("blue", "lens readouts", tag, f'<div class="absent">{_esc(_ABSENT_LENS)}</div>')
+        return _mod("blue", "lens readouts", tag,
+                    f'<div class="absent">{_esc(_ABSENT_LENS)}</div>', "lens")
     by_layer: dict = {}
     for r in readouts:
         by_layer.setdefault(r.get("layer"), []).append(r)
@@ -701,7 +766,8 @@ def _lens_section(bundle: dict) -> str:
                           f'<div class="jchips">{"".join(chips)}</div></div>')
     if not groups:
         tag = '<span class="tag der-t">derived · on demand</span>'
-        return _mod("blue", "lens readouts", tag, f'<div class="absent">{_esc(_ABSENT_LENS)}</div>')
+        return _mod("blue", "lens readouts", tag,
+                    f'<div class="absent">{_esc(_ABSENT_LENS)}</div>', "lens")
     first = readouts[0]
     provenance = str(first.get("provenance") or first.get("note") or "")
     if not provenance:
@@ -709,7 +775,7 @@ def _lens_section(bundle: dict) -> str:
                       else f"workspace readout — provider {first.get('provider_type') or 'unknown'}")
     tag = '<span class="tag der-t">derived — lens readout</span>'
     body = "".join(groups) + f'<div class="provenance">{_esc(provenance)}</div>'
-    return _mod("blue", "lens readouts", tag, body)
+    return _mod("blue", "lens readouts", tag, body, "lens")
 
 
 def _tree_lines(node: dict, rid: str, depth: int, out: list) -> None:
@@ -736,22 +802,22 @@ def _lineage_section(bundle: dict, run: dict, rid: str) -> str:
         lines: list = []
         _tree_lines(tree, rid, 0, lines)
         if len(lines) > 1 or tree.get("children"):
-            return _mod("lilac", "lineage", tag, f'<div class="tree">{"<br>".join(lines)}</div>')
+            return _mod("lilac", "lineage", tag,
+                        f'<div class="tree">{"<br>".join(lines)}</div>', "lineage")
     parent = run.get("parent_run_id")
     if parent:
         body = (f'<div class="tree"><b>{_esc(parent)}</b> · parent<br>'
                 f'└ <b>{_esc(rid)}</b> ◀ this run</div>')
-        return _mod("lilac", "lineage", tag, body)
+        return _mod("lilac", "lineage", tag, body, "lineage")
     return _mod("lilac", "lineage", tag,
                 '<div class="absent">no lineage — an original run '
-                '(no parent, no recorded branches)</div>')
+                '(no parent, no recorded branches)</div>', "lineage")
 
 
 def _footer(rid: str) -> str:
-    return (f'<footer class="mod"><div class="foot">'
-            f'<span class="credo">{_esc(_FOOTER_CREDO)}</span>'
+    return (f'<footer class="mod receipt-footer"><div class="foot">'
+            f'<span class="credo">{_esc(_FOOTER_LABEL)}</span>'
             f'<span class="flowbar"></span>'
-            f'<span class="wordmark" style="font-size:12px">cloz<b>n</b></span>'
             f'<span class="rid">{_esc(rid)}</span></div></footer>')
 
 
@@ -770,10 +836,14 @@ def render_card(bundle: dict) -> str:
         "<head>",
         '<meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
+        '<meta name="color-scheme" content="light dark">',
         f"<title>clozn — run receipt · {_esc(rid)}</title>",
         f"<style>{_CSS}{influence_css}</style>",
         "</head>",
         "<body>",
+        '<div class="receipt-shell">',
+        '<input class="theme-toggle-input" type="checkbox" id="receipt-theme" '
+        'aria-label="Use Cathedral theme">',
         '<main class="card">',
         _masthead(run, rid),
         _exchange(run, trace, rid),
@@ -783,6 +853,7 @@ def render_card(bundle: dict) -> str:
         _lineage_section(bundle, run, rid),
         _footer(rid),
         "</main>",
+        "</div>",
         "</body>",
         "</html>",
     ]

@@ -6,10 +6,16 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
-import { loadRunConcepts, loadRunInspection, measureRunInfluenceMap } from "../../data/api";
+import {
+  loadRunConcepts,
+  loadRunInspection,
+  loadRunPerformance,
+  measureRunInfluenceMap,
+} from "../../data/api";
 import type {
   ObservatoryData,
   RunConcepts,
+  RunPerformance as RunPerformanceData,
   RuntimeState,
   SourceReading,
   TokenReading,
@@ -22,6 +28,7 @@ import {
   summarizeRange,
   weakestTokenInRange,
 } from "./analysis";
+import { RunPerformance } from "./RunPerformance";
 
 interface LensProps {
   runtime: RuntimeState;
@@ -33,6 +40,9 @@ type LensMode = "sources" | "shakiness" | "influences" | "concepts";
 type ConceptState =
   | { status: "idle" | "loading" }
   | { status: "done"; data: RunConcepts };
+type PerformanceState =
+  | { status: "idle" | "loading" | "error" }
+  | { status: "ready"; data: RunPerformanceData };
 type TokenRange = { start: number; end: number };
 
 const modes: Array<{ id: LensMode; label: string }> = [
@@ -124,6 +134,9 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
   const [concepts, setConcepts] = useState<ConceptState>({ status: "idle" });
   const [sourceStatus, setSourceStatus] = useState<"idle" | "measuring" | "error">("idle");
+  const [performanceOpen, setPerformanceOpen] = useState(false);
+  const [performance, setPerformance] = useState<PerformanceState>({ status: "idle" });
+  const [selectedPerformanceFinding, setSelectedPerformanceFinding] = useState("generation");
 
   useEffect(() => {
     if (!runtime.runs.length) return;
@@ -138,6 +151,8 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
     setSelectedRange(null);
     setConcepts({ status: "idle" });
     setSourceStatus("idle");
+    setPerformance({ status: "loading" });
+    setSelectedPerformanceFinding("generation");
     void loadRunInspection(runId, controller.signal).then((inspection) => {
       if (controller.signal.aborted) return;
       const nextToken = initialToken(inspection);
@@ -148,6 +163,11 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
       history.replaceState(null, "", `#/runs/${encodeURIComponent(runId)}`);
     }).catch(() => {
       if (!controller.signal.aborted) setStatus("error");
+    });
+    void loadRunPerformance(runId, controller.signal).then((nextPerformance) => {
+      if (!controller.signal.aborted) setPerformance({ status: "ready", data: nextPerformance });
+    }).catch(() => {
+      if (!controller.signal.aborted) setPerformance({ status: "error" });
     });
     return () => controller.abort();
   }, [runId]);
@@ -402,7 +422,22 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
               key={item.id}
             >{item.label}</button>
           ))}
+          <button
+            type="button"
+            className={`lens-performance-toggle ${performanceOpen ? "is-active" : ""}`}
+            aria-expanded={performanceOpen}
+            onClick={() => setPerformanceOpen((open) => !open)}
+          >PERFORMANCE</button>
         </nav>
+
+        {performanceOpen && (
+          <RunPerformance
+            data={performance.status === "ready" ? performance.data : undefined}
+            status={performance.status}
+            selectedFindingId={selectedPerformanceFinding}
+            onSelectFinding={setSelectedPerformanceFinding}
+          />
+        )}
 
         <div className="lens-response-stage">
           {status === "error" && <div className="lens-state is-error">RUN LOAD FAILED</div>}
