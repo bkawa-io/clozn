@@ -325,9 +325,11 @@ def _preflight(model: str, cpu: bool, report: Report) -> str | None:
     studio_root = os.path.abspath(os.path.expanduser(
         os.environ.get("CLOZN_STUDIO_DIR", os.path.join(REPO, "studio"))
     ))
-    # The app the gateway redirects "/" to (clozn.server.static.APP_INDEX) -- must match, or the next
-    # check ("Studio loads from the product gateway") 404s while this one reports present.
-    studio_index = os.path.join(studio_root, "app", "index.html")
+    # The app the gateway redirects "/" to -- DERIVED from static.APP_INDEX, never spelled out here.
+    # A hardcoded copy silently disagrees the moment the served app moves: this check reports the
+    # assets "present" while the next one ("Studio loads from the product gateway") 404s.
+    from clozn.server.static import APP_INDEX
+    studio_index = os.path.join(studio_root, APP_INDEX.lstrip("/").replace("/", os.sep))
     report.add("Studio assets are present", os.path.isfile(studio_index), studio_index)
 
     if engine is None:

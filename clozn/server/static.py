@@ -1,7 +1,12 @@
 """Studio static-file serving: the instrument's own HTML/CSS/JS, served straight off disk from
-`studio/` (DEMO) -- no build step, no templating. Mechanical extraction of clozn.server.app's `_html`
-helper + the do_GET literal-root / asset-suffix branches; "/" and "/index.html" point at the current
-Studio app (studio/app/), the rebuilt frontend.
+`studio/` (DEMO) -- no build step at serve time, no templating. Mechanical extraction of
+clozn.server.app's `_html` helper + the do_GET literal-root / asset-suffix branches; "/" and
+"/index.html" point at the current Studio app.
+
+The served app is `studio/next/` -- the built output of the `studio-frontend/` React source. Unlike
+the hand-written apps that came before it, this one is COMPILED: edit `studio-frontend/src/**`, run
+its build, and commit the regenerated `studio/next/` bundle. Editing `studio/next/assets/*.js` by
+hand edits minified output that the next build silently overwrites.
 """
 import os
 
@@ -10,13 +15,20 @@ from clozn.server.config import DEMO
 # The Studio app's canonical entry point. `clozn studio --open` targets the bare root
 # (cli/commands/studio.py builds `http://127.0.0.1:<port>`), so it inherits this redirect for free --
 # there is no second copy of this path to keep in sync.
-APP_INDEX = "/app/index.html"
+#
+# Vite is configured with `base: "./"` (studio-frontend/vite.config.ts), so index.html references its
+# bundle RELATIVELY (./assets/index-*.js). That is what makes serving it from a subdirectory work at
+# all: the browser resolves those to /next/assets/*, which the suffix branch below already serves. If
+# that base is ever changed to "/", the asset requests become /assets/* -- outside studio/next/ -- and
+# the app loads a blank page with two 404s. Keep them in sync.
+APP_INDEX = "/next/index.html"
 
 
 def try_get(handler, path):
-    """Studio static GETs: "/", "/index.html", "/app" and "/app/" 302-redirect to APP_INDEX; any other
-    .html/.css/.js/.mjs file under DEMO (including subdirs like app/, pages/) is served directly off
-    disk, guarded against escaping DEMO. Returns True iff handled.
+    """Studio static GETs: "/", "/index.html", "/next", "/next/" (and the legacy "/app", "/app/")
+    302-redirect to APP_INDEX; any other .html/.css/.js/.mjs file under DEMO (including subdirs like
+    next/, next/assets/) is served directly off disk, guarded against escaping DEMO. Returns True iff
+    handled.
 
     Why a redirect and not serving app/index.html's bytes in place at "/": it loads itself entirely
     through RELATIVE references (./tokens.css, ./app.mjs, and the dynamic ./lens.mjs etc. the router
@@ -31,7 +43,7 @@ def try_get(handler, path):
     below only matches paths ending in a known asset extension -- without this they 404, which is
     exactly what they used to do.
     """
-    if path in ("/", "/index.html", "/app", "/app/"):
+    if path in ("/", "/index.html", "/next", "/next/", "/app", "/app/"):
         handler._send(302, "", "text/plain; charset=utf-8", {"Location": APP_INDEX})
         return True
     if path.endswith((".html", ".css", ".js", ".mjs")):

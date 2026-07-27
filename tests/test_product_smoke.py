@@ -22,6 +22,18 @@ from clozn.server import app as gateway_app
 from clozn.server import static as static_routes
 
 
+def _seed_studio_index(studio_root: str) -> str:
+    """Create the index.html the gateway actually redirects "/" to, at whatever path
+    static.APP_INDEX names. Derived, not hardcoded: these fixtures exist to prove the product boots,
+    so they must follow the served app when it moves rather than pinning a stale layout."""
+    rel = static_routes.APP_INDEX.lstrip("/").replace("/", os.sep)
+    index = os.path.join(studio_root, rel)
+    os.makedirs(os.path.dirname(index), exist_ok=True)
+    with open(index, "w", encoding="utf-8") as handle:
+        handle.write("<!doctype html><title>Clozn</title>")
+    return index
+
+
 class SmokeGatewayHandler(BaseHTTPRequestHandler):
     run_id = ""
 
@@ -254,11 +266,10 @@ class ProductSmokeTests(unittest.TestCase):
         worker_thread.start()
 
         studio = os.path.join(self.temp.name, "studio")
-        # Mirror the real studio/ layout: the gateway redirects "/" to static.APP_INDEX
-        # ("/app/index.html"), so the fixture must provide the app/ subdir it points at.
-        os.makedirs(os.path.join(studio, "app"), exist_ok=True)
-        with open(os.path.join(studio, "app", "index.html"), "w", encoding="utf-8") as handle:
-            handle.write("<!doctype html><title>Clozn</title>")
+        # Mirror the real studio/ layout. The fixture path is DERIVED from static.APP_INDEX rather
+        # than hardcoded, so moving the served app can never leave this fixture building a directory
+        # the gateway no longer redirects to (which fails as an opaque smoke-report assertion).
+        _seed_studio_index(studio)
 
         old = (gateway_app.ENGINE, gateway_app.SUB, gateway_app.SUBNAME, static_routes.DEMO)
         gateway_app.ENGINE = FakeEngine(f"http://127.0.0.1:{worker.server_address[1]}")
@@ -374,10 +385,8 @@ class ProductSmokeTests(unittest.TestCase):
             os.chmod(worker_path, 0o755)
 
         studio = os.path.join(self.temp.name, "managed-studio")
-        # Same as above: "/" redirects to static.APP_INDEX, so app/index.html is what must exist.
-        os.makedirs(os.path.join(studio, "app"), exist_ok=True)
-        with open(os.path.join(studio, "app", "index.html"), "w", encoding="utf-8") as handle:
-            handle.write("<!doctype html><title>Clozn</title>")
+        # Same as above: derived from static.APP_INDEX, never spelled out.
+        _seed_studio_index(studio)
         model = os.path.join(self.temp.name, "fake.gguf")
         with open(model, "wb") as handle:
             # A header-valid, tensor-free GGUF fixture. Product startup now derives an exact

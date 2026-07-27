@@ -56,12 +56,18 @@ def _check_protocol() -> dict:
 def _check_studio() -> dict:
     try:
         from clozn.server.config import DEMO
-        # Check the app the gateway actually redirects to (clozn.server.static.APP_INDEX), so this
-        # check can't drift into passing on assets nothing serves any more.
-        index = os.path.join(DEMO, "app", "index.html")
+        from clozn.server.static import APP_INDEX
+        # DERIVE the checked path from APP_INDEX rather than spelling it out. The intent was always
+        # "check the app the gateway actually redirects to", but a hardcoded "app/index.html" quietly
+        # became wrong the moment the served app moved -- doctor would have reported OK for a path
+        # nothing serves, or WARNed about a directory that was correctly gone. Deriving it means the
+        # redirect target and this check cannot disagree.
+        rel = APP_INDEX.lstrip("/").replace("/", os.sep)
+        index = os.path.join(DEMO, rel)
         if os.path.isfile(index):
-            return _check("studio assets", _OK, DEMO)
-        return _check("studio assets", _WARN, f"{DEMO} exists but app/index.html is missing under it")
+            return _check("studio assets", _OK, f"{DEMO} (serving {APP_INDEX})")
+        return _check("studio assets", _WARN,
+                      f"{DEMO} exists but {APP_INDEX.lstrip('/')} is missing under it")
     except Exception as error:
         return _check("studio assets", _WARN, f"could not resolve studio assets: {error}")
 
