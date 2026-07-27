@@ -1,0 +1,63 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  --font-machine: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+  --page: #e8e9f1;
+  --page-deep: #dddfe9;
+  --panel: rgba(248, 248, 252, 0.68);
+  --panel-solid: #f4f3f8;
+  --panel-raised: rgba(255, 255, 255, 0.8);
+  --glass-edge: rgba(89, 91, 119, 0.25);
+  --glass-bright: rgba(255, 255, 255, 0.9);
+  --line: rgba(82, 84, 110, 0.16);
+  --line-strong: rgba(75, 77, 104, 0.34);
+  --ink: #242738;
+  --ink-soft: #626575;
+  --ink-faint: #898b9a;
+  --signal-cyan: #63d2e2;
+  --signal-mint: #79d8bd;
+  --signal-blue: #79aef1;
+  --signal-violet: #9d88ed;
+  --signal-magenta: #cd81d5;
+  --signal-pink: #e18fc9;
+  --signal-peach: #efaa91;
+  --signal-gold: var(--signal-peach);
+  --danger: #db7c89;
+  --spectrum-full: linear-gradient(90deg, var(--signal-cyan) 0%, var(--signal-mint) 24%, var(--signal-violet) 50%, var(--signal-pink) 75%, var(--signal-peach) 100%);
+  --spectrum-tint: linear-gradient(115deg, color-mix(in srgb, var(--signal-cyan) 10%, transparent), color-mix(in srgb, var(--signal-mint) 7%, transparent) 25%, color-mix(in srgb, var(--signal-violet) 9%, transparent) 51%, color-mix(in srgb, var(--signal-pink) 8%, transparent) 76%, color-mix(in srgb, var(--signal-peach) 8%, transparent));
+  --pearl-sheen: linear-gradient(118deg, rgba(255,255,255,.72), rgba(157,216,214,.12) 25%, rgba(177,156,225,.12) 52%, rgba(231,171,201,.12) 76%, rgba(255,255,255,.5));
+  --shadow: 0 18px 55px rgba(51, 62, 102, 0.12), 0 2px 7px rgba(45, 55, 92, 0.08);
+  --shadow-soft: 0 8px 24px rgba(46, 57, 92, 0.09);
+  --radius: 0;
+  --radius-small: 0;
+}
+
+:root[data-theme="cathedral"] {
+  color-scheme: dark;
+  --page: #111415;
+  --page-deep: #090b0c;
+  --panel: rgba(24, 27, 29, 0.78);
+  --panel-solid: #191c1e;
+  --panel-raised: rgba(33, 36, 38, 0.84);
+  --glass-edge: rgba(177, 187, 190, 0.22);
+  --glass-bright: rgba(206, 216, 215, 0.13);
+  --line: rgba(185, 194, 195, 0.12);
+  --line-strong: rgba(187, 198, 201, 0.28);
+  --ink: #f0efed;
+  --ink-soft: #b2b4b2;
+  --ink-faint: #7c8181;
+  --signal-cyan: #6bd8e3;
+  --signal-mint: #7cdbbd;
+  --signal-blue: #7faef5;
+  --signal-violet: #ac95f2;
+  --signal-magenta: #d887d7;
+  --signal-pink: #e99dce;
+  --signal-peach: #efad92;
+  --signal-gold: var(--signal-peach);
+  --danger: #ea8994;
+  --spectrum-tint: linear-gradient(115deg, color-mix(in srgb, var(--signal-cyan) 9%, transparent), color-mix(in srgb, var(--signal-mint) 8%, transparent) 25%, color-mix(in srgb, var(--signal-violet) 10%, transparent) 51%, color-mix(in srgb, var(--signal-pink) 8%, transparent) 76%, color-mix(in srgb, var(--signal-peach) 7%, transparent));
+  --pearl-sheen: linear-gradient(118deg, rgba(169,220,211,.06), rgba(110,154,146,.03) 25%, rgba(161,126,190,.08) 52%, rgba(205,124,171,.06) 76%, rgba(228,194,173,.04));
+  --shadow: 0 22px 70px rgba(0, 0, 0, 0.46), 0 2px 8px rgba(0, 0, 0, 0.34);
+  --shadow-soft: 0 10px 30px rgba(0, 0, 0, 0.27);
+}

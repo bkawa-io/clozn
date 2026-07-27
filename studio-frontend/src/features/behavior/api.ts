@@ -1,0 +1,367 @@
+export interface BehaviorAxis {
+  name: string;
+  poles: [string, string];
+  value: number;
+  max: number;
+  calibrated: boolean;
+  library?: boolean;
+  custom?: boolean;
+}
+
+export interface SamplingSettings {
+  sampling: boolean;
+  sample_temperature: number;
+  sample_top_p: number;
+  sample_top_k: number;
+  sample_repeat_penalty: number;
+}
+
+export interface GuardSettings {
+  enabled: boolean;
+  guard: {
+    concepts?: string[];
+    threshold?: number;
+    counter_strength?: number;
+    max_fires?: number;
+    layer?: number;
+  } | null;
+}
+
+export interface MemoryCard {
+  id: string;
+  text: string;
+  status: string;
+}
+
+export interface AnchoredTerm {
+  token: string;
+  alpha: number;
+}
+
+export interface AnchoredBag {
+  card_id: string;
+  card_text: string;
+  on: boolean;
+  k?: number;
+  layer?: number;
+  reconstruction_cos?: number;
+  terms: AnchoredTerm[];
+}
+
+export interface BehaviorProfile {
+  name: string;
+  description: string;
+  cards: Array<{ text: string; status: string }>;
+  dials: Record<string, number>;
+}
+
+export interface BehaviorWorkspaceData {
+  axes: BehaviorAxis[];
+  sampling?: SamplingSettings;
+  guard?: GuardSettings;
+  cards: MemoryCard[];
+  bags: AnchoredBag[];
+  profiles: BehaviorProfile[];
+  activeProfile?: string;
+  errors: Partial<Record<"axes" | "sampling" | "guard" | "memory" | "profiles", string>>;
+}
+
+export interface AxisPreview {
+  prompt: string;
+  axis: string;
+  value: number;
+  baseline: string;
+  steered: string;
+  warning?: string;
+}
+
+export interface ConceptPreview {
+  prompt: string;
+  concept: string;
+  strength: number;
+  baseline: string;
+  steered?: string;
+  note?: string;
+}
+
+type JsonRecord = Record<string, unknown>;
+
+function record(value: unknown): JsonRecord {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
+}
+
+function records(value: unknown): JsonRecord[] {
+  return Array.isArray(value) ? value.map(record) : [];
+}
+
+function errorText(body: JsonRecord, status: number) {
+  const error = body.error;
+  if (typeof error === "string") return error;
+  const nested = record(error);
+  if (typeof nested.message === "string") return nested.message;
+  if (typeof body.blocked === "string") return body.blocked;
+  if (typeof body.reason === "string") return body.reason;
+  if (typeof body.note === "string") return body.note;
+  return `Request failed (${status})`;
+}
+
+async function request(
+  url: string,
+  options: RequestInit = {},
+): Promise<JsonRecord> {
+  const response = await fetch(url, options);
+  let body: JsonRecord = {};
+  try {
+    body = record(await response.json());
+  } catch {
+    // The HTTP status remains authoritative when the route returns no JSON.
+  }
+  if (!response.ok || body.error) throw new Error(errorText(body, response.status));
+  return body;
+}
+
+async function get(url: string, signal?: AbortSignal) {
+  return request(url, { signal });
+}
+
+async function post(url: string, body: JsonRecord, signal?: AbortSignal) {
+  return request(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+}
+
+function axisFromBody(axis: JsonRecord): BehaviorAxis | null {
+  const name = String(axis.name || "");
+  const rawPoles = Array.isArray(axis.poles) ? axis.poles.map(String) : [];
+  if (!name || rawPoles.length !== 2) return null;
+  const max = Number(axis.max);
+  const value = Number(axis.value);
+  return {
+    name,
+    poles: [rawPoles[0], rawPoles[1]],
+    max: Number.isFinite(max) && max > 0 ? max : 1.5,
+    value: Number.isFinite(value) ? value : 0,
+    calibrated: axis.calibrated === true,
+    library: axis.library === true,
+    custom: axis.custom === true,
+  };
+}
+
+function samplingFromBody(body: JsonRecord): SamplingSettings {
+  return {
+    sampling: body.sampling === true,
+    sample_temperature: Number(body.sample_temperature) || 0,
+    sample_top_p: Number(body.sample_top_p) || 0,
+    sample_top_k: Number(body.sample_top_k) || 0,
+    sample_repeat_penalty: Number(body.sample_repeat_penalty) || 0,
+  };
+}
+
+function guardFromBody(body: JsonRecord): GuardSettings {
+  const source = record(body.guard);
+  const concepts = Array.isArray(source.concepts)
+    ? source.concepts.map(String).filter(Boolean)
+    : undefined;
+  const numberOrUndefined = (value: unknown) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  };
+  return {
+    enabled: body.enabled === true,
+    guard: body.guard && typeof body.guard === "object"
+      ? {
+          concepts,
+          threshold: numberOrUndefined(source.threshold),
+          counter_strength: numberOrUndefined(source.counter_strength),
+          max_fires: numberOrUndefined(source.max_fires),
+          layer: numberOrUndefined(source.layer),
+        }
+      : null,
+  };
+}
+
+function cardsFromBody(body: JsonRecord): MemoryCard[] {
+  return records(body.cards).map((card) => ({
+    id: String(card.id || ""),
+    text: String(card.text || ""),
+    status: String(card.status || "inactive"),
+  })).filter((card) => card.id && card.text);
+}
+
+function bagsFromBody(body: JsonRecord): AnchoredBag[] {
+  return records(body.bags).map((bag) => ({
+    card_id: String(bag.card_id || ""),
+    card_text: String(bag.card_text || ""),
+    on: bag.on !== false,
+    k: Number.isFinite(Number(bag.k)) ? Number(bag.k) : undefined,
+    layer: Number.isFinite(Number(bag.layer)) ? Number(bag.layer) : undefined,
+    reconstruction_cos: Number.isFinite(Number(bag.reconstruction_cos))
+      ? Number(bag.reconstruction_cos)
+      : undefined,
+    terms: records(bag.terms).map((term) => ({
+      token: String(term.token || ""),
+      alpha: Number(term.alpha) || 0,
+    })).filter((term) => term.token),
+  })).filter((bag) => bag.card_id);
+}
+
+function profilesFromBody(body: JsonRecord): BehaviorProfile[] {
+  return records(body.profiles).map((profile) => ({
+    name: String(profile.name || ""),
+    description: String(profile.description || ""),
+    cards: records(profile.cards).map((card) => ({
+      text: String(card.text || ""),
+      status: String(card.status || "active"),
+    })).filter((card) => card.text),
+    dials: Object.fromEntries(
+      Object.entries(record(profile.dials))
+        .map(([name, value]) => [name, Number(value)])
+        .filter((entry) => Number.isFinite(entry[1])),
+    ),
+  })).filter((profile) => profile.name);
+}
+
+export async function loadBehaviorWorkspace(signal?: AbortSignal): Promise<BehaviorWorkspaceData> {
+  const results = await Promise.allSettled([
+    post("/steer/axes", {}, signal),
+    get("/sampling/mode", signal),
+    get("/guard/mode", signal),
+    post("/memory/cards", {}, signal),
+    get("/memory/anchored/list", signal),
+    get("/profiles/list", signal),
+  ]);
+  const [axes, sampling, guard, cards, bags, profiles] = results;
+  const errors: BehaviorWorkspaceData["errors"] = {};
+  if (axes.status === "rejected") errors.axes = axes.reason instanceof Error ? axes.reason.message : "Axes unavailable";
+  if (sampling.status === "rejected") errors.sampling = sampling.reason instanceof Error ? sampling.reason.message : "Sampling unavailable";
+  if (guard.status === "rejected") errors.guard = guard.reason instanceof Error ? guard.reason.message : "Guard unavailable";
+  if (cards.status === "rejected" || bags.status === "rejected") {
+    errors.memory = [
+      cards.status === "rejected" ? cards.reason instanceof Error ? cards.reason.message : "Cards unavailable" : "",
+      bags.status === "rejected" ? bags.reason instanceof Error ? bags.reason.message : "Anchored memory unavailable" : "",
+    ].filter(Boolean).join(" · ");
+  }
+  if (profiles.status === "rejected") {
+    errors.profiles = profiles.reason instanceof Error ? profiles.reason.message : "Profiles unavailable";
+  }
+
+  const profileBody = profiles.status === "fulfilled" ? profiles.value : {};
+  return {
+    axes: axes.status === "fulfilled"
+      ? records(axes.value.axes).map(axisFromBody).filter((axis): axis is BehaviorAxis => axis !== null)
+      : [],
+    sampling: sampling.status === "fulfilled" ? samplingFromBody(sampling.value) : undefined,
+    guard: guard.status === "fulfilled" ? guardFromBody(guard.value) : undefined,
+    cards: cards.status === "fulfilled" ? cardsFromBody(cards.value) : [],
+    bags: bags.status === "fulfilled" ? bagsFromBody(bags.value) : [],
+    profiles: profilesFromBody(profileBody),
+    activeProfile: typeof profileBody.active === "string" ? profileBody.active : undefined,
+    errors,
+  };
+}
+
+export async function applyAxis(name: string, value: number) {
+  const body = await post("/steer/set", { name, value });
+  return {
+    active: Object.fromEntries(
+      Object.entries(record(body.active))
+        .map(([axis, next]) => [axis, Number(next)])
+        .filter((entry) => Number.isFinite(entry[1])),
+    ),
+    warning: typeof body.warning === "string" ? body.warning : undefined,
+  };
+}
+
+export async function previewAxis(name: string, value: number, prompt: string): Promise<AxisPreview> {
+  const body = await post("/steer/check", { name, value, prompt });
+  return {
+    prompt: String(body.prompt || prompt),
+    axis: String(body.axis || name),
+    value: Number(body.value) || value,
+    baseline: String(body.baseline || ""),
+    steered: String(body.steered || ""),
+    warning: typeof body.warning === "string" ? body.warning : undefined,
+  };
+}
+
+export async function applyConcept(concept: string, strength: number) {
+  const body = await post("/steer/concept/set", { concept, strength });
+  if (body.ok !== true) throw new Error(errorText(body, 200));
+  return Object.fromEntries(
+    Object.entries(record(body.active))
+      .map(([name, value]) => [name, Number(value)])
+      .filter((entry) => Number.isFinite(entry[1])),
+  );
+}
+
+export async function previewConcept(
+  concept: string,
+  strength: number,
+  prompt: string,
+): Promise<ConceptPreview> {
+  const body = await post("/steer/concept/check", { concept, strength, prompt });
+  if (body.steered == null) throw new Error(errorText(body, 200));
+  return {
+    prompt: String(body.prompt || prompt),
+    concept: String(body.concept || concept),
+    strength: Number(body.strength) || strength,
+    baseline: String(body.baseline || ""),
+    steered: String(body.steered || ""),
+    note: typeof body.note === "string" ? body.note : undefined,
+  };
+}
+
+export async function saveSampling(settings: SamplingSettings): Promise<SamplingSettings> {
+  return samplingFromBody(await post("/sampling/mode", settings as unknown as JsonRecord));
+}
+
+export async function saveGuard(settings: GuardSettings): Promise<GuardSettings> {
+  const body = await post("/guard/mode", {
+    enabled: settings.enabled,
+    concepts: settings.guard?.concepts ?? [],
+    ...(settings.guard?.threshold == null ? {} : { threshold: settings.guard.threshold }),
+    ...(settings.guard?.counter_strength == null
+      ? {}
+      : { counter_strength: settings.guard.counter_strength }),
+    ...(settings.guard?.max_fires == null ? {} : { max_fires: settings.guard.max_fires }),
+    ...(settings.guard?.layer == null ? {} : { layer: settings.guard.layer }),
+  });
+  return guardFromBody(body);
+}
+
+export async function toggleAnchoredBag(cardId: string, on: boolean): Promise<AnchoredBag> {
+  const body = await post("/memory/anchored/toggle", { card_id: cardId, on });
+  if (body.ok !== true) throw new Error(errorText(body, 200));
+  return bagsFromBody({ bags: [body.bag] })[0];
+}
+
+export async function fitAnchoredBag(cardId: string, k = 4): Promise<AnchoredBag> {
+  const body = await post("/memory/anchored/fit", { card_id: cardId, k });
+  if (body.ok !== true) throw new Error(errorText(body, 200));
+  return bagsFromBody({ bags: [body.bag] })[0];
+}
+
+export async function saveProfile(
+  name: string,
+  description: string,
+  axes: BehaviorAxis[],
+  cards: MemoryCard[],
+) {
+  const body = await post("/profiles/save", {
+    version: 1,
+    name,
+    description,
+    dials: Object.fromEntries(axes.map((axis) => [axis.name, axis.value])),
+    cards: cards
+      .filter((card) => card.status === "active")
+      .map((card) => ({ text: card.text, status: "active" })),
+  });
+  return record(body.profile);
+}
+
+export async function switchProfile(name: string) {
+  return post("/profiles/switch", { name });
+}
