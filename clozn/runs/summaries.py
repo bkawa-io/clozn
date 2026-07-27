@@ -36,19 +36,13 @@ def _flags(rec: dict) -> list[str]:
     """Cheap UI flags derived from the record (the Runs page filters on these)."""
     f = []
     mem = rec.get("memory") or {}
-    if mem.get("cards_applied") or mem.get("anchored"):
+    if mem.get("cards_applied"):
         f.append("memory")
-    if mem.get("anchored"):
-        f.append("anchored-memory")
     if mem.get("proposed_cards"):
         f.append("pending-memory")
-    alg = mem.get("anchored_loop_guard") or {}
-    if alg.get("fired"):
-        # An anchored over-injection becomes a VISIBLE, self-healing
-        # run flag -- "memory-retried" when the halved-strength retry came back clean, else
-        # "memory-loop-guard" (the anchored steer had to be zeroed, or a stream could only detect and
-        # flag after the fact). Never implies the memory "worked" -- only that degeneracy was mitigated.
-        f.append("memory-retried" if alg.get("action") == "retried@s/2" else "memory-loop-guard")
+    # ("anchored-memory" / "memory-retried" / "memory-loop-guard" were derived here from
+    # memory.anchored{,_loop_guard}. Nothing writes those keys since the 2026-07-27 anchored-memory
+    # removal, so the flags could only ever be false -- a filter that silently matched nothing.)
     if (rec.get("behavior") or {}).get("active_dials"):
         f.append("steered")
     if rec.get("parent_run_id"):

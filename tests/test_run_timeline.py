@@ -140,19 +140,6 @@ def test_singular_card_and_dial_labels_are_not_pluralized(store):
     assert dial_ev["label"] == "1 behavior dial"
 
 
-def test_anchored_memory_produces_memory_event_without_prompt_cards(store):
-    rid = store.record(source="engine_chat", messages=[{"role": "user", "content": "q"}], response="a",
-                       memory={"mode": "prompt",
-                               "anchored": [{"card_id": "mem_tea", "gate": 0.5,
-                                             "alpha_top3": [{"token": "tea", "alpha": 0.7}]}]})
-    events = run_timeline.timeline(store.get_run(rid))
-    mem_ev = next(e for e in events if e["type"] == "memory_applied")
-    assert mem_ev["label"] == "1 anchored memory bag applied"
-    assert mem_ev["count"] == 1
-    assert mem_ev["cards"] == []
-    assert mem_ev["anchored"][0]["card_id"] == "mem_tea"
-
-
 # ---------------------------------------------------------------------------------------- fixture: minimal run
 
 def test_minimal_run_has_started_generation_and_an_honest_finished_with_no_reason(store):

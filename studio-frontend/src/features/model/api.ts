@@ -24,8 +24,6 @@ export interface ModelAxis {
 export interface ModelMemoryState {
   cards: number;
   activeCards: number;
-  anchoredBags: number;
-  activeBags: number;
 }
 
 export interface LocalModel {
@@ -146,25 +144,20 @@ export async function loadModelWorkspace(signal?: AbortSignal): Promise<ModelWor
     get("/engine/health", signal),
     post("/steer/axes", {}, signal),
     post("/memory/cards", {}, signal),
-    get("/memory/anchored/list", signal),
     get("/models/local", signal),
     get("/profiles/list", signal),
   ]);
-  const [engine, axes, cards, bags, inventory, profiles] = results;
+  const [engine, axes, cards, inventory, profiles] = results;
   const errors: ModelWorkspaceData["errors"] = {};
   if (engine.status === "rejected") errors.engine = message(engine.reason, "Engine health unavailable");
   if (axes.status === "rejected") errors.axes = message(axes.reason, "Steering axes unavailable");
-  if (cards.status === "rejected" || bags.status === "rejected") {
-    errors.memory = [
-      cards.status === "rejected" ? message(cards.reason, "Memory cards unavailable") : "",
-      bags.status === "rejected" ? message(bags.reason, "Anchored memory unavailable") : "",
-    ].filter(Boolean).join(" · ");
+  if (cards.status === "rejected") {
+    errors.memory = message(cards.reason, "Memory cards unavailable");
   }
   if (inventory.status === "rejected") errors.inventory = message(inventory.reason, "Model inventory unavailable");
   if (profiles.status === "rejected") errors.profiles = message(profiles.reason, "Profiles unavailable");
 
   const cardRows = cards.status === "fulfilled" ? records(cards.value.cards) : [];
-  const bagRows = bags.status === "fulfilled" ? records(bags.value.bags) : [];
   const profileBody = profiles.status === "fulfilled" ? profiles.value : {};
   return {
     engine: engine.status === "fulfilled" ? engineFromBody(engine.value) : undefined,
@@ -178,8 +171,6 @@ export async function loadModelWorkspace(signal?: AbortSignal): Promise<ModelWor
     memory: {
       cards: cardRows.length,
       activeCards: cardRows.filter((card) => card.status === "active").length,
-      anchoredBags: bagRows.length,
-      activeBags: bagRows.filter((bag) => bag.on !== false).length,
     },
     localModels: inventory.status === "fulfilled" ? localModelsFromBody(inventory.value) : undefined,
     activeProfile: typeof profileBody.active === "string" ? profileBody.active : undefined,

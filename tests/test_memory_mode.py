@@ -37,7 +37,6 @@ import clozn.memory.cards as memory_cards            # noqa: E402
 import clozn.memory.mode as memory_mode             # noqa: E402
 from clozn import replay                  # noqa: E402
 import clozn.runs.store as runlog                  # noqa: E402
-import clozn.memory.topic_gate as topic_gate              # noqa: E402
 
 
 # ---- fakes (mirror test_memory_wiring / test_replay -- each suite carries its own) -----------------
@@ -82,14 +81,6 @@ class FakeSub:
         return f"reply excl={self.seen['exclude']}"
 
 
-class StubGate:
-    def __init__(self, value):
-        self.value = float(value)
-
-    def scalar(self, prompt, texts):
-        return self.value
-
-
 class _LabSub(lab_substrates._InternalizedRetrain, cs.Substrate):
     """A lab substrate: the base studio surface + the per-instance internalized retrain machinery (same
     MRO as QwenSubstrate/DreamSubstrate). In PROMPT mode _start_retrain short-circuits exactly like the
@@ -107,8 +98,13 @@ def _substrate(mem):
 
 
 def _gate(monkeypatch, value):
-    """Pin the topic gate to a fixed scalar (no embedder load, deterministic gate-in/out)."""
-    monkeypatch.setattr(topic_gate, "get_gate", lambda: StubGate(value))
+    """Pin the per-turn gate seam to a fixed scalar.
+
+    _prompt_gate is a CONSTANT 1.0 in the shipped product (its MiniLM backend went in the 2026-07-27
+    memory cut -- it was never a product dependency, so it already returned 1.0 everywhere). The seam
+    itself is real and still consulted by _prompt_block_for and the lab /memory/preview route, so these
+    tests drive it directly to cover the omission branch rather than through a deleted embedder."""
+    monkeypatch.setattr(cs, "_prompt_gate", lambda _prompt, _texts: float(value))
 
 
 @pytest.fixture()

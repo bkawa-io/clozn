@@ -33,21 +33,6 @@ export interface MemoryCard {
   status: string;
 }
 
-export interface AnchoredTerm {
-  token: string;
-  alpha: number;
-}
-
-export interface AnchoredBag {
-  card_id: string;
-  card_text: string;
-  on: boolean;
-  k?: number;
-  layer?: number;
-  reconstruction_cos?: number;
-  terms: AnchoredTerm[];
-}
-
 export interface BehaviorProfile {
   name: string;
   description: string;
@@ -60,7 +45,6 @@ export interface BehaviorWorkspaceData {
   sampling?: SamplingSettings;
   guard?: GuardSettings;
   cards: MemoryCard[];
-  bags: AnchoredBag[];
   profiles: BehaviorProfile[];
   activeProfile?: string;
   errors: Partial<Record<"axes" | "sampling" | "guard" | "memory" | "profiles", string>>;
@@ -191,23 +175,6 @@ function cardsFromBody(body: JsonRecord): MemoryCard[] {
   })).filter((card) => card.id && card.text);
 }
 
-function bagsFromBody(body: JsonRecord): AnchoredBag[] {
-  return records(body.bags).map((bag) => ({
-    card_id: String(bag.card_id || ""),
-    card_text: String(bag.card_text || ""),
-    on: bag.on !== false,
-    k: Number.isFinite(Number(bag.k)) ? Number(bag.k) : undefined,
-    layer: Number.isFinite(Number(bag.layer)) ? Number(bag.layer) : undefined,
-    reconstruction_cos: Number.isFinite(Number(bag.reconstruction_cos))
-      ? Number(bag.reconstruction_cos)
-      : undefined,
-    terms: records(bag.terms).map((term) => ({
-      token: String(term.token || ""),
-      alpha: Number(term.alpha) || 0,
-    })).filter((term) => term.token),
-  })).filter((bag) => bag.card_id);
-}
-
 function profilesFromBody(body: JsonRecord): BehaviorProfile[] {
   return records(body.profiles).map((profile) => ({
     name: String(profile.name || ""),
@@ -230,19 +197,15 @@ export async function loadBehaviorWorkspace(signal?: AbortSignal): Promise<Behav
     get("/sampling/mode", signal),
     get("/guard/mode", signal),
     post("/memory/cards", {}, signal),
-    get("/memory/anchored/list", signal),
     get("/profiles/list", signal),
   ]);
-  const [axes, sampling, guard, cards, bags, profiles] = results;
+  const [axes, sampling, guard, cards, profiles] = results;
   const errors: BehaviorWorkspaceData["errors"] = {};
   if (axes.status === "rejected") errors.axes = axes.reason instanceof Error ? axes.reason.message : "Axes unavailable";
   if (sampling.status === "rejected") errors.sampling = sampling.reason instanceof Error ? sampling.reason.message : "Sampling unavailable";
   if (guard.status === "rejected") errors.guard = guard.reason instanceof Error ? guard.reason.message : "Guard unavailable";
-  if (cards.status === "rejected" || bags.status === "rejected") {
-    errors.memory = [
-      cards.status === "rejected" ? cards.reason instanceof Error ? cards.reason.message : "Cards unavailable" : "",
-      bags.status === "rejected" ? bags.reason instanceof Error ? bags.reason.message : "Anchored memory unavailable" : "",
-    ].filter(Boolean).join(" · ");
+  if (cards.status === "rejected") {
+    errors.memory = cards.reason instanceof Error ? cards.reason.message : "Cards unavailable";
   }
   if (profiles.status === "rejected") {
     errors.profiles = profiles.reason instanceof Error ? profiles.reason.message : "Profiles unavailable";
@@ -256,7 +219,6 @@ export async function loadBehaviorWorkspace(signal?: AbortSignal): Promise<Behav
     sampling: sampling.status === "fulfilled" ? samplingFromBody(sampling.value) : undefined,
     guard: guard.status === "fulfilled" ? guardFromBody(guard.value) : undefined,
     cards: cards.status === "fulfilled" ? cardsFromBody(cards.value) : [],
-    bags: bags.status === "fulfilled" ? bagsFromBody(bags.value) : [],
     profiles: profilesFromBody(profileBody),
     activeProfile: typeof profileBody.active === "string" ? profileBody.active : undefined,
     errors,
@@ -330,18 +292,6 @@ export async function saveGuard(settings: GuardSettings): Promise<GuardSettings>
     ...(settings.guard?.layer == null ? {} : { layer: settings.guard.layer }),
   });
   return guardFromBody(body);
-}
-
-export async function toggleAnchoredBag(cardId: string, on: boolean): Promise<AnchoredBag> {
-  const body = await post("/memory/anchored/toggle", { card_id: cardId, on });
-  if (body.ok !== true) throw new Error(errorText(body, 200));
-  return bagsFromBody({ bags: [body.bag] })[0];
-}
-
-export async function fitAnchoredBag(cardId: string, k = 4): Promise<AnchoredBag> {
-  const body = await post("/memory/anchored/fit", { card_id: cardId, k });
-  if (body.ok !== true) throw new Error(errorText(body, 200));
-  return bagsFromBody({ bags: [body.bag] })[0];
 }
 
 export async function saveProfile(

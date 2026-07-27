@@ -12,7 +12,7 @@ estimated, or synthesized -- an event fires only when its underlying data actual
 The event taxonomy, in emission order (each only when its data is present -- see `timeline()`'s guards):
   1. run_started    -- once, always (for a non-empty run): source/client/model/created_at.
   2. branched_from  -- only when parent_run_id is set (this run is a replay/branch of another).
-  3. memory_applied -- only when memory.cards_applied or memory.anchored is non-empty; one card entry per applied card,
+  3. memory_applied -- only when memory.cards_applied is non-empty; one card entry per applied card,
                        zipped against applied_ids / relevance BY INDEX (a short or missing list is None for
                        that slot -- e.g. internalized mode logs no applied_ids at all -- never fabricated).
   4. dials_applied  -- only when behavior.active_dials is non-empty.
@@ -108,28 +108,18 @@ def _trace_steps(trace: dict) -> list[dict]:
 
 # --------------------------------------------------------------------------------------------- memory_applied
 def _memory_applied(run: dict) -> dict | None:
-    """One event for the memory that fired this turn: prompt cards and/or anchored bags."""
+    """One event for the memory cards compiled into this turn's prompt. None when none were."""
     mem = _as_dict(run.get("memory"))
     texts = _as_list(mem.get("cards_applied"))
-    anchored = _as_list(mem.get("anchored"))
-    if not texts and not anchored:
+    if not texts:
         return None
     ids = _as_list(mem.get("applied_ids"))
     rels = _as_list(mem.get("relevance"))
     cards = [{"text": _card_text(t), "id": ids[i] if i < len(ids) else None,
               "relevance": _rounded(rels[i]) if i < len(rels) else None} for i, t in enumerate(texts)]
     n_cards = len(cards)
-    n_anchored = len(anchored)
-    if n_cards and not n_anchored:
-        label = f"{n_cards} memory card{'' if n_cards == 1 else 's'} applied"
-    elif n_anchored and not n_cards:
-        label = f"{n_anchored} anchored memory bag{'' if n_anchored == 1 else 's'} applied"
-    else:
-        label = (f"{n_cards} memory card{'' if n_cards == 1 else 's'} + "
-                 f"{n_anchored} anchored bag{'' if n_anchored == 1 else 's'} applied")
-    return {"type": "memory_applied", "label": label,
-            "count": n_cards + n_anchored, "gate": mem.get("gate"), "mode": mem.get("mode"),
-            "cards": cards, "anchored": anchored}
+    return {"type": "memory_applied", "label": f"{n_cards} memory card{'' if n_cards == 1 else 's'} applied",
+            "count": n_cards, "gate": mem.get("gate"), "mode": mem.get("mode"), "cards": cards}
 
 
 # ---------------------------------------------------------------------------------------------- dials_applied

@@ -15,10 +15,6 @@ Registry (`REGISTRY`, also served read-only via `catalog()` / GET /experiments/t
   set_dial       {dial, value}            -> counterfactual     -- what-if dial regen (decode-time, cheap)
   swap_concept   {to_concept, from_hint?} -> swap_receipt       -- read disposition, inject a concept dir,
                                                                     diff vs baseline AND a random-dir null
-  anchored_recall {card_id?}              -> anchored_receipt   -- compose an anchored-memory bag (or every
-                                                                    active bag), inject it, diff vs baseline
-                                                                    AND a random-dir null (verify-with-a-
-                                                                    receipt for the anchored-memory demo)
   edit_turn      {turn, alt_user?}        -> branch             -- fork the transcript at a turn
   reroll         {}                       -> replay({})         -- plain re-roll (sampled)
   toggle_greedy  {}                       -> replay({greedy})   -- same messages, forced greedy decode
@@ -39,7 +35,6 @@ receipts/swap_receipt.py for why these seams exist):
 """
 from __future__ import annotations
 
-from clozn.receipts.anchored_receipt import anchored_receipt as _anchored_receipt
 from clozn.receipts.core import receipt as _receipt
 from clozn.receipts.metrics import receipt_metrics as _receipt_metrics
 from clozn.receipts.swap_receipt import swap_receipt as _swap_receipt
@@ -90,14 +85,6 @@ REGISTRY: dict = {
         "cost_hint": "moderate-to-expensive: 2-3 independent fresh generations, no KV reuse across arms",
         "op": "swap_receipt",
     },
-    "anchored_recall": {
-        "label": "verify an anchored memory's causal effect",
-        "needs": [],
-        "substrate": "engine_jlens",
-        "cost_hint": "moderate-to-expensive: 2-3 independent fresh generations, no KV reuse across arms "
-                     "(comparable to swap_concept)",
-        "op": "anchored_receipt",
-    },
     "edit_turn": {
         "label": "fork the conversation at a turn, optionally asking something different",
         "needs": ["turn"],
@@ -132,7 +119,6 @@ _CONTROL_BY_TYPE = {
     "ablate_dial": "with/without intervention; forced mode adds an equal-norm random-vector control when available",
     "set_dial": "direct baseline comparison; no null control",
     "swap_concept": "equal-norm random-direction null control",
-    "anchored_recall": "equal-norm random-direction null control",
     "edit_turn": "direct branch comparison; no null control",
     "reroll": "direct regenerated comparison; no null control",
     "toggle_greedy": "direct regenerated comparison; no null control",
@@ -269,9 +255,6 @@ def _question_for(ctype: str, change: dict, target) -> str:
         hint = change.get("from_hint")
         lean = f" (instead of leaning toward '{hint}')" if hint else ""
         return f"What if the model had been steered toward '{change.get('to_concept')}'{lean}?"
-    if ctype == "anchored_recall":
-        which = f"anchored memory card {target}" if target else "the active anchored memory"
-        return f"What if {which} had been recalled and injected during generation?"
     if ctype == "edit_turn":
         if change.get("alt_user"):
             return f"What if turn {target} had asked something different?"
@@ -434,41 +417,6 @@ def _handle_swap_concept(run, change, method, sub):
     }
 
 
-def _handle_anchored_recall(run, change, method, sub):
-    raw_card_id = change.get("card_id")
-    card_id = (str(raw_card_id).strip() or None) if raw_card_id else None
-    raw = _anchored_receipt(run, card_id, sub)   # never raises, never returns None (see module doc)
-    lexicon = raw.get("lexicon_hits") or {}
-    logprob = raw.get("logprob_shift") or {}
-    null_obj = {
-        "available": raw.get("null_control_available"),
-        "reply": raw.get("null_reply"),
-        "lexicon_hits": lexicon.get("null"),
-        "logprob": logprob.get("null"),
-        "anchored_over_null_nat": logprob.get("anchored_over_null_nat"),
-        "note": raw.get("null_note"),
-    }
-    baseline_reply, changed_reply = raw.get("baseline_reply"), raw.get("anchored_reply")
-    target = card_id or "active memory"
-    label = f"recalling anchored card {card_id}" if card_id else "recalling all active anchored memory"
-    n_gen = 2 + (1 if raw.get("null_control_available") else 0)
-    note = ("cost: " + str(n_gen) + " independent fresh generations from the same rendered prompt "
-           "(baseline, anchored-recall" + (", null-control" if raw.get("null_control_available") else "") +
-           ") -- no KV reuse across arms, comparable in cost to a swap-concept receipt; the quantitative "
-           "logprob-shift measure adds a few cheap teacher-forced scoring calls (no new tokens generated).")
-    return {
-        "op": "anchored_receipt", "raw": raw, "target": target, "label": label,
-        "baseline_reply": baseline_reply, "changed_reply": changed_reply,
-        "delta": _text_delta(baseline_reply, changed_reply),
-        # anchored_receipt() computes a REAL has_effect from the actual generated diff (beyond the null) --
-        # carried verbatim, never re-derived here (unlike swap_receipt, which deliberately has no such
-        # field -- see _handle_swap_concept's own comment on that honesty call).
-        "has_effect": raw.get("has_effect"), "causal_verified": raw.get("causal_verified"), "null": null_obj,
-        "cost_passes": n_gen, "cost_note": note,
-        "cost_est_seconds": None,   # shorter (max_new-capped) completions aren't duration-comparable to the run
-    }
-
-
 def _handle_edit_turn(run, change, method, sub):
     if "turn" not in change:
         raise ValueError("edit_turn needs a 'turn'")
@@ -537,7 +485,6 @@ _HANDLERS = {
     "ablate_dial": _handle_ablate_dial,
     "set_dial": _handle_set_dial,
     "swap_concept": _handle_swap_concept,
-    "anchored_recall": _handle_anchored_recall,
     "edit_turn": _handle_edit_turn,
     "reroll": _handle_reroll,
     "toggle_greedy": _handle_toggle_greedy,

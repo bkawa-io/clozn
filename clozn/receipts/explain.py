@@ -38,7 +38,7 @@ import clozn.memory.cards as memory_cards
 from clozn.runs import close_calls
 
 # Matches the run timeline and confidence-span `LOW_CONF` values -- one convention, so every recorded
-# hesitation and the heavn Explain panel's uncertain moments agree about what counts as unsure.
+# hesitation and the Studio Explain panel's uncertain moments agree about what counts as unsure.
 LOW_CONF = 0.5
 
 _NO_TRACE_NOTE = "token trace captured on the engine path"
@@ -144,6 +144,9 @@ def _influences_active(run: dict) -> dict:
     texts = _as_list(mem.get("cards_applied"))
     ids = _as_list(mem.get("applied_ids"))
     cards = [_card_entry(_card_text(t), ids[i] if i < len(ids) else None) for i, t in enumerate(texts)]
+    # `anchored` is always [] on runs recorded since the 2026-07-27 anchored-memory removal -- kept
+    # because this reads the RUN's own record, and pre-cut runs really did have bags ride the turn
+    # (same reasoning as runs/memory_usage.py::_anchored).
     anchored = [a for a in _as_list(mem.get("anchored")) if isinstance(a, dict)]
 
     dials_raw = _as_dict(behavior.get("active_dials"))
@@ -154,7 +157,7 @@ def _influences_active(run: dict) -> dict:
     if not cards and not anchored:
         # Prompt mode logs PER-TURN application: "none" there means the block wasn't injected on THIS turn
         # (topic-gated out, or strength 0) -- not that no cards exist at all. Say so explicitly rather than
-        # let an empty list misread as "memory is unconfigured" (mirrors heavn Explain's influence note).
+        # let an empty list misread as "memory is unconfigured" (mirrors the Explain influence note).
         out["note"] = ("no memory applied this turn (block not injected)" if mem.get("mode") == "prompt"
                        else "no memory applied")
     return out

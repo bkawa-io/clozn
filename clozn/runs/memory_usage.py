@@ -77,6 +77,13 @@ def _total_prompt_tokens(run: Mapping) -> tuple[int | None, str | None]:
 
 
 def _anchored(memory: Mapping) -> dict:
+    """Anchored-memory evidence. DELIBERATELY OUTLIVES the 2026-07-27 anchored-memory removal.
+
+    No code writes these keys anymore, so every run recorded since reads "not_observed". But runs
+    recorded BEFORE the cut carry real evidence of what actually rode those turns, and this module's
+    contract (see the module docstring) is to reshape what the run recorded -- never to re-judge it
+    against today's feature set. Deleting the reader would silently rewrite that history to "no memory
+    was applied", which is the one thing a receipt may not do."""
     keys = ("anchored", "anchored_layer", "anchored_s_total", "anchored_skipped",
             "anchored_loop_guard", "anchored_scope_excluded_count")
     if not any(key in memory for key in keys):

@@ -124,26 +124,22 @@ def _last_user(messages):
     return next((m.get("content", "") for m in reversed(messages or []) if m.get("role") == "user"), "")
 
 
-def _prompt_gate(last_user, texts):
-    """Topic-relevance gate for the prompt-mode block -- the SAME signal the prefix path scales by
-    (topic_gate.scalar over the active texts). 1.0 (no gating) when the embedder is unavailable."""
-    try:
-        from clozn.memory.topic_gate import get_gate
-        return float(get_gate().scalar(last_user, list(texts)))
-    except Exception:
-        return 1.0
+def _prompt_gate(_last_user, _texts):
+    """Ungated: every active card enters the prompt block.
+
+    This used to call topic_gate.scalar(). BEHAVIOUR IS UNCHANGED by removing it, because the gate
+    needed `sentence-transformers` -- which is not a product dependency (pyproject `dependencies = []`,
+    enforced by the torch-free CI lane) -- and returned 1.0 whenever the embedder was missing. In the
+    shipped configuration it therefore always returned 1.0 and gated nothing. Kept as a function
+    rather than inlined so every call site and the run-record shape stay identical."""
+    return 1.0
 
 
-def _prompt_relevance(last_user, texts):
-    """Per-card topic cosine {text: relevance} for the applied block -- the SAME embeddings _prompt_gate
-    just used (cached by string in topic_gate), so it's ~free. {} when the embedder is unavailable. This
-    is the per-card signal the run record needs so the inspector can show WHY each card fired, not just
-    that the block as a whole did (the scalar gate)."""
-    try:
-        from clozn.memory.topic_gate import get_gate
-        return dict(get_gate().relevance(last_user, list(texts)))
-    except Exception:
-        return {}
+def _prompt_relevance(_last_user, _texts):
+    """No per-card relevance signal. Same reason as _prompt_gate: this read cosines from the MiniLM
+    embedder and returned {} without it, which was the shipped case. The inspector already treats {}
+    as "no relevance data", so nothing downstream changes."""
+    return {}
 
 
 def _prompt_mem_cards(mem, exclude_ids=(), request_scope=None):
@@ -188,115 +184,12 @@ def _prompt_block_for(mem, last_user, strength=None, request_scope=None):
                                candidates=cards)
 
 
-def _anchored_gates(last_user, bags):
-    """Per anchored bag topic gate, fail-open like prompt memory's topic gate."""
-    try:
-        from clozn.memory import topic_gate
-        gate = topic_gate.get_gate()
-        out = {}
-        for bag in bags or []:
-            if not isinstance(bag, dict):
-                continue
-            cid = bag.get("card_id")
-            text = str(bag.get("card_text") or "").strip()
-            if cid and text:
-                out[cid] = float(gate.scalar(last_user or "", [text]))
-        return out
-    except Exception:
-        return None
-
-
-def _apply_anchored_memory(kw: dict, mem_out: dict | None, last_user: str | None,
-                           request_scope=None) -> dict | None:
-    """Add X7/J-anchored memory to a live engine request when the raw steer slot is free. Returns the
-    compile_steer() payload that was ACTUALLY injected into `kw` (steer_vec/coef/layer/s_total/vector/
-    bags), or None when nothing was injected -- no active bags, nothing composed, or the raw-steer slot
-    was already held by tone dials (mem_out["anchored_skipped"]). The loop guard (chat()/chat_stream()
-    below) uses this return to retry at half strength without recomposing from the store, and to know
-    whether the guard applies at all THIS turn (only when anchored memory actually rode this turn)."""
-    try:
-        from clozn.memory import anchored
-        bags = anchored.active_bags()
-        if request_scope is not None:
-            from clozn.memory import cards as memory_cards, scope as memory_scope
-            current = request_scope if isinstance(request_scope, memory_scope.MemoryScope) \
-                else memory_scope.MemoryScope()
-            eligible_ids = {card.get("id") for card in memory_scope.eligible_cards(
-                memory_cards.list_cards(status="active"), current)}
-            before_scope = len(bags)
-            bags = [bag for bag in bags if bag.get("card_id") in eligible_ids]
-            if mem_out is not None and before_scope > len(bags):
-                mem_out["anchored_scope_excluded_count"] = before_scope - len(bags)
-        if not bags:
-            return None
-        comp = anchored.compile_steer(bags, gates=_anchored_gates(last_user, bags))
-        if not comp:
-            return None
-        if kw.get("steer_vec"):
-            if mem_out is not None:
-                mem_out["anchored_skipped"] = "tone dials held the raw-steer channel this turn"
-            return None
-        kw["steer_vec"] = comp["steer_vec"]
-        kw["steer"] = {"coef": 1.0, "layer": comp["layer"]}
-        if mem_out is not None:
-            mem_out["anchored"] = comp["bags"]
-            mem_out["anchored_layer"] = comp["layer"]
-            mem_out["anchored_s_total"] = comp.get("s_total")
-        return comp
-    except Exception:
-        return None
-
-
-def _anchored_loop_guard(engine, prompt, max_new, kw, samp, comp, reply, steps, finish, mem_out):
-    """The substrate wiring anchored.detect_loop()'s own docstring deliberately leaves undone
-    -- chat()'s non-streaming path only: detect_loop() over the pieces
-    JUST generated under a FULL-STRENGTH anchored injection (`comp`, the compile_steer() payload that
-    actually rode this turn -- callers only invoke this when comp is not None, i.e. anchored memory was
-    really injected, never on a skipped/absent one). A fired loop is OVER-INJECTION DEGENERACY, not a
-    quality signal either way -- this only MITIGATES it; it never claims the memory "worked" or "was
-    recalled" (clozn's honesty contract).
-
-      1. clean (no loop): returns (reply, steps, finish) UNTOUCHED -- byte-identical to today, mem_out
-         gets no anchored_loop_guard key at all.
-      2. loop -> retry ONCE at s_total/2 (anchored.halve_steer -- same direction/layer/bags, half the
-         injected magnitude). Clean on retry: use the retry's (reply, steps, finish);
-         mem_out["anchored_loop_guard"] = {"fired": True, "action": "retried@s/2", "resolved": True},
-         and mem_out["anchored_s_total"] is corrected to the HALVED value that actually shaped the final
-         reply (the run record must describe what really happened, not the original full-strength ask).
-      3. still loops at half strength -> one final pass with the anchored steer ZEROED entirely (kw's
-         steer_vec/steer keys dropped -- the raw-steer slot was free before anchored memory claimed it,
-         so this is a genuinely unsteered generation, not "fall back to tone dials"). Whether THAT pass
-         is itself loop-free is checked too (never claim "resolved" without looking);
-         mem_out["anchored_loop_guard"] = {"fired": True, "action": "disabled", "resolved": <checked>},
-         mem_out["anchored_s_total"] = 0.0.
-
-    Every regeneration reuses the SAME prompt/max_new/sample regime as the original call -- only the
-    steer changes -- so a retry is a fair A/B against the original, not a different generation policy."""
-    from clozn.memory import anchored
-    pieces = [str(s.get("piece", "")) for s in (steps or [])]
-    if not anchored.detect_loop(pieces):
-        return reply, steps, finish
-
-    half = anchored.halve_steer(comp)
-    kw_half = dict(kw)
-    kw_half["steer_vec"] = half["steer_vec"]
-    kw_half["steer"] = {"coef": 1.0, "layer": half["layer"]}
-    reply2, steps2, finish2, _ = ctx._engine_complete_traced(engine, prompt, max_new, kw_half, sample=samp)
-    pieces2 = [str(s.get("piece", "")) for s in (steps2 or [])]
-    if not anchored.detect_loop(pieces2):
-        if mem_out is not None:
-            mem_out["anchored_loop_guard"] = {"fired": True, "action": "retried@s/2", "resolved": True}
-            mem_out["anchored_s_total"] = half["s_total"]
-        return reply2, steps2, finish2
-
-    kw_zero = {k: v for k, v in kw.items() if k not in ("steer_vec", "steer")}
-    reply3, steps3, finish3, _ = ctx._engine_complete_traced(engine, prompt, max_new, kw_zero, sample=samp)
-    pieces3 = [str(s.get("piece", "")) for s in (steps3 or [])]
-    if mem_out is not None:
-        mem_out["anchored_loop_guard"] = {"fired": True, "action": "disabled",
-                                          "resolved": not anchored.detect_loop(pieces3)}
-        mem_out["anchored_s_total"] = 0.0
-    return reply3, steps3, finish3
+# ANCHORED MEMORY REMOVED (2026-07-27). _anchored_gates / _apply_anchored_memory /
+# _anchored_loop_guard lived here. They composed a k-sparse {token: alpha} bag into one steer
+# vector at L21. Measured on its own qualified config and it could not recall: the bag for a card
+# naming a cat 'Miso' adopted in 'Kyoto' stored {cat, grey, named, adopted} -- dir(c) needs
+# single-token words, so every proper noun was dropped -- and the injection induced a fabricated
+# "your cat named Qwen". See notes/ANCHORED_MEMORY_FINDINGS.md.
 
 
 def _inject_block(messages, block):

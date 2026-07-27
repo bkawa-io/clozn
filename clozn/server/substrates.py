@@ -182,22 +182,9 @@ class Substrate:
             return {"strength": float(getattr(m, "memory_strength", 1.0)), "has_prefix": m.prefix is not None,
                     "mode": ctx._memory_mode()}
 
-        if path == "/memory/gatecheck":         # DEBUG (live calibration): the topic-relevance gate for a prompt
-            # Exposes both raw signals + the final gate + per-rule cosines for the active rules, so the bands
-            # (lo_t/hi_t/lo_o/hi_o) can be tuned against real on/off-topic prompts. Fully guarded: on any
-            # failure (or no embedder) it reports the no-gating baseline (gate 1.0) rather than raising.
-            prompt = str(body.get("prompt", ""))
-            rules = list(getattr(m, "rules", []) or [])
-            try:
-                from clozn.memory.topic_gate import get_gate
-                dbg = get_gate().debug(prompt, rules)
-            except Exception as e:
-                dbg = {"gate": 1.0, "topic": 0.0, "openness": 0.0, "relevance": {},
-                       "ok": False, "error": f"{type(e).__name__}: {e}"}
-            # `gate` here is the RAW topic gate (relevance only); the applied scale is memory_strength x
-            # gate (internalized) or include-iff gate >= ctx.PROMPT_GATE_MIN (prompt mode) -- mode says which.
-            return {"prompt": prompt, "rules": rules, "mode": ctx._memory_mode(),
-                    "strength": float(getattr(m, "memory_strength", 1.0)), **dbg}
+        # (/memory/gatecheck lived here -- a live-calibration debug view of clozn.memory.topic_gate's
+        # relevance bands. Removed 2026-07-27 with the gate itself: it needed sentence-transformers, which
+        # is not a product dependency, so the shipped route only ever reported its own fallback.)
         return None
 
     # ---- E1 review lifecycle: a status change rebuilds m.rules from the active set, retrains iff it moved -
@@ -643,7 +630,7 @@ class EngineSubstrate(Substrate):
         return req.prompt_tokens if req is not None else None
 
     def chat(self, messages, max_new=256, sample=True, trace_out=None, mem_out=None,
-             reference_tokens=None, apply_anchored=False, memory_scope=None):
+             reference_tokens=None, memory_scope=None):
         """One stateless chat completion on the engine with memory (prompt-mode card block) + tone dials
         applied. Mirrors QwenSubstrate.chat's contract EXACTLY (same signature, same trace_out/mem_out
         fill) so the receipts/replay stack is backend-agnostic.
@@ -669,8 +656,6 @@ class EngineSubstrate(Substrate):
         request_context.RequestContext's docstring. _last_generation_meta/_last_diverged/_last_diverged_at
         stay readable exactly as before (now read-only views onto self._request); nothing about this
         call's CONTROL FLOW or the reply it returns changed."""
-        # `apply_anchored` is explicit so live OpenAI chat can use X7 anchored memory, while receipts/replay
-        # keep the pre-existing deterministic baseline unless they intentionally opt in.
         req = self._new_request()
         samp = ctx._resolve_sampling(sample)
         req.sampling = samp
@@ -705,10 +690,6 @@ class EngineSubstrate(Substrate):
             if sv:
                 kw["steer_vec"] = sv
                 kw["steer"] = {"coef": 1.0, "layer": self.steer.layer}
-        comp = ((ctx._apply_anchored_memory(kw, mem_out, ctx._last_user(messages))
-                 if memory_scope is None else ctx._apply_anchored_memory(
-                     kw, mem_out, ctx._last_user(messages), request_scope=memory_scope))
-                if apply_anchored else None)
         if reference_tokens:                                # prove-all early-stop: halt when the answer changes
             kw["reference_tokens"] = [int(t) for t in reference_tokens if t is not None]
         usage = {}
@@ -728,15 +709,9 @@ class EngineSubstrate(Substrate):
         req.generation_timing = dict(usage.get("generation_timing") or {})
         req.finish_reason = finish                          # stash for last_finish_reason() (the log path)
         req.diverged, req.diverged_at = divinfo             # stash for last_divergence()
-        if comp is not None:                                 # LOOP GUARD: only when anchored memory was
-            reply_raw, steps, finish = ctx._anchored_loop_guard(  # ACTUALLY injected this turn (comp is not
-                self.engine, prompt, max_new, kw, samp, comp, reply_raw, steps, finish, mem_out)
-            req.finish_reason = finish                      # None) -- see ctx._anchored_loop_guard's docstring
-            if mem_out is not None and mem_out.get("anchored_loop_guard"):
-                # The guard may have replaced the first generation with one or two retries.  Those older
-                # helper calls do not return timing, so discard the initial pass's timing rather than attach
-                # it to a different final reply.
-                req.generation_timing = {}
+        # (The anchored-memory loop guard lived here -- it only ran when an anchored bag had actually
+        # been injected this turn, which no longer happens. Generic repetition detection survives as
+        # clozn/runs/degeneracy.py, used by runs/signals.py.)
         if trace_out is not None:
             trace_out.extend(steps)
         req.trace = list(steps)
@@ -746,7 +721,7 @@ class EngineSubstrate(Substrate):
 
     def _complete_chat_native(self, messages, *, tools=None, tool_choice="auto", json_schema=None,
                               parallel_tool_calls=False, max_new=256, sample=True,
-                              trace_out=None, mem_out=None, apply_anchored=False,
+                              trace_out=None, mem_out=None,
                               add_generation_prompt=True, enable_thinking=True,
                               reasoning_format="none", memory_scope=None) -> dict:
         """Private atomic model-native structured chat on the C++ worker.
@@ -757,8 +732,8 @@ class EngineSubstrate(Substrate):
         client-held prepared descriptor from drifting between rendering and generation.
 
         Clozn still owns the layers around that native operation.  Prompt-card memory is injected into
-        the message list before the worker renders it, tone dials (and explicitly requested anchored
-        memory) use the same raw steering channel as :meth:`chat`, and sampling resolves through the
+        the message list before the worker renders it, tone dials use the raw steering channel as in
+        :meth:`chat`, and sampling resolves through the
         same per-request policy.  The worker's buffered response contains the actual native event JSON,
         so it is folded through ``accumulate_ar_events`` rather than reconstructed from a final board.
 
@@ -804,18 +779,10 @@ class EngineSubstrate(Substrate):
                 options["steer_vec"] = steer_vec
                 options["steer"] = {"coef": 1.0, "layer": self.steer.layer}
 
-        # Anchored memory is opt-in, matching chat().  The atomic response now carries real token events,
-        # but this private seam intentionally does not run chat()'s multi-pass loop guard: retrying would
-        # require a second atomic structured generation and could produce a different parsed call.  The
-        # public route must not opt in until that policy is explicitly designed and qualified.
-        if apply_anchored:
-            if memory_scope is None:
-                ctx._apply_anchored_memory(options, memory_manifest, ctx._last_user(messages))
-            else:
-                ctx._apply_anchored_memory(
-                    options, memory_manifest, ctx._last_user(messages), request_scope=memory_scope)
-            if mem_out is not None:
-                mem_out.update(memory_manifest)
+        # (Anchored memory was applied here, opt-in. Removed 2026-07-27 -- it could not recall, see
+        # notes/ANCHORED_MEMORY_FINDINGS.md.)
+        if mem_out is not None:
+            mem_out.update(memory_manifest)
 
         if samp and samp.get("on"):
             options.update(
@@ -1079,7 +1046,7 @@ class EngineSubstrate(Substrate):
 
     def chat_stream(self, messages, max_new=256, mem_out=None, lens=None, on_frame=None, sample=True,
                     memory_scope=None):
-        """Streaming twin of chat(): the SAME memory-block + tone-dial + anchored-memory construction
+        """Streaming twin of chat(): the SAME memory-block + tone-dial construction
         (kept in lockstep -- see chat()'s comments; do not let this drift from that logic), but opens the engine's
         /v1/completions with stream:True (mirrors _engine_complete_traced's request) and yields text as
         the engine commits it, instead of waiting on one blocking call. This is what makes /v1/chat/
@@ -1149,12 +1116,7 @@ class EngineSubstrate(Substrate):
             if sv:
                 kw["steer_vec"] = sv
                 kw["steer"] = {"coef": 1.0, "layer": self.steer.layer}
-        # F6 ANCHORED MEMORY (X7): active bags compose into ONE gated steer_vec at L21 and ride live chat.
-        if memory_scope is None:
-            ctx._apply_anchored_memory(kw, mem_out, ctx._last_user(messages))
-        else:
-            ctx._apply_anchored_memory(
-                kw, mem_out, ctx._last_user(messages), request_scope=memory_scope)
+        # (F6 anchored memory composed a gated steer_vec here; removed 2026-07-27.)
         body = dict(kw); body["prompt"] = prompt; body["max_tokens"] = int(max_new)
         if samp and samp.get("on"):     # S5: real sampling -- Ollama-style temperature/top_k/top_p/rep_penalty/seed
             body["temperature"] = float(samp["temperature"])
@@ -1246,25 +1208,10 @@ class EngineSubstrate(Substrate):
                 req.generation_timing = runlog.generation_timing_from_frames(frames)
             except Exception:
                 req.generation_timing = {}
-            # LOOP GUARD, streaming twin: the engine sets the anchored
-            # steer at generation-START (body["steer_vec"] above) and every piece is yielded to the
-            # caller live over SSE -- by the time this `finally` runs, the client has ALREADY received
-            # the whole reply. There is no seamless mid-stream re-injection here (unlike chat()'s
-            # auto-retry-at-half-strength): the honest thing this path can do is DETECT the degeneracy
-            # after the fact and FLAG the run -- never fake a retry/self-heal capability streaming
-            # doesn't have. Only checked when anchored memory actually rode this turn (mem_out["anchored"]
-            # set, not anchored_skipped/absent) -- a degeneracy safety, never a claim the memory "worked".
-            if mem_out is not None and mem_out.get("anchored"):
-                try:
-                    from clozn.memory import anchored as _anchored_lg
-                    pieces = [str(s.get("piece", "")) for s in (req.trace or [])]
-                    if _anchored_lg.detect_loop(pieces):
-                        mem_out["anchored_loop_guard"] = {
-                            "fired": True, "action": "flagged-only", "resolved": False,
-                            "note": ("streaming reply already reached the client -- detected after the "
-                                     "fact, no mid-stream retry is possible on this path")}
-                except Exception:
-                    pass
+            # (A streaming-twin loop guard lived here. It only ran when anchored memory had actually
+            # ridden the turn -- mem_out["anchored"] -- which no longer happens, so it was dead code
+            # after the anchored removal. Generic repetition detection survives in
+            # clozn/runs/degeneracy.py and still reaches run records through runs/signals.py.)
             if mem_out is not None:
                 req.memory_manifest = dict(mem_out)
 

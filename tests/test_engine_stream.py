@@ -34,8 +34,6 @@ sys.path.insert(0, RESEARCH)
 from clozn.server import app as cs          # noqa: E402
 import clozn.memory.cards as memory_cards                # noqa: E402
 import clozn.memory.mode as memory_mode                 # noqa: E402
-import clozn.memory.anchored as anchored_memory          # noqa: E402
-import clozn.memory.topic_gate as topic_gate             # noqa: E402
 import urllib.request               # noqa: E402
 
 
@@ -46,9 +44,6 @@ def iso(tmp_path, monkeypatch):
     monkeypatch.setattr(cs, "CLOZN_DIR", str(tmp_path))
     monkeypatch.setattr(memory_cards, "CARDS_PATH", str(tmp_path / "cards.json"))
     monkeypatch.setattr(memory_mode, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    # the anchored-bag store too: _apply_anchored_memory reads it on every chat_stream, so a REAL bag
-    # in ~/.clozn/anchored_bags.json would honestly steer these requests and flunk the no-steer tests
-    monkeypatch.setattr(anchored_memory, "BAGS_PATH", str(tmp_path / "anchored_bags.json"))
     return tmp_path
 
 
@@ -402,101 +397,3 @@ def test_chat_stream_skips_steer_vec_when_no_dial_is_active(iso, monkeypatch, fa
     assert "steer_vec" not in body
 
 
-def test_chat_stream_forwards_anchored_memory_when_raw_steer_slot_is_free(iso, monkeypatch, fake_urlopen):
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
-    bag = {"card_id": "mem_space", "card_text": "loves space planets",
-           "vector": [0.0, 1.0], "on": True,
-           "terms": [{"token": "space", "alpha": 0.8}]}
-    monkeypatch.setattr(anchored_memory, "active_bags", lambda: [bag])
-
-    class Gate:
-        def scalar(self, prompt, texts):
-            return 0.25
-
-    monkeypatch.setattr(topic_gate, "get_gate", lambda: Gate())
-    sub = _bare_engine_substrate(FakeEngine())
-    mem_out = {}
-
-    list(sub.chat_stream([{"role": "user", "content": "tell me about planets"}], mem_out=mem_out))
-
-    body = json.loads(fake_urlopen[-1]["req"].data.decode("utf-8"))
-    assert body["steer"] == {"coef": 1.0, "layer": anchored_memory.LAYER}
-    assert body["steer_vec"][1] == pytest.approx(anchored_memory.SCALE * 0.25 * anchored_memory.BASE_NORM)
-    assert mem_out["anchored"][0]["card_id"] == "mem_space"
-
-
-# ==================================================================================== the anchored-memory loop guard (streaming twin)
-# The loop-guard policy: the engine sets the anchored steer at generation-START and every piece
-# is yielded to the caller live, so by the time a loop could be detected the client has already received
-# the whole reply -- there is no seamless mid-stream retry here (unlike chat()'s auto-retry-at-half-
-# strength in test_engine_substrate.py). This path can only detect the degeneracy after the fact and flag
-# the run -- never fake a retry it structurally cannot do.
-
-def _loop_lines():
-    """8 tokens forming a period-2 cycle ('the'/'cake' x4) -- enough evidence for detect_loop to fire."""
-    toks = ["the", "cake"] * 4
-    lines = [_sse_line({"type": "tokens_committed", "items": [{"piece": t, "conf": 0.5, "pos": i}]})
-            for i, t in enumerate(toks)]
-    lines.append(_sse_line({"type": "gen_finished"}))
-    lines.append(_sse_line({"choices": [{"text": "".join(toks), "index": 0, "finish_reason": "stop"}]}))
-    lines.append(b"data: [DONE]\n")
-    return lines
-
-
-def _anchored_bag_setup(monkeypatch, card_id="mem_cake"):
-    bag = {"card_id": card_id, "card_text": "loves cake", "vector": [1.0, 0.0], "on": True,
-           "terms": [{"token": "cake", "alpha": 1.0}]}
-    monkeypatch.setattr(anchored_memory, "active_bags", lambda: [bag])
-    monkeypatch.setattr(topic_gate, "get_gate",
-                        lambda: type("Gate", (), {"scalar": lambda self, p, t: 1.0})())
-
-
-def test_chat_stream_loop_guard_flags_after_the_fact_with_no_retry(iso, monkeypatch):
-    """A looping reply under an ACTUAL anchored injection -> detected once the stream ends, flagged
-    honestly (fired/action/resolved), and -- critically -- only ONE HTTP request was ever made: the
-    stream cannot regenerate mid-flight the way chat() can."""
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
-    _anchored_bag_setup(monkeypatch)
-    calls = _patch_urlopen(monkeypatch, _loop_lines())
-    sub = _bare_engine_substrate(FakeEngine())
-    mem_out = {}
-
-    pieces = list(sub.chat_stream([{"role": "user", "content": "tell me about cake"}], mem_out=mem_out))
-
-    assert pieces == ["the", "cake"] * 4
-    assert len(calls) == 1                                            # no mid-stream retry -- can't be done
-    assert mem_out["anchored"][0]["card_id"] == "mem_cake"             # the injection itself is unaffected
-    assert mem_out["anchored_loop_guard"] == {
-        "fired": True, "action": "flagged-only", "resolved": False,
-        "note": ("streaming reply already reached the client -- detected after the "
-                "fact, no mid-stream retry is possible on this path")}
-
-
-def test_chat_stream_no_loop_guard_key_when_the_reply_is_clean(iso, monkeypatch, fake_urlopen):
-    """canned_lines() (the default 3-token 'Paris.' reply) is well under detect_loop's evidence window --
-    no anchored_loop_guard key at all, even with an active anchored injection."""
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
-    _anchored_bag_setup(monkeypatch, card_id="mem_paris")
-    sub = _bare_engine_substrate(FakeEngine())
-    mem_out = {}
-
-    list(sub.chat_stream([{"role": "user", "content": "capital of France?"}], mem_out=mem_out))
-
-    assert mem_out["anchored"][0]["card_id"] == "mem_paris"
-    assert "anchored_loop_guard" not in mem_out
-
-
-def test_chat_stream_loop_guard_never_engages_without_an_actual_anchored_injection(iso, monkeypatch):
-    """No active bags -> mem_out['anchored'] is never set -> the guard must not even LOOK at the trace,
-    even though these exact pieces would trip detect_loop on their own."""
-    monkeypatch.setattr(cs, "_prompt_block_for", _no_block)
-    monkeypatch.setattr(anchored_memory, "active_bags", lambda: [])
-    _patch_urlopen(monkeypatch, _loop_lines())
-    sub = _bare_engine_substrate(FakeEngine())
-    mem_out = {}
-
-    pieces = list(sub.chat_stream([{"role": "user", "content": "hi"}], mem_out=mem_out))
-
-    assert pieces == ["the", "cake"] * 4          # the reply itself is untouched either way
-    assert "anchored" not in mem_out
-    assert "anchored_loop_guard" not in mem_out

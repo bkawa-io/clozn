@@ -1,6 +1,6 @@
 """test_experiment -- model-free tests for clozn/experiments/experiment.py, the ONE experiment primitive
 over clozn's run-scoped "hold everything constant, change one thing, compare, with a receipt" ops
-(replay / counterfactual / receipt / branch / swap_receipt / anchored_receipt).
+(replay / counterfactual / receipt / branch / swap_receipt).
 
 No model, no GPU: mirrors test_receipts.py / test_counterfactual.py / test_swap_receipt.py's own
 model-free style. Two layers:
@@ -14,7 +14,7 @@ model-free style. Two layers:
     contract-shaped canned dict (HEAVN_API_CONTRACTS.md §8), which is exactly the "stub the ... underlying
     ops" the build brief calls for.
   * SPY tests: every one of the six underlying-op names the dispatcher imports
-    (_receipt/_counterfactual/_swap_receipt/_anchored_receipt/_branch/_replay) is monkeypatched with a
+    (_receipt/_counterfactual/_swap_receipt/_branch/_replay) is monkeypatched with a
     recording stub, to prove the REGISTRY dispatches every change.type to exactly the one right op and
     nothing else.
 
@@ -154,42 +154,9 @@ def swap_stub(monkeypatch):
     monkeypatch.setattr(experiment, "_swap_receipt", _canned_swap_receipt)
 
 
-# ==================================================================== a canned anchored_receipt() stand-in
-
-def _canned_anchored_receipt(run, card_id, sub):
-    return {
-        "mode": "anchored_receipt", "causal_verified": True, "run_id": run.get("id"), "card_id": card_id,
-        "injected": {"card_id": card_id, "layer": 21, "coef": 73.34, "s_total": 0.5,
-                    "bags": [{"card_id": card_id or "mem_a", "gate": 1.0,
-                             "alpha_top3": [{"token": "kyoto", "alpha": 0.62}]}],
-                    "target_term": "kyoto", "target_token_id": 16234},
-        "whatlearned": {"note": "this is a lookup ...", "envelope": "L21 ...",
-                       "bags": [{"card_id": card_id or "mem_a", "card_text": "likes kyoto",
-                                "reconstruction_cos": 0.87, "k": 1,
-                                "terms": [{"token": "kyoto", "alpha": 0.62, "reconstruction_cos": 0.87}],
-                                "table": "+0.620  kyoto"}]},
-        "baseline_reply": "I don't have a particular travel preference.",
-        "anchored_reply": "I'd love to talk about Kyoto's gardens.",
-        "null_reply": "I don't have a particular travel preference, honestly.",
-        "lexicon_hits": {"baseline": 0, "anchored": 1, "null": 0},
-        "logprob_shift": {"baseline": -4.1, "anchored": -0.6, "null": -3.9,
-                          "anchored_over_baseline_nat": 3.5, "anchored_over_null_nat": 3.3},
-        "has_effect": True, "targeted_shift": True, "null_control_available": True,
-        "coherent": True, "coherence_score": 0.91,
-        "null_note": "the null arm injects a RANDOM direction ...",
-        "lexicon_note": "lexicon_hits counts LITERAL ... mentions ...",
-        "blocked": None, "note": None,
-    }
-
-
-@pytest.fixture
-def anchored_stub(monkeypatch):
-    monkeypatch.setattr(experiment, "_anchored_receipt", _canned_anchored_receipt)
-
-
 # =========================================================================================== envelope shape
 
-def test_envelope_shape_identical_across_every_change_type(iso, monkeypatch, swap_stub, anchored_stub):
+def test_envelope_shape_identical_across_every_change_type(iso, monkeypatch, swap_stub):
     memory_mode.set_mode("prompt")
     run = _seed_run(memory={"cards_applied": ["Be concise."], "applied_ids": ["mem_a"], "mode": "prompt",
                             "gate": 0.8})
@@ -201,7 +168,6 @@ def test_envelope_shape_identical_across_every_change_type(iso, monkeypatch, swa
         {"type": "ablate_dial", "dial": "warm"},
         {"type": "set_dial", "dial": "warm", "value": 1.2},
         {"type": "swap_concept", "to_concept": "ocean", "from_hint": "Paris"},
-        {"type": "anchored_recall", "card_id": "mem_a"},
         {"type": "edit_turn", "turn": 0},
         {"type": "reroll"},
         {"type": "toggle_greedy"},
@@ -231,7 +197,7 @@ def test_ablate_receipt_modes_all_share_the_same_envelope_shape(iso):
 # =========================================================================================== registry dispatch
 
 def test_registry_dispatches_every_type_to_exactly_the_right_op(iso, monkeypatch):
-    calls = {"receipt": 0, "counterfactual": 0, "swap_receipt": 0, "anchored_receipt": 0,
+    calls = {"receipt": 0, "counterfactual": 0, "swap_receipt": 0,
              "branch": 0, "replay": 0}
 
     def spy(name, retval):
@@ -251,8 +217,6 @@ def test_registry_dispatches_every_type_to_exactly_the_right_op(iso, monkeypatch
         "cost_note": "c"}))
     monkeypatch.setattr(experiment, "_swap_receipt", spy("swap_receipt", _canned_swap_receipt(
         {"id": "run_x"}, "Paris", "ocean", None)))
-    monkeypatch.setattr(experiment, "_anchored_receipt", spy("anchored_receipt", _canned_anchored_receipt(
-        {"id": "run_x"}, "mem_a", None)))
     monkeypatch.setattr(experiment, "_branch", spy("branch", {
         "id": "run_child", "response": "r", "changes_applied": {"branch_turn": 0, "kv_snapshot": False}}))
     monkeypatch.setattr(experiment, "_replay", spy("replay", {"id": "run_child", "response": "r"}))
@@ -266,7 +230,6 @@ def test_registry_dispatches_every_type_to_exactly_the_right_op(iso, monkeypatch
         ("ablate_dial", {"type": "ablate_dial", "dial": "warm"}, "receipt"),
         ("set_dial", {"type": "set_dial", "dial": "warm", "value": 1.0}, "counterfactual"),
         ("swap_concept", {"type": "swap_concept", "to_concept": "ocean"}, "swap_receipt"),
-        ("anchored_recall", {"type": "anchored_recall", "card_id": "mem_a"}, "anchored_receipt"),
         ("edit_turn", {"type": "edit_turn", "turn": 0}, "branch"),
         ("reroll", {"type": "reroll"}, "replay"),
         ("toggle_greedy", {"type": "toggle_greedy"}, "replay"),
@@ -394,24 +357,6 @@ def test_swap_concept_never_invents_has_effect_and_preserves_the_null_control(is
     # the raw underlying receipt is preserved verbatim, no info loss
     assert out["result"]["receipt"]["targeted_shift"] is True
     assert "targeted_shift" not in out["result"]   # never promoted/renamed into a top-level field
-
-
-def test_anchored_recall_carries_has_effect_and_preserves_the_null_control(iso, anchored_stub):
-    run = _seed_run()
-    out = experiment.run_experiment(run, {"type": "anchored_recall", "card_id": "mem_a"}, None, object())
-    # anchored_receipt() DOES compute a real has_effect (from the generated diff beyond the null) --
-    # unlike swap_receipt, which has none. It must carry through verbatim, never dropped, never re-derived.
-    assert out["result"]["has_effect"] is True
-    assert out["result"]["causal_verified"] is True
-    null = out["result"]["null"]
-    assert null["available"] is True
-    assert null["reply"] == "I don't have a particular travel preference, honestly."
-    assert null["lexicon_hits"] == 0
-    assert null["anchored_over_null_nat"] == 3.3
-    # the raw underlying receipt (+ its whatlearned alpha table -- the receipt naming its own cause) is
-    # preserved verbatim, no info loss
-    assert out["result"]["receipt"]["targeted_shift"] is True
-    assert out["result"]["receipt"]["whatlearned"]["bags"][0]["table"] == "+0.620  kyoto"
 
 
 def test_swap_concept_blocked_response_still_shapes_cleanly(iso, monkeypatch):

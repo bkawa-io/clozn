@@ -62,7 +62,7 @@ class RequestContext:
       generation_timing    -- worker-measured aggregate decode timing from its terminal gen_finished
                               event; empty when that event was unavailable or the final reply was retried.
       memory_manifest       -- a snapshot of mem_out once the call has finished mutating it (prompt-mode block/
-                              applied cards/gate/anchored bag(s)); the LIVE mem_out dict remains the primary,
+                              applied cards/gate); the LIVE mem_out dict remains the primary,
                               already-per-call-isolated channel (callers own and read it directly) -- this is
                               an additional, consolidated copy on the context object for symmetry.
       steering_snapshot     -- the dial-strength dict THIS call actually used (self.steer.strength or the disk

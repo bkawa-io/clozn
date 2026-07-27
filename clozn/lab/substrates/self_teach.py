@@ -41,18 +41,6 @@ from clozn.lab.substrates.qwen import (
 )
 
 
-def _topic_gate():
-    """The shared TopicGate (a small sentence-embedder that scores prompt<->rule topic relevance), or
-    None if topic_gate isn't importable. Guarded so a missing module can never break SelfTeach -- callers
-    fall back to no-gating (g == 1.0), i.e. the old always-on behavior. The 80MB embedder loads at most
-    once per process (get_gate is a singleton) and only on first real use."""
-    try:
-        from clozn.memory.topic_gate import get_gate
-        return get_gate()
-    except Exception:
-        return None
-
-
 # A few varied probe prompts used to GENERATE consolidation targets (rule-following responses) so a
 # learned rule generalizes past the exact turn it appeared on. Recent real user turns are added too.
 PROBE_PROMPTS = [
@@ -204,25 +192,18 @@ class SelfTeach:
         return v / (v.norm() + 1e-8)
 
     def _gate(self, prompt: str) -> float:
-        """TOPIC-RELEVANCE gate in [0,1]: how strongly the memory should fire for THIS prompt.
+        """TOPIC-RELEVANCE gate in [0,1]. Always 1.0 (no gating) since the 2026-07-27 memory cut.
 
-        Delegates to a small sentence-embedder (topic_gate.TopicGate) that scores the prompt against the
-        active rule TEXTS (self.rules) and returns the relevance to the best-matching rule, soft-thresholded
-        to [0,1]. On-topic prompts -> ~1, off-topic -> ~0. This REPLACES the old hidden-state cosine gate
-        (self.anchor / sim_in / sim_neutral), which was unreliable because mean-pooled 7B hidden states are
-        too anisotropic to separate domains. Those fields remain on the object for save/load compat but are
-        no longer consulted here.
-
-        Graceful default (the safety contract): returns 1.0 -- i.e. NO gating, the always-on baseline --
-        whenever the embedder is unavailable OR there are no active rules. So a machine without
-        sentence-transformers, or a memory with no rules, behaves exactly as before (no regression)."""
-        gate = _topic_gate()
-        if gate is None:
-            return 1.0
-        try:
-            return float(gate.scalar(prompt, list(self.rules)))
-        except Exception:
-            return 1.0                                       # any gate hiccup -> fall back to no-gating
+        This used to delegate to clozn.memory.topic_gate -- a MiniLM sentence-embedder scoring the prompt
+        against the active rule TEXTS. That module is gone: it needed sentence-transformers (never a product
+        dependency), so in every shipped configuration it already fell through this method's own except-clause
+        and returned 1.0. Removing it changed nothing that ran. An earlier hidden-state cosine gate
+        (self.anchor / sim_in / sim_neutral) came before that and was abandoned as unreliable -- mean-pooled
+        7B hidden states are too anisotropic to separate domains; those fields survive for save/load compat
+        only. So SelfTeach's soft prefix is ALWAYS-ON, which is exactly the over-bleed the gate was meant to
+        fix and never did -- see notes/ANCHORED_MEMORY_FINDINGS.md. This is lab code (torch, research-only,
+        PRODUCT_MODES == ("prompt",)); treat the always-on prefix as a known property of the arm."""
+        return 1.0
 
     @torch.no_grad()
     def _generate(self, messages: list[dict], use_prefix: bool, max_new=200, sample=True, gate="auto",

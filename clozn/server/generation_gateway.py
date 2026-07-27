@@ -82,7 +82,7 @@ def instrumented_chat(handler, messages: list, *, model: str, max_tokens: int = 
     """Run chat through the active substrate and persist the resulting evidence.
 
     This is deliberately below every compatibility serializer.  The active substrate
-    is where Clozn applies prompt-card memory, tone steering, anchored memory, and the
+    is where Clozn applies prompt-card memory, tone steering, and the
     traced engine call; ``handler._log_run`` is where that evidence becomes a receipt.
     A route calling ``ENGINE.complete`` directly skips all of those layers.
 
@@ -101,9 +101,6 @@ def instrumented_chat(handler, messages: list, *, model: str, max_tokens: int = 
     logged_messages = journal_messages if journal_messages is not None else messages
     chat_kw = {"trace_out": trace_steps, "mem_out": memout}
     if isinstance(sub, ctx.EngineSubstrate):
-        # Live compatibility traffic gets the same anchored-memory behavior as the
-        # OpenAI route. Receipt/replay callers remain explicitly deterministic.
-        chat_kw["apply_anchored"] = True
         chat_kw["memory_scope"] = request_memory_scope(handler)
     native_result = None
     try:
@@ -117,8 +114,6 @@ def instrumented_chat(handler, messages: list, *, model: str, max_tokens: int = 
                 parallel_tool_calls=False,
                 max_new=int(max_tokens), sample=sample,
                 trace_out=trace_steps, mem_out=memout,
-                # Structured output cannot safely run the ordinary anchored retry/loop policy.
-                apply_anchored=False,
                 enable_thinking=True,
                 reasoning_format="none",
                 memory_scope=request_memory_scope(handler),

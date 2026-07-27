@@ -3,7 +3,6 @@ import type { RuntimeState } from "../../data/types";
 import {
   applyAxis,
   applyConcept,
-  fitAnchoredBag,
   loadBehaviorWorkspace,
   previewAxis,
   previewConcept,
@@ -11,8 +10,6 @@ import {
   saveProfile,
   saveSampling,
   switchProfile,
-  toggleAnchoredBag,
-  type AnchoredBag,
   type AxisPreview,
   type BehaviorAxis,
   type BehaviorProfile,
@@ -40,7 +37,7 @@ interface OperationState {
 const modules: Array<{ id: BehaviorView; label: string }> = [
   { id: "dials", label: "TONE DIALS" },
   { id: "concepts", label: "CONCEPT STEERING" },
-  { id: "memory", label: "ANCHORED MEMORY" },
+  { id: "memory", label: "MEMORY CARDS" },
   { id: "runtime", label: "RUNTIME DEFAULTS" },
   { id: "profiles", label: "PROFILES" },
 ];
@@ -81,7 +78,6 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
   const [guard, setGuard] = useState<GuardSettings>();
   const [guardDraft, setGuardDraft] = useState<GuardSettings>();
   const [cards, setCards] = useState<MemoryCard[]>([]);
-  const [bags, setBags] = useState<AnchoredBag[]>([]);
   const [profiles, setProfiles] = useState<BehaviorProfile[]>([]);
   const [activeProfile, setActiveProfile] = useState<string>();
   const [errors, setErrors] = useState<Awaited<ReturnType<typeof loadBehaviorWorkspace>>["errors"]>({});
@@ -108,7 +104,6 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
     setGuard(next.guard);
     setGuardDraft(next.guard);
     setCards(next.cards);
-    setBags(next.bags);
     setProfiles(next.profiles);
     setActiveProfile(next.activeProfile);
     setErrors(next.errors);
@@ -131,7 +126,6 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
   const dirtyAxes = axes.filter((axis) => changed(axis.value, drafts[axis.name]));
   const activeAxes = axes.filter((axis) => Math.abs(axis.value) > 0.0001);
   const activeCards = cards.filter((card) => card.status === "active");
-  const activeBags = bags.filter((bag) => bag.on);
   const samplingDirty = Boolean(
     sampling
     && samplingDraft
@@ -373,45 +367,6 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
     }
   }
 
-  async function toggleBag(cardId: string, on: boolean) {
-    setOperation({
-      status: "pending",
-      action: `${on ? "ENABLING" : "DISABLING"} ANCHORED BAG`,
-      detail: cardId,
-    });
-    try {
-      const next = await toggleAnchoredBag(cardId, on);
-      setBags((current) => current.map((bag) => bag.card_id === cardId ? next : bag));
-      setOperation({
-        status: on ? "applied" : "reverted",
-        action: `${on ? "ENABLED" : "DISABLED"} ANCHORED BAG`,
-        detail: cardId,
-      });
-    } catch (error) {
-      setOperation({ status: "failed", action: "MEMORY APPLY FAILED", detail: errorMessage(error) });
-    }
-  }
-
-  async function fitCard(cardId: string) {
-    setOperation({ status: "pending", action: "FITTING ANCHORED BAG", detail: cardId });
-    try {
-      const next = await fitAnchoredBag(cardId);
-      setBags((current) => [
-        ...current.filter((bag) => bag.card_id !== cardId),
-        next,
-      ]);
-      setOperation({
-        status: "applied",
-        action: "ANCHORED BAG FIT",
-        detail: next.reconstruction_cos == null
-          ? cardId
-          : `COS ${next.reconstruction_cos.toFixed(3)}`,
-      });
-    } catch (error) {
-      setOperation({ status: "failed", action: "MEMORY FIT FAILED", detail: errorMessage(error) });
-    }
-  }
-
   async function createProfile() {
     const name = profileName.trim();
     if (!name) return;
@@ -466,20 +421,19 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
                   : module.id === "concepts"
                     ? Object.keys(activeConcepts).length
                     : module.id === "memory"
-                      ? activeCards.length + activeBags.length
+                      ? activeCards.length
                       : module.id === "profiles" ? profiles.length : sampling ? 1 : 0}
               </b>
             </button>
           ))}
         </nav>
         <section className="behavior-stack-state">
-          <header><span>ACTIVE STACK</span><b>{activeAxes.length + activeCards.length + activeBags.length}</b></header>
+          <header><span>ACTIVE STACK</span><b>{activeAxes.length + activeCards.length}</b></header>
           <dl>
             <div><dt>Model</dt><dd>{basename(runtime.engine?.model)}</dd></div>
             <div><dt>Tone dials</dt><dd>{activeAxes.length}</dd></div>
             <div><dt>Concept dials</dt><dd>{Object.keys(activeConcepts).length}</dd></div>
             <div><dt>Memory cards</dt><dd>{activeCards.length}</dd></div>
-            <div><dt>Anchored bags</dt><dd>{activeBags.length}</dd></div>
             <div><dt>Profile</dt><dd>{activeProfile || "—"}</dd></div>
           </dl>
           <div className="behavior-active-dials">
@@ -617,47 +571,19 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
             <header className="instrument-head behavior-console-head">
               <div>
                 <span className="eyebrow">MEMORY INTERVENTION</span>
-                <h1 id="behavior-console-title">Anchored memory</h1>
+                <h1 id="behavior-console-title">Memory cards</h1>
               </div>
               <div className="behavior-head-stats">
                 <span><b>CARDS</b>{cards.length}</span>
-                <span><b>ANCHORED</b>{bags.length}</span>
-                <span><b>ACTIVE</b>{activeBags.length}</span>
               </div>
             </header>
             <div className="behavior-memory-stage">
               {errors.memory && <div className="behavior-unavailable">{errors.memory}</div>}
               <section className="behavior-memory-section">
-                <header><span>ANCHORED BAGS</span><b>{bags.length}</b></header>
-                {bags.map((bag) => (
-                  <article className="behavior-bag" key={bag.card_id}>
-                    <div>
-                      <strong>{bag.card_text || bag.card_id}</strong>
-                      <span>
-                        {bag.terms.length} TERMS
-                        {bag.layer == null ? "" : ` · L${bag.layer}`}
-                        {bag.reconstruction_cos == null ? "" : ` · COS ${bag.reconstruction_cos.toFixed(3)}`}
-                      </span>
-                    </div>
-                    <div className="behavior-bag-terms">
-                      {bag.terms.map((term) => <span key={term.token}>{term.token} <b>{term.alpha >= 0 ? "+" : ""}{term.alpha.toFixed(3)}</b></span>)}
-                    </div>
-                    <label>
-                      <input type="checkbox" checked={bag.on} onChange={(event) => void toggleBag(bag.card_id, event.target.checked)} />
-                      <span>{bag.on ? "ON" : "OFF"}</span>
-                    </label>
-                  </article>
-                ))}
-                {!bags.length && <div className="behavior-empty-row">0 ANCHORED BAGS</div>}
-              </section>
-              <section className="behavior-memory-section">
                 <header><span>MEMORY CARDS</span><b>{cards.length}</b></header>
                 {cards.map((card) => (
                   <article className="behavior-card" key={card.id}>
                     <div><strong>{card.text}</strong><span>{card.status.toUpperCase()}</span></div>
-                    <button type="button" disabled={!runtime.engine?.jlens || operation.status === "pending"} onClick={() => void fitCard(card.id)}>
-                      {runtime.engine?.jlens ? "FIT ANCHOR" : "J-LENS REQUIRED"}
-                    </button>
                   </article>
                 ))}
                 {!cards.length && <div className="behavior-empty-row">0 MEMORY CARDS</div>}

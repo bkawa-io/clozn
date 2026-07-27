@@ -189,8 +189,6 @@ def try_post(h, p, body):
                 if sv:
                     kw["steer_vec"] = sv
                     kw["steer"] = {"coef": 1.0, "layer": es.layer}
-            ctx._apply_anchored_memory(
-                kw, memout, ctx._last_user(msgs), request_scope=memory_scope)
             # Generate + capture a per-token trace alongside (B3). Reply is byte-identical to the
             # plain complete(); the trace feeds the Run Inspector timeline. steps=[] (diffusion, or a
             # stream hiccup) -> runlog stores a clean empty trace.

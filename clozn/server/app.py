@@ -514,7 +514,7 @@ from clozn.server.memory_assembly import (                                      
     _risk_of, _dial_suggestion, _provenance_of, _memory_mode, _last_user,
     _prompt_gate, _prompt_relevance, _prompt_mem_cards, _prompt_block_for,
     PromptBlockDecision, _capture_prompt_decision, _baseline_prompt_tokens,
-    _anchored_gates, _apply_anchored_memory, _anchored_loop_guard, _inject_block,
+    _inject_block,
     _mem_migrate, _export_markdown, _runs_for_card, _mem_sync_rules,
 )
 
@@ -673,12 +673,11 @@ from clozn.server.routes import engine as _engine_routes              # noqa: E4
 from clozn.server.routes import guard as _guard_routes                # noqa: E402 (persisted /guard/mode)
 from clozn.server.routes import models as _models_routes              # noqa: E402 (local GGUF inventory)
 from clozn.server.routes import readouts as _readouts_routes          # noqa: E402
-# Inspector route families: fork-at-token, journal actuary, anchored memory (F6), model diff (F8).
+# Inspector route families: fork-at-token, journal actuary, model diff (F8).
 from clozn.server.routes import provenance as _provenance_routes       # noqa: E402
 from clozn.server.routes import causal_trace as _causal_trace_routes   # noqa: E402
 from clozn.server.routes import fork as _fork_routes                   # noqa: E402
 from clozn.server.routes import journal as _journal_routes             # noqa: E402
-from clozn.server.routes import anchored as _anchored_routes           # noqa: E402
 from clozn.server.routes import diff as _diff_routes                   # noqa: E402
 from clozn.server.routes import receipt_link as _receipt_link_routes   # noqa: E402 (ambient delivery ch.1)
 from clozn.server.routes import influence_map as _influence_map_routes # noqa: E402
@@ -689,13 +688,13 @@ _runs_fallback_routes = _types.SimpleNamespace(try_get=_runs_routes.try_get_fall
 _GET_ROUTES = [_static_routes, _health_routes, _runs_routes, _memory_routes, _receipts_routes,
               _timetravel_routes, _profiles_routes, _ollama_routes, _openai_routes, _engine_routes,
               _guard_routes, _models_routes,
-              _journal_routes, _anchored_routes, _diff_routes, _receipt_link_routes,
+              _journal_routes, _diff_routes, _receipt_link_routes,
               _influence_map_routes, _contracts_routes, _runs_fallback_routes]
 _POST_ROUTES = [_health_routes, _memory_routes, _receipts_routes,
                _corrective_retry_routes, _replay_routes,
                _timetravel_routes, _profiles_routes, _preferences_routes, _feedback_routes,
                _ollama_routes, _openai_routes, _engine_routes, _guard_routes, _readouts_routes,
-               _fork_routes, _journal_routes, _anchored_routes, _diff_routes,
+               _fork_routes, _journal_routes, _diff_routes,
                _receipt_link_routes, _influence_map_routes, _contracts_routes,
                _provenance_routes, _causal_trace_routes]
 
@@ -887,24 +886,6 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                             value = mo[key]
                             memd[key] = ([dict(card) for card in value if isinstance(card, dict)]
                                          if key.endswith("_cards") and isinstance(value, list) else value)
-                    anchored = [dict(a) for a in (mo.get("anchored") or []) if isinstance(a, dict)]
-                    if anchored:
-                        memd["anchored"] = anchored
-                        if mo.get("anchored_layer") is not None:
-                            memd["anchored_layer"] = int(mo["anchored_layer"])
-                        if mo.get("anchored_s_total") is not None:
-                            memd["anchored_s_total"] = round(float(mo["anchored_s_total"]), 4)
-                    if mo.get("anchored_skipped"):
-                        memd["anchored_skipped"] = str(mo["anchored_skipped"])
-                    if isinstance(mo.get("anchored_scope_excluded_count"), int):
-                        memd["anchored_scope_excluded_count"] = max(
-                            0, int(mo["anchored_scope_excluded_count"]))
-                    if isinstance(mo.get("anchored_loop_guard"), dict):
-                        # the loop guard's honest self-healing record --
-                        # _flags() below turns this into the visible "memory-retried"/"memory-loop-guard"
-                        # run flag; never let a guard event go unrecorded just because no bag rode as
-                        # `applied` (anchored memory rides `anchored`, not prompt-mode `applied`).
-                        memd["anchored_loop_guard"] = dict(mo["anchored_loop_guard"])
                     if applied:                                  # bump exactly the cards that rode this turn
                         try:
                             import clozn.memory.cards as memory_cards

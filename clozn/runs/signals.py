@@ -7,7 +7,7 @@ raise a false one, so only unambiguous facts are here (fuzzy refusal detection /
 comparison are deliberately left out until they can be done without false alarms).
 
 Signals (each a human phrase): errored · truncated (hit the token limit) · got stuck repeating (a real
-degeneracy loop, reusing the anchored-memory loop guard) · empty reply · a fenced JSON block that doesn't
+degeneracy loop, via runs/degeneracy.detect_loop) · empty reply · a fenced JSON block that doesn't
 parse (real verification -- a check ran and failed).
 """
 from __future__ import annotations
@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import re
 
-from clozn.memory.anchored import detect_loop
+from clozn.runs.degeneracy import detect_loop
 
 # mirrors clozn/runs/actuary.py's machine-source set -- studio probes, not user turns.
 _MACHINE_SOURCES = {"replay", "branch", "fork", "receipt", "receipts", "counterfactual", "rederive",
