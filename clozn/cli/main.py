@@ -64,20 +64,14 @@ from clozn.cli.commands.studio import cmd_studio                                
 from clozn.cli.commands.explain import (cmd_explain, cmd_inspect, cmd_trace, cmd_branch, cmd_prove,  # noqa: E402
                                         format_explain, format_narrate, format_prove, _fetch_explain,
                                         _fetch_narrate, _fetch_prove, _last_run_id, _verified_tag)
-from clozn.cli.commands.preferences import cmd_preferences, format_preferences                # noqa: E402
 from clozn.cli.commands.test import cmd_test                                                  # noqa: E402
 from clozn.cli.commands.quant_check import cmd_quant_check, add_subparser as _add_quant_check  # noqa: E402,F401
 from clozn.cli.commands.diff_model import cmd_diff_model, add_subparser as _add_diff_model      # noqa: E402,F401
-from clozn.cli.commands.validate_export import cmd_validate_export, add_subparser as _add_validate_export  # noqa: E402,F401
 from clozn.cli.commands.eval import cmd_eval, add_subparser as _add_eval                       # noqa: E402,F401
 from clozn.cli.commands.test_model import cmd_test_model, add_subparser as _add_test_model      # noqa: E402,F401
-from clozn.cli.commands.qualify import cmd_qualify, add_subparser as _add_qualify              # noqa: E402,F401
-from clozn.cli.commands.qualify_chat_io import add_subparser as _add_qualify_chat_io            # noqa: E402
 from clozn.cli.commands.trace_circuit import cmd_trace_circuit, add_subparser as _add_causal_trace  # noqa: E402
 from clozn.cli.commands.ci_check import cmd_ci_baseline, cmd_ci_check, add_subparser as _add_ci_check  # noqa: E402,F401
 from clozn.cli.commands.experiment_suite import add_subparser as _add_experiment_suite                  # noqa: E402
-from clozn.cli.commands.migrate import cmd_migrate_runs                                        # noqa: E402
-from clozn.cli.commands.migrate import add_subparser as _add_migrate                            # noqa: E402
 from clozn.cli.commands.lab import cmd_lab                                                      # noqa: E402
 from clozn.cli.commands.smoke import cmd_smoke                                                  # noqa: E402
 from clozn.cli.commands.version import cmd_version                                              # noqa: E402
@@ -87,10 +81,8 @@ from clozn.cli.commands.watch import add_subparser as _add_watch                
 from clozn.cli.commands.connect import add_subparser as _add_connect                             # noqa: E402
 from clozn.cli.commands.retry import add_subparser as _add_retry                                 # noqa: E402
 from clozn.cli.commands.diagnose import add_subparser as _add_diagnose                           # noqa: E402
-from clozn.cli.commands.memory import add_subparser as _add_memory                               # noqa: E402
 from clozn.cli.commands.regression_suite import add_subparser as _add_regression_suite            # noqa: E402
 from clozn.cli.commands.runs_privacy import add_subparser as _add_runs_privacy                    # noqa: E402
-from clozn.cli.commands.privacy import add_subparser as _add_privacy                              # noqa: E402
 from clozn.cli.commands.provenance import add_subparser as _add_provenance                        # noqa: E402
 
 
@@ -172,10 +164,6 @@ def build_parser():
     sub.add_parser("ps", help="list running product runtimes").set_defaults(fn=cmd_ps)
     pstop = sub.add_parser("stop", help="stop a product runtime (by model name, port, or 'all')")
     pstop.add_argument("which"); pstop.set_defaults(fn=cmd_stop)
-    pmig = sub.add_parser("migrate-runs", help="one-shot import of the old run_*.json journal into SQLite")
-    pmig.add_argument("path", nargs="?", default=None, help="legacy JSON directory (default ~/.clozn/runs)")
-    pmig.set_defaults(fn=cmd_migrate_runs)
-    _add_migrate(sub)      # `clozn migrate` -- run-store schema migrations + `--gc` blob GC (BACKLOG §2)
     pt = sub.add_parser("trace", help="inspect the last run journal entry's confidence timeline")
     pt.add_argument("--list", action="store_true", help="list recent run journal entries instead of showing the last")
     pt.set_defaults(fn=cmd_trace)
@@ -219,12 +207,6 @@ def build_parser():
                     help="gateway fallback when the id is not in the local journal (default 8080)")
     pi.add_argument("--json", action="store_true", help="print the exact explanation object as JSON")
     pi.set_defaults(fn=cmd_inspect)
-    ppref = sub.add_parser("preferences", help="review learned-preference suggestions the model proposes "
-                           "from your quick-repairs (needs a running Clozn gateway)")
-    ppref.add_argument("--approve", metavar="ID", default=None, help="approve a proposal by id (persists the dial)")
-    ppref.add_argument("--dismiss", metavar="ID", default=None, help="dismiss a proposal by id")
-    ppref.add_argument("--port", type=int, default=0, help="Clozn gateway port (default 8080)")
-    ppref.set_defaults(fn=cmd_preferences)
     pte = sub.add_parser("test", help="run tiny-test assertions against a stored run (the receipt/replay seams)")
     pte.add_argument("file", help="path to a JSON tiny-test spec (see clozn/testkit/runner.py's module docstring)")
     pte.add_argument("--json", action="store_true",
@@ -238,11 +220,8 @@ def build_parser():
     pte.set_defaults(fn=cmd_test)
     _add_quant_check(sub)   # `clozn quant-check <A> <B>` — quant-ladder receipts (Tier-1)
     _add_diff_model(sub)    # `clozn diff-model <ref> <candidate>` — base-vs-fine-tune/merge receipts (§4.1)
-    _add_validate_export(sub)  # `clozn validate-export <expected> [exported]` — deployment-equivalence check (§4.5)
     _add_eval(sub)          # `clozn eval` — outcome-grounded calibration (Brier/ECE/risk-coverage)
     _add_test_model(sub)    # `clozn test-model` — the model's own CI: pinned probes vs. a golden fixture
-    _add_qualify(sub)       # `clozn qualify-whitebox <gguf>` — honest per-feature capability matrix
-    _add_qualify_chat_io(sub)  # `clozn qualify-chat-io <gguf>` — exact live native structured-I/O gate
     _add_causal_trace(sub)  # `clozn causal-trace` — intervention-validated causal tracing
     _add_ci_check(sub)      # `clozn ci baseline`/`clozn ci check` — headless CI gate (§4.4)
     _add_experiment_suite(sub)  # `clozn experiment run/show` — versioned case x variant x seed object (§4.2)
@@ -251,10 +230,8 @@ def build_parser():
     _add_connect(sub)           # `clozn connect aider` — safe third-party app config with backup
     _add_retry(sub)             # `clozn retry last` — prompt-first corrective compare + scoped undo
     _add_diagnose(sub)          # `clozn diagnose last` — evidence-only latency/cutoff diagnosis
-    _add_memory(sub)            # `clozn memory used last` — evidence-only memory usage receipt
     _add_regression_suite(sub)  # `clozn suite create` — promote captured app runs into Model CI cases
     _add_runs_privacy(sub)      # `clozn runs` — local journal privacy controls and telemetry export
-    _add_privacy(sub)           # `clozn privacy` — local-only enforcement and outbound-attempt ledger
     _add_provenance(sub)        # `clozn provenance` — attention-knockout context-vs-parametric receipt
     sub.add_parser("version", help="print the installed clozn version (+ git commit if available)"
                    ).set_defaults(fn=cmd_version)

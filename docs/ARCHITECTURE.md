@@ -77,8 +77,10 @@ HTTP process rejects all `/v1/*` and `/api/clozn/*` routes, so it is not a compe
 ## Persistence
 
 SQLite is authoritative for queryable run metadata, lineage, status, and the complete run document.
-Large normalized traces live as immutable SHA-256-addressed JSON blobs. The old per-run JSON journal has
-an explicit one-shot importer (`clozn migrate-runs`) and is never read or dual-written during normal use.
+Large normalized traces live as immutable SHA-256-addressed JSON blobs. Schema migrations are applied
+automatically on every store open (`clozn/runs/migrations.py`, driven by `store._ensure()`), so there is
+no migration step to run by hand. The pre-SQLite per-run JSON journal is no longer importable -- its
+one-shot importer was retired with the CLI shrink; it is never read or dual-written during normal use.
 
 ## Product acceptance gate
 

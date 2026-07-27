@@ -93,7 +93,7 @@ run id in already-committed headers yet. `inspect` assembles confidence, active 
 concepts locally, falling back to a running gateway only when the id is not in this journal.
 Queryable run
 metadata lives in `~/.clozn/runs/runs.sqlite3`; large traces are immutable, content-addressed blobs under
-`~/.clozn/runs/blobs/sha256`. To import an old beta JSON journal once, run `clozn migrate-runs`.
+`~/.clozn/runs/blobs/sha256`. Schema migrations apply automatically whenever the store is opened.
 `clozn test` runs user-authored checks against a stored run: static ones (`contains` / `finish_reason` /
 `min_confidence` / `card_applied` / …) read the run alone; the causal `leans_on` check re-runs the real
 ablation and honestly **skips** (never a silent pass) unless you pass `--live`. Point any OpenAI client
