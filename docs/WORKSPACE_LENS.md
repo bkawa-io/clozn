@@ -5,8 +5,8 @@ Workspace Lens is the UI-visible seam for per-token, per-layer latent workspace 
 This first implementation is deliberately small:
 
 - `workspace_readout` is an additive event type in the generation event spine.
-- `research/workspace_lens.py` adapts existing Clozn concept/SAE readouts into that event shape.
-- `research/clozn_server.py` prefers the live C++ engine concept path (`/engine/concepts`, backed by
+- `clozn/readouts/workspace_lens.py` adapts existing Clozn concept/SAE readouts into that event shape.
+- `clozn/server/app.py` prefers the live C++ engine concept path (`/engine/concepts`, backed by
   `/harvest` + SAE) and stores provider `engine_concepts` when available.
 - If the engine concept path is unavailable but the Python Qwen + SAE brain stack is loaded, the server
   stores provider `sae/probe`.
