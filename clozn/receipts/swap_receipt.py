@@ -45,8 +45,6 @@ import os
 import re
 from collections import Counter
 
-import clozn.behavior.steering.concept_dir as concept_dir
-
 from . import rederive
 from .forced import _random_vector_of_norm
 
@@ -131,7 +129,7 @@ def _baseline_lean(text: str) -> str:
 
 
 def swap_receipt(run: dict, from_hint, to_concept: str, sub, *,
-                 layer: int = concept_dir.DEFAULT_LAYER, strength: float = concept_dir.DEFAULT_STRENGTH,
+                 layer: int | None = None, strength: float | None = None,
                  max_new: int = 64, concept_steer=None, null_seed=None) -> dict:
     """The product entry point. Never raises.
 
@@ -169,6 +167,34 @@ def swap_receipt(run: dict, from_hint, to_concept: str, sub, *,
         "blocked": None, "note": None,
     }
     try:
+        # Imported HERE, not at module scope, and this placement is load-bearing rather than stylistic.
+        #
+        # concept_dir is steering math and needs numpy, which clozn does NOT install: pyproject declares
+        # `dependencies = []` on purpose (docs/RUNTIME_SPLIT.md). This module is reachable from
+        # `clozn/cli/main.py`'s import block via experiments/__init__ -> experiment.py, so a module-scope
+        # import made numpy a hard requirement of `clozn --help` on a fresh `pip install clozn` --
+        # breaking scripts/release/clean_room_install_test.py, and every install that has not separately
+        # installed numpy. The product-minimal CI lane did not catch it because that lane asserts only
+        # that torch is absent, and torch genuinely is.
+        #
+        # `layer`/`strength` default to None rather than concept_dir's constants for the same reason:
+        # default arguments are evaluated at function-DEFINITION time, so reading them off concept_dir in
+        # the signature would re-create the eager import no matter where this line sits.
+        #
+        # Inside the try on purpose: this function documents "Never raises", so a missing numpy has to
+        # degrade to a blocked receipt like every other failure here, not escape as an ImportError.
+        try:
+            import clozn.behavior.steering.concept_dir as concept_dir
+        except ImportError as e:
+            out["blocked"] = "steering_unavailable"
+            out["note"] = (f"concept steering is unavailable in this install ({e}). swap receipts need "
+                           f"numpy, which clozn does not install by default.")
+            return out
+        if layer is None:
+            layer = concept_dir.DEFAULT_LAYER
+        if strength is None:
+            strength = concept_dir.DEFAULT_STRENGTH
+
         if not run or not isinstance(run, dict):
             out["note"] = "no run record given"
             return out

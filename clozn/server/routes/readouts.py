@@ -4,14 +4,19 @@ concepts read from the engine's Qwen GGUF (POST /engine/concepts). Mechanical ex
 `if p == "/engine/..."` branches out of clozn.server.app's do_POST; behavior unchanged. -> clozn.readouts
 (through the one raw ENGINE client on clozn.server.app).
 """
-import numpy as np
-
 from clozn.server import app as ctx
+
+# numpy is used exactly once here (the harvest norms below) and is NOT installed by clozn: pyproject
+# declares `dependencies = []` deliberately, so anything beyond the stdlib is imported lazily inside the
+# function that needs it. app.py imports this module at startup, so a module-scope `import numpy` made
+# the whole gateway unimportable on a fresh `pip install clozn`. Kept inside the existing try so a
+# missing numpy degrades to this route's ordinary 502, not a dead gateway.
 
 
 def try_post(h, p, body):
     if p == "/engine/harvest":   # READ the real C++ runtime's activations (any substrate; the engine is separate)
         try:
+            import numpy as np
             hv = ctx.ENGINE.harvest(str(body.get("text", ""))[:300])
             norms = np.linalg.norm(hv.activations, axis=1)
             h._json(200, {"tokens": hv.tokens, "layer": int(hv.layer), "n_embd": hv.n_embd,
