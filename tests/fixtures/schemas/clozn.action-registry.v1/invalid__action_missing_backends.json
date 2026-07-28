@@ -1,0 +1,11 @@
+{
+  "schema_version": "clozn.action-registry.v1",
+  "version": "1",
+  "actions": [
+    {
+      "id": "less-verbose",
+      "label": "More concise",
+      "description": "For this reply, answer concisely."
+    }
+  ]
+}
