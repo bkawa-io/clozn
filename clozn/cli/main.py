@@ -123,6 +123,16 @@ def build_parser():
                          "attn_knockout works and `clozn provenance` becomes available "
                          "(GET /health.capabilities.attn_knockout flips true). Off by "
                          "default; costs decode speed. Not needed for the Studio Sources lens.")
+    ps.add_argument("--adapter", default=None, metavar="PATH",
+                    help="serve the model with a LoRA fine-tune adapter (a GGUF converted by "
+                         "llama.cpp's convert_lora_to_gguf.py) applied over its weights. The adapter's "
+                         "identity rides the run record, so a receipt says which weights answered. If "
+                         "it cannot be attached -- architecture mismatch, wrong file -- the worker "
+                         "REFUSES to start rather than quietly serving the base model.")
+    ps.add_argument("--adapter-scale", type=float, default=None, metavar="F",
+                    help="multiplier on the adapter's weight delta (default 1.0). 0.0 attaches it while "
+                         "contributing nothing -- the identity control for 'did the adapter actually "
+                         "change this answer, or did loading one change something else?'")
     ps.set_defaults(fn=cmd_serve)
 
     sub.add_parser("models", help="list local models + the engine backend").set_defaults(fn=cmd_models)

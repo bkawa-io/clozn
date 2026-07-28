@@ -20,6 +20,7 @@
     "jlens",
     "readout",
     "attn_knockout",
+    "lora",
     "score_arms"
   ],
   "stream_frame_envelope": [

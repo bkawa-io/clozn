@@ -242,6 +242,15 @@ def _launch_args(exe: str, model: str, port: int, flags: dict, gpu: bool) -> lis
         args += ["--jlens", str(flags["jlens"])]
     if flags.get("_model_sha256"):
         args += ["--model-sha256", str(flags["_model_sha256"])]
+    # A fine-tune adapter (LoRA). Given a first-class key rather than riding extra_args because the
+    # adapter is part of the run's REPRODUCTION IDENTITY -- what weights actually answered -- not a
+    # tuning knob, so callers that record identity need to read it back structurally. The engine
+    # ABORTS rather than serving the base model if the adapter will not attach, so there is no path
+    # where this silently does nothing.
+    if flags.get("adapter"):
+        args += ["--lora", str(flags["adapter"])]
+        if flags.get("adapter_scale") is not None:
+            args += ["--lora-scale", str(flags["adapter_scale"])]
     # Generic passthrough for engine flags this mapping has no key for (first user:
     # --no-flash-attn, which the provenance/attn-knockout mode requires -- flash attention fuses
     # the softmax, so the weights never materialize). A list of literal argv tokens, appended

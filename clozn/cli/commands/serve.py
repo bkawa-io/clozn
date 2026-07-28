@@ -30,9 +30,21 @@ def cmd_serve(args):
             flags["sae_k"] = args.sae_k
     if args.no_flash_attn:
         # extra_args is the generic engine-argv passthrough _launch_args already documents (see
-        # engine_process.py) -- attention-edge provenance (clozn provenance / the Studio Sources lens)
-        # needs the engine started this way so kq_soft_max materializes for /score's attn_knockout.
+        # engine_process.py) -- attention-edge provenance (`clozn provenance`) needs the engine started
+        # this way so kq_soft_max materializes for /score's attn_knockout. NOT the Studio Sources lens,
+        # which runs on /runs/<id>/influence-map's forced-scoring path and never touches attn_knockout.
         flags.setdefault("extra_args", []).append("--no-flash-attn")
+    if getattr(args, "adapter", None):
+        # Fail here rather than letting the engine abort mid-boot: a missing adapter file is a typo, and
+        # the actionable message is the path the user typed, not a worker exit code.
+        adapter = os.path.abspath(os.path.expanduser(args.adapter))
+        if not os.path.isfile(adapter):
+            raise ctx.CloznError(f"adapter not found: {adapter}")
+        flags["adapter"] = adapter
+        if getattr(args, "adapter_scale", None) is not None:
+            flags["adapter_scale"] = args.adapter_scale
+        scale = flags.get("adapter_scale", 1.0)
+        print(f"{fmt.DIM}- adapter: {adapter} (scale {scale}){fmt.RST}", file=sys.stderr, flush=True)
 
     port = args.port or 8080
     os.makedirs(ctx.HOME, exist_ok=True)
