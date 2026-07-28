@@ -9,9 +9,17 @@ from clozn.replay import corrective
 def test_preset_vocabulary_is_bounded_and_named():
     assert set(corrective.CORRECTION_PRESETS) == {
         "less-verbose", "more-concrete", "use-context", "ask-before-guessing",
+        "preserve-formatting", "stop-repeating",
     }
     with pytest.raises(TypeError):
         corrective.CORRECTION_PRESETS["custom"] = "unbounded instruction"
+
+
+def test_new_presets_inject_their_own_instruction():
+    messages = [{"role": "user", "content": "x"}]
+    for preset in ("preserve-formatting", "stop-repeating"):
+        injected = corrective.inject_correction(messages, preset)
+        assert corrective.CORRECTION_PRESETS[preset] in injected[0]["content"]
 
 
 def test_injection_preserves_caller_messages_and_nested_payloads():

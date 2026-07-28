@@ -34,6 +34,14 @@ _PRESET_TEXT = {
         "If missing information would materially change the answer, ask one concise clarifying "
         "question before attempting an answer. Do not guess missing facts."
     ),
+    "preserve-formatting": (
+        "Preserve the formatting conventions already present in the conversation (headings, lists, "
+        "code fences, tables). Do not add or remove structural formatting the user did not ask for."
+    ),
+    "stop-repeating": (
+        "Do not repeat information, phrases, or caveats already stated earlier in this reply or "
+        "conversation. Say each point once."
+    ),
 }
 
 # Public, immutable vocabulary.  Arbitrary caller-provided instructions are not a
