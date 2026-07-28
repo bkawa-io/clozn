@@ -162,6 +162,54 @@ def build(run: dict | None, explain: dict | None = None, receipts=None) -> dict:
     }
 
 
+def _context_receipt_markdown(run: dict) -> str:
+    """Feature 06: summarize the run's context receipt (either shape -- see
+    clozn.runs.context_receipt's module docstring) so an export states plainly whether content is
+    included or withheld, not just that a receipt exists. Empty string when there is nothing recorded --
+    omit, never render a hollow section."""
+    from clozn.runs.context_receipt import read_receipt
+    view = read_receipt(run)
+    if view["shape"] in ("absent", "unrecognized"):
+        return ""
+    receipt = view["receipt"]
+    lines = ["\n## Context receipt"]
+
+    if view["shape"] == "legacy":
+        lines.append("_pre-2026-07-27 receipt shape (clozn.context_receipt.v1); segment ids and "
+                     "termination normalization are unavailable for this run._")
+    else:
+        lines.append(f"schema: {receipt.get('schema_version')}")
+        privacy = receipt.get("privacy")
+        if privacy:
+            lines.append(f"privacy tier: **{privacy}**"
+                         + (" -- content below is redacted, not omitted by oversight"
+                            if privacy != "full" else ""))
+        termination = receipt.get("termination")
+        if termination:
+            raw = termination.get("reason_raw")
+            raw_note = f" (raw: `{raw}`)" if raw and raw != termination.get("reason") else ""
+            lines.append(f"termination: **{termination.get('reason')}**{raw_note}")
+        delivered = receipt.get("delivered") or []
+        omitted = [seg for seg in delivered if seg.get("included") is False]
+        lines.append(f"segments: {len(delivered)} delivered, {len(omitted)} did not survive to assembly")
+        for seg in omitted:
+            reason = seg.get("reason") or "no reason recorded"
+            lines.append(f"  - {seg.get('segment_id')} ({seg.get('source_label', '?')}): {reason}")
+        rendered = receipt.get("rendered") or {}
+        if rendered.get("sha256"):
+            lines.append(f"rendered sha256: `{rendered['sha256'][:16]}...`")
+
+    survived = receipt.get("survived") or {}
+    content_present = bool(survived.get("final_prompt")) or bool(survived.get("assembled_messages"))
+    withheld = survived.get("content_withheld_by_privacy_tier")
+    if withheld:
+        lines.append(f"_full assembled/rendered text withheld by receipt privacy tier {withheld!r} -- "
+                     "not omitted by oversight._")
+    elif not content_present:
+        lines.append("_full assembled/rendered text not captured for this run._")
+    return "\n".join(lines)
+
+
 def to_markdown(bundle: dict | None) -> str:
     """Render the readable export receipt from the same object returned as JSON."""
     bundle = bundle if isinstance(bundle, dict) else build(None)
@@ -223,6 +271,10 @@ def to_markdown(bundle: dict | None) -> str:
     elif mem.get("mode") == "internalized" and mem.get("has_prefix"):
         lines.append("\n## Assembled prompt/messages")
         lines.append("Memory injected as soft prefix; no literal prompt string.")
+
+    context_receipt_md = _context_receipt_markdown(run)
+    if context_receipt_md:
+        lines.append(context_receipt_md)
 
     cards = mem.get("cards_applied") or []
     if cards:

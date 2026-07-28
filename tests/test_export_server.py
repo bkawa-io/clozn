@@ -247,6 +247,55 @@ def test_receipt_bundle_drops_malformed_output_contract_without_mutating_source(
     assert source["output_contract"] == ["bad"]
 
 
+# ---------------------------------------------------------------------------------------------------
+# feature 06: the exported markdown states termination and omission/redaction status explicitly
+# ---------------------------------------------------------------------------------------------------
+
+def test_markdown_states_termination_and_privacy_for_a_new_shaped_receipt():
+    from clozn.runs.context_receipt import build_context_receipt
+    receipt = build_context_receipt(
+        messages=[{"role": "user", "content": "hi"}], finish_reason="length",
+        meta={"max_tokens": 4, "n_ctx": 4096, "prompt_tokens": 10},
+        trace={"tokens": ["a", "b", "c", "d"]}, run_id="r_ctx",
+    )
+    bundle = receipt_bundle.build({"id": "r_ctx", "context_receipt": receipt, "messages": []})
+    md = receipt_bundle.to_markdown(bundle)
+    assert "## Context receipt" in md
+    assert "termination: **max_tokens**" in md
+    assert "privacy tier: **full**" in md
+
+
+def test_markdown_states_content_withheld_by_privacy_tier_not_omitted_by_oversight():
+    from clozn.runs.context_receipt import build_context_receipt
+    receipt = build_context_receipt(
+        messages=[{"role": "user", "content": "hi"}], final_prompt="secret prompt",
+        run_id="r_priv", privacy="metadata_only",
+    )
+    bundle = receipt_bundle.build({"id": "r_priv", "context_receipt": receipt, "messages": []})
+    md = receipt_bundle.to_markdown(bundle)
+    assert "withheld by receipt privacy tier 'metadata_only'" in md
+    assert "secret prompt" not in md
+
+
+def test_markdown_labels_a_legacy_shaped_receipt_plainly():
+    legacy = {
+        "schema": "clozn.context_receipt.v1",
+        "delivered": {"label": "delivered", "meaning": "m", "messages": []},
+        "survived": {"label": "survived", "meaning": "m", "assembled_messages": None,
+                    "final_prompt": None},
+        "limits": {}, "warnings": [], "input_truncated": False, "input_policy": "p",
+        "output_cut_off": False,
+    }
+    bundle = receipt_bundle.build({"id": "r_legacy", "context_receipt": legacy, "messages": []})
+    md = receipt_bundle.to_markdown(bundle)
+    assert "pre-2026-07-27 receipt shape" in md
+
+
+def test_markdown_has_no_context_receipt_section_when_absent():
+    bundle = receipt_bundle.build({"id": "r_none", "messages": []})
+    assert "## Context receipt" not in receipt_bundle.to_markdown(bundle)
+
+
 def test_receipt_bundle_preserves_actual_stored_receipts_and_tiny_tests():
     rec = {"influence": {"dial": "concise"}, "has_effect": True}
     tiny = [{"name": "reply_mentions_mass", "status": "pass"}]
