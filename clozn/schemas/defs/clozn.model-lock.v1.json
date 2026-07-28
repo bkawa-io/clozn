@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.model-lock.v1",
+  "title": "Pinned model artifacts for a CI model-change gate",
+  "description": "A checked-in lockfile naming the exact remote model artifacts a model-gate action's run mode resolves and gates, keyed by role (typically 'baseline' and 'candidate', but any role name is allowed -- clozn does not fix the role set). SHA-256 is mandatory for every entry: this schema never accepts a remote model artifact whose checksum is unknown. `clozn.models.lockfile.load_lockfile()` is the reference reader; it validates against this schema and rejects non-HTTPS URLs, but it never downloads anything -- fetching, redirect-following, and size verification are a separate (deferred) concern.",
+
+  "type": "object",
+  "required": ["schema_version", "models"],
+
+  "$defs": {
+    "pinned_model": {
+      "type": "object",
+      "description": "One role's pinned artifact. quantization/chat_template_sha256 are optional -- omit rather than null-pad when not applicable to a given artifact.",
+      "required": ["url", "sha256"],
+      "properties": {
+        "url": {
+          "type": "string",
+          "pattern": "^https://",
+          "minLength": 9,
+          "description": "Must be HTTPS. Redirects followed at download time must also stay HTTPS -- that is a downloader-time invariant, not one JSON Schema can express."
+        },
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "size_bytes": {"type": "integer", "minimum": 0},
+        "quantization": {"type": "string", "minLength": 1},
+        "chat_template_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": true
+    }
+  },
+
+  "properties": {
+    "schema_version": {"const": "clozn.model-lock.v1"},
+    "models": {
+      "type": "object",
+      "description": "Role name -> pinned_model. At least one role is expected in practice; not enforced here since this validator has no non-empty-object keyword (roadmap rule: omit, never null-pad -- an empty models object is a legitimate, if useless, document rather than a schema violation).",
+      "additionalProperties": {"$ref": "#/$defs/pinned_model"}
+    }
+  },
+
+  "additionalProperties": true
+}

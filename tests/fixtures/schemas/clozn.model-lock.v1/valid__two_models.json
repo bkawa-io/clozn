@@ -1,0 +1,19 @@
+{
+  "schema_version": "clozn.model-lock.v1",
+  "models": {
+    "baseline": {
+      "url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/base.gguf",
+      "sha256": "1998d0f44f5844c64453a1760f9caae45fdecf2db9bec067740ffd0638dc64eb",
+      "size_bytes": 397766528,
+      "quantization": "Q4_K_M",
+      "chat_template_sha256": "7b0133b31c8b3d1f91374a003883d857739b2a7d6922fa2143f8232326061a33"
+    },
+    "candidate": {
+      "url": "https://huggingface.co/example/reasoning-sft/resolve/main/candidate.gguf",
+      "sha256": "c94838f6b42b18bde4a549d3a0f0841e05cb998ab14a555675626157906f2ed5",
+      "size_bytes": 412345678,
+      "quantization": "Q5_K_M",
+      "chat_template_sha256": "7b0133b31c8b3d1f91374a003883d857739b2a7d6922fa2143f8232326061a33"
+    }
+  }
+}
