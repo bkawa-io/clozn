@@ -44,6 +44,9 @@ const ROUTES = [
   ["#/compare/run_a/run_b", "compare"],
   ["#/behavior", "behavior"],
   ["#/model", "model"],
+  ["#/experiments", "experiments"],
+  ["#/experiments/exp_abc123", "experiments"],
+  ["#/experiments/exp_abc123?suite=target&status=fail&cell=target%3A%3Agreet%3A%3Acandidate%3A%3A0", "experiments"],
   ["#/definitely-not-a-route", "runs"],   // unknown hash falls back to the first surface
 ];
 
@@ -59,7 +62,7 @@ check("registry has no load failures", panelRegistry.loadFailures.length === 0,
       JSON.stringify(panelRegistry.loadFailures));
 
 const ids = panelRegistry.panels.map((p) => p.id);
-for (const expected of ["runs", "lens", "scope", "compare", "behavior", "model"]) {
+for (const expected of ["runs", "lens", "scope", "compare", "behavior", "model", "experiments"]) {
   check(`panel "${expected}" is registered`, ids.includes(expected), `found: ${ids.join(", ")}`);
 }
 check("panel ids are unique", new Set(ids).size === ids.length, ids.join(", "));

@@ -1,0 +1,700 @@
+/* Studio Experiments workspace (roadmap feature 04, slices 2-5). Self-imported by
+   src/panels/experiments.tsx rather than added to main.tsx's stylesheet chain -- see that file's
+   header comment. Reuses the shared `.instrument`/`.instrument-head`/`.eyebrow` chrome from
+   workspace.css and the status-dot vocabulary runs.css established (mint=good, peach=warning,
+   danger=bad), plus one additional signal color for "error" so it reads distinctly from "fail". */
+
+.workspace.is-experiments {
+  display: flex;
+  flex-direction: column;
+  grid-template-columns: none;
+  grid-template-rows: none;
+  gap: 10px;
+  padding: 10px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.workspace.is-experiments .instrument {
+  flex: 0 0 auto;
+}
+
+.experiments-state {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 24px;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 10px;
+  letter-spacing: .06em;
+}
+
+.experiments-state.is-error {
+  color: var(--danger);
+}
+
+.experiments-state a {
+  color: var(--signal-blue);
+}
+
+/* ---------------------------------------------------------------- list -------------------------- */
+
+.experiments-list-instrument {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.experiments-broken {
+  margin: 0 14px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--line));
+  color: color-mix(in srgb, var(--danger) 75%, var(--ink));
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  font-family: var(--font-machine);
+  font-size: 9px;
+}
+
+.experiments-broken ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+}
+
+.experiments-table {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 14px 14px;
+}
+
+.experiments-table-head,
+.experiments-table-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 2fr) 130px 120px minmax(120px, 1.4fr) 70px;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+}
+
+.experiments-table-head {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .1em;
+}
+
+.experiments-table-row {
+  border-top: 1px solid var(--line);
+  color: var(--ink);
+  text-decoration: none;
+  font-family: var(--font-machine);
+  font-size: 9px;
+}
+
+.experiments-table-row:hover {
+  background: color-mix(in srgb, var(--panel-raised) 55%, transparent);
+}
+
+.experiments-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.experiments-name small {
+  color: var(--ink-faint);
+}
+
+.experiments-empty {
+  padding: 24px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 9px;
+  text-align: center;
+}
+
+/* ------------------------------------------------------------- summary strip -------------------- */
+
+.experiments-summary-meta {
+  display: flex;
+  gap: 14px;
+  margin-left: auto;
+}
+
+.experiments-summary-meta span {
+  display: grid;
+  gap: 2px;
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 8px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.experiments-summary-meta b {
+  color: var(--ink-faint);
+  font-size: 6px;
+  font-weight: 500;
+  letter-spacing: .09em;
+}
+
+.experiments-summary-meta .is-error {
+  color: var(--danger);
+}
+
+.experiments-summary-variants {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.experiments-variant-card {
+  min-width: 200px;
+  flex: 1 1 220px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-raised) 45%, transparent);
+}
+
+.experiments-variant-card.is-baseline {
+  border-color: var(--line-strong);
+  background: color-mix(in srgb, var(--panel-raised) 65%, transparent);
+}
+
+.experiments-variant-card header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-family: var(--font-machine);
+}
+
+.experiments-variant-card header strong {
+  font-size: 11px;
+}
+
+.experiments-variant-card header span {
+  color: var(--ink-faint);
+  font-size: 7px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.experiments-variant-rates {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.experiments-variant-rates span {
+  display: grid;
+  gap: 2px;
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 11px;
+}
+
+.experiments-variant-rates b {
+  color: var(--ink-faint);
+  font-size: 6px;
+  font-weight: 500;
+  letter-spacing: .09em;
+}
+
+.experiments-variant-comparison {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 8px;
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .03em;
+}
+
+.experiments-variant-comparison .is-gain { color: var(--signal-mint); }
+.experiments-variant-comparison .is-regression { color: var(--danger); }
+.experiments-variant-comparison .is-guard-regression { color: var(--danger); }
+.experiments-variant-comparison .is-guard-fix { color: var(--signal-mint); }
+
+/* ---------------------------------------------------------------- matrix ------------------------ */
+
+.experiments-matrix-instrument {
+  display: flex;
+  flex-direction: column;
+  min-height: 460px;
+}
+
+.experiments-matrix-head {
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  height: auto;
+  min-height: 62px;
+}
+
+.experiments-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.experiments-filters label {
+  display: grid;
+  gap: 2px;
+}
+
+.experiments-filters label > span {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .09em;
+}
+
+.experiments-filters select,
+.experiments-filters input {
+  height: 26px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel-raised) 72%, transparent);
+  font-family: var(--font-machine);
+  font-size: 8px;
+  padding: 4px 6px;
+}
+
+.experiments-search input {
+  width: 150px;
+}
+
+.experiments-matrix-columns,
+.experiments-row {
+  display: grid;
+  align-items: center;
+}
+
+.experiments-matrix-columns {
+  gap: 4px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  grid-template-columns: minmax(160px, 260px) repeat(auto-fit, minmax(96px, 1fr));
+}
+
+.experiments-matrix-columns .is-baseline {
+  color: var(--ink-soft);
+}
+
+.experiments-matrix-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+  padding: 0 6px 10px;
+}
+
+.experiments-suite-label {
+  padding: 8px 8px 4px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .1em;
+}
+
+.experiments-suite-list {
+  min-height: 80px;
+  max-height: 280px;
+}
+
+.experiments-row {
+  gap: 4px;
+  padding: 0 8px;
+  height: 100%;
+}
+
+.experiments-row-label {
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.experiments-cell {
+  position: relative;
+  display: flex;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  color: var(--ink-soft);
+  background: color-mix(in srgb, var(--panel-raised) 40%, transparent);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .04em;
+}
+
+.experiments-cell.is-missing {
+  color: var(--ink-faint);
+  background: transparent;
+  border-style: dashed;
+}
+
+.experiments-cell.is-pass { border-color: color-mix(in srgb, var(--signal-mint) 45%, var(--line)); color: color-mix(in srgb, var(--signal-mint) 70%, var(--ink)); }
+.experiments-cell.is-fail { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); color: color-mix(in srgb, var(--danger) 70%, var(--ink)); }
+.experiments-cell.is-error { border-color: color-mix(in srgb, var(--signal-magenta) 50%, var(--line)); color: color-mix(in srgb, var(--signal-magenta) 70%, var(--ink)); }
+.experiments-cell.is-unscored { color: var(--ink-faint); }
+
+.experiments-cell.is-selected {
+  outline: 2px solid var(--signal-violet);
+  outline-offset: -2px;
+}
+
+.experiments-cell-dots {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.experiments-cell-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+}
+
+.experiments-cell-dots i.is-pass { background: var(--signal-mint); }
+.experiments-cell-dots i.is-fail { background: var(--danger); }
+.experiments-cell-dots i.is-error { background: var(--signal-magenta); }
+
+.experiments-cell-flag {
+  position: absolute;
+  top: -1px;
+  right: 1px;
+  font-size: 6px;
+}
+
+/* ---------------------------------------------------------------- drawer ------------------------ */
+
+.experiments-drawer {
+  display: flex;
+  flex-direction: column;
+  max-height: 70vh;
+}
+
+.experiments-drawer-head {
+  gap: 12px;
+}
+
+.experiments-drawer-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.experiments-seed-picker {
+  display: grid;
+  gap: 2px;
+}
+
+.experiments-seed-picker span {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .09em;
+}
+
+.experiments-seed-picker select {
+  height: 24px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 8px;
+}
+
+.experiments-drawer-actions button {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  background: transparent;
+  font-size: 13px;
+}
+
+.experiments-drawer-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+  padding: 12px 14px 16px;
+}
+
+.experiments-drawer-body h3 {
+  margin: 0 0 8px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 8px;
+  letter-spacing: .1em;
+}
+
+.experiments-drawer-note {
+  margin: 4px 0 0;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 8px;
+}
+
+.experiments-drawer-unavailable {
+  margin: 0;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 8px;
+  font-style: italic;
+}
+
+.experiments-drawer-state {
+  padding: 24px;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 9px;
+}
+
+.experiments-drawer-state.is-error {
+  color: var(--danger);
+}
+
+.experiments-case-def {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.experiments-message,
+.experiments-expect {
+  border: 1px solid var(--line);
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--panel-raised) 40%, transparent);
+}
+
+.experiments-message span,
+.experiments-expect span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .09em;
+}
+
+.experiments-message p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.experiments-expect pre {
+  margin: 0;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 9px;
+  white-space: pre-wrap;
+}
+
+.experiments-outputs-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.experiments-output-pane {
+  border: 1px solid var(--line);
+  padding: 10px 12px;
+}
+
+.experiments-output-pane header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.experiments-output-pane.is-pass header strong { color: color-mix(in srgb, var(--signal-mint) 70%, var(--ink)); }
+.experiments-output-pane.is-fail header strong { color: color-mix(in srgb, var(--danger) 70%, var(--ink)); }
+.experiments-output-pane.is-error header strong { color: color-mix(in srgb, var(--signal-magenta) 70%, var(--ink)); }
+
+.experiments-response {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.experiments-error-text {
+  margin: 6px 0 0;
+  color: var(--danger);
+  font-family: var(--font-machine);
+  font-size: 9px;
+}
+
+.experiments-assertions {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-family: var(--font-machine);
+  font-size: 8px;
+}
+
+.experiments-assertions .is-pass { color: color-mix(in srgb, var(--signal-mint) 70%, var(--ink)); }
+.experiments-assertions .is-fail { color: color-mix(in srgb, var(--danger) 70%, var(--ink)); }
+
+.experiments-receipt-line {
+  margin-top: 8px;
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .05em;
+}
+
+.experiments-receipt-line .is-available { color: color-mix(in srgb, var(--signal-mint) 70%, var(--ink)); }
+.experiments-receipt-line .is-unavailable { color: var(--ink-faint); }
+
+.experiments-identity-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-machine);
+  font-size: 8px;
+}
+
+.experiments-identity-table th {
+  padding: 4px 8px;
+  color: var(--ink-faint);
+  font-size: 6px;
+  letter-spacing: .09em;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+
+.experiments-identity-table td {
+  padding: 4px 8px;
+  color: var(--ink-soft);
+  border-bottom: 1px solid var(--line);
+  word-break: break-all;
+}
+
+.experiments-identity-table tr.is-differs td {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--signal-peach) 10%, transparent);
+}
+
+.experiments-identity-table tr.is-base-only td:nth-child(3),
+.experiments-identity-table tr.is-candidate-only td:nth-child(2) {
+  color: var(--ink-faint);
+}
+
+.experiments-repro {
+  margin-top: 8px;
+}
+
+.experiments-repro span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .09em;
+}
+
+.experiments-repro-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.experiments-repro-line code {
+  flex: 1 1 auto;
+  overflow-x: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--page-deep) 60%, transparent);
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 9px;
+  white-space: pre;
+}
+
+.experiments-repro-line button {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  background: transparent;
+  font-family: var(--font-machine);
+  font-size: 8px;
+}
+
+.experiments-repro-line button:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+
+/* ------------------------------------------------------------- virtual list ---------------------- */
+
+.virtual-list {
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 60px;
+}
+
+.virtual-list-spacer {
+  position: relative;
+}
+
+.virtual-list-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+}
+
+.virtual-list-empty {
+  padding: 18px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 8px;
+  text-align: center;
+}
+
+@media (max-width: 860px) {
+  .experiments-table-head,
+  .experiments-table-row {
+    grid-template-columns: minmax(120px, 1fr) 90px;
+  }
+
+  .experiments-table-head span:nth-child(n+3),
+  .experiments-table-row span:nth-child(n+3) {
+    display: none;
+  }
+
+  .experiments-outputs-grid {
+    grid-template-columns: 1fr;
+  }
+}
