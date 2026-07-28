@@ -137,3 +137,39 @@ def action_ids() -> list[str]:
     """Every action id currently in the registry, in vocabulary order -- convenience for callers
     (routes, CLI) that want the id list without building the full document."""
     return list(CORRECTION_PRESETS)
+
+
+def dial_for_action(action_id: str) -> str | None:
+    """The control-vector dial name backing `action_id`, or None if this action has no matching
+    axis -- the same lookup build_registry() uses internally, exposed for a caller (retry_compare())
+    that wants to CHOOSE a backend rather than just describe one."""
+    return _DIAL_FOR_ACTION.get(action_id)
+
+
+# Fraction of the calibrated ceiling a chosen control-vector strength uses. Deliberately inside the
+# PROVEN usable range rather than at the ceiling itself: ceiling_for()'s calibrated usable_max is
+# where a sweep last found the dial still coherent, not a target to run right up against on every
+# request. 0.67 is a plain, conservative default -- not itself calibrated -- until a real per-action
+# strength recipe exists.
+_DEFAULT_CEILING_FRACTION = 0.67
+
+
+def qualified_dial_strength(action_id: str, steer) -> tuple[str, float] | None:
+    """(dial, strength) for `action_id`'s control-vector backend IF `steer` reports it CALIBRATED
+    for the exact loaded model (EngineSteer.ceiling_for, e959477's fail-closed contract) -- else
+    None, meaning prompt_policy is the only honest choice for this call. Never raises: a missing
+    dial, a missing/misbehaving `steer`, or an uncalibrated model all return None rather than
+    guessing a strength nobody validated."""
+    dial = _DIAL_FOR_ACTION.get(action_id)
+    if dial is None or steer is None or not hasattr(steer, "ceiling_for"):
+        return None
+    try:
+        ceiling, calibrated = steer.ceiling_for(dial)
+    except Exception:
+        return None
+    if not calibrated:
+        return None
+    strength = round(float(ceiling) * _DEFAULT_CEILING_FRACTION, 4)
+    if strength <= 0:
+        return None
+    return dial, strength

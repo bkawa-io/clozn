@@ -32,12 +32,20 @@ def try_post(h, p, body):
             return True
         preset = str(body.get("preset") or "")
         scope = str(body.get("scope") or "once")
+        # Optional -- absent/omitted keeps the default prompt_policy behavior byte-for-byte (spec:
+        # "must not expose raw scientific dials as the default interaction"). "control_vector" is an
+        # explicit opt-in that may still fall back to prompt_policy (comparison["backend_fallback"])
+        # when this exact model has no calibrated dial for `preset` -- see retry_compare's docstring.
+        backend = body.get("backend")
         from clozn.replay.corrective import CORRECTION_PRESETS, retry_compare
         if preset not in CORRECTION_PRESETS:
             h._json(400, {"error": "preset must be one of: " + ", ".join(CORRECTION_PRESETS)})
             return True
         if scope not in {"once", "session", "profile"}:
             h._json(400, {"error": "scope must be once, session, or profile"})
+            return True
+        if backend is not None and backend not in ("prompt_policy", "control_vector"):
+            h._json(400, {"error": "backend must be omitted, 'prompt_policy', or 'control_vector'"})
             return True
         mismatch = _identity_conflict(run, sub)
         if mismatch:
@@ -66,7 +74,7 @@ def try_post(h, p, body):
                 profile_name=ctx._active_profile_name(),
             )
             comparison = retry_compare(
-                run, preset, sub, scope=scope, active_presets=active_presets,
+                run, preset, sub, scope=scope, active_presets=active_presets, backend=backend,
             )
         except ValueError as exc:
             h._json(400, {"error": str(exc)})

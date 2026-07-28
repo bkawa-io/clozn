@@ -92,3 +92,30 @@ def test_every_action_declares_sampling_policy_unsupported():
 
 def test_action_ids_matches_the_registry():
     assert registry.action_ids() == [a["id"] for a in registry.build_registry()["actions"]]
+
+
+# ------------------------------------------------------------ dial_for_action / qualified_dial_strength
+
+def test_dial_for_action_matches_the_control_vector_backend():
+    assert registry.dial_for_action("less-verbose") == "concise"
+    assert registry.dial_for_action("more-concrete") == "concrete"
+    assert registry.dial_for_action("use-context") is None
+
+
+def test_qualified_dial_strength_is_none_without_calibration():
+    assert registry.qualified_dial_strength("less-verbose", FakeSteer({})) is None
+    assert registry.qualified_dial_strength("less-verbose", None) is None
+
+
+def test_qualified_dial_strength_is_none_for_an_action_with_no_dial():
+    assert registry.qualified_dial_strength("use-context", FakeSteer({"concise": (1.2, True)})) is None
+
+
+def test_qualified_dial_strength_is_a_fraction_of_the_calibrated_ceiling():
+    dial, strength = registry.qualified_dial_strength("less-verbose", FakeSteer({"concise": (1.2, True)}))
+    assert dial == "concise"
+    assert 0 < strength < 1.2
+
+
+def test_qualified_dial_strength_never_raises_on_a_broken_steer():
+    assert registry.qualified_dial_strength("less-verbose", FakeSteer(raises=True)) is None

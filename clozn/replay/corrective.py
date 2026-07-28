@@ -130,14 +130,35 @@ def _prompt_blocks(presets) -> list[str]:
     )]
 
 
+def _dial_applied(child: Mapping[str, Any], dial: str, strength: float) -> bool:
+    active = ((child.get("behavior") or {}).get("active_dials") or {})
+    try:
+        return abs(float(active.get(dial, 0.0)) - float(strength)) < 1e-6
+    except (TypeError, ValueError):
+        return False
+
+
 def retry_compare(run: Mapping[str, Any], preset: str, sub, *, scope: str = "once",
-                  active_presets=()) -> dict[str, Any] | None:
+                  active_presets=(), backend: str | None = None) -> dict[str, Any] | None:
     """Generate mandatory matched greedy baseline/corrected replay children.
 
     Returns ``None`` when either existing replay operation fails, matching replay's
     established failure contract.  Invalid inputs and preset names raise
     ``ValueError`` before generation.  No dial or memory setting is changed here;
     replay remains the sole owner of temporary substrate state and restoration.
+
+    ``backend`` chooses the corrected arm's mechanism:
+      * ``None`` (default) or ``"prompt_policy"`` -- the system-instruction preset, exactly the
+        behavior this function had before control-vector support existed. This is the DEFAULT for a
+        reason (spec: "must not expose raw scientific dials as the default interaction") -- callers
+        opt into ``"control_vector"`` explicitly, it is never chosen automatically.
+      * ``"control_vector"`` -- request the calibrated dial backing `preset` (clozn.behavior.
+        registry.qualified_dial_strength), applied via replay's existing ``behavior_overrides``
+        snapshot/restore isolation (clozn/replay/replay.py) -- no new isolation code needed. If no
+        calibrated dial exists for this exact model (or `preset` has no matching dial at all), this
+        FALLS BACK to prompt_policy and the return value labels it: ``backend == "prompt_policy"``
+        and ``backend_fallback is True``, per the spec's "never market a prompt rewrite as an
+        internal steering intervention."
     """
     if not isinstance(run, Mapping) or not run.get("id"):
         raise ValueError("run must be a stored run with an id")
@@ -147,6 +168,8 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *, scope: str = "onc
     inject_correction(messages, preset)
     if scope not in {"once", "session", "profile"}:
         raise ValueError("scope must be once, session, or profile")
+    if backend not in (None, "prompt_policy", "control_vector"):
+        raise ValueError("backend must be None, 'prompt_policy', or 'control_vector'")
     budget = _original_budget(run)
     current_presets = list(dict.fromkeys(
         str(value) for value in (active_presets or []) if str(value) in CORRECTION_PRESETS
@@ -163,19 +186,43 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *, scope: str = "onc
         return None
 
     instruction = CORRECTION_PRESETS[preset]
-    corrected_changes = {
-        "greedy": True,
-        "corrective_retry": {
-            "arm": "corrected",
-            "preset": preset,
-            "method": "system_instruction",
-            "instruction": instruction,
-            "scope": scope,
-        },
-    }
-    corrected = replay_run(dict(run), corrected_changes, sub,
-                           prompt_instructions=_prompt_blocks(candidate_presets),
-                           max_new=budget)
+    dial_choice = None
+    chosen_backend = "prompt_policy"
+    backend_fallback = False
+    if backend == "control_vector":
+        from clozn.behavior import registry
+        dial_choice = registry.qualified_dial_strength(preset, getattr(sub, "steer", None))
+        if dial_choice is not None:
+            chosen_backend = "control_vector"
+        else:
+            backend_fallback = True     # asked for control_vector; not qualified -- honest fallback
+
+    if chosen_backend == "control_vector":
+        dial, strength = dial_choice
+        corrected_changes = {
+            "greedy": True,
+            "corrective_retry": {
+                "arm": "corrected", "preset": preset, "method": "control_vector",
+                "dial": dial, "strength": strength, "scope": scope,
+            },
+            "behavior_overrides": {dial: strength},
+        }
+        corrected = replay_run(dict(run), corrected_changes, sub,
+                               prompt_instructions=_prompt_blocks(current_presets), max_new=budget)
+    else:
+        corrected_changes = {
+            "greedy": True,
+            "corrective_retry": {
+                "arm": "corrected",
+                "preset": preset,
+                "method": "system_instruction",
+                "instruction": instruction,
+                "scope": scope,
+            },
+        }
+        corrected = replay_run(dict(run), corrected_changes, sub,
+                               prompt_instructions=_prompt_blocks(candidate_presets),
+                               max_new=budget)
     if corrected is None:
         return None
 
@@ -188,11 +235,20 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *, scope: str = "onc
         coherence = _coherence(corrected_reply)
     except Exception:
         coherence = {"degenerate": False, "reasons": []}
-    backend = "prompt_policy"
-    backend_parameters = {"preset": preset}
+
+    if chosen_backend == "control_vector":
+        dial, strength = dial_choice
+        intervention_observed = _dial_applied(corrected, dial, strength)
+        backend_parameters = {"dial": dial, "strength": strength}
+        qualification, qualified = "model_build_exact", True
+    else:
+        intervention_observed = _instruction_survived(corrected, instruction)
+        backend_parameters = {"preset": preset}
+        qualification, qualified = "generic", None
     execution_identity = _execution_identity(
-        run, preset, backend, backend_parameters, qualification="generic", qualified=None,
-        fallback=False, baseline_reply=baseline_reply, corrected_reply=corrected_reply,
+        run, preset, chosen_backend, backend_parameters, qualification=qualification,
+        qualified=qualified, fallback=backend_fallback,
+        baseline_reply=baseline_reply, corrected_reply=corrected_reply,
     )
     return {
         "preset": preset,
@@ -206,13 +262,14 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *, scope: str = "onc
         "delta": receipts.receipt_metrics(baseline_reply, corrected_reply),
         "changed": baseline_reply != corrected_reply,
         "coherence": coherence,
-        "intervention_observed": _instruction_survived(corrected, instruction),
+        "intervention_observed": intervention_observed,
         "comparison_note": ("matched greedy baseline and candidate under the current runtime policy; "
                             "the stored original is context only"),
         "max_tokens": budget,
         "baseline_child_id": baseline_id,
         "corrected_child_id": corrected_id,
         "child_ids": {"baseline": baseline_id, "corrected": corrected_id},
-        "backend": backend,
+        "backend": chosen_backend,
+        "backend_fallback": backend_fallback,
         "execution_identity": execution_identity,
     }
