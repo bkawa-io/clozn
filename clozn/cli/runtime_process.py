@@ -17,7 +17,7 @@ import urllib.request
 from types import MappingProxyType
 from typing import Mapping
 
-from clozn.cli.engine_process import REPO, _free_port, _log_tail, spawn_engine
+from clozn.cli.engine_process import REPO, _free_port, _log_tail, find_engine_ex, spawn_engine
 
 
 def gateway_health(port: int, timeout: float = 2.0) -> dict | None:
@@ -161,6 +161,25 @@ def spawn_runtime(config: RuntimeConfig, *, worker_log=None, gateway_log=None) -
         env["CLOZN_ENGINE_PORT"] = str(worker_port)
         env["CLOZN_RUNTIME_KIND"] = "product"
         env["PYTHONUNBUFFERED"] = "1"
+        # roadmap feature 01: the gateway is a SEPARATE subprocess (see the command below), so the
+        # discovery-tier/backend/artifact facts spawn_engine's own find_engine() call just established
+        # do not exist in that process unless handed across the boundary -- env vars are the same
+        # mechanism CLOZN_ENGINE_PORT already uses. This is a second, cheap, purely-filesystem lookup
+        # (never a re-download or re-extraction); its result is deterministic against the same on-disk
+        # state spawn_engine() just read, so it is never allowed to fail the actual server start --
+        # missing discovery metadata just means clozn.runs.identity_providers.engine_artifact reports
+        # less, per the omit-don't-invent rule the rest of clozn.runs follows.
+        try:
+            discovery = find_engine_ex(prefer_gpu=config.prefer_gpu)
+            env["CLOZN_ENGINE_DISCOVERY_SOURCE"] = discovery.discovery_source
+            if discovery.backend:
+                env["CLOZN_ENGINE_BACKEND"] = discovery.backend
+            if discovery.artifact_sha256:
+                env["CLOZN_ENGINE_ARTIFACT_SHA256"] = discovery.artifact_sha256
+            if discovery.engine_version:
+                env["CLOZN_ENGINE_VERSION"] = discovery.engine_version
+        except Exception:
+            pass
         command = [
             config.gateway_python,
             "-m",

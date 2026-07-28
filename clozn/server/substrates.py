@@ -191,6 +191,33 @@ class Substrate:
         return None
 
 
+# roadmap feature 01: CLOZN_ENGINE_DISCOVERY_SOURCE/BACKEND/ARTIFACT_SHA256/VERSION are set by
+# clozn.cli.runtime_process.spawn_runtime() on the gateway subprocess's own environment -- this process
+# (clozn.server.app, launched as `python -m clozn.server.app`) is a SEPARATE process from the `clozn
+# serve` CLI that called clozn.cli.engine_process.find_engine_ex(), so these facts have no other way to
+# cross that boundary (the same reason CLOZN_ENGINE_PORT is an env var and not a constructor argument).
+_ENGINE_DISCOVERY_ENV_KEYS = {
+    "discovery_source": "CLOZN_ENGINE_DISCOVERY_SOURCE",
+    "backend": "CLOZN_ENGINE_BACKEND",
+    "artifact_sha256": "CLOZN_ENGINE_ARTIFACT_SHA256",
+    "engine_version": "CLOZN_ENGINE_VERSION",
+}
+
+
+def _engine_discovery_context() -> dict:
+    """{'discovery_source', 'backend', 'artifact_sha256', 'engine_version'} restricted to whichever of
+    those CLOZN_ENGINE_* env vars are actually set -- an unset one is omitted, never null-padded (the
+    same rule clozn.runs.identity follows everywhere else), so e.g. a repo-local dev build honestly
+    reports no artifact_sha256 rather than an empty string. Fed to
+    clozn.runs.identity.runtime_identity(extra_context=...), which clozn.runs.identity_providers.
+    engine_artifact then reads. Never raises: os.environ.get is the only thing this does."""
+    return {
+        field: os.environ[env_key]
+        for field, env_key in _ENGINE_DISCOVERY_ENV_KEYS.items()
+        if os.environ.get(env_key)
+    }
+
+
 class EngineSubstrate(Substrate):
     """PURE-ENGINE substrate: chat + prompt-mode memory + tone dials on the C++ GGUF runtime, NO PyTorch
     model resident. THIS is the class that brings the whole torch-free Server tier -- /v1/chat/completions,
@@ -753,6 +780,7 @@ class EngineSubstrate(Substrate):
                     model_sha256_hint=(h or {}).get("model_sha256"),
                     apply_template_fn=getattr(self.engine, "apply_template", None),
                     engine_health=h if isinstance(h, dict) else None,
+                    extra_context=_engine_discovery_context(),
                 )
             except Exception:
                 self._identity_meta_val = {}
