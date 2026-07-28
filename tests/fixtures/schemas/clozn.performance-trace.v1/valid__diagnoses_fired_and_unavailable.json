@@ -1,0 +1,25 @@
+{
+  "schema_version": "clozn.performance-trace.v1",
+  "run_id": "run_with_diagnoses",
+  "clock": "monotonic",
+  "diagnoses": [
+    {
+      "rule": "large_context",
+      "rule_version": "1",
+      "status": "fired",
+      "evidence_state": "correlated",
+      "likely_cause": "The prompt used 92% of the context window, and decode accounted for only 18% of the request's total wall time.",
+      "possible_fix": "Reduce the prompt size or context window, or inspect what's being included in context.",
+      "evidence": [
+        {"path": "context_receipt.limits.prompt_tokens", "value": 7411},
+        {"path": "context_receipt.limits.context_window_tokens", "value": 8192}
+      ]
+    },
+    {
+      "rule": "cold_model_load",
+      "rule_version": "1",
+      "status": "unavailable",
+      "reason": "no model-load duration is recorded on this run; no code path writes load_duration_ms yet"
+    }
+  ]
+}

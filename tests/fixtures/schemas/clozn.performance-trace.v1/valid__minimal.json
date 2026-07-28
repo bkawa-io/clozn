@@ -1,0 +1,5 @@
+{
+  "schema_version": "clozn.performance-trace.v1",
+  "run_id": "run_minimal",
+  "clock": "monotonic"
+}

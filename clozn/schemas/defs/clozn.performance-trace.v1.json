@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.performance-trace.v1",
+  "title": "Evidence-only performance trace for one run",
+  "description": "A schema-validated DERIVED view over a stored run's recorded timing/identity fields, assembled by clozn.runs.perf_trace.build_trace() -- not a second copy persisted alongside the run. clock: 'monotonic' is a contract on `phases`: every phases[].duration_ns in this document is sourced from a monotonic clock (Python time.monotonic_ns() or the C++ worker's std::chrono::steady_clock), never from a wall-clock delta, so NTP adjustment or a system clock step cannot produce a negative or skewed phase duration. Wall-clock-derived totals (e.g. the gateway's started_at/ended_at timestamps) are correlation-only and live under `metrics.wall_clock_total_ms`, explicitly named so a reader never mistakes them for a phases[] entry with monotonic provenance. A key or array entry this run's evidence cannot support is OMITTED, never null-padded or estimated -- absence must stay visible.",
+
+  "type": "object",
+  "required": ["schema_version", "run_id", "clock"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "clozn.performance-trace.v1"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "clock": {
+      "type": "string",
+      "description": "The clock family every phases[].duration_ns in this document is sourced from. 'monotonic' is the only value v1 emits.",
+      "enum": ["monotonic"]
+    },
+    "machine_identity": {
+      "type": "object",
+      "description": "The run's identity.ext.machine facet (clozn/runs/identity_providers/machine.py), when the run recorded one. Absent entirely on runs captured before that provider shipped, or when every field it could report was itself unmeasurable -- never present-and-empty.",
+      "additionalProperties": true
+    },
+    "engine_identity": {
+      "type": "object",
+      "description": "The subset of the run's top-level identity block (clozn/runs/identity.py) that identifies the engine/model/build that produced this trace: model_sha256, template_fingerprint, engine_build, clozn_version. A field absent here means the run's identity block never captured it, not that it was empty.",
+      "additionalProperties": true
+    },
+    "phases": {
+      "type": "array",
+      "description": "Monotonic-clock phase spans. Only phases this run's evidence actually supports are present -- an unmeasured phase (queue, model_load, prefill, ... per the roadmap spec) is omitted from this array entirely rather than emitted with a zero or guessed duration.",
+      "items": {
+        "type": "object",
+        "required": ["name", "duration_ns"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Open vocabulary (not a closed enum): future features add phase names -- e.g. 'adapter_load' -- without a schema edit here. See docs/agent_roadmap/09-performance-diagnosis.md's 'Required phases' list for the intended names."
+          },
+          "owner": {
+            "type": "string",
+            "description": "Which side of the ownership boundary this phase's time is charged to, per the spec's 'Ownership boundaries' -- so a slow external tool or client backpressure is never presented as the model's fault.",
+            "enum": ["clozn_gateway", "clozn_worker", "model_load", "client", "external_tool", "unknown"]
+          },
+          "start_ns": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Nanoseconds since this trace's first recorded span (relative, not an absolute clock reading). OPTIONAL: omitted when this phase's offset within the request isn't known, even though its own duration is -- e.g. a decode duration recorded with no queue/load timing recorded before it to anchor against."
+          },
+          "duration_ns": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "description": "Whole-request counters and rates. Open for extension (additionalProperties: true) since later slices add fields without a schema bump.",
+      "properties": {
+        "prompt_tokens": {"type": "integer", "minimum": 0},
+        "generated_tokens": {"type": "integer", "minimum": 0},
+        "prompt_tokens_per_second": {"type": "number", "minimum": 0},
+        "decode_tokens_per_second": {"type": "number", "minimum": 0},
+        "wall_clock_total_ms": {
+          "type": "number",
+          "minimum": 0,
+          "description": "The gateway's started_at/ended_at delta. Explicitly NOT a phases[] entry: it is wall-clock-derived (time.time(), not monotonic), so it is correlation-only and must never be summed with phases[].duration_ns as if the two shared a clock domain."
+        }
+      },
+      "additionalProperties": true
+    },
+    "events": {
+      "type": "array",
+      "description": "Advanced, opt-in raw events (e.g. per-token timing) -- present only when advanced tracing was enabled for this run. v1's default derivation never populates this.",
+      "items": {"type": "object"}
+    },
+    "diagnoses": {
+      "type": "array",
+      "description": "One entry per rule clozn.runs.perf_diagnosis evaluated, whether or not it could fire -- a rule the evidence could not support is listed with status 'unavailable' and a stated reason, never silently omitted, so the absence of a warning is never mistaken for 'nothing wrong here'.",
+      "items": {
+        "type": "object",
+        "required": ["rule", "rule_version", "status"],
+        "properties": {
+          "rule": {"type": "string", "minLength": 1},
+          "rule_version": {"type": "string", "minLength": 1},
+          "status": {
+            "type": "string",
+            "description": "'fired': the rule's evidence was present and its condition was met. 'not_fired': the rule's evidence was present and evaluated, but the condition was NOT met -- an explicit, present 'checked and clean' entry, never silence. 'unavailable': the evidence this rule needs does not exist on this run at all (usually because no code path records it yet) -- distinct from not_fired so a reader can never mistake 'we don't have this instrumented' for 'we checked and it's fine'.",
+            "enum": ["fired", "not_fired", "unavailable"]
+          },
+          "reason": {
+            "type": "string",
+            "description": "Required in practice when status is 'unavailable' or 'not_fired': names exactly what evidence was missing, or what was checked and found not to meet the rule's threshold."
+          },
+          "evidence_state": {
+            "type": "string",
+            "description": "Required in practice when status is 'fired': how strongly the evidence supports the cause, using the roadmap's explicit vocabulary. This artifact never emits 'causally_supported' without a real replay intervention behind it.",
+            "enum": ["observed", "correlated", "causally_supported"]
+          },
+          "likely_cause": {"type": "string"},
+          "possible_fix": {"type": "string"},
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["path", "value"],
+              "properties": {
+                "path": {"type": "string"},
+                "value": {}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "schema_version": "clozn.performance-trace.v1",
+  "run_id": "run_decode_only",
+  "clock": "monotonic",
+  "machine_identity": {"os": "Windows", "cpu_count": 16, "gpu_vram_gb": 16.0},
+  "engine_identity": {"model_sha256": "a1b2c3", "engine_build": "clozn-server-dev"},
+  "phases": [
+    {"name": "decode", "owner": "clozn_worker", "duration_ns": 1500000000}
+  ],
+  "metrics": {
+    "prompt_tokens": 7411,
+    "generated_tokens": 512,
+    "decode_tokens_per_second": 18.2,
+    "wall_clock_total_ms": 24100.0
+  },
+  "events": []
+}
