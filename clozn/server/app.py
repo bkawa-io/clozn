@@ -650,20 +650,32 @@ from clozn.server.routes import receipt_link as _receipt_link_routes   # noqa: E
 from clozn.server.routes import influence_map as _influence_map_routes # noqa: E402
 from clozn.server.routes import contracts as _contracts_routes         # noqa: E402 (hook vocab + replay, P4.2)
 
+from clozn.server.routes import _autoload as _route_autoload          # noqa: E402
+
 _runs_fallback_routes = _types.SimpleNamespace(try_get=_runs_routes.try_get_fallback)
 
+# Route families that opted in via CLOZN_ROUTE_AUTOLOAD, so a new endpoint is a new file rather than
+# another edit to the two lists below. Discovered once at import, not per request.
+_autoloaded_routes = _route_autoload.discover()
+
+# Autoloaded GET families are spliced in BEFORE _runs_fallback_routes, never appended after it: the
+# fallback matches the whole "/runs/" prefix, so anything landing behind it would be shadowed -- and
+# shadowed as a wrong-shaped 200 rather than a 404, which is far harder to spot. See _autoload.py.
 _GET_ROUTES = [_static_routes, _health_routes, _runs_routes, _receipts_routes,
               _timetravel_routes, _profiles_routes, _ollama_routes, _openai_routes, _engine_routes,
               _guard_routes, _models_routes,
               _journal_routes, _card_routes, _diff_routes, _receipt_link_routes,
-              _influence_map_routes, _contracts_routes, _runs_fallback_routes]
+              _influence_map_routes, _contracts_routes,
+              *_route_autoload.with_try_get(_autoloaded_routes),
+              _runs_fallback_routes]
 _POST_ROUTES = [_health_routes, _receipts_routes,
                _corrective_retry_routes, _replay_routes,
                _timetravel_routes, _profiles_routes, _preferences_routes, _feedback_routes,
                _ollama_routes, _openai_routes, _engine_routes, _guard_routes, _readouts_routes,
                _fork_routes, _journal_routes, _diff_routes,
                _receipt_link_routes, _influence_map_routes, _contracts_routes,
-               _provenance_routes, _causal_trace_routes]
+               _provenance_routes, _causal_trace_routes,
+               *_route_autoload.with_try_post(_autoloaded_routes)]
 
 
 def active_sub(h):

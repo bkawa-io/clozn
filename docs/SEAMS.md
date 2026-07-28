@@ -104,6 +104,33 @@ Your fields land at `identity["ext"]["engine_artifact"]`. Providers run on the p
 real run: keep them cheap (read already-computed values out of `context`; never hash a multi-GB file or
 make a network call), and never let one raise — a broken facet must cost its own namespace, not the run.
 
+## Seam 4 — new HTTP routes (`CLOZN_ROUTE_AUTOLOAD`)
+
+`clozn/server/app.py` hand-wires ~25 route modules into `_GET_ROUTES` and `_POST_ROUTES`. Create
+`clozn/server/routes/<family>.py` instead:
+
+```python
+CLOZN_ROUTE_AUTOLOAD = True
+
+def try_get(h, p):
+    if p == "/experiments":
+        h._json(200, {"experiments": [...]})
+        return True
+    return False            # not mine -- keep looking
+```
+
+`try_get(h, p)` and `try_post(h, p, body)` are both optional; you are added to whichever lists you have
+a handler for. Truthy return means "handled". Setting the marker with neither handler is an error, not
+a no-op.
+
+**Order is semantic here.** `_GET_ROUTES` ends with the generic `GET /runs/<id>` fallback, deliberately,
+so every more-specific `/runs/<id>/<suffix>` family gets first refusal. Autoloaded GET modules are
+spliced in *before* that fallback. If you are adding a `/runs/<id>/<something>` route this is what makes
+it reachable at all — appended after the fallback it would be shadowed, and shadowed as a wrong-shaped
+200 rather than a 404.
+
+Within the autoloaded group, dispatch order is by module name.
+
 ## Survey before you build
 
 **A great deal of this roadmap is already partly implemented.** The pack was written against the product
