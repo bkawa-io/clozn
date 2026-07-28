@@ -79,6 +79,30 @@ def sha256_path(path: Path) -> str:
     return digest.hexdigest()
 
 
+def atomic_copy_file(source: Path, target: Path, *, chunk_size: int = 1 << 20) -> None:
+    """Stream-copy `source` to `target` via a same-directory tempfile + os.replace. Used for `clozn
+    adopt ollama --copy`, where `source` may be a multi-GB model blob: this never holds the whole file
+    in memory (unlike shutil.copy2 called on a Path object, which is fine size-wise -- it also streams
+    -- but is kept out of this module's own vocabulary so every "did this write land atomically" answer
+    for adopt.py routes through the same primitive family as its other three operations)."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".copy", dir=target.parent)
+    try:
+        with os.fdopen(fd, "wb") as dst, Path(source).open("rb") as src:
+            while chunk := src.read(chunk_size):
+                dst.write(chunk)
+            dst.flush()
+            os.fsync(dst.fileno())
+        shutil.copystat(source, temporary, follow_symlinks=True)
+        os.replace(temporary, target)
+    except BaseException:
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+        raise
+
+
 def atomic_restore(source: Path, target: Path) -> None:
     """Copy `source` over `target` via a same-directory tempfile + os.replace -- used by undo paths so a
     restore is itself all-or-nothing, never a partially-written target."""

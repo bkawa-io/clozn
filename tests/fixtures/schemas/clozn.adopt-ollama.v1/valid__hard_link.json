@@ -1,0 +1,33 @@
+{
+  "schema_version": "clozn.adopt-ollama.v1",
+  "created_at": "2026-07-27T12:00:00+00:00",
+  "discovery": {
+    "source": "endpoint",
+    "host": "http://127.0.0.1:11434",
+    "version": "0.6.2"
+  },
+  "ollama": {
+    "model_name": "qwen2.5:7b-instruct",
+    "manifest_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "source_blob_path": "/home/user/.ollama/models/blobs/sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "source_blob_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "clozn": {
+    "registered_name": "ollama/qwen2.5:7b-instruct",
+    "path": "/home/user/.clozn/models/ollama__qwen2.5_7b-instruct.gguf",
+    "mode": "hard_link",
+    "model_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "template": {
+    "source": "ollama_modelfile",
+    "exactly_reproduced": false,
+    "warnings": [
+      "template/parameter translation not implemented in this release"
+    ]
+  },
+  "engine_capability": {
+    "level": "discovered",
+    "architecture": "qwen2"
+  },
+  "client_transactions": []
+}

@@ -5,7 +5,6 @@ generic Connector interface and its first implementation, AiderConnector.
 from __future__ import annotations
 
 import shutil
-from datetime import datetime, timezone
 
 import pytest
 
