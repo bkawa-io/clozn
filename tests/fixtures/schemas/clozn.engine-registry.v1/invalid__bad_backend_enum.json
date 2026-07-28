@@ -1,0 +1,15 @@
+{
+  "schema_version": "clozn.engine-registry.v1",
+  "installed": {
+    "1.0.0/windows-x86_64-vulkan": {
+      "version": "1.0.0",
+      "os": "windows",
+      "arch": "x86_64",
+      "backend": "vulkan",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "protocol_version": "1.0",
+      "entrypoint": "C:/Users/x/.clozn/engines/1.0.0/windows-x86_64-cpu/bin/clozn-server.exe",
+      "installed_at": "2026-07-27T12:00:00+00:00"
+    }
+  }
+}

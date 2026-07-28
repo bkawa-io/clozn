@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.engine-registry.v1",
+  "title": "Local record of managed engine installs (~/.clozn/engines/registry.json)",
+  "description": "Written by clozn/setup/registry.py, atomically (clozn._io.atomic_write_json), on every successful `clozn setup`/`setup upgrade`/`setup rollback`. `active` and `previous` are install keys (see `installed`); `previous` is what `clozn setup rollback` restores, never deleted by an upgrade. A key absent from `installed` is a self-heal signal (its directory was removed out of band), not an error -- readers must treat it the same way clozn/cli/engine_process.py's daemons.json registry treats a dead pid: prune, don't crash.",
+
+  "type": "object",
+  "required": ["schema_version"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "clozn.engine-registry.v1"
+    },
+    "active": {
+      "type": "string",
+      "description": "The install key (see `installed`) clozn/cli/engine_process.py's managed-engine discovery tier resolves to. Absent when nothing has ever been successfully installed.",
+      "minLength": 1
+    },
+    "previous": {
+      "type": "string",
+      "description": "The install key `clozn setup rollback` restores `active` to. Absent when there is nothing to roll back to (a fresh install, or after a rollback has already consumed it).",
+      "minLength": 1
+    },
+    "installed": {
+      "type": "object",
+      "description": "install key -> installed-artifact record. Keys are '<version>/<os>-<arch>-<backend>[cuda_major]' (see clozn/setup/registry.py's install_key()).",
+      "additionalProperties": { "$ref": "#/$defs/installed_artifact" }
+    }
+  },
+
+  "$defs": {
+    "installed_artifact": {
+      "type": "object",
+      "required": ["version", "os", "arch", "backend", "sha256", "entrypoint", "installed_at"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1 },
+        "os": { "type": "string", "enum": ["windows", "linux", "macos"] },
+        "arch": { "type": "string", "enum": ["x86_64", "arm64"] },
+        "backend": { "type": "string", "enum": ["cpu", "cuda", "metal"] },
+        "cuda_major": { "type": "integer", "minimum": 1 },
+        "sha256": {
+          "type": "string",
+          "description": "sha256 of the downloaded archive, not the extracted entrypoint file -- this is what clozn.runs.identity_providers.engine_artifact reports as artifact_sha256.",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "protocol_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        },
+        "entrypoint": {
+          "type": "string",
+          "description": "Absolute path to the extracted clozn-server executable.",
+          "minLength": 1
+        },
+        "installed_at": {
+          "type": "string",
+          "description": "ISO-8601 UTC timestamp.",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}
