@@ -62,3 +62,45 @@ def test_filters_are_rejected_for_exact_run(isolated, capsys):
     rid = _record()
     assert cli.main(["diagnose", rid, "--model", "m"]) == 1
     assert "filters apply only" in capsys.readouterr().err
+
+
+def test_dash_dash_last_is_an_alias_for_the_last_positional(isolated, capsys):
+    """The spec's literal `clozn diagnose --last --performance` -- --last with no positional target."""
+    wanted = _record(model="wanted")
+    assert cli.main(["diagnose", "--last", "--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["run_id"] == wanted
+
+
+def test_dash_dash_last_combined_with_an_explicit_id_is_rejected(isolated, capsys):
+    rid = _record()
+    assert cli.main(["diagnose", rid, "--last"]) == 1
+    assert "--last cannot be combined" in capsys.readouterr().err
+
+
+def test_no_target_and_no_dash_dash_last_is_rejected(capsys):
+    assert cli.main(["diagnose"]) == 1
+    assert "give a run id" in capsys.readouterr().err
+
+
+def test_performance_flag_renders_the_performance_trace_report(isolated, capsys):
+    rid = _record()
+    assert cli.main(["diagnose", rid, "--performance", "--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["schema_version"] == "clozn.performance-trace.v1"
+    assert report["run_id"] == rid
+    assert len(report["diagnoses"]) == 7
+
+
+def test_performance_human_output_names_unavailable_rules_by_name(isolated, capsys):
+    """The binding discipline in human output, not just JSON: an uninstrumented rule must be named, not
+    silently dropped, so the CLI's default view can't be mistaken for 'nothing wrong here'."""
+    rid = _record()
+    assert cli.main(["diagnose", rid, "--performance"]) == 0
+    out = capsys.readouterr().out
+    assert f"performance - {rid}" in out
+    assert "PHASES (monotonic)" in out
+    assert "LIKELY CAUSE" in out
+    assert "EVIDENCE NOT YET AVAILABLE" in out
+    assert "cold_model_load" in out
+    assert "queue_contention" in out
