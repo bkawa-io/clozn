@@ -112,11 +112,17 @@ def build_parser():
     ps.add_argument("--sae", default=None, help="on-device SAE readout dir (dims must match the model; "
                     "server refuses politely on mismatch)")
     ps.add_argument("--sae-k", type=int, default=None, help="SAE features kept per position (default 16)")
+    # NB: this flag does NOT gate the Studio Sources lens, despite what this help text claimed until
+    # 2026-07-27. That lens calls GET /runs/<id>/influence-map, which routes to
+    # receipts/context_answer_influence.py's forced-scoring path and never touches attn_knockout --
+    # verified by the absence of any attn_knockout reference in server/routes/influence_map.py. Only
+    # `clozn provenance` (analysis/provenance.py's attention-edge knockout) needs it. The old wording
+    # told users to pay a decode-speed cost for a lens that already worked without it.
     ps.add_argument("--no-flash-attn", action="store_true",
                     help="materialize attention weights instead of fusing them, so /score's "
-                         "attn_knockout works and `clozn provenance`/the Studio Sources lens become "
-                         "available (GET /health.capabilities.attn_knockout flips true). Off by "
-                         "default; costs decode speed.")
+                         "attn_knockout works and `clozn provenance` becomes available "
+                         "(GET /health.capabilities.attn_knockout flips true). Off by "
+                         "default; costs decode speed. Not needed for the Studio Sources lens.")
     ps.set_defaults(fn=cmd_serve)
 
     sub.add_parser("models", help="list local models + the engine backend").set_defaults(fn=cmd_models)
