@@ -117,9 +117,16 @@ def test_runtime_identity_still_validates_against_its_schema():
     schemas.validate(block)
 
 
-def test_runtime_identity_omits_ext_when_no_provider_contributes():
-    """No providers ship yet, so `ext` must be absent entirely rather than present-and-empty."""
-    assert "ext" not in identity.runtime_identity()
+def test_runtime_identity_omits_ext_when_no_provider_contributes(tmp_path, monkeypatch):
+    """When nothing contributes a namespace, `ext` must be absent entirely rather than present-and-empty.
+    Uses an empty shimmed provider directory rather than the real one: clozn/runs/identity_providers/
+    now ships a real provider (machine.py, performance diagnosis's facet), so this invariant is about the
+    collect() mechanism itself, not about how many real providers happen to exist at any given time."""
+    cleanup = _shim(tmp_path, monkeypatch)
+    try:
+        assert "ext" not in identity.runtime_identity()
+    finally:
+        cleanup()
 
 
 def test_extra_context_reaches_providers(tmp_path, monkeypatch):
