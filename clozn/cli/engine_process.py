@@ -13,6 +13,7 @@ has long finished.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import socket
@@ -62,48 +63,145 @@ def _dll_dirs_for(exe: str) -> list[str]:
     return dirs
 
 
-def find_engine(prefer_gpu=True) -> tuple[str, list[str], bool]:
-    """-> (exe_path, dll_dirs, is_gpu).
+@dataclasses.dataclass(frozen=True)
+class EngineDiscovery:
+    """The full result of one find_engine_ex() resolution -- what find_engine() trims to its historical
+    3-tuple, plus everything roadmap feature 01 wants recorded on every run: which of the four
+    precedence tiers produced this engine, and (when knowable) its backend and managed-install identity.
 
-    ``prefer_gpu=True`` prefers a GPU build but may fall back to CPU.  ``False`` is
-    the implementation of the CLI's documented ``--cpu`` contract and therefore
-    refuses to return a GPU worker.
+    `backend` is deliberately coarse ("cpu"/"gpu") for every tier except "managed": tiers 1/3/4 only ever
+    know GPU-or-not (a directory name, or an env var), never the exact accelerator, so claiming "cuda"
+    there would be a guess this module has no evidence for. Only the managed tier's registry record (see
+    clozn/setup/registry.py) carries a manifest-declared exact backend, so only it reports one.
     """
+
+    exe: str
+    dll_dirs: list
+    gpu: bool
+    discovery_source: str                    # "env_override" | "managed" | "repo_dev_build" | "legacy"
+    backend: "str | None" = None
+    artifact_sha256: "str | None" = None
+    engine_version: "str | None" = None
+
+
+def _env_override_candidate() -> "EngineDiscovery | None":
+    """Tier 1. CLOZN_ENGINE is the spec's own name for this override; CLOZN_ENGINE_BIN is kept working
+    indefinitely as the pre-existing name (renaming it would break any script/CI already setting it) --
+    CLOZN_ENGINE wins when both are set. CLOZN_ENGINE_GPU marks a CLOZN_ENGINE(_BIN)-pointed build as a
+    GPU worker; there is no way to detect that from the file itself."""
     from clozn.cli import main as ctx
-    override = os.environ.get("CLOZN_ENGINE_BIN")
-    if override:
-        exe = os.path.abspath(os.path.expanduser(override))
-        if not os.path.isfile(exe):
-            raise ctx.CloznError(f"CLOZN_ENGINE_BIN does not point to a file: {exe}")
-        bins = _dll_dirs_for(exe)
-        gpu = os.environ.get("CLOZN_ENGINE_GPU", "").strip().lower() in ("1", "true", "yes", "on")
-        if not prefer_gpu and gpu:
-            raise ctx.CloznError(
-                "--cpu was requested, but CLOZN_ENGINE_BIN is marked as a GPU worker; "
-                "point it at a CPU build or unset CLOZN_ENGINE_GPU"
-            )
-        return exe, bins, gpu
-    cands = []
+
+    override = os.environ.get("CLOZN_ENGINE") or os.environ.get("CLOZN_ENGINE_BIN")
+    if not override:
+        return None
+    exe = os.path.abspath(os.path.expanduser(override))
+    if not os.path.isfile(exe):
+        raise ctx.CloznError(
+            f"CLOZN_ENGINE{'' if os.environ.get('CLOZN_ENGINE') else '_BIN'} does not point to a file: {exe}")
+    gpu = os.environ.get("CLOZN_ENGINE_GPU", "").strip().lower() in ("1", "true", "yes", "on")
+    return EngineDiscovery(exe=exe, dll_dirs=_dll_dirs_for(exe), gpu=gpu,
+                           discovery_source="env_override", backend="gpu" if gpu else "cpu")
+
+
+def _managed_candidate() -> "EngineDiscovery | None":
+    """Tier 2. The active engine `clozn setup` installed, per ~/.clozn/engines/registry.json. Absent
+    entirely (returns None, not an error) when nothing has ever been installed, or when the registry's
+    `active` entry is stale (its entrypoint file was removed out of band) -- clozn.setup.registry's own
+    self-heal (prune_missing) is what a `clozn setup status` call reconciles; discovery here just moves
+    on to tier 3 rather than failing the whole lookup over one missing managed install."""
+    from clozn.cli import main as ctx
+    from clozn.setup import registry as setup_registry
+
+    doc = setup_registry.load(ctx.HOME)
+    active_key = doc.get("active")
+    if not active_key:
+        return None
+    record = (doc.get("installed") or {}).get(active_key)
+    if not isinstance(record, dict):
+        return None
+    exe = record.get("entrypoint")
+    if not exe or not os.path.isfile(exe):
+        return None
+    backend = record.get("backend")
+    gpu = backend not in (None, "cpu")
+    return EngineDiscovery(exe=exe, dll_dirs=_dll_dirs_for(exe), gpu=gpu,
+                           discovery_source="managed", backend=backend,
+                           artifact_sha256=record.get("sha256"), engine_version=record.get("version"))
+
+
+def _repo_dev_build_candidates() -> list:
+    """Tier 3. Today's original (pre-feature-01) discovery logic, unchanged: every BUILDS subdirectory
+    under engine/core/ that contains a clozn-server binary, most-preferred first."""
+    found = []
     for sub, gpu in BUILDS:
         root = os.path.join(ENGINE_CORE, sub)
         for exe in (os.path.join(root, "clozn-server.exe"),
                     os.path.join(root, "Release", "clozn-server.exe"),
                     os.path.join(root, "clozn-server")):       # posix
             if os.path.isfile(exe):
-                cands.append((exe, _dll_dirs_for(exe), gpu))
+                found.append(EngineDiscovery(exe=exe, dll_dirs=_dll_dirs_for(exe), gpu=gpu,
+                                             discovery_source="repo_dev_build",
+                                             backend="gpu" if gpu else "cpu"))
                 break
-    if not cands:
-        raise ctx.CloznError("no engine found. See docs/DEVELOPMENT.md, or set CLOZN_ENGINE_BIN.")
+    return found
+
+
+def _legacy_candidates() -> list:
+    """Tier 4, named and kept last so a future migration path (e.g. a pre-feature-01 install layout, or
+    a deprecated managed-engine directory shape) has somewhere to land without another precedence-order
+    edit. No such layout has ever shipped -- this always returns [] today, honestly, rather than
+    inventing a filesystem location no version of clozn has ever written to."""
+    return []
+
+
+def find_engine_ex(prefer_gpu=True) -> EngineDiscovery:
+    """The full discovery result -- see EngineDiscovery. Precedence: CLOZN_ENGINE(_BIN) override ->
+    active managed engine (clozn setup) -> repository-local dev build -> legacy search paths (currently
+    always empty). ``prefer_gpu=False`` is the CLI's documented ``--cpu`` contract: it skips any
+    candidate this function otherwise cannot prove is a CPU build, at every tier -- including refusing a
+    GPU env override and falling through past a GPU managed install to whatever CPU candidate a later
+    tier offers, exactly as it already did for tier 3 before this refactor."""
+    from clozn.cli import main as ctx
+
+    override = _env_override_candidate()
+    if override is not None:
+        if not prefer_gpu and override.gpu:
+            raise ctx.CloznError(
+                "--cpu was requested, but CLOZN_ENGINE(_BIN) is marked as a GPU worker; "
+                "point it at a CPU build or unset CLOZN_ENGINE_GPU"
+            )
+        return override
+
+    managed = _managed_candidate()
+    if managed is not None and (prefer_gpu or not managed.gpu):
+        return managed
+
+    candidates = _repo_dev_build_candidates() + _legacy_candidates()
     if not prefer_gpu:
-        cands = [candidate for candidate in cands if not candidate[2]]
-        if not cands:
+        candidates = [c for c in candidates if not c.gpu]
+        if not candidates:
             raise ctx.CloznError(
                 "--cpu was requested, but no CPU engine build was found. "
-                "Build engine/core/build-serve as described in docs/DEVELOPMENT.md."
+                "Build engine/core/build-serve as described in docs/DEVELOPMENT.md, or run `clozn "
+                "setup --backend cpu`."
             )
-    else:
-        cands.sort(key=lambda candidate: 0 if candidate[2] else 1)
-    return cands[0]
+        return candidates[0]
+
+    if not candidates:
+        raise ctx.CloznError(
+            "no engine found. Run `clozn setup` to install one, see docs/DEVELOPMENT.md to build one, "
+            "or set CLOZN_ENGINE."
+        )
+    candidates.sort(key=lambda c: 0 if c.gpu else 1)
+    return candidates[0]
+
+
+def find_engine(prefer_gpu=True) -> tuple[str, list[str], bool]:
+    """-> (exe_path, dll_dirs, is_gpu). The historical 3-tuple contract every existing caller (doctor,
+    smoke, models, spawn_engine, ...) already unpacks; find_engine_ex() above is the same lookup with
+    the discovery-source/backend/artifact identity feature 01's run-journal recording needs."""
+    d = find_engine_ex(prefer_gpu)
+    return d.exe, d.dll_dirs, d.gpu
 
 
 def _free_port() -> int:
