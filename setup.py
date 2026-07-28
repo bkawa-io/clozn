@@ -54,6 +54,11 @@ setup(
     packages=find_packages(include=["clozn", "clozn.*"]) + list(_studio_map) + list(_protocol_map),
     package_dir={**_studio_map, **_protocol_map},
     package_data={
+        # Artifact schemas ship with the wheel: clozn.schemas.validate() is on the path that reads and
+        # writes stored artifacts, so a pip-installed clozn with no defs/ would fail every validation
+        # (SchemaError "no schema named ...") rather than degrade. defs/ has no __init__.py -- it is
+        # data, not code -- so it rides in as package_data on clozn.schemas rather than as a package.
+        "clozn.schemas": ["defs/*.json"],
         "clozn.studio": ["*"],
         "clozn.protocol_fixtures": ["*"],
         **{name: ["*"] for name in _studio_map if name != "clozn.studio"},

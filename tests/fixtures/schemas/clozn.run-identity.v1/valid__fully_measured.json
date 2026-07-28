@@ -1,0 +1,17 @@
+{
+  "schema_version": "clozn.run-identity.v1",
+  "captured_at": "2026-07-27T14:03:11.482913+00:00",
+  "model_path": "C:\\Users\\example\\.clozn\\models\\qwen2.5-3b-instruct-q4_k_m.gguf",
+  "model_sha256": "3f786850e387550fdab836ed7e6dc881de23001b3f5f1a0f1e9b0b6f4e9a2c17",
+  "model_size_bytes": 2019377280,
+  "template_fingerprint": "9a4c1f0b7e2d6835",
+  "engine_build": "clozn-server 0.9.3+g1911a4f",
+  "clozn_version": "0.9.3",
+  "ext": {
+    "engine_artifact": {
+      "backend": "cuda",
+      "artifact_sha256": "8b1a9953c4611296a827abf8c47804d7e6dc881de23001b3f5f1a0f1e9b0b6f4",
+      "protocol_version": 7
+    }
+  }
+}

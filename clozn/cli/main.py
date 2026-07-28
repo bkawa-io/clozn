@@ -83,6 +83,7 @@ from clozn.cli.commands.diagnose import add_subparser as _add_diagnose          
 from clozn.cli.commands.regression_suite import add_subparser as _add_regression_suite            # noqa: E402
 from clozn.cli.commands.runs_privacy import add_subparser as _add_runs_privacy                    # noqa: E402
 from clozn.cli.commands.provenance import add_subparser as _add_provenance                        # noqa: E402
+from clozn.cli.commands import _autoload                                                          # noqa: E402
 
 
 def build_parser():
@@ -227,6 +228,10 @@ def build_parser():
     _add_regression_suite(sub)  # `clozn suite create` — promote captured app runs into Model CI cases
     _add_runs_privacy(sub)      # `clozn runs` — local journal privacy controls and telemetry export
     _add_provenance(sub)        # `clozn provenance` — attention-knockout context-vs-parametric receipt
+    # Every command module that sets CLOZN_AUTOLOAD = True, registered without another line here. Runs
+    # LAST so an autoloaded module reaching back into this one finds it fully defined, and so the
+    # hand-wired order above (models before serve/run/explain) is already settled. See _autoload.py.
+    _autoload.register_all(sub)
     sub.add_parser("version", help="print the installed clozn version (+ git commit if available)"
                    ).set_defaults(fn=cmd_version)
     pdoc = sub.add_parser("doctor", help="diagnose this install; --verify-offline adds a strict "
