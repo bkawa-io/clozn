@@ -1,0 +1,37 @@
+{
+  "schema": "clozn.context_receipt.v1",
+  "delivered": {
+    "label": "delivered",
+    "meaning": "messages accepted by the gateway and handed to prompt assembly",
+    "messages": [
+      {"role": "system", "content": "caller rule"},
+      {"role": "user", "content": "question"}
+    ]
+  },
+  "survived": {
+    "label": "survived",
+    "meaning": "post-assembly input retained as evidence of what reached generation",
+    "assembled_messages": [
+      {"role": "system", "content": "caller rule"},
+      {"role": "user", "content": "question"}
+    ],
+    "final_prompt": "<rendered exact>"
+  },
+  "input_truncated": false,
+  "input_policy": "overlong prompts are rejected, not silently truncated",
+  "output_cut_off": true,
+  "limits": {
+    "prompt_tokens": 31,
+    "context_window_tokens": 128,
+    "requested_max_tokens": 8,
+    "generated_tokens": 2
+  },
+  "warnings": [
+    {
+      "code": "output_truncated",
+      "severity": "warning",
+      "message": "generation stopped at the output/context token budget; the reply may be incomplete",
+      "requested_max_tokens": 8
+    }
+  ]
+}
