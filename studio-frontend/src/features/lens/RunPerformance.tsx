@@ -1,5 +1,8 @@
+import { useState } from "react";
 import type {
   DiagnosisEvidence,
+  PerformanceRuleDiagnosis,
+  PerformanceRuleEvidence,
   RunDiagnosisFinding,
   RunPerformance as RunPerformanceData,
 } from "../../data/types";
@@ -21,6 +24,25 @@ const findingLabels: Record<string, string> = {
   cpu_spill: "CPU SPILL",
 };
 
+const ruleLabels: Record<string, string> = {
+  large_context: "LARGE CONTEXT",
+  slow_decode: "SLOW DECODE",
+  cold_model_load: "COLD MODEL LOAD",
+  client_backpressure: "CLIENT BACKPRESSURE",
+  queue_contention: "QUEUE CONTENTION",
+  adapter_reload: "ADAPTER RELOAD",
+  memory_pressure: "MEMORY PRESSURE",
+};
+
+// "fired"/"not_fired"/"unavailable" are a DIFFERENT vocabulary from the phase findings above --
+// see types.ts. The nav label text differs for every status on purpose (not just color), so the
+// distinction survives a screenshot, a colorblind viewer, or someone skimming past the dot.
+const ruleStatusLabels: Record<PerformanceRuleDiagnosis["status"], string> = {
+  fired: "FIRED",
+  not_fired: "CHECKED · CLEAN",
+  unavailable: "NOT INSTRUMENTED",
+};
+
 function duration(value?: number) {
   if (value == null) return "—";
   if (value < 1000) return `${Math.round(value)} ms`;
@@ -35,21 +57,27 @@ function rate(value?: number) {
   return value == null ? "—" : `${value.toFixed(value < 10 ? 2 : 1)} tok/s`;
 }
 
-function evidenceValue(evidence: DiagnosisEvidence) {
-  if (typeof evidence.value === "number") {
-    return Number.isInteger(evidence.value)
-      ? evidence.value.toLocaleString()
-      : evidence.value.toFixed(3);
+function rawValue(value: unknown) {
+  if (typeof value === "number") {
+    return Number.isInteger(value) ? value.toLocaleString() : value.toFixed(3);
   }
-  if (typeof evidence.value === "string" || typeof evidence.value === "boolean") {
-    return String(evidence.value);
+  if (typeof value === "string" || typeof value === "boolean") {
+    return String(value);
   }
-  if (evidence.value == null) return "—";
+  if (value == null) return "—";
   try {
-    return JSON.stringify(evidence.value);
+    return JSON.stringify(value);
   } catch {
     return "—";
   }
+}
+
+function evidenceValue(evidence: DiagnosisEvidence) {
+  return rawValue(evidence.value);
+}
+
+function ruleEvidenceValue(evidence: PerformanceRuleEvidence) {
+  return rawValue(evidence.value);
 }
 
 function Metric({
@@ -81,6 +109,15 @@ function selectedFinding(
     ?? findings[0];
 }
 
+function selectedRule(
+  diagnoses: PerformanceRuleDiagnosis[],
+  selectedRuleId: string | null,
+) {
+  return diagnoses.find((entry) => entry.rule === selectedRuleId)
+    ?? diagnoses.find((entry) => entry.status === "fired")
+    ?? diagnoses[0];
+}
+
 export function RunPerformance({
   data,
   status,
@@ -94,6 +131,13 @@ export function RunPerformance({
     : data?.throughput?.kind === "derived_end_to_end"
       ? "DERIVED END TO END"
       : "UNAVAILABLE";
+
+  // Local, not lifted to Lens.tsx state -- this selection is this component's own concern, and a fresh
+  // run resets it naturally on remount via Lens's `key`-less data swap (the rule list itself changes
+  // identity every run, so a stale rule id just falls through to the "first fired, else first" default).
+  const [selectedRuleId, setSelectedRuleId] = useState<string | null>(null);
+  const diagnoses = data?.rules?.diagnoses ?? [];
+  const selectedDiagnosis = selectedRule(diagnoses, selectedRuleId);
 
   return (
     <section className="lens-performance" aria-labelledby="lens-performance-title">
@@ -190,6 +234,91 @@ export function RunPerformance({
             <div className="lens-performance-state">
               {data ? "PHASE DIAGNOSIS UNAVAILABLE" : "LOADING PERFORMANCE"}
             </div>
+          )}
+        </div>
+      </div>
+
+      <div className="lens-performance-rules-label">
+        <span>RULE ENGINE</span>
+        <strong>Likely cause</strong>
+      </div>
+
+      <div className="lens-performance-rules">
+        <nav aria-label="Performance diagnosis rules">
+          {diagnoses.map((entry) => (
+            <button
+              type="button"
+              title={`${ruleLabels[entry.rule] ?? entry.rule} — ${ruleStatusLabels[entry.status]}`}
+              className={[
+                selectedDiagnosis?.rule === entry.rule ? "is-selected" : "",
+                `status-${entry.status.replace(/_/g, "-")}`,
+              ].join(" ")}
+              aria-pressed={selectedDiagnosis?.rule === entry.rule}
+              onClick={() => setSelectedRuleId(entry.rule)}
+              key={entry.rule}
+            >
+              <i />
+              <span>{ruleLabels[entry.rule] ?? entry.rule.replaceAll("_", " ").toUpperCase()}</span>
+              <small>{ruleStatusLabels[entry.status]}</small>
+            </button>
+          ))}
+        </nav>
+
+        <div className="lens-performance-rules-detail">
+          {status === "loading" ? (
+            <div className="lens-performance-state">LOADING RULE ENGINE</div>
+          ) : status === "error" ? (
+            <div className="lens-performance-state is-error">RULE ENGINE UNAVAILABLE</div>
+          ) : !data?.rules ? (
+            // Distinct from "checked every rule, nothing fired": the fetch itself never returned a
+            // trace for this run at all, which is a different fact and must read differently -- see
+            // the module-level discipline this whole feature exists to enforce.
+            <div className="lens-performance-state">
+              {data ? "NO PERFORMANCE TRACE FOR THIS RUN" : "LOADING RULE ENGINE"}
+            </div>
+          ) : selectedDiagnosis ? (
+            <>
+              <header>
+                <strong>
+                  {ruleLabels[selectedDiagnosis.rule] ?? selectedDiagnosis.rule.replaceAll("_", " ").toUpperCase()}
+                </strong>
+                <span className={`status-${selectedDiagnosis.status.replace(/_/g, "-")}`}>
+                  {ruleStatusLabels[selectedDiagnosis.status]}
+                </span>
+              </header>
+
+              {selectedDiagnosis.status === "fired" ? (
+                <>
+                  <p className="rule-evidence-state">
+                    EVIDENCE: {(selectedDiagnosis.evidenceState ?? "observed").toUpperCase()}
+                    {selectedDiagnosis.evidenceState === "correlated"
+                      && " — correlated with the outcome, not shown to be its cause"}
+                  </p>
+                  {selectedDiagnosis.likelyCause && <p>{selectedDiagnosis.likelyCause}</p>}
+                  {selectedDiagnosis.possibleFix && (
+                    <p className="rule-fix"><b>POSSIBLE FIX</b>{selectedDiagnosis.possibleFix}</p>
+                  )}
+                </>
+              ) : (
+                // not_fired and unavailable are both rendered from `reason` -- the backend names the
+                // exact evidence it checked (not_fired) or the exact evidence it lacks (unavailable).
+                // Never a placeholder dash: see clozn/runs/perf_diagnosis.py's module docstring.
+                <p>{selectedDiagnosis.reason ?? "No further detail was recorded for this rule."}</p>
+              )}
+
+              {selectedDiagnosis.evidence.length > 0 && (
+                <dl>
+                  {selectedDiagnosis.evidence.map((evidence, index) => (
+                    <div key={`${evidence.path}-${index}`}>
+                      <dt>{evidence.path}</dt>
+                      <dd>{ruleEvidenceValue(evidence)}</dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
+            </>
+          ) : (
+            <div className="lens-performance-state">RULE ENGINE UNAVAILABLE</div>
           )}
         </div>
       </div>
