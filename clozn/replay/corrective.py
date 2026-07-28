@@ -15,6 +15,7 @@ from types import MappingProxyType
 from typing import Any
 
 from clozn import receipts
+from clozn.behavior.compare import compare_metrics
 from .replay import replay as replay_run
 
 
@@ -259,7 +260,8 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *, scope: str = "onc
         "stored_original_reply": str(run.get("response") or ""),
         "baseline_reply": baseline_reply,
         "corrected_reply": corrected_reply,
-        "delta": receipts.receipt_metrics(baseline_reply, corrected_reply),
+        "delta": {**receipts.receipt_metrics(baseline_reply, corrected_reply),
+                  **compare_metrics(baseline_reply, corrected_reply)},
         "changed": baseline_reply != corrected_reply,
         "coherence": coherence,
         "intervention_observed": intervention_observed,
