@@ -250,6 +250,27 @@ public:
     // concept direction in and watch the denoiser's commits move. NOT a golden path (off by default).
     void set_steer(const std::vector<float>& data, int il_start, int il_end);
     void clear_steer();
+    // Fine-tune adapter (LoRA) attach/detach. A DIFFERENT MECHANISM from set_steer above, despite
+    // llama.cpp placing llama_set_adapters_lora directly beside llama_set_adapter_cvec in its header --
+    // which is exactly why the two get conflated on a keyword search (see docs/ENGINE_ADAPTER_SUPPORT.md).
+    // A control vector adds ONE vector to the residual stream at inference time, uniformly across a layer
+    // range. A LoRA is a pair of low-rank matrices whose product reconstructs a per-weight-matrix delta,
+    // multiplied into specific attention/MLP projections. Having one gets you no part of the other.
+    //
+    // set_lora returns false and fills `err` when the adapter cannot be attached to THIS model --
+    // rank/architecture mismatch, unreadable file, a GGUF that is not a LoRA -- rather than aborting the
+    // worker: a bad adapter is a user error to report cleanly, not a crash. An empty path is a valid
+    // request meaning "no adapter", not a failure. `scale` multiplies the delta; 0.0 attaches the adapter
+    // while contributing nothing, which is the identity control that proves an observed output change
+    // came from the adapter's weights rather than from the act of loading it.
+    bool set_lora(const std::string& path, float scale, std::string* err = nullptr);
+    void clear_lora();
+    bool lora_loaded() const { return lora_ != nullptr; }
+    const std::string& lora_path() const { return lora_path_; }
+    float lora_scale() const { return lora_scale_; }
+    // The adapter's OWN GGUF metadata (rank, alpha, target modules, ...) read back from the loaded file,
+    // for honest run identity. Empty when no adapter is attached -- absent, never invented.
+    std::map<std::string, std::string> lora_meta() const;
     // White-box STATE-WRITE (GAP #1, task #43): overwrite the residual at board `positions` with
     // `values` ([positions.size()*n_embd]) at the l_out-<il> mid layer (same naming as the read tap),
     // applied on EVERY subsequent forward via the SAME eval callback as the tap (ggml_backend_tensor_set,
@@ -423,6 +444,12 @@ private:
     bool causal_ = false;            // attention mode: false = diffusion (bidirectional), true = AR (causal)
     int n_embd_ = 0;                 // hidden size, cached from the model for the activation tap
     int n_layer_ = 0;                // layer count, cached for control-vector (steering) sizing
+    // Fine-tune adapter state. OWNED: detached from the context and freed by clear_lora() and by the
+    // destructor, which must run while ctx_ is still alive. llama.cpp would also free a leaked adapter
+    // when the model dies, but the model here is shared (model_owner_) and may outlive this adapter.
+    llama_adapter_lora* lora_ = nullptr;
+    std::string lora_path_;          // the path it was loaded from -- recorded, never guessed
+    float lora_scale_ = 0.0f;
     int tap_layer_ = 0;              // residual layer to tap (~2/3 depth); 0 => final layer via embeddings
     std::string tap_name_;           // "l_out-<tap_layer_>": the residual tensor the eval callback captures
     std::vector<float> tap_buf_;     // last-decode residual at tap_layer_ [rows*n_embd], filled by eval_cb

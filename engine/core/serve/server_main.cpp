@@ -63,6 +63,7 @@ int main(int argc, char** argv) {
     if (argc < 2) {
         std::fprintf(stderr, "usage: %s <model.gguf> [--port N] [--host H] [--gpu-layers N] "
                              "[--ar | --diffusion] [--mask-token ID] [--eos ID] [--ctx N] [--workers N] "
+                             "[--lora PATH] [--lora-scale F] "
                              "[--sae <dir>] [--sae-k N] [--jlens <dir>] [--model-sha256 HEX] "
                              "[--no-flash-attn]\n", argv[0]);
         return 1;
@@ -80,6 +81,12 @@ int main(int argc, char** argv) {
     // /score's attn_knockout can cut individual query->key attention edges. Costs decode speed,
     // so it stays opt-in; the /health capability reports which mode is live.
     bool flash_attn = true;
+    // --lora: a fine-tune adapter GGUF applied over the base model's weights. Distinct from the
+    // steering control vector (--steer paths / set_steer) in both math and mechanism; see
+    // docs/ENGINE_ADAPTER_SUPPORT.md. --lora-scale multiplies the delta; 0.0 attaches the adapter but
+    // contributes nothing, which is the identity control for "did the adapter actually change this?"
+    std::string lora_path;
+    float lora_scale = 1.0f;
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
         auto next = [&]() { return (i + 1 < argc) ? argv[++i] : ""; };
@@ -97,6 +104,8 @@ int main(int argc, char** argv) {
         else if (a == "--ar") force_ar = true;
         else if (a == "--diffusion") force_diffusion = true;
         else if (a == "--no-flash-attn") flash_attn = false;
+        else if (a == "--lora") lora_path = next();
+        else if (a == "--lora-scale") lora_scale = static_cast<float>(std::atof(next()));
     }
     if (force_ar && force_diffusion) {
         std::fprintf(stderr, "--ar and --diffusion are mutually exclusive\n");
@@ -108,6 +117,20 @@ int main(int argc, char** argv) {
     // One copy of the weights, N contexts over it — concurrent requests, one model in (V)RAM.
     auto model = std::make_shared<GgmlModel>(model_path, mask_token, eos, gpu_layers);
     ContextPool pool(model, workers, n_ctx, flash_attn);
+
+    // A requested adapter that fails to attach ABORTS the worker rather than serving the base model.
+    // Roadmap rule 3 (no silent fallback) is at its sharpest here: someone evaluating a fine-tune who
+    // silently gets base-model output would draw a conclusion about weights that were never loaded --
+    // a wrong answer that looks exactly like a right one, and one no downstream receipt could catch.
+    if (!lora_path.empty()) {
+        std::string lora_err;
+        if (!pool.attach_lora(lora_path, lora_scale, &lora_err)) {
+            std::fprintf(stderr, "clozn-server: %s\n", lora_err.c_str());
+            return 1;
+        }
+        std::fprintf(stderr, "clozn-server: LoRA attached: %s (scale %.3f)\n",
+                     lora_path.c_str(), static_cast<double>(lora_scale));
+    }
     if (!flash_attn)
         std::fprintf(stderr, "[clozn-server] flash attention DISABLED: attention weights "
                              "materialize, /score attn_knockout available (slower decode)\n");
@@ -273,6 +296,13 @@ int main(int argc, char** argv) {
             {"jlens", jlens.on},          // live Jacobian-lens "disposed to say" readout
             {"readout", true},            // Phase 2.3 multi-observer readout plane (readout:{...})
             {"attn_knockout", !flash_attn},  // /score attn_knockout (needs --no-flash-attn)
+            {"lora", true},               // this build can attach a fine-tune adapter (--lora). A
+                                          // CAPABILITY, not a state: whether one is currently attached
+                                          // is the separate "lora" object below, present only when it
+                                          // is. A client needs both facts, and a build that predates
+                                          // adapters omits this key entirely rather than reporting
+                                          // false -- so absent means "doesn't know about adapters",
+                                          // false would have meant "knows, and declines".
             {"score_arms", true},         // /score arms: batched multi-arm scoring -- APPROXIMATE
                                           // regime (screening only; response carries the label)
         };
@@ -289,6 +319,15 @@ int main(int argc, char** argv) {
                {"n_ctx", n_ctx},                              // configured context window (repro metadata)
                {"gpu_layers", gpu_layers},                    // layers offloaded to the GPU (0 => CPU-resident)
                {"device", gpu_layers > 0 ? "cuda" : "cpu"}};  // CUDA build; device follows the offload setting
+        // The ATTACHED adapter, present only when one actually is -- omitted, never null-padded, so a
+        // reader cannot mistake "no adapter" for "adapter whose fields we failed to read". The meta map
+        // is whatever the adapter GGUF itself declares (rank, alpha, target modules), read back off the
+        // loaded file rather than inferred, so a run receipt records what was really applied.
+        if (pool.lora_loaded()) {
+            h["lora"] = {{"path", pool.lora_path()},
+                         {"scale", pool.lora_scale()},
+                         {"meta", pool.lora_meta()}};
+        }
         h["native_chat_io"] = {
             {"available", ar_mode && chat_templates->available()},
             {"executor_id", NATIVE_CHAT_EXECUTOR_ID},

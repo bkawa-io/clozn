@@ -150,6 +150,7 @@ void GgmlAdapter::set_head_writes(const std::vector<HeadWrite>& ws) {
 void GgmlAdapter::clear_head_writes() { head_writes_.clear(); }
 
 GgmlAdapter::~GgmlAdapter() {
+    clear_lora();                // must run while ctx_ is alive: it detaches from the context first
     if (ctx_) llama_free(ctx_);  // the model is freed by GgmlModel when the last adapter releases it
     // backend intentionally left initialized (see note above).
 }
@@ -377,6 +378,69 @@ void GgmlAdapter::set_steer(const std::vector<float>& data, int il_start, int il
 
 void GgmlAdapter::clear_steer() {
     llama_set_adapter_cvec(ctx_, nullptr, 0, n_embd_, 0, n_layer_);
+}
+
+bool GgmlAdapter::set_lora(const std::string& path, float scale, std::string* err) {
+    // NOT the control-vector path above -- see the header comment on why these two get confused.
+    if (!model_ || !ctx_) {
+        if (err) *err = "no model/context to attach a LoRA adapter to";
+        return false;
+    }
+    clear_lora();                       // replace semantics: one adapter at a time in this build
+    if (path.empty()) return true;      // "no adapter" is a valid request, not a failure
+
+    // llama_adapter_lora_init does the rank/architecture validation for us: it returns null when the
+    // adapter's tensors do not line up with THIS model's shapes. That is the check that has to exist
+    // before attaching -- a mismatched adapter must be a clean refusal, not a wrong answer.
+    llama_adapter_lora* adapter = llama_adapter_lora_init(model_, path.c_str());
+    if (!adapter) {
+        if (err) {
+            *err = "could not load LoRA adapter '" + path + "' against this model: rank/architecture "
+                   "mismatch, unreadable file, or not a LoRA GGUF";
+        }
+        return false;
+    }
+
+    float applied = scale;
+    const int32_t rc = llama_set_adapters_lora(ctx_, &adapter, 1, &applied);
+    if (rc != 0) {
+        llama_adapter_lora_free(adapter);
+        if (err) *err = "llama_set_adapters_lora failed (rc=" + std::to_string(rc) + ")";
+        return false;
+    }
+
+    lora_ = adapter;
+    lora_path_ = path;
+    lora_scale_ = scale;
+    return true;
+}
+
+void GgmlAdapter::clear_lora() {
+    if (!lora_) return;
+    // Detach from the context BEFORE freeing, and only while ctx_ is alive -- the destructor relies on
+    // this ordering (it calls clear_lora() ahead of llama_free(ctx_)).
+    if (ctx_) llama_set_adapters_lora(ctx_, nullptr, 0, nullptr);
+    llama_adapter_lora_free(lora_);
+    lora_ = nullptr;
+    lora_path_.clear();
+    lora_scale_ = 0.0f;
+}
+
+std::map<std::string, std::string> GgmlAdapter::lora_meta() const {
+    // Whatever the adapter file itself declares -- rank, alpha, target modules. Read back rather than
+    // inferred, so run identity records what was actually loaded. Keys that fail to read are skipped,
+    // never defaulted: an unreadable field is absent, not zero.
+    std::map<std::string, std::string> out;
+    if (!lora_) return out;
+    const int32_t n = llama_adapter_meta_count(lora_);
+    for (int32_t i = 0; i < n; ++i) {
+        char key[256] = {0};
+        if (llama_adapter_meta_key_by_index(lora_, i, key, sizeof(key)) < 0) continue;
+        char val[1024] = {0};
+        if (llama_adapter_meta_val_str_by_index(lora_, i, val, sizeof(val)) < 0) continue;
+        out[key] = val;
+    }
+    return out;
 }
 
 bool GgmlAdapter::write_state(int il, const std::vector<int>& positions,

@@ -1235,6 +1235,31 @@ public:
     }
     int size() const { return static_cast<int>(adapters_.size()); }
 
+    // Attach a fine-tune adapter to EVERY pooled context, or to none of them. All-or-nothing is the
+    // whole point: a pool where only some contexts carry the LoRA would serve adapted or unadapted
+    // output depending on which lease a request happened to acquire -- nondeterminism no run identity
+    // could explain, and the worst possible failure mode for a tool whose product is receipts. On any
+    // failure the already-attached contexts are rolled back before returning false.
+    bool attach_lora(const std::string& path, float scale, std::string* err) {
+        for (size_t i = 0; i < adapters_.size(); ++i) {
+            if (!adapters_[i]->set_lora(path, scale, err)) {
+                for (size_t j = 0; j < i; ++j) adapters_[j]->clear_lora();
+                return false;
+            }
+        }
+        return true;
+    }
+    // Pool-wide adapter state. attach_lora's all-or-nothing contract is what makes reading these off
+    // the first context correct for the whole pool.
+    bool lora_loaded() const { return !adapters_.empty() && adapters_.front()->lora_loaded(); }
+    std::string lora_path() const {
+        return adapters_.empty() ? std::string() : adapters_.front()->lora_path();
+    }
+    float lora_scale() const { return adapters_.empty() ? 0.0f : adapters_.front()->lora_scale(); }
+    std::map<std::string, std::string> lora_meta() const {
+        return adapters_.empty() ? std::map<std::string, std::string>() : adapters_.front()->lora_meta();
+    }
+
 private:
     void release(GgmlAdapter* a) {
         { std::lock_guard<std::mutex> lk(mtx_); free_.push(a); }
