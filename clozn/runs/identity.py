@@ -192,14 +192,25 @@ def _clozn_version() -> str | None:
 
 
 def runtime_identity(*, model_path=None, model_sha256_hint=None, apply_template_fn=None,
-                      engine_health=None, clozn_version=None) -> dict:
+                      engine_health=None, clozn_version=None, extra_context=None) -> dict:
     """Assemble the run record's `identity` block.
 
     `model_sha256_hint` lets a caller pass an already-known digest (e.g. the engine's own /health
     model_sha256, computed once at boot -- see the module docstring) so this never re-hashes a file the
     caller already identified; `model_sha256(model_path)` is only invoked as a fallback when no hint is
     given. Every field is OMITTED (never None-padded) when it cannot be honestly established -- absence
-    must stay visible, not be faked as null. Never raises."""
+    must stay visible, not be faked as null. Never raises.
+
+    `extra_context` is a dict of already-computed facts the CALLER knows and this function cannot
+    measure for itself -- engine discovery source, backend, artifact sha256, adapter path, machine
+    identity. It is merged into the context handed to clozn.runs.identity_providers.* and is the
+    supported way for a facet provider to see a value that lives in the CLI/supervisor layer rather
+    than in this module's own arguments. Without it a provider could only report what runtime_identity
+    already knows, which makes most of the facets rule 2 asks for unreachable.
+
+    The measured arguments above always WIN over same-named `extra_context` keys: a caller's hint must
+    never be able to overwrite a value this module actually established. Unknown keys pass through
+    untouched."""
     out: dict = {}
     try:
         if model_path:
@@ -234,12 +245,14 @@ def runtime_identity(*, model_path=None, model_sha256_hint=None, apply_template_
         # belong to different features, and merging them here by hand would make this one function the
         # thing every feature branch has to edit. collect() never raises and omits a namespace it could
         # not establish, so the "omit, never null-pad" rule above holds inside `ext` too.
-        extensions = identity_ext.collect({
+        context = dict(extra_context) if isinstance(extra_context, dict) else {}
+        context.update({
             "model_path": model_path,
             "model_sha256": out.get("model_sha256"),
             "engine_health": engine_health,
             "apply_template_fn": apply_template_fn,
         })
+        extensions = identity_ext.collect(context)
         if extensions:
             out["ext"] = extensions
     except Exception:

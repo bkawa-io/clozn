@@ -1,6 +1,8 @@
 """Contract tests for the namespaced run-identity extension seam (clozn/runs/identity_ext.py)."""
 from __future__ import annotations
 
+import itertools
+
 import pytest
 
 from clozn import schemas
@@ -16,15 +18,31 @@ def _isolate_discovery_cache():
     identity_ext.reset_cache()
 
 
-def _shim(tmp_path, monkeypatch, name="zz_ident_shim"):
+_SHIM_SEQ = itertools.count()
+
+
+def _shim(tmp_path, monkeypatch):
+    """Point identity_ext at `tmp_path` as a throwaway provider package.
+
+    The package name is unique per call, and cleanup purges the package AND every submodule under it.
+    Both matter: importlib caches by dotted name, so a fixed name would make the second test that
+    writes `engine_artifact.py` silently import the FIRST test's module object out of sys.modules --
+    a stale provider that passes in isolation and fails in a full run. This helper is the pattern
+    feature agents will copy for their own provider tests, so it needs to be right.
+    """
     import sys
     import types
+    name = f"zz_ident_shim_{next(_SHIM_SEQ)}"
     module = types.ModuleType(name)
     module.__path__ = [str(tmp_path)]
     sys.modules[name] = module
     monkeypatch.setattr(identity_ext, "_DIR", str(tmp_path))
     monkeypatch.setattr(identity_ext, "_PACKAGE", name)
-    return lambda: sys.modules.pop(name, None)
+
+    def _cleanup():
+        for key in [k for k in sys.modules if k == name or k.startswith(f"{name}.")]:
+            sys.modules.pop(key, None)
+    return _cleanup
 
 
 def test_no_shipped_provider_failed_to_load():
@@ -102,6 +120,47 @@ def test_runtime_identity_still_validates_against_its_schema():
 def test_runtime_identity_omits_ext_when_no_provider_contributes():
     """No providers ship yet, so `ext` must be absent entirely rather than present-and-empty."""
     assert "ext" not in identity.runtime_identity()
+
+
+def test_extra_context_reaches_providers(tmp_path, monkeypatch):
+    """Facets like engine discovery source and backend are CLI-layer facts runtime_identity() cannot
+    measure. Without extra_context a provider could only report what runtime_identity already knows,
+    which puts most of what roadmap rule 2 asks for out of reach."""
+    (tmp_path / "engine_artifact.py").write_text(
+        "NAME = 'engine_artifact'\n"
+        "def identity(context):\n"
+        "    return {k: v for k, v in (context or {}).items() if k in ('discovery_source', 'backend')}\n",
+        encoding="utf-8")
+    cleanup = _shim(tmp_path, monkeypatch)
+    try:
+        block = identity.runtime_identity(
+            extra_context={"discovery_source": "managed", "backend": "cuda"})
+        assert block["ext"]["engine_artifact"] == {"discovery_source": "managed", "backend": "cuda"}
+    finally:
+        cleanup()
+
+
+def test_extra_context_cannot_overwrite_a_measured_value(tmp_path, monkeypatch):
+    """A caller's hint must never displace a value this module actually established -- otherwise
+    extra_context becomes a way to launder an invented value into the identity block."""
+    (tmp_path / "echo.py").write_text(
+        "NAME = 'echo'\n"
+        "def identity(context):\n"
+        "    return {'seen': (context or {}).get('engine_health')}\n",
+        encoding="utf-8")
+    cleanup = _shim(tmp_path, monkeypatch)
+    try:
+        block = identity.runtime_identity(
+            engine_health={"real": True},
+            extra_context={"engine_health": {"spoofed": True}})
+        assert block["ext"]["echo"]["seen"] == {"real": True}
+    finally:
+        cleanup()
+
+
+@pytest.mark.parametrize("bad", [None, "not a dict", 42, ["a", "b"]])
+def test_a_malformed_extra_context_is_ignored_not_fatal(tmp_path, monkeypatch, bad):
+    assert "captured_at" in identity.runtime_identity(extra_context=bad)
 
 
 def test_runtime_identity_never_raises_on_a_broken_provider(tmp_path, monkeypatch):
