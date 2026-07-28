@@ -1615,3 +1615,338 @@
     gap: 2px;
   }
 }
+
+/* -----------------------------------------------------------------------------------------------
+   Context receipt (feature 06) -- slot panel rendered via <SlotHost slot="lens.evidence"/>, inside
+   .lens-context-body below the source list. See docs/SURFACES.md's "Registered slots" table.
+   ----------------------------------------------------------------------------------------------- */
+
+.context-receipt {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--line);
+}
+
+.context-receipt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 14px 7px;
+}
+
+.context-receipt-head h3 {
+  margin: 2px 0 0;
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 9px;
+  font-weight: 550;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+
+.context-receipt-shape {
+  padding: 2px 6px;
+  border: 1px solid var(--line-strong);
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .1em;
+}
+
+.context-receipt-shape.is-new {
+  color: var(--signal-mint);
+  border-color: color-mix(in srgb, var(--signal-mint) 45%, var(--line-strong));
+}
+
+.context-receipt-shape.is-legacy {
+  color: var(--signal-peach);
+  border-color: color-mix(in srgb, var(--signal-peach) 45%, var(--line-strong));
+}
+
+.context-receipt-shape.is-unrecognized {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line-strong));
+}
+
+.context-receipt-facts-strip {
+  display: grid;
+  gap: 1px;
+  padding: 0 14px 10px;
+}
+
+.context-receipt-fact {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.context-receipt-fact:last-child {
+  border-bottom: 0;
+}
+
+.context-receipt-fact > span {
+  grid-column: 1;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .08em;
+}
+
+.context-receipt-fact > strong {
+  grid-column: 2;
+  grid-row: 1;
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 8px;
+  letter-spacing: .04em;
+  text-align: right;
+}
+
+.context-receipt-fact > small {
+  grid-column: 1 / -1;
+  color: var(--ink-faint);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.context-receipt-fact.is-ok > strong { color: var(--signal-mint); }
+.context-receipt-fact.is-warn > strong { color: var(--signal-peach); }
+.context-receipt-fact.is-unavailable > strong { color: var(--ink-faint); }
+.context-receipt-fact.is-na > strong { color: var(--ink-faint); font-style: italic; }
+
+.context-receipt-toggle {
+  margin: 0 14px 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--line-strong);
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .08em;
+  text-align: center;
+}
+
+.context-receipt-toggle:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel-raised) 42%, transparent);
+}
+
+.context-receipt-detail {
+  display: grid;
+  gap: 1px;
+  padding-bottom: 8px;
+}
+
+.context-receipt-section {
+  padding: 9px 14px;
+  border-top: 1px solid var(--line);
+}
+
+.context-receipt-section > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .1em;
+}
+
+.context-receipt-section > header b {
+  color: var(--ink-soft);
+  font-size: 8px;
+}
+
+.context-receipt-facts {
+  display: grid;
+  gap: 4px;
+}
+
+.context-receipt-facts > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.context-receipt-facts dt {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .06em;
+}
+
+.context-receipt-facts dd {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 8px;
+  text-align: right;
+}
+
+.context-receipt-badge {
+  margin-left: 6px;
+  padding: 1px 4px;
+  font-size: 6px;
+  letter-spacing: .06em;
+}
+
+.context-receipt-badge.is-estimated {
+  color: var(--signal-peach);
+  border: 1px solid color-mix(in srgb, var(--signal-peach) 45%, var(--line-strong));
+}
+
+.context-receipt-badge.is-exact {
+  color: var(--signal-mint);
+  border: 1px solid color-mix(in srgb, var(--signal-mint) 45%, var(--line-strong));
+}
+
+.context-receipt-table {
+  display: grid;
+  font-family: var(--font-machine);
+  font-size: 7px;
+}
+
+.context-receipt-row {
+  display: grid;
+  grid-template-columns: 22px 56px minmax(0, 1fr) 56px 56px minmax(0, 1fr) 60px;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-soft);
+}
+
+.context-receipt-row.is-head {
+  color: var(--ink-faint);
+  letter-spacing: .06em;
+}
+
+.context-receipt-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-receipt-list {
+  display: grid;
+  gap: 6px;
+  padding: 0;
+  list-style: none;
+}
+
+.context-receipt-list li {
+  display: grid;
+  gap: 3px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+}
+
+.context-receipt-list strong {
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 8px;
+}
+
+.context-receipt-list small {
+  color: var(--ink-faint);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.context-receipt-list.is-messages p {
+  margin: 2px 0 0;
+  color: var(--ink-soft);
+  font-size: 9px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.context-receipt-category {
+  justify-self: start;
+  padding: 1px 4px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .06em;
+  border: 1px solid var(--line-strong);
+}
+
+.context-receipt-note {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 9px;
+}
+
+.context-receipt-note code {
+  color: var(--ink);
+  font-family: var(--font-machine);
+}
+
+.context-receipt-caveat {
+  display: block;
+  margin-top: 4px;
+  color: var(--signal-peach);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.context-receipt-legacy-banner {
+  padding: 8px 14px;
+}
+
+.context-receipt-section.is-advanced button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .1em;
+}
+
+.context-receipt-section.is-advanced button:hover {
+  color: var(--ink);
+}
+
+.context-receipt-advanced-body {
+  margin-top: 8px;
+}
+
+.context-receipt-raw {
+  max-height: 220px;
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--page-deep) 60%, transparent);
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 8px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.context-receipt-empty {
+  padding: 10px 14px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .06em;
+}
+
+.context-receipt-empty.is-error {
+  color: var(--danger);
+}
+
+.context-receipt-empty small {
+  display: block;
+  margin-top: 4px;
+  letter-spacing: .02em;
+  text-transform: none;
+}
