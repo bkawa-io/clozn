@@ -6,7 +6,14 @@ export interface TokenReading {
   confidence?: number;
   band?: "strong" | "okay" | "shaky";
   source?: string;
+  /** Links that cleared the method's measurement floor -- a real, controlled intervention effect. */
   sources?: TokenSourceReading[];
+  /**
+   * Links that were measured but did NOT clear the floor. Kept separate from `sources` on purpose:
+   * "below the measurement floor" is an honest observed reading, never the same claim as a cleared
+   * effect, and never the same as "this source is irrelevant" (see InfluenceEvidenceState).
+   */
+  observedSources?: TokenSourceReading[];
   alternatives?: CandidateReading[];
 }
 
@@ -25,6 +32,12 @@ export interface SourceReading {
   groupId?: string;
   messageIndex?: number;
   measured?: boolean;
+  /**
+   * Whether ANY link from this source cleared the measurement floor for any answer token.
+   * `undefined` means "not applicable" -- the source was never measured at all (a genuinely different
+   * state from `false`, which means it WAS measured and nothing cleared).
+   */
+  clearEffect?: boolean;
   start?: number;
   end?: number;
 }
@@ -39,12 +52,70 @@ export interface ContextCoverage {
   promptTokens?: number;
 }
 
+/**
+ * The roadmap's explicit-states vocabulary for one measured link (evidence_state on
+ * clozn.context_answer_influence.v1's Link). `causally_supported`: cleared the measurement floor -- a
+ * real, controlled intervention effect. `observed`: the intervention ran and produced a delta, but it
+ * did not clear the floor -- measured absence of a strong effect, never proof of irrelevance. This is a
+ * closed union on purpose: a value that is not exactly `causally_supported` must render as the WEAKER
+ * claim, never be silently upgraded (see `toEvidenceState` in data/api.ts).
+ */
+export type InfluenceEvidenceState = "causally_supported" | "observed";
+
 export interface TokenSourceReading {
   sourceId: string;
   label: string;
   effect: "supports" | "suppresses" | "neutral";
   deltaNats: number;
+  evidenceState: InfluenceEvidenceState;
 }
+
+/** `context_answer_influence.py`'s `_METHOD` dict, camelCased. Present on every computed shape the
+ * backend returns -- success or failure -- so a consumer holding it is always one field away from the
+ * sentence that bounds every number this feature shows. */
+export interface InfluenceMethod {
+  name?: string;
+  mode: string;
+  measurement?: string;
+  sign?: string;
+  segmentation?: string;
+  redundancyCheck?: string;
+  claimLimit: string;
+  caveat: string;
+}
+
+export interface InfluenceThresholds {
+  cellAbsDeltaNats?: number;
+  sourceClearRule?: string;
+  calibration?: string;
+}
+
+/** The closed set of `error.code` values `clozn.receipts.context_answer_influence.ERROR_CODES` emits. */
+export type InfluenceErrorCode =
+  | "invalid_run"
+  | "no_text_context"
+  | "no_recorded_continuation"
+  | "scoring_unavailable"
+  | "invalid_baseline_score"
+  | "intervention_score_failed"
+  | "influence_map_error";
+
+/**
+ * Why the source map is unavailable, typed instead of collapsed into one generic message. A user who
+ * can't tell "scoring unavailable on this build" (no_worker / scoring_unavailable) from "this run has
+ * no measurable context" (no_text_context / no_recorded_continuation) cannot act on either.
+ */
+export type InfluenceAbsence =
+  | { kind: "not_measured" }
+  | { kind: "no_worker" }
+  | { kind: "typed"; code: InfluenceErrorCode; status: "unavailable" | "error"; message: string }
+  | { kind: "invalid_request"; message: string }
+  | { kind: "server_error"; message: string }
+  | { kind: "network_error"; message: string };
+
+export type MeasureInfluenceResult =
+  | { ok: true }
+  | { ok: false; absence: InfluenceAbsence };
 
 export interface WorkspaceReadout {
   tokenIndex?: number;
@@ -82,6 +153,11 @@ export interface ObservatoryData {
   sources: SourceReading[];
   contextSources?: SourceReading[];
   contextCoverage?: ContextCoverage;
+  /** Present exactly when a source map has been computed and persisted for this run. */
+  influenceMethod?: InfluenceMethod;
+  influenceThresholds?: InfluenceThresholds;
+  /** Present exactly when `sources` is empty -- explains why, instead of leaving the reader to guess. */
+  influenceAbsence?: InfluenceAbsence;
   workspaceReadouts?: WorkspaceReadout[];
   configuration: RunConfiguration;
 }

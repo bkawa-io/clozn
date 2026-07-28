@@ -2,6 +2,12 @@ import type {
   CandidateReading,
   ConceptCandidate,
   ContextCoverage,
+  InfluenceAbsence,
+  InfluenceErrorCode,
+  InfluenceEvidenceState,
+  InfluenceMethod,
+  InfluenceThresholds,
+  MeasureInfluenceResult,
   ObservatoryData,
   RunConfiguration,
   RunConcepts,
@@ -358,25 +364,102 @@ export async function loadRunConcepts(
   }
 }
 
+// The exact set clozn.receipts.context_answer_influence.ERROR_CODES emits, mirrored here so an
+// unrecognized code (drift, or a future backend addition this frontend hasn't been taught about yet)
+// falls back to the generic "server_error" bucket instead of being silently trusted as one of the named
+// ones -- fail toward "unlabeled failure," never toward a specific claim the backend didn't make.
+const INFLUENCE_ERROR_CODES = new Set<InfluenceErrorCode>([
+  "invalid_run",
+  "no_text_context",
+  "no_recorded_continuation",
+  "scoring_unavailable",
+  "invalid_baseline_score",
+  "intervention_score_failed",
+  "influence_map_error",
+]);
+
+function isInfluenceErrorCode(value: unknown): value is InfluenceErrorCode {
+  return typeof value === "string" && INFLUENCE_ERROR_CODES.has(value as InfluenceErrorCode);
+}
+
+/**
+ * POST /runs/<id>/influence-map, preserving the backend's typed absence states instead of collapsing
+ * every non-2xx response into one generic thrown Error. `clozn/server/routes/influence_map.py` returns:
+ *   - 200 { available: true, ... }              -- a fresh or cached measurement.
+ *   - 503 { error: "...no worker..." }          -- no worker attached at all (infra-level, this build).
+ *   - 400 { error: "..." }                      -- a malformed request (bad max_context_spans).
+ *   - 422 { available: false, status: "unavailable", error: { code, message } } -- a precondition on
+ *     THIS run was never met (no text context, no recorded continuation, scorer unavailable).
+ *   - 500 { available: false, status: "error", error: { code, message } }      -- an intervention that
+ *     should have worked did not complete.
+ *   - 500 { error: "..." }                      -- an infra failure with no typed code (schema
+ *     validation, persistence) -- rare, but still surfaced distinctly rather than guessed at.
+ */
 export async function measureRunInfluenceMap(
   runId: string,
   signal?: AbortSignal,
-): Promise<void> {
-  const response = await fetch(`/runs/${encodeURIComponent(runId)}/influence-map`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: "{}",
-    signal,
-  });
+): Promise<MeasureInfluenceResult> {
+  let response: Response;
+  try {
+    response = await fetch(`/runs/${encodeURIComponent(runId)}/influence-map`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+      signal,
+    });
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return {
+      ok: false,
+      absence: {
+        kind: "network_error",
+        message: error instanceof Error ? error.message : "the measurement request failed to reach the server",
+      },
+    };
+  }
+
   let body: JsonRecord = {};
   try {
     body = record(await response.json());
   } catch {
     // The status remains authoritative when the response has no JSON body.
   }
-  if (!response.ok || body.available !== true) {
-    throw new Error(String(body.reason ?? body.error ?? `Source measurement failed (${response.status})`));
+
+  if (response.ok && body.available === true) return { ok: true };
+
+  if (response.status === 503) {
+    return { ok: false, absence: { kind: "no_worker" } };
   }
+
+  const errorBody = record(body.error);
+  const code = errorBody.code;
+  const typedMessage = typeof errorBody.message === "string" ? errorBody.message : undefined;
+  if ((response.status === 422 || response.status === 500) && isInfluenceErrorCode(code) && typedMessage) {
+    return {
+      ok: false,
+      absence: {
+        kind: "typed",
+        code,
+        status: body.status === "error" ? "error" : "unavailable",
+        message: typedMessage,
+      },
+    };
+  }
+
+  const flatMessage = typeof body.error === "string" ? body.error : undefined;
+  if (response.status === 400) {
+    return {
+      ok: false,
+      absence: { kind: "invalid_request", message: flatMessage ?? "the measurement request was rejected" },
+    };
+  }
+  return {
+    ok: false,
+    absence: {
+      kind: "server_error",
+      message: flatMessage ?? `source measurement failed (${response.status})`,
+    },
+  };
 }
 
 function spanBands(spansBody: unknown): Map<number, TokenReading["band"]> {
@@ -397,7 +480,16 @@ interface InfluenceIndex {
   contextSources: SourceReading[];
   coverage: ContextCoverage;
   tokenSources: Map<number, TokenSourceReading[]>;
+  observedSources: Map<number, TokenSourceReading[]>;
+  method?: InfluenceMethod;
+  thresholds?: InfluenceThresholds;
+  absence?: InfluenceAbsence;
 }
+
+// How many below-floor candidates to surface per answer token in the inspector's secondary list.
+// Mirrors the backend's own top_context_span_ids cap (3) for the cleared list so neither list reads as
+// artificially truncated relative to the other.
+const MAX_OBSERVED_SOURCES_PER_TOKEN = 3;
 
 function promptTokenCount(run: JsonRecord): number | undefined {
   const rawValue = record(record(run.context_receipt).limits).prompt_tokens;
@@ -426,7 +518,7 @@ function messageContextSources(run: JsonRecord): SourceReading[] {
   });
 }
 
-function sourceReading(source: JsonRecord, measured: boolean): SourceReading | null {
+function sourceReading(source: JsonRecord, measured: boolean, clearEffect?: boolean): SourceReading | null {
   const id = String(source.id || "");
   const text = typeof source.text === "string" ? source.text : "";
   if (!id || !text.trim()) return null;
@@ -443,8 +535,49 @@ function sourceReading(source: JsonRecord, measured: boolean): SourceReading | n
     groupId: String(source.parent_id || source.id || ""),
     messageIndex: Number.isInteger(messageIndex) ? messageIndex : undefined,
     measured,
+    clearEffect,
     start: Number.isInteger(start) ? start : undefined,
     end: Number.isInteger(end) ? end : undefined,
+  };
+}
+
+// Fails toward the WEAKER claim: only the exact backend string counts as `causally_supported`. A
+// missing, malformed, or future-added value must never be silently upgraded into the stronger claim --
+// this is the structural half of "below the measurement floor must not read the same as a real effect."
+function toEvidenceState(raw: unknown): InfluenceEvidenceState {
+  return raw === "causally_supported" ? "causally_supported" : "observed";
+}
+
+function sanitizeInfluenceEffect(raw: unknown): TokenSourceReading["effect"] {
+  return raw === "suppresses" || raw === "neutral" ? raw : "supports";
+}
+
+function influenceMethodFrom(body: JsonRecord): InfluenceMethod | undefined {
+  const method = record(body.method);
+  if (typeof method.mode !== "string" || typeof method.claim_limit !== "string"
+      || typeof method.caveat !== "string") {
+    return undefined;
+  }
+  return {
+    name: typeof method.name === "string" ? method.name : undefined,
+    mode: method.mode,
+    measurement: typeof method.measurement === "string" ? method.measurement : undefined,
+    sign: typeof method.sign === "string" ? method.sign : undefined,
+    segmentation: typeof method.segmentation === "string" ? method.segmentation : undefined,
+    redundancyCheck: typeof method.redundancy_check === "string" ? method.redundancy_check : undefined,
+    claimLimit: method.claim_limit,
+    caveat: method.caveat,
+  };
+}
+
+function influenceThresholdsFrom(body: JsonRecord): InfluenceThresholds | undefined {
+  const thresholds = record(body.thresholds);
+  if (!Object.keys(thresholds).length) return undefined;
+  const floor = Number(thresholds.cell_abs_delta_nats);
+  return {
+    cellAbsDeltaNats: Number.isFinite(floor) ? floor : undefined,
+    sourceClearRule: typeof thresholds.source_clear_rule === "string" ? thresholds.source_clear_rule : undefined,
+    calibration: typeof thresholds.calibration === "string" ? thresholds.calibration : undefined,
   };
 }
 
@@ -464,6 +597,13 @@ function influenceIndex(body: unknown, run: JsonRecord): InfluenceIndex {
         promptTokens: promptTokenCount(run),
       },
       tokenSources: new Map(),
+      observedSources: new Map(),
+      // GET /runs/<id>/influence-map only ever returns an already-persisted `available: true` artifact
+      // or a 404 -- the server never persists a failed measurement (influence_map.py's try_post only
+      // attaches the run when status == "ok"). So on the read path, "not available" always means
+      // "never successfully computed," never a specific typed failure (those only surface transiently
+      // from the POST call itself, see measureRunInfluenceMap / Lens.tsx's local sourceAbsence state).
+      absence: { kind: "not_measured" },
     };
   }
 
@@ -475,8 +615,16 @@ function influenceIndex(body: unknown, run: JsonRecord): InfluenceIndex {
   const omittedSourceIds = new Set(
     Array.isArray(selection.omitted_source_ids) ? selection.omitted_source_ids.map(String) : [],
   );
+
+  const clearEffectById = new Map<string, boolean>();
+  for (const entry of records(record(influence.summary).context_to_answer)) {
+    const id = String(entry.context_span_id || "");
+    if (id) clearEffectById.set(id, entry.clear_effect === true);
+  }
+
   const sources = records(influence.prompt_spans).flatMap((span) => {
-    const reading = sourceReading(span, true);
+    const id = String(span.id || "");
+    const reading = sourceReading(span, true, clearEffectById.get(id));
     return reading ? [reading] : [];
   });
   const measuredParents = new Set(sources.map((source) => source.groupId || source.id));
@@ -502,10 +650,27 @@ function influenceIndex(body: unknown, run: JsonRecord): InfluenceIndex {
   }
 
   const linkByPair = new Map<string, JsonRecord>();
+  const linksByAnswerId = new Map<string, JsonRecord[]>();
   for (const link of records(influence.links)) {
-    const key = `${String(link.answer_span_id || "")}:${String(link.context_span_id || "")}`;
+    const answerId = String(link.answer_span_id || "");
+    const key = `${answerId}:${String(link.context_span_id || "")}`;
     const previous = linkByPair.get(key);
     if (!previous || Number(link.abs_delta_nats) > Number(previous.abs_delta_nats)) linkByPair.set(key, link);
+    const bucket = linksByAnswerId.get(answerId) ?? [];
+    bucket.push(link);
+    linksByAnswerId.set(answerId, bucket);
+  }
+
+  function toReading(answerId: string, sourceId: string, link: JsonRecord | undefined): TokenSourceReading | null {
+    const source = sourceById.get(sourceId);
+    if (!source) return null;
+    return {
+      sourceId,
+      label: source.text,
+      effect: sanitizeInfluenceEffect(link?.effect),
+      deltaNats: Number(link?.delta_nats) || 0,
+      evidenceState: toEvidenceState(link?.evidence_state),
+    };
   }
 
   const tokenSources = new Map<number, TokenSourceReading[]>();
@@ -516,22 +681,26 @@ function influenceIndex(body: unknown, run: JsonRecord): InfluenceIndex {
     const tokenIndex = tokenByAnswerId.get(answerId);
     if (tokenIndex == null) continue;
     const linked = (Array.isArray(answer.top_context_span_ids) ? answer.top_context_span_ids : [])
-      .map((sourceIdValue): TokenSourceReading | null => {
-        const sourceId = String(sourceIdValue);
-        const source = sourceById.get(sourceId);
-        if (!source) return null;
-        const link = linkByPair.get(`${answerId}:${sourceId}`);
-        const effect = link?.effect;
-        return {
-          sourceId,
-          label: source.text,
-          effect: effect === "suppresses" || effect === "neutral" ? effect : "supports",
-          deltaNats: Number(link?.delta_nats) || 0,
-        };
-      })
+      .map((sourceIdValue) => toReading(answerId, String(sourceIdValue), linkByPair.get(`${answerId}:${sourceIdValue}`)))
       .filter((item): item is TokenSourceReading => item !== null);
     if (linked.length) tokenSources.set(tokenIndex, linked);
   }
+
+  // The secondary, honestly-labeled list: every measured link that did NOT clear the floor, read
+  // straight off the full `links` matrix (the backend's curated `top_context_span_ids` only ever
+  // contains clearing links, so a below-floor candidate is only visible here). Ranked by magnitude so
+  // the closest-to-clearing spans surface first; capped so a long context doesn't flood the inspector.
+  const observedSources = new Map<number, TokenSourceReading[]>();
+  for (const [answerId, tokenIndex] of tokenByAnswerId) {
+    const candidates = (linksByAnswerId.get(answerId) ?? [])
+      .filter((link) => toEvidenceState(link.evidence_state) === "observed")
+      .sort((a, b) => Number(b.abs_delta_nats) - Number(a.abs_delta_nats))
+      .slice(0, MAX_OBSERVED_SOURCES_PER_TOKEN)
+      .map((link) => toReading(answerId, String(link.context_span_id || ""), link))
+      .filter((item): item is TokenSourceReading => item !== null);
+    if (candidates.length) observedSources.set(tokenIndex, candidates);
+  }
+
   const totalSources = promptSourceRows.length || new Set(
     contextSources.map((source) => source.groupId || source.id),
   ).size;
@@ -551,6 +720,9 @@ function influenceIndex(body: unknown, run: JsonRecord): InfluenceIndex {
       promptTokens: promptTokenCount(run),
     },
     tokenSources,
+    observedSources,
+    method: influenceMethodFrom(influence),
+    thresholds: influenceThresholdsFrom(influence),
   };
 }
 
@@ -689,6 +861,7 @@ export async function loadRunInspection(runId: string, signal?: AbortSignal): Pr
   const tokens: TokenReading[] = tokenPieces.map((text, index) => {
     const confidence = numberAt(trace.confidence, index, Number(stepRows[index]?.confidence) || 0);
     const sources = influence.tokenSources.get(index) ?? [];
+    const observedSources = influence.observedSources.get(index) ?? [];
     const alternatives = Array.isArray(trace.alternatives)
       ? trace.alternatives[index]
       : stepRows[index]?.alternatives;
@@ -699,6 +872,7 @@ export async function loadRunInspection(runId: string, signal?: AbortSignal): Pr
       band: bands.get(index),
       source: sources[0]?.label,
       sources,
+      observedSources,
       alternatives: candidateReadings(text, confidence, alternatives),
     };
   });
@@ -721,6 +895,9 @@ export async function loadRunInspection(runId: string, signal?: AbortSignal): Pr
     sources: influence.sources,
     contextSources: influence.contextSources,
     contextCoverage: influence.coverage,
+    influenceMethod: influence.method,
+    influenceThresholds: influence.thresholds,
+    influenceAbsence: influence.absence,
     workspaceReadouts: workspaceReadouts(trace),
     configuration: runConfiguration(run),
   };
