@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.ci-report.v1",
+  "title": "clozn ci check report",
+  "description": "The report `clozn ci check` prints (--json) and writes (--report FILE), assembled by clozn.cli.commands.ci_check.run_gate (mode='baseline') or gate_experiment_result (mode='experiment') and finished by cmd_ci_check (which adds exit_code and the *_path/model fields). This schema covers only the pass/fail report clozn ci check actually writes to disk: an identity-policy refusal (exit 3) writes a separate, much smaller {refused, reason} object before any check runs, and an execution error (exit 2, e.g. an unreadable/invalid input file) never reaches a --report write at all -- neither is described here, on purpose, rather than forcing them into a shape they don't have.",
+
+  "type": "object",
+  "required": ["schema_version", "mode", "overall", "exit_code", "checks", "generated_at"],
+
+  "$defs": {
+    "check_result": {
+      "type": "object",
+      "description": "One budget check's outcome, as produced by ci_check.py's _check_golden/_check_tiny/_check_diff (mode=baseline) or gate_experiment_result's per-budget checks (mode=experiment). Only 'passed' is required -- 'ran', 'budget', 'observed', and 'worst_offenders' are present on every check kind clozn ships today, but a future check kind may honestly omit one (e.g. a check with no natural 'budget' concept) rather than null-pad it.",
+      "required": ["passed"],
+      "properties": {
+        "ran": {"type": "boolean"},
+        "passed": {"type": "boolean"},
+        "reason": {"type": ["string", "null"]},
+        "budget": {"type": ["object", "null"]},
+        "observed": {"type": ["object", "null"]},
+        "worst_offenders": {"type": "array"}
+      },
+      "additionalProperties": true
+    }
+  },
+
+  "properties": {
+    "schema_version": {"const": "clozn.ci-report.v1"},
+    "mode": {
+      "type": "string",
+      "enum": ["baseline", "experiment"],
+      "description": "'baseline': clozn ci check --baseline FILE MODEL (checks are golden/tiny/diff; identity/identity_policy/live_identity are present). 'experiment': clozn ci check --experiment RESULT.json (checks are artifact_integrity/execution_errors/target_regressions/guard_regressions/target_gains; artifact is present)."
+    },
+    "overall": {"type": "string", "enum": ["pass", "fail"]},
+    "reason": {"type": ["string", "null"]},
+    "generated_at": {"type": "string", "minLength": 1},
+    "exit_code": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "0 == overall pass, 1 == overall fail. Exit codes 2 (execution error) and 3 (identity refusal) never produce a document validated against this schema -- see the top-level description."
+    },
+    "checks": {
+      "type": "object",
+      "description": "Keyed by check name (golden/tiny/diff for mode=baseline; artifact_integrity/execution_errors/target_regressions/guard_regressions/target_gains for mode=experiment). Only enabled/applicable checks appear -- an empty object is valid (and, per ci_check.py's own contract, gates the report to overall=fail: a gate that checks nothing is a misconfiguration, not a clean pass).",
+      "additionalProperties": {"$ref": "#/$defs/check_result"}
+    },
+    "identity": {"type": "object", "description": "mode=baseline only: clozn.runs.identity.runtime_identity() of the model under test."},
+    "identity_policy": {"type": "object", "description": "mode=baseline only: pin_model policy verdict, see ci_check.identity_policy_check."},
+    "live_identity": {"type": "object", "description": "mode=baseline only: whether the model that actually answered probes matches the identity this report certifies, see ci_check.live_identity_verdict."},
+    "artifact": {"type": "object", "description": "mode=experiment only: identifying fields lifted from the gated clozn.experiment.result.v0 artifact."},
+    "baseline_path": {"type": "string", "description": "mode=baseline only."},
+    "model": {"type": "string", "description": "mode=baseline only: the resolved absolute model path."},
+    "experiment_path": {"type": "string", "description": "mode=experiment only."}
+  },
+
+  "additionalProperties": true
+}

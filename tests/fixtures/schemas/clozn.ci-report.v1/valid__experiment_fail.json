@@ -1,0 +1,63 @@
+{
+  "schema_version": "clozn.ci-report.v1",
+  "mode": "experiment",
+  "overall": "fail",
+  "reason": "budget violated: target_regressions",
+  "generated_at": "2026-07-27T12:00:00+00:00",
+  "exit_code": 1,
+  "artifact": {
+    "schema_version": "clozn.experiment.result.v0",
+    "experiment_id": "exp_fixture",
+    "name": "ci fixture",
+    "manifest_sha256": "abc123",
+    "baseline_variant": "base",
+    "candidate_variants": ["candidate"],
+    "cells": 4
+  },
+  "checks": {
+    "artifact_integrity": {
+      "ran": true,
+      "passed": true,
+      "budget": {"manifest_digest_match": true, "cell_run_id_match": true, "require_run_identity": false},
+      "observed": {"findings": 0, "identity_sha256_count_by_variant": {"base": 1, "candidate": 1}},
+      "reason": null,
+      "worst_offenders": []
+    },
+    "execution_errors": {
+      "ran": true,
+      "passed": true,
+      "budget": {"max_execution_errors": 0, "scope": "whole artifact"},
+      "observed": {"count": 0},
+      "reason": null,
+      "worst_offenders": []
+    },
+    "target_regressions": {
+      "ran": true,
+      "passed": false,
+      "budget": {"max_target_regressions": 0, "scope": "per candidate"},
+      "observed": {"by_variant": {"candidate": 1}},
+      "reason": "budget violated by variant(s): candidate",
+      "worst_offenders": [
+        {"variant": "candidate", "case": "target-case", "seed": 0,
+         "baseline_status": "pass", "candidate_status": "fail"}
+      ]
+    },
+    "guard_regressions": {
+      "ran": true,
+      "passed": true,
+      "budget": {"max_guard_regressions": 0, "scope": "per candidate"},
+      "observed": {"by_variant": {"candidate": 0}},
+      "reason": null,
+      "worst_offenders": []
+    },
+    "target_gains": {
+      "ran": true,
+      "passed": true,
+      "budget": {"min_target_gains": 0, "scope": "per candidate"},
+      "observed": {"by_variant": {"candidate": 0}},
+      "reason": null,
+      "worst_offenders": []
+    }
+  },
+  "experiment_path": "result.json"
+}

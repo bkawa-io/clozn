@@ -7,6 +7,18 @@ ROADMAP.md: "'CI' isn't CI until a pipeline can fail on it"). It supports two de
 
 Both modes print a compact report, can write a machine-readable report, and use the same exit codes.
 
+FEATURE 02 ("GitHub Action for model-change gating") ADDITIONS: the printed/written report is now
+schema-stamped and versioned as `clozn.ci-report.v1` (CI_REPORT_SCHEMA below; see
+clozn/schemas/defs/clozn.ci-report.v1.json) and validated via `_validate_report` right before it is
+printed or written anywhere. `--github-summary FILE`/`--junit-report FILE` write the two pure renderers
+in clozn/cli/ci_report_render.py -- a GitHub Actions job-summary Markdown table and a JUnit XML export --
+so an external action can `cat` them onto `$GITHUB_STEP_SUMMARY` / hand them to a JUnit-aware reporter
+without this repo taking on any GitHub-API dependency. `clozn model-lock verify FILE`
+(clozn/cli/commands/model_lock.py, clozn/models/lockfile.py) separately validates a checked-in
+`clozn.model-lock.v1` lockfile with no network access; it is not wired into this gate at all yet --
+resolving a pinned lockfile entry into a downloaded, verified local model is deferred, out-of-repo "run
+mode" work.
+
 WHY NOT `clozn.testkit.ci` -- that module (clozn/testkit/ci.py) is a DIFFERENT, pre-existing thing: a
 live suite orchestrator (Client/run_case/run_suite/diff_suites) that calls a running gateway's /v1/chat/
 completions itself and diffs two of its OWN SuiteResults. This module never generates anything and never
@@ -112,6 +124,11 @@ _DEFAULT_URL = "http://127.0.0.1:8080"
 SCHEMA_VERSION = 1
 EXPERIMENT_RESULT_SCHEMA = "clozn.experiment.result.v0"
 EXPERIMENT_STATUSES = frozenset({"pass", "fail", "error", "unscored"})
+# The schema of the REPORT `clozn ci check` prints/writes (clozn/schemas/defs/clozn.ci-report.v1.json),
+# distinct from SCHEMA_VERSION (the baseline artifact) and EXPERIMENT_RESULT_SCHEMA (the input artifact
+# --experiment gates). Stamped onto both run_gate's and gate_experiment_result's return dicts; validated
+# in cmd_ci_check right before the report is printed or written anywhere -- see _validate_report below.
+CI_REPORT_SCHEMA = "clozn.ci-report.v1"
 
 
 class CIIdentityRefusal(Exception):
@@ -508,7 +525,8 @@ def gate_experiment_result(*, result: dict, max_execution_errors: int = 0,
     }
     failed = [name for name, check in checks.items() if not check["passed"]]
     return {
-        "mode": "experiment", "overall": "fail" if failed else "pass",
+        "schema_version": CI_REPORT_SCHEMA, "mode": "experiment",
+        "overall": "fail" if failed else "pass",
         "reason": f"budget violated: {', '.join(failed)}" if failed else None,
         "artifact": {"schema_version": result.get("schema_version"),
                      "experiment_id": result.get("experiment_id"), "name": result.get("name"),
@@ -704,8 +722,11 @@ def run_gate(*, baseline: dict, model_path: str, url: str = _DEFAULT_URL,
     problem is folded into that ONE check's own FAILED-with-reason result (never raised), so the report's
     "overall" is "fail" (exit 1), not an exception -- exit 2 is reserved for `cmd_ci_check`'s own baseline-
     loading/model-resolution failures, which happen before this function is ever called. Returns:
-        {"identity": {...current...}, "identity_policy": {...}, "checks": {"golden": {...}?, "tiny": {...}?,
-         "diff": {...}?}, "overall": "pass"|"fail", "reason": str|None, "generated_at": "..."}
+        {"schema_version": CI_REPORT_SCHEMA, "mode": "baseline", "identity": {...current...},
+         "identity_policy": {...}, "checks": {"golden": {...}?, "tiny": {...}?, "diff": {...}?},
+         "overall": "pass"|"fail", "reason": str|None, "generated_at": "..."}
+    See clozn/schemas/defs/clozn.ci-report.v1.json for the schema `cmd_ci_check` validates the finished
+    report against (after it adds exit_code/baseline_path/model, which this function does not know yet).
     """
     current = _current_identity(model_path)
     pin_model = bool(baseline.get("pin_model"))
@@ -748,7 +769,8 @@ def run_gate(*, baseline: dict, model_path: str, url: str = _DEFAULT_URL,
         failed = [name for name, c in report_checks.items() if not c["passed"]]
         reason = f"budget violated: {', '.join(failed)}"
 
-    return {"identity": current, "identity_policy": policy, "live_identity": live_check,
+    return {"schema_version": CI_REPORT_SCHEMA, "mode": "baseline",
+            "identity": current, "identity_policy": policy, "live_identity": live_check,
             "checks": report_checks, "overall": "fail" if any_fail else "pass", "reason": reason,
             "generated_at": _now_iso()}
 
@@ -868,6 +890,13 @@ def add_subparser(sub):
                          "sha256 doesn't match it")
     pc.add_argument("--report", default=None, metavar="OUT.json",
                     help="also write the machine-readable report to this path")
+    pc.add_argument("--github-summary", default=None, metavar="OUT.md", dest="github_summary",
+                    help="also write a GitHub Actions job-summary Markdown render of the report to this "
+                         "path (pure function of the report, see clozn/cli/ci_report_render.py -- cat it "
+                         "onto $GITHUB_STEP_SUMMARY from the calling workflow/action)")
+    pc.add_argument("--junit-report", default=None, metavar="OUT.xml", dest="junit_report",
+                    help="also write a JUnit XML render of the report to this path (one <testcase> per "
+                         "budget check)")
     pc.add_argument("--json", action="store_true", help="print the report as JSON instead of the text summary")
     pc.add_argument("--cpu", action="store_true", help="force the CPU build for the diff check's two engines")
     pc.add_argument("--max-execution-errors", type=int, default=0,
@@ -936,6 +965,30 @@ def cmd_ci_baseline(args):
     return 0
 
 
+def _validate_report(report: dict) -> None:
+    """Validate the FULLY assembled report (exit_code/baseline_path-or-experiment_path already merged
+    in by cmd_ci_check) against `CI_REPORT_SCHEMA` before it is printed or written anywhere. Deliberately
+    does not catch its own failure: a `clozn ci check` report that does not conform to clozn's own schema
+    for it is a bug in clozn, not a user-facing condition, and must never be written to disk looking
+    valid (roadmap rule 3, no silent fallback)."""
+    from clozn import schemas
+    schemas.validate(report, CI_REPORT_SCHEMA)
+
+
+def _write_renders(report: dict, *, github_summary: str | None, junit_report: str | None) -> None:
+    """Write the optional GitHub-flavored renders. Both renderer functions (clozn/cli/ci_report_render.py)
+    are pure -- this function is the only place that touches the filesystem for them, mirroring how
+    `atomic_write_json` is the only place `--report` touches it."""
+    if github_summary:
+        from clozn.cli.ci_report_render import render_job_summary
+        with open(github_summary, "w", encoding="utf-8") as f:
+            f.write(render_job_summary(report))
+    if junit_report:
+        from clozn.cli.ci_report_render import render_junit_xml
+        with open(junit_report, "w", encoding="utf-8") as f:
+            f.write(render_junit_xml(report))
+
+
 def cmd_ci_check(args):
     """`clozn ci check --baseline <file> <model> [options]` -- see add_subparser for the full flag list
     and the module docstring for the exit-code contract. Deliberately handles its OWN error paths (rather
@@ -979,12 +1032,14 @@ def cmd_ci_check(args):
         exit_code = 0 if report["overall"] == "pass" else 1
         report["experiment_path"] = experiment_path
         report["exit_code"] = exit_code
+        _validate_report(report)
         if args.json:
             print(json.dumps(report, indent=2, default=str))
         else:
             print(format_ci_report(report))
         if args.report:
             atomic_write_json(args.report, report, indent=2, default=str)
+        _write_renders(report, github_summary=args.github_summary, junit_report=args.junit_report)
         return exit_code
 
     baseline = artifact
@@ -1021,6 +1076,7 @@ def cmd_ci_check(args):
     report["baseline_path"] = args.baseline
     report["model"] = model_path
     report["exit_code"] = exit_code
+    _validate_report(report)
 
     if args.json:
         print(json.dumps(report, indent=2, default=str))
@@ -1028,4 +1084,5 @@ def cmd_ci_check(args):
         print(format_ci_report(report))
     if args.report:
         atomic_write_json(args.report, report, indent=2, default=str)
+    _write_renders(report, github_summary=args.github_summary, junit_report=args.junit_report)
     return exit_code

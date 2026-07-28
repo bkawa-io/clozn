@@ -1,0 +1,42 @@
+{
+  "schema_version": "clozn.ci-report.v1",
+  "mode": "baseline",
+  "overall": "pass",
+  "reason": null,
+  "generated_at": "2026-07-27T12:00:00+00:00",
+  "exit_code": 0,
+  "identity": {
+    "captured_at": "2026-07-27T12:00:00+00:00",
+    "model_path": "/models/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+    "model_sha256": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9d",
+    "clozn_version": "0.1.0"
+  },
+  "identity_policy": {
+    "pin_model": false,
+    "allow_model_change": false,
+    "baseline_sha256": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9d",
+    "current_sha256": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9d",
+    "match": true,
+    "ok": true,
+    "reason": null
+  },
+  "live_identity": {
+    "state": "verified",
+    "certified_sha256": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9d",
+    "live_sha256": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9d",
+    "ok": true,
+    "reason": null
+  },
+  "checks": {
+    "golden": {
+      "ran": true,
+      "passed": true,
+      "budget": {"min_pass_rate": 0.9, "which": "all"},
+      "observed": {"n": 10, "n_correct": 9, "pass_rate": 0.9},
+      "reason": null,
+      "worst_offenders": []
+    }
+  },
+  "baseline_path": "baseline.json",
+  "model": "/models/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+}
