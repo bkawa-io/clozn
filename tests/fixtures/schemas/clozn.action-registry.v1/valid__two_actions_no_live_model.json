@@ -1,0 +1,28 @@
+{
+  "schema_version": "clozn.action-registry.v1",
+  "version": "1",
+  "actions": [
+    {
+      "id": "less-verbose",
+      "label": "More concise",
+      "description": "For this reply, answer concisely.",
+      "conflicts": [],
+      "backends": [
+        {"type": "prompt_policy", "recipe_version": "1", "parameters": {"preset": "less-verbose"}, "qualification": "generic"},
+        {"type": "control_vector", "recipe_version": "1", "parameters": {"dial": "concise"}, "qualification": "model_build_exact", "safe_bounds": {"declared_max": 1.5}},
+        {"type": "unsupported", "reason": "no sampling-policy action is implemented in this registry version"}
+      ]
+    },
+    {
+      "id": "use-context",
+      "label": "Use the provided sources",
+      "description": "Use the supplied conversation and context as the primary evidence.",
+      "conflicts": [],
+      "backends": [
+        {"type": "prompt_policy", "recipe_version": "1", "parameters": {"preset": "use-context"}, "qualification": "generic"},
+        {"type": "unsupported", "reason": "no control-vector dial exists for 'use-context'"},
+        {"type": "unsupported", "reason": "no sampling-policy action is implemented in this registry version"}
+      ]
+    }
+  ]
+}

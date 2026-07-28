@@ -196,6 +196,39 @@ def test_validate_never_raises_on_a_fully_hand_edited_junk_bundle():
     assert [(f["cue"], f["answer"]) for f in out["facts"]] == [("c2", "a2")]
 
 
+# ---- Seam 2 retrofit: the bundle IS clozn.behavior-profile.v1 (docs/SEAMS.md) -------------------
+
+def test_new_profile_and_validate_carry_the_schema_version():
+    p = P.new_profile("work")
+    assert p["schema_version"] == "clozn.behavior-profile.v1"
+    assert P.validate({"name": "work"})["schema_version"] == "clozn.behavior-profile.v1"
+
+
+def test_saved_bundle_validates_against_its_own_schema(tmp_path):
+    from clozn import schemas
+    st = mk(tmp_path)
+    p = P.new_profile("work", "strictly business")
+    p["dials"] = {"concise": 0.8}
+    p["response_policies"] = ["less-verbose"]
+    st.save(p)
+    schemas.validate(st.load("work"))     # infers the schema from the document's own schema_version
+
+
+def test_a_legacy_bundle_with_no_schema_version_still_loads_and_gets_one(tmp_path):
+    """A bundle saved before this retrofit has no `schema_version` key on disk. Loading it must not
+    reject it -- validate() setdefaults the field so an old bundle upgrades in place on next load."""
+    import json
+    st = mk(tmp_path)
+    legacy_path = os.path.join(st.root, "legacy.json")
+    os.makedirs(st.root, exist_ok=True)
+    with open(legacy_path, "w", encoding="utf-8") as f:
+        json.dump({"version": 1, "name": "legacy", "description": "", "cards": [], "dials": {},
+                   "response_policies": [], "custom_dials": [], "facts": [],
+                   "created_at": 1.0, "updated_at": 1.0}, f)
+    loaded = st.load("legacy")
+    assert loaded["schema_version"] == "clozn.behavior-profile.v1"
+
+
 def test_load_rejects_path_traversal(tmp_path):
     """load()/switch/export took an unvalidated name, so `../config` escaped the profiles dir to
     ~/.clozn/*.json. _path() now validates every name -> traversal raises ValueError (the routes turn

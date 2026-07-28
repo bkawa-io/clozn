@@ -9,9 +9,17 @@ from clozn.replay import corrective
 def test_preset_vocabulary_is_bounded_and_named():
     assert set(corrective.CORRECTION_PRESETS) == {
         "less-verbose", "more-concrete", "use-context", "ask-before-guessing",
+        "preserve-formatting", "stop-repeating",
     }
     with pytest.raises(TypeError):
         corrective.CORRECTION_PRESETS["custom"] = "unbounded instruction"
+
+
+def test_new_presets_inject_their_own_instruction():
+    messages = [{"role": "user", "content": "x"}]
+    for preset in ("preserve-formatting", "stop-repeating"):
+        injected = corrective.inject_correction(messages, preset)
+        assert corrective.CORRECTION_PRESETS[preset] in injected[0]["content"]
 
 
 def test_injection_preserves_caller_messages_and_nested_payloads():
@@ -94,3 +102,98 @@ def test_unknown_preset_fails_before_generation(monkeypatch):
             "invent-a-new-policy",
             object(),
         )
+
+
+def test_invalid_backend_value_raises(monkeypatch):
+    monkeypatch.setattr(corrective, "replay_run", lambda *_: pytest.fail("must not generate"))
+    with pytest.raises(ValueError, match="backend must be"):
+        corrective.retry_compare(
+            {"id": "run-parent", "messages": [{"role": "user", "content": "x"}]},
+            "less-verbose", object(), backend="not-a-real-backend",
+        )
+
+
+class _FakeCalibratedSteer:
+    def __init__(self, table):
+        self._table = table
+
+    def ceiling_for(self, name):
+        return self._table.get(name, (0.6, False))
+
+
+class _FakeSub:
+    def __init__(self, steer):
+        self.steer = steer
+
+
+def test_control_vector_backend_applies_the_calibrated_dial(monkeypatch):
+    """backend="control_vector" on a calibrated model routes through replay's OWN
+    behavior_overrides/snapshot-restore mechanism (clozn/replay/replay.py) -- no prompt text at all
+    for the corrected arm -- and the return value is honestly labeled, not disguised as a preset."""
+    run = {"id": "run-parent", "messages": [{"role": "user", "content": "Explain it"}]}
+    calls = []
+
+    def fake_replay(arm_run, changes, actual_sub, **kwargs):
+        calls.append(deepcopy(changes))
+        index = len(calls)
+        if index == 1:
+            return {"id": "run-child-1", "response": "long answer"}
+        return {"id": "run-child-2", "response": "short",
+                "behavior": {"active_dials": {"concise": 0.804}}}
+
+    monkeypatch.setattr(corrective, "replay_run", fake_replay)
+    sub = _FakeSub(_FakeCalibratedSteer({"concise": (1.2, True)}))
+    result = corrective.retry_compare(run, "less-verbose", sub, backend="control_vector")
+
+    assert calls[1]["behavior_overrides"] == {"concise": 0.804}
+    assert calls[1]["corrective_retry"]["method"] == "control_vector"
+    assert "instruction" not in calls[1]["corrective_retry"]
+    assert result["backend"] == "control_vector"
+    assert result["backend_fallback"] is False
+    assert result["intervention_observed"] is True
+    ident = result["execution_identity"]["ext"]["behavior_intervention"]
+    assert ident["backend"] == "control_vector"
+    assert ident["qualification"] == "model_build_exact"
+    assert ident["qualified"] is True
+    assert ident["parameters"] == {"dial": "concise", "strength": 0.804}
+
+
+def test_control_vector_falls_back_to_prompt_policy_when_uncalibrated(monkeypatch):
+    """No calibration for THIS exact model (e959477's fail-closed contract) -> honest fallback, never
+    a silent prompt-policy substitution presented as control_vector."""
+    run = {"id": "run-parent", "messages": [{"role": "user", "content": "Explain it"}]}
+
+    def fake_replay(arm_run, changes, actual_sub, **kwargs):
+        return {"id": f"run-child-{len(calls_seen)}", "response": "reply"}
+    calls_seen = []
+    monkeypatch.setattr(corrective, "replay_run",
+                        lambda *a, **k: (calls_seen.append(1), fake_replay(*a, **k))[1])
+
+    sub = _FakeSub(_FakeCalibratedSteer({}))              # ceiling_for -> (0.6, False): uncalibrated
+    result = corrective.retry_compare(run, "less-verbose", sub, backend="control_vector")
+
+    assert result["backend"] == "prompt_policy"
+    assert result["backend_fallback"] is True
+    assert result["execution_identity"]["ext"]["behavior_intervention"]["fallback"] is True
+
+
+def test_control_vector_falls_back_for_an_action_with_no_matching_dial(monkeypatch):
+    run = {"id": "run-parent", "messages": [{"role": "user", "content": "x"}]}
+    monkeypatch.setattr(corrective, "replay_run",
+                        lambda *a, **k: {"id": "c", "response": "r"})
+    sub = _FakeSub(_FakeCalibratedSteer({"concise": (1.2, True)}))
+    result = corrective.retry_compare(run, "use-context", sub, backend="control_vector")
+    assert result["backend"] == "prompt_policy"
+    assert result["backend_fallback"] is True
+
+
+def test_default_backend_is_prompt_policy_even_with_a_calibrated_steer(monkeypatch):
+    """The spec: raw dials must never be the default interaction. Omitting `backend` must NOT
+    silently prefer control_vector just because the loaded model happens to be calibrated."""
+    run = {"id": "run-parent", "messages": [{"role": "user", "content": "x"}]}
+    monkeypatch.setattr(corrective, "replay_run",
+                        lambda *a, **k: {"id": "c", "response": "r"})
+    sub = _FakeSub(_FakeCalibratedSteer({"concise": (1.2, True)}))
+    result = corrective.retry_compare(run, "less-verbose", sub)
+    assert result["backend"] == "prompt_policy"
+    assert result["backend_fallback"] is False

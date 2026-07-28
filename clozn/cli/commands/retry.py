@@ -11,6 +11,8 @@ _FLAG_TO_PRESET = {
     "more_concrete": "more-concrete",
     "use_context": "use-context",
     "ask_before_guessing": "ask-before-guessing",
+    "preserve_formatting": "preserve-formatting",
+    "stop_repeating": "stop-repeating",
 }
 
 
@@ -23,6 +25,8 @@ def add_subparser(sub):
     repairs.add_argument("--more-concrete", action="store_true")
     repairs.add_argument("--use-context", action="store_true")
     repairs.add_argument("--ask-before-guessing", action="store_true")
+    repairs.add_argument("--preserve-formatting", action="store_true")
+    repairs.add_argument("--stop-repeating", action="store_true")
     parser.add_argument("--scope", choices=("once", "session", "profile"), default="once",
                         help="how long the correction stays active (default once)")
     parser.add_argument("--port", type=int, default=0, help="Clozn gateway port (default 8080)")
@@ -109,7 +113,7 @@ def cmd_retry(args):
     if not preset:
         raise ctx.CloznError(
             "choose one correction: --less-verbose, --more-concrete, --use-context, "
-            "or --ask-before-guessing"
+            "--ask-before-guessing, --preserve-formatting, or --stop-repeating"
         )
     result = _post(port, f"/runs/{_last_organic_id()}/retry",
                    {"preset": preset, "scope": args.scope})

@@ -1,0 +1,25 @@
+{
+  "schema_version": "clozn.action-registry.v1",
+  "version": "1",
+  "actions": [
+    {
+      "id": "more-concrete",
+      "label": "More concrete",
+      "description": "For this reply, use specific examples, named steps, and concrete details.",
+      "conflicts": [],
+      "evaluation_metrics": ["word_count_delta", "coherence"],
+      "backends": [
+        {"type": "prompt_policy", "recipe_version": "1", "parameters": {"preset": "more-concrete"}, "qualification": "generic"},
+        {
+          "type": "control_vector",
+          "recipe_version": "1",
+          "parameters": {"dial": "concrete"},
+          "qualification": "model_build_exact",
+          "qualified": true,
+          "safe_bounds": {"declared_max": 0.5, "enforced_ceiling": 0.5}
+        },
+        {"type": "unsupported", "reason": "no sampling-policy action is implemented in this registry version"}
+      ]
+    }
+  ]
+}
