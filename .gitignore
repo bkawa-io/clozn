@@ -60,3 +60,6 @@ CLAUDE.md
 /notes/
 research/np_labels_l15.json
 research/np_stats_l15.json
+
+# Studio SSR smoke-render build output (scripts/smoke-render.mjs)
+studio-frontend/.smoke/

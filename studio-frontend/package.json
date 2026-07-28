@@ -6,8 +6,9 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "pnpm check:copy && tsc -b && vite build",
-    "check": "pnpm check:copy && tsc -b --pretty false",
+    "check": "pnpm check:copy && tsc -b --pretty false && pnpm smoke",
     "check:copy": "node scripts/check-copy.mjs",
+    "smoke": "vite build --ssr scripts/smoke-render.mjs --outDir .smoke --logLevel warn && node .smoke/smoke-render.js",
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {

@@ -94,6 +94,18 @@
   background: color-mix(in srgb, var(--panel-raised) 58%, transparent);
 }
 
+/* A panel that failed to load. Rendered by App.tsx from panelRegistry.loadFailures so a broken surface
+   is VISIBLE rather than silently missing from the rail -- the frontend counterpart to the Python
+   autoloaders' LOAD_FAILURES. Not interactive: there is nothing to navigate to. The hover title carries
+   the reason. In normal operation this never renders; the SSR smoke check asserts it is absent. */
+.rail-item.is-failed {
+  color: var(--signal-rose, #e07a96);
+  border-color: color-mix(in srgb, var(--signal-rose, #e07a96) 40%, var(--line));
+  border-style: dashed;
+  cursor: help;
+  opacity: .8;
+}
+
 .rail-item.is-active {
   color: var(--ink);
   border-color: color-mix(in srgb, var(--signal-violet) 44%, var(--line));

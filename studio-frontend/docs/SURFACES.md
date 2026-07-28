@@ -100,3 +100,112 @@ Runs → Lens or Model Scope → select token → fork → Compare
                                   │
                                   └─ Behavior, when the change is an intervention rather than a fork
 ```
+
+---
+
+# Adding a surface
+
+The sections above define what each surface *owns*. This section is the mechanics of adding one.
+
+Two seams, matching the pattern in the repo-root `docs/SEAMS.md`: discover by walking the filesystem,
+opt in by an explicit export, keep failures visible. `App.tsx` is not edited for either.
+
+## Seam A — a new top-level surface
+
+Create `src/panels/<id>.tsx` with a default export:
+
+```tsx
+import type { PanelContext, StudioPanel } from "./types";
+
+const panel: StudioPanel = {
+  id: "experiments",           // MUST equal the filename
+  navLabel: "Experiments",
+  order: 70,                   // nav position; the existing surfaces are 10..60
+  icon: () => <svg viewBox="0 0 24 24">…</svg>,
+  match: (hash) => (/^#\/experiments\/?$/.test(hash) ? {} : null),
+  routeName: () => "EXPERIMENTS",
+  Component: ({ runtime, inspectorOpen, params }: PanelContext) => <Experiments … />,
+};
+
+export default panel;
+```
+
+**`id` must equal the filename.** The registry rejects a mismatch, for the same reason `clozn/schemas/`
+requires a schema's filename to equal its `schema_version`: otherwise a deep link and a nav entry can
+disagree about which panel owns a route.
+
+**`match()` returns `{}` on a bare match, never a falsy value.** `null` means "not my route"; returning
+something falsy on a real match makes the panel unreachable.
+
+**Anchor your patterns.** Panels are tried in `order`, but do not lean on it — `lens` sorts before
+`scope` and would happily swallow `#/runs/<id>/scope` if its regex were not end-anchored.
+
+An unknown hash falls back to the lowest-ordered panel (Runs), preserving the old router's behavior.
+
+A panel whose module fails to load, or whose default export is malformed, appears in the rail as a
+visible `<id> failed to load` placeholder rather than silently vanishing.
+
+### Topbar content
+
+Content derivable from `PanelContext` goes in the optional `topStats` / `modeChip` fields.
+
+Content derived from the panel's **own internal state** cannot — App cannot see inside a panel, and the
+whole point of the seam is that it no longer tries. Use the hook, from inside your component:
+
+```tsx
+useTopbar(() => ({ stats: <span className="top-stat"><b>RUN</b>{id}</span>, modeChip: "LOADING" }),
+          [id, status]);
+```
+
+The factory-plus-deps shape is deliberate: JSX allocates a new element object every render, so a hook
+taking nodes directly would set state on every render forever. Published content wins over the static
+fields and is cleared on unmount. `src/panels/scope.tsx` is the worked example — it is the surface whose
+run id, model, and fork/load status used to live in `App.tsx` as `route.kind === "scope" && …` branches.
+
+## Seam B — a sub-panel inside someone else's surface
+
+Create `src/slots/<slot>/<id>.tsx`:
+
+```tsx
+const panel: SlotPanel<LensData> = {
+  id: "context-receipt",
+  slot: "lens.evidence",
+  title: "What the model saw",
+  order: 20,
+  Component: ({ data }) => <ContextReceipt run={data.run} />,
+};
+
+export default panel;
+```
+
+The host renders `<SlotHost slot="lens.evidence" data={…} />`. Each panel gets an error boundary, so a
+throw costs that card and nothing else — which is what makes it safe for a host to expose a slot to code
+it does not own.
+
+**Slot names and their `data` shape are the host's contract.** Whoever owns the host page documents them
+in the table below. `SlotHost` owns the mechanism, never the vocabulary.
+
+### Registered slots
+
+| slot | host | `data` | notes |
+|---|---|---|---|
+| _(none yet)_ | | | the first host to expose one documents it here |
+
+## Verification
+
+```
+pnpm check      # copy check + tsc + smoke render
+pnpm smoke      # just the smoke render
+```
+
+`scripts/smoke-render.mjs` server-renders every route under Node and asserts each one resolves to the
+intended panel and mounts without throwing. It exists because `tsc` and `vite build` both pass happily
+on an app that crashes on mount, and opening a browser was previously the only way to find out.
+
+**It is not a substitute for looking at the thing.** Effects do not run under `renderToString`, so data
+loading, `useTopbar` publication, and everything after first paint are not covered, and it says nothing
+about layout, CSS, or theming. It covers the module graph, the registry, route resolution, and first
+render — most of what a routing change can break, and none of what a design change can.
+
+Add your route to `ROUTES` in that file when you add a panel. That list is hardcoded on purpose:
+deriving it from the registry would make the assertion vacuous.
