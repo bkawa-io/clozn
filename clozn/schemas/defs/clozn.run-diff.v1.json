@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.run-diff.v1",
+  "title": "Structured diff between two recorded runs",
+  "description": "clozn.analysis.run_diff.compare_runs()'s output: what changed between run_a and run_b across identity, context, generation settings, and output. `differences` is exhaustive over every dimension the differ actually examined -- a dimension both runs agreed on is simply absent, never emitted as a no-op entry. `differences[].rank` is a PRESENTATION-ONLY sort key (a static priority over dimension categories, documented in `ranking`) and is structurally separate from `findings[]`: rank never appears on a finding, and a finding's `status` never appears on a difference. `findings[].status` is the only evidence-strength field in this document and is capped at 'observed'/'correlated' unless a controlled replay actually demonstrates causation ('causally_supported'). Differences under an `identity.ext.<namespace>` this differ has never seen (a facet owned by a feature it does not know about) appear only in `differences`, never folded into a `findings[]` classification -- a differ with no semantic model of a facet has no business claiming it explains anything.",
+
+  "type": "object",
+  "required": ["schema_version", "run_a", "run_b", "differences", "findings"],
+  "properties": {
+    "schema_version": {"const": "clozn.run-diff.v1"},
+    "run_a": {"type": "string", "minLength": 1},
+    "run_b": {"type": "string", "minLength": 1},
+    "generated_at": {
+      "type": "string",
+      "description": "ISO-8601 UTC timestamp of when this comparison was computed (not when either run happened)."
+    },
+    "differences": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/difference"}
+    },
+    "findings": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/finding"}
+    },
+    "ranking": {
+      "type": "object",
+      "description": "Documents the static category order used to assign differences[].rank -- not a scoring function computed from this run pair's actual behavior, just the named constant so a reader (or a future replay result) can see and contest it.",
+      "properties": {
+        "order": {"type": "array", "items": {"type": "string"}},
+        "note": {"type": "string"}
+      }
+    },
+    "privacy_limited": {
+      "type": "boolean",
+      "description": "True when at least one dimension could only be compared by hash/token-count because full content was unavailable on one or both runs (a legacy/light-capture-tier run, or -- once feature 06 ships graduated privacy modes -- a restrictive retention policy). Never a reason to omit the dimension; see each such difference's own note."
+    }
+  },
+
+  "$defs": {
+    "difference": {
+      "type": "object",
+      "required": ["dimension", "kind", "rank", "evidence"],
+      "properties": {
+        "dimension": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Dot-path identifying what was compared, e.g. 'identity.model_sha256' or 'identity.ext.adapter.strength'. Namespaces under identity.ext are contributed by identity_providers this differ does not know the meaning of -- their dimension strings are still well-formed dot-paths, just not ones this schema enumerates."
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["added", "removed", "changed", "unavailable", "diff_failed"],
+          "description": "'unavailable' means the dimension could not be honestly compared (missing evidence on one or both sides, not a same-value match). 'diff_failed' means comparing this one dimension raised -- isolated to this entry, never the whole document."
+        },
+        "value_a": {"description": "Any JSON value, or absent when run_a did not carry this dimension."},
+        "value_b": {"description": "Any JSON value, or absent when run_b did not carry this dimension."},
+        "rank": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Presentation-only sort position from the static category order in `ranking.order` (lower sorts first / 'more likely to matter'). Never an evidence-strength claim -- see the schema description."
+        },
+        "evidence": {
+          "type": "array",
+          "description": "Supporting detail for this one difference (e.g. an embedded model_diff.diff_runs() fragment for an output-dimension entry). Empty array, never omitted, when there is nothing beyond value_a/value_b."
+        },
+        "note": {
+          "type": "string",
+          "description": "Free-text honesty caveat for this entry, e.g. why it is 'unavailable' or what a diff_failed exception was."
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "required": ["classification", "status", "summary"],
+      "properties": {
+        "classification": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A short machine-stable label, e.g. 'model_changed', 'context_omission', 'output_truncated', 'tool_parse_failed'."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["observed", "eliminated", "reproduced", "correlated", "causally_supported"],
+          "description": "The roadmap's evidence-before-narration vocabulary. Without a replay, the strongest allowed value is 'observed' or 'correlated' -- 'causally_supported' requires an intervention (see the replay planner)."
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "One human-readable sentence derived from the dimensions below, e.g. 'The model changed.' Never contains a claim stronger than `status`."
+        },
+        "dimensions": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Which differences[].dimension entries this finding was derived from, so a reader can trace the claim back to raw evidence."
+        }
+      }
+    }
+  }
+}

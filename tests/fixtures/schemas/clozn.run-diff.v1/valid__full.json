@@ -1,0 +1,59 @@
+{
+  "schema_version": "clozn.run-diff.v1",
+  "run_a": "run_0000000000001_aaaaaa",
+  "run_b": "run_0000000000002_bbbbbb",
+  "generated_at": "2026-07-27T12:00:00+00:00",
+  "privacy_limited": false,
+  "ranking": {
+    "order": ["identity.model_sha256", "identity.template_fingerprint", "generation", "context", "output", "identity.ext"],
+    "note": "presentation-only sort key; never an evidence-strength claim"
+  },
+  "differences": [
+    {
+      "dimension": "identity.model_sha256",
+      "kind": "changed",
+      "value_a": "aaaa000000000000000000000000000000000000000000000000000000000000",
+      "value_b": "bbbb000000000000000000000000000000000000000000000000000000000000",
+      "rank": 0,
+      "evidence": []
+    },
+    {
+      "dimension": "identity.ext.adapter.strength",
+      "kind": "changed",
+      "value_a": 0.5,
+      "value_b": 0.8,
+      "rank": 90,
+      "evidence": [],
+      "note": "namespace contributed by a facet this differ does not interpret"
+    },
+    {
+      "dimension": "context.delivered.messages.count",
+      "kind": "changed",
+      "value_a": 6,
+      "value_b": 2,
+      "rank": 30,
+      "evidence": []
+    },
+    {
+      "dimension": "output.tool_call.status",
+      "kind": "unavailable",
+      "rank": 40,
+      "evidence": [],
+      "note": "neither run carried an output_contract"
+    }
+  ],
+  "findings": [
+    {
+      "classification": "model_changed",
+      "status": "observed",
+      "summary": "The model changed between run_a and run_b.",
+      "dimensions": ["identity.model_sha256"]
+    },
+    {
+      "classification": "context_omission",
+      "status": "observed",
+      "summary": "Four fewer messages were delivered in run_b than in run_a.",
+      "dimensions": ["context.delivered.messages.count"]
+    }
+  ]
+}

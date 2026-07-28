@@ -1,0 +1,7 @@
+{
+  "schema_version": "clozn.run-diff.v2",
+  "run_a": "run_0000000000001_aaaaaa",
+  "run_b": "run_0000000000002_bbbbbb",
+  "differences": [],
+  "findings": []
+}
