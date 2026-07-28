@@ -25,6 +25,13 @@ def add_subparser(sub):
     run.add_argument("--url", default=suite.DEFAULT_URL, help="default Clozn gateway URL (default :8080)")
     run.add_argument("--seeds", type=int, default=None, help="override the manifest with seeds 0..N-1")
     run.add_argument("--out", default=None, help="result path (default ~/.clozn/experiments/<id>.json)")
+    run.add_argument("--vcs-repository", help="explicit repository identity to record; never inferred")
+    run.add_argument("--vcs-commit", help="explicit commit/revision to record; never inferred")
+    run.add_argument("--vcs-branch", help="explicit branch to record; never inferred")
+    run.add_argument("--workflow-url", help="explicit workflow URL to record")
+    run.add_argument("--artifact-url", help="explicit artifact URL to record")
+    run.add_argument("--artifact-expires-at", help="explicit artifact-link expiry timestamp")
+    run.add_argument("--local-open-command", help="explicit local command for opening the stored artifact")
     run.add_argument("--json", action="store_true", help="print the full result JSON")
     run.set_defaults(fn=cmd_run)
 
@@ -81,7 +88,25 @@ def _no_command(_args):
 def cmd_run(args):
     try:
         manifest = suite.load_manifest(args.manifest)
-        result = suite.run_manifest(manifest, default_url=args.url, seeds_override=args.seeds)
+        vcs = {
+            field: value for field, value in (
+                ("repository", getattr(args, "vcs_repository", None)),
+                ("commit", getattr(args, "vcs_commit", None)),
+                ("branch", getattr(args, "vcs_branch", None)),
+            ) if value
+        } or None
+        provenance = {
+            field: value for field, value in (
+                ("workflow_url", getattr(args, "workflow_url", None)),
+                ("artifact_url", getattr(args, "artifact_url", None)),
+                ("expires_at", getattr(args, "artifact_expires_at", None)),
+                ("local_open_command", getattr(args, "local_open_command", None)),
+            ) if value
+        } or None
+        result = suite.run_manifest(
+            manifest, default_url=args.url, seeds_override=args.seeds,
+            vcs=vcs, artifact_provenance=provenance,
+        )
     except suite.ManifestError as exc:
         raise CloznError(str(exc)) from exc
     path = args.out or suite.default_result_path(result)

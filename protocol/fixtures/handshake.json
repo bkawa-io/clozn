@@ -21,7 +21,8 @@
     "readout",
     "attn_knockout",
     "lora",
-    "score_arms"
+    "score_arms",
+    "performance_timing"
   ],
   "stream_frame_envelope": [
     "req",

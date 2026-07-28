@@ -1,0 +1,32 @@
+{
+  "schema_version": "clozn.adapter-export-suite.v1",
+  "suite_id": "adapter-export-smoke",
+  "seeds": [0],
+  "max_tokens": 64,
+  "topk": 8,
+  "budgets": {
+    "max_argmax_flips": 0,
+    "max_mean_abs_delta_nats": 0.02,
+    "max_unknown_positions": 0
+  },
+  "cases": [
+    {
+      "id": "factual-format",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Name the capital of France in one short sentence."
+        }
+      ]
+    },
+    {
+      "id": "structured-list",
+      "messages": [
+        {
+          "role": "user",
+          "content": "List the first three prime numbers, one per line."
+        }
+      ]
+    }
+  ]
+}

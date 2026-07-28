@@ -117,6 +117,15 @@ def test_finish_reason_from_gen_finished_event():
     assert runlog.finish_reason_from_frames([{"type": "gen_finished", "reason": "steps_exhausted"}]) == "length"
 
 
+def test_raw_worker_finish_reason_is_preserved_before_openai_normalization():
+    frames = [
+        {"type": "gen_finished", "reason": "steps_exhausted"},
+        {"choices": [{"finish_reason": "length"}]},
+    ]
+    assert runlog.finish_reason_from_frames(frames) == "length"
+    assert runlog.raw_finish_reason_from_frames(frames) == "steps_exhausted"
+
+
 def test_generation_timing_from_worker_terminal_event():
     frames = [{"type": "gen_finished", "new_tokens": 17, "wall_ms": 425.5,
                "steps_total": 18, "tok_per_s": 40.0, "reason": "eos"}]

@@ -6,16 +6,15 @@ The design docs, indexed. Read top-down: the synthesis first, then the per-layer
 
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — the synthesis: one product, the layers, the
   state-stream protocol, the interp maturity ladder. *How the whole thing fits.*
+- **[CAPABILITIES.md](CAPABILITIES.md)** — the single current matrix for merged, released,
+  qualified, and limited capabilities.
 - **[ROADMAP.md](ROADMAP.md)** — the consolidated map: what's done, the v1 cut, what's next.
 
 ## Per-layer design
 
-- **[DESIGN.md](DESIGN.md)** — the **engine** runtime architecture (scheduler §5, the L0 ggml
-  adapter, the KV-cache tiers, the white-box taps). The deep "how the runtime works"; the
-  engine code's `DESIGN §x` references point here. *(Written when the engine was the standalone
-  `cloze` repo — read "cloze" as "the engine layer.")*
-- **[TECHNICAL.md](TECHNICAL.md)** — the honest engineering account of the engine: what's fast,
-  what it cost in quality, the measurements behind every claim.
+- **[DESIGN.md](DESIGN.md)** — historical diffusion-engine design. It explains old scheduler and
+  kernel references but is not a current-user product contract.
+- **[TECHNICAL.md](TECHNICAL.md)** — archived diffusion research measurements and engineering notes.
 - **[STUDIO.md](STUDIO.md)** — the studio UI: pages, panels, and what each surface shows.
 - **[MODEL_SUPPORT.md](MODEL_SUPPORT.md)** — which model families run, and on which paths.
 - **[WORKSPACE_LENS.md](WORKSPACE_LENS.md)** — the J-lens: how it's fitted, what it can and

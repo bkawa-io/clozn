@@ -15,6 +15,7 @@ import math
 import os
 import time
 import urllib.error
+from urllib.parse import urlsplit
 import urllib.request
 import uuid
 
@@ -23,6 +24,7 @@ from clozn.testkit import ci as testkit_ci
 
 MANIFEST_SCHEMA = "clozn.experiment.v0"
 RESULT_SCHEMA = "clozn.experiment.result.v0"
+FINGERPRINT_ALGORITHM = "canonical-json-v1"
 VARIANT_KINDS = frozenset({"base", "tuned", "quant", "prompt", "dial"})
 DEFAULT_URL = "http://127.0.0.1:8080"
 # Phase 4.4 (docs/PRODUCT_ROADMAP.md §7 item 4, "statistical rigor + evidence labels as product"): the one
@@ -169,6 +171,94 @@ def _manifest_digest(manifest: dict) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+_SEMANTIC_DEFAULT_FIELDS = (
+    "max_tokens", "temperature", "top_p", "top_k", "repeat_penalty",
+)
+_SEMANTIC_VARIANT_FIELDS = (
+    "name", "kind", "system_prompt", "prompt_prefix", "prompt_suffix",
+    "dials", "max_tokens", "temperature", "top_p", "top_k", "repeat_penalty",
+)
+_SEMANTIC_CASE_FIELDS = ("name", "prompt", "messages", "expect", "prove")
+
+
+def _selected_fields(value: dict, fields: tuple[str, ...]) -> dict:
+    return {field: copy.deepcopy(value[field]) for field in fields if field in value}
+
+
+def suite_fingerprint(raw_manifest: dict, *, seeds: list[int] | None = None) -> dict:
+    """Return the versioned behavior identity shared by results, trends, CI, and cache keys.
+
+    The material is intentionally narrower than ``manifest_sha256``.  It includes generation and
+    scoring semantics, but excludes transport/storage and subject identity facts such as ``base_url``,
+    model paths, timestamps, run IDs, and absolute paths. Model/adapter/build identity belongs on each
+    trend point; excluding it here is what permits one suite to trend across those versions. Case and
+    variant arrays are sorted by their unique names and seeds are sorted, so JSON key/array presentation
+    changes do not split otherwise-compatible history.
+    Message order is retained because it changes model behavior.
+    """
+    manifest = validate_manifest(raw_manifest)
+    effective_seeds = manifest["seeds"] if seeds is None else seeds
+    if (not isinstance(effective_seeds, list) or not effective_seeds
+            or any(not isinstance(seed, int) or isinstance(seed, bool) for seed in effective_seeds)
+            or len(set(effective_seeds)) != len(effective_seeds)):
+        raise ManifestError("fingerprint seeds must be a non-empty list of unique integers")
+
+    material = {
+        "schema_version": manifest["schema_version"],
+        "seeds": sorted(effective_seeds),
+        "baseline_variant": manifest["baseline_variant"],
+        "defaults": _selected_fields(manifest["defaults"], _SEMANTIC_DEFAULT_FIELDS),
+        "variants": sorted(
+            (_selected_fields(variant, _SEMANTIC_VARIANT_FIELDS)
+             for variant in manifest["variants"]),
+            key=lambda variant: variant["name"],
+        ),
+        "suites": {
+            role: sorted(
+                (_selected_fields(case, _SEMANTIC_CASE_FIELDS)
+                 for case in manifest["suites"][role]["cases"]),
+                key=lambda case: case["name"],
+            )
+            for role in ("target", "guard")
+        },
+    }
+    if manifest.get("primary_metric") is not None:
+        material["primary_metric"] = copy.deepcopy(manifest["primary_metric"])
+    encoded = json.dumps(
+        material, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False,
+    ).encode("utf-8")
+    return {"algorithm": FINGERPRINT_ALGORITHM, "sha256": hashlib.sha256(encoded).hexdigest()}
+
+
+def result_fingerprint(result: dict) -> dict:
+    """Return and verify a result's fingerprint, deriving it for legacy artifacts."""
+    expected = suite_fingerprint(result.get("manifest"), seeds=result.get("seeds"))
+    claimed = result.get("suite_fingerprint")
+    if claimed is None:
+        return expected
+    if claimed != expected:
+        raise ManifestError("experiment result suite_fingerprint does not match behavior-bearing content")
+    return copy.deepcopy(claimed)
+
+
+def _explicit_metadata(value, *, label: str, fields: tuple[str, ...]) -> dict | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or not value:
+        raise ManifestError(f"{label} must be a non-empty object when supplied")
+    unknown = sorted(set(value) - set(fields))
+    if unknown:
+        raise ManifestError(f"{label} has unsupported fields: {unknown!r}")
+    out = {}
+    for field, item in value.items():
+        out[field] = _nonempty(item, f"{label}.{field}")
+        if field in ("workflow_url", "artifact_url"):
+            parsed = urlsplit(out[field])
+            if parsed.scheme not in ("http", "https") or not parsed.netloc:
+                raise ManifestError(f"{label}.{field} must be an explicit HTTP(S) URL")
+    return out
+
+
 def _coordinate(cell: dict) -> tuple:
     return (cell.get("suite"), cell.get("case"), cell.get("variant"), cell.get("seed"))
 
@@ -211,6 +301,14 @@ def validate_result(raw: dict) -> dict:
             or any(not isinstance(seed, int) or isinstance(seed, bool) for seed in seeds)
             or len(set(seeds)) != len(seeds)):
         raise ManifestError("experiment result seeds must be a non-empty list of unique integers")
+    result_fingerprint(result)
+    _explicit_metadata(
+        result.get("vcs"), label="vcs", fields=("repository", "commit", "branch"),
+    )
+    _explicit_metadata(
+        result.get("artifact_provenance"), label="artifact_provenance",
+        fields=("workflow_url", "artifact_url", "local_open_command", "expires_at"),
+    )
 
     cells = result.get("cells")
     if not isinstance(cells, list):
@@ -409,7 +507,8 @@ def _summarize(cells: list, baseline: str, variant_names: list[str]) -> dict:
 
 
 def run_manifest(raw_manifest: dict, *, default_url: str = DEFAULT_URL, seeds_override: int | None = None,
-                 client_factory=ExperimentClient) -> dict:
+                 client_factory=ExperimentClient, vcs: dict | None = None,
+                 artifact_provenance: dict | None = None) -> dict:
     manifest = validate_manifest(raw_manifest)
     seeds = list(range(seeds_override)) if seeds_override is not None else manifest["seeds"]
     if not seeds:
@@ -457,10 +556,26 @@ def run_manifest(raw_manifest: dict, *, default_url: str = DEFAULT_URL, seeds_ov
                     for seed in seeds:
                         cells.append(_cell_error(suite_name, case, variant, seed, exc))
 
-    return {"schema_version": RESULT_SCHEMA, "experiment_id": experiment_id, "name": manifest["name"],
-            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "manifest_sha256": digest, "manifest": manifest, "seeds": seeds, "cells": cells,
-            "summary": _summarize(cells, manifest["baseline_variant"], [v["name"] for v in manifest["variants"]])}
+    result = {
+        "schema_version": RESULT_SCHEMA, "experiment_id": experiment_id, "name": manifest["name"],
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "manifest_sha256": digest, "manifest": manifest, "seeds": seeds, "cells": cells,
+        "suite_fingerprint": suite_fingerprint(manifest, seeds=seeds),
+        "summary": _summarize(
+            cells, manifest["baseline_variant"], [v["name"] for v in manifest["variants"]]),
+    }
+    explicit_vcs = _explicit_metadata(
+        vcs, label="vcs", fields=("repository", "commit", "branch"),
+    )
+    explicit_provenance = _explicit_metadata(
+        artifact_provenance, label="artifact_provenance",
+        fields=("workflow_url", "artifact_url", "local_open_command", "expires_at"),
+    )
+    if explicit_vcs is not None:
+        result["vcs"] = explicit_vcs
+    if explicit_provenance is not None:
+        result["artifact_provenance"] = explicit_provenance
+    return result
 
 
 def results_directory() -> str:

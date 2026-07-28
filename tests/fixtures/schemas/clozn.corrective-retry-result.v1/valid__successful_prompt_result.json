@@ -1,0 +1,41 @@
+{
+  "schema_version": "clozn.corrective-retry-result.v1",
+  "result_id": "fix_result_0123456789abcdef0123",
+  "created_ts": 100,
+  "parent_run_id": "run_parent",
+  "preview_id": "fix_preview_0123456789abcdef0123",
+  "action": {
+    "id": "less-verbose",
+    "label": "More concise",
+    "description": "Answer concisely."
+  },
+  "user_intent": {"action_id": "less-verbose"},
+  "execution": {
+    "requested_backend": "prompt_policy",
+    "executed_backend": "prompt_policy",
+    "fallback": false,
+    "qualification": "generic",
+    "qualification_id": "clozn.prompt-policy.generic.v1",
+    "identity": {}
+  },
+  "children": {
+    "baseline": {"status": "success", "run_id": "run_baseline"},
+    "corrected": {"status": "success", "run_id": "run_corrected"}
+  },
+  "comparison": {
+    "stored_original_reply": "Stored",
+    "baseline_reply": "Baseline",
+    "corrected_reply": "Corrected",
+    "note": "Matched greedy comparison.",
+    "changed": true
+  },
+  "metrics": {"word_delta": -1},
+  "coherence": {"degenerate": false},
+  "intervention_observed": true,
+  "scope_eligibility": [
+    {"scope": "once", "available": true, "target": "run_parent", "prior_hash": "abc"},
+    {"scope": "session", "available": false, "unavailability_reason": "no session"},
+    {"scope": "profile", "available": false, "unavailability_reason": "no profile"}
+  ],
+  "outcome": {"status": "succeeded"}
+}

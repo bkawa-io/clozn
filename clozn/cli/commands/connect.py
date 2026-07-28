@@ -83,7 +83,10 @@ def render_aider_config(existing: str, *, base_url: str, model: str,
 
 
 def configure_aider(path: Path, *, base_url: str, model: str, api_key: str,
-                    state_path: Path, dry_run: bool = False, now=None) -> dict:
+                    state_path: Path, dry_run: bool = False, now=None,
+                    expected_prior_exists: bool | None = None,
+                    expected_prior_sha256: str | None = None,
+                    expected_after_sha256: str | None = None) -> dict:
     """Plan or apply one conservative Aider YAML update with backup-before-write."""
     path = Path(os.path.abspath(path.expanduser()))
     if path.is_symlink():
@@ -96,13 +99,25 @@ def configure_aider(path: Path, *, base_url: str, model: str, api_key: str,
         existing = existing_bytes.decode("utf-8")
     except UnicodeDecodeError:
         raise ValueError(f"config is not UTF-8 and was left unchanged: {path}") from None
+    prior_sha256 = _sha256_bytes(existing_bytes) if existed else None
+    if expected_prior_exists is not None:
+        if existed != expected_prior_exists or (
+            existed and prior_sha256 != expected_prior_sha256
+        ):
+            raise ValueError("aider config changed since preview; refusing to apply a stale plan")
     rendered = render_aider_config(existing, base_url=base_url, model=model, api_key=api_key)
+    after_sha256 = _sha256_bytes(rendered.encode("utf-8"))
+    if expected_after_sha256 is not None and after_sha256 != expected_after_sha256:
+        raise ValueError("aider requested configuration differs from preview; refusing to apply")
+    integrity = {"expected_prior_exists": existed, "after_sha256": after_sha256}
+    if prior_sha256 is not None:
+        integrity["expected_prior_sha256"] = prior_sha256
     if rendered == existing:
-        return {"app": "aider", "path": str(path), "status": "unchanged", "backup": None,
-                "base_url": _base_url(base_url), "model": _aider_model(model)}
+        return {"app": "aider", "path": str(path), "status": "unchanged",
+                "base_url": _base_url(base_url), "model": _aider_model(model), **integrity}
     report = {"app": "aider", "path": str(path),
               "status": "dry_run" if dry_run else "updated" if existed else "created",
-              "backup": None, "base_url": _base_url(base_url), "model": _aider_model(model)}
+              "base_url": _base_url(base_url), "model": _aider_model(model), **integrity}
     if dry_run:
         return report
     state_path = Path(os.path.abspath(state_path.expanduser()))
@@ -127,11 +142,12 @@ def configure_aider(path: Path, *, base_url: str, model: str, api_key: str,
             "app": "aider",
             "target": str(path),
             "target_existed": existed,
-            "backup": str(backup) if backup else None,
-            "before_sha256": _sha256_bytes(existing_bytes) if existed else None,
             "after_sha256": after_sha256,
             "created_at": (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat(),
         }
+        if backup is not None:
+            transaction["backup"] = str(backup)
+            transaction["before_sha256"] = prior_sha256
         atomic_write_json(str(state_path), transaction, ensure_ascii=False, indent=2, sort_keys=True)
     except BaseException:
         # If transaction recording fails, roll back so an untracked mutation is never left active.
@@ -155,9 +171,11 @@ def undo_aider(state_path: Path, *, expected_path: Path | None = None) -> dict:
         state = json.loads(state_path.read_text(encoding="utf-8"))
     except Exception as exc:
         raise ValueError(f"Aider connect transaction is unreadable: {exc}") from None
-    required = {"schema_version", "app", "target", "target_existed", "backup",
-                "before_sha256", "after_sha256", "created_at"}
-    if (not isinstance(state, dict) or set(state) != required
+    required = {"schema_version", "app", "target", "target_existed",
+                "after_sha256", "created_at"}
+    allowed = required | {"backup", "before_sha256"}
+    if (not isinstance(state, dict) or not required.issubset(state)
+            or not set(state).issubset(allowed)
             or state.get("schema_version") != _TRANSACTION_SCHEMA or state.get("app") != "aider"
             or not isinstance(state.get("target"), str)
             or not isinstance(state.get("target_existed"), bool)
@@ -174,7 +192,7 @@ def undo_aider(state_path: Path, *, expected_path: Path | None = None) -> dict:
     if current_sha256 != state["after_sha256"]:
         raise ValueError("target changed after `clozn connect`; refusing to overwrite external edits")
 
-    backup_value = state["backup"]
+    backup_value = state.get("backup")
     if state["target_existed"]:
         if not isinstance(backup_value, str) or not isinstance(state["before_sha256"], str):
             raise ValueError("recorded restore transaction is incomplete")
@@ -186,18 +204,20 @@ def undo_aider(state_path: Path, *, expected_path: Path | None = None) -> dict:
         _atomic_restore(backup, target)
         status = "restored"
     else:
-        if backup_value is not None or state["before_sha256"] is not None:
+        if backup_value is not None or state.get("before_sha256") is not None:
             raise ValueError("recorded new-file transaction is inconsistent")
         target.unlink()
         status = "removed"
     state_path.unlink()
-    return {"app": "aider", "path": str(target), "status": status,
-            "backup": backup_value, "base_url": None, "model": None}
+    report = {"app": "aider", "path": str(target), "status": status}
+    if isinstance(backup_value, str):
+        report["backup"] = backup_value
+    return report
 
 
 def add_subparser(sub):
     parser = sub.add_parser("connect", help="safely point a supported third-party app at Clozn")
-    parser.add_argument("app", choices=("aider",))
+    parser.add_argument("app", choices=("aider", "openai-env", "open-webui", "ollama-sdk"))
     parser.add_argument("--url", default="http://127.0.0.1:8080/v1",
                         help="Clozn OpenAI base URL (default http://127.0.0.1:8080/v1)")
     parser.add_argument("--model", default="clozn-local",
@@ -205,7 +225,7 @@ def add_subparser(sub):
     parser.add_argument("--api-key", default="local-clozn",
                         help="local placeholder API key (default local-clozn)")
     parser.add_argument("--config", default=None,
-                        help="explicit app config path (Aider default: ~/.aider.conf.yml)")
+                        help="explicit app config/environment-file path")
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--dry-run", action="store_true", help="show the planned action without writing")
     action.add_argument("--undo", action="store_true",
@@ -217,15 +237,22 @@ def add_subparser(sub):
 
 def cmd_connect(args):
     from clozn.cli import main as ctx
+    from clozn.cli.commands._connector import connector_for
     try:
-        path = Path(args.config).expanduser() if args.config else Path.home() / ".aider.conf.yml"
-        state_path = Path(ctx.HOME) / "connect" / "aider.json"
+        path = Path(args.config).expanduser() if args.config else None
+        connector = connector_for(args.app, config_path=path)
+        state_path = Path(ctx.HOME) / "connect" / f"{args.app}.json"
         if args.undo:
-            report = undo_aider(state_path, expected_path=path if args.config else None)
+            report = connector.undo(state_path=state_path).report
         else:
-            report = configure_aider(path, base_url=args.url, model=args.model,
-                                     api_key=args.api_key, state_path=state_path,
-                                     dry_run=args.dry_run)
+            kwargs = {
+                "base_url": args.url,
+                "model": args.model,
+                "api_key": args.api_key,
+                "state_path": state_path,
+            }
+            plan = connector.plan(**kwargs)
+            report = plan.details if args.dry_run else connector.apply(plan, **kwargs).report
     except (OSError, ValueError) as exc:
         raise ctx.CloznError(f"could not connect {args.app}: {exc}") from None
     if args.json:
@@ -233,18 +260,22 @@ def cmd_connect(args):
         return 0
     status = report["status"]
     if status == "unchanged":
-        print(f"aider is already connected: {report['path']}")
+        print(f"{args.app} is already connected: {report['path']}")
     elif status == "dry_run":
-        print(f"would configure aider: {report['path']}")
+        print(f"would configure {args.app}: {report['path']}")
     elif status in {"restored", "removed"}:
         verb = "restored" if status == "restored" else "removed"
-        print(f"{verb} aider config: {report['path']}")
+        print(f"{verb} {args.app} config: {report['path']}")
         return 0
     else:
-        print(f"configured aider: {report['path']}")
-        if report["backup"]:
+        print(f"configured {args.app}: {report['path']}")
+        if report.get("backup"):
             print(f"backup: {report['backup']}")
-    print(f"endpoint: {report['base_url']}")
-    print(f"model: {report['model']}")
-    print("next: start Clozn on that port, then run `aider`")
+    if report.get("base_url"):
+        print(f"endpoint: {report['base_url']}")
+    if report.get("model"):
+        print(f"model: {report['model']}")
+    if report.get("variables"):
+        print(f"variables: {', '.join(report['variables'])}")
+    print(f"next: start Clozn on that port, then use {args.app}")
     return 0

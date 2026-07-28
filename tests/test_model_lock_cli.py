@@ -51,6 +51,18 @@ def test_model_lock_verify_parses():
     assert ns.fn is model_lock.cmd_model_lock_verify
 
 
+def test_model_lock_fetch_parses_with_explicit_role_and_output_directory():
+    ns = build_parser().parse_args([
+        "model-lock", "fetch", "models/clozn.lock.json",
+        "--role", "candidate", "--out", ".models",
+    ])
+    assert ns.lockfile == "models/clozn.lock.json"
+    assert ns.role == "candidate"
+    assert ns.out == ".models"
+    assert ns.json is False
+    assert ns.fn is model_lock.cmd_model_lock_fetch
+
+
 def test_model_lock_no_subcommand_returns_2(capsys):
     ns = build_parser().parse_args(["model-lock"])
     rc = ns.fn(ns)

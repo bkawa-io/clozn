@@ -735,7 +735,48 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
             self.wfile.write(b)
 
         def _json(self, code, o, extra_headers=None):
-            self._send(code, json.dumps(o), "application/json", extra_headers=extra_headers)
+            serialize_started_ns = time.monotonic_ns()
+            payload = json.dumps(o)
+            serialize_duration_ns = max(0, time.monotonic_ns() - serialize_started_ns)
+            rid = getattr(self, "_last_logged_run_id", None)
+            if rid:
+                try:
+                    from clozn.runs.attachments import attach_performance_phase
+                    attach_performance_phase(rid, {
+                        "name": "gateway_serialize", "owner": "clozn_gateway",
+                        "duration_ns": serialize_duration_ns,
+                        "measurement": "measured",
+                        # The run record's wall timer stops when record() is called, immediately before
+                        # serialization. Keep this measured phase visible, but do not pretend it is
+                        # inside that earlier wall interval when computing unaccounted time.
+                        "aggregation": "context_only",
+                    })
+                except Exception:
+                    pass
+            self._send(code, payload, "application/json", extra_headers=extra_headers)
+
+        def _record_gateway_phase(self, name, duration_ns, *, owner="clozn_gateway",
+                                  aggregation="exclusive"):
+            """Accumulate a measured gateway phase for the run this request will eventually journal."""
+            try:
+                duration_ns = max(0, int(duration_ns))
+                phases = getattr(self, "_gateway_timing_phases", None)
+                if not isinstance(phases, list):
+                    phases = []
+                    self._gateway_timing_phases = phases
+                for phase in phases:
+                    if (
+                        phase.get("name") == name and phase.get("owner") == owner
+                        and phase.get("aggregation") == aggregation
+                    ):
+                        phase["duration_ns"] += duration_ns
+                        return
+                phases.append({
+                    "name": str(name), "owner": str(owner), "duration_ns": duration_ns,
+                    "measurement": "measured", "aggregation": aggregation,
+                })
+            except Exception:
+                pass
 
         def _reject_untrusted_origin(self):
             origin = request_origin(self)
@@ -866,6 +907,16 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                     meta["prompt_tokens"] = actual_prompt_tokens
                 if extra_meta:
                     meta.update({k: v for k, v in extra_meta.items() if v is not None})
+                gateway_phases = list(getattr(self, "_gateway_timing_phases", None) or [])
+                substrate_gateway = meta.get("gateway_timing")
+                if gateway_phases or (
+                    isinstance(substrate_gateway, dict) and substrate_gateway.get("phases")
+                ):
+                    from clozn.runs.perf_spans import merge_timing_documents, timing_document
+                    handler_timing = timing_document(gateway_phases)
+                    meta["gateway_timing"] = merge_timing_documents(
+                        substrate_gateway, handler_timing
+                    )
                 # (memory prompt_token_cost -- the with-vs-without-block token delta -- was computed
                 # here; there is no block to charge for since the 2026-07-27 cards cut.)
                 git = _git_commit()
@@ -902,6 +953,9 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                         identity = _sub().identity_meta() or None
                 except Exception:
                     identity = None
+                request_started = getattr(self, "_request_wall_started", None)
+                if isinstance(request_started, (int, float)) and request_started <= time.time():
+                    started = min(started, request_started)
                 rid = runlog.record(source=source, client=self._client(self.headers.get("User-Agent", "")),
                                     model=str(model), substrate=_subname(), messages=messages, response=response,
                                     behavior={"active_dials": dials}, started=started, error=error,
@@ -913,6 +967,7 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                                     project_key=project_key,
                                     output_contract=output_contract)
                 self._maybe_snapshot_turn(rid, messages, trace, error)
+                self._last_logged_run_id = rid
                 return rid                        # M5 bridge: the run id, for callers that want to surface it
             except Exception:
                 return None                        # logging must never break the request -- no id to surface
@@ -948,6 +1003,7 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 pass
 
         def do_GET(self):
+            self._last_logged_run_id = None
             if self._reject_untrusted_origin():
                 return
             p = self.path.split("?")[0]
@@ -968,6 +1024,9 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
             self._json(404, {"error": "GET " + p})
 
         def do_POST(self):
+            self._last_logged_run_id = None
+            self._request_wall_started = time.time()
+            self._gateway_timing_phases = []
             if self._reject_untrusted_origin():
                 return
             try:
@@ -1017,7 +1076,12 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 # bounded queue behind a slow generation request either.
                 self._dispatch_post(p, body)
                 return
+            queue_started_ns = time.monotonic_ns()
             rejected = POST_GATE.acquire(cancel_check=lambda: client_gone(self))
+            self._record_gateway_phase(
+                "gateway_queue", time.monotonic_ns() - queue_started_ns,
+                aggregation="exclusive",
+            )
             if rejected:
                 # "cancelled": client_gone(self) fired while this request was queued -- the requester is
                 # confirmed gone, so this response is best-effort only (mirrors "full"/"timeout": nothing

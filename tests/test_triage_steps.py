@@ -2,7 +2,13 @@
 from __future__ import annotations
 
 from clozn.triage.status import STATES
-from clozn.triage.steps import context_diff_steps, identity_diff_steps
+from clozn.triage.steps import (
+    context_diff_steps,
+    identity_diff_steps,
+    quant_export_diff_steps,
+    sampling_diff_steps,
+    tool_contract_diff_steps,
+)
 
 
 def _by_kind(steps):
@@ -136,11 +142,79 @@ def test_missing_context_receipt_on_both_sides_is_not_run():
     assert step["status"] == "not_run"
 
 
-def test_omissions_and_special_tokens_are_always_explicit_not_run_pending_feature_06():
+def test_omissions_and_special_tokens_are_explicit_not_run_when_not_captured():
     steps = _by_kind(context_diff_steps({}, {}))
     for kind in ("context_diff:omissions", "context_diff:special_tokens"):
         assert steps[kind]["status"] == "not_run"
-        assert "feature 06" in steps[kind]["reason"]
+        assert "not captured" in steps[kind]["reason"]
+
+
+def test_v1_segment_receipt_steps_compare_stable_metadata_and_rendered_hash():
+    base_receipt = {
+        "schema_version": "clozn.context-receipt.v1", "run_id": "run_b",
+        "delivered": [{"segment_id": "seg_" + "a" * 16, "source_type": "message",
+                       "original_order": 0, "content_hash": "b" * 16}],
+        "assembled": [{"segment_id": "seg_" + "a" * 16, "source_type": "message",
+                       "original_order": 0, "content_hash": "b" * 16}],
+        "rendered": {"sha256": "c" * 64},
+        "omissions": [],
+    }
+    candidate_receipt = {
+        **base_receipt, "run_id": "run_c", "rendered": {"sha256": "d" * 64},
+    }
+    steps = _by_kind(context_diff_steps(
+        {"context_receipt": base_receipt}, {"context_receipt": candidate_receipt}))
+    assert steps["context_diff:delivered_messages"]["status"] == "matched"
+    assert steps["context_diff:rendered_prompt"]["status"] == "mismatched"
+    assert steps["context_diff:omissions"]["status"] == "matched"
+
+
+# ======================================================================================== later observations ===
+
+def test_sampling_observations_are_model_free_and_zero_values_are_preserved():
+    baseline = {"meta": {"temperature": 0.0, "seed": 1}}
+    candidate = {"meta": {"temperature": 0.8, "seed": 1}}
+    steps = _by_kind(sampling_diff_steps(baseline, candidate))
+    assert steps["sampling_diff:temperature"]["status"] == "mismatched"
+    assert steps["sampling_diff:temperature"]["observations"][0]["baseline"] == 0.0
+    assert all(step["cost"]["model_runs"] == 0 for step in steps.values())
+
+
+def test_tool_contract_distinguishes_parser_drift_from_model_failure_without_raw_text():
+    request = {"mode": "tools", "tools": [{"name": "weather"}]}
+    baseline = {"output_contract": {
+        "request": request,
+        "native": {"pipeline": {"parser_id": "parser-v1"}},
+        "raw_model_output": '{"ok":true}',
+        "outcome": {"status": "parsed", "kind": "tool_call"},
+    }}
+    candidate = {"output_contract": {
+        "request": request,
+        "native": {"pipeline": {"parser_id": "parser-v2"}},
+        "raw_model_output": "not-json",
+        "outcome": {"status": "error", "code": "native_parse_failed",
+                    "message": "private raw failure text"},
+    }}
+    steps = _by_kind(tool_contract_diff_steps(baseline, candidate))
+    assert steps["tool_contract_diff:requested_schema"]["status"] == "matched"
+    assert steps["tool_contract_diff:parser_runtime"]["status"] == "mismatched"
+    assert steps["tool_contract_diff:failure_class"]["status"] == "observed"
+    dumped = str(steps)
+    assert "not-json" not in dumped
+    assert "private raw failure text" not in dumped
+    assert "parser/runtime identity changed" in steps["tool_contract_diff:failure_class"]["reason"]
+
+
+def test_quant_export_observation_hashes_adapter_identity_instead_of_embedding_it():
+    baseline = {"identity": {"ext": {"adapter": {"sha256": "a" * 64, "path": "private/a"}}},
+                "meta": {"quant": "Q4"}}
+    candidate = {"identity": {"ext": {"adapter": {"sha256": "b" * 64, "path": "private/b"}}},
+                 "meta": {"quant": "Q8"}}
+    steps = _by_kind(quant_export_diff_steps(baseline, candidate))
+    assert steps["quant_export_diff:quantization"]["status"] == "mismatched"
+    assert steps["quant_export_diff:adapter"]["status"] == "mismatched"
+    dumped = str(steps)
+    assert "private/a" not in dumped and "private/b" not in dumped
 
 
 def test_every_context_step_status_is_in_the_controlled_enum():

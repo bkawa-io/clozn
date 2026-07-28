@@ -193,7 +193,8 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
                            int prefix_rows,
                            const std::vector<int>* reference,
                            const GrammarConfig* grammar,
-                           const EngineCheckpoint* resume_from) {
+                           const EngineCheckpoint* resume_from,
+                           const std::vector<PerformancePhase>* request_phases) {
     if (prompt_ids.empty()) throw std::invalid_argument("prompt_ids must be non-empty");
     if (config.max_new < 1) throw std::invalid_argument("max_new must be >= 1");
     if (resume_from != nullptr) {
@@ -221,12 +222,18 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
     const ModelConfig& mcfg = adapter.config();
     const int eos = mcfg.eos_token_id;
 
+    using clock = std::chrono::steady_clock;
+    std::int64_t event_delivery_ns = 0;
     std::vector<Event> events;
     auto emit = [&](Event e) {
-        if (on_event) on_event(e);
+        if (on_event) {
+            const clock::time_point delivery_start = clock::now();
+            on_event(e);
+            event_delivery_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                clock::now() - delivery_start).count();
+        }
         events.push_back(std::move(e));
     };
-    using clock = std::chrono::steady_clock;
     auto ms_since = [](clock::time_point a) {
         return std::chrono::duration<double, std::milli>(clock::now() - a).count();
     };
@@ -285,6 +292,7 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
     // re-decode its token there -- the identical single-token batch shape the original decode
     // used at that position, so the resulting row is the same distribution the interrupted
     // generation would have sampled from (the bit-exactness acceptance the route verifies).
+    const clock::time_point prefill_start = clock::now();
     ForwardResult fwd;
     int n_past;
     if (resume_from != nullptr) {
@@ -297,6 +305,11 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
         fwd = adapter.ar_forward(prompt_ids, base);
         n_past = base + p;
     }
+    const clock::time_point prefill_end = clock::now();
+    const std::int64_t prefill_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(prefill_end - prefill_start).count();
+    const clock::time_point decode_start = prefill_end;
+    event_delivery_ns = 0;  // GenStarted delivery preceded decode and must not be charged to it.
     int t = 0;
 
     for (int k = 0; k < config.max_new; ++k) {
@@ -368,6 +381,11 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
         if (is_eos) { reason = "eos"; break; }
     }
 
+    const clock::time_point decode_end = clock::now();
+    const std::int64_t decode_loop_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(decode_end - decode_start).count();
+    const std::int64_t decode_ns = std::max<std::int64_t>(0, decode_loop_ns - event_delivery_ns);
+
     GenerateResult result;
     std::vector<int> kept = generated;
     if (reason == "eos" && !kept.empty()) kept.pop_back();  // drop the trailing EOS for the text
@@ -385,8 +403,27 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
     result.board.insert(result.board.end(), generated.begin(), generated.end());
 
     const double wall_ms = ms_since(t_start);
-    const double tok_per_s = wall_ms > 0 ? result.new_tokens * 1000.0 / wall_ms : 0.0;
-    emit(GenFinished{t > 0 ? t - 1 : 0, result.reason, result.new_tokens, wall_ms, t, tok_per_s});
+    const double decode_s = static_cast<double>(decode_ns) / 1e9;
+    const double prefill_s = static_cast<double>(prefill_ns) / 1e9;
+    const double tok_per_s = decode_s > 0 ? result.new_tokens / decode_s : 0.0;
+    const double prompt_tok_per_s =
+        (resume_from == nullptr && prefill_s > 0) ? p / prefill_s : -1.0;
+    std::vector<PerformancePhase> timing_phases =
+        request_phases != nullptr ? *request_phases : std::vector<PerformancePhase>{};
+    PerformancePhase prefill_phase{"prefill", "clozn_worker", prefill_ns,
+        std::chrono::duration_cast<std::chrono::nanoseconds>(prefill_start - t_start).count()};
+    if (resume_from != nullptr) prefill_phase.includes = {"kv_restore", "bridge_decode"};
+    if (prefix_embd != nullptr && prefix_rows > 0) prefill_phase.includes.push_back("soft_prefix");
+    timing_phases.push_back(std::move(prefill_phase));
+    timing_phases.push_back(PerformancePhase{
+        "decode", "clozn_worker", decode_ns,
+        std::chrono::duration_cast<std::chrono::nanoseconds>(decode_start - t_start).count()});
+    if (event_delivery_ns > 0) {
+        timing_phases.push_back(PerformancePhase{
+            "stream_flush", "clozn_worker", event_delivery_ns, -1, "exclusive"});
+    }
+    emit(GenFinished{t > 0 ? t - 1 : 0, result.reason, result.new_tokens, wall_ms, t, tok_per_s,
+                     std::move(timing_phases), p, prompt_tok_per_s, tok_per_s});
     result.events = std::move(events);
     return result;
 }

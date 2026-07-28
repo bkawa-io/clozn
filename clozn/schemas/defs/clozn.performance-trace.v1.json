@@ -47,6 +47,30 @@
             "description": "Which side of the ownership boundary this phase's time is charged to, per the spec's 'Ownership boundaries' -- so a slow external tool or client backpressure is never presented as the model's fault.",
             "enum": ["clozn_gateway", "clozn_worker", "model_load", "client", "external_tool", "unknown"]
           },
+          "clock_owner": {
+            "type": "string",
+            "description": "Process that sampled this phase's monotonic clock. Offsets may only be compared within the same clock_domain."
+          },
+          "clock_domain": {
+            "type": "string",
+            "description": "Stable display label for the local monotonic domain, e.g. clozn_worker:steady_clock. It is not a globally synchronized clock."
+          },
+          "measurement": {
+            "type": "string",
+            "enum": ["measured", "estimated"],
+            "description": "Measured phases come from an instrumented clock. Estimated is reserved for explicitly modeled values and is never included in known_duration_ns."
+          },
+          "aggregation": {
+            "type": "string",
+            "enum": ["exclusive", "overlapping", "context_only"],
+            "description": "Only exclusive measured phases contribute to known_duration_ns. Overlapping spans are useful attribution but would double-count another phase; context_only phases occurred outside the run wall interval."
+          },
+          "source_schema": {"type": "string"},
+          "scope": {"type": "string"},
+          "includes": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
           "start_ns": {
             "type": "integer",
             "minimum": 0,
@@ -75,10 +99,48 @@
       },
       "additionalProperties": true
     },
+    "aggregation": {
+      "type": "object",
+      "description": "Arithmetic over measured, exclusive phases only. Cross-process offsets are never subtracted.",
+      "properties": {
+        "known_duration_ns": {"type": "integer", "minimum": 0},
+        "unaccounted_duration_ns": {"type": "integer", "minimum": 0},
+        "wall_clock_total_ns": {"type": "integer", "minimum": 0},
+        "measurement_coverage": {"type": "number", "minimum": 0},
+        "phase_count": {"type": "integer", "minimum": 0},
+        "exclusive_phase_count": {"type": "integer", "minimum": 0},
+        "consistency": {
+          "type": "string",
+          "enum": ["consistent", "known_exceeds_wall"]
+        }
+      },
+      "additionalProperties": true
+    },
     "events": {
       "type": "array",
       "description": "Advanced, opt-in raw events (e.g. per-token timing) -- present only when advanced tracing was enabled for this run. v1's default derivation never populates this.",
       "items": {"type": "object"}
+    },
+    "regression_attribution": {
+      "type": "object",
+      "description": "Summary of evidence-gated rules that attributed a likely regression. This is never upgraded beyond the strongest evidence state carried by those rules.",
+      "required": ["status", "rules", "evaluable_rule_count", "evidence_state"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["attributed", "not_detected", "unavailable"]
+        },
+        "rules": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "evaluable_rule_count": {"type": "integer", "minimum": 0},
+        "evidence_state": {
+          "type": "string",
+          "enum": ["observed", "correlated", "causally_supported"]
+        }
+      },
+      "additionalProperties": true
     },
     "diagnoses": {
       "type": "array",

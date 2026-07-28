@@ -13,6 +13,7 @@ from clozn.setup.errors import ManifestError, SelectionError
 SHA_A = "a" * 64
 SHA_B = "b" * 64
 SHA_C = "c" * 64
+LLAMA_COMMIT = "88a39274ecf88ba11686acd357b59685b1cbf03d"
 
 
 def _artifact(**kw):
@@ -20,6 +21,9 @@ def _artifact(**kw):
         "os": "linux", "arch": "x86_64", "backend": "cpu",
         "url": "https://example.invalid/clozn-engine-1.0.0-linux-x86_64-cpu.tar.gz",
         "sha256": SHA_A, "size_bytes": 1000, "entrypoint": "bin/clozn-server",
+        "build_id": "release-1.0.0-test",
+        "llama_cpp_commit": LLAMA_COMMIT,
+        "feature_flags": {"lora": True, "sae": False},
     }
     base.update(kw)
     return base

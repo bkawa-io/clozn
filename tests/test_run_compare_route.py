@@ -40,7 +40,7 @@ def test_missing_query_params_yield_400():
     h = Handler("/runs/compare")
     assert route.try_get(h, "/runs/compare") is True
     assert h.status == 400
-    assert "a=" in h.body["error"]
+    assert "b=" in h.body["error"]
 
 
 def test_only_one_param_still_400s():
@@ -95,3 +95,66 @@ def test_no_replay_param_omits_plan(monkeypatch):
     h = Handler("/runs/compare?a=run_a&b=run_b")
     route.try_get(h, "/runs/compare")
     assert "replay_plan" not in h.body
+
+
+def test_automatic_get_selection_excludes_child_runs(monkeypatch):
+    candidate = _run("candidate", identity={"model_sha256": "m" * 64}, recorded_ts=3)
+    child = _run("child", identity={"model_sha256": "m" * 64}, recorded_ts=2,
+                 parent_run_id="older", source="replay")
+    older = _run("older", identity={"model_sha256": "m" * 64}, recorded_ts=1)
+    monkeypatch.setattr(runlog, "get_run", lambda rid: candidate if rid == "candidate" else None)
+    monkeypatch.setattr(runlog, "iter_runs", lambda: [candidate, child, older])
+    h = Handler("/runs/compare?b=candidate&against=previous_compatible")
+    route.try_get(h, "/runs/compare")
+    assert h.status == 200
+    assert h.body["run_a"] == "older"
+    assert h.body["comparison_selection"]["mode"] == "previous_compatible"
+
+
+def test_post_plan_is_model_free_and_schema_valid(monkeypatch):
+    a = _run("run_a", response="good", messages=[{"role": "user", "content": "full"}])
+    b = _run("run_b", response="bad", messages=[{"role": "user", "content": "short"}])
+    monkeypatch.setattr(runlog, "get_run", lambda rid: {"run_a": a, "run_b": b}.get(rid))
+    h = Handler("/runs/compare/test")
+    handled = route.try_post(h, "/runs/compare/test", {
+        "a": "run_a", "b": "run_b", "tests": ["context"],
+        "max_runs": 2, "max_seconds": 30, "plan": True,
+    })
+    assert handled is True and h.status == 200
+    assert h.body["schema_version"] == "clozn.run-change-test.v1"
+    assert h.body["budget"]["runs_used"] == 0
+
+
+def test_post_execution_returns_real_runner_child_ids(monkeypatch):
+    from clozn.replay import controlled
+    from clozn.server import app
+
+    meta = {"sampling": "greedy", "temperature": 0.0}
+    a = _run("run_a", response="good", messages=[{"role": "user", "content": "full"}], meta=meta)
+    b = _run("run_b", response="bad", messages=[{"role": "user", "content": "short"}], meta=meta)
+    monkeypatch.setattr(runlog, "get_run", lambda rid: {"run_a": a, "run_b": b}.get(rid))
+    monkeypatch.setattr(app, "active_sub", lambda _h: type("Sub", (), {"chat": lambda *_a, **_k: ""})())
+
+    class FakeLiveRunner:
+        def __init__(self, _sub):
+            self.calls = 0
+
+        def qualify(self, *_args):
+            return {"ok": True}
+
+        def run_arm(self, _kind, arm, _a, _b, *, timeout_seconds):
+            self.calls += 1
+            return {"run": {"id": f"run_{arm}", "response": "bad" if arm == "control" else "good",
+                            "context_receipt": {}, "trace": {}}}
+
+    monkeypatch.setattr(controlled, "SubstrateReplayRunner", FakeLiveRunner)
+    h = Handler("/runs/compare/test")
+    route.try_post(h, "/runs/compare/test", {
+        "a": "run_a", "b": "run_b", "tests": ["context"],
+        "max_runs": 2, "max_seconds": 30,
+    })
+    assert h.status == 200
+    assert h.body["tests"][0]["status"] == "causally_supported"
+    assert [e["run_id"] for e in h.body["tests"][0]["evidence"]] == [
+        "run_control", "run_treatment",
+    ]

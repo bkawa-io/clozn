@@ -8,7 +8,7 @@ Transaction shape (roadmap setup-flow steps 3-11), all of it inside one SetupLoc
     3. download to ~/.clozn/engines/.download/ , hashing as it streams
     4. verify sha256 (and size) against the manifest BEFORE extraction              (clozn/setup/transport.py)
     5. extract into a throwaway ~/.clozn/engines/.staging/<uuid>/ directory         (clozn/setup/archive.py)
-    6. qualify the extracted entrypoint (best-effort process-start check)
+    6. qualify the extracted entrypoint against the manifest's embedded build identity
     7. atomically promote staging -> the real ~/.clozn/engines/<version>/<platform>/ (os.replace)
     8. atomically update registry.json's `installed`/`active`/`previous`            (clozn/setup/registry.py)
 
@@ -21,11 +21,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import uuid
 from datetime import datetime, timezone
+from urllib.parse import quote
 
+from clozn.protocol import check_worker_protocol
 from clozn.setup import manifest as manifest_mod
 from clozn.setup import platform_detect
 from clozn.setup import registry as registry_mod
@@ -34,20 +37,36 @@ from clozn.setup.archive import safe_extract
 from clozn.setup.errors import ManifestError, SelectionError, SetupError
 from clozn.setup.lock import SetupLock
 
-DEFAULT_MANIFEST_URL = "https://github.com/brigittekawaguchi/clozn/releases/latest/download/clozn-engine-manifest.json"
+RELEASE_REPOSITORY = "bkawa-io/clozn"
+DEFAULT_MANIFEST_URL = (
+    f"https://github.com/{RELEASE_REPOSITORY}/releases/latest/download/clozn-engine-manifest.json"
+)
+VERSIONED_MANIFEST_URL = (
+    f"https://github.com/{RELEASE_REPOSITORY}/releases/download/v{{version}}/"
+    "clozn-engine-manifest.json"
+)
 MANIFEST_URL_ENV = "CLOZN_ENGINE_MANIFEST_URL"
 
 _QUALIFY_TIMEOUT_S = 5.0
+_SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
-def resolve_manifest_url(explicit: "str | None" = None) -> str:
-    """`explicit` (a CLI --manifest-url, if this ever grows one) wins, then CLOZN_ENGINE_MANIFEST_URL
-    (roadmap: 'Add CLOZN_ENGINE_MANIFEST_URL only as an explicit developer/testing override'), then the
-    real default. There is no per-version URL template today -- no engine release has ever been
-    published (see this feature's plan, Slice E deferred) -- so `--version` is enforced by checking the
-    fetched manifest's own clozn_version, not by pointing at a different URL per version. A future
-    release pipeline can add that without changing this function's contract."""
-    return explicit or os.environ.get(MANIFEST_URL_ENV) or DEFAULT_MANIFEST_URL
+def resolve_manifest_url(explicit: "str | None" = None, *, version: "str | None" = None) -> str:
+    """Resolve the release manifest without silently changing release authority.
+
+    An explicit URL (the internal test seam) wins, followed by CLOZN_ENGINE_MANIFEST_URL (the documented
+    development override). Ordinary installs use the latest release; ``--version X`` uses the immutable
+    ``vX`` release asset. The fetched document is still checked against ``version`` by plan_install(), so
+    a mistagged or replaced asset fails closed instead of installing a different build.
+    """
+    override = explicit or os.environ.get(MANIFEST_URL_ENV)
+    if override:
+        return override
+    if version is None:
+        return DEFAULT_MANIFEST_URL
+    if not isinstance(version, str) or not version.strip():
+        raise SelectionError("--version must be a non-empty release version")
+    return VERSIONED_MANIFEST_URL.format(version=quote(version.strip(), safe=""))
 
 
 def fetch_manifest(url: str) -> dict:
@@ -67,15 +86,13 @@ def plan_install(*, manifest_url: "str | None" = None, backend_pref: str = "auto
     fetching the manifest and reading the on-disk registry, neither of which mutates anything -- this is
     exactly what `--dry-run --json` returns, and what run_install() computes first before doing
     anything else. Raises ManifestError/SelectionError; never returns None (roadmap rule 3)."""
-    resolved_url = resolve_manifest_url(manifest_url)
+    resolved_url = resolve_manifest_url(manifest_url, version=version)
     doc = fetch_manifest(resolved_url)
     engine_version = doc["clozn_version"]
     if version is not None and version != engine_version:
         raise SelectionError(
             f"manifest at {resolved_url!r} publishes clozn_version {engine_version!r}, not the "
-            f"requested --version {version!r}. clozn setup has no per-version manifest URL scheme yet "
-            f"(see docs/agent_roadmap/01-native-distribution-and-managed-setup.md, Slice E); point "
-            f"{MANIFEST_URL_ENV} at the manifest for the exact version you want.")
+            f"requested --version {version!r}; refusing a mistagged or replaced release asset.")
     resolved_platform = platform if platform is not None else platform_detect.detect_platform()
     artifact = manifest_mod.select_artifact(doc, resolved_platform, backend_pref=backend_pref)
     key = manifest_mod.install_key(engine_version, artifact)
@@ -96,31 +113,76 @@ def plan_install(*, manifest_url: "str | None" = None, backend_pref: str = "auto
     }
 
 
-def qualify_entrypoint(argv: list, *, timeout: float = _QUALIFY_TIMEOUT_S) -> dict:
-    """Best-effort 'is this actually launchable' check: run `argv + ['--version']` and report whether
-    the OS could even exec it, plus its exit code/output when it could.
+def _build_info_error(build_info) -> "str | None":
+    if not isinstance(build_info, dict):
+        return "build-info output must be one JSON object"
+    required_strings = ("engine_version", "build_id", "protocol_version", "backend",
+                        "llama_cpp_commit")
+    for field in required_strings:
+        if not isinstance(build_info.get(field), str) or not build_info[field]:
+            return f"build-info field {field!r} must be a non-empty string"
+    if build_info["backend"] not in ("cpu", "cuda", "metal"):
+        return f"build-info backend {build_info['backend']!r} is unsupported"
+    if not _SHA1_RE.fullmatch(build_info["llama_cpp_commit"]):
+        return "build-info llama_cpp_commit must be a full lowercase 40-character Git SHA"
+    feature_flags = build_info.get("feature_flags")
+    if not isinstance(feature_flags, dict):
+        return "build-info field 'feature_flags' must be an object"
+    if any(not isinstance(name, str) or not name or not isinstance(enabled, bool)
+           for name, enabled in feature_flags.items()):
+        return "build-info feature_flags must map non-empty names to booleans"
+    compatible, reason = check_worker_protocol(build_info["protocol_version"])
+    if not compatible:
+        return f"build-info protocol_version is incompatible: {reason}"
+    return None
 
-    KNOWN GAP, stated rather than hidden: as of this writing engine/core/serve/server_main.cpp does not
-    implement --version at all, so a real clozn-server build exiting non-zero or printing a usage error
-    here is EXPECTED, not a sign of a bad download -- this function and its caller both treat `ran: True`
-    with any returncode as a pass. What this DOES catch reliably, and DOES fail the install over, is
-    `ran: False`: a missing file, a wrong-architecture binary, or a permissions problem -- anything that
-    stops the OS from launching the process at all. Never raises."""
+
+def qualify_entrypoint(argv: list, *, timeout: float = _QUALIFY_TIMEOUT_S,
+                       expected: "dict | None" = None) -> dict:
+    """Run ``clozn-server --version --json`` and strictly validate its embedded build identity.
+
+    ``expected`` is the selected manifest identity. Any nonzero exit, malformed output, incompatible
+    protocol, unsupported backend, or manifest/build disagreement returns ``qualified: False``. The
+    function never raises so doctor/status callers can render the exact failure; installers must refuse
+    promotion unless ``qualified`` is true.
+    """
     try:
         result = subprocess.run(
-            list(argv) + ["--version"], capture_output=True, text=True, timeout=timeout)
+            list(argv) + ["--version", "--json"], capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError as error:
-        return {"ran": False, "error": f"not found or not executable: {error}"}
+        return {"ran": False, "qualified": False, "error": f"not found or not executable: {error}"}
     except OSError as error:
-        return {"ran": False, "error": f"could not launch: {error}"}
+        return {"ran": False, "qualified": False, "error": f"could not launch: {error}"}
     except subprocess.TimeoutExpired:
-        return {"ran": False, "error": f"did not exit within {timeout}s"}
-    return {
+        return {"ran": False, "qualified": False, "error": f"did not exit within {timeout}s"}
+    report = {
         "ran": True,
         "returncode": result.returncode,
         "stdout": (result.stdout or "").strip()[:500],
         "stderr": (result.stderr or "").strip()[:500],
     }
+    if result.returncode != 0:
+        return {**report, "qualified": False,
+                "error": f"build-info command exited with status {result.returncode}"}
+    try:
+        build_info = json.loads(result.stdout)
+    except (TypeError, json.JSONDecodeError) as error:
+        return {**report, "qualified": False, "error": f"malformed build-info JSON: {error}"}
+    error = _build_info_error(build_info)
+    if error:
+        return {**report, "qualified": False, "error": error}
+    for field, wanted in (expected or {}).items():
+        if wanted is not None and build_info.get(field) != wanted:
+            return {
+                **report,
+                "qualified": False,
+                "build_info": build_info,
+                "error": (
+                    f"manifest/build disagreement for {field}: manifest declares {wanted!r}, "
+                    f"binary reports {build_info.get(field)!r}"
+                ),
+            }
+    return {**report, "qualified": True, "build_info": build_info}
 
 
 def _rmtree_quietly(path: str) -> None:
@@ -151,10 +213,20 @@ def _install_artifact(plan: dict, home: str, *, argv_prefix: "list | None" = Non
         if not os.path.isfile(entrypoint):
             raise SetupError(
                 f"manifest entrypoint {artifact['entrypoint']!r} was not found in the extracted archive")
-        qualification = qualify_entrypoint(list(argv_prefix or []) + [entrypoint])
-        if not qualification["ran"]:
+        expected_build_info = {
+            "engine_version": plan["engine_version"],
+            "protocol_version": plan["protocol_version"],
+            "backend": artifact["backend"],
+            "build_id": artifact.get("build_id"),
+            "llama_cpp_commit": artifact.get("llama_cpp_commit"),
+            "feature_flags": artifact.get("feature_flags"),
+        }
+        qualification = qualify_entrypoint(
+            list(argv_prefix or []) + [entrypoint], expected=expected_build_info)
+        if not qualification["qualified"]:
             raise SetupError(
-                f"the extracted engine could not be launched: {qualification['error']} -- refusing to "
+                f"the extracted engine failed build identity qualification: {qualification['error']} "
+                f"-- refusing to "
                 f"install it (the prior active engine, if any, is untouched)")
 
         target_dir = plan["target_dir"]
@@ -165,12 +237,16 @@ def _install_artifact(plan: dict, home: str, *, argv_prefix: "list | None" = Non
         staging_dir = None   # promoted -- do not clean it up in the finally below
 
         final_entrypoint = os.path.join(target_dir, *artifact["entrypoint"].replace("\\", "/").split("/"))
+        build_info = qualification["build_info"]
         return {
             "version": plan["engine_version"],
             "os": artifact["os"], "arch": artifact["arch"], "backend": artifact["backend"],
             **({"cuda_major": artifact["cuda_major"]} if artifact.get("cuda_major") else {}),
             "sha256": artifact["sha256"],
             "protocol_version": plan["protocol_version"],
+            "build_id": build_info["build_id"],
+            "llama_cpp_commit": build_info["llama_cpp_commit"],
+            "feature_flags": build_info["feature_flags"],
             "entrypoint": final_entrypoint,
             "installed_at": datetime.now(timezone.utc).isoformat(),
             "qualification": qualification,
@@ -276,7 +352,7 @@ def four_state_report(*, engine_exe: "str | None", discovery_source: "str | None
     clozn today (checked -- there is none in this tree), and actually qualifying inference needs a real
     model, which violates the model-free contract these commands make. `qualification` lets a caller that
     already ran qualify_entrypoint() (e.g. a fresh `clozn setup` install) pass its result through instead
-    of this function re-running the process-start check a second time; `deep=True` with no pre-computed
+    of this function re-running the build-identity check a second time; `deep=True` with no pre-computed
     `qualification` runs it here (this is `clozn doctor --deep`'s only extra cost over the default sweep).
     """
     if engine_exe is None:
@@ -293,9 +369,11 @@ def four_state_report(*, engine_exe: "str | None", discovery_source: "str | None
         if qualification is None and deep:
             qualification = qualify_entrypoint(list(argv_prefix or []) + [engine_exe])
         if qualification is not None:
-            engine_state["process_start_check"] = qualification
+            engine_state["build_identity_check"] = qualification
             if not qualification.get("ran"):
                 engine_state["status"] = "found_but_not_launchable"
+            elif not qualification.get("qualified"):
+                engine_state["status"] = "found_but_not_qualified"
 
     return {
         "python_package_installed": {"status": "passed"},

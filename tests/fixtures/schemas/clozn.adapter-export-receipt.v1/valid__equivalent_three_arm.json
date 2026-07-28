@@ -1,0 +1,189 @@
+{
+  "schema_version": "clozn.adapter-export-receipt.v1",
+  "receipt_id": "adapter-export-0123456789ab",
+  "created_at": "2026-07-28T19:00:00+00:00",
+  "producer": {
+    "clozn_version": "0.1.0",
+    "engine": {
+      "entrypoint": "C:\\clozn\\clozn-server.exe",
+      "entrypoint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "discovery_source": "managed",
+      "backend": "cpu",
+      "engine_version": "0.1.0",
+      "build_id": "release-1",
+      "llama_cpp_commit": "88a39274ecf88ba11686acd357b59685b1cbf03d"
+    }
+  },
+  "suite": {
+    "suite_id": "export-smoke",
+    "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "case_count": 1,
+    "expanded_case_count": 1
+  },
+  "inputs": {
+    "base": {
+      "path": "base.gguf",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "file_size": 1024,
+      "architecture": "qwen2",
+      "hidden_size": 896,
+      "layer_count": 24,
+      "vocab_size": 151936,
+      "tokenizer_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "chat_template_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "quantization": "Q8_0"
+    },
+    "adapter": {
+      "path": "tune.gguf",
+      "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "file_size": 512,
+      "format": "lora_gguf",
+      "architecture": "qwen2",
+      "metadata": {
+        "general.type": "adapter",
+        "adapter.type": "lora"
+      }
+    },
+    "merged": {
+      "path": "merged.gguf",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "file_size": 1024,
+      "architecture": "qwen2",
+      "hidden_size": 896,
+      "layer_count": 24,
+      "vocab_size": 151936,
+      "tokenizer_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "chat_template_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "quantization": "Q8_0"
+    }
+  },
+  "preflight": {
+    "status": "passed",
+    "checks": [
+      {
+        "name": "architecture",
+        "status": "passed",
+        "detail": "base, adapter, and merged declare qwen2"
+      }
+    ],
+    "effective_identity": {
+      "base": {
+        "model_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "protocol_version": "1.0",
+        "architecture": "qwen2",
+        "device": "cpu"
+      },
+      "adapted": {
+        "model_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "protocol_version": "1.0",
+        "architecture": "qwen2",
+        "device": "cpu",
+        "adapter": {
+          "path": "tune.gguf",
+          "scale": 1.0,
+          "metadata": {
+            "adapter.type": "lora"
+          }
+        }
+      },
+      "merged": {
+        "model_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "protocol_version": "1.0",
+        "architecture": "qwen2",
+        "device": "cpu"
+      }
+    }
+  },
+  "cases": [
+    {
+      "case_id": "capital",
+      "seed": 0,
+      "status": "passed",
+      "messages_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "continuation_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "run_ids": {
+        "base": "adapter-export-0123456789ab-capital-0-base",
+        "adapted": "adapter-export-0123456789ab-capital-0-adapted",
+        "merged": "adapter-export-0123456789ab-capital-0-merged"
+      },
+      "teacher_forced": {
+        "base_vs_adapted": {
+          "causal_verified": true,
+          "n_tokens": 1,
+          "n_flipped": 1,
+          "n_preserved": 0,
+          "n_unknown": 0,
+          "mean_abs_delta_nats": 1.0,
+          "positions": [
+            {
+              "index": 0,
+              "token_id": 42,
+              "delta_nats": 1.0,
+              "status": "flipped",
+              "argmax_a_id": 7,
+              "argmax_b_id": 42
+            }
+          ]
+        },
+        "adapted_vs_merged": {
+          "causal_verified": true,
+          "n_tokens": 1,
+          "n_flipped": 0,
+          "n_preserved": 1,
+          "n_unknown": 0,
+          "mean_abs_delta_nats": 0.001,
+          "positions": [
+            {
+              "index": 0,
+              "token_id": 42,
+              "delta_nats": 0.001,
+              "status": "preserved",
+              "argmax_a_id": 42,
+              "argmax_b_id": 42
+            }
+          ]
+        }
+      },
+      "assertions": [
+        {
+          "name": "max_argmax_flips",
+          "passed": true,
+          "observed": 0,
+          "budget": 0
+        },
+        {
+          "name": "max_mean_abs_delta_nats",
+          "passed": true,
+          "observed": 0.001,
+          "budget": 0.02
+        },
+        {
+          "name": "max_unknown_positions",
+          "passed": true,
+          "observed": 0,
+          "budget": 0
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "expanded_case_count": 1,
+    "completed": 1,
+    "passed": 1,
+    "mismatched": 0,
+    "inconclusive": 0,
+    "execution_errors": 0,
+    "teacher_forced_tokens": 1
+  },
+  "verdict": {
+    "status": "equivalent_within_budget",
+    "reason": "all 1 case/seed evaluations passed the declared teacher-forced budgets"
+  },
+  "claims": {
+    "primary_comparison": "base_plus_adapter_vs_merged",
+    "base_role": "control",
+    "byte_equivalent": false,
+    "semantic_equivalence_proven": false,
+    "quantization_note": "same declared quantization; behavior was compared, byte equivalence was not claimed"
+  }
+}

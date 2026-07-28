@@ -3,6 +3,7 @@ import { useTopbar } from "../../panels/topbar";
 import { listExperiments, loadExperimentDetail } from "./api";
 import { CellDrawer } from "./CellDrawer";
 import { formatPassRate, formatTimestamp, shortId } from "./format";
+import { CiPreviewPanel, HistoryPanel } from "./HistoryAndCi";
 import { Matrix } from "./Matrix";
 import { DEFAULT_FILTERS, parseUrlState, serializeUrlState } from "./urlState";
 import type { CellSelection, MatrixFilters } from "./urlState";
@@ -77,6 +78,9 @@ function ExperimentsList() {
                 <span className="experiments-name">
                   <strong>{entry.name}</strong>
                   <small>{shortId(entry.experimentId)}</small>
+                  {entry.suiteFingerprint && (
+                    <small>{entry.suiteFingerprint.algorithm}:{shortId(entry.suiteFingerprint.sha256)}</small>
+                  )}
                 </span>
                 <span>{formatTimestamp(entry.createdAt)}</span>
                 <span>{entry.baselineVariant ?? "—"}</span>
@@ -107,6 +111,9 @@ function SummaryStrip({ detail }: { detail: ExperimentDetail }) {
           <span><b>BASELINE</b>{baseline || "—"}</span>
           <span><b>SEEDS</b>{detail.seeds.length}</span>
           <span><b>CELLS</b>{detail.cells.length}</span>
+          {detail.suiteFingerprint && (
+            <span><b>FINGERPRINT</b>{shortId(detail.suiteFingerprint.sha256)}</span>
+          )}
           {errorCount > 0 && <span className="is-error"><b>ERRORS</b>{errorCount}</span>}
         </div>
       </header>
@@ -190,6 +197,7 @@ function ExperimentWorkspace({ id, rawQuery }: { id: string; rawQuery: string | 
 
   return (
     <>
+      <HistoryPanel experimentId={id} />
       <SummaryStrip detail={detail} />
       <Matrix
         detail={detail}
@@ -198,6 +206,7 @@ function ExperimentWorkspace({ id, rawQuery }: { id: string; rawQuery: string | 
         selection={selection}
         onSelectCell={setSelection}
       />
+      <CiPreviewPanel detail={detail} />
       {selection && (
         <CellDrawer
           experimentId={id}

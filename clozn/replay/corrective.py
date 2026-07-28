@@ -139,8 +139,52 @@ def _dial_applied(child: Mapping[str, Any], dial: str, strength: float) -> bool:
         return False
 
 
+def _structured_failure(
+    run: Mapping[str, Any],
+    preset: str,
+    scope: str,
+    requested_backend: str,
+    budget: int,
+    current_presets: list[str],
+    candidate_presets: list[str],
+    baseline: dict[str, Any],
+    corrected: dict[str, Any],
+) -> dict[str, Any]:
+    """Return a persistable partial outcome without changing the legacy ``None`` contract."""
+    return {
+        "preset": preset,
+        "scope": scope,
+        "active_presets_before": current_presets,
+        "active_presets_candidate": candidate_presets,
+        "instruction": CORRECTION_PRESETS[preset],
+        "stored_original_reply": str(run.get("response") or ""),
+        "baseline_reply": str(baseline.get("reply") or ""),
+        "corrected_reply": str(corrected.get("reply") or ""),
+        "delta": {},
+        "changed": False,
+        "intervention_observed": False,
+        "comparison_note": (
+            "matched greedy comparison did not complete; the stored original is context only"
+        ),
+        "max_tokens": budget,
+        "baseline_child_id": baseline.get("run_id"),
+        "corrected_child_id": corrected.get("run_id"),
+        "child_ids": {
+            "baseline": baseline.get("run_id"),
+            "corrected": corrected.get("run_id"),
+        },
+        "child_outcomes": {"baseline": baseline, "corrected": corrected},
+        "requested_backend": requested_backend,
+        "backend": None,
+        "executed_backend": None,
+        "backend_fallback": False,
+        "outcome": {"status": "execution_error"},
+    }
+
+
 def retry_compare(run: Mapping[str, Any], preset: str, sub, *, scope: str = "once",
-                  active_presets=(), backend: str | None = None) -> dict[str, Any] | None:
+                  active_presets=(), backend: str | None = None,
+                  structured: bool = False) -> dict[str, Any] | None:
     """Generate mandatory matched greedy baseline/corrected replay children.
 
     Returns ``None`` when either existing replay operation fails, matching replay's
@@ -176,15 +220,53 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *, scope: str = "onc
         str(value) for value in (active_presets or []) if str(value) in CORRECTION_PRESETS
     ))
     candidate_presets = list(dict.fromkeys(current_presets + [preset]))
+    requested_backend = backend or "prompt_policy"
 
     baseline_changes = {
         "greedy": True,
         "corrective_retry": {"arm": "baseline", "preset": preset},
     }
-    baseline = replay_run(dict(run), baseline_changes, sub,
-                          prompt_instructions=_prompt_blocks(current_presets), max_new=budget)
+    try:
+        baseline = replay_run(
+            dict(run),
+            baseline_changes,
+            sub,
+            prompt_instructions=_prompt_blocks(current_presets),
+            max_new=budget,
+        )
+    except Exception as exc:
+        if not structured:
+            raise
+        return _structured_failure(
+            run, preset, scope, requested_backend, budget, current_presets, candidate_presets,
+            {"status": "error", "error": {"code": "generation_error", "message": str(exc)}},
+            {"status": "not_run"},
+        )
     if baseline is None:
+        if structured:
+            return _structured_failure(
+                run, preset, scope, requested_backend, budget, current_presets, candidate_presets,
+                {"status": "error", "error": {"code": "generation_failed",
+                                               "message": "baseline replay returned no run"}},
+                {"status": "not_run"},
+            )
         return None
+    baseline_outcome = {
+        "status": "success",
+        "run_id": baseline.get("id"),
+        "reply": str(baseline.get("response") or ""),
+    }
+    if structured and not baseline_outcome["run_id"]:
+        baseline_outcome = {
+            **baseline_outcome,
+            "status": "error",
+            "error": {"code": "missing_child_run",
+                      "message": "baseline replay did not persist a child run id"},
+        }
+        return _structured_failure(
+            run, preset, scope, requested_backend, budget, current_presets, candidate_presets,
+            baseline_outcome, {"status": "not_run"},
+        )
 
     instruction = CORRECTION_PRESETS[preset]
     dial_choice = None
@@ -208,8 +290,22 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *, scope: str = "onc
             },
             "behavior_overrides": {dial: strength},
         }
-        corrected = replay_run(dict(run), corrected_changes, sub,
-                               prompt_instructions=_prompt_blocks(current_presets), max_new=budget)
+        try:
+            corrected = replay_run(
+                dict(run),
+                corrected_changes,
+                sub,
+                prompt_instructions=_prompt_blocks(current_presets),
+                max_new=budget,
+            )
+        except Exception as exc:
+            if not structured:
+                raise
+            return _structured_failure(
+                run, preset, scope, requested_backend, budget, current_presets, candidate_presets,
+                baseline_outcome,
+                {"status": "error", "error": {"code": "generation_error", "message": str(exc)}},
+            )
     else:
         corrected_changes = {
             "greedy": True,
@@ -221,16 +317,52 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *, scope: str = "onc
                 "scope": scope,
             },
         }
-        corrected = replay_run(dict(run), corrected_changes, sub,
-                               prompt_instructions=_prompt_blocks(candidate_presets),
-                               max_new=budget)
+        try:
+            corrected = replay_run(
+                dict(run),
+                corrected_changes,
+                sub,
+                prompt_instructions=_prompt_blocks(candidate_presets),
+                max_new=budget,
+            )
+        except Exception as exc:
+            if not structured:
+                raise
+            return _structured_failure(
+                run, preset, scope, requested_backend, budget, current_presets, candidate_presets,
+                baseline_outcome,
+                {"status": "error", "error": {"code": "generation_error", "message": str(exc)}},
+            )
     if corrected is None:
+        if structured:
+            return _structured_failure(
+                run, preset, scope, requested_backend, budget, current_presets, candidate_presets,
+                baseline_outcome,
+                {"status": "error", "error": {"code": "generation_failed",
+                                               "message": "corrected replay returned no run"}},
+            )
         return None
 
     baseline_reply = str(baseline.get("response") or "")
     corrected_reply = str(corrected.get("response") or "")
     baseline_id = baseline.get("id")
     corrected_id = corrected.get("id")
+    corrected_outcome = {
+        "status": "success",
+        "run_id": corrected_id,
+        "reply": corrected_reply,
+    }
+    if structured and not corrected_id:
+        corrected_outcome = {
+            **corrected_outcome,
+            "status": "error",
+            "error": {"code": "missing_child_run",
+                      "message": "corrected replay did not persist a child run id"},
+        }
+        return _structured_failure(
+            run, preset, scope, requested_backend, budget, current_presets, candidate_presets,
+            baseline_outcome, corrected_outcome,
+        )
     try:
         from .counterfactual import _coherence
         coherence = _coherence(corrected_reply)
@@ -271,7 +403,14 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *, scope: str = "onc
         "baseline_child_id": baseline_id,
         "corrected_child_id": corrected_id,
         "child_ids": {"baseline": baseline_id, "corrected": corrected_id},
+        "child_outcomes": {
+            "baseline": baseline_outcome,
+            "corrected": corrected_outcome,
+        },
+        "requested_backend": requested_backend,
         "backend": chosen_backend,
+        "executed_backend": chosen_backend,
         "backend_fallback": backend_fallback,
         "execution_identity": execution_identity,
+        "outcome": {"status": "succeeded"},
     }

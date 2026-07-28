@@ -46,6 +46,46 @@ def test_chat_rejects_unknown_field_instead_of_silently_dropping_it():
     assert caught.value.param == "magic"
 
 
+def test_chat_accepts_explicit_unique_source_metadata_without_putting_it_in_messages():
+    out = normalize_chat_request({
+        "messages": [
+            {"role": "system", "content": "Policy"},
+            {"role": "user", "content": "Document text"},
+        ],
+        "clozn_sources": [
+            {"message_index": 1, "source_id": "customer-handbook", "label": "Customer handbook"},
+        ],
+    })
+    assert out["messages"][1] == {"role": "user", "content": "Document text"}
+    assert out["_clozn_sources"] == [{
+        "message_index": 1,
+        "source_id": "customer-handbook",
+        "label": "Customer handbook",
+    }]
+
+
+@pytest.mark.parametrize("sources,param", [
+    (
+        [
+            {"message_index": 0, "source_id": "duplicate"},
+            {"message_index": 1, "source_id": "duplicate"},
+        ],
+        "clozn_sources[1].source_id",
+    ),
+    ([{"message_index": 4, "source_id": "missing"}], "clozn_sources[0].message_index"),
+])
+def test_chat_rejects_ambiguous_source_metadata(sources, param):
+    with pytest.raises(CompatibilityError) as caught:
+        normalize_chat_request({
+            "messages": [
+                {"role": "system", "content": "Policy"},
+                {"role": "user", "content": "Question"},
+            ],
+            "clozn_sources": sources,
+        })
+    assert caught.value.param == param
+
+
 def test_chat_accepts_and_strips_documented_neutral_values():
     out = normalize_chat_request({
         "messages": [{"role": "user", "content": "hi"}],

@@ -5,6 +5,8 @@ import type {
   InfluenceAbsence,
   InfluenceErrorCode,
   InfluenceEvidenceState,
+  InfluenceMapJob,
+  InfluenceMapJobState,
   InfluenceMethod,
   InfluenceThresholds,
   MeasureInfluenceResult,
@@ -260,6 +262,24 @@ function performancePhase(value: unknown): PerformancePhase | undefined {
     durationNs: typeof item.duration_ns === "number" && Number.isFinite(item.duration_ns)
       ? item.duration_ns
       : undefined,
+    startNs: typeof item.start_ns === "number" && Number.isFinite(item.start_ns)
+      ? item.start_ns
+      : undefined,
+    clockOwner: typeof item.clock_owner === "string" ? item.clock_owner : undefined,
+    clockDomain: typeof item.clock_domain === "string" ? item.clock_domain : undefined,
+    measurement: item.measurement === "measured" || item.measurement === "estimated"
+      ? item.measurement
+      : undefined,
+    aggregation: item.aggregation === "exclusive"
+      || item.aggregation === "overlapping"
+      || item.aggregation === "context_only"
+      ? item.aggregation
+      : undefined,
+    sourceSchema: typeof item.source_schema === "string" ? item.source_schema : undefined,
+    scope: typeof item.scope === "string" ? item.scope : undefined,
+    includes: Array.isArray(item.includes)
+      ? item.includes.filter((entry): entry is string => typeof entry === "string")
+      : [],
   };
 }
 
@@ -283,6 +303,8 @@ function performanceRuleReport(value: unknown): PerformanceRuleReport | undefine
     const parsed = performanceRuleDiagnosis(item);
     return parsed ? [parsed] : [];
   });
+  const aggregation = record(body.aggregation);
+  const regression = record(body.regression_attribution);
   return {
     schemaVersion: body.schema_version,
     phases: records(body.phases).flatMap((item) => {
@@ -290,6 +312,30 @@ function performanceRuleReport(value: unknown): PerformanceRuleReport | undefine
       return phase ? [phase] : [];
     }),
     metrics: performanceMetrics(body.metrics),
+    aggregation: Object.keys(aggregation).length > 0 ? {
+      knownDurationNs: nonnegativeNumber(aggregation.known_duration_ns),
+      unaccountedDurationNs: nonnegativeNumber(aggregation.unaccounted_duration_ns),
+      wallClockTotalNs: nonnegativeNumber(aggregation.wall_clock_total_ns),
+      measurementCoverage: nonnegativeNumber(aggregation.measurement_coverage),
+      phaseCount: nonnegativeNumber(aggregation.phase_count),
+      exclusivePhaseCount: nonnegativeNumber(aggregation.exclusive_phase_count),
+      consistency: aggregation.consistency === "consistent"
+        || aggregation.consistency === "known_exceeds_wall"
+        ? aggregation.consistency
+        : undefined,
+    } : undefined,
+    regressionAttribution: typeof regression.status === "string" ? {
+      status: regression.status,
+      rules: Array.isArray(regression.rules)
+        ? regression.rules.filter((entry): entry is string => typeof entry === "string")
+        : [],
+      evaluableRuleCount: nonnegativeNumber(regression.evaluable_rule_count),
+      evidenceState: regression.evidence_state === "observed"
+        || regression.evidence_state === "correlated"
+        || regression.evidence_state === "causally_supported"
+        ? regression.evidence_state
+        : undefined,
+    } : undefined,
     diagnoses,
   };
 }
@@ -468,6 +514,118 @@ function isInfluenceErrorCode(value: unknown): value is InfluenceErrorCode {
   return typeof value === "string" && INFLUENCE_ERROR_CODES.has(value as InfluenceErrorCode);
 }
 
+const INFLUENCE_JOB_STATES = new Set<InfluenceMapJobState>([
+  "queued",
+  "running",
+  "persisting",
+  "cancelling",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+
+function parseInfluenceMapJob(value: unknown): InfluenceMapJob {
+  const body = record(value);
+  const progress = record(body.progress);
+  const error = record(body.error);
+  const state = body.state;
+  if (
+    body.schema_version !== "clozn.influence-map-job.v1"
+    || typeof body.job_id !== "string"
+    || typeof body.run_id !== "string"
+    || typeof state !== "string"
+    || !INFLUENCE_JOB_STATES.has(state as InfluenceMapJobState)
+    || typeof progress.phase !== "string"
+  ) {
+    throw new Error("the server returned an invalid influence-map job");
+  }
+  return {
+    schemaVersion: "clozn.influence-map-job.v1",
+    jobId: body.job_id,
+    runId: body.run_id,
+    state: state as InfluenceMapJobState,
+    progress: {
+      phase: progress.phase,
+      completedUnits: Number(progress.completed_units) || 0,
+      totalUnits: Number(progress.total_units) || 0,
+      percent: Number(progress.percent) || 0,
+    },
+    cancelRequested: body.cancel_requested === true,
+    cancellable: body.cancellable === true,
+    cached: body.cached === true,
+    cancelAccepted: typeof body.cancel_accepted === "boolean" ? body.cancel_accepted : undefined,
+    error: typeof error.message === "string"
+      ? {
+          code: typeof error.code === "string" ? error.code : undefined,
+          message: error.message,
+          artifactStatus: error.artifact_status === "error" ? "error"
+            : error.artifact_status === "unavailable" ? "unavailable"
+              : undefined,
+        }
+      : undefined,
+  };
+}
+
+async function influenceMapJobRequest(
+  runId: string,
+  suffix: string,
+  method: "GET" | "POST",
+  signal?: AbortSignal,
+): Promise<InfluenceMapJob> {
+  const response = await fetch(
+    `/runs/${encodeURIComponent(runId)}/influence-map/jobs${suffix}`,
+    {
+      method,
+      headers: method === "POST" ? { "content-type": "application/json" } : undefined,
+      body: method === "POST" ? "{}" : undefined,
+      signal,
+    },
+  );
+  let body: unknown = {};
+  try {
+    body = await response.json();
+  } catch {
+    // Preserve the HTTP status below if the response is not JSON.
+  }
+  if (!response.ok) {
+    const flatError = record(body).error;
+    throw new Error(
+      typeof flatError === "string"
+        ? flatError
+        : `influence-map job request failed (${response.status})`,
+    );
+  }
+  return parseInfluenceMapJob(body);
+}
+
+export function startRunInfluenceMapJob(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<InfluenceMapJob> {
+  return influenceMapJobRequest(runId, "", "POST", signal);
+}
+
+export function loadRunInfluenceMapJob(
+  runId: string,
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<InfluenceMapJob> {
+  return influenceMapJobRequest(runId, `/${encodeURIComponent(jobId)}`, "GET", signal);
+}
+
+export function cancelRunInfluenceMapJob(
+  runId: string,
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<InfluenceMapJob> {
+  return influenceMapJobRequest(
+    runId,
+    `/${encodeURIComponent(jobId)}/cancel`,
+    "POST",
+    signal,
+  );
+}
+
 /**
  * POST /runs/<id>/influence-map, preserving the backend's typed absence states instead of collapsing
  * every non-2xx response into one generic thrown Error. `clozn/server/routes/influence_map.py` returns:
@@ -511,7 +669,13 @@ export async function measureRunInfluenceMap(
     // The status remains authoritative when the response has no JSON body.
   }
 
-  if (response.ok && body.available === true) return { ok: true };
+  if (response.ok && body.available === true) {
+    const cacheHeader = response.headers.get("X-Clozn-Influence-Cache");
+    return {
+      ok: true,
+      cache: cacheHeader === "hit" || cacheHeader === "miss" ? cacheHeader : "unknown",
+    };
+  }
 
   if (response.status === 503) {
     return { ok: false, absence: { kind: "no_worker" } };
@@ -585,17 +749,29 @@ function promptTokenCount(run: JsonRecord): number | undefined {
 }
 
 function messageContextSources(run: JsonRecord): SourceReading[] {
+  const receiptByOrder = new Map<number, JsonRecord>();
+  for (const segment of records(record(run.context_receipt).delivered)) {
+    const order = Number(segment.original_order);
+    if (Number.isInteger(order)) receiptByOrder.set(order, segment);
+  }
   return records(run.messages).flatMap((message, index) => {
     if (typeof message.content !== "string" || !message.content.trim()) return [];
     const role = String(message.role || "unknown");
     const name = typeof message.name === "string" ? message.name : "";
+    const receipt = receiptByOrder.get(index) ?? {};
+    const segmentId = typeof receipt.segment_id === "string" ? receipt.segment_id : undefined;
+    const clientSourceId = typeof receipt.client_source_id === "string"
+      ? receipt.client_source_id : undefined;
+    const receiptLabel = typeof receipt.source_label === "string" ? receipt.source_label : undefined;
     return [{
-      id: `context.m${String(index).padStart(3, "0")}`,
+      id: segmentId ?? `context.m${String(index).padStart(3, "0")}`,
       text: message.content,
       role,
       kind: role === "tool" ? "tool_result" : "message",
-      label: name || undefined,
-      groupId: `context.m${String(index).padStart(3, "0")}`,
+      label: (receiptLabel ?? clientSourceId ?? name) || undefined,
+      segmentId,
+      clientSourceId,
+      groupId: segmentId ?? `context.m${String(index).padStart(3, "0")}`,
       messageIndex: index,
       measured: false,
       start: 0,
@@ -611,19 +787,35 @@ function sourceReading(source: JsonRecord, measured: boolean, clearEffect?: bool
   const messageIndex = Number(source.message_index);
   const start = Number(source.start);
   const end = Number(source.end);
-  const label = source.name ?? source.external_source_id;
+  const byteStart = Number(source.byte_start);
+  const byteEnd = Number(source.byte_end);
+  const segmentId = typeof source.segment_id === "string" ? source.segment_id : undefined;
+  const clientSourceId = typeof source.client_source_id === "string"
+    ? source.client_source_id
+    : typeof source.external_source_id === "string" ? source.external_source_id : undefined;
+  const explicitLabel = source.source_label ?? source.name;
+  const label = (
+    typeof explicitLabel === "string" && explicitLabel
+      ? explicitLabel
+      : clientSourceId
+        ?? (segmentId ? `segment ${segmentId.slice(0, 10)}` : undefined)
+  );
   return {
     id,
     text,
     role: String(source.role || "unknown"),
     kind: String(source.source_kind || source.kind || "message"),
     label: typeof label === "string" && label ? label : undefined,
+    segmentId,
+    clientSourceId,
     groupId: String(source.parent_id || source.id || ""),
     messageIndex: Number.isInteger(messageIndex) ? messageIndex : undefined,
     measured,
     clearEffect,
     start: Number.isInteger(start) ? start : undefined,
     end: Number.isInteger(end) ? end : undefined,
+    byteStart: Number.isInteger(byteStart) ? byteStart : undefined,
+    byteEnd: Number.isInteger(byteEnd) ? byteEnd : undefined,
   };
 }
 
@@ -752,7 +944,7 @@ function influenceIndex(body: unknown, run: JsonRecord): InfluenceIndex {
     if (!source) return null;
     return {
       sourceId,
-      label: source.text,
+      label: source.label ?? source.text,
       effect: sanitizeInfluenceEffect(link?.effect),
       deltaNats: Number(link?.delta_nats) || 0,
       evidenceState: toEvidenceState(link?.evidence_state),

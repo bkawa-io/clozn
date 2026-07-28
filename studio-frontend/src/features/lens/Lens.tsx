@@ -2,18 +2,22 @@ import {
   Fragment,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
 import {
+  cancelRunInfluenceMapJob,
+  loadRunInfluenceMapJob,
   loadRunConcepts,
   loadRunInspection,
   loadRunPerformance,
-  measureRunInfluenceMap,
+  startRunInfluenceMapJob,
 } from "../../data/api";
 import type {
   InfluenceAbsence,
+  InfluenceMapJob,
   ObservatoryData,
   RunConcepts,
   RunPerformance as RunPerformanceData,
@@ -101,6 +105,24 @@ function bandCounts(tokens: TokenReading[]) {
   );
 }
 
+function waitForSourcePoll(signal: AbortSignal, delayMs = 250) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, delayMs);
+    const abort = () => {
+      window.clearTimeout(timeout);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
 function SourceCard({
   source,
   selected,
@@ -123,12 +145,14 @@ function SourceCard({
       aria-pressed={selected}
       onClick={onSelect}
     >
-      <span>{source.role || "CONTEXT"}</span>
+      <span>{source.label ?? source.role ?? "CONTEXT"}</span>
       <strong>{source.text}</strong>
       <small className={noClearEffect ? "is-evidence-observed" : undefined}>
-        {noClearEffect
-          ? "MEASURED · NO CLEAR EFFECT"
-          : `${linkedTokens} ${linkedTokens === 1 ? "TOKEN" : "TOKENS"}`}
+        {source.measured === false
+          ? "NOT MEASURED"
+          : noClearEffect
+            ? "MEASURED · NO CLEAR EFFECT"
+            : `${linkedTokens} ${linkedTokens === 1 ? "TOKEN" : "TOKENS"}`}
       </small>
     </button>
   );
@@ -146,6 +170,10 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
   const [concepts, setConcepts] = useState<ConceptState>({ status: "idle" });
   const [sourceStatus, setSourceStatus] = useState<"idle" | "measuring" | "error">("idle");
   const [sourceAbsence, setSourceAbsence] = useState<InfluenceAbsence | null>(null);
+  const [sourceCache, setSourceCache] = useState<"hit" | "miss" | "unknown" | null>(null);
+  const [sourceJob, setSourceJob] = useState<InfluenceMapJob | null>(null);
+  const sourceRequest = useRef<AbortController | null>(null);
+  const sourceJobId = useRef<string | null>(null);
   const [performanceOpen, setPerformanceOpen] = useState(false);
   const [performance, setPerformance] = useState<PerformanceState>({ status: "idle" });
   const [selectedPerformanceFinding, setSelectedPerformanceFinding] = useState("generation");
@@ -164,6 +192,11 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
     setConcepts({ status: "idle" });
     setSourceStatus("idle");
     setSourceAbsence(null);
+    setSourceCache(null);
+    setSourceJob(null);
+    sourceRequest.current?.abort();
+    sourceRequest.current = null;
+    sourceJobId.current = null;
     setPerformance({ status: "loading" });
     setSelectedPerformanceFinding("generation");
     void loadRunInspection(runId, controller.signal).then((inspection) => {
@@ -211,6 +244,7 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
   const tokens = data?.tokens ?? [];
   const selected = tokens[selectedToken];
   const counts = bandCounts(tokens);
+  const contextSources = data?.contextSources ?? data?.sources ?? [];
   const claims = useMemo(() => buildResponseClaims(tokens), [tokens]);
   const rangeSummary = selectedRange
     ? summarizeRange(tokens, selectedRange.start, selectedRange.end)
@@ -255,12 +289,15 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
   const linkedIndexes = useMemo(
     () => selectedSourceId
       ? tokens.flatMap((token, index) =>
-        token.text && token.sources?.some((source) => source.sourceId === selectedSourceId) ? [index] : [])
+        token.text && (
+          token.sources?.some((source) => source.sourceId === selectedSourceId)
+          || token.observedSources?.some((source) => source.sourceId === selectedSourceId)
+        ) ? [index] : [])
       : [],
     [selectedSourceId, tokens],
   );
   const linkedSet = new Set(linkedIndexes);
-  const selectedSource = data?.sources.find((source) => source.id === selectedSourceId);
+  const selectedSource = contextSources.find((source) => source.id === selectedSourceId);
   const sourceCounts = useMemo(() => {
     const output = new Map<string, number>();
     for (const token of tokens) {
@@ -339,14 +376,55 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
 
   async function measureSources() {
     if (!data || sourceStatus === "measuring") return;
+    const controller = new AbortController();
+    sourceRequest.current = controller;
+    sourceJobId.current = null;
     setSourceStatus("measuring");
     setSourceAbsence(null);
-    const result = await measureRunInfluenceMap(data.id);
-    if (!result.ok) {
-      setSourceAbsence(result.absence);
+    setSourceJob(null);
+    let job: InfluenceMapJob | null = null;
+    try {
+      job = await startRunInfluenceMapJob(data.id, controller.signal);
+      sourceJobId.current = job.jobId;
+      setSourceJob(job);
+      while (
+        job.state !== "completed"
+        && job.state !== "failed"
+        && job.state !== "cancelled"
+      ) {
+        await waitForSourcePoll(controller.signal);
+        job = await loadRunInfluenceMapJob(data.id, job.jobId, controller.signal);
+        setSourceJob(job);
+      }
+    } catch (error) {
+      if (controller.signal.aborted) {
+        setSourceStatus("idle");
+        return;
+      }
+      setSourceAbsence({
+        kind: "network_error",
+        message: error instanceof Error ? error.message : "source measurement request failed",
+      });
+      setSourceStatus("error");
+      return;
+    } finally {
+      if (sourceRequest.current === controller) sourceRequest.current = null;
+      if (job && sourceJobId.current === job.jobId) sourceJobId.current = null;
+    }
+
+    if (job.state === "cancelled") {
+      setSourceStatus("idle");
+      return;
+    }
+    if (job.state === "failed") {
+      setSourceAbsence({
+        kind: "server_error",
+        message: job.error?.message ?? "source measurement did not produce available evidence",
+      });
       setSourceStatus("error");
       return;
     }
+    setSourceCache(job.cached ? "hit" : "miss");
     try {
       const inspection = await loadRunInspection(data.id);
       const nextToken = Math.min(selectedToken, Math.max(0, inspection.tokens.length - 1));
@@ -361,6 +439,40 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
     }
   }
 
+  async function stopWaitingForSources() {
+    if (sourceStatus !== "measuring") return;
+    const controller = sourceRequest.current;
+    const jobId = sourceJobId.current;
+    if (data && jobId) {
+      try {
+        const job = await cancelRunInfluenceMapJob(data.id, jobId);
+        setSourceJob(job);
+        if (job.state === "completed") {
+          setSourceAbsence({
+            kind: "server_error",
+            message: "the measurement completed before cancellation was accepted; stopped waiting locally",
+          });
+        }
+      } catch (error) {
+        setSourceAbsence({
+          kind: "network_error",
+          message: `cancellation could not be confirmed; stopped waiting locally and the server job may still finish${
+            error instanceof Error ? `: ${error.message}` : ""
+          }`,
+        });
+      }
+    } else {
+      setSourceAbsence({
+        kind: "network_error",
+        message: "stopped waiting before a server job ID was available; server cancellation could not be requested",
+      });
+    }
+    controller?.abort();
+    if (sourceRequest.current === controller) sourceRequest.current = null;
+    if (sourceJobId.current === jobId) sourceJobId.current = null;
+    setSourceStatus("idle");
+  }
+
   return (
     <>
       <section className="instrument lens-context" aria-labelledby="lens-context-title">
@@ -369,22 +481,40 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
             <span className="eyebrow">INPUT</span>
             <h2 id="lens-context-title">Context</h2>
           </div>
-          <strong>{data?.sources.length ?? 0} SPANS</strong>
+          <strong>{contextSources.length} SOURCES</strong>
         </header>
         <div className="lens-context-body">
           <section className="lens-prompt">
             <span>PROMPT</span>
             <p>{data?.prompt || "—"}</p>
           </section>
-          {data?.sources.length ? (
+          {sourceStatus === "measuring" && (
+            <p className="lens-source-measurement-state">
+              {sourceJob
+                ? `MEASURING CONTEXT SUPPORT · ${sourceJob.progress.phase.toUpperCase()} · ${
+                    sourceJob.progress.completedUnits
+                  }/${sourceJob.progress.totalUnits}`
+                : "STARTING CONTEXT SUPPORT MEASUREMENT"}
+            </p>
+          )}
+          {contextSources.length ? (
             <>
               <EvidenceCaveat
-                method={data.influenceMethod}
-                thresholds={data.influenceThresholds}
-                coverage={data.contextCoverage}
+                method={data?.influenceMethod}
+                thresholds={data?.influenceThresholds}
+                coverage={data?.contextCoverage}
               />
+              {sourceCache && (
+                <p className="lens-source-measurement-state">
+                  {sourceCache === "hit"
+                    ? "MEASURED CONTEXT SUPPORT · CACHED"
+                    : sourceCache === "miss"
+                      ? "MEASURED CONTEXT SUPPORT · NEWLY MEASURED"
+                      : "MEASURED CONTEXT SUPPORT"}
+                </p>
+              )}
               <div className="lens-source-list">
-                {data.sources.map((source) => (
+                {contextSources.map((source) => (
                   <SourceCard
                     key={source.id}
                     source={source}
@@ -398,6 +528,31 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
                   />
                 ))}
               </div>
+              {!data?.sources.length && (
+                <div className="lens-source-empty">
+                  {(() => {
+                    const described = describeAbsence(
+                      sourceAbsence ?? data?.influenceAbsence ?? { kind: "not_measured" },
+                    );
+                    return (
+                      <>
+                        <span>{described.title}</span>
+                        {described.detail && <p>{described.detail}</p>}
+                      </>
+                    );
+                  })()}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (sourceStatus === "measuring") {
+                        void stopWaitingForSources();
+                        return;
+                      }
+                      void measureSources();
+                    }}
+                  >{sourceStatus === "measuring" ? "STOP WAITING" : "MEASURE SOURCES"}</button>
+                </div>
+              )}
             </>
           ) : (
             <div className="lens-source-empty">
@@ -413,9 +568,15 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
               })()}
               <button
                 type="button"
-                disabled={!data || sourceStatus === "measuring"}
-                onClick={() => void measureSources()}
-              >{sourceStatus === "measuring" ? "MEASURING SOURCES" : "MEASURE SOURCES"}</button>
+                disabled={!data}
+                onClick={() => {
+                  if (sourceStatus === "measuring") {
+                    void stopWaitingForSources();
+                    return;
+                  }
+                  void measureSources();
+                }}
+              >{sourceStatus === "measuring" ? "STOP WAITING" : "MEASURE SOURCES"}</button>
             </div>
           )}
           {runId && <SlotHost slot="lens.evidence" data={{ runId }} />}
@@ -597,17 +758,17 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
           {selectedSource ? (
             <div className="lens-inspector-body">
               <section className="lens-selected-source">
-                <span>{selectedSource.role || "CONTEXT"}</span>
+                <span>{selectedSource.label ?? selectedSource.role ?? "CONTEXT"}</span>
                 <p>{selectedSource.text}</p>
               </section>
               <div className="lens-linked-output">
                 <span>LINKED OUTPUT</span>
                 <p>{linkedIndexes.map((index) => tokens[index]?.text).join("") || "—"}</p>
-                {selectedSource.measured && !linkedIndexes.length && (
+                {(selectedSource.measured === false || selectedSource.clearEffect === false) && (
                   <p className="lens-evidence-observed-label">
-                    {selectedSource.clearEffect === false
-                      ? "MEASURED · NO LINK CLEARED THE FLOOR"
-                      : "NOT MEASURED"}
+                    {selectedSource.measured === false
+                      ? "NOT MEASURED"
+                      : "MEASURED · NO LINK CLEARED THE FLOOR"}
                   </p>
                 )}
               </div>
@@ -635,7 +796,10 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
                 {rangeSources.map((source) => (
                   <button
                     type="button"
-                    className={`lens-evidence-row effect-${source.effect}`}
+                    className={`lens-evidence-row effect-${source.effect} ${
+                      source.clearTokenCount && source.observedTokenCount ? "is-evidence-mixed"
+                        : source.observedTokenCount ? "is-evidence-observed" : ""
+                    }`}
                     onClick={() => {
                       setMode("sources");
                       setSelectedRange(null);
@@ -644,7 +808,11 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
                     key={source.sourceId}
                   >
                     <strong>{source.label}</strong>
-                    <span>{source.tokenCount} TOKENS</span>
+                    <span>
+                      {source.clearTokenCount ? `${source.clearTokenCount} CLEAR` : ""}
+                      {source.clearTokenCount && source.observedTokenCount ? " · " : ""}
+                      {source.observedTokenCount ? `${source.observedTokenCount} BELOW FLOOR` : ""}
+                    </span>
                     <output>{source.deltaNats >= 0 ? "+" : ""}{source.deltaNats.toFixed(4)} Σ nats</output>
                   </button>
                 ))}

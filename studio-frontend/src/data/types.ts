@@ -29,6 +29,8 @@ export interface SourceReading {
   role: string;
   kind?: string;
   label?: string;
+  segmentId?: string;
+  clientSourceId?: string;
   groupId?: string;
   messageIndex?: number;
   measured?: boolean;
@@ -40,6 +42,8 @@ export interface SourceReading {
   clearEffect?: boolean;
   start?: number;
   end?: number;
+  byteStart?: number;
+  byteEnd?: number;
 }
 
 export interface ContextCoverage {
@@ -114,8 +118,39 @@ export type InfluenceAbsence =
   | { kind: "network_error"; message: string };
 
 export type MeasureInfluenceResult =
-  | { ok: true }
+  | { ok: true; cache: "hit" | "miss" | "unknown" }
   | { ok: false; absence: InfluenceAbsence };
+
+export type InfluenceMapJobState =
+  | "queued"
+  | "running"
+  | "persisting"
+  | "cancelling"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface InfluenceMapJob {
+  schemaVersion: "clozn.influence-map-job.v1";
+  jobId: string;
+  runId: string;
+  state: InfluenceMapJobState;
+  progress: {
+    phase: string;
+    completedUnits: number;
+    totalUnits: number;
+    percent: number;
+  };
+  cancelRequested: boolean;
+  cancellable: boolean;
+  cached: boolean;
+  cancelAccepted?: boolean;
+  error?: {
+    code?: string;
+    message: string;
+    artifactStatus?: "unavailable" | "error";
+  };
+}
 
 export interface WorkspaceReadout {
   tokenIndex?: number;
@@ -273,12 +308,37 @@ export interface PerformancePhase {
   name: string;
   owner?: string;
   durationNs?: number;
+  startNs?: number;
+  clockOwner?: string;
+  clockDomain?: string;
+  measurement?: "measured" | "estimated";
+  aggregation?: "exclusive" | "overlapping" | "context_only";
+  sourceSchema?: string;
+  scope?: string;
+  includes: string[];
+}
+
+export interface PerformanceAggregation {
+  knownDurationNs?: number;
+  unaccountedDurationNs?: number;
+  wallClockTotalNs?: number;
+  measurementCoverage?: number;
+  phaseCount?: number;
+  exclusivePhaseCount?: number;
+  consistency?: "consistent" | "known_exceeds_wall";
 }
 
 export interface PerformanceRuleReport {
   schemaVersion: string;
   phases: PerformancePhase[];
   metrics: Record<string, number>;
+  aggregation?: PerformanceAggregation;
+  regressionAttribution?: {
+    status: string;
+    rules: string[];
+    evaluableRuleCount?: number;
+    evidenceState?: PerformanceEvidenceState;
+  };
   /** Always one entry per rule the engine knows about (see the backend module docstring) when this run's
    * trace could be built at all -- absence of this whole object means the fetch itself failed or the run
    * could not produce a trace, not that every rule was clean. The UI must render those two cases visibly

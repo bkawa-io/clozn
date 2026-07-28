@@ -33,6 +33,7 @@ cmake -S engine/core -B engine/core/build-serve \
   -DCMAKE_BUILD_TYPE=Release \
   -DCLOZN_BUILD_GGML=ON \
   -DCLOZN_BUILD_SERVE=ON \
+  -DCLOZN_ENGINE_BUILD_ID=development \
   -DGGML_CUDA=OFF
 cmake --build engine/core/build-serve --target clozn-server -j
 ```
@@ -41,6 +42,16 @@ On Windows, `engine/core/build_serve.bat` performs the equivalent build. For CUD
 `engine/core/build_gpu.bat` or configure the same CMake target with `GGML_CUDA=ON` in a CUDA-capable
 toolchain. `clozn` discovers `build-serve`, `build-gpu`, and the other supported build directories
 automatically.
+
+Confirm the model-free embedded identity before loading a GGUF:
+
+```bash
+engine/core/build-serve/clozn-server --version --json
+```
+
+Published artifacts use a release-unique build ID and are checked against their release manifest before
+`clozn setup` promotes them. See [NATIVE_DISTRIBUTION.md](NATIVE_DISTRIBUTION.md) for that contract and
+the current release status.
 
 For a nonstandard or test build, `CLOZN_ENGINE_BIN=/absolute/path/to/clozn-server` selects the worker
 explicitly; set `CLOZN_ENGINE_GPU=1` when that binary should receive GPU offload flags. A packaged Studio

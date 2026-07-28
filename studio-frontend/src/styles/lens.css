@@ -343,6 +343,63 @@
   font-size: 11px;
 }
 
+.lens-performance-breakdown {
+  border-top: 1px solid var(--line);
+}
+
+.lens-performance-breakdown > header {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 24px;
+  align-items: end;
+  padding: 16px 18px 12px;
+}
+
+.lens-performance-breakdown > header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.lens-performance-breakdown > header span,
+.lens-performance-breakdown article small {
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: .08em;
+}
+
+.lens-performance-breakdown > header strong {
+  font-size: 13px;
+}
+
+.lens-performance-breakdown > div {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  border-top: 1px solid var(--line);
+}
+
+.lens-performance-breakdown article {
+  display: grid;
+  gap: 5px;
+  padding: 12px 18px;
+  border-right: 1px solid var(--line);
+}
+
+.lens-performance-breakdown article span {
+  font-size: 10px;
+  letter-spacing: .06em;
+}
+
+.lens-performance-breakdown article strong {
+  font-size: 16px;
+}
+
+.lens-performance-breakdown > div > p {
+  margin: 0;
+  padding: 16px 18px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .lens-performance-diagnosis {
   display: grid;
   min-width: 0;

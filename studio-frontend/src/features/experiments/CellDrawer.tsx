@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { loadExperimentCells, reproductionCommand } from "./api";
 import { formatTimestamp, statusLabel } from "./format";
 import { diffIdentity } from "./identityDiff";
+import { PromotionPanel } from "./PromotionPanel";
 import type { CellSelection } from "./urlState";
 import type { CaseDef, ExperimentDetail, FullCell } from "./types";
 
@@ -231,6 +232,15 @@ export function CellDrawer({ experimentId, detail, selection, onClose, onSelectS
               Assumes the default result path (~/.clozn/experiments/{experimentId}.json); a result saved
               with a custom --out will need its own path substituted.
             </p>
+          </section>
+
+          <section>
+            <h3>PROMOTE TO REGRESSION SUITE</h3>
+            <PromotionPanel
+              experimentId={experimentId}
+              selection={selection}
+              canPromote={Boolean(candidateCell?.run && candidateCell.status !== "error")}
+            />
           </section>
 
           {candidateCell?.run?.identity?.capturedAt && (

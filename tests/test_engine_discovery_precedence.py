@@ -41,6 +41,9 @@ def _install_managed(home, *, backend="cuda", cuda_major=12, sha256="a" * 64, ve
         "version": version, "os": "windows", "arch": "x86_64", "backend": backend,
         **({"cuda_major": cuda_major} if backend == "cuda" else {}),
         "sha256": sha256, "protocol_version": "1.0", "entrypoint": exe,
+        "build_id": f"release-{version}-{backend}",
+        "llama_cpp_commit": "88a39274ecf88ba11686acd357b59685b1cbf03d",
+        "feature_flags": {"lora": True, "sae": False},
         "installed_at": "2026-07-27T00:00:00+00:00",
     }
     key = f"{version}/windows-x86_64-{backend}{cuda_major if backend == 'cuda' else ''}"
@@ -98,6 +101,8 @@ def test_managed_engine_only(isolated):
     assert result.backend == "cuda"
     assert result.artifact_sha256 == "b" * 64
     assert result.engine_version == "2.0.0"
+    assert result.build_id == "release-2.0.0-cuda"
+    assert result.llama_cpp_commit == "88a39274ecf88ba11686acd357b59685b1cbf03d"
     assert result.gpu is True
 
 

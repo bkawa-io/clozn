@@ -256,8 +256,8 @@ def build_parser():
     pdoc.add_argument("--verify-offline", action="store_true",
                       help="fail unless local-only enforcement is active and its ledger window is clean")
     pdoc.add_argument("--deep", action="store_true",
-                      help="also run a model-free process-start check on the discovered engine binary "
-                           "(roadmap feature 01: one extra subprocess launch, still no model/network)")
+                      help="also validate the discovered engine's embedded build identity "
+                           "(one extra subprocess launch, still no model/network)")
     pdoc.set_defaults(fn=cmd_doctor)
     return p
 

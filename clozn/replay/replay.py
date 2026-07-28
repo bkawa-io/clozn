@@ -72,7 +72,6 @@ def _apply_changes(changes: dict, sub, mode: str) -> dict:
     raises."""
     notes: dict = {}
     steer = getattr(sub, "steer", None)
-    mem = getattr(sub, "memory", None) or getattr(sub, "_mem", None)
 
     # --- memory ---
     # (memory_off / disabled_memory_ids drove the strength dial and the per-card block ablation until
@@ -125,7 +124,9 @@ def _effective_dials(sub) -> dict:
 
 
 def replay(run: dict, changes: dict, sub, reference_tokens=None, *,
-           prompt_instructions=None, max_new: int | None = None) -> dict | None:
+           prompt_instructions=None, max_new: int | None = None,
+           messages_override: list[dict] | None = None,
+           sampling_override: bool | dict | None = None) -> dict | None:
     """Re-run `run` under `changes` on the live substrate `sub`; record the result as a child run and return
     it. Returns None on any failure (a replay must never raise into the request handler).
 
@@ -146,7 +147,12 @@ def replay(run: dict, changes: dict, sub, reference_tokens=None, *,
         if not run or not isinstance(run, dict):
             return None
         from clozn.runs.think_tags import sanitize_messages
-        messages = sanitize_messages(run.get("messages") or [])
+        source_messages = run.get("messages") or []
+        if messages_override is not None:
+            if not isinstance(messages_override, list):
+                return None
+            source_messages = messages_override
+        messages = sanitize_messages(source_messages)
         generation_messages = _inject_prompt_instructions(messages, prompt_instructions)
         chat = getattr(sub, "chat", None)
         if not callable(chat):
@@ -171,7 +177,8 @@ def replay(run: dict, changes: dict, sub, reference_tokens=None, *,
             # difference is attributable to the CHANGE, not to sampling dice. Default stays sampled.
             # Capture the per-token trace when chat supports it (the real substrates do); fall back for a
             # chat that predates trace_out -- replay's sub contract is just (messages, max_new=, sample=).
-            sampled = not bool(changes.get("greedy"))
+            sampled = (sampling_override if isinstance(sampling_override, (bool, dict))
+                       else not bool(changes.get("greedy")))
             # Build the call kwargs and drop any the substrate's chat() doesn't accept (a fake
             # / test fakes predate trace_out and/or reference_tokens). Progressive-degrade on the exact
             # unknown kwarg named in the TypeError, so the reply is never lost -- just less instrumented.

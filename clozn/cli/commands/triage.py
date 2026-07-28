@@ -15,17 +15,21 @@ substitution for the spec's literal verb, not a silent rename.
 by name (`clozn.experiments.suite.load_result`/`select_cells`) and does not define or validate its shape
 beyond what that module already does.
 
-SCOPE OF THIS BUILD
-----------------------
-Only the model-free steps (identity diff, context diff) actually execute. Every other step the spec's
-triage order names (controlled replay, quant/export, tool contract, internal localization) is reported as
-an explicit, reasoned `not_run` -- `--deep` does not change that in this build; it is accepted and
-threaded into the placeholder so the request is visible, not silently ignored (roadmap rule 3: no silent
-fallback).
+EXECUTION BOUNDARY
+------------------
+Identity, segment/rendered context, sampling, quant/export identity and tool-contract comparisons are
+model-free. `--plan` emits the complete two-arm controlled-test plan without generation. `--deep`
+executes context/template/sampling tests through the running gateway under hard run and wall budgets;
+exact-template replay stays unavailable until exact template material exists, and qualified internal
+localization remains an explicit final-tier `not_run`.
 """
 from __future__ import annotations
 
 import json
+import math
+import os
+import urllib.error
+import urllib.request
 
 from clozn.triage.artifact import ALL_FAMILIES, build_triage_artifact
 
@@ -34,6 +38,7 @@ CLOZN_AUTOLOAD = True
 
 _BUCKET_HEADINGS = (
     ("causally_supported", "CAUSALLY SUPPORTED"),
+    ("reproduced", "REPRODUCED (not causally isolated)"),
     ("eliminated", "ELIMINATED"),
     ("observed", "OBSERVED (not causally isolated)"),
     ("correlated", "CORRELATED (not causally isolated)"),
@@ -54,7 +59,7 @@ def format_triage(document: dict) -> str:
         headline = classification.upper().replace("_", " ").replace(":", " ")
         lines.append(f"LIKELY {headline}")
     else:
-        lines.append("UNDETERMINED")
+        lines.append("UNDETERMINED (ENTANGLED)" if summary.get("entangled") else "UNDETERMINED")
     lines.append(f"  confidence basis: {summary.get('confidence_basis')}")
     lines.append("")
 
@@ -107,6 +112,17 @@ def _validate_args(args) -> None:
         if args.case or args.variant or args.seed is not None:
             raise ctx.CloznError(
                 "--case/--variant/--seed apply only when triaging from an experiment result")
+    max_runs = getattr(args, "max_runs", None)
+    max_seconds = getattr(args, "max_seconds", None)
+    if max_runs is not None and (isinstance(max_runs, bool) or max_runs < 0):
+        raise ctx.CloznError("--max-runs must be a non-negative integer")
+    if max_seconds is not None and (
+            max_seconds < 0 or not math.isfinite(float(max_seconds))):
+        raise ctx.CloznError("--max-seconds must be a finite non-negative number")
+    if getattr(args, "deep", False) and (
+            getattr(args, "plan", False) or getattr(args, "dry_run", False)):
+        # This combination is meaningful: show exactly what --deep would run.
+        pass
 
 
 def _resolve_run_pair_from_ids(args):
@@ -208,6 +224,44 @@ def _write_artifact(path: str, document: dict, *, force: bool) -> None:
     atomic_write_json(str(target), document, indent=2, ensure_ascii=False)
 
 
+def _controlled_families(families) -> list[str]:
+    return ["context", "template", "sampling"] if families is None or "replay" in families else []
+
+
+def _request_controlled_tests(*, run_a: str, run_b: str, tests: list[str],
+                              max_runs: int, max_seconds: float,
+                              match_criterion: str, port: int) -> dict:
+    """Execute through the running gateway, which owns the live substrate."""
+    from clozn.cli import main as ctx
+
+    body = json.dumps({
+        "a": run_a, "b": run_b, "tests": tests,
+        "max_runs": max_runs, "max_seconds": max_seconds,
+        "match_criterion": match_criterion,
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/runs/compare/test",
+        data=body, method="POST", headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=max(5.0, max_seconds + 5.0)) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")
+        try:
+            detail = json.loads(detail).get("error") or detail
+        except Exception:
+            pass
+        raise ctx.CloznError(f"controlled triage failed: HTTP {exc.code}: {detail}") from None
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise ctx.CloznError(
+            f"couldn't execute controlled triage through the Clozn gateway on port {port}: {exc}"
+        ) from None
+    if not isinstance(result, dict) or result.get("schema_version") != "clozn.run-change-test.v1":
+        raise ctx.CloznError("gateway returned an invalid controlled-test artifact")
+    return result
+
+
 def cmd_triage(args) -> int:
     from clozn.cli import main as ctx
 
@@ -224,11 +278,37 @@ def cmd_triage(args) -> int:
         if unknown:
             raise ctx.CloznError(f"unknown --steps value(s) {unknown}; know: {list(ALL_FAMILIES)}")
 
+    plan_only = bool(getattr(args, "plan", False) or getattr(args, "dry_run", False))
+    max_runs = (args.max_runs if args.max_runs is not None else 4)
+    max_seconds = (args.max_seconds if args.max_seconds is not None else 120.0)
+    match_criterion = getattr(args, "match", "exact_output")
+    requested_tests = _controlled_families(families)
+    controlled_test_artifact = None
+    if requested_tests and plan_only:
+        from clozn.replay.controlled import plan_change_tests
+        try:
+            controlled_test_artifact = plan_change_tests(
+                baseline_run, candidate_run, tests=requested_tests,
+                max_runs=max_runs, max_seconds=max_seconds,
+                match_criterion=match_criterion,
+            )
+        except ValueError as exc:
+            raise ctx.CloznError(str(exc)) from None
+    elif requested_tests and args.deep:
+        port = int(getattr(args, "port", 0) or os.environ.get("CLOZN_PORT", "8080"))
+        controlled_test_artifact = _request_controlled_tests(
+            run_a=baseline_run.get("id") or args.baseline_run,
+            run_b=candidate_run.get("id") or args.candidate_run,
+            tests=requested_tests, max_runs=max_runs, max_seconds=max_seconds,
+            match_criterion=match_criterion, port=port,
+        )
+
     try:
         document = build_triage_artifact(
             baseline_run=baseline_run, candidate_run=candidate_run,
             source_experiment_id=source_experiment_id, case_id=case_id,
-            families=families, deep=args.deep, max_runs=args.max_runs, max_seconds=args.max_seconds,
+            families=families, deep=args.deep, max_runs=max_runs, max_seconds=max_seconds,
+            controlled_test_artifact=controlled_test_artifact, dry_run=plan_only,
         )
     except ValueError as exc:
         raise ctx.CloznError(str(exc)) from None
@@ -267,14 +347,25 @@ def add_subparser(sub):
         help="comma-separated step families to run/report (default: all -- " + ", ".join(ALL_FAMILIES) + ")")
     parser.add_argument(
         "--deep", action="store_true",
-        help="request GPU-touching steps (controlled replay, quant/export, tool contract, internal "
-             "localization); not implemented in this build -- still reported as an explicit, reasoned "
-             "not_run rather than silently ignored")
+        help="execute bounded context/template/sampling controlled tests through a running Clozn gateway; "
+             "later quant/tool/internal tiers remain explicit not_run")
+    parser.add_argument(
+        "--plan", action="store_true",
+        help="show the controlled-test plan and cost without starting a model run")
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="alias for --plan; no model run is started")
     parser.add_argument("--max-runs", type=int, default=None,
-                        help="budget: maximum model runs a deep step may spend (not enforced by any "
-                             "step this build executes; recorded for forward compatibility)")
+                        help="hard budget for controlled arms (default 4; a two-arm test is never "
+                             "started when fewer than two runs remain)")
     parser.add_argument("--max-seconds", type=float, default=None,
-                        help="budget: maximum wall-clock seconds a deep step may spend (same caveat)")
+                        help="wall-clock deadline for controlled tests (default 120)")
+    parser.add_argument(
+        "--match", choices=("exact_output", "tool_parse", "finish_reason", "token_budget"),
+        default="exact_output",
+        help="exact recorded outcome used to reproduce/recover; semantic similarity is not supported")
+    parser.add_argument("--port", type=int, default=0,
+                        help="running Clozn gateway port for --deep (default CLOZN_PORT or 8080)")
     parser.add_argument("--out", default=None, help="write the clozn.triage.v1 artifact JSON to this path")
     parser.add_argument("--force", action="store_true", help="overwrite --out if it already exists")
     parser.add_argument("--json", action="store_true",

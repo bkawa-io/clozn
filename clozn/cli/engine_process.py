@@ -82,6 +82,8 @@ class EngineDiscovery:
     backend: "str | None" = None
     artifact_sha256: "str | None" = None
     engine_version: "str | None" = None
+    build_id: "str | None" = None
+    llama_cpp_commit: "str | None" = None
 
 
 def _env_override_candidate() -> "EngineDiscovery | None":
@@ -126,7 +128,9 @@ def _managed_candidate() -> "EngineDiscovery | None":
     gpu = backend not in (None, "cpu")
     return EngineDiscovery(exe=exe, dll_dirs=_dll_dirs_for(exe), gpu=gpu,
                            discovery_source="managed", backend=backend,
-                           artifact_sha256=record.get("sha256"), engine_version=record.get("version"))
+                           artifact_sha256=record.get("sha256"), engine_version=record.get("version"),
+                           build_id=record.get("build_id"),
+                           llama_cpp_commit=record.get("llama_cpp_commit"))
 
 
 def _repo_dev_build_candidates() -> list:

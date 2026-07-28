@@ -41,10 +41,8 @@ def _publish_manifest(http_server, *, clozn_version="1.0.0"):
     unlike tests/test_setup_install.py (which uses argv_prefix=[sys.executable] to run a .py fixture as
     a test-only seam), this file exercises setup_engine.py's actual production code path, which has no
     such seam. The simplest thing that is honestly launchable on every platform without a compiler is
-    this process's OWN interpreter binary: `python.exe --version` prints a version string and exits 0,
-    which is all qualify_entrypoint() ever checks (`ran: True`) -- it never parses stdout for a specific
-    clozn-server format (see install.py's qualify_entrypoint docstring for why: the real engine binary
-    does not implement --version yet either)."""
+    this process's OWN interpreter binary. The isolated fixture replaces only the build-info subprocess
+    probe with a contract-valid result; tests/test_setup_install.py exercises the real strict parser."""
     import zipfile
     serve_dir, base_url = http_server
     archive_path = serve_dir / f"clozn-engine-{clozn_version}.zip"
@@ -61,6 +59,12 @@ def _publish_manifest(http_server, *, clozn_version="1.0.0"):
             "url": f"{base_url}/{archive_path.name}",
             "sha256": hashlib.sha256(data).hexdigest(),
             "size_bytes": len(data), "entrypoint": entrypoint_name,
+            "build_id": f"release-{clozn_version}-cpu",
+            "llama_cpp_commit": "88a39274ecf88ba11686acd357b59685b1cbf03d",
+            "feature_flags": {
+                "jlens": True, "lora": True, "native_chat_io": True,
+                "sae": False, "whitebox": True,
+            },
         }],
     }
     (serve_dir / "manifest.json").write_text(json.dumps(doc), encoding="utf-8")
@@ -84,6 +88,24 @@ def isolated(tmp_path, monkeypatch, http_server):
     monkeypatch.setattr(
         install_mod.platform_detect, "detect_platform",
         lambda **kw: {**real_detect(probe_gpu=False), "gpu_backend": None, "cuda_major": None})
+    def _qualified_build_info(_argv, *, timeout=5.0, expected=None):
+        build_info = {
+            "engine_version": "1.0.0",
+            "build_id": "release-1.0.0-cpu",
+            "protocol_version": "1.0",
+            "backend": "cpu",
+            "llama_cpp_commit": "88a39274ecf88ba11686acd357b59685b1cbf03d",
+            "feature_flags": {
+                "jlens": True, "lora": True, "native_chat_io": True,
+                "sae": False, "whitebox": True,
+            },
+        }
+        build_info.update({key: value for key, value in (expected or {}).items() if value is not None})
+        return {
+            "ran": True, "qualified": True, "returncode": 0,
+            "stdout": json.dumps(build_info), "stderr": "", "build_info": build_info,
+        }
+    monkeypatch.setattr(install_mod, "qualify_entrypoint", _qualified_build_info)
     return tmp_path, http_server
 
 

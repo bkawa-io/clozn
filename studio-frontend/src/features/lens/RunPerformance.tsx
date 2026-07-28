@@ -57,6 +57,10 @@ function rate(value?: number) {
   return value == null ? "—" : `${value.toFixed(value < 10 ? 2 : 1)} tok/s`;
 }
 
+function nanoseconds(value?: number) {
+  return value == null ? "—" : duration(value / 1_000_000);
+}
+
 function rawValue(value: unknown) {
   if (typeof value === "number") {
     return Number.isInteger(value) ? value.toLocaleString() : value.toFixed(3);
@@ -184,6 +188,41 @@ export function RunPerformance({
           title={data?.generationDuration?.source}
         />
       </div>
+
+      {data?.rules && (
+        <section className="lens-performance-breakdown" aria-label="Measured phase breakdown">
+          <header>
+            <div>
+              <span>MEASURED BREAKDOWN</span>
+              <strong>Known vs unaccounted</strong>
+            </div>
+            <div>
+              <span>KNOWN</span>
+              <strong>{nanoseconds(data.rules.aggregation?.knownDurationNs)}</strong>
+            </div>
+            <div>
+              <span>UNACCOUNTED</span>
+              <strong>{nanoseconds(data.rules.aggregation?.unaccountedDurationNs)}</strong>
+            </div>
+          </header>
+          <div>
+            {data.rules.phases.length > 0 ? data.rules.phases.map((phase, index) => (
+              <article key={`${phase.name}-${phase.clockDomain ?? phase.owner ?? "unknown"}-${index}`}>
+                <span>{phase.name.replaceAll("_", " ").toUpperCase()}</span>
+                <strong>{nanoseconds(phase.durationNs)}</strong>
+                <small>
+                  {(phase.measurement ?? "measured").toUpperCase()}
+                  {" · "}
+                  {(phase.aggregation ?? "exclusive").replaceAll("_", " ").toUpperCase()}
+                  {phase.clockOwner ? ` · ${phase.clockOwner}` : ""}
+                </small>
+              </article>
+            )) : (
+              <p>No measured phases were recorded for this run.</p>
+            )}
+          </div>
+        </section>
+      )}
 
       <div className="lens-performance-diagnosis">
         <nav aria-label="Performance phases">

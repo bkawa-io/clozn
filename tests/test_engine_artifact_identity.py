@@ -59,10 +59,14 @@ def test_runtime_identity_with_full_extra_context_populates_engine_artifact(monk
         extra_context={
             "discovery_source": "managed", "backend": "cuda",
             "artifact_sha256": "a" * 64, "engine_version": "1.0.0",
+            "build_id": "release-1.0.0-cuda",
+            "llama_cpp_commit": "88a39274ecf88ba11686acd357b59685b1cbf03d",
         })
     assert block["ext"]["engine_artifact"] == {
         "discovery_source": "managed", "backend": "cuda",
         "artifact_sha256": "a" * 64, "engine_version": "1.0.0",
+        "build_id": "release-1.0.0-cuda",
+        "llama_cpp_commit": "88a39274ecf88ba11686acd357b59685b1cbf03d",
         "protocol_version": "1.0",
     }
 
@@ -80,15 +84,21 @@ def test_engine_discovery_context_reads_set_env_vars(monkeypatch):
     monkeypatch.setenv("CLOZN_ENGINE_BACKEND", "cuda")
     monkeypatch.setenv("CLOZN_ENGINE_ARTIFACT_SHA256", "c" * 64)
     monkeypatch.setenv("CLOZN_ENGINE_VERSION", "1.2.3")
+    monkeypatch.setenv("CLOZN_ENGINE_BUILD_ID", "release-1.2.3-cuda")
+    monkeypatch.setenv(
+        "CLOZN_ENGINE_LLAMA_CPP_COMMIT", "88a39274ecf88ba11686acd357b59685b1cbf03d")
     assert substrates._engine_discovery_context() == {
         "discovery_source": "managed", "backend": "cuda",
         "artifact_sha256": "c" * 64, "engine_version": "1.2.3",
+        "build_id": "release-1.2.3-cuda",
+        "llama_cpp_commit": "88a39274ecf88ba11686acd357b59685b1cbf03d",
     }
 
 
 def test_engine_discovery_context_omits_unset_vars(monkeypatch):
     for var in ("CLOZN_ENGINE_DISCOVERY_SOURCE", "CLOZN_ENGINE_BACKEND",
-                "CLOZN_ENGINE_ARTIFACT_SHA256", "CLOZN_ENGINE_VERSION"):
+                "CLOZN_ENGINE_ARTIFACT_SHA256", "CLOZN_ENGINE_VERSION",
+                "CLOZN_ENGINE_BUILD_ID", "CLOZN_ENGINE_LLAMA_CPP_COMMIT"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("CLOZN_ENGINE_DISCOVERY_SOURCE", "repo_dev_build")
     assert substrates._engine_discovery_context() == {"discovery_source": "repo_dev_build"}
@@ -96,6 +106,7 @@ def test_engine_discovery_context_omits_unset_vars(monkeypatch):
 
 def test_engine_discovery_context_empty_when_nothing_set(monkeypatch):
     for var in ("CLOZN_ENGINE_DISCOVERY_SOURCE", "CLOZN_ENGINE_BACKEND",
-                "CLOZN_ENGINE_ARTIFACT_SHA256", "CLOZN_ENGINE_VERSION"):
+                "CLOZN_ENGINE_ARTIFACT_SHA256", "CLOZN_ENGINE_VERSION",
+                "CLOZN_ENGINE_BUILD_ID", "CLOZN_ENGINE_LLAMA_CPP_COMMIT"):
         monkeypatch.delenv(var, raising=False)
     assert substrates._engine_discovery_context() == {}

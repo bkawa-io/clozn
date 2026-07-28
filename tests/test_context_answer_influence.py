@@ -59,6 +59,28 @@ class StepClock:
         return value
 
 
+def test_segment_context_carries_canonical_receipt_source_identity():
+    segmented = segment_context(
+        [{"role": "user", "content": "Document sentence."}],
+        receipt_sources={
+            0: {
+                "segment_id": "seg_0123456789abcdef",
+                "client_source_id": "doc-7",
+                "source_label": "Handbook",
+            }
+        },
+    )
+    source = segmented["sources"][0]
+    span = segmented["spans"][0]
+    assert source["segment_id"] == "seg_0123456789abcdef"
+    assert source["external_source_id"] == "doc-7"
+    assert source["name"] == "Handbook"
+    assert span["segment_id"] == source["segment_id"]
+    assert span["client_source_id"] == "doc-7"
+    assert span["byte_start"] == 0
+    assert span["byte_end"] == len("Document sentence.".encode("utf-8"))
+
+
 def _run():
     return {
         "id": "run-map-1",

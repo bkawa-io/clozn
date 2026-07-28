@@ -836,6 +836,367 @@
   z-index: 2;
 }
 
+.behavior-fix-stage {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.behavior-fix-setup,
+.behavior-fix-confirm,
+.behavior-fix-result {
+  padding: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.behavior-fix-run {
+  display: grid;
+  gap: 7px;
+}
+
+.behavior-fix-run > span,
+.behavior-fix-backends > span,
+.behavior-fix-confirm > header span,
+.behavior-fix-scopes > header span {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .09em;
+}
+
+.behavior-fix-run select {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 9px;
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  background: var(--panel-raised);
+  font-family: var(--font-machine);
+  font-size: 8px;
+}
+
+.behavior-fix-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 12px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+.behavior-fix-actions > button {
+  display: grid;
+  min-height: 102px;
+  align-content: start;
+  gap: 9px;
+  padding: 13px;
+  color: var(--ink-soft);
+  background: var(--panel);
+  text-align: left;
+}
+
+.behavior-fix-actions > button:hover,
+.behavior-fix-actions > button.is-selected {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--signal-violet) 8%, var(--panel-raised));
+}
+
+.behavior-fix-actions > button.is-selected {
+  box-shadow: inset 0 2px var(--signal-violet);
+}
+
+.behavior-fix-actions strong {
+  font-family: var(--font-machine);
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: .04em;
+}
+
+.behavior-fix-actions span {
+  color: var(--ink-faint);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.behavior-fix-backends {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.behavior-fix-backends > span {
+  margin-right: auto;
+}
+
+.behavior-fix-backends button,
+.behavior-fix-preview-button,
+.behavior-fix-confirm button,
+.behavior-fix-undo button,
+.behavior-fix-source-use > button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  color: var(--ink-faint);
+  background: transparent;
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .06em;
+}
+
+.behavior-fix-backends button.is-selected {
+  color: var(--ink);
+  border-color: var(--signal-violet);
+  background: color-mix(in srgb, var(--signal-violet) 9%, transparent);
+}
+
+.behavior-fix-preview-button {
+  width: 100%;
+  margin-top: 10px;
+}
+
+.behavior-fix-confirm {
+  display: grid;
+  gap: 12px;
+  background: color-mix(in srgb, var(--signal-violet) 5%, transparent);
+}
+
+.behavior-fix-confirm > header,
+.behavior-fix-result > header,
+.behavior-fix-scopes > header,
+.behavior-fix-outputs article > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.behavior-fix-confirm > header b,
+.behavior-fix-scopes > header b {
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  font-weight: 500;
+}
+
+.behavior-fix-confirm dl {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  margin: 0;
+  border: 1px solid var(--line);
+}
+
+.behavior-fix-confirm dl div {
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+  border-right: 1px solid var(--line);
+}
+
+.behavior-fix-confirm dl div:last-child {
+  border-right: 0;
+}
+
+.behavior-fix-confirm dt,
+.behavior-fix-confirm dd {
+  margin: 0;
+  font-family: var(--font-machine);
+  font-size: 6px;
+}
+
+.behavior-fix-confirm dt {
+  color: var(--ink-faint);
+}
+
+.behavior-fix-confirm p,
+.behavior-fix-comparison-note {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.behavior-fix-confirm > div:last-child {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.behavior-fix-result {
+  display: grid;
+  gap: 12px;
+}
+
+.behavior-fix-result > header > div {
+  display: grid;
+  gap: 5px;
+}
+
+.behavior-fix-result > header span,
+.behavior-fix-result > header b,
+.behavior-fix-result > header strong {
+  font-family: var(--font-machine);
+}
+
+.behavior-fix-result > header span {
+  color: var(--ink-faint);
+  font-size: 6px;
+  letter-spacing: .08em;
+}
+
+.behavior-fix-result > header strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.behavior-fix-result > header > b {
+  color: var(--ink-soft);
+  font-size: 7px;
+}
+
+.behavior-fix-result > header > b.is-succeeded {
+  color: var(--signal-mint);
+}
+
+.behavior-fix-execution,
+.behavior-fix-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  background: var(--line);
+}
+
+.behavior-fix-execution span,
+.behavior-fix-metrics span {
+  display: grid;
+  min-width: 120px;
+  flex: 1;
+  gap: 5px;
+  padding: 8px;
+  color: var(--ink);
+  background: var(--panel-raised);
+  font-family: var(--font-machine);
+  font-size: 7px;
+}
+
+.behavior-fix-execution b,
+.behavior-fix-metrics b {
+  color: var(--ink-faint);
+  font-size: 6px;
+  font-weight: 500;
+}
+
+.behavior-fix-outputs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+.behavior-fix-outputs article {
+  min-width: 0;
+  padding: 11px;
+  background: var(--panel);
+}
+
+.behavior-fix-outputs article.is-corrected {
+  background: color-mix(in srgb, var(--signal-violet) 7%, var(--panel));
+  box-shadow: inset 0 2px var(--signal-violet);
+}
+
+.behavior-fix-outputs header span,
+.behavior-fix-outputs header b {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+}
+
+.behavior-fix-outputs p {
+  min-height: 72px;
+  margin: 10px 0 0;
+  color: var(--ink-soft);
+  font-size: 10px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.behavior-fix-outputs small {
+  display: block;
+  margin-top: 8px;
+  color: var(--signal-peach);
+  font-family: var(--font-machine);
+  font-size: 6px;
+}
+
+.behavior-fix-scopes {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+.behavior-fix-scopes > header {
+  grid-column: 1 / -1;
+  padding: 9px;
+  background: var(--panel-raised);
+}
+
+.behavior-fix-scopes > button {
+  display: grid;
+  min-height: 66px;
+  align-content: center;
+  gap: 6px;
+  padding: 10px;
+  color: var(--ink-soft);
+  background: var(--panel);
+  text-align: left;
+}
+
+.behavior-fix-scopes > button:disabled {
+  opacity: .45;
+}
+
+.behavior-fix-scopes > button strong {
+  font-family: var(--font-machine);
+  font-size: 7px;
+}
+
+.behavior-fix-scopes > button span {
+  color: var(--ink-faint);
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.behavior-fix-undo,
+.behavior-fix-source-use {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px;
+  border: 1px solid var(--line);
+}
+
+.behavior-fix-undo span,
+.behavior-fix-source-use span {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  line-height: 1.45;
+}
+
+.behavior-fix-source-use > div {
+  display: grid;
+  max-width: 65%;
+  gap: 4px;
+}
+
+.behavior-fix-source-use strong {
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 7px;
+}
+
 @media (max-width: 1120px) {
   .workspace.is-behavior {
     grid-template-columns: 190px minmax(0, 1fr) 270px;
@@ -877,7 +1238,8 @@
 
   .behavior-concept-stage,
   .behavior-runtime-stage,
-  .behavior-profile-stage {
+  .behavior-profile-stage,
+  .behavior-fix-outputs {
     grid-template-columns: 1fr;
   }
 
@@ -932,5 +1294,24 @@
   .behavior-runtime-fields .behavior-toggle,
   .behavior-runtime-fields > button {
     grid-column: 1;
+  }
+
+  .behavior-fix-actions,
+  .behavior-fix-scopes {
+    grid-template-columns: 1fr;
+  }
+
+  .behavior-fix-scopes > header {
+    grid-column: 1;
+  }
+
+  .behavior-fix-backends,
+  .behavior-fix-source-use {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .behavior-fix-source-use > div {
+    max-width: none;
   }
 }

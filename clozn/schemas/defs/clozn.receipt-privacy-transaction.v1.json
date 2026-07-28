@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.receipt-privacy-transaction.v1",
+  "title": "Context Receipt privacy settings mutation transaction",
+  "description": "Immutable receipt for one CAS-guarded mutation of studio_settings.json. before_sha256 and backup_path are omitted when the mutation created the settings file.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "transaction_id",
+    "created_at",
+    "target",
+    "target_existed",
+    "after_sha256",
+    "tier"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "clozn.receipt-privacy-transaction.v1"
+    },
+    "transaction_id": {
+      "type": "string",
+      "pattern": "^rp_[0-9a-f]{32}$"
+    },
+    "created_at": {"type": "string", "minLength": 1},
+    "target": {"type": "string", "minLength": 1},
+    "target_existed": {"type": "boolean"},
+    "before_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "after_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "backup_path": {"type": "string", "minLength": 1},
+    "tier": {
+      "type": "string",
+      "enum": ["full", "metadata_only", "hashes_only", "off"]
+    }
+  }
+}

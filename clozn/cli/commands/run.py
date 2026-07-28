@@ -62,7 +62,7 @@ def stream_ar(port: int, prompt: str, max_tokens: int, heat: bool = False):
     length) once done. We pair the per-token frames by position into a replayable trace -- the raw
     material for the timeline: where was it uncertain, and what did it almost say -- and also pluck the
     stop cause so CLI runs get a real `finish_reason` in the run journal, same as Studio's chat path.
-    -> (token count, steps, finish_reason, prompt_tokens)."""
+    -> (token count, steps, finish_reason, prompt_tokens, public_text, worker_timing)."""
     body = json.dumps({"prompt": prompt, "max_tokens": max_tokens, "stream": True}).encode()
     req = urllib.request.Request(f"http://127.0.0.1:{port}/api/clozn/generate", data=body,
                                  headers={"Content-Type": "application/json"})
@@ -101,6 +101,7 @@ def stream_ar(port: int, prompt: str, max_tokens: int, heat: bool = False):
         import clozn.runs.store as runlog
         steps = runlog.accumulate_ar_events(frames)
         finish = runlog.finish_reason_from_frames(frames)
+        generation_timing = runlog.generation_timing_from_frames(frames)
     except Exception:
         by_pos: dict = {}
         for obj in frames:
@@ -124,10 +125,11 @@ def stream_ar(port: int, prompt: str, max_tokens: int, heat: bool = False):
         for obj in frames:
             if obj.get("type") == "gen_finished" and isinstance(obj.get("reason"), str):
                 finish = "stop" if obj["reason"] == "eos" else "length"
+        generation_timing = {}
     prompt_tokens = next((obj.get("prompt_tokens") for obj in frames
                           if obj.get("type") == "gen_started"
                           and isinstance(obj.get("prompt_tokens"), int)), None)
-    return n, steps, finish, prompt_tokens, think_result.public_text
+    return n, steps, finish, prompt_tokens, think_result.public_text, generation_timing
 
 
 def _complete_once_raw(port: int, prompt: str, max_tokens: int) -> dict:
@@ -152,6 +154,7 @@ def _run_turn(port, mode, text, max_tokens, gpu, model_name, prompt_for_trace, h
     steps = []
     finish = None
     prompt_tokens = None
+    generation_timing = {}
     if mode == "autoregressive":
         streamed = stream_ar(port, text, max_tokens, heat=heat)
         # Keep the helper seam friendly to older/custom stream implementations that return the original
@@ -160,8 +163,10 @@ def _run_turn(port, mode, text, max_tokens, gpu, model_name, prompt_for_trace, h
         if len(streamed) == 3:
             n, steps, finish = streamed
             public_resp = "".join(str(step.get("piece") or "") for step in steps)
-        else:
+        elif len(streamed) == 5:
             n, steps, finish, prompt_tokens, public_resp = streamed
+        else:
+            n, steps, finish, prompt_tokens, public_resp, generation_timing = streamed
         sys.stdout.write("\n")
         if heat and fmt.COLOR:                             # a legend + how many tokens wavered, after the reply
             lows = sum(1 for s in steps if fmt._num(s.get("conf")) < 0.5)
@@ -189,9 +194,10 @@ def _run_turn(port, mode, text, max_tokens, gpu, model_name, prompt_for_trace, h
     # in REPL mode, prior turns).  Gate 0 requires the journal to record what the model actually saw;
     # replacing messages with template syntax would satisfy that mechanically while making the ordinary
     # run view worse, so runlog's purpose-built final_prompt field carries the exact wire input instead.
+    run_meta = {"max_tokens": int(max_tokens), "prompt_tokens": prompt_tokens}
+    run_meta.update(dict(generation_timing or {}))
     _log_run_cli(model_name, prompt_for_trace, raw_resp, steps, g0, finish_reason=finish, port=port,
-                 final_prompt=text, meta={"max_tokens": int(max_tokens),
-                                          "prompt_tokens": prompt_tokens})
+                 final_prompt=text, meta=run_meta)
     return resp
 
 

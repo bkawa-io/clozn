@@ -16,6 +16,7 @@ These tests are also the binding-condition proof the coordinator required:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import struct
@@ -243,6 +244,33 @@ def test_dry_run_shows_plan_and_writes_nothing(monkeypatch, home, ollama_blob):
     assert not (home / "adopt").exists()
 
 
+def test_build_plan_resolves_exact_manifest_model_layer(monkeypatch, home, ollama_blob, tmp_path):
+    ollama = _FakeOllama()
+    model_name = "qwen2.5:7b-instruct"
+    ollama.add_model(model_name, blob_path=None)
+    ollama.install(monkeypatch)
+    root = tmp_path / "ollama-models"
+    digest = hashlib.sha256(ollama_blob.read_bytes()).hexdigest()
+    blob = root / "blobs" / f"sha256-{digest}"
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(ollama_blob.read_bytes())
+    manifest = root / "manifests" / "registry.ollama.ai" / "library" / "qwen2.5" / "7b-instruct"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"layers": [{
+        "mediaType": "application/vnd.ollama.image.model",
+        "digest": f"sha256:{digest}",
+        "size": blob.stat().st_size,
+    }]}), encoding="utf-8")
+    monkeypatch.setattr(adopt.discovery, "known_storage_paths", lambda: [str(root)])
+
+    plan = adopt._build_plan(_args(model=model_name))
+
+    assert plan["blocked"] is None
+    assert plan["blob_path"] == str(blob.resolve())
+    assert plan["resolution"]["method"] == "manifest_model_layer"
+    assert plan["resolution"]["blob_digest"] == f"sha256:{digest}"
+
+
 def test_dry_run_reports_blocked_when_no_local_blob(monkeypatch, home):
     ollama = _FakeOllama()
     ollama.add_model("cloud-only:latest", blob_path=None)
@@ -369,6 +397,64 @@ def test_apply_is_idempotent_on_unchanged_reapply(monkeypatch, home, ollama_blob
     plan2 = adopt._build_plan(_args(model="qwen2.5:7b-instruct"))
     second = adopt._apply(_args(model="qwen2.5:7b-instruct"), plan2)
     assert second["status"] == "unchanged"
+
+
+def test_changed_ollama_tag_digest_cannot_reuse_stale_adoption(monkeypatch, home, ollama_blob):
+    ollama = _FakeOllama()
+    name = "qwen2.5:7b-instruct"
+    ollama.add_model(name, blob_path=str(ollama_blob), digest="sha256:" + "a" * 64)
+    ollama.install(monkeypatch)
+    args = _args(model=name)
+    adopt._apply(args, adopt._build_plan(args))
+
+    ollama.models[name]["tags_entry"]["digest"] = "sha256:" + "b" * 64
+    with pytest.raises(ValueError, match="already adopted"):
+        adopt._apply(args, adopt._build_plan(args))
+
+
+def test_qualify_success_is_recorded_after_safe_adoption(monkeypatch, home, ollama_blob):
+    ollama = _FakeOllama()
+    name = "qwen2.5:7b-instruct"
+    ollama.add_model(name, blob_path=str(ollama_blob))
+    ollama.install(monkeypatch)
+    monkeypatch.setattr(adopt, "_run_qualification", lambda _plan: {
+        "status": "passed",
+        "capability": "core",
+        "run_id": "run-qualified",
+        "receipt_shape": "new",
+        "warnings": [],
+    })
+    args = _args(model=name, qualify=True)
+
+    report = adopt._apply(args, adopt._build_plan(args))
+    transaction = json.loads(Path(report["transaction_path"]).read_text(encoding="utf-8"))
+
+    assert report["qualification"]["status"] == "passed"
+    assert transaction["qualification"]["run_id"] == "run-qualified"
+    assert Path(report["clozn_path"]).is_file()
+
+
+def test_qualification_failure_preserves_adoption_and_exact_undo(monkeypatch, home, ollama_blob):
+    ollama = _FakeOllama()
+    name = "qwen2.5:7b-instruct"
+    ollama.add_model(name, blob_path=str(ollama_blob))
+    ollama.install(monkeypatch)
+    monkeypatch.setattr(adopt, "_run_qualification", lambda plan: {
+        "status": "failed",
+        "capability": "discovered",
+        "error": "engine failed",
+        "warnings": ["adoption preserved"],
+        "undo_command": f"clozn adopt ollama --model {plan['model_name']} --undo",
+    })
+    args = _args(model=name, qualify=True)
+
+    report = adopt._apply(args, adopt._build_plan(args))
+
+    assert report["qualification"]["status"] == "failed"
+    assert Path(report["clozn_path"]).is_file()
+    assert report["undo_commands"]["adoption"] == (
+        f"clozn adopt ollama --model {name} --undo"
+    )
 
 
 def test_apply_refuses_blocked_model(monkeypatch, home):
@@ -525,6 +611,43 @@ def test_apply_connect_failure_does_not_undo_the_model_adoption(monkeypatch, hom
     assert report["connect"]["status"] == "failed"
 
 
+def test_apply_connect_failure_reports_the_requested_app(monkeypatch, home, ollama_blob):
+    from clozn.cli.commands import _connector
+
+    ollama = _FakeOllama()
+    ollama.add_model("qwen2.5:7b-instruct", blob_path=str(ollama_blob))
+    ollama.install(monkeypatch)
+
+    class FailingConnector:
+        id = "open-webui"
+
+        def detect(self):
+            return _connector.Detection(installed=True, app=self.id)
+
+        def plan(self, **_kwargs):
+            return _connector.MutationPlan(
+                app=self.id, status="dry_run", target=str(home / "client.env"),
+                details={
+                    "expected_prior_exists": False,
+                    "after_sha256": "a" * 64,
+                },
+            )
+
+        def apply(self, mutation, **_kwargs):
+            assert mutation.app == self.id
+            raise ValueError("simulated connector failure")
+
+    monkeypatch.setattr(_connector, "connector_for", lambda _app: FailingConnector())
+    args = _args(model="qwen2.5:7b-instruct", connect="open-webui")
+    report = adopt._apply(args, adopt._build_plan(args))
+
+    assert report["connect"] == {
+        "status": "failed",
+        "app": "open-webui",
+        "error": "simulated connector failure",
+    }
+
+
 def test_cmd_adopt_returns_nonzero_when_connect_fails_but_adoption_succeeds(monkeypatch, home, ollama_blob, capsys):
     ollama = _FakeOllama()
     ollama.add_model("qwen2.5:7b-instruct", blob_path=str(ollama_blob))
@@ -553,12 +676,30 @@ def test_cmd_adopt_dry_run_json_round_trips(monkeypatch, home, ollama_blob, caps
     assert not (home / "adopt").exists()
 
 
+def test_try_flow_requires_explicit_yes_before_mutating(monkeypatch, home, ollama_blob, capsys):
+    ollama = _FakeOllama()
+    ollama.add_model("qwen2.5:7b-instruct", blob_path=str(ollama_blob))
+    ollama.install(monkeypatch)
+    args = _args(model="qwen2.5:7b-instruct", try_flow=True, yes=False, json=True)
+
+    assert adopt.cmd_adopt(args) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["requires_confirmation"] is True
+    assert "--try --yes" in report["confirm_command"]
+    assert not (home / "models").exists()
+
+
 def test_add_subparser_registers_expected_flags():
     p = argparse.ArgumentParser()
     sub = p.add_subparsers()
     adopt.add_subparser(sub)
-    args = p.parse_args(["adopt", "ollama", "--model", "x", "--dry-run", "--json"])
+    args = p.parse_args([
+        "adopt", "ollama", "--model", "x", "--try", "--yes", "--qualify",
+        "--blob", str(Path.cwd() / "x.gguf"), "--json",
+    ])
     assert args.app == "ollama"
     assert args.model == "x"
-    assert args.dry_run is True
+    assert args.try_flow is True
+    assert args.yes is True
+    assert args.qualify is True
     assert args.json is True

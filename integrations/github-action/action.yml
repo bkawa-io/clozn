@@ -1,0 +1,165 @@
+name: Clozn model gate
+description: Verify a Clozn experiment artifact, or produce one on an explicitly trusted runner.
+author: bkawa-io
+
+inputs:
+  mode:
+    description: "verify (engine-free) or run (trusted producer)"
+    default: verify
+  clozn-version:
+    description: "Exact released Clozn version; ranges and VCS installs are refused"
+    default: "0.1.0"
+  evidence:
+    description: "Experiment result path; input in verify mode, producer output in run mode"
+    default: "clozn-experiment-result.json"
+  max-execution-errors:
+    description: "Maximum experiment error cells"
+    default: "0"
+  max-target-regressions:
+    description: "Maximum paired target regressions per candidate"
+    default: "0"
+  max-guard-regressions:
+    description: "Maximum paired guard regressions per candidate"
+    default: "0"
+  min-target-gains:
+    description: "Minimum paired target gains per candidate"
+    default: "0"
+  receipt-bundle:
+    description: "Build metadata-only clozn-receipts.zip from the report receipt index"
+    default: "true"
+  comment:
+    description: "off or auto; auto creates/updates one redacted marker comment when permissions allow"
+    default: "off"
+  artifact-name:
+    description: "Uploaded artifact name"
+    default: "clozn-model-gate"
+  retention-days:
+    description: "Evidence/report artifact retention"
+    default: "14"
+  trusted-run:
+    description: "Required acknowledgement for run mode"
+    default: "false"
+  manifest:
+    description: "Run mode: trusted clozn.experiment.v0 manifest"
+    default: ""
+  model-lock:
+    description: "Run mode: trusted clozn.model-lock.v1 file"
+    default: ""
+  engine-version:
+    description: "Run mode: exact released engine version"
+    default: ""
+  adapter-artifacts:
+    description: "Run mode: newline-separated trusted adapter files included in the cache identity"
+    default: ""
+  producer-argv:
+    description: >-
+      Run mode: JSON argv array for the trusted evidence producer. Supported substitutions:
+      {manifest}, {evidence}, {model_cache}, and {model:ROLE}. A shell command string is not accepted.
+    default: ""
+  python-version:
+    description: "Python runtime used by the action"
+    default: "3.12"
+
+outputs:
+  exit-code:
+    description: "Exact Clozn gate exit code"
+    value: ${{ steps.execute.outputs.exit_code }}
+  report-path:
+    description: "clozn.ci-report.v1 path when verification reached a gate verdict"
+    value: ${{ steps.execute.outputs.report_path }}
+  summary-path:
+    description: "GitHub job-summary Markdown path"
+    value: ${{ steps.execute.outputs.summary_path }}
+  junit-path:
+    description: "JUnit XML path"
+    value: ${{ steps.execute.outputs.junit_path }}
+  receipt-bundle-path:
+    description: "Metadata-only receipt ZIP path when available"
+    value: ${{ steps.execute.outputs.receipt_bundle_path }}
+  cache-key:
+    description: "Run-mode cache identity; verify mode uses no model cache"
+    value: ${{ steps.prepare.outputs.cache_key }}
+  comment-status:
+    description: "disabled, not_pull_request, created, updated, or read_only"
+    value: ${{ steps.comment.outputs.comment_status }}
+
+runs:
+  using: composite
+  steps:
+    # actions/setup-python v6
+    - name: Set up Python
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      with:
+        python-version: ${{ inputs.python-version }}
+        check-latest: false
+
+    - name: Validate mode and inputs
+      id: prepare
+      shell: bash
+      env:
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_CLOZN_VERSION: ${{ inputs.clozn-version }}
+        INPUT_EVIDENCE: ${{ inputs.evidence }}
+        INPUT_MAX_EXECUTION_ERRORS: ${{ inputs.max-execution-errors }}
+        INPUT_MAX_TARGET_REGRESSIONS: ${{ inputs.max-target-regressions }}
+        INPUT_MAX_GUARD_REGRESSIONS: ${{ inputs.max-guard-regressions }}
+        INPUT_MIN_TARGET_GAINS: ${{ inputs.min-target-gains }}
+        INPUT_RECEIPT_BUNDLE: ${{ inputs.receipt-bundle }}
+        INPUT_COMMENT: ${{ inputs.comment }}
+        INPUT_TRUSTED_RUN: ${{ inputs.trusted-run }}
+        INPUT_MANIFEST: ${{ inputs.manifest }}
+        INPUT_MODEL_LOCK: ${{ inputs.model-lock }}
+        INPUT_ENGINE_VERSION: ${{ inputs.engine-version }}
+        INPUT_ADAPTER_ARTIFACTS: ${{ inputs.adapter-artifacts }}
+        INPUT_PRODUCER_ARGV: ${{ inputs.producer-argv }}
+      run: python "${{ github.action_path }}/scripts/clozn_action.py" prepare
+
+    # actions/cache v4. The full run identity includes model pins, adapter bytes,
+    # engine release, chat-template pin, suite/variant material, and Clozn release.
+    - name: Restore trusted run cache
+      if: ${{ inputs.mode == 'run' }}
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: ${{ steps.prepare.outputs.model_cache }}
+        key: ${{ runner.os }}-${{ steps.prepare.outputs.cache_key }}
+
+    - name: Run Clozn gate
+      id: execute
+      shell: bash
+      run: python "${{ github.action_path }}/scripts/clozn_action.py" execute "${{ steps.prepare.outputs.state_file }}"
+
+    - name: Publish redacted PR comment when permitted
+      id: comment
+      if: ${{ always() && inputs.comment == 'auto' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: python "${{ github.action_path }}/scripts/clozn_action.py" comment "${{ steps.prepare.outputs.state_file }}"
+
+    # actions/upload-artifact v4. Missing optional receipt/report files are
+    # warnings; the final propagation step still owns the gate outcome.
+    - name: Upload report and evidence
+      if: ${{ always() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ${{ inputs.artifact-name }}
+        retention-days: ${{ inputs.retention-days }}
+        if-no-files-found: warn
+        path: |
+          ${{ steps.prepare.outputs.result_path }}
+          ${{ steps.prepare.outputs.report_path }}
+          ${{ steps.prepare.outputs.summary_path }}
+          ${{ steps.prepare.outputs.junit_path }}
+          ${{ steps.prepare.outputs.receipt_bundle_path }}
+          ${{ inputs.evidence }}
+
+    - name: Propagate exact gate exit
+      if: ${{ always() }}
+      shell: bash
+      run: python "${{ github.action_path }}/scripts/clozn_action.py" propagate "${{ steps.prepare.outputs.state_file }}"
+
+branding:
+  icon: shield
+  color: purple

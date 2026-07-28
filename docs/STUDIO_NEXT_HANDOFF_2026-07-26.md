@@ -1,5 +1,9 @@
 # Clozn Studio Next — Agent Handoff
 
+> **Archived implementation handoff.** Paths, branches, status, and UI names below describe the dated
+> handoff, not the current product contract. See [STUDIO.md](STUDIO.md) and
+> [CAPABILITIES.md](CAPABILITIES.md).
+
 Repository: `bkawa-io/clozn`
 Branch: `codex/studio-next`
 Date: 2026-07-26

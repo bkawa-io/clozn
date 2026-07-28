@@ -1,0 +1,31 @@
+{
+  "schema_version": "clozn.corrective-retry-result.v1",
+  "result_id": "fix_result_0123456789abcdef0123",
+  "created_ts": 100,
+  "parent_run_id": "run_parent",
+  "preview_id": "fix_preview_0123456789abcdef0123",
+  "action": {"id": "less-verbose", "label": "More concise", "description": "Answer concisely."},
+  "user_intent": {"action_id": "less-verbose"},
+  "execution": {
+    "requested_backend": "prompt_policy",
+    "executed_backend": null,
+    "fallback": false,
+    "qualification": null,
+    "qualification_id": null,
+    "identity": null
+  },
+  "comparison": {
+    "stored_original_reply": "Stored",
+    "baseline_reply": "",
+    "corrected_reply": "",
+    "note": "Failed.",
+    "changed": false
+  },
+  "metrics": {},
+  "scope_eligibility": [
+    {"scope": "once", "available": true},
+    {"scope": "session", "available": false},
+    {"scope": "profile", "available": false}
+  ],
+  "outcome": {"status": "execution_error"}
+}

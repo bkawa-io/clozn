@@ -24,7 +24,7 @@ authors = [{ name = "Brigitte Kawaguchi" }]
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/brigittekawaguchi/clozn"
+Homepage = "https://github.com/bkawa-io/clozn"
 
 [project.scripts]
 # Matches `python -m clozn` (clozn/__main__.py) and clozn.cmd/clozn.sh exactly -- one entry point, three

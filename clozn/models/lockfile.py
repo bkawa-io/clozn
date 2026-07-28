@@ -6,22 +6,16 @@ it resolves, by SHA-256, rather than trusting whatever a floating model name hap
 
 SCOPE -- WHAT THIS MODULE DOES NOT DO
 --------------------------------------
-This module parses and validates a lockfile ALREADY ON DISK. It never opens a socket, never follows a
-URL, and never resolves a pinned entry into a local model file. Downloading with SHA-256 verification,
-HTTPS-redirect enforcement at connection time, and caching keyed on artifact/engine/suite/tokenizer/
-template fingerprints are real, separate work (the spec's "run mode"); they were deliberately deferred
-out of this slice because they need real network I/O to test honestly (a local HTTP test server or heavy
-mocking), and because verify mode -- the free-CPU-runner path -- does not need them at all. See the
-feature-02 plan for the full reasoning.
-
-Route any future downloader that reads a lockfile produced here through `clozn.network_policy.
-guarded_urlopen` (the process-wide urlopen wrapper with the local-only gate and audit ledger) rather than
-calling `urllib`/`http.client` directly -- that is the established pattern for every other outbound call
-in this codebase.
+This module parses and validates a lockfile ALREADY ON DISK. It never opens a socket, follows a URL, or
+resolves a pin. The separate, explicitly networked resolver is ``clozn.models.fetch``; keeping the
+boundary between them is what guarantees that ``model-lock verify`` stays safe on a network-free CI
+runner.
 """
 from __future__ import annotations
 
 import json
+from copy import deepcopy
+from urllib.parse import urlsplit
 
 from clozn import schemas
 
@@ -32,8 +26,25 @@ class LockfileError(ValueError):
     """The lockfile could not be read, parsed, or does not conform to `clozn.model-lock.v1`."""
 
 
-def load_lockfile(path: str) -> dict:
+def _loopback_http(url: object) -> bool:
+    if not isinstance(url, str):
+        return False
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return False
+    return (
+        parsed.scheme.casefold() == "http"
+        and (parsed.hostname or "").rstrip(".").casefold() in {"127.0.0.1", "localhost", "::1"}
+    )
+
+
+def load_lockfile(path: str, *, allow_loopback_http: bool = False) -> dict:
     """Read, parse, and validate a model lockfile at `path`. Never touches the network.
+
+    ``allow_loopback_http`` is an internal test seam for ``clozn.models.fetch``.
+    It accepts only exact loopback fixture hosts; the default and the public
+    ``model-lock verify`` command remain strictly HTTPS-only.
 
     Raises LockfileError -- never lets json.JSONDecodeError/OSError/clozn.schemas.ValidationError/
     SchemaError escape directly -- on:
@@ -55,15 +66,27 @@ def load_lockfile(path: str) -> dict:
     except json.JSONDecodeError as exc:
         raise LockfileError(f"lockfile {path!r} is not valid JSON: {exc}") from exc
 
+    # The released v1 schema correctly remains HTTPS-only.  The networked fetcher's in-process test seam
+    # may explicitly admit a loopback HTTP fixture; validate an HTTPS-normalized copy in that one case,
+    # then apply the transport check to the original document below. Normal callers (especially
+    # `model-lock verify`) never set this flag and therefore validate the unmodified document.
+    schema_document = document
+    if allow_loopback_http and isinstance(document, dict):
+        schema_document = deepcopy(document)
+        for pinned in (schema_document.get("models") or {}).values():
+            if isinstance(pinned, dict) and _loopback_http(pinned.get("url")):
+                pinned["url"] = "https://" + pinned["url"][len("http://"):]
     try:
-        schemas.validate(document, LOCKFILE_SCHEMA)
+        schemas.validate(schema_document, LOCKFILE_SCHEMA)
     except (schemas.ValidationError, schemas.SchemaError) as exc:
         raise LockfileError(
             f"lockfile {path!r} does not conform to {LOCKFILE_SCHEMA}: {exc}") from exc
 
     for role, pinned in (document.get("models") or {}).items():
         url = pinned.get("url") if isinstance(pinned, dict) else None
-        if not isinstance(url, str) or not url.lower().startswith("https://"):
+        if not isinstance(url, str) or (
+                not url.lower().startswith("https://")
+                and not (allow_loopback_http and _loopback_http(url))):
             raise LockfileError(
                 f"lockfile {path!r} model {role!r}: url must be HTTPS, got {url!r}")
 

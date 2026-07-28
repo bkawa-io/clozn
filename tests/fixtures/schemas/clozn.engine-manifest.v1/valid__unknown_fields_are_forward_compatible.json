@@ -12,7 +12,10 @@
       "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "size_bytes": 123456,
       "entrypoint": "bin/clozn-server",
-      "build_id": "a-future-per-artifact-field"
+      "build_id": "release-1.0.0-linux-cpu",
+      "llama_cpp_commit": "88a39274ecf88ba11686acd357b59685b1cbf03d",
+      "feature_flags": {"lora": true, "future_flag": false},
+      "future_artifact_field": "still tolerated"
     }
   ]
 }

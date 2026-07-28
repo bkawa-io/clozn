@@ -52,6 +52,31 @@
     "baseline_path": {"type": "string", "description": "mode=baseline only."},
     "model": {"type": "string", "description": "mode=baseline only: the resolved absolute model path."},
     "experiment_path": {"type": "string", "description": "mode=experiment only."}
+    ,
+    "receipt_index": {
+      "type": "object",
+      "required": ["privacy", "entries"],
+      "properties": {
+        "privacy": {"type": "string", "enum": ["metadata_only"]},
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["suite", "case", "variant", "seed", "status"],
+            "properties": {
+              "suite": {"type": "string"},
+              "case": {"type": "string"},
+              "variant": {"type": "string"},
+              "seed": {"type": "integer"},
+              "status": {"type": "string"},
+              "run_id": {"type": "string"},
+              "privacy": {"type": "string", "enum": ["metadata_only"]},
+              "evidence_unavailable": {"type": "string"}
+            }
+          }
+        }
+      }
+    }
   },
 
   "additionalProperties": true

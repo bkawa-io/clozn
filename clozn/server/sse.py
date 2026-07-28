@@ -63,8 +63,17 @@ def sse_chat(handler, messages, max_new, model, lens=None, receipt=False, sample
              "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
         if extension:
             o.update(extension)
-        handler.wfile.write(("data: " + json.dumps(o) + "\n\n").encode("utf-8"))
-        handler.wfile.flush()
+        flush_started_ns = time.monotonic_ns()
+        try:
+            handler.wfile.write(("data: " + json.dumps(o) + "\n\n").encode("utf-8"))
+            handler.wfile.flush()
+        finally:
+            recorder = getattr(handler, "_record_gateway_phase", None)
+            if callable(recorder):
+                recorder(
+                    "stream_flush", time.monotonic_ns() - flush_started_ns,
+                    owner="client", aggregation="overlapping",
+                )
 
     def side_frame(obj):
         # Keep the opt-in extension inside a valid chat.completion.chunk envelope. Strict clients can

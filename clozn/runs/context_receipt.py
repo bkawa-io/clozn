@@ -90,7 +90,11 @@ def _content_hash(content) -> str:
 
 
 def _delivered_segments(messages) -> list[dict]:
-    """One segment per message in `messages`, in order, with a stable, content-derived id."""
+    """One segment per message in `messages`, in order, with a stable, content-derived id.
+
+    ``source_id``/``source_label`` are private journal metadata produced only by the explicit
+    ``clozn_sources`` request extension.  They never ride into the rendered prompt.
+    """
     seen: dict[tuple[str, str], int] = {}
     out = []
     for index, message in enumerate(messages or []):
@@ -102,14 +106,21 @@ def _delivered_segments(messages) -> list[dict]:
         occurrence = seen.get(key, 0)
         seen[key] = occurrence + 1
         text = content if isinstance(content, str) else ""
-        out.append({
+        explicit_label = message.get("source_label")
+        explicit_id = message.get("source_id")
+        segment = {
             "segment_id": segment_id(role, content, occurrence=occurrence),
             "source_type": "message",
-            "source_label": role,
+            "source_label": (
+                explicit_label if isinstance(explicit_label, str) and explicit_label else role
+            ),
             "original_order": index,
             "delivered_bytes": len(text.encode("utf-8")),
             "content_hash": _content_hash(content),
-        })
+        }
+        if isinstance(explicit_id, str) and explicit_id:
+            segment["client_source_id"] = explicit_id
+        out.append(segment)
     return out
 
 
@@ -122,7 +133,7 @@ def _assembled_segments(delivered_segments, delivered_messages, assembled_messag
         role = str(msg.get("role") or "")
         content = msg.get("content")
         key = (role, content if isinstance(content, str) else "")
-        queues.setdefault(key, deque()).append(seg["segment_id"])
+        queues.setdefault(key, deque()).append(seg)
 
     matched: set[str] = set()
     seen: dict[tuple[str, str], int] = {}
@@ -134,8 +145,10 @@ def _assembled_segments(delivered_segments, delivered_messages, assembled_messag
         content = message.get("content")
         key = (role, content if isinstance(content, str) else "")
         queue = queues.get(key)
+        matched_segment = None
         if queue:
-            sid = queue.popleft()
+            matched_segment = queue.popleft()
+            sid = matched_segment["segment_id"]
             matched.add(sid)
         else:
             # No delivered segment has this exact content -- a genuinely new segment (or a modified one
@@ -143,14 +156,19 @@ def _assembled_segments(delivered_segments, delivered_messages, assembled_messag
             occurrence = seen.get(key, 0)
             seen[key] = occurrence + 1
             sid = segment_id(role, content, occurrence=occurrence)
-        out.append({
+        assembled = {
             "segment_id": sid,
             "source_type": "message",
-            "source_label": role,
+            "source_label": (
+                matched_segment.get("source_label", role) if matched_segment is not None else role
+            ),
             "original_order": index,
             "included": True,
             "content_hash": _content_hash(content),
-        })
+        }
+        if matched_segment is not None and matched_segment.get("client_source_id"):
+            assembled["client_source_id"] = matched_segment["client_source_id"]
+        out.append(assembled)
     return out, matched
 
 
@@ -188,6 +206,12 @@ def normalize_termination(finish_reason, error, meta, limits) -> dict | None:
     base: dict = {}
     if isinstance(generated, int):
         base["generated_tokens"] = generated
+    source = meta.get("finish_reason_source")
+    if isinstance(source, str) and source:
+        base["source"] = source
+    raw_finish_reason = meta.get("finish_reason_raw")
+    if not isinstance(raw_finish_reason, str) or not raw_finish_reason:
+        raw_finish_reason = finish_reason
 
     stream_failure = meta.get("stream_failure")
     if stream_failure == "client_disconnected":
@@ -199,7 +223,7 @@ def normalize_termination(finish_reason, error, meta, limits) -> dict | None:
         return {**base, "reason": "worker_error", "reason_raw": error}
 
     if finish_reason == "tool_calls":
-        return {**base, "reason": "tool_call", "reason_raw": finish_reason}
+        return {**base, "reason": "tool_call", "reason_raw": raw_finish_reason}
 
     if finish_reason == "length":
         prompt = limits.get("prompt_tokens")
@@ -212,10 +236,10 @@ def normalize_termination(finish_reason, error, meta, limits) -> dict | None:
         # user who did not get their full requested output because the conversation was too long is the
         # more surprising and more actionable fact of the two.
         reason = "context_limit" if hit_context else ("max_tokens" if hit_max else "unknown")
-        return {**base, "reason": reason, "reason_raw": finish_reason}
+        return {**base, "reason": reason, "reason_raw": raw_finish_reason}
 
     if finish_reason == "stop":
-        return {**base, "reason": "eos", "reason_raw": finish_reason}
+        return {**base, "reason": "eos", "reason_raw": raw_finish_reason}
 
     if isinstance(finish_reason, str) and finish_reason:
         return {**base, "reason": "unknown", "reason_raw": finish_reason}
@@ -292,6 +316,14 @@ def _apply_privacy(doc: dict, tier: str) -> dict:
                 continue
             out[key] = [{**seg, "redaction_state": redaction_state} if isinstance(seg, dict) else seg
                         for seg in segments]
+    rendered = out.get("rendered")
+    if isinstance(rendered, dict):
+        rendered = dict(rendered)
+        rendered["content_available"] = (
+            tier == "full"
+            and isinstance((out.get("survived") or {}).get("final_prompt"), str)
+        )
+        out["rendered"] = rendered
     out["privacy"] = tier
     return out
 
@@ -361,7 +393,12 @@ def build_context_receipt(*, messages=None, assembled_messages=None, final_promp
 
     rendered: dict = {}
     if isinstance(final_prompt, str) and final_prompt:
-        rendered["sha256"] = hashlib.sha256(final_prompt.encode("utf-8")).hexdigest()
+        rendered_bytes = final_prompt.encode("utf-8")
+        rendered["sha256"] = hashlib.sha256(rendered_bytes).hexdigest()
+        rendered["bytes"] = len(rendered_bytes)
+        rendered["content_available"] = True
+        if isinstance(template_fingerprint, str) and template_fingerprint:
+            rendered["template_fingerprint"] = template_fingerprint
         all_ids = [seg["segment_id"] for seg in delivered_segments]
         if all_ids:
             transformations.append({
@@ -371,6 +408,7 @@ def build_context_receipt(*, messages=None, assembled_messages=None, final_promp
                            "into the exact prompt string; see rendered.sha256"),
             })
     if isinstance(prompt_tokens, int):
+        rendered["tokens"] = prompt_tokens
         rendered["token_count"] = prompt_tokens
         rendered["estimated"] = False           # the engine's own gen_started frame reports this exactly
     if rendered:

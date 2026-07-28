@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.context-answer-influence-export.v1",
+  "title": "Portable context-to-answer influence evidence export",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "source_schema",
+    "source_artifact_sha256",
+    "privacy",
+    "status",
+    "available",
+    "method",
+    "identity",
+    "cache_identity",
+    "thresholds",
+    "prompt_sources",
+    "selection",
+    "prompt_spans",
+    "answer_spans",
+    "links",
+    "summary"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "clozn.context-answer-influence-export.v1"
+    },
+    "source_schema": {
+      "type": "string",
+      "const": "clozn.context_answer_influence.v1"
+    },
+    "source_artifact_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "privacy": {
+      "type": "string",
+      "enum": ["metadata_only", "full"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["ok", "unavailable", "error"]
+    },
+    "available": {"type": "boolean"},
+    "method": {
+      "type": "object",
+      "required": ["name", "version", "mode", "claim_limit", "caveat"]
+    },
+    "identity": {"type": "object"},
+    "cache_identity": {"type": "object"},
+    "thresholds": {"type": "object"},
+    "prompt_sources": {
+      "type": "array",
+      "description": "All canonical prompt sources, including explicitly omitted/not-measured sources. Text is hashed unless privacy is full.",
+      "items": {"$ref": "#/$defs/HashedSpan"}
+    },
+    "selection": {
+      "type": "object",
+      "description": "The bounded measurement selection, including selected and omitted source IDs and coverage state."
+    },
+    "prompt_spans": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/HashedSpan"}
+    },
+    "answer_spans": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/HashedSpan"}
+    },
+    "links": {"type": "array", "items": {"type": "object"}},
+    "summary": {"type": "object"},
+    "error": {"type": "object"},
+    "answer": {"type": "object"},
+    "answer_hashes": {"type": "object"}
+  },
+  "$defs": {
+    "HashedSpan": {
+      "type": "object",
+      "required": ["id", "start", "end", "text_sha256", "text_bytes"],
+      "properties": {
+        "id": {"type": "string"},
+        "parent_id": {"type": "string"},
+        "level": {"type": "string"},
+        "kind": {"type": "string"},
+        "message_index": {"type": ["integer", "null"], "minimum": 0},
+        "role": {"type": "string"},
+        "name": {"type": ["string", "null"]},
+        "source_kind": {"type": "string"},
+        "segment_id": {"type": "string"},
+        "client_source_id": {"type": "string"},
+        "external_source_id": {"type": "string"},
+        "source_label": {"type": "string"},
+        "selected": {"type": "boolean"},
+        "start": {"type": "integer", "minimum": 0},
+        "end": {"type": "integer", "minimum": 0},
+        "byte_start": {"type": "integer", "minimum": 0},
+        "byte_end": {"type": "integer", "minimum": 0},
+        "text_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "text_bytes": {"type": "integer", "minimum": 0},
+        "text": {"type": "string"}
+      }
+    }
+  }
+}

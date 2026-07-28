@@ -53,13 +53,12 @@ def test_add_subparser_parses_flags():
     assert args.replay is True
 
 
-def test_add_subparser_requires_both_run_ids():
-    import contextlib
-    import io
+def test_add_subparser_accepts_one_candidate_for_automatic_selection():
     p = _build_parser()
-    with contextlib.redirect_stderr(io.StringIO()):
-        with pytest.raises(SystemExit):
-            p.parse_args(["compare-runs", "only_one"])
+    args = p.parse_args(["compare-runs", "candidate", "--against", "same_session"])
+    assert args.run_a == "candidate"
+    assert args.run_b is None
+    assert args.against == "same_session"
 
 
 # ============================================================================================= cmd_compare_runs
@@ -142,7 +141,9 @@ def test_no_replay_flag_omits_replay_section(monkeypatch, capsys):
 
 def test_label_mapping_matches_the_spec_vocabulary():
     assert cr._label_for("identity.model_sha256") == "Model"
-    assert cr._label_for("identity.ext.adapter.strength") == "Model"
+    assert cr._label_for("identity.ext.adapter.strength") == "Adapter"
+    assert cr._label_for("identity.ext.engine_artifact.build_id") == "Engine"
+    assert cr._label_for("identity.ext.machine.cpu") == "Machine"
     assert cr._label_for("generation.temperature") == "Settings"
     assert cr._label_for("context.delivered.messages.count") == "History"
     assert cr._label_for("output.tool_call_status") == "Tools"
@@ -170,3 +171,36 @@ def test_format_flags_privacy_limited_runs():
     }
     out = cr.format_compare_runs(result)
     assert "content wasn't" in out or "unavailable" in out
+
+
+def test_automatic_selection_uses_full_store_and_shows_why(monkeypatch, capsys):
+    older = _run("older", identity={"model_sha256": "m" * 64}, recorded_ts=1)
+    child = _run("child", identity={"model_sha256": "m" * 64}, recorded_ts=2,
+                 parent_run_id="older", source="replay")
+    candidate = _run("candidate", identity={"model_sha256": "m" * 64}, recorded_ts=3)
+    monkeypatch.setattr(runlog, "get_run", lambda rid: candidate if rid == "candidate" else None)
+    monkeypatch.setattr(runlog, "iter_runs", lambda: [candidate, child, older])
+    args = _build_parser().parse_args([
+        "compare-runs", "candidate", "--against", "previous_compatible",
+    ])
+    cr.cmd_compare_runs(args)
+    out = capsys.readouterr().out
+    assert "previous_compatible" in out
+    assert "older -> candidate" in out
+    assert "child runs were excluded" in out
+
+
+def test_plan_adds_separate_controlled_artifact_without_calling_gateway(monkeypatch, capsys):
+    meta_a = {"sampling": "sample", "temperature": 0.2, "top_p": 0.9, "top_k": 40,
+              "repetition_penalty": 1.1, "seed": 1}
+    meta_b = {**meta_a, "temperature": 0.8, "seed": 2}
+    a = _run("run_a", response="good", messages=[{"role": "user", "content": "full"}], meta=meta_a)
+    b = _run("run_b", response="bad", messages=[{"role": "user", "content": "short"}], meta=meta_b)
+    monkeypatch.setattr(runlog, "get_run", lambda rid: {"run_a": a, "run_b": b}[rid])
+    args = _build_parser().parse_args([
+        "compare-runs", "run_a", "run_b", "--test", "context,sampling", "--plan", "--json",
+    ])
+    cr.cmd_compare_runs(args)
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["controlled_tests"]["status"] == "planned"
+    assert payload["controlled_tests"]["budget"]["runs_used"] == 0

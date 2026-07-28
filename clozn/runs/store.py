@@ -39,6 +39,7 @@ from .trace import (
     _with_workspace_readouts,
     accumulate_ar_events,
     finish_reason_from_frames,
+    raw_finish_reason_from_frames,
     generation_timing_from_frames,
     steps_to_trace,
 )

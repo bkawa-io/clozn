@@ -259,6 +259,19 @@ def test_multiple_simultaneous_differences_stay_separated_not_collapsed():
     assert len(result["findings"]) == len(classes)
 
 
+def test_fixed_summary_axes_distinguish_changed_unchanged_and_unavailable():
+    a = _run("run_a", model_sha256="m" * 64, template_fingerprint="same",
+             meta={"temperature": 0.2}, response="a")
+    b = _run("run_b", model_sha256="m" * 64, template_fingerprint="same",
+             meta={"temperature": 0.8}, response="b")
+    axes = run_diff.compare_runs(a, b)["summary_axes"]
+    assert axes["model"]["status"] == "unchanged"
+    assert axes["template"]["status"] == "unchanged"
+    assert axes["sampling"]["status"] == "changed"
+    assert axes["output"]["status"] == "changed"
+    assert axes["adapter"]["status"] == "unavailable"
+
+
 # ==================================================================== forward-compatible identity["ext"] walk
 
 def test_unknown_ext_namespace_added_removed_and_changed_all_surface():
@@ -360,6 +373,7 @@ def test_ranking_block_documents_the_static_order():
 def test_replay_planner_marks_available_swaps_from_the_diff():
     a = _run("run_a", template_fingerprint="fp1", meta={"temperature": 0.2},
              messages=[{"role": "user", "content": "hi"}] * 3)
+    a["template_material"] = "{{ exact baseline template }}"
     b = _run("run_b", template_fingerprint="fp2", meta={"temperature": 0.9},
              messages=[{"role": "user", "content": "hi"}])
     result = run_diff.compare_runs(a, b)
@@ -370,6 +384,132 @@ def test_replay_planner_marks_available_swaps_from_the_diff():
     assert by_swap["sampling"]["available"] is True
     assert plan["runs_required"] == 3
     assert "NOT performed" in plan["note"]
+
+
+def test_replay_planner_does_not_treat_a_template_fingerprint_as_template_material():
+    a = _run("run_a", template_fingerprint="fp1")
+    b = _run("run_b", template_fingerprint="fp2")
+    plan = run_diff.plan_replay(a, b, run_diff.compare_runs(a, b))
+    template = next(c for c in plan["candidates"] if c["swap"] == "template")
+    assert template["available"] is False
+    assert "exact baseline template material" in template["note"]
+
+
+def test_v1_segments_report_added_removed_reordered_and_render_only_change():
+    def receipt(items, rendered):
+        return {
+            "schema_version": "clozn.context-receipt.v1",
+            "run_id": "ignored",
+            "delivered": items,
+            "assembled": items,
+            "rendered": {"sha256": rendered},
+        }
+
+    common_a = {"segment_id": "seg_" + "a" * 16, "source_type": "message",
+                "source_label": "user", "original_order": 0, "content_hash": "1" * 16}
+    common_b = {**common_a, "original_order": 1}
+    removed = {"segment_id": "seg_" + "b" * 16, "source_type": "message",
+               "source_label": "system", "original_order": 1, "content_hash": "2" * 16}
+    added = {"segment_id": "seg_" + "c" * 16, "source_type": "message",
+             "source_label": "system", "original_order": 0, "content_hash": "3" * 16}
+    a = _run("run_a")
+    b = _run("run_b")
+    a["context_receipt"] = receipt([common_a, removed], "a" * 64)
+    b["context_receipt"] = receipt([added, common_b], "b" * 64)
+    result = run_diff.compare_runs(a, b)
+    classes = _classes(result)
+    assert {"context_segments_added", "context_segments_removed",
+            "context_segments_reordered"} <= classes
+    assert any(
+        e.get("change") == "reordered"
+        for d in result["differences"] for e in d.get("evidence") or []
+    )
+
+    same_a = _run("run_c")
+    same_b = _run("run_d")
+    same_a["context_receipt"] = receipt([common_a], "c" * 64)
+    same_b["context_receipt"] = receipt([common_a], "d" * 64)
+    rendered = run_diff.compare_runs(same_a, same_b)
+    assert "rendering_changed_with_identical_delivery" in _classes(rendered)
+
+
+def test_v1_segments_match_real_content_derived_ids_by_stable_client_source():
+    from clozn.runs.context_receipt import build_context_receipt
+
+    def receipt(run_id, content):
+        return build_context_receipt(
+            messages=[{
+                "role": "user",
+                "content": content,
+                "source_id": "policy-stable",
+                "source_label": "Policy",
+            }],
+            assembled_messages=[{
+                "role": "user",
+                "content": content,
+                "source_id": "policy-stable",
+                "source_label": "Policy",
+            }],
+            final_prompt=content,
+            run_id=run_id,
+        )
+
+    a = _run("run_source_a")
+    b = _run("run_source_b")
+    a["context_receipt"] = receipt("run_source_a", "Policy revision one")
+    b["context_receipt"] = receipt("run_source_b", "Policy revision two")
+    assert (
+        a["context_receipt"]["delivered"][0]["segment_id"]
+        != b["context_receipt"]["delivered"][0]["segment_id"]
+    )
+
+    result = run_diff.compare_runs(a, b)
+    delivered = [
+        difference for difference in result["differences"]
+        if difference["dimension"].startswith("context.delivered.segments.")
+    ]
+    changes = [
+        evidence
+        for difference in delivered
+        for evidence in difference.get("evidence") or []
+    ]
+    assert not any(difference["kind"] in {"added", "removed"} for difference in delivered)
+    assert any(
+        evidence.get("change") == "stable_source_changed"
+        and evidence.get("client_source_id") == "policy-stable"
+        and evidence.get("segment_id_a") != evidence.get("segment_id")
+        for evidence in changes
+    )
+    assert "context_stable_source_changed" in _classes(result)
+
+
+def test_automatic_selection_excludes_internal_children_and_records_basis():
+    candidate = _run("candidate", model_sha256="m" * 64)
+    candidate.update(recorded_ts=30)
+    older = _run("older", model_sha256="m" * 64)
+    older.update(recorded_ts=10)
+    child = _run("child", model_sha256="m" * 64)
+    child.update(recorded_ts=20, parent_run_id="older", source="replay")
+    selected = run_diff.select_reference_run(
+        candidate, [candidate, child, older], mode="previous_compatible"
+    )
+    assert selected["ok"] is True
+    assert selected["run"]["id"] == "older"
+    assert "excluded" in selected["selection"]["reason"]
+
+
+def test_same_task_selection_is_exact_hash_not_semantic_similarity():
+    candidate = _run("candidate", messages=[{"role": "user", "content": "Exact task"}])
+    candidate["recorded_ts"] = 3
+    exact = _run("exact", messages=[{"role": "user", "content": "Exact task"}])
+    exact["recorded_ts"] = 1
+    similar = _run("similar", messages=[{"role": "user", "content": "exact task"}])
+    similar["recorded_ts"] = 2
+    selected = run_diff.select_reference_run(
+        candidate, [candidate, similar, exact], mode="same_task"
+    )
+    assert selected["run"]["id"] == "exact"
+    assert selected["selection"]["basis"]["field"] == "last_user_sha256"
 
 
 def test_replay_planner_marks_swaps_unavailable_when_nothing_differs():

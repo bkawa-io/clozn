@@ -1,0 +1,42 @@
+{
+  "schema_version": "clozn.adapter-export-receipt.v1",
+  "receipt_id": "bad",
+  "created_at": "2026-07-28T19:00:00+00:00",
+  "producer": {
+    "clozn_version": "0.1.0"
+  },
+  "suite": {
+    "suite_id": "suite",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "case_count": 1,
+    "expanded_case_count": 1
+  },
+  "inputs": {
+    "base": {},
+    "merged": {}
+  },
+  "preflight": {
+    "status": "failed",
+    "checks": []
+  },
+  "cases": [],
+  "summary": {
+    "expanded_case_count": 1,
+    "completed": 0,
+    "passed": 0,
+    "mismatched": 0,
+    "inconclusive": 0,
+    "execution_errors": 0,
+    "teacher_forced_tokens": 0
+  },
+  "verdict": {
+    "status": "identity_mismatch",
+    "reason": "missing adapter"
+  },
+  "claims": {
+    "primary_comparison": "base_plus_adapter_vs_merged",
+    "base_role": "control",
+    "byte_equivalent": false,
+    "semantic_equivalence_proven": false
+  }
+}

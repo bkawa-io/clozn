@@ -10,7 +10,10 @@
       "url": "https://github.com/example/clozn/releases/download/v1.0.0/clozn-engine-1.0.0-windows-x86_64-cpu.zip",
       "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "size_bytes": 123456,
-      "entrypoint": "bin/clozn-server.exe"
+      "entrypoint": "bin/clozn-server.exe",
+      "build_id": "release-1.0.0-windows-cpu",
+      "llama_cpp_commit": "88a39274ecf88ba11686acd357b59685b1cbf03d",
+      "feature_flags": {"lora": true, "sae": false}
     },
     {
       "os": "windows",
@@ -20,7 +23,10 @@
       "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "size_bytes": 123456,
       "entrypoint": "bin/clozn-server.exe",
-      "cuda_major": 12
+      "cuda_major": 12,
+      "build_id": "release-1.0.0-windows-cuda12",
+      "llama_cpp_commit": "88a39274ecf88ba11686acd357b59685b1cbf03d",
+      "feature_flags": {"lora": true, "sae": true}
     },
     {
       "os": "linux",
@@ -29,7 +35,10 @@
       "url": "https://github.com/example/clozn/releases/download/v1.0.0/clozn-engine-1.0.0-linux-x86_64-cpu.tar.gz",
       "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "size_bytes": 123456,
-      "entrypoint": "bin/clozn-server"
+      "entrypoint": "bin/clozn-server",
+      "build_id": "release-1.0.0-linux-cpu",
+      "llama_cpp_commit": "88a39274ecf88ba11686acd357b59685b1cbf03d",
+      "feature_flags": {"lora": true, "sae": false}
     },
     {
       "os": "linux",
@@ -39,7 +48,10 @@
       "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "size_bytes": 123456,
       "entrypoint": "bin/clozn-server",
-      "cuda_major": 12
+      "cuda_major": 12,
+      "build_id": "release-1.0.0-linux-cuda12",
+      "llama_cpp_commit": "88a39274ecf88ba11686acd357b59685b1cbf03d",
+      "feature_flags": {"lora": true, "sae": true}
     },
     {
       "os": "macos",
@@ -48,7 +60,10 @@
       "url": "https://github.com/example/clozn/releases/download/v1.0.0/clozn-engine-1.0.0-macos-arm64-metal.tar.gz",
       "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "size_bytes": 123456,
-      "entrypoint": "bin/clozn-server"
+      "entrypoint": "bin/clozn-server",
+      "build_id": "release-1.0.0-macos-metal",
+      "llama_cpp_commit": "88a39274ecf88ba11686acd357b59685b1cbf03d",
+      "feature_flags": {"lora": true, "sae": false}
     }
   ]
 }

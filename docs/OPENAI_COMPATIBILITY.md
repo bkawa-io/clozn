@@ -37,6 +37,7 @@ Clozn state events never leak into a standard OpenAI stream.
 | `n` | one only | `1`/null accepted and stripped; any other value is a 400 |
 | `top_k`, `repeat_penalty` | Clozn extensions | forwarded to the engine sampler |
 | `clozn_trust`, `clozn_receipt`, `clozn_lens` | Clozn extensions | opt-in confidence spans, receipt delivery, and live J-lens readout |
+| `clozn_sources` | Clozn extension | optional list of `{message_index, source_id, label?}` records; IDs must be unique and are carried unchanged into Context Receipt/source evidence |
 | `tools` | qualified subset | up to 32 strict function definitions; Clozn returns at most one call and never executes it |
 | `tool_choice` | qualified subset | `"auto"` activates the one-tool contract; `"none"` is an explicit text bypass |
 | `parallel_tool_calls` | false for active tools | omitted/`false` accepted; `true` is rejected when the tool contract is active |
@@ -71,6 +72,10 @@ ignored for client interoperability:
 Any behavior-bearing value outside the supported subset—stop sequences, nonzero frequency/presence
 penalties, multiple choices, requested stream usage, and so on—is a 400 with that field in `error.param`.
 Unknown top-level fields are also rejected.
+
+`clozn_sources` is journal metadata only: it does not alter the standard message list or prompt text.
+It is refused on request modes that cannot preserve the identity contract (currently structured-I/O
+qualification and guard-v1 transforms), rather than being silently dropped.
 
 ## Qualified structured I/O (Phase 2.8)
 
@@ -140,7 +145,8 @@ unless they carry the neutral values defined in `clozn/server/openai_compat.py`.
 
 - Chat and completion response objects/chunks use the standard object names and one choice at index 0.
 - Every accepted chat or legacy completion request crosses Clozn's instrumented substrate and is written
-  to the local run journal with its rendered prompt, applied memory/dials, trace, and finish/failure state.
+  to the local run journal with its delivered messages, rendered prompt, active dials/corrective policy,
+  trace, and finish/failure state.
 - Non-streaming chat and text completions may add `clozn_run_id` and `X-Clozn-Run-Id`; opt-in Clozn fields are additive.
 - Token usage is omitted when unknown. Clozn no longer fabricates zero prompt/completion token counts.
 - Finish reasons map worker EOS to `stop` and token limits to `length`. A worker failure is an error, never a
@@ -179,8 +185,8 @@ Unqualified structured request example:
   pipeline matching, native-message validator, schema validator, typed errors, and model-free Python-envelope
   harness without qualifying that harness for public use.
 - `tests/test_engine_chat_io.py` and `tests/test_engine_substrate_native_chat.py` exercise the private atomic
-  request/response contract, pipeline and model evidence, native parse failures, Clozn memory/steering layers,
-  and trace folding without a model.
+  request/response contract, pipeline and model evidence, native parse failures, steering layers, and
+  trace folding without a model.
 - `tests/test_openai_structured_client_compat.py` drives the real gateway through OpenAI Python 2.46.0
   against a fake atomic native result with exact identity and pipeline: one tool call, tool-result continuation,
   buffered tool SSE, `json_object`, unqualified rejection, native parse failure, and malformed-message
@@ -192,7 +198,7 @@ Unqualified structured request example:
 - `tests/test_runtime_architecture.py` and `tests/test_product_smoke.py` guard the standard-vs-native stream
   envelope boundary.
 - `tests/test_legacy_completion_instrumented.py` drives the real HTTP handler with a model-free substrate
-  and verifies memory/dial/rendered-prompt/trace capture plus success, worker-failure, and disconnect runs.
+  and verifies delivered-prompt/dial/trace capture plus success, worker-failure, and disconnect runs.
 - `tests/test_gate0_request_paths.py` proves legacy text completions retain their exact raw prompt, decode
   metadata, token trace, finish reason, stable terminal/non-stream run ID, and one coherent journal record.
 - `tests/test_think_tags.py` plus the OpenAI/Ollama streaming integration tests prove chunk-split think tags

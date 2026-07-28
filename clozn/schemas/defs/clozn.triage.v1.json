@@ -26,6 +26,21 @@
     },
     "baseline_run_id": { "type": "string", "minLength": 1 },
     "candidate_run_id": { "type": "string", "minLength": 1 },
+    "execution_status": {
+      "type": "string",
+      "enum": ["planned", "completed", "budget_exhausted", "cancelled", "inconclusive"]
+    },
+    "budget": {
+      "type": "object",
+      "properties": {
+        "max_runs": {"type": "integer", "minimum": 0},
+        "max_seconds": {"type": "number", "minimum": 0}
+      }
+    },
+    "controlled_tests": {
+      "type": "object",
+      "description": "The complete clozn.run-change-test.v1 intervention artifact, when controlled replay was planned or executed."
+    },
     "steps": {
       "type": "array",
       "items": { "$ref": "#/$defs/Step" }
@@ -72,6 +87,15 @@
             "model_runs": { "type": "integer", "minimum": 0 }
           }
         },
+        "ran": {"type": "boolean"},
+        "runs_used": {"type": "integer", "minimum": 0},
+        "duration_ms": {"type": "integer", "minimum": 0},
+        "budget": {"type": "object"},
+        "evidence": {"type": "array", "items": {"type": "object"}},
+        "stop_reason": {
+          "type": "string",
+          "enum": ["planned", "unavailable", "identity_unqualified", "budget_exhausted", "cancelled", "not_implemented"]
+        },
         "caveats": {
           "type": "array",
           "description": "Standing limitations of this specific step's measurement (e.g. a fingerprint that conflates two identity dimensions). Must survive into summary.caveats, not just live here.",
@@ -93,6 +117,10 @@
           "minLength": 1,
           "description": "'undetermined' unless exactly one step reached causally_supported, in which case this is that step's own `kind` verbatim -- never a hand-authored label."
         },
+        "entangled": {
+          "type": "boolean",
+          "description": "True when more than one controlled family is causally_supported, so no single headline cause is named."
+        },
         "confidence_basis": { "$ref": "#/$defs/EvidenceStatus" },
         "caveats": {
           "type": "array",
@@ -110,6 +138,11 @@
         },
         "correlated": {
           "type": "array",
+          "items": { "type": "string" }
+        },
+        "reproduced": {
+          "type": "array",
+          "description": "Controlled outcome reproduced, but isolation was insufficient for a causal label.",
           "items": { "type": "string" }
         },
         "causally_supported": {

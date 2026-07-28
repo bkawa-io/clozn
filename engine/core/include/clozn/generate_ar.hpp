@@ -98,7 +98,11 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
                            // -- the same single-token batch shape the original sequential decode
                            // used, which is what makes bit-exactness achievable (and it is the
                            // acceptance bar: greedy resume suffix == greedy re-prefill suffix).
-                           const EngineCheckpoint* resume_from = nullptr);
+                           const EngineCheckpoint* resume_from = nullptr,
+                           // Already-measured worker phases for this request (template/tokenization)
+                           // plus optional process-startup context. Their clocks are the same worker
+                           // steady clock, but offsets may be absent when their local origin differs.
+                           const std::vector<PerformancePhase>* request_phases = nullptr);
 
 // Batched multi-sequence branching: prefill a shared prompt once, then decode N independent
 // continuations in parallel using a single llama_decode per step. Each branch gets its own

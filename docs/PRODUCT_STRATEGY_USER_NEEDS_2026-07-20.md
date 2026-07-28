@@ -1,5 +1,9 @@
 # Clozn product positioning and user-needs audit
 
+> **Dated research and strategy archive.** Capability observations are tied to the repository snapshot
+> named below and may include features later removed. Current status lives in
+> [CAPABILITIES.md](CAPABILITIES.md).
+
 - **Date:** July 20, 2026
 - **Repository snapshot:** working branch agent/instrument-ollama-runtime at b6190b8; origin/main at 1e7ccb5
 - **Research window:** primarily January–July 2026, with older primary sources used where they still define a current product capability

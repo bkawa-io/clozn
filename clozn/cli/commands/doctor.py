@@ -157,10 +157,10 @@ def _check_engine(*, deep: bool = False) -> dict:
     """State 2 of roadmap feature 01's 4-state contract ("compatible engine installed"). Uses
     find_engine_ex() (not the older 3-tuple find_engine()) so the detail line can say WHICH of the 4
     discovery tiers produced this engine and, for a `clozn setup`-managed install, its recorded backend.
-    `deep=True` additionally launches the binary with `--version` (clozn.setup.install.qualify_entrypoint
-    -- a model-free process-start check, spec setup-flow step 8) and reports whether the OS could even
-    exec it; it stays a WARN, never a FAIL, on that outcome too -- see this module's docstring on why
-    doctor almost never fails outright."""
+    `deep=True` additionally launches the binary with `--version --json`
+    (clozn.setup.install.qualify_entrypoint) and validates its embedded build identity; it stays a WARN,
+    never a FAIL, on that outcome -- see this module's docstring on why doctor almost never fails
+    outright."""
     from clozn.cli.engine_process import find_engine_ex, REPO
     from clozn.cli.main import CloznError
     try:
@@ -175,24 +175,31 @@ def _check_engine(*, deep: bool = False) -> dict:
     if discovery.discovery_source == "managed" and discovery.engine_version:
         detail += f", engine {discovery.engine_version}"
     pin = _bootstrap_llama_pin(REPO)
-    if pin:
+    if pin and not deep:
         tag, commit = pin
-        # Static provenance only: the binary itself embeds no build-flags/commit record today (no
-        # CMake step emits one -- see this task's report for a proposed server_main.cpp/CMakeLists.txt
-        # addition). What we CAN say honestly is what source commit this checkout is pinned to build
-        # from; whether the binary at `exe` was actually built from exactly that checkout is unverified.
         detail += f"; llama.cpp pinned @ {tag} ({commit[:12]}) -- unverified against the built binary"
-    else:
+    elif not pin and not deep:
         detail += "; llama.cpp pin unavailable (engine/core/third_party/bootstrap_llama.py not found)"
     status = _OK
     if deep:
         from clozn.setup.install import qualify_entrypoint
-        qualification = qualify_entrypoint([discovery.exe])
-        if qualification["ran"]:
-            detail += f"; --deep: process-start check ran (exit {qualification['returncode']})"
+        expected = {
+            "engine_version": discovery.engine_version,
+            "build_id": discovery.build_id,
+            "backend": discovery.backend if discovery.backend in ("cpu", "cuda", "metal") else None,
+            "llama_cpp_commit": discovery.llama_cpp_commit or (pin[1] if pin else None),
+        }
+        qualification = qualify_entrypoint([discovery.exe], expected=expected)
+        if qualification["qualified"]:
+            info = qualification["build_info"]
+            detail += (
+                f"; --deep: identity verified (build {info['build_id']}, "
+                f"protocol {info['protocol_version']}, backend {info['backend']}, "
+                f"llama.cpp {info['llama_cpp_commit'][:12]})"
+            )
         else:
             status = _WARN
-            detail += f"; --deep: process-start check FAILED: {qualification['error']}"
+            detail += f"; --deep: build identity FAILED: {qualification['error']}"
     result = _check("engine binary", status, detail)
     result["discovery_source"] = discovery.discovery_source
     return result

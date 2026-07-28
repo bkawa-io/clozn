@@ -17,10 +17,9 @@ WHAT THIS COMPARES
                identity["ext"] via _ext_diff (see below) -- the part of the design the roadmap task
                called central.
 - generation.* clozn.receipts.bundle.REPRO_META_KEYS' sampling-relevant subset, read off run["meta"].
-- context.*    clozn.runs.context_receipt's CURRENT (partial) shape: delivered message count, a
-               compare-time SHA-256 of the survived final_prompt text (feature 06 has not shipped a
-               stored rendered-prompt hash yet -- this hashes what the run already carries rather than
-               waiting on that), and the limits block (prompt/context/max/generated token counts).
+- context.*    clozn.context-receipt.v1's stable delivered/assembled segment metadata and stored rendered
+               hash, with read compatibility for legacy delivered.messages/survived.final_prompt runs,
+               plus prompt/context/output limit fields.
 - output.*     finish_reason, response length in words, output_contract.outcome.status (tool-call parse
                status -- see _tool_call_status for the shape this reads, verified against
                tests/test_openai_structured_client_compat.py rather than guessed), and an EMBEDDED
@@ -211,19 +210,165 @@ def _generation_diff(run_a: dict, run_b: dict) -> list[dict]:
 # ------------------------------------------------------------------------------------------------ context
 
 def _msg_count(context_receipt: dict):
-    messages = _dict(context_receipt.get("delivered")).get("messages")
+    """Message/segment count across both context-receipt generations.
+
+    The released v1 receipt stores ``delivered`` as a metadata-only segment
+    array.  Older runs used ``delivered.messages``.  Reading both shapes here
+    keeps historical comparisons useful without rewriting either artifact.
+    """
+    delivered = context_receipt.get("delivered")
+    if isinstance(delivered, list):
+        return len(delivered)
+    messages = _dict(delivered).get("messages")
     return len(messages) if isinstance(messages, list) else None
 
 
 def _rendered_prompt_hash(context_receipt: dict):
-    """SHA-256 of the SURVIVED final_prompt text, computed HERE at compare time from data the run already
-    carries (clozn.runs.context_receipt.build_context_receipt's own `survived.final_prompt`). Feature 06's
-    spec wants a stored `rendered.sha256`; that field does not exist on disk yet, so this hashes the text
-    that IS captured rather than waiting on it -- never a claim that the artifact itself stores a hash."""
+    """Prefer v1's stored rendered hash, falling back to the legacy prompt text."""
+    stored = _dict(context_receipt.get("rendered")).get("sha256")
+    if isinstance(stored, str) and len(stored) == 64:
+        return stored
     final_prompt = _dict(context_receipt.get("survived")).get("final_prompt")
     if not isinstance(final_prompt, str) or not final_prompt:
         return None
     return hashlib.sha256(final_prompt.encode("utf-8")).hexdigest()
+
+
+def _segments(receipt: dict, stage: str) -> list[dict] | None:
+    value = receipt.get(stage)
+    if not isinstance(value, list):
+        return None
+    return [dict(item) for item in value if isinstance(item, dict) and item.get("segment_id")]
+
+
+def _segment_metadata(item: dict) -> dict:
+    """Privacy-safe allowlist from clozn.context-receipt.v1's segment schema."""
+    keys = (
+        "segment_id", "client_source_id", "source_type", "source_label", "original_order",
+        "delivered_bytes", "delivered_tokens", "included", "content_hash",
+        "reason", "redaction_state",
+    )
+    return {key: item[key] for key in keys if key in item}
+
+
+def _segment_matches(a: list[dict], b: list[dict]):
+    """Pair segments by explicit source identity first, then content identity.
+
+    ``segment_id`` is deliberately content-derived, so it cannot identify a
+    client source whose content changed between runs.  The request extension's
+    ``client_source_id`` can.  Only IDs unique within each receipt are used for
+    this stronger match; malformed/legacy duplicate IDs fall back to the
+    content-derived identity instead of being paired heuristically.
+    """
+    client_a: dict[str, list[int]] = {}
+    client_b: dict[str, list[int]] = {}
+    for index, item in enumerate(a):
+        source_id = item.get("client_source_id")
+        if isinstance(source_id, str) and source_id:
+            client_a.setdefault(source_id, []).append(index)
+    for index, item in enumerate(b):
+        source_id = item.get("client_source_id")
+        if isinstance(source_id, str) and source_id:
+            client_b.setdefault(source_id, []).append(index)
+
+    matched_a: set[int] = set()
+    matched_b: set[int] = set()
+    matches = []
+    for source_id in sorted(set(client_a) & set(client_b)):
+        indexes_a, indexes_b = client_a[source_id], client_b[source_id]
+        if len(indexes_a) == len(indexes_b) == 1:
+            index_a, index_b = indexes_a[0], indexes_b[0]
+            matched_a.add(index_a)
+            matched_b.add(index_b)
+            matches.append(("client_source_id", source_id, a[index_a], b[index_b]))
+
+    segment_b = {
+        str(item["segment_id"]): index
+        for index, item in enumerate(b)
+        if index not in matched_b
+    }
+    for index_a, item_a in enumerate(a):
+        if index_a in matched_a:
+            continue
+        segment_id = str(item_a["segment_id"])
+        index_b = segment_b.get(segment_id)
+        if index_b is None or index_b in matched_b:
+            continue
+        matched_a.add(index_a)
+        matched_b.add(index_b)
+        matches.append(("segment_id", segment_id, item_a, b[index_b]))
+
+    removed = [item for index, item in enumerate(a) if index not in matched_a]
+    added = [item for index, item in enumerate(b) if index not in matched_b]
+    return matches, removed, added
+
+
+def _segment_stage_diff(stage: str, a: list[dict] | None, b: list[dict] | None) -> list[dict]:
+    """Compare one v1 segment stage without exposing prompt/message content.
+
+    Segment IDs, content hashes, source labels, inclusion decisions and order
+    are receipt metadata.  A changed order is represented as a normal
+    ``kind=changed`` difference with ``evidence.change=reordered`` so the
+    stable run-diff kind vocabulary does not need a presentation concept added
+    to it.
+    """
+    dimension = f"context.{stage}.segments"
+    if a is None and b is None:
+        return []
+    if a is None or b is None:
+        return [{
+            "dimension": dimension,
+            "kind": "unavailable",
+            "note": (
+                f"{stage} segment metadata is unavailable on "
+                f"{'run_a' if a is None else 'run_b'}; legacy/privacy-limited evidence "
+                "is not treated as an empty segment list"
+            ),
+        }]
+
+    matches, removed, added = _segment_matches(a, b)
+    out: list[dict] = []
+    for item_b in sorted(added, key=lambda item: str(item["segment_id"])):
+        sid = str(item_b["segment_id"])
+        out.append({
+            "dimension": f"{dimension}.{sid}", "kind": "added",
+            "value_b": _segment_metadata(item_b),
+            "evidence": [{"change": "added", "segment_id": sid, "stage": stage}],
+        })
+    for item_a in sorted(removed, key=lambda item: str(item["segment_id"])):
+        sid = str(item_a["segment_id"])
+        out.append({
+            "dimension": f"{dimension}.{sid}", "kind": "removed",
+            "value_a": _segment_metadata(item_a),
+            "evidence": [{"change": "removed", "segment_id": sid, "stage": stage}],
+        })
+    for match_kind, match_value, item_a, item_b in matches:
+        sid_a = str(item_a["segment_id"])
+        sid_b = str(item_b["segment_id"])
+        if match_kind == "client_source_id":
+            identity = hashlib.sha256(match_value.encode("utf-8")).hexdigest()[:16]
+            base = f"{dimension}.source_{identity}"
+        else:
+            base = f"{dimension}.{match_value}"
+        evidence_identity = {
+            "stage": stage,
+            "segment_id": sid_b,
+            **({"segment_id_a": sid_a, "client_source_id": match_value}
+               if match_kind == "client_source_id" else {}),
+        }
+        for key in ("content_hash", "source_type", "source_label", "included", "reason"):
+            entry = _scalar_diff(f"{base}.{key}", item_a, item_b, key)
+            if entry:
+                entry["evidence"] = [{
+                    "change": "stable_source_changed" if key == "content_hash" else "metadata_changed",
+                    **evidence_identity,
+                }]
+                out.append(entry)
+        entry = _scalar_diff(f"{base}.order", item_a, item_b, "original_order")
+        if entry:
+            entry["evidence"] = [{"change": "reordered", **evidence_identity}]
+            out.append(entry)
+    return out
 
 
 def _context_diff(run_a: dict, run_b: dict) -> list[dict]:
@@ -238,6 +383,12 @@ def _context_diff(run_a: dict, run_b: dict) -> list[dict]:
     out += _content_availability_diff(
         "context.rendered_prompt_sha256", _rendered_prompt_hash(cr_a), _rendered_prompt_hash(cr_b),
         note="the rendered prompt text was not captured for this run -- comparing hashes/counts only")
+
+    # Feature-06 v1 segment metadata.  Legacy runs simply take the compatibility
+    # path above; when only one side is v1 the unavailable entry is important
+    # evidence rather than pretending the older side delivered zero segments.
+    out += _segment_stage_diff("delivered", _segments(cr_a, "delivered"), _segments(cr_b, "delivered"))
+    out += _segment_stage_diff("assembled", _segments(cr_a, "assembled"), _segments(cr_b, "assembled"))
 
     limits_a, limits_b = _dict(cr_a.get("limits")), _dict(cr_b.get("limits"))
     for key in ("prompt_tokens", "context_window_tokens", "requested_max_tokens", "generated_tokens"):
@@ -363,6 +514,68 @@ def _findings_from(differences: list[dict]) -> list[dict]:
                              "summary": "Tool-call output parsing failed in run_a but not run_b.",
                              "dimensions": ["output.tool_call_status"]})
 
+    segment_diffs = [
+        d for dimension, d in by_dim.items()
+        if dimension.startswith("context.delivered.segments.")
+    ]
+    removed = [d for d in segment_diffs if d.get("kind") == "removed"]
+    added = [d for d in segment_diffs if d.get("kind") == "added"]
+    reordered = [
+        d for d in segment_diffs
+        if any(e.get("change") == "reordered" for e in d.get("evidence") or [] if isinstance(e, dict))
+    ]
+    stable_changed = [
+        d for d in segment_diffs
+        if any(e.get("change") == "stable_source_changed"
+               for e in d.get("evidence") or [] if isinstance(e, dict))
+    ]
+    if removed:
+        findings.append({
+            "classification": "context_segments_removed", "status": "observed",
+            "summary": f"{len(removed)} delivered context segment(s) were removed in run_b.",
+            "dimensions": [d["dimension"] for d in removed],
+        })
+    if added:
+        findings.append({
+            "classification": "context_segments_added", "status": "observed",
+            "summary": f"{len(added)} delivered context segment(s) were added in run_b.",
+            "dimensions": [d["dimension"] for d in added],
+        })
+    if reordered:
+        findings.append({
+            "classification": "context_segments_reordered", "status": "observed",
+            "summary": f"{len(reordered)} delivered context segment(s) changed order.",
+            "dimensions": [d["dimension"] for d in reordered],
+        })
+    if stable_changed:
+        findings.append({
+            "classification": "context_stable_source_changed", "status": "observed",
+            "summary": (
+                f"{len(stable_changed)} stable context source id(s) carried different "
+                "content metadata; this is a recorded mismatch, not a semantic judgment."
+            ),
+            "dimensions": [d["dimension"] for d in stable_changed],
+        })
+
+    rendered = by_dim.get("context.rendered_prompt_sha256")
+    delivered_material_change = any(
+        d.get("kind") != "unavailable" and d.get("dimension", "").startswith(
+            "context.delivered.segments.")
+        for d in differences
+    )
+    delivered_available = not any(
+        d.get("dimension") == "context.delivered.segments" and d.get("kind") == "unavailable"
+        for d in differences
+    )
+    if rendered and rendered.get("kind") == "changed" and delivered_available and not delivered_material_change:
+        findings.append({
+            "classification": "rendering_changed_with_identical_delivery", "status": "observed",
+            "summary": (
+                "Delivered segment metadata is identical, but the rendered prompt hash changed."
+            ),
+            "dimensions": ["context.rendered_prompt_sha256"],
+        })
+
     return findings
 
 
@@ -374,9 +587,77 @@ def _rank_for(dimension: str) -> int:
                                  # happen for dimensions this module itself produces; defensive fallback)
 
 
+def _axis_state(*, available_a: bool, available_b: bool, changed: bool,
+                note: str | None = None) -> dict:
+    if not available_a and not available_b:
+        out = {"status": "unavailable"}
+    elif not available_a or not available_b:
+        out = {"status": "unavailable"}
+    else:
+        out = {"status": "changed" if changed else "unchanged"}
+    if note:
+        out["note"] = note
+    return out
+
+
+def _summary_axes(run_a: dict, run_b: dict, differences: list[dict]) -> dict:
+    """Fixed top-summary axes, derived from raw comparisons without narration."""
+    dims = {
+        d.get("dimension") for d in differences
+        if isinstance(d, dict) and d.get("kind") not in ("unavailable", "diff_failed")
+    }
+    id_a, id_b = _dict(run_a.get("identity")), _dict(run_b.get("identity"))
+    ext_a, ext_b = _dict(id_a.get("ext")), _dict(id_b.get("ext"))
+    meta_a, meta_b = _dict(run_a.get("meta")), _dict(run_b.get("meta"))
+    cr_a, cr_b = _dict(run_a.get("context_receipt")), _dict(run_b.get("context_receipt"))
+
+    def present(mapping, key):
+        return key in mapping and mapping.get(key) is not None
+
+    model_a = present(id_a, "model_sha256") or present(id_a, "model_path") or bool(run_a.get("model"))
+    model_b = present(id_b, "model_sha256") or present(id_b, "model_path") or bool(run_b.get("model"))
+    adapter_a, adapter_b = bool(_dict(ext_a.get("adapter"))), bool(_dict(ext_b.get("adapter")))
+    engine_a = present(id_a, "engine_build") or bool(_dict(ext_a.get("engine_artifact")))
+    engine_b = present(id_b, "engine_build") or bool(_dict(ext_b.get("engine_artifact")))
+    generation_a = any(key in meta_a for key in _GENERATION_KEYS)
+    generation_b = any(key in meta_b for key in _GENERATION_KEYS)
+    contract_a, contract_b = bool(_dict(run_a.get("output_contract"))), bool(_dict(run_b.get("output_contract")))
+
+    context_changed = any(d.startswith("context.") for d in dims)
+    return {
+        "model": _axis_state(
+            available_a=model_a, available_b=model_b,
+            changed=any(d in dims for d in ("identity.model_sha256", "identity.model_path"))),
+        "adapter": _axis_state(
+            available_a=adapter_a, available_b=adapter_b,
+            changed=any(d.startswith("identity.ext.adapter") for d in dims)),
+        "template": _axis_state(
+            available_a=present(id_a, "template_fingerprint"),
+            available_b=present(id_b, "template_fingerprint"),
+            changed="identity.template_fingerprint" in dims),
+        "context": _axis_state(
+            available_a=bool(cr_a), available_b=bool(cr_b), changed=context_changed,
+            note="metadata/hash comparison; raw content may be privacy-limited"),
+        "sampling": _axis_state(
+            available_a=generation_a, available_b=generation_b,
+            changed=any(d.startswith("generation.") for d in dims)),
+        "engine": _axis_state(
+            available_a=engine_a, available_b=engine_b,
+            changed=("identity.engine_build" in dims
+                     or any(d.startswith("identity.ext.engine_artifact") for d in dims))),
+        "tool_parse": _axis_state(
+            available_a=contract_a, available_b=contract_b,
+            changed="output.tool_call_status" in dims),
+        "output": _axis_state(
+            available_a=isinstance(run_a.get("response"), str),
+            available_b=isinstance(run_b.get("response"), str),
+            changed=any(d.startswith("output.") for d in dims)),
+    }
+
+
 # ==================================================================================== the public surface
 
-def compare_runs(run_a: dict, run_b: dict) -> dict:
+def compare_runs(run_a: dict, run_b: dict, *, selection: dict | None = None) -> dict:
     """Compare two recorded runs across identity/generation/context/output. Pure and never raises: a
     missing/malformed run yields {"ok": False, "missing": [...], "error": ...} (mirrors
     clozn.analysis.model_diff.diff_runs()'s own error shape -- deliberately NOT clozn.run-diff.v1-shaped,
@@ -387,12 +668,12 @@ def compare_runs(run_a: dict, run_b: dict) -> dict:
         return {"ok": False, "missing": missing,
                 "error": "run " + " and ".join(missing) + " missing/unreadable -- nothing to compare"}
     try:
-        return _compare(run_a, run_b)
+        return _compare(run_a, run_b, selection=selection)
     except Exception as exc:      # noqa: BLE001 -- the never-raise discipline, with a reason attached
         return {"ok": False, "missing": [], "error": f"comparison failed: {type(exc).__name__}: {exc}"}
 
 
-def _compare(run_a: dict, run_b: dict) -> dict:
+def _compare(run_a: dict, run_b: dict, *, selection: dict | None = None) -> dict:
     differences = []
     differences += _identity_diff(run_a, run_b)
     differences += _generation_diff(run_a, run_b)
@@ -407,14 +688,22 @@ def _compare(run_a: dict, run_b: dict) -> dict:
     findings = _findings_from(differences)
     privacy_limited = any(d.get("kind") == "unavailable" for d in differences)
 
+    comparison_selection = dict(selection or {
+        "mode": "explicit",
+        "reference_run_id": run_a.get("id") or "?",
+        "candidate_run_id": run_b.get("id") or "?",
+        "reason": "both run ids were supplied explicitly",
+    })
     return {
         "schema_version": SCHEMA_VERSION,
         "ok": True,
         "run_a": run_a.get("id") or "?",
         "run_b": run_b.get("id") or "?",
+        "comparison_selection": comparison_selection,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "privacy_limited": privacy_limited,
         "ranking": {"order": list(_RANK_ORDER), "note": _RANKING_NOTE},
+        "summary_axes": _summary_axes(run_a, run_b, differences),
         "differences": differences,
         "findings": findings,
     }
@@ -428,6 +717,21 @@ _REPLAY_EXECUTION_NOTE = (
     "spec's three candidate swaps are available and compatible for this run pair. Display run_count/cost "
     "before actually executing any of them."
 )
+
+
+def _template_material(run: dict):
+    """Exact recoverable template material, never a fingerprint stand-in.
+
+    No current run writer captures this field.  The small seam is intentionally
+    forward compatible: an import/tool may provide either top-level
+    ``template_material`` or ``identity.template_material`` in a future run,
+    and the planner will then expose the swap without changing its honesty
+    rule today.
+    """
+    value = run.get("template_material")
+    if value is None:
+        value = _dict(run.get("identity")).get("template_material")
+    return value if isinstance(value, str) and value else None
 
 
 def plan_replay(run_a: dict, run_b: dict, diff_result: dict) -> dict:
@@ -449,13 +753,18 @@ def plan_replay(run_a: dict, run_b: dict, diff_result: dict) -> dict:
                 "no context.delivered.messages.count difference, or run_a's messages are not available",
     }]
 
-    template_available = "identity.template_fingerprint" in by_dim
+    template_changed = "identity.template_fingerprint" in by_dim
+    template_available = template_changed and _template_material(run_a) is not None
     candidates.append({
         "swap": "template", "order": 2,
         "description": "re-run B rendering A's chat template",
         "available": template_available,
-        "note": None if template_available else
-                "no identity.template_fingerprint difference detected -- nothing to swap",
+        "note": None if template_available else (
+            "no identity.template_fingerprint difference detected -- nothing to swap"
+            if not template_changed else
+            "template fingerprint changed, but exact baseline template material was not captured; "
+            "a fingerprint is not replayable template content"
+        ),
     })
 
     sampling_dims = sorted(d for d in by_dim if d.startswith("generation."))
@@ -476,3 +785,128 @@ def plan_replay(run_a: dict, run_b: dict, diff_result: dict) -> dict:
         "runs_required": sum(1 for c in candidates if c["available"]),
         "note": _REPLAY_EXECUTION_NOTE,
     }
+
+
+# ================================================================================== run selection
+
+_DERIVED_SOURCES = frozenset({"replay", "branch", "fork", "controlled_test"})
+
+
+def is_internal_child_run(run: dict) -> bool:
+    """Whether a run is derived/internal and excluded from automatic selection."""
+    return bool(
+        isinstance(run, dict)
+        and (run.get("parent_run_id") or str(run.get("source") or "") in _DERIVED_SOURCES)
+    )
+
+
+def _recorded_order(run: dict) -> tuple[float, str]:
+    for key in ("recorded_ts", "created_ts"):
+        value = run.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value), str(run.get("id") or "")
+    return float("-inf"), str(run.get("id") or "")
+
+
+def _model_key(run: dict):
+    identity = _dict(run.get("identity"))
+    value = identity.get("model_sha256") or run.get("model")
+    return str(value) if value else None
+
+
+def _client_key(run: dict):
+    value = run.get("client_key")
+    if value:
+        return ("client_key", str(value))
+    value = run.get("client")
+    return ("client", str(value).casefold()) if value else None
+
+
+def _task_key(run: dict):
+    for field in ("task_key", "case_id"):
+        if run.get(field):
+            return (field, str(run[field]))
+    meta = _dict(run.get("meta"))
+    for field in ("task_key", "task_id", "case_id"):
+        if meta.get(field):
+            return (f"meta.{field}", str(meta[field]))
+    messages = run.get("messages")
+    if isinstance(messages, list):
+        last_user = next(
+            (m.get("content") for m in reversed(messages)
+             if isinstance(m, dict) and m.get("role") == "user"
+             and isinstance(m.get("content"), str)),
+            None,
+        )
+        if last_user is not None:
+            # Exact prompt hash: deterministic equality only, never semantic
+            # similarity and never raw prompt disclosure in selection metadata.
+            return ("last_user_sha256", hashlib.sha256(last_user.encode("utf-8")).hexdigest())
+    return None
+
+
+def _session_key(run: dict):
+    return run.get("session_key")
+
+
+def select_reference_run(candidate: dict, runs: list[dict], *, mode: str,
+                         reference_run_id: str | None = None,
+                         include_child_runs: bool = False) -> dict:
+    """Select an earlier reference deterministically from full run records.
+
+    Returns ``{ok, run?, selection?, error?}``; it never fabricates a fallback
+    when the requested association key is missing.  Automatic modes exclude
+    replay/branch/fork/controlled child runs unless explicitly opted in.
+    """
+    if not isinstance(candidate, dict) or not candidate.get("id"):
+        return {"ok": False, "error": "candidate run is missing/unreadable"}
+    known = {"previous_compatible", "same_session", "same_client", "same_task", "pinned"}
+    if mode not in known:
+        return {"ok": False, "error": f"unknown comparison selection mode {mode!r}"}
+
+    records = [r for r in (runs or []) if isinstance(r, dict) and r.get("id") != candidate.get("id")]
+    if not include_child_runs:
+        records = [r for r in records if not is_internal_child_run(r)]
+    by_id = {r.get("id"): r for r in records}
+    if mode == "pinned":
+        selected = by_id.get(reference_run_id)
+        if selected is None:
+            suffix = " (internal child runs are excluded by default)" if reference_run_id else ""
+            return {"ok": False, "error": f"pinned reference run not found: {reference_run_id!r}{suffix}"}
+        basis = {"field": "run_id", "value": str(reference_run_id)}
+    else:
+        if mode == "previous_compatible":
+            key, label = _model_key(candidate), "model identity"
+            key_fn = _model_key
+        elif mode == "same_session":
+            key, label = candidate.get("session_key"), "session_key"
+            key_fn = _session_key
+        elif mode == "same_client":
+            key, label = _client_key(candidate), "client association"
+            key_fn = _client_key
+        else:
+            key, label = _task_key(candidate), "exact task key"
+            key_fn = _task_key
+        if key is None:
+            return {"ok": False, "error": f"candidate carries no {label}; selection cannot be inferred"}
+        before = [
+            r for r in records
+            if _recorded_order(r) < _recorded_order(candidate) and key_fn(r) == key
+        ]
+        if not before:
+            return {"ok": False, "error": f"no earlier non-child run matched {label}"}
+        selected = max(before, key=_recorded_order)
+        basis_value = key[1] if isinstance(key, tuple) else key
+        basis = {"field": key[0] if isinstance(key, tuple) else label, "value": str(basis_value)}
+
+    selection = {
+        "mode": mode,
+        "reference_run_id": selected["id"],
+        "candidate_run_id": candidate["id"],
+        "reason": (
+            f"selected {selected['id']} by {basis['field']}; "
+            + ("child runs were eligible" if include_child_runs else "internal child runs were excluded")
+        ),
+        "basis": basis,
+    }
+    return {"ok": True, "run": selected, "selection": selection}

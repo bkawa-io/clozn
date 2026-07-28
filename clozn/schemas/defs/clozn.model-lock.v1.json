@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "clozn.model-lock.v1",
   "title": "Pinned model artifacts for a CI model-change gate",
-  "description": "A checked-in lockfile naming the exact remote model artifacts a model-gate action's run mode resolves and gates, keyed by role (typically 'baseline' and 'candidate', but any role name is allowed -- clozn does not fix the role set). SHA-256 is mandatory for every entry: this schema never accepts a remote model artifact whose checksum is unknown. `clozn.models.lockfile.load_lockfile()` is the reference reader; it validates against this schema and rejects non-HTTPS URLs, but it never downloads anything -- fetching, redirect-following, and size verification are a separate (deferred) concern.",
+  "description": "A checked-in lockfile naming the exact remote model artifacts a model-gate action's run mode resolves and gates, keyed by role (typically 'baseline' and 'candidate', but any role name is allowed -- clozn does not fix the role set). SHA-256 is mandatory for every entry: this schema never accepts a remote model artifact whose checksum is unknown. `clozn.models.lockfile.load_lockfile()` is the reference reader and `clozn model-lock verify` remains offline. `clozn model-lock fetch` performs the separately authorized HTTPS download with bounded redirects, size checking, checksum verification, and atomic cache promotion.",
 
   "type": "object",
   "required": ["schema_version", "models"],

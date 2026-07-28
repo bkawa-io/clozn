@@ -1,0 +1,30 @@
+name: Clozn verify-only model gate
+
+on:
+  pull_request:
+    paths:
+      - "artifacts/clozn-experiment-result.json"
+      - "model/**"
+      - "adapters/**"
+      - "templates/**"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: bkawa-io/clozn-action@v1
+        with:
+          mode: verify
+          clozn-version: "0.1.0"
+          evidence: artifacts/clozn-experiment-result.json
+          max-execution-errors: "0"
+          max-target-regressions: "0"
+          max-guard-regressions: "0"
+          min-target-gains: "0"
+          receipt-bundle: "true"
+          comment: "off"

@@ -178,6 +178,10 @@ def spawn_runtime(config: RuntimeConfig, *, worker_log=None, gateway_log=None) -
                 env["CLOZN_ENGINE_ARTIFACT_SHA256"] = discovery.artifact_sha256
             if discovery.engine_version:
                 env["CLOZN_ENGINE_VERSION"] = discovery.engine_version
+            if discovery.build_id:
+                env["CLOZN_ENGINE_BUILD_ID"] = discovery.build_id
+            if discovery.llama_cpp_commit:
+                env["CLOZN_ENGINE_LLAMA_CPP_COMMIT"] = discovery.llama_cpp_commit
         except Exception:
             pass
         command = [

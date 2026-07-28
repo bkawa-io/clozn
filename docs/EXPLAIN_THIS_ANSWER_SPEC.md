@@ -1,5 +1,9 @@
 # SPEC — "Explain this answer": inspect any reply (the core surface)
 
+> **Historical feature specification (2026-07-04).** It records the earlier memory-card product shape
+> and old Studio terminology. Do not use it as current-user documentation; see
+> [CAPABILITIES.md](CAPABILITIES.md).
+
 *2026-07-04. The mainstream front door: a normal user, chatting normally, taps "explain" on any reply
 and sees — measured, never self-reported — how confident the model was, what influenced the answer and
 where, and what it'd look like with the dials changed. The studio becomes the power-user basement; this

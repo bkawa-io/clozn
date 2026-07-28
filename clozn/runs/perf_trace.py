@@ -1,28 +1,9 @@
-"""clozn/runs/perf_trace.py -- derive the clozn.performance-trace.v1 artifact from a stored run.
+"""Derive a clock-domain-aware performance trace from a stored run.
 
-WHY THIS IS A DERIVED VIEW, NOT A NEW STORED FIELD
-----------------------------------------------------
-Like clozn.runs.diagnosis.diagnose() and clozn.runs.timeline.timeline(), build_trace() reads an
-already-recorded run and reshapes it -- it does not add a new block to clozn.runs.store.record()'s
-payload. Persisting a full performance_trace document on every run today would mean writing a mostly-empty
-artifact to disk forever: see the module docstring below for exactly which phases this run's evidence can
-and cannot support. Once real phase instrumentation lands (queue wait, model load, prefill -- see the
-09-performance-diagnosis plan's Slice 6, deferred), this function's job shrinks to "pass through what was
-actually captured" rather than reconstructing from scraps; it does not need to change shape to get there.
-
-WHAT THIS RUN'S EVIDENCE CAN ACTUALLY SUPPORT TODAY
-------------------------------------------------------
-A repo-wide survey (see the 09-performance-diagnosis plan) found exactly one phase genuinely measured on
-a production run: decode. The C++ worker times it with std::chrono::steady_clock (engine/core/src/
-generate_ar.cpp) and it reaches this run's `meta` as generation_duration_ms/generation_tokens_per_second
-(clozn/runs/trace.py's generation_timing_from_frames(), merged in at clozn/server/substrates.py). Model
-load, prompt prefill, queue wait, and KV/context allocation are not measured anywhere in this codebase --
-clozn.runs.diagnosis already reads for load_duration_ms/prefill_duration_ms/kv_allocation_ms/
-context_allocation_ms and reports "unavailable" for exactly this reason. build_trace() inherits that
-honesty: only the decode phase is emitted into `phases`, and the total wall-clock duration is surfaced
-separately (metrics.wall_clock_total_ms) rather than dressed up as a monotonic phase -- see the schema's
-own docstring for why mixing those two clock domains under one `duration_ns` array would be exactly the
-kind of narration-ahead-of-evidence this feature exists to prevent.
+Worker and gateway timing documents remain separate at capture time. This derived view flattens their
+phases for presentation while retaining ``clock_owner``/``clock_domain`` on each entry. Only measured,
+exclusive, in-request durations contribute to known time; overlapping transport spans and process-startup
+context stay visible without being double-counted.
 """
 from __future__ import annotations
 
@@ -75,13 +56,72 @@ def _engine_identity(identity: Mapping[str, Any]) -> dict:
 
 
 def _decode_phase(meta: Mapping[str, Any]) -> dict | None:
-    """The one phase this codebase genuinely times with a monotonic clock today -- see the module
-    docstring. No `start_ns`: nothing upstream of decode is timed yet, so decode's offset within the
-    request isn't known even though its own duration is (omit, don't guess)."""
+    """Legacy-worker fallback for builds that predate the versioned timing wrapper."""
     duration_ns = _duration_ns(meta.get("generation_duration_ms"))
     if duration_ns is None:
         return None
+    # Keep the original v1 shape byte-compatible for old worker frames. The versioned worker wrapper
+    # below carries the richer clock-domain/measurement labels.
     return {"name": "decode", "owner": "clozn_worker", "duration_ns": duration_ns}
+
+
+def _captured_phases(meta: Mapping[str, Any]) -> list[dict]:
+    phases: list[dict] = []
+    for key, expected_owner in (
+        ("gateway_timing", "clozn_gateway"),
+        ("worker_timing", "clozn_worker"),
+    ):
+        document = _object(meta.get(key))
+        if document.get("unit") != "nanoseconds":
+            continue
+        clock = document.get("clock") if isinstance(document.get("clock"), str) else "monotonic"
+        clock_owner = (
+            document.get("clock_owner")
+            if isinstance(document.get("clock_owner"), str)
+            else expected_owner
+        )
+        source_schema = document.get("schema_version")
+        for raw in document.get("phases", []) if isinstance(document.get("phases"), list) else []:
+            phase = _object(raw)
+            name = phase.get("name")
+            duration_ns = _integer(phase.get("duration_ns"))
+            if not isinstance(name, str) or not name or duration_ns is None:
+                continue
+            entry = {
+                "name": name,
+                "owner": (
+                    phase.get("owner") if isinstance(phase.get("owner"), str) else expected_owner
+                ),
+                "clock_owner": clock_owner,
+                "clock_domain": f"{clock_owner}:{clock}",
+                "duration_ns": duration_ns,
+                "measurement": (
+                    phase.get("measurement")
+                    if phase.get("measurement") in {"measured", "estimated"}
+                    else "measured"
+                ),
+                "aggregation": (
+                    phase.get("aggregation")
+                    if phase.get("aggregation") in {"exclusive", "overlapping", "context_only"}
+                    else "exclusive"
+                ),
+            }
+            start_ns = _integer(phase.get("start_ns"))
+            if start_ns is not None:
+                entry["start_ns"] = start_ns
+            if isinstance(phase.get("scope"), str):
+                entry["scope"] = phase["scope"]
+            includes = phase.get("includes")
+            if isinstance(includes, list):
+                entry["includes"] = [value for value in includes if isinstance(value, str)]
+            if isinstance(source_schema, str) and source_schema:
+                entry["source_schema"] = source_schema
+            phases.append(entry)
+    if not any(phase["name"] == "decode" for phase in phases):
+        legacy = _decode_phase(meta)
+        if legacy is not None:
+            phases.append(legacy)
+    return phases
 
 
 def _metrics(run: Mapping[str, Any], meta: Mapping[str, Any]) -> dict:
@@ -103,6 +143,10 @@ def _metrics(run: Mapping[str, Any], meta: Mapping[str, Any]) -> dict:
     if decode_tok_s is not None:
         metrics["decode_tokens_per_second"] = decode_tok_s
 
+    prompt_tok_s = _number(meta.get("prompt_tokens_per_second"))
+    if prompt_tok_s is not None:
+        metrics["prompt_tokens_per_second"] = prompt_tok_s
+
     # prompt_tokens_per_second needs a prefill duration this codebase does not measure yet (see module
     # docstring) -- deliberately never populated in v1, kept in the schema for forward compatibility.
 
@@ -111,6 +155,35 @@ def _metrics(run: Mapping[str, Any], meta: Mapping[str, Any]) -> dict:
         metrics["wall_clock_total_ms"] = wall_clock_ms
 
     return metrics
+
+
+def _aggregation(phases: Sequence[Mapping[str, Any]], wall_clock_ms) -> dict:
+    known_ns = sum(
+        int(phase["duration_ns"])
+        for phase in phases
+        if phase.get("measurement", "measured") == "measured"
+        and phase.get("aggregation", "exclusive") == "exclusive"
+        and isinstance(phase.get("duration_ns"), int)
+    )
+    out: dict[str, Any] = {
+        "known_duration_ns": known_ns,
+        "phase_count": len(phases),
+        "exclusive_phase_count": sum(
+            1 for phase in phases
+            if phase.get("measurement", "measured") == "measured"
+            and phase.get("aggregation", "exclusive") == "exclusive"
+        ),
+    }
+    wall_ms = _number(wall_clock_ms)
+    if wall_ms is not None:
+        wall_ns = round(wall_ms * 1_000_000)
+        out["wall_clock_total_ns"] = wall_ns
+        out["unaccounted_duration_ns"] = max(0, wall_ns - known_ns)
+        out["consistency"] = "consistent" if known_ns <= wall_ns else "known_exceeds_wall"
+        out["measurement_coverage"] = (
+            min(1.0, known_ns / wall_ns) if wall_ns > 0 else (1.0 if known_ns == 0 else 0.0)
+        )
+    return out
 
 
 def build_trace(run) -> dict:
@@ -140,16 +213,22 @@ def build_trace(run) -> dict:
         doc["machine_identity"] = machine_identity
 
     engine_identity = _engine_identity(identity)
+    for key in ("backend", "device", "gpu_layers", "quant", "mode"):
+        value = meta.get(key)
+        if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+            engine_identity.setdefault(key, value)
     if engine_identity:
         doc["engine_identity"] = engine_identity
 
-    phases = [phase for phase in (_decode_phase(meta),) if phase is not None]
+    phases = _captured_phases(meta)
     if phases:
         doc["phases"] = phases
 
     metrics = _metrics(record, meta)
     if metrics:
         doc["metrics"] = metrics
+    if phases or "wall_clock_total_ms" in metrics:
+        doc["aggregation"] = _aggregation(phases, metrics.get("wall_clock_total_ms"))
 
     schemas.validate(doc, SCHEMA)
     return doc

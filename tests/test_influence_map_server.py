@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 import json
+import threading
+import time
 
 import pytest
 
@@ -60,9 +62,13 @@ def _get(path):
 
 @pytest.fixture
 def isolated(tmp_path, monkeypatch):
+    from clozn.server.influence_jobs import JOBS
+
+    JOBS.clear_for_tests()
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(cs, "SUB", ScoreSub())
-    return tmp_path
+    yield tmp_path
+    JOBS.clear_for_tests()
 
 
 def _seed():
@@ -102,7 +108,12 @@ def test_influence_map_computes_and_attaches_to_run(isolated, monkeypatch):
 def test_influence_map_returns_attached_map_without_rescoring(isolated, monkeypatch):
     rid = _seed()
     run = runlog.get_run(rid)
-    run["influence_map"] = {"schema": "clozn.context_answer_influence.v1", "available": True}
+    from clozn.receipts.context_answer_influence import cache_identity
+    run["influence_map"] = {
+        "schema": "clozn.context_answer_influence.v1",
+        "available": True,
+        "cache_identity": cache_identity(run),
+    }
     assert runlog.replace_run(run)
     import clozn.receipts.context_answer_influence as backend
     monkeypatch.setattr(
@@ -115,6 +126,39 @@ def test_influence_map_returns_attached_map_without_rescoring(isolated, monkeypa
 
     assert status == 200
     assert out["schema"] == "clozn.context_answer_influence.v1"
+
+
+def test_influence_map_cache_invalidates_when_receipt_changes(isolated, monkeypatch):
+    rid = _seed()
+    run = runlog.get_run(rid)
+    from clozn.receipts.context_answer_influence import cache_identity
+    run["context_receipt"] = {"schema_version": "clozn.context-receipt.v1", "run_id": rid}
+    run["influence_map"] = {
+        "schema": "clozn.context_answer_influence.v1",
+        "available": True,
+        "cache_identity": cache_identity(run),
+    }
+    run["context_receipt"]["privacy"] = "metadata_only"
+    assert runlog.replace_run(run)
+
+    import clozn.receipts.context_answer_influence as backend
+    calls = []
+
+    def recompute(current, *_args, **_kwargs):
+        calls.append(current["context_receipt"])
+        return {
+            "schema": "clozn.context_answer_influence.v1",
+            "status": "ok",
+            "available": True,
+            "method": _METHOD_STUB,
+            "identity": {"run_id": rid},
+            "cache_identity": cache_identity(current),
+        }
+
+    monkeypatch.setattr(backend, "context_answer_influence", recompute)
+    status, _out = _post(f"/runs/{rid}/influence-map")
+    assert status == 200
+    assert len(calls) == 1
 
 
 def test_influence_map_validates_run_worker_and_cost_bound(isolated, monkeypatch):
@@ -240,3 +284,252 @@ def test_get_influence_map_does_not_return_a_failed_unavailable_artifact(isolate
     assert status == 404
     assert out["available"] is False
     assert "influence_map" not in runlog.get_run(rid)
+
+
+def test_influence_map_portable_export_defaults_to_metadata_only_without_text(isolated):
+    rid = _seed()
+    secret_source = "private source sentence"
+    secret_answer = "private answer"
+    run = runlog.get_run(rid)
+    run["influence_map"] = {
+        "schema": "clozn.context_answer_influence.v1",
+        "status": "ok",
+        "available": True,
+        "method": _METHOD_STUB,
+        "identity": {"run_id": rid},
+        "cache_identity": {},
+        "thresholds": {"cell_abs_delta_nats": 0.05},
+        "prompt_sources": [{
+            "id": "p.m000", "start": 0, "end": len(secret_source),
+            "text": secret_source, "segment_id": "seg-1", "client_source_id": "doc-1",
+            "selected": True,
+        }, {
+            "id": "p.m001", "start": 0, "end": 14,
+            "text": "omitted secret", "segment_id": "seg-2", "client_source_id": "doc-2",
+            "selected": False,
+        }],
+        "selection": {
+            "strategy": "bounded_test",
+            "max_context_spans": 1,
+            "selected_source_ids": ["p.m000"],
+            "omitted_source_ids": ["p.m001"],
+            "measured_span_count": 1,
+            "complete_for_selected_spans": True,
+        },
+        "prompt_spans": [{
+            "id": "p.m000.c000", "start": 0, "end": len(secret_source),
+            "text": secret_source, "segment_id": "seg-1", "client_source_id": "doc-1",
+        }],
+        "answer_spans": [{
+            "id": "a.t0000", "start": 0, "end": len(secret_answer), "text": secret_answer,
+        }],
+        "answer": {"recorded_text": secret_answer},
+        "links": [],
+        "summary": {"no_clear_source": True},
+    }
+    assert runlog.replace_run(run)
+
+    status, out = _get(f"/runs/{rid}/influence-map/export")
+    encoded = json.dumps(out)
+
+    assert status == 200
+    assert out["privacy"] == "metadata_only"
+    assert secret_source not in encoded
+    assert secret_answer not in encoded
+    assert "omitted secret" not in encoded
+    assert [source["client_source_id"] for source in out["prompt_sources"]] == ["doc-1", "doc-2"]
+    assert out["prompt_sources"][1]["selected"] is False
+    assert out["selection"]["omitted_source_ids"] == ["p.m001"]
+    assert len(out["prompt_sources"][1]["text_sha256"]) == 64
+    assert out["prompt_spans"][0]["segment_id"] == "seg-1"
+    assert out["prompt_spans"][0]["client_source_id"] == "doc-1"
+    assert len(out["prompt_spans"][0]["text_sha256"]) == 64
+
+
+def test_influence_map_full_text_export_requires_explicit_post_opt_in(isolated):
+    rid = _seed()
+    run = runlog.get_run(rid)
+    run["influence_map"] = {
+        "schema": "clozn.context_answer_influence.v1",
+        "status": "ok",
+        "available": True,
+        "method": _METHOD_STUB,
+        "identity": {"run_id": rid},
+        "cache_identity": {},
+        "thresholds": {},
+        "prompt_sources": [{
+            "id": "p1", "start": 0, "end": 6, "text": "secret", "selected": True,
+        }],
+        "selection": {
+            "strategy": "test",
+            "max_context_spans": 1,
+            "selected_source_ids": ["p1"],
+            "omitted_source_ids": [],
+            "measured_span_count": 1,
+            "complete_for_selected_spans": True,
+        },
+        "prompt_spans": [{"id": "p1", "start": 0, "end": 6, "text": "secret"}],
+        "answer_spans": [{"id": "a1", "start": 0, "end": 6, "text": "answer"}],
+        "links": [],
+        "summary": {},
+    }
+    assert runlog.replace_run(run)
+
+    status, out = _post(f"/runs/{rid}/influence-map/export", {"privacy": "full"})
+
+    assert status == 200
+    assert out["privacy"] == "full"
+    assert out["prompt_sources"][0]["text"] == "secret"
+    assert out["prompt_spans"][0]["text"] == "secret"
+    assert out["answer_spans"][0]["text"] == "answer"
+
+
+# ----------------------------------------------------------- bounded async job lifecycle
+
+def _wait_for_job(rid: str, job_id: str, states: set[str], timeout: float = 2.0):
+    deadline = time.monotonic() + timeout
+    last = None
+    while time.monotonic() < deadline:
+        status, last = _get(f"/runs/{rid}/influence-map/jobs/{job_id}")
+        assert status == 200
+        if last["state"] in states:
+            return last
+        time.sleep(0.01)
+    pytest.fail(f"job did not reach {states}; last={last}")
+
+
+def _available_map(rid: str) -> dict:
+    return {
+        "schema": "clozn.context_answer_influence.v1",
+        "status": "ok",
+        "available": True,
+        "method": _METHOD_STUB,
+        "identity": {"run_id": rid},
+        "prompt_spans": [],
+        "answer_spans": [],
+        "links": [],
+    }
+
+
+def test_influence_job_reports_coarse_refine_progress_and_persists(isolated, monkeypatch):
+    rid = _seed()
+    refine_reached = threading.Event()
+    release = threading.Event()
+    import clozn.receipts.context_answer_influence as backend
+
+    def measured(_run, _sub, **options):
+        options["progress"](phase="coarse", completed=2, total=4)
+        options["progress"](phase="refine", completed=1, total=3)
+        refine_reached.set()
+        assert release.wait(2)
+        return _available_map(rid)
+
+    monkeypatch.setattr(backend, "context_answer_influence", measured)
+    status, started = _post(f"/runs/{rid}/influence-map/jobs")
+    assert status == 202
+    assert started["state"] in {"queued", "running"}
+    assert refine_reached.wait(2)
+
+    status, progress = _get(
+        f"/runs/{rid}/influence-map/jobs/{started['job_id']}")
+    assert status == 200
+    assert progress["state"] == "running"
+    assert progress["progress"] == {
+        "phase": "refine",
+        "completed_units": 1,
+        "total_units": 3,
+        "percent": 33.3,
+    }
+
+    release.set()
+    done = _wait_for_job(rid, started["job_id"], {"completed"})
+    assert done["progress"]["phase"] == "done"
+    assert done["cancellable"] is False
+    assert runlog.get_run(rid)["influence_map"]["available"] is True
+
+
+def test_influence_job_cancel_checkpoint_prevents_persistence(isolated, monkeypatch):
+    rid = _seed()
+    scoring = threading.Event()
+    import clozn.receipts.context_answer_influence as backend
+
+    def measured(_run, _sub, **options):
+        options["progress"](phase="coarse", completed=1, total=4)
+        scoring.set()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if options["cancel_requested"]():
+                raise backend.InfluenceComputationCancelled("cancelled in test")
+            time.sleep(0.005)
+        pytest.fail("test job never observed cancellation")
+
+    monkeypatch.setattr(backend, "context_answer_influence", measured)
+    status, started = _post(f"/runs/{rid}/influence-map/jobs")
+    assert status == 202
+    assert scoring.wait(2)
+
+    status, cancelled = _post(
+        f"/runs/{rid}/influence-map/jobs/{started['job_id']}/cancel")
+    assert status == 200
+    assert cancelled["cancel_requested"] is True
+    assert cancelled["cancel_accepted"] is True
+    terminal = _wait_for_job(rid, started["job_id"], {"cancelled"})
+    assert terminal["cancellable"] is False
+    assert "influence_map" not in runlog.get_run(rid)
+
+
+def test_influence_job_repeated_cancel_is_idempotent(isolated, monkeypatch):
+    rid = _seed()
+    scoring = threading.Event()
+    import clozn.receipts.context_answer_influence as backend
+
+    def measured(_run, _sub, **options):
+        scoring.set()
+        while not options["cancel_requested"]():
+            time.sleep(0.005)
+        raise backend.InfluenceComputationCancelled("cancelled")
+
+    monkeypatch.setattr(backend, "context_answer_influence", measured)
+    status, started = _post(f"/runs/{rid}/influence-map/jobs")
+    assert status == 202 and scoring.wait(2)
+    cancel_path = f"/runs/{rid}/influence-map/jobs/{started['job_id']}/cancel"
+    status, first = _post(cancel_path)
+    assert status == 200 and first["cancel_accepted"] is True
+    status, second = _post(cancel_path)
+    assert status == 200
+    assert second["cancel_requested"] is True
+    assert second["cancel_accepted"] is False
+    terminal = _wait_for_job(rid, started["job_id"], {"cancelled"})
+
+    status, third = _post(cancel_path)
+    assert status == 200
+    assert third["state"] == terminal["state"] == "cancelled"
+    assert third["cancel_accepted"] is False
+    assert "influence_map" not in runlog.get_run(rid)
+
+
+def test_async_cached_job_and_synchronous_post_remain_compatible(isolated, monkeypatch):
+    rid = _seed()
+    run = runlog.get_run(rid)
+    from clozn.receipts.context_answer_influence import cache_identity
+
+    stored = {
+        **_available_map(rid),
+        "cache_identity": cache_identity(run),
+    }
+    run["influence_map"] = stored
+    assert runlog.replace_run(run)
+    import clozn.receipts.context_answer_influence as backend
+    monkeypatch.setattr(
+        backend,
+        "context_answer_influence",
+        lambda *_args, **_kwargs: pytest.fail("valid cached maps must not rescore"),
+    )
+
+    status, job = _post(f"/runs/{rid}/influence-map/jobs")
+    assert status == 202
+    assert job["state"] == "completed"
+    assert job["cached"] is True
+    status, sync = _post(f"/runs/{rid}/influence-map")
+    assert status == 200
+    assert sync == stored

@@ -10,9 +10,12 @@ the segment/omission/transformation/termination detail the new shape carries tha
 from __future__ import annotations
 
 import json
+import hashlib
+from copy import deepcopy
+from pathlib import Path
 
 from clozn.cli import main as ctx
-from clozn.runs.context_receipt import build_context_receipt, read_receipt
+from clozn.runs.context_receipt import _apply_privacy, build_context_receipt, read_receipt
 import clozn.runs.store as runlog
 
 
@@ -100,7 +103,11 @@ def _new_body(run: dict, receipt: dict, *, detailed: bool) -> list[str]:
     if termination:
         raw = termination.get("reason_raw")
         raw_note = f" (raw: {raw})" if raw and raw != termination.get("reason") else ""
-        lines.extend(["", "termination · " + str(termination.get("reason")) + raw_note])
+        source_note = f" via {termination['source']}" if termination.get("source") else ""
+        lines.extend([
+            "",
+            "termination · " + str(termination.get("reason")) + raw_note + source_note,
+        ])
 
     lines.extend(["", "input policy · " + str(receipt.get("input_policy") or "unknown")])
 
@@ -111,7 +118,14 @@ def _new_body(run: dict, receipt: dict, *, detailed: bool) -> list[str]:
             mark = "omitted" if included is False else "included"
             reason = f" reason={seg['reason']}" if seg.get("reason") else ""
             label = seg.get("source_label", "?")
-            lines.append(f"  [{seg.get('original_order')}] {seg.get('segment_id')} {label} - {mark}{reason}")
+            source_id = (
+                f" source={seg['client_source_id']}"
+                if seg.get("client_source_id") else ""
+            )
+            lines.append(
+                f"  [{seg.get('original_order')}] {seg.get('segment_id')} "
+                f"{label}{source_id} - {mark}{reason}"
+            )
         omissions = receipt.get("omissions") or []
         lines.append(f"OMISSIONS ({len(omissions)})")
         for omission in omissions:
@@ -126,9 +140,15 @@ def _new_body(run: dict, receipt: dict, *, detailed: bool) -> list[str]:
             lines.append("RENDERED")
             if rendered.get("sha256"):
                 lines.append(f"  sha256 {rendered['sha256'][:16]}...")
-            if "token_count" in rendered:
+            if "bytes" in rendered:
+                lines.append(f"  bytes {rendered['bytes']}")
+            if "tokens" in rendered or "token_count" in rendered:
                 estimated = " (estimated)" if rendered.get("estimated") else ""
-                lines.append(f"  token_count {rendered['token_count']}{estimated}")
+                lines.append(
+                    f"  tokens {rendered.get('tokens', rendered.get('token_count'))}{estimated}"
+                )
+            if "content_available" in rendered:
+                lines.append(f"  content_available {str(rendered['content_available']).lower()}")
         privacy = receipt.get("privacy")
         if privacy:
             lines.append(f"receipt privacy · {privacy}")
@@ -188,6 +208,75 @@ def cmd_context_show(args):
     return 0
 
 
+_PRIVACY_ORDER = {"full": 0, "metadata_only": 1, "hashes_only": 2, "off": 3}
+_OMITTED = {
+    "full": [],
+    "metadata_only": ["survived.final_prompt", "survived.assembled_messages"],
+    "hashes_only": [
+        "survived.final_prompt",
+        "survived.assembled_messages",
+        "segments.source_label",
+        "segments.client_source_id",
+        "segments.delivered_bytes",
+    ],
+    "off": ["all receipt fields except schema_version, run_id, and privacy"],
+}
+
+
+def export_context_receipt(run: dict, *, privacy: str) -> dict:
+    """Derive a lower- or equal-disclosure export without mutating the stored run."""
+    view = read_receipt(run)
+    if view["shape"] != "new":
+        raise ValueError(
+            f"privacy-safe export requires a clozn.context-receipt.v1 source; "
+            f"this run's receipt shape is {view['shape']}"
+        )
+    receipt = deepcopy(view["receipt"])
+    stored_privacy = str(receipt.get("privacy") or "full")
+    if stored_privacy not in _PRIVACY_ORDER:
+        stored_privacy = "full"
+    if _PRIVACY_ORDER[privacy] < _PRIVACY_ORDER[stored_privacy]:
+        raise ValueError(
+            f"cannot export at privacy {privacy!r}: the stored receipt is already "
+            f"{stored_privacy!r} and omitted content cannot be recovered"
+        )
+    canonical = json.dumps(
+        receipt, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    derived = _apply_privacy(receipt, privacy)
+    from clozn import schemas
+    schemas.validate(derived, "clozn.context-receipt.v1")
+    document = {
+        "schema_version": "clozn.context-receipt-export.v1",
+        "run_id": str(run.get("id") or derived.get("run_id") or ""),
+        "source_receipt_sha256": hashlib.sha256(canonical).hexdigest(),
+        "privacy": privacy,
+        "omitted_fields": list(_OMITTED[privacy]),
+        "context_receipt": derived,
+    }
+    schemas.validate(document)
+    return document
+
+
+def cmd_context_export(args):
+    run = runlog.get_run(args.run_id)
+    if not run:
+        raise ctx.CloznError(f"no such run: {args.run_id}")
+    try:
+        document = export_context_receipt(run, privacy=args.privacy)
+    except ValueError as exc:
+        raise ctx.CloznError(str(exc)) from None
+    target = Path(args.out).expanduser()
+    if target.exists():
+        raise ctx.CloznError(f"refusing to overwrite existing export: {target}")
+    from clozn._io import atomic_write_json
+    atomic_write_json(
+        str(target), document, indent=2, ensure_ascii=False, sort_keys=True
+    )
+    print(str(target))
+    return 0
+
+
 def add_subparser(subparsers):
     parser = subparsers.add_parser(
         "context", help="inspect what a run delivered and what survived into generation")
@@ -205,3 +294,13 @@ def add_subparser(subparsers):
     show.add_argument("--detailed", action="store_true",
                       help="also show segments, omissions, transformations, and rendered detail")
     show.set_defaults(fn=cmd_context_show)
+
+    export = commands.add_parser(
+        "export", help="write an immutable privacy-scoped context receipt export")
+    export.add_argument("run_id")
+    export.add_argument("--out", required=True, help="new JSON file to create (never overwritten)")
+    export.add_argument(
+        "--privacy", choices=tuple(_PRIVACY_ORDER), default="metadata_only",
+        help="maximum disclosure tier for the derived export (default: metadata_only)",
+    )
+    export.set_defaults(fn=cmd_context_export)

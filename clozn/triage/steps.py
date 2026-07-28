@@ -127,17 +127,28 @@ def _context_receipt(run) -> dict:
 
 def _delivered_messages(run):
     delivered = _context_receipt(run).get("delivered")
+    if isinstance(delivered, list):
+        # v1 metadata-only segments.  Full content remains on run.messages,
+        # but the stable IDs/hashes/order are the stronger comparison input.
+        return delivered
     messages = delivered.get("messages") if isinstance(delivered, dict) else None
     return messages if isinstance(messages, list) else None
 
 
 def _assembled_messages(run):
+    assembled = _context_receipt(run).get("assembled")
+    if isinstance(assembled, list):
+        return assembled
     survived = _context_receipt(run).get("survived")
     messages = survived.get("assembled_messages") if isinstance(survived, dict) else None
     return messages if isinstance(messages, list) else None
 
 
 def _final_prompt(run):
+    rendered = _context_receipt(run).get("rendered")
+    sha256 = rendered.get("sha256") if isinstance(rendered, dict) else None
+    if isinstance(sha256, str) and len(sha256) == 64:
+        return {"stored_sha256": sha256}
     survived = _context_receipt(run).get("survived")
     prompt = survived.get("final_prompt") if isinstance(survived, dict) else None
     return prompt if isinstance(prompt, str) else None
@@ -152,10 +163,32 @@ def _sha256_messages(messages: list) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _sha256_json(value) -> str:
+    canonical = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _length_of(value) -> int | None:
     if isinstance(value, (str, list)):
         return len(value)
     return None
+
+
+def _sha256_rendered(value) -> str:
+    if isinstance(value, dict) and isinstance(value.get("stored_sha256"), str):
+        return value["stored_sha256"]
+    return _sha256_text(value)
+
+
+def _omissions(run):
+    value = _context_receipt(run).get("omissions")
+    return value if isinstance(value, list) else None
+
+
+def _special_tokens(run):
+    value = _context_receipt(run).get("rendered")
+    value = value.get("special_tokens") if isinstance(value, dict) else None
+    return value if isinstance(value, list) else None
 
 
 def _digest_comparison_step(kind: str, path: str, baseline_value, candidate_value, digest_fn) -> dict:
@@ -181,39 +214,165 @@ def _digest_comparison_step(kind: str, path: str, baseline_value, candidate_valu
     }])
 
 
-_CONTEXT_NOT_RUN = (
-    ("context_diff:omissions",
-     "segment-level omission reason codes require feature 06's context-receipt v1; this build's "
-     "context_receipt precursor (clozn.runs.context_receipt) has no segment identity"),
-    ("context_diff:special_tokens",
-     "special-token insertion tracking requires feature 06's context-receipt v1; not captured by this "
-     "build's context_receipt precursor"),
+def context_diff_steps(baseline_run: dict, candidate_run: dict) -> list[dict]:
+    """Spec step 2 over both v1 segment receipts and historical receipt shapes."""
+    return [
+        _digest_comparison_step(
+            "context_diff:delivered_messages", "context_receipt.delivered",
+            _delivered_messages(baseline_run), _delivered_messages(candidate_run), _sha256_messages),
+        _digest_comparison_step(
+            "context_diff:assembled_messages", "context_receipt.assembled",
+            _assembled_messages(baseline_run), _assembled_messages(candidate_run), _sha256_messages),
+        _digest_comparison_step(
+            "context_diff:rendered_prompt", "context_receipt.rendered.sha256",
+            _final_prompt(baseline_run), _final_prompt(candidate_run), _sha256_rendered),
+        _digest_comparison_step(
+            "context_diff:omissions", "context_receipt.omissions",
+            _omissions(baseline_run), _omissions(candidate_run), _sha256_messages),
+        _digest_comparison_step(
+            "context_diff:special_tokens", "context_receipt.rendered.special_tokens",
+            _special_tokens(baseline_run), _special_tokens(candidate_run), _sha256_messages),
+    ]
+
+
+# ====================================================================================== sampling ===
+
+_SAMPLING_FIELDS = (
+    "sampling", "sampler_mode", "temperature", "top_p", "top_k",
+    "repetition_penalty", "repeat_penalty", "seed", "max_tokens", "stop",
 )
 
 
-def context_diff_steps(baseline_run: dict, candidate_run: dict) -> list[dict]:
-    """Spec step 2 (rendered prompt diff), against today's context_receipt precursor: delivered
-    messages, assembled messages, and the exact rendered prompt, each compared by digest. Omitted/
-    truncated-segment and special-token detail need feature 06's segment-identified artifact and are
-    always reported as explicit `not_run` placeholders here, never silently skipped."""
+def sampling_diff_steps(baseline_run: dict, candidate_run: dict) -> list[dict]:
+    baseline_meta = baseline_run.get("meta") if isinstance(baseline_run, dict) else None
+    candidate_meta = candidate_run.get("meta") if isinstance(candidate_run, dict) else None
+    baseline_meta = baseline_meta if isinstance(baseline_meta, dict) else {}
+    candidate_meta = candidate_meta if isinstance(candidate_meta, dict) else {}
+    return [
+        _comparison_step(
+            f"sampling_diff:{field}", f"meta.{field}",
+            baseline_meta.get(field), candidate_meta.get(field),
+        )
+        for field in _SAMPLING_FIELDS
+    ]
+
+
+# ================================================================================= tool contracts ===
+
+def _output_contract(run) -> dict:
+    value = run.get("output_contract") if isinstance(run, dict) else None
+    return value if isinstance(value, dict) else {}
+
+
+def _contract_request(run):
+    value = _output_contract(run).get("request")
+    return value if isinstance(value, dict) and value else None
+
+
+def _parser_runtime(run):
+    contract = _output_contract(run)
+    native = contract.get("native")
+    native = native if isinstance(native, dict) else {}
+    qualification = contract.get("qualification")
+    qualification = qualification if isinstance(qualification, dict) else {}
+    pipeline = native.get("pipeline") or qualification.get("pipeline")
+    parser = contract.get("parser")
+    if isinstance(pipeline, dict) and pipeline:
+        return pipeline
+    if isinstance(parser, dict) and parser:
+        # v1 parser evidence has no one fixed version key.  Hash the complete
+        # metadata object rather than guessing which field is authoritative.
+        return parser
+    return None
+
+
+def _raw_output(run):
+    value = _output_contract(run).get("raw_model_output")
+    return value if isinstance(value, str) else None
+
+
+def _outcome(run):
+    value = _output_contract(run).get("outcome")
+    if not isinstance(value, dict) or not value:
+        return None
+    # No raw generated text or free-form error message in triage artifacts.
+    return {key: value[key] for key in ("status", "code", "kind", "tool_name") if key in value}
+
+
+def tool_contract_diff_steps(baseline_run: dict, candidate_run: dict) -> list[dict]:
     steps = [
         _digest_comparison_step(
-            "context_diff:delivered_messages", "context_receipt.delivered.messages",
-            _delivered_messages(baseline_run), _delivered_messages(candidate_run), _sha256_messages),
+            "tool_contract_diff:requested_schema", "output_contract.request",
+            _contract_request(baseline_run), _contract_request(candidate_run), _sha256_json),
         _digest_comparison_step(
-            "context_diff:assembled_messages", "context_receipt.survived.assembled_messages",
-            _assembled_messages(baseline_run), _assembled_messages(candidate_run), _sha256_messages),
+            "tool_contract_diff:parser_runtime", "output_contract.parser_runtime",
+            _parser_runtime(baseline_run), _parser_runtime(candidate_run), _sha256_json),
         _digest_comparison_step(
-            "context_diff:rendered_prompt", "context_receipt.survived.final_prompt",
-            _final_prompt(baseline_run), _final_prompt(candidate_run), _sha256_text),
+            "tool_contract_diff:raw_model_output", "output_contract.raw_model_output",
+            _raw_output(baseline_run), _raw_output(candidate_run), _sha256_text),
+        _digest_comparison_step(
+            "tool_contract_diff:outcome", "output_contract.outcome",
+            _outcome(baseline_run), _outcome(candidate_run), _sha256_json),
     ]
-    for kind, reason in _CONTEXT_NOT_RUN:
-        steps.append(_step(kind, "not_run", [{"note": reason}], reason=reason))
+    candidate_outcome = _outcome(candidate_run) or {}
+    request_step = next(s for s in steps if s["kind"].endswith("requested_schema"))
+    parser_step = next(s for s in steps if s["kind"].endswith("parser_runtime"))
+    if candidate_outcome.get("status") == "error":
+        code = candidate_outcome.get("code")
+        if request_step["status"] == "mismatched":
+            reason = "requested tool/schema contract changed; parser/model attribution remains unisolated"
+        elif parser_step["status"] == "mismatched":
+            reason = "parser/runtime identity changed; model malformed-output attribution remains unisolated"
+        elif code:
+            reason = (
+                f"candidate structured output failed with recorded code {code}; request/parser metadata "
+                "matched where captured, but no controlled parser swap ran"
+            )
+        else:
+            reason = "candidate structured output failed without a recorded error code"
+        steps.append(_step(
+            "tool_contract_diff:failure_class", "observed",
+            [{"candidate_status": "error", **({"candidate_code": code} if code else {})}],
+            reason=reason,
+        ))
     return steps
+
+
+# =================================================================================== quant/export ===
+
+def _quant_identity(run):
+    meta = run.get("meta") if isinstance(run, dict) else None
+    meta = meta if isinstance(meta, dict) else {}
+    return {
+        key: meta[key] for key in ("quant", "quantization", "model_file")
+        if key in meta
+    } or None
+
+
+def _adapter_identity(run):
+    identity = _identity(run)
+    ext = identity.get("ext")
+    ext = ext if isinstance(ext, dict) else {}
+    value = ext.get("adapter")
+    return value if isinstance(value, dict) and value else None
+
+
+def quant_export_diff_steps(baseline_run: dict, candidate_run: dict) -> list[dict]:
+    return [
+        _digest_comparison_step(
+            "quant_export_diff:quantization", "meta.quantization",
+            _quant_identity(baseline_run), _quant_identity(candidate_run), _sha256_json),
+        _digest_comparison_step(
+            "quant_export_diff:adapter", "identity.ext.adapter",
+            _adapter_identity(baseline_run), _adapter_identity(candidate_run), _sha256_json),
+    ]
 
 
 # The two step families this build actually executes. Keyed by the `--steps` filter name the CLI accepts.
 STEP_FAMILIES = {
     "identity": identity_diff_steps,
     "context": context_diff_steps,
+    "sampling": sampling_diff_steps,
+    "quant_export": quant_export_diff_steps,
+    "tool_contract": tool_contract_diff_steps,
 }

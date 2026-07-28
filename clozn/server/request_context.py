@@ -61,6 +61,8 @@ class RequestContext:
       generation_meta      -- ctx._engine_generation_meta(...)'s reproducibility block (what _last_generation_meta aliases).
       generation_timing    -- worker-measured aggregate decode timing from its terminal gen_finished
                               event; empty when that event was unavailable or the final reply was retried.
+      gateway_timing       -- request-local gateway spans (template rendering/worker dispatch). These
+                              use the gateway monotonic clock and are never aligned to worker offsets.
       memory_manifest       -- a snapshot of mem_out once the call has finished mutating it (prompt-mode block/
                               applied cards/gate); the LIVE mem_out dict remains the primary,
                               already-per-call-isolated channel (callers own and read it directly) -- this is
@@ -70,6 +72,7 @@ class RequestContext:
                               which a concurrent /steer/set could still be mutating.
       trace                -- the per-token step list (what last_stream_trace() aliases).
       finish_reason         -- the engine's stop cause, or None (missing reads as missing, never as "stop").
+      finish_reason_raw     -- the worker event's pre-normalization stop cause, when available.
       diverged/diverged_at  -- the prove-all early-stop verdict (what last_divergence() aliases).
       engine_req            -- the worker's OWN per-request id (StreamEnvelope's `req`, stamped on every
                               native SSE frame), captured off the FIRST frame chat_stream() parses -- or
@@ -92,10 +95,12 @@ class RequestContext:
     sampling: dict | None = None
     generation_meta: dict = field(default_factory=dict)
     generation_timing: dict = field(default_factory=dict)
+    gateway_timing: dict = field(default_factory=dict)
     memory_manifest: dict = field(default_factory=dict)
     steering_snapshot: dict = field(default_factory=dict)
     trace: list = field(default_factory=list)
     finish_reason: str | None = None
+    finish_reason_raw: str | None = None
     diverged: bool | None = None
     diverged_at: int | None = None
     engine_req: str | None = None

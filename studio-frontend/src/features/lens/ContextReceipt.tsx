@@ -252,7 +252,9 @@ function SegmentTable({ title, segments }: { title: string; segments: ReceiptSeg
             <div className="context-receipt-row" role="row" key={segment.segmentId ?? index}>
               <span>{segment.originalOrder ?? index}</span>
               <span>{segment.sourceLabel ?? "—"}</span>
-              <span title={segment.segmentId}>{shortId(segment.segmentId)}</span>
+              <span title={segment.clientSourceId ?? segment.segmentId}>
+                {shortId(segment.clientSourceId ?? segment.segmentId)}
+              </span>
               <span>{bytesText(segment.deliveredBytes)}</span>
               <span>{boolText(segment.included, "YES", "NO")}</span>
               <span title={reasonInfo(segment.reason, SEGMENT_REASON_INFO)?.label}>
@@ -300,12 +302,21 @@ function NewDetail({ receipt }: { receipt: NewReceipt }) {
         {receipt.rendered ? (
           <dl className="context-receipt-facts">
             <div><dt>SHA-256</dt><dd title={receipt.rendered.sha256}>{shortId(receipt.rendered.sha256)}</dd></div>
+            <div><dt>BYTES</dt><dd>{count(receipt.rendered.bytes)}</dd></div>
             <div>
               <dt>TOKEN COUNT</dt>
               <dd>
-                {count(receipt.rendered.tokenCount)}
+                {count(receipt.rendered.tokens ?? receipt.rendered.tokenCount)}
                 {estimatedBadge && <span className={`context-receipt-badge is-${estimatedBadge.toLowerCase()}`}>{estimatedBadge}</span>}
               </dd>
+            </div>
+            <div>
+              <dt>CONTENT AVAILABLE</dt>
+              <dd>{boolText(receipt.rendered.contentAvailable, "YES", "NO")}</dd>
+            </div>
+            <div>
+              <dt>BOUND TEMPLATE</dt>
+              <dd title={receipt.rendered.templateFingerprint}>{shortId(receipt.rendered.templateFingerprint)}</dd>
             </div>
             <div>
               <dt>SPECIAL TOKENS</dt>
@@ -376,6 +387,7 @@ function NewDetail({ receipt }: { receipt: NewReceipt }) {
             <div><dt>NORMALIZED REASON</dt><dd>{reasonInfo(receipt.termination.reason, TERMINATION_REASON_INFO)?.label ?? receipt.termination.reason}</dd></div>
             <div><dt>CATEGORY</dt><dd>{CATEGORY_LABEL[reasonInfo(receipt.termination.reason, TERMINATION_REASON_INFO)?.category ?? "infra"]}</dd></div>
             <div><dt>RAW BACKEND VALUE</dt><dd>{receipt.termination.reasonRaw ?? "—"}</dd></div>
+            <div><dt>RAW VALUE SOURCE</dt><dd>{receipt.termination.source ?? "—"}</dd></div>
             <div><dt>GENERATED TOKENS</dt><dd>{count(receipt.termination.generatedTokens)}</dd></div>
           </dl>
         ) : (

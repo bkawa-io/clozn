@@ -57,6 +57,26 @@
           "type": "string",
           "pattern": "^[0-9a-f]{64}$",
           "description": "SHA-256 Clozn itself computed by reading source_blob_path's bytes at adoption time -- ground truth independent of manifest_digest, used by --undo to detect drift/GC of the Ollama-side source."
+        },
+        "blob_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "Exact model-layer digest read from Ollama's manifest, distinct from manifest_digest."
+        },
+        "resolution_method": {
+          "type": "string",
+          "enum": [
+            "manifest_model_layer",
+            "modelfile_absolute_from",
+            "explicit_blob",
+            "show.model_path",
+            "show.blob_path",
+            "show.path"
+          ]
+        },
+        "manifest_path": {
+          "type": "string",
+          "description": "Read-only manifest used to select the exact model layer."
         }
       }
     },
@@ -89,7 +109,7 @@
     },
     "template": {
       "type": "object",
-      "description": "Whether Clozn can reproduce this model's Ollama-side template/parameters/system prompt exactly. Template/parameter TRANSLATION is not implemented in this release, so exactly_reproduced is currently always false -- this object exists so a later release can add translation without a schema break (roadmap rule: never silently claim equivalence).",
+      "description": "How Clozn translated and verified this model's Ollama-side template, parameters, and system prompt. Components record exact reproduction, translation, absence, or unsupported input separately; exactly_reproduced is true only when every present component can be reproduced exactly, and warnings preserve any uncertainty.",
       "required": ["source", "exactly_reproduced", "warnings"],
       "properties": {
         "source": {
@@ -102,12 +122,32 @@
         "warnings": {
           "type": "array",
           "items": {"type": "string"}
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["component", "status"],
+            "properties": {
+              "component": {"type": "string"},
+              "status": {
+                "type": "string",
+                "enum": ["reproduced_exactly", "translated", "unsupported", "not_present"]
+              },
+              "target": {"type": "string"},
+              "note": {"type": "string"},
+              "source_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          }
         }
       }
     },
     "engine_capability": {
       "type": "object",
-      "description": "Only the 'discovered' rung of docs/MODEL_SUPPORT.md's qualification ladder -- adoption reads the GGUF header, never runs the smoke suite, so it can never honestly claim 'core' or higher.",
+      "description": "Header-derived capability discovered before adoption. This field remains 'discovered'; when `--qualify` runs the deterministic runtime smoke check, its separate result is recorded in the qualification property and may establish 'core' capability.",
       "properties": {
         "level": {
           "type": "string",
@@ -119,6 +159,21 @@
         "note": {
           "type": "string"
         }
+      }
+    },
+    "qualification": {
+      "type": "object",
+      "required": ["status", "capability", "warnings"],
+      "properties": {
+        "status": {"type": "string", "enum": ["passed", "failed"]},
+        "capability": {"type": "string", "enum": ["core", "discovered"]},
+        "run_id": {"type": "string"},
+        "receipt_shape": {"type": "string", "enum": ["new", "legacy"]},
+        "worker_protocol_version": {"type": ["string", "integer"]},
+        "worker_backend": {"type": "string"},
+        "error": {"type": "string"},
+        "warnings": {"type": "array", "items": {"type": "string"}},
+        "undo_command": {"type": "string"}
       }
     },
     "client_transactions": {

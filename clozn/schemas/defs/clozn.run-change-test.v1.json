@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.run-change-test.v1",
+  "title": "Bounded controlled tests for a run comparison",
+  "description": "A separate intervention artifact layered on top of the pure clozn.run-diff.v1 comparison. Child run ids are the evidence. A causally_supported status requires a runner-qualified control arm that reproduces run_b and a treatment arm that recovers run_a under the declared exact criterion. Semantic similarity is not a supported criterion.",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "run_a", "run_b", "status", "dry_run", "match_criterion", "budget", "tests", "summary"],
+  "properties": {
+    "schema_version": {"const": "clozn.run-change-test.v1"},
+    "generated_at": {"type": "string", "minLength": 1},
+    "run_a": {"type": "string", "minLength": 1},
+    "run_b": {"type": "string", "minLength": 1},
+    "status": {"enum": ["planned", "completed", "budget_exhausted", "cancelled", "inconclusive"]},
+    "dry_run": {"type": "boolean"},
+    "match_criterion": {
+      "type": "object",
+      "required": ["kind", "note"],
+      "properties": {
+        "kind": {"enum": ["exact_output", "tool_parse", "finish_reason", "token_budget"]},
+        "note": {"type": "string"}
+      }
+    },
+    "budget": {"$ref": "#/$defs/budget"},
+    "tests": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/test"}
+    },
+    "summary": {
+      "type": "object",
+      "required": ["classification", "causally_supported", "entangled"],
+      "properties": {
+        "classification": {"type": "string", "minLength": 1},
+        "causally_supported": {"type": "array", "items": {"type": "string"}},
+        "entangled": {"type": "boolean"}
+      }
+    }
+  },
+  "$defs": {
+    "budget": {
+      "type": "object",
+      "required": ["max_runs", "max_seconds", "runs_used", "duration_ms", "remaining_runs", "remaining_seconds"],
+      "properties": {
+        "max_runs": {"type": "integer", "minimum": 0},
+        "max_seconds": {"type": "number", "minimum": 0},
+        "runs_used": {"type": "integer", "minimum": 0},
+        "duration_ms": {"type": "integer", "minimum": 0},
+        "remaining_runs": {"type": "integer", "minimum": 0},
+        "remaining_seconds": {"type": "number", "minimum": 0},
+        "stop_reason": {"enum": ["budget_exhausted", "cancelled"]}
+      }
+    },
+    "arm": {
+      "type": "object",
+      "required": ["name", "status", "duration_ms", "match_target"],
+      "properties": {
+        "name": {"enum": ["control", "treatment"]},
+        "status": {"enum": ["completed", "error", "cancelled", "budget_exhausted"]},
+        "duration_ms": {"type": "integer", "minimum": 0},
+        "match_target": {"enum": ["baseline", "candidate"]},
+        "run_id": {"type": "string", "minLength": 1},
+        "error": {"type": "string"},
+        "match": {"type": "object"},
+        "match_candidate": {"type": "object"},
+        "cancellation": {"type": "object"}
+      }
+    },
+    "test": {
+      "type": "object",
+      "required": ["kind", "status", "ran", "runs_used", "duration_ms", "budget", "evidence", "arms", "reason"],
+      "properties": {
+        "kind": {"enum": ["context", "template", "sampling"]},
+        "status": {"enum": ["observed", "eliminated", "reproduced", "causally_supported", "inconclusive", "not_run", "unsupported"]},
+        "ran": {"type": "boolean"},
+        "runs_used": {"type": "integer", "minimum": 0},
+        "duration_ms": {"type": "integer", "minimum": 0},
+        "budget": {"$ref": "#/$defs/budget"},
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["run_id", "arm"],
+            "properties": {
+              "run_id": {"type": "string", "minLength": 1},
+              "arm": {"enum": ["control", "treatment"]}
+            }
+          }
+        },
+        "arms": {"type": "array", "items": {"$ref": "#/$defs/arm"}},
+        "qualification": {"type": "object"},
+        "stop_reason": {"enum": ["planned", "unavailable", "identity_unqualified", "budget_exhausted", "cancelled"]},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

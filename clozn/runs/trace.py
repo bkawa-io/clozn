@@ -253,29 +253,126 @@ def finish_reason_from_frames(frames) -> str | None:
     return reason
 
 
-def generation_timing_from_frames(frames) -> dict:
-    """Return the worker's aggregate decode timing from the last ``gen_finished`` frame.
+def raw_finish_reason_from_frames(frames) -> str | None:
+    """Preserve the worker's own terminal reason before OpenAI normalization.
 
-    The C++ worker measures this directly.  Keep the names explicit when the values enter a run's
-    metadata so consumers do not mistake generation time for the gateway's end-to-end duration.
-    Invalid or absent fields are omitted rather than estimated.
+    ``gen_finished.reason`` carries values such as ``eos`` and ``steps_exhausted``.  Later summary
+    frames intentionally normalize those to ``stop``/``length`` for protocol compatibility, so this
+    helper reads only the worker event and never substitutes a public value.
+    """
+    reason = None
+    for obj in frames or []:
+        if (
+            isinstance(obj, dict)
+            and obj.get("type") == "gen_finished"
+            and isinstance(obj.get("reason"), str)
+            and obj["reason"]
+        ):
+            reason = obj["reason"]
+    return reason
+
+
+def generation_timing_from_frames(frames) -> dict:
+    """Return versioned worker phases plus legacy aggregate aliases from the last terminal frame.
+
+    New workers send ``timing`` with nanosecond durations from their own steady clock. Old workers only
+    send ``wall_ms``/``tok_per_s``; that legacy path remains accepted. Invalid or absent fields are
+    omitted, never converted into a zero-duration phase.
     """
     timing = {}
     for obj in frames or []:
         if not isinstance(obj, dict) or obj.get("type") != "gen_finished":
             continue
+        worker_timing = obj.get("timing")
+        if (
+            isinstance(worker_timing, dict)
+            and worker_timing.get("schema_version") == "clozn.worker-timing.v1"
+            and worker_timing.get("unit") == "nanoseconds"
+            and isinstance(worker_timing.get("phases"), list)
+        ):
+            clean_phases = []
+            for raw_phase in worker_timing["phases"]:
+                if not isinstance(raw_phase, dict) or not isinstance(raw_phase.get("name"), str):
+                    continue
+                duration_ns = raw_phase.get("duration_ns")
+                if (
+                    not isinstance(duration_ns, int) or isinstance(duration_ns, bool)
+                    or duration_ns < 0
+                ):
+                    continue
+                phase = {
+                    "name": raw_phase["name"],
+                    "owner": (
+                        raw_phase.get("owner")
+                        if isinstance(raw_phase.get("owner"), str)
+                        else "clozn_worker"
+                    ),
+                    "duration_ns": duration_ns,
+                    "measurement": "measured",
+                    "aggregation": (
+                        raw_phase.get("aggregation")
+                        if raw_phase.get("aggregation") in {
+                            "exclusive", "overlapping", "context_only"
+                        }
+                        else "exclusive"
+                    ),
+                }
+                start_ns = raw_phase.get("start_ns")
+                if isinstance(start_ns, int) and not isinstance(start_ns, bool) and start_ns >= 0:
+                    phase["start_ns"] = start_ns
+                if isinstance(raw_phase.get("scope"), str):
+                    phase["scope"] = raw_phase["scope"]
+                if isinstance(raw_phase.get("includes"), list):
+                    phase["includes"] = [
+                        str(value) for value in raw_phase["includes"] if isinstance(value, str)
+                    ]
+                clean_phases.append(phase)
+            if clean_phases:
+                timing["worker_timing"] = {
+                    "schema_version": "clozn.worker-timing.v1",
+                    "unit": "nanoseconds",
+                    "clock": (
+                        worker_timing.get("clock")
+                        if isinstance(worker_timing.get("clock"), str)
+                        else "steady_clock"
+                    ),
+                    "clock_owner": "clozn_worker",
+                    "phases": clean_phases,
+                }
+                by_name = {phase["name"]: phase for phase in clean_phases}
+                if "prefill" in by_name:
+                    timing["prefill_duration_ms"] = by_name["prefill"]["duration_ns"] / 1_000_000
+                if "decode" in by_name:
+                    timing["generation_duration_ms"] = by_name["decode"]["duration_ns"] / 1_000_000
+
+            worker_metrics = worker_timing.get("metrics")
+            if isinstance(worker_metrics, dict):
+                prompt_rate = worker_metrics.get("prompt_tokens_per_second")
+                decode_rate = worker_metrics.get("decode_tokens_per_second")
+                if (
+                    isinstance(prompt_rate, (int, float)) and not isinstance(prompt_rate, bool)
+                    and math.isfinite(float(prompt_rate)) and prompt_rate >= 0
+                ):
+                    timing["prompt_tokens_per_second"] = prompt_rate
+                if (
+                    isinstance(decode_rate, (int, float)) and not isinstance(decode_rate, bool)
+                    and math.isfinite(float(decode_rate)) and decode_rate >= 0
+                ):
+                    timing["generation_tokens_per_second"] = decode_rate
         wall_ms = obj.get("wall_ms")
         new_tokens = obj.get("new_tokens")
         steps_total = obj.get("steps_total")
         tok_per_s = obj.get("tok_per_s")
-        if (isinstance(wall_ms, (int, float)) and not isinstance(wall_ms, bool)
+        if ("generation_duration_ms" not in timing
+                and isinstance(wall_ms, (int, float)) and not isinstance(wall_ms, bool)
                 and math.isfinite(float(wall_ms)) and wall_ms >= 0):
             timing["generation_duration_ms"] = wall_ms
         if isinstance(new_tokens, int) and not isinstance(new_tokens, bool) and new_tokens >= 0:
             timing["generation_tokens"] = new_tokens
         if isinstance(steps_total, int) and not isinstance(steps_total, bool) and steps_total >= 0:
             timing["generation_steps"] = steps_total
-        if (isinstance(tok_per_s, (int, float)) and not isinstance(tok_per_s, bool)
+        if ("generation_tokens_per_second" not in timing
+                and isinstance(tok_per_s, (int, float)) and not isinstance(tok_per_s, bool)
                 and math.isfinite(float(tok_per_s)) and tok_per_s >= 0):
             timing["generation_tokens_per_second"] = tok_per_s
     return timing

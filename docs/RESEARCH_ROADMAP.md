@@ -1,5 +1,8 @@
 # Research Roadmap — expand then contract
 
+> **Archived research plan.** This is preserved as experimental history, not as a current-user command
+> or release contract. See [CAPABILITIES.md](CAPABILITIES.md).
+
 **Date:** 2026-07-19
 **Principle:** Run the big messy experiments first (prove or kill). Productionize only what survives. Parallelize with sonnet worktree agents wherever tasks are independent.
 

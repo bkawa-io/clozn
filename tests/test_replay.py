@@ -68,7 +68,8 @@ class FakeSub:
     def chat(self, messages, max_new=256, sample=True, trace_out=None, mem_out=None):
         self.calls += 1
         self.seen = {"memory_strength": self.memory.memory_strength,
-                     "dials": dict(self.steer.strength), "max_new": max_new, "sample": sample}
+                     "dials": dict(self.steer.strength), "max_new": max_new, "sample": sample,
+                     "messages": [dict(message) for message in messages]}
         if trace_out is not None:                          # mirror the real chat: fill the per-token trace
             trace_out.extend([{"piece": "re", "conf": 0.9, "alts": []},
                               {"piece": "ply", "conf": 0.7, "alts": []}])
@@ -153,6 +154,29 @@ def test_plain_reroll_records_child(store):
     assert sub.seen["dials"] == {"concise": 0.4}          # unchanged
     assert child["parent_run_id"] == "run_parent0"
     assert child["changes_applied"] == {}
+
+
+def test_controlled_override_uses_exact_messages_and_sampling_without_mutating_parent(store):
+    sub = FakeSub(steer=FakeSteer({"warm": 0.2}))
+    override_messages = [{"role": "user", "content": "baseline delivered context"}]
+    sampling = {
+        "temperature": 0.2, "top_p": 0.9, "top_k": 40,
+        "repeat_penalty": 1.1, "seed": 7,
+    }
+    child = replay.replay(
+        RUN,
+        {"behavior_off": True, "behavior_overrides": {"concise": 0.4},
+         "controlled_test": {"kind": "context", "arm": "treatment"}},
+        sub,
+        messages_override=override_messages,
+        sampling_override=sampling,
+    )
+    assert child is not None
+    assert sub.seen["messages"] == override_messages
+    assert sub.seen["sample"] == sampling
+    assert child["messages"] == override_messages
+    assert child["parent_run_id"] == RUN["id"]
+    assert sub.steer.strength == {"warm": 0.2}
 
 
 class _ScopedSub(FakeSub):

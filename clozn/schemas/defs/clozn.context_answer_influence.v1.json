@@ -156,12 +156,24 @@
         "message_index": { "type": ["integer", "null"] },
         "role": { "type": "string" },
         "source_kind": { "type": "string" },
+        "segment_id": {
+          "type": "string",
+          "description": "Canonical Context Receipt segment identity, carried through unchanged rather than regenerated."
+        },
+        "client_source_id": { "type": "string" },
+        "source_label": { "type": "string" },
         "start": {
           "type": "integer",
           "minimum": 0,
           "description": "Unicode code-point offset, half-open [start, end) into this source's exact text."
         },
         "end": { "type": "integer", "minimum": 0 },
+        "byte_start": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "UTF-8 byte offset into the exact source text."
+        },
+        "byte_end": {"type": "integer", "minimum": 0},
         "text": { "type": "string" },
         "child_unit_count": { "type": "integer", "minimum": 1 }
       }
