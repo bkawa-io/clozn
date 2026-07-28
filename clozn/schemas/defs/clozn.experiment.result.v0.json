@@ -1,0 +1,260 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.experiment.result.v0",
+  "title": "A completed case x variant x seed model experiment (target/guard suite run)",
+  "description": "Produced by clozn.experiments.suite.run_manifest() and validated in depth by validate_result() (cell-matrix completeness against the embedded manifest, manifest_sha256 agreement, and summary-recomputed-from-cells -- none of which this shape schema attempts, since the validator here has no keyword for cross-referencing sibling fields). This schema is the STRUCTURAL contract three features share (Studio Experiments workspace, the GitHub Action model gate's verify mode, and automatic regression triage): what a well-shaped result document looks like, so any of them can validate a document they did not produce with clozn.schemas.validate() alone. validate_result() remains the authority on whether a result is a genuinely complete, internally consistent experiment.",
+
+  "type": "object",
+  "required": ["schema_version", "experiment_id", "name", "created_at", "manifest_sha256", "manifest", "seeds", "cells", "summary"],
+  "properties": {
+    "schema_version": { "const": "clozn.experiment.result.v0" },
+    "experiment_id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "created_at": {
+      "type": "string",
+      "description": "UTC timestamp, e.g. 2026-07-22T00:00:00Z (time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())).",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"
+    },
+    "manifest_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "manifest": { "$ref": "#/$defs/Manifest" },
+    "seeds": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "integer" }
+    },
+    "cells": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Cell" }
+    },
+    "summary": { "$ref": "#/$defs/Summary" }
+  },
+
+  "$defs": {
+    "Message": {
+      "type": "object",
+      "required": ["role", "content"],
+      "properties": {
+        "role": { "type": "string", "enum": ["system", "developer", "user", "assistant"] },
+        "content": { "type": "string" }
+      }
+    },
+
+    "Case": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "prompt": { "type": "string" },
+        "messages": { "type": "array", "items": { "$ref": "#/$defs/Message" } },
+        "expect": { "type": "object" },
+        "prove": { "type": "object" }
+      }
+    },
+
+    "Variant": {
+      "type": "object",
+      "required": ["name", "kind"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "kind": { "type": "string", "enum": ["base", "tuned", "quant", "prompt", "dial"] },
+        "dials": { "type": "object" },
+        "base_url": { "type": "string" },
+        "model": { "type": "string" },
+        "system_prompt": { "type": "string" },
+        "prompt_prefix": { "type": "string" },
+        "prompt_suffix": { "type": "string" },
+        "max_tokens": { "type": "number" },
+        "temperature": { "type": "number" },
+        "top_p": { "type": "number" },
+        "top_k": { "type": "number" },
+        "repeat_penalty": { "type": "number" }
+      }
+    },
+
+    "SuiteCases": {
+      "type": "object",
+      "required": ["cases"],
+      "properties": {
+        "cases": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/Case" }
+        }
+      }
+    },
+
+    "PrimaryMetric": {
+      "type": "object",
+      "description": "The one comparison a manifest author predeclared as primary, before seeing results (docs/PRODUCT_ROADMAP.md Phase 4.4) -- optional, and absent on every manifest saved before this field existed.",
+      "required": ["suite", "metric"],
+      "properties": {
+        "suite": { "type": "string", "enum": ["target", "guard"] },
+        "metric": { "type": "string", "enum": ["pass_rate"] }
+      }
+    },
+
+    "Manifest": {
+      "type": "object",
+      "required": ["schema_version", "name", "seeds", "variants", "baseline_variant", "suites"],
+      "properties": {
+        "schema_version": { "const": "clozn.experiment.v0" },
+        "name": { "type": "string", "minLength": 1 },
+        "defaults": { "type": "object" },
+        "seeds": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "integer" }
+        },
+        "variants": {
+          "type": "array",
+          "minItems": 2,
+          "description": "At least two variants are required to compare -- a single-variant manifest has nothing to gate against.",
+          "items": { "$ref": "#/$defs/Variant" }
+        },
+        "baseline_variant": { "type": "string", "minLength": 1 },
+        "primary_metric": { "$ref": "#/$defs/PrimaryMetric" },
+        "suites": {
+          "type": "object",
+          "required": ["target", "guard"],
+          "properties": {
+            "target": { "$ref": "#/$defs/SuiteCases" },
+            "guard": { "$ref": "#/$defs/SuiteCases" }
+          }
+        }
+      }
+    },
+
+    "Assertion": {
+      "type": "object",
+      "properties": {
+        "status": { "type": "string" },
+        "check": { "type": "string" }
+      }
+    },
+
+    "Cell": {
+      "type": "object",
+      "description": "One (suite, case, variant, seed) coordinate. status='error' is the one case where run/run_id may be absent-as-null -- a generation-level failure, not evidence to fabricate. Every other status carries the run record that evaluated it (enforced below via anyOf, mirroring validate_result()'s own 'cell coordinate is missing run evidence' check).",
+      "required": ["suite", "case", "variant", "variant_kind", "seed", "status", "assertions"],
+      "properties": {
+        "suite": { "type": "string", "enum": ["target", "guard"] },
+        "case": { "type": "string", "minLength": 1 },
+        "variant": { "type": "string", "minLength": 1 },
+        "variant_kind": { "type": "string", "enum": ["base", "tuned", "quant", "prompt", "dial"] },
+        "seed": { "type": "integer" },
+        "status": { "type": "string", "enum": ["pass", "fail", "error", "unscored"] },
+        "run_id": { "type": ["string", "null"] },
+        "response": { "type": ["string", "null"] },
+        "assertions": { "type": "array", "items": { "$ref": "#/$defs/Assertion" } },
+        "min_confidence": { "type": ["number", "null"] },
+        "receipts": { "type": ["object", "null"] },
+        "error": { "type": ["string", "null"] },
+        "run": {
+          "type": ["object", "null"],
+          "description": "The full run record (clozn.runs.store shape -- no standalone schema exists for it yet). Left open here on purpose."
+        }
+      },
+      "anyOf": [
+        {
+          "properties": { "status": { "const": "error" } },
+          "required": ["status"]
+        },
+        {
+          "properties": {
+            "status": { "enum": ["pass", "fail", "unscored"] },
+            "run_id": { "type": "string", "minLength": 1 },
+            "run": { "type": "object" }
+          },
+          "required": ["status", "run_id", "run"]
+        }
+      ]
+    },
+
+    "CaseSeedLabel": {
+      "type": "object",
+      "required": ["case", "seed"],
+      "properties": {
+        "case": { "type": "string" },
+        "seed": { "type": "integer" }
+      }
+    },
+
+    "ChangedUnscoredLabel": {
+      "type": "object",
+      "required": ["suite", "case", "seed"],
+      "properties": {
+        "suite": { "type": "string", "enum": ["target", "guard"] },
+        "case": { "type": "string" },
+        "seed": { "type": "integer" }
+      }
+    },
+
+    "StatusCounts": {
+      "type": "object",
+      "required": ["pass", "fail", "error", "unscored"],
+      "properties": {
+        "pass": { "type": "integer", "minimum": 0 },
+        "fail": { "type": "integer", "minimum": 0 },
+        "error": { "type": "integer", "minimum": 0 },
+        "unscored": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "SuiteAggregate": {
+      "type": "object",
+      "required": ["runs", "counts", "pass_rate"],
+      "properties": {
+        "runs": { "type": "integer", "minimum": 0 },
+        "counts": { "$ref": "#/$defs/StatusCounts" },
+        "pass_rate": {
+          "type": ["number", "null"],
+          "description": "null when the suite had no pass/fail-scored cells for this variant (e.g. every case was unscored or errored) -- never a fabricated rate.",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+
+    "VariantAggregate": {
+      "type": "object",
+      "required": ["target", "guard"],
+      "properties": {
+        "target": { "$ref": "#/$defs/SuiteAggregate" },
+        "guard": { "$ref": "#/$defs/SuiteAggregate" }
+      }
+    },
+
+    "Comparison": {
+      "type": "object",
+      "required": ["variant", "baseline", "target_gains", "target_regressions", "guard_regressions", "guard_fixes", "changed_unscored"],
+      "properties": {
+        "variant": { "type": "string" },
+        "baseline": { "type": "string" },
+        "target_gains": { "type": "array", "items": { "$ref": "#/$defs/CaseSeedLabel" } },
+        "target_regressions": { "type": "array", "items": { "$ref": "#/$defs/CaseSeedLabel" } },
+        "guard_regressions": { "type": "array", "items": { "$ref": "#/$defs/CaseSeedLabel" } },
+        "guard_fixes": { "type": "array", "items": { "$ref": "#/$defs/CaseSeedLabel" } },
+        "changed_unscored": { "type": "array", "items": { "$ref": "#/$defs/ChangedUnscoredLabel" } }
+      }
+    },
+
+    "Summary": {
+      "type": "object",
+      "description": "Recomputed from cells by clozn.experiments.suite._summarize(); validate_result() rejects a stored summary that disagrees with its own cells, so a document that passes both this schema and validate_result() can be trusted without recomputing the summary again.",
+      "required": ["baseline_variant", "aggregates", "comparisons"],
+      "properties": {
+        "baseline_variant": { "type": "string", "minLength": 1 },
+        "aggregates": {
+          "type": "object",
+          "description": "Keyed by variant name -- every variant in manifest.variants, including the baseline.",
+          "additionalProperties": { "$ref": "#/$defs/VariantAggregate" }
+        },
+        "comparisons": {
+          "type": "array",
+          "description": "One entry per non-baseline variant.",
+          "items": { "$ref": "#/$defs/Comparison" }
+        }
+      }
+    }
+  }
+}

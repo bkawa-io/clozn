@@ -1,0 +1,180 @@
+{
+  "cells": [
+    {
+      "assertions": [],
+      "case": "t1",
+      "error": null,
+      "min_confidence": null,
+      "receipts": null,
+      "response": "hi",
+      "run": {
+        "id": "run-base-target-t1-0",
+        "model": "clozn"
+      },
+      "run_id": "run-base-target-t1-0",
+      "seed": 0,
+      "status": "unscored",
+      "suite": "target",
+      "variant": "base",
+      "variant_kind": "base"
+    },
+    {
+      "assertions": [],
+      "case": "g1",
+      "error": null,
+      "min_confidence": null,
+      "receipts": null,
+      "response": "hi",
+      "run": {
+        "id": "run-base-guard-g1-0",
+        "model": "clozn"
+      },
+      "run_id": "run-base-guard-g1-0",
+      "seed": 0,
+      "status": "unscored",
+      "suite": "guard",
+      "variant": "base",
+      "variant_kind": "base"
+    },
+    {
+      "assertions": [],
+      "case": "t1",
+      "error": null,
+      "min_confidence": null,
+      "receipts": null,
+      "response": "hi",
+      "run": {
+        "id": "run-candidate-target-t1-0",
+        "model": "clozn"
+      },
+      "run_id": "run-candidate-target-t1-0",
+      "seed": 0,
+      "status": "unscored",
+      "suite": "target",
+      "variant": "candidate",
+      "variant_kind": "prompt"
+    },
+    {
+      "assertions": [],
+      "case": "g1",
+      "error": null,
+      "min_confidence": null,
+      "receipts": null,
+      "response": "hi",
+      "run": {
+        "id": "run-candidate-guard-g1-0",
+        "model": "clozn"
+      },
+      "run_id": "run-candidate-guard-g1-0",
+      "seed": 0,
+      "status": "unscored",
+      "suite": "guard",
+      "variant": "candidate",
+      "variant_kind": "prompt"
+    }
+  ],
+  "created_at": "2026-07-20T12:00:00Z",
+  "experiment_id": "exp_minimal_smoke",
+  "manifest": {
+    "baseline_variant": "base",
+    "defaults": {},
+    "name": "minimal-smoke",
+    "schema_version": "clozn.experiment.v0",
+    "seeds": [
+      0
+    ],
+    "suites": {
+      "guard": {
+        "cases": [
+          {
+            "name": "g1",
+            "prompt": "world"
+          }
+        ]
+      },
+      "target": {
+        "cases": [
+          {
+            "name": "t1",
+            "prompt": "hello"
+          }
+        ]
+      }
+    },
+    "variants": [
+      {
+        "kind": "base",
+        "name": "base"
+      },
+      {
+        "kind": "prompt",
+        "name": "candidate"
+      }
+    ]
+  },
+  "name": "minimal-smoke",
+  "schema_version": "clozn.experiment.result.v0",
+  "seeds": [
+    0
+  ],
+  "summary": {
+    "aggregates": {
+      "base": {
+        "guard": {
+          "counts": {
+            "error": 0,
+            "fail": 0,
+            "pass": 0,
+            "unscored": 1
+          },
+          "pass_rate": null,
+          "runs": 1
+        },
+        "target": {
+          "counts": {
+            "error": 0,
+            "fail": 0,
+            "pass": 0,
+            "unscored": 1
+          },
+          "pass_rate": null,
+          "runs": 1
+        }
+      },
+      "candidate": {
+        "guard": {
+          "counts": {
+            "error": 0,
+            "fail": 0,
+            "pass": 0,
+            "unscored": 1
+          },
+          "pass_rate": null,
+          "runs": 1
+        },
+        "target": {
+          "counts": {
+            "error": 0,
+            "fail": 0,
+            "pass": 0,
+            "unscored": 1
+          },
+          "pass_rate": null,
+          "runs": 1
+        }
+      }
+    },
+    "baseline_variant": "base",
+    "comparisons": [
+      {
+        "baseline": "base",
+        "changed_unscored": [],
+        "guard_fixes": [],
+        "guard_regressions": [],
+        "target_gains": [],
+        "target_regressions": [],
+        "variant": "candidate"
+      }
+    ]
+  }
+}
