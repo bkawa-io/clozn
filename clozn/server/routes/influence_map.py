@@ -77,12 +77,26 @@ def try_post(h, p, body):
         h._json(400, {"error": str(exc)})
         return True
 
-    from clozn.receipts.context_answer_influence import context_answer_influence
+    from clozn.receipts.context_answer_influence import SCHEMA, context_answer_influence
 
     result = context_answer_influence(run, sub, max_context_spans=max_spans)
     if not isinstance(result, dict):
         h._json(500, {"error": "influence-map failed without an evidence object"})
         return True
+
+    # Seam 2: validate every freshly-computed shape (ok, unavailable, or error) against its registered
+    # schema before it is persisted or returned -- a malformed artifact must fail loudly here, not sail
+    # through and mislead a reader later (roadmap rule 3: no silent fallback). Cached reads (the branch
+    # above) and the pure GET export path (try_get) are intentionally NOT re-validated on every read --
+    # this is a write-boundary check, not a read tax on already-stored data.
+    from clozn import schemas
+
+    try:
+        schemas.validate(result, SCHEMA)
+    except schemas.ValidationError as exc:
+        h._json(500, {"error": f"influence-map produced an artifact that failed its own schema: {exc}"})
+        return True
+
     if result.get("available") is not True:
         status = 500 if result.get("status") == "error" else 422
         h._json(status, result)

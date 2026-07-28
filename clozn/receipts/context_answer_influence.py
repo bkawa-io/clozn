@@ -30,6 +30,42 @@ from .forced import _FORCED_MEAN_THRESHOLD, _forced_deltas, _matched_length_fill
 
 
 SCHEMA = "clozn.context_answer_influence.v1"
+
+# The spec-facing mode enum (notes/agent_roadmap/07-sources-evidence-lens.md's "Measurement modes"):
+# presence_only / attention_proxy / forced_score_intervention / regeneration_intervention / unsupported.
+# This module implements exactly one of those -- forced_score_intervention -- never attention_proxy
+# (raw attention weight is not read anywhere on this path; every effect is a scored intervention).
+MODE = "forced_score_intervention"
+
+# The two evidence states a LINK can honestly carry once a map computes successfully. A link that never
+# clears the measurement floor is still `observed` (the intervention ran; nothing hidden), never silently
+# dropped -- "no clear source" must never be misread as "the source was irrelevant" (spec, verbatim).
+EVIDENCE_STATE_CAUSALLY_SUPPORTED = "causally_supported"
+EVIDENCE_STATE_OBSERVED = "observed"
+
+# The persistent, product-facing caveat every displayed number here needs attached (spec's own required
+# text, verbatim). Lives on `method` -- present whether the call ok'd or failed -- so a consumer reading
+# ANY shape this module returns is one key away from the sentence that bounds every number in it.
+_PERSISTENT_CAVEAT = (
+    "Influence means this context changed the measured output under this intervention. It does not "
+    "prove the document is correct or reveal hidden reasoning."
+)
+
+# The complete, closed set of `error.code` values this module ever emits (grep-verified against every
+# `_failed(..., code=...)` call site below). Not enforced at runtime by this module itself -- enforced
+# structurally by clozn/schemas/defs/clozn.context_answer_influence.v1.json's `error.code` enum, which a
+# new code path that forgets to add itself here will fail against the moment it's validated at the
+# persistence boundary (clozn/server/routes/influence_map.py). Keep this set and the schema's enum in sync.
+ERROR_CODES = frozenset({
+    "invalid_run",
+    "no_text_context",
+    "no_recorded_continuation",
+    "scoring_unavailable",
+    "invalid_baseline_score",
+    "intervention_score_failed",
+    "influence_map_error",
+})
+
 DEFAULT_MAX_CONTEXT_SPANS = 8
 DEFAULT_TARGET_CHUNK_CHARS = 600
 # Coarse-to-fine refinement: only the strongest coarse-clearing spans are ever split further, and only
@@ -41,6 +77,7 @@ _CONTROL_RECIPE = "clozn.matched_length_neutral_filler.v1"
 
 _METHOD = {
     "name": "teacher_forced_matched_context_replacement",
+    "mode": MODE,
     "generation_used": False,
     "baseline_reused": True,
     "measurement": "signed_logprob_delta_nats_per_recorded_answer_token",
@@ -57,6 +94,7 @@ _METHOD = {
         "behavioral dependence under a controlled prompt intervention; not a percentage, "
         "attention explanation, internal mediation result, or circuit explanation"
     ),
+    "caveat": _PERSISTENT_CAVEAT,
 }
 
 
@@ -782,6 +820,7 @@ def context_answer_influence(run: dict, sub, *, max_context_spans: int = DEFAULT
         for context_index, (span, row) in enumerate(zip(prompt_spans, matrix)):
             for answer_index, (answer_span, delta) in enumerate(zip(answer_spans, row)):
                 magnitude = _round(abs(delta))
+                clears = magnitude >= floor
                 links.append({
                     "context_span_id": span["id"],
                     "answer_span_id": answer_span["id"],
@@ -790,7 +829,14 @@ def context_answer_influence(run: dict, sub, *, max_context_spans: int = DEFAULT
                     "delta_nats": delta,
                     "abs_delta_nats": magnitude,
                     "effect": "supports" if delta > 0 else "suppresses" if delta < 0 else "neutral",
-                    "clears_floor": magnitude >= floor,
+                    "clears_floor": clears,
+                    # The exact claim this ONE number licenses (roadmap rule 4's explicit-states list):
+                    # a link that never clears the floor was still measured -- `observed`, never silently
+                    # dropped and never "source_irrelevant" (that claim is not available from a null
+                    # result, see `caveat` on `method` above).
+                    "evidence_state": (
+                        EVIDENCE_STATE_CAUSALLY_SUPPORTED if clears else EVIDENCE_STATE_OBSERVED
+                    ),
                 })
 
         # Bounded check: does the strongest redundant pair of context spans behave additively or

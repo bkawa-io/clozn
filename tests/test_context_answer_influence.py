@@ -4,7 +4,12 @@ from __future__ import annotations
 from copy import deepcopy
 
 from clozn.receipts.context_answer_influence import (
+    ERROR_CODES,
+    EVIDENCE_STATE_CAUSALLY_SUPPORTED,
+    EVIDENCE_STATE_OBSERVED,
+    MODE,
     SCHEMA,
+    _PERSISTENT_CAVEAT,
     context_answer_influence,
     segment_context,
 )
@@ -149,6 +154,8 @@ def test_one_baseline_exact_continuation_assembled_preference_and_bidirectional_
         and item["answer_span_id"] == out["answer_spans"][0]["id"]
     )
     assert link["delta_nats"] == 1.0 and link["effect"] == "supports"
+    assert link["clears_floor"] is True
+    assert link["evidence_state"] == EVIDENCE_STATE_CAUSALLY_SUPPORTED
     assert out["controls"][1]["length_preserved"] is True
 
 
@@ -162,6 +169,9 @@ def test_below_floor_is_explicitly_no_clear_source():
 
     assert out["matrix"] == [[0.01, 0.01]]
     assert all(link["clears_floor"] is False for link in out["links"])
+    # Below-floor is `observed`, never a silently-dropped link and never "irrelevant" -- the spec's own
+    # rule ("Never convert absence of measured effect into proof the source was irrelevant") applied.
+    assert all(link["evidence_state"] == EVIDENCE_STATE_OBSERVED for link in out["links"])
     assert out["summary"]["has_any_clear_source"] is False
     assert out["summary"]["no_clear_source"] is True
     assert out["summary"]["answer_span_ids_without_clear_source"] == ["a.t0000", "a.t0001"]
@@ -235,6 +245,7 @@ def test_missing_score_surface_is_an_honest_unavailable_shape():
     assert out["status"] == "unavailable"
     assert out["available"] is False
     assert out["error"]["code"] == "scoring_unavailable"
+    assert out["error"]["code"] in ERROR_CODES
     assert out["method"]["generation_used"] is False
     assert "matrix" not in out
 
@@ -245,9 +256,23 @@ def test_failed_intervention_does_not_masquerade_as_a_complete_map():
     assert out["status"] == "error"
     assert out["available"] is False
     assert out["error"]["code"] == "intervention_score_failed"
+    assert out["error"]["code"] in ERROR_CODES
     assert out["failed_context_span_id"] == "p.m000.c000"
     assert out["completed_context_span_ids"] == []
     assert "matrix" not in out and "links" not in out
+
+
+def test_method_carries_mode_and_persistent_caveat_in_every_shape():
+    """`method` (and therefore `mode`/`caveat`) comes from `_base_result`, so it is present whether the
+    call succeeds, degrades to `unavailable`, or fails outright -- a consumer reading ANY shape this
+    module returns is one key away from the sentence bounding every number in it (spec's required
+    persistent caveat, verbatim)."""
+    ok = context_answer_influence(_run(), FakeScoreSub(_influence_scores), clock=StepClock())
+    unavailable = context_answer_influence(_run(), NoScoreSub(), clock=StepClock())
+    for out in (ok, unavailable):
+        assert out["method"]["mode"] == MODE == "forced_score_intervention"
+        assert out["method"]["caveat"] == _PERSISTENT_CAVEAT
+        assert "does not prove the document is correct" in out["method"]["caveat"]
 
 
 def test_coarse_to_fine_refinement_splits_only_the_strongest_clearing_span():
