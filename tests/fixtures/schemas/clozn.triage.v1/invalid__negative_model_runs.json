@@ -1,0 +1,21 @@
+{
+  "schema_version": "clozn.triage.v1",
+  "generated_at": "2026-07-27T00:00:00+00:00",
+  "baseline_run_id": "run_baseline_0001",
+  "candidate_run_id": "run_candidate_0001",
+  "steps": [
+    {
+      "kind": "template_swap",
+      "status": "causally_supported",
+      "inputs": {},
+      "observations": [],
+      "artifact_refs": [],
+      "cost": {"model_runs": -1}
+    }
+  ],
+  "summary": {
+    "classification": "template_swap",
+    "confidence_basis": "causally_supported",
+    "caveats": []
+  }
+}

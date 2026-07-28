@@ -1,0 +1,50 @@
+{
+  "schema_version": "clozn.triage.v1",
+  "generated_at": "2026-07-27T00:00:00+00:00",
+  "source_experiment_id": "exp_deadbeef00000001",
+  "case_id": "greeting",
+  "baseline_run_id": "run_baseline_0002",
+  "candidate_run_id": "run_candidate_0002",
+  "steps": [
+    {
+      "kind": "identity_diff:model",
+      "status": "matched",
+      "inputs": {},
+      "observations": [{"path": "identity.model_sha256", "baseline": "a", "candidate": "a"}],
+      "artifact_refs": [],
+      "cost": {"model_runs": 0}
+    },
+    {
+      "kind": "identity_diff:template",
+      "status": "mismatched",
+      "inputs": {},
+      "observations": [{"path": "identity.template_fingerprint", "baseline": "aaaaaaaaaaaaaaaa", "candidate": "bbbbbbbbbbbbbbbb"}],
+      "artifact_refs": [],
+      "cost": {"model_runs": 0},
+      "caveats": ["template_fingerprint hashes both template rendering AND tokenizer behavior together; a mismatch here cannot be attributed to template vs tokenizer alone"]
+    },
+    {
+      "kind": "template_swap",
+      "status": "causally_supported",
+      "inputs": {"swap": "candidate_model_with_baseline_template"},
+      "observations": [
+        {"note": "candidate model regenerated under baseline template reproduces the baseline's answer"}
+      ],
+      "artifact_refs": [],
+      "cost": {"model_runs": 2}
+    }
+  ],
+  "summary": {
+    "classification": "template_swap",
+    "confidence_basis": "causally_supported",
+    "caveats": [
+      "template_fingerprint hashes both template rendering AND tokenizer behavior together; a mismatch here cannot be attributed to template vs tokenizer alone"
+    ],
+    "eliminated": ["identity_diff:model"],
+    "observed": ["identity_diff:template"],
+    "correlated": [],
+    "causally_supported": ["template_swap"],
+    "inconclusive": [],
+    "not_run": []
+  }
+}

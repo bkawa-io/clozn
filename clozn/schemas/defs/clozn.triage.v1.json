@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.triage.v1",
+  "title": "Automatic regression triage: an evidence ladder, not a generated explanation",
+  "description": "Roadmap rule 1 (evidence before narration): every conclusion here must be traceable to `steps[]`. `summary` is a recomputable rollup of `steps`, never an independent claim -- a reader who distrusts `summary` can always re-derive it. `root_cause` must never appear as a status anywhere in this document; `summary.classification` may name a cause only when exactly one step reached `causally_supported`, and is `undetermined` otherwise.",
+
+  "type": "object",
+  "required": ["schema_version", "baseline_run_id", "candidate_run_id", "steps", "summary", "generated_at"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": { "const": "clozn.triage.v1" },
+    "generated_at": {
+      "type": "string",
+      "description": "ISO-8601 UTC timestamp this artifact was assembled.",
+      "minLength": 1
+    },
+    "source_experiment_id": {
+      "type": "string",
+      "description": "Present only when the baseline/candidate runs were resolved from a clozn.experiment.result.v0 artifact (feature 04's schema, consumed by name here, not defined here).",
+      "minLength": 1
+    },
+    "case_id": {
+      "type": "string",
+      "description": "Present only alongside source_experiment_id: the experiment case name that was triaged.",
+      "minLength": 1
+    },
+    "baseline_run_id": { "type": "string", "minLength": 1 },
+    "candidate_run_id": { "type": "string", "minLength": 1 },
+    "steps": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Step" }
+    },
+    "summary": { "$ref": "#/$defs/Summary" }
+  },
+
+  "$defs": {
+    "EvidenceStatus": {
+      "type": "string",
+      "enum": [
+        "observed", "matched", "mismatched", "eliminated", "reproduced", "correlated",
+        "causally_supported", "inconclusive", "not_run", "unsupported"
+      ]
+    },
+    "Step": {
+      "type": "object",
+      "required": ["kind", "status", "observations", "cost"],
+      "additionalProperties": true,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Free-text step identifier, e.g. 'identity_diff:model', 'template_swap'. Not an enum: the triage order (roadmap spec) is open-ended and later slices add kinds without a schema edit."
+        },
+        "status": { "$ref": "#/$defs/EvidenceStatus" },
+        "inputs": {
+          "type": "object",
+          "description": "What this step was given (run ids, budgets, swap targets). Omitted keys mean unavailable, never null-padded."
+        },
+        "observations": {
+          "type": "array",
+          "description": "The raw facts this step measured. Never prose-only -- each item should be reconstructible evidence (a path, a value, a hash), not a claim.",
+          "items": { "type": "object" }
+        },
+        "artifact_refs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "cost": {
+          "type": "object",
+          "required": ["model_runs"],
+          "properties": {
+            "model_runs": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "caveats": {
+          "type": "array",
+          "description": "Standing limitations of this specific step's measurement (e.g. a fingerprint that conflates two identity dimensions). Must survive into summary.caveats, not just live here.",
+          "items": { "type": "string" }
+        },
+        "reason": {
+          "type": "string",
+          "description": "Required in practice (not schema-enforced, since only not_run/unsupported/inconclusive steps need one) whenever status is not_run, unsupported, or inconclusive: why."
+        }
+      }
+    },
+    "Summary": {
+      "type": "object",
+      "required": ["classification", "confidence_basis", "caveats"],
+      "additionalProperties": true,
+      "properties": {
+        "classification": {
+          "type": "string",
+          "minLength": 1,
+          "description": "'undetermined' unless exactly one step reached causally_supported, in which case this is that step's own `kind` verbatim -- never a hand-authored label."
+        },
+        "confidence_basis": { "$ref": "#/$defs/EvidenceStatus" },
+        "caveats": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "eliminated": {
+          "type": "array",
+          "description": "Step kinds whose comparison matched -- hypotheses ruled out.",
+          "items": { "type": "string" }
+        },
+        "observed": {
+          "type": "array",
+          "description": "Step kinds whose comparison mismatched but were never isolated by a controlled intervention -- live candidate causes, not proven ones.",
+          "items": { "type": "string" }
+        },
+        "correlated": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "causally_supported": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "inconclusive": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "not_run": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "unsupported": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}
