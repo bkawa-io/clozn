@@ -8,6 +8,7 @@ reply.
 """
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from types import MappingProxyType
@@ -89,6 +90,36 @@ def _instruction_survived(child: Mapping[str, Any], instruction: str) -> bool:
     return instruction in str(child.get("final_prompt") or "")
 
 
+def _sha256(text: str) -> str:
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+
+
+def _execution_identity(run: Mapping[str, Any], preset: str, backend: str, parameters: dict,
+                        qualification: str, qualified: bool | None, fallback: bool,
+                        baseline_reply: str, corrected_reply: str) -> dict:
+    """The spec's per-revision execution identity: parent run, action id + backend + exact
+    parameters, and before/after hashes -- reproducible/explainable later without re-reading the
+    full replies. `ext` is contributed through Seam 3 (clozn.runs.identity_providers.
+    behavior_intervention) rather than assembled here by hand, so a future caller of
+    clozn.runs.identity.runtime_identity() that supplies the same `behavior_intervention` fact gets
+    an identical shape with no code shared beyond the provider file."""
+    from clozn.runs import identity_ext
+    fact: dict[str, Any] = {
+        "action_id": preset, "backend": backend, "registry_version": "1", "parameters": parameters,
+        "qualification": qualification, "fallback": fallback,
+    }
+    if qualified is not None:
+        fact["qualified"] = qualified
+    return {
+        "parent_run_id": run.get("id"),
+        "action_id": preset,
+        "backend": backend,
+        "before_hash": _sha256(baseline_reply),
+        "after_hash": _sha256(corrected_reply),
+        "ext": identity_ext.collect({"behavior_intervention": fact}),
+    }
+
+
 def _prompt_blocks(presets) -> list[str]:
     selected = list(dict.fromkeys(str(value) for value in (presets or [])
                                   if str(value) in CORRECTION_PRESETS))
@@ -157,6 +188,12 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *, scope: str = "onc
         coherence = _coherence(corrected_reply)
     except Exception:
         coherence = {"degenerate": False, "reasons": []}
+    backend = "prompt_policy"
+    backend_parameters = {"preset": preset}
+    execution_identity = _execution_identity(
+        run, preset, backend, backend_parameters, qualification="generic", qualified=None,
+        fallback=False, baseline_reply=baseline_reply, corrected_reply=corrected_reply,
+    )
     return {
         "preset": preset,
         "scope": scope,
@@ -176,4 +213,6 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *, scope: str = "onc
         "baseline_child_id": baseline_id,
         "corrected_child_id": corrected_id,
         "child_ids": {"baseline": baseline_id, "corrected": corrected_id},
+        "backend": backend,
+        "execution_identity": execution_identity,
     }
