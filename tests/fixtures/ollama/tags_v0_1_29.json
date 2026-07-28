@@ -1,0 +1,10 @@
+{
+  "models": [
+    {
+      "name": "qwen2.5:7b-instruct",
+      "modified_at": "2025-03-01T10:15:00Z",
+      "size": 4680000000,
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ]
+}

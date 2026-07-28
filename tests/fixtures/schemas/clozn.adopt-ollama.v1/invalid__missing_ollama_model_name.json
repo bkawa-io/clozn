@@ -1,0 +1,18 @@
+{
+  "schema_version": "clozn.adopt-ollama.v1",
+  "created_at": "2026-07-27T12:00:00+00:00",
+  "discovery": {"source": "endpoint"},
+  "ollama": {
+    "manifest_digest": "sha256:aaaa"
+  },
+  "clozn": {
+    "registered_name": "ollama/unknown",
+    "path": "/home/user/.clozn/models/ollama__unknown.gguf",
+    "mode": "hard_link"
+  },
+  "template": {
+    "source": "ollama_modelfile",
+    "exactly_reproduced": false,
+    "warnings": []
+  }
+}

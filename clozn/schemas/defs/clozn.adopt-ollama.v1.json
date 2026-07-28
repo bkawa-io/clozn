@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.adopt-ollama.v1",
+  "title": "Read-only adoption transaction for one model discovered in an existing Ollama install",
+  "description": "Written by `clozn adopt ollama` (clozn.cli.commands.adopt) when it registers one Ollama model into Clozn's own model directory. This document IS the transaction record `--undo` reads back -- it is never written for a --dry-run. Every optional field is omitted, never null, when Clozn could not honestly determine it (e.g. a cloud-only Ollama model has no source_blob_path). Adoption never writes into Ollama's own storage; this schema only ever describes what Clozn itself created.",
+
+  "type": "object",
+  "required": ["schema_version", "created_at", "discovery", "ollama", "clozn", "template"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "clozn.adopt-ollama.v1"
+    },
+    "created_at": {
+      "type": "string",
+      "description": "ISO-8601 UTC timestamp of when this transaction was written.",
+      "minLength": 1
+    },
+    "discovery": {
+      "type": "object",
+      "description": "Provenance of how Ollama was found -- clozn.adopt.ollama_discovery.discover()'s result. An API-sourced discovery (env/endpoint) is higher-confidence than executable or storage_fallback (see that module's docstring).",
+      "required": ["source"],
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["env", "endpoint", "executable", "storage_fallback"]
+        },
+        "host": {
+          "type": "string",
+          "description": "The Ollama API base URL that answered, when discovery was API-sourced."
+        },
+        "version": {
+          "type": "string",
+          "description": "Ollama's own reported version string, when available."
+        }
+      }
+    },
+    "ollama": {
+      "type": "object",
+      "description": "What Clozn read about the model FROM Ollama. Nothing in this object was ever written back to Ollama.",
+      "required": ["model_name"],
+      "properties": {
+        "model_name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The model name exactly as Ollama reports it (e.g. 'qwen2.5:7b-instruct')."
+        },
+        "manifest_digest": {
+          "type": "string",
+          "description": "The `digest` field Ollama's /api/tags reports for this model. Its exact scope (image-config digest vs. weight-blob digest) is a documented uncertainty of this integration -- it is recorded for provenance and must not be assumed equal to source_blob_sha256."
+        },
+        "source_blob_path": {
+          "type": "string",
+          "description": "Absolute path to the blob Clozn resolved as this model's weights, parsed from the `FROM` line of Ollama's own /api/show 'modelfile' text. Absent when no local blob could be resolved (e.g. a cloud-only model)."
+        },
+        "source_blob_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 Clozn itself computed by reading source_blob_path's bytes at adoption time -- ground truth independent of manifest_digest, used by --undo to detect drift/GC of the Ollama-side source."
+        }
+      }
+    },
+    "clozn": {
+      "type": "object",
+      "description": "What Clozn created. Always a NEW entry under Clozn's own model directory; never a write into Ollama's tree.",
+      "required": ["registered_name", "path", "mode"],
+      "properties": {
+        "registered_name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The name this adoption is registered under, e.g. 'ollama/qwen2.5:7b-instruct'."
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path Clozn created under its own model directory."
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["hard_link", "copy"],
+          "description": "How `path` was created. 'external_read_only' (register the source path directly, no new file) and 'symlink' are described in the spec's strategy ladder but not implemented in this release -- see clozn/cli/commands/adopt.py's module docstring."
+        },
+        "model_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 of path's bytes at adoption time. Equals source_blob_sha256 for both hard_link and copy modes (a hard link is the same bytes; a copy is verified byte-identical before this transaction is written)."
+        }
+      }
+    },
+    "template": {
+      "type": "object",
+      "description": "Whether Clozn can reproduce this model's Ollama-side template/parameters/system prompt exactly. Template/parameter TRANSLATION is not implemented in this release, so exactly_reproduced is currently always false -- this object exists so a later release can add translation without a schema break (roadmap rule: never silently claim equivalence).",
+      "required": ["source", "exactly_reproduced", "warnings"],
+      "properties": {
+        "source": {
+          "type": "string",
+          "const": "ollama_modelfile"
+        },
+        "exactly_reproduced": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "engine_capability": {
+      "type": "object",
+      "description": "Only the 'discovered' rung of docs/MODEL_SUPPORT.md's qualification ladder -- adoption reads the GGUF header, never runs the smoke suite, so it can never honestly claim 'core' or higher.",
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["discovered"]
+        },
+        "architecture": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "client_transactions": {
+      "type": "array",
+      "description": "Zero or more clozn.connect.transaction.v1-shaped records for apps configured via --connect during this adoption (see clozn.cli.commands._connector). Undoing this adopt transaction does not automatically undo these -- each is its own independently undoable transaction.",
+      "items": {"type": "object"}
+    }
+  }
+}

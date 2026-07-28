@@ -1,18 +1,29 @@
-"""Safe setup helpers for pointing supported third-party apps at Clozn."""
+"""Safe setup helpers for pointing supported third-party apps at Clozn.
+
+The atomic-write/backup/hash/restore primitives this module uses now live in
+clozn.cli.commands._connector (extracted so clozn.cli.commands.adopt's Ollama model linking can reuse
+the exact same tested safety properties -- see that module's docstring). This module's own public
+functions (configure_aider, undo_aider, cmd_connect, add_subparser) and their observable behavior are
+unchanged by that extraction; tests/test_connect_cli.py's six tests exercise them exactly as before.
+"""
 from __future__ import annotations
 
 import json
-import hashlib
 import os
 import re
 import shutil
 import stat
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from clozn._io import atomic_write_json
+from clozn.cli.commands._connector import (
+    atomic_restore as _atomic_restore,
+    atomic_write_text as _atomic_write_text,
+    sha256_bytes as _sha256_bytes,
+    sha256_path as _sha256_path,
+)
 
 
 _AIDER_KEYS = ("model", "openai-api-base", "openai-api-key")
@@ -69,52 +80,6 @@ def render_aider_config(existing: str, *, base_url: str, model: str,
         output.append("# Added by `clozn connect aider`.")
         output.extend(f"{key}: {json.dumps(desired[key], ensure_ascii=False)}" for key in missing)
     return newline.join(output) + newline
-
-
-def _atomic_write_text(path: Path, text: str, *, prior_mode: int | None) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        if prior_mode is not None:
-            os.chmod(temporary, prior_mode)
-        os.replace(temporary, path)
-    except BaseException:
-        try:
-            os.remove(temporary)
-        except OSError:
-            pass
-        raise
-
-
-def _sha256_bytes(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
-
-
-def _sha256_path(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(1 << 20):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _atomic_restore(source: Path, target: Path) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".restore", dir=target.parent)
-    os.close(fd)
-    try:
-        shutil.copy2(source, temporary)
-        os.replace(temporary, target)
-    except BaseException:
-        try:
-            os.remove(temporary)
-        except OSError:
-            pass
-        raise
 
 
 def configure_aider(path: Path, *, base_url: str, model: str, api_key: str,
