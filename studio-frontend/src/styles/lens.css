@@ -128,6 +128,13 @@
   text-transform: uppercase;
 }
 
+/* Measured but no link cleared the floor -- kept distinct from a plain "0 TOKENS" count, which would
+   read identically to a source that was never measured at all. */
+.lens-source small.is-evidence-observed {
+  color: color-mix(in srgb, var(--ink-faint) 65%, var(--signal-peach));
+  font-style: italic;
+}
+
 .lens-source strong {
   display: -webkit-box;
   overflow: hidden;
@@ -1012,6 +1019,80 @@
   color: var(--ink-faint);
 }
 
+.lens-source-empty p {
+  max-width: 230px;
+  margin: 0;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6.5px;
+  letter-spacing: normal;
+  line-height: 1.5;
+  text-transform: none;
+}
+
+.lens-evidence-caveat {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-raised) 34%, transparent);
+}
+
+.lens-evidence-caveat header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lens-evidence-caveat header span,
+.lens-evidence-caveat header b {
+  font-family: var(--font-machine);
+  font-weight: 500;
+  letter-spacing: .07em;
+}
+
+.lens-evidence-caveat header span {
+  color: var(--ink-soft);
+  font-size: 6.5px;
+}
+
+.lens-evidence-caveat header b {
+  color: color-mix(in srgb, var(--signal-cyan) 58%, var(--ink));
+  font-size: 6px;
+  white-space: nowrap;
+}
+
+.lens-evidence-coverage {
+  margin: 0;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .06em;
+}
+
+.lens-evidence-caveat-text {
+  margin: 0;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  line-height: 1.5;
+}
+
+.lens-evidence-claim-limit {
+  margin: 0;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6.5px;
+  line-height: 1.5;
+}
+
+.lens-evidence-claim-limit b {
+  color: var(--ink-soft);
+  font-weight: 500;
+  letter-spacing: .05em;
+}
+
 .lens-concept-state {
   display: grid;
   max-width: 420px;
@@ -1180,6 +1261,41 @@
 
 .lens-evidence-row.effect-suppresses {
   box-shadow: inset 2px 0 var(--signal-peach);
+}
+
+/* evidence_state=observed: measured, but did not clear the method's floor. Deliberately dimmer and
+   dashed rather than sharing the solid causally_supported treatment above -- "below the measurement
+   floor" must not read the same as a confirmed effect, and must not read the same as "irrelevant"
+   either (it still gets its own row, its own number, and a label). */
+.lens-evidence-row.is-evidence-observed {
+  border-bottom-style: dashed;
+  opacity: .7;
+}
+
+.lens-evidence-observed-group {
+  border-top: 1px dashed var(--line);
+}
+
+.lens-evidence-observed-label {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  font-style: italic;
+  letter-spacing: .07em;
+}
+
+.lens-evidence-observed-group > .lens-evidence-observed-label {
+  display: block;
+  padding: 8px 14px 4px;
+}
+
+.lens-linked-output p.lens-evidence-observed-label {
+  margin: 4px 0 0;
+  color: var(--ink-faint);
+  font-size: 6px;
+  font-style: italic;
+  letter-spacing: .07em;
+  white-space: normal;
 }
 
 .lens-concept-row {

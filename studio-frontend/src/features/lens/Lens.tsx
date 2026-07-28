@@ -13,6 +13,7 @@ import {
   measureRunInfluenceMap,
 } from "../../data/api";
 import type {
+  InfluenceAbsence,
   ObservatoryData,
   RunConcepts,
   RunPerformance as RunPerformanceData,
@@ -29,6 +30,7 @@ import {
   summarizeRange,
   weakestTokenInRange,
 } from "./analysis";
+import { describeAbsence, EvidenceCaveat, evidenceStateBadge } from "./EvidenceCaveat";
 import { RunPerformance } from "./RunPerformance";
 
 interface LensProps {
@@ -110,6 +112,10 @@ function SourceCard({
   linkedTokens: number;
   onSelect: () => void;
 }) {
+  // clearEffect is only meaningful once a source has actually been measured (`source.measured`); an
+  // omitted/unmeasured source keeps its plain token count so "never looked at" is never confused with
+  // "looked at, found nothing that cleared the floor."
+  const noClearEffect = source.measured && source.clearEffect === false && linkedTokens === 0;
   return (
     <button
       type="button"
@@ -119,7 +125,11 @@ function SourceCard({
     >
       <span>{source.role || "CONTEXT"}</span>
       <strong>{source.text}</strong>
-      <small>{linkedTokens} {linkedTokens === 1 ? "TOKEN" : "TOKENS"}</small>
+      <small className={noClearEffect ? "is-evidence-observed" : undefined}>
+        {noClearEffect
+          ? "MEASURED · NO CLEAR EFFECT"
+          : `${linkedTokens} ${linkedTokens === 1 ? "TOKEN" : "TOKENS"}`}
+      </small>
     </button>
   );
 }
@@ -135,6 +145,7 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
   const [concepts, setConcepts] = useState<ConceptState>({ status: "idle" });
   const [sourceStatus, setSourceStatus] = useState<"idle" | "measuring" | "error">("idle");
+  const [sourceAbsence, setSourceAbsence] = useState<InfluenceAbsence | null>(null);
   const [performanceOpen, setPerformanceOpen] = useState(false);
   const [performance, setPerformance] = useState<PerformanceState>({ status: "idle" });
   const [selectedPerformanceFinding, setSelectedPerformanceFinding] = useState("generation");
@@ -152,6 +163,7 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
     setSelectedRange(null);
     setConcepts({ status: "idle" });
     setSourceStatus("idle");
+    setSourceAbsence(null);
     setPerformance({ status: "loading" });
     setSelectedPerformanceFinding("generation");
     void loadRunInspection(runId, controller.signal).then((inspection) => {
@@ -328,8 +340,14 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
   async function measureSources() {
     if (!data || sourceStatus === "measuring") return;
     setSourceStatus("measuring");
+    setSourceAbsence(null);
+    const result = await measureRunInfluenceMap(data.id);
+    if (!result.ok) {
+      setSourceAbsence(result.absence);
+      setSourceStatus("error");
+      return;
+    }
     try {
-      await measureRunInfluenceMap(data.id);
       const inspection = await loadRunInspection(data.id);
       const nextToken = Math.min(selectedToken, Math.max(0, inspection.tokens.length - 1));
       setData(inspection);
@@ -338,6 +356,7 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
       setSelectedRange(null);
       setSourceStatus("idle");
     } catch {
+      setSourceAbsence({ kind: "network_error", message: "the measurement completed but the run could not be reloaded" });
       setSourceStatus("error");
     }
   }
@@ -358,24 +377,40 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
             <p>{data?.prompt || "—"}</p>
           </section>
           {data?.sources.length ? (
-            <div className="lens-source-list">
-              {data.sources.map((source) => (
-                <SourceCard
-                  key={source.id}
-                  source={source}
-                  selected={source.id === selectedSourceId}
-                  linkedTokens={sourceCounts.get(source.id) ?? 0}
-                  onSelect={() => {
-                    setMode("sources");
-                    setSelectedRange(null);
-                    setSelectedSourceId((current) => current === source.id ? null : source.id);
-                  }}
-                />
-              ))}
-            </div>
+            <>
+              <EvidenceCaveat
+                method={data.influenceMethod}
+                thresholds={data.influenceThresholds}
+                coverage={data.contextCoverage}
+              />
+              <div className="lens-source-list">
+                {data.sources.map((source) => (
+                  <SourceCard
+                    key={source.id}
+                    source={source}
+                    selected={source.id === selectedSourceId}
+                    linkedTokens={sourceCounts.get(source.id) ?? 0}
+                    onSelect={() => {
+                      setMode("sources");
+                      setSelectedRange(null);
+                      setSelectedSourceId((current) => current === source.id ? null : source.id);
+                    }}
+                  />
+                ))}
+              </div>
+            </>
           ) : (
             <div className="lens-source-empty">
-              <span>{sourceStatus === "error" ? "SOURCE MEASUREMENT FAILED" : "SOURCE MAP UNAVAILABLE"}</span>
+              {(() => {
+                const absence: InfluenceAbsence = sourceAbsence ?? data?.influenceAbsence ?? { kind: "not_measured" };
+                const described = describeAbsence(absence);
+                return (
+                  <>
+                    <span>{described.title}</span>
+                    {described.detail && <p>{described.detail}</p>}
+                  </>
+                );
+              })()}
               <button
                 type="button"
                 disabled={!data || sourceStatus === "measuring"}
@@ -568,6 +603,13 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
               <div className="lens-linked-output">
                 <span>LINKED OUTPUT</span>
                 <p>{linkedIndexes.map((index) => tokens[index]?.text).join("") || "—"}</p>
+                {selectedSource.measured && !linkedIndexes.length && (
+                  <p className="lens-evidence-observed-label">
+                    {selectedSource.clearEffect === false
+                      ? "MEASURED · NO LINK CLEARED THE FLOOR"
+                      : "NOT MEASURED"}
+                  </p>
+                )}
               </div>
               <button
                 type="button"
@@ -606,7 +648,13 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
                     <output>{source.deltaNats >= 0 ? "+" : ""}{source.deltaNats.toFixed(4)} Σ nats</output>
                   </button>
                 ))}
-                {!rangeSources.length && <div className="lens-unavailable">UNRESOLVED</div>}
+                {!rangeSources.length && (
+                  <div className="lens-unavailable">
+                    {data?.sources.length
+                      ? "NO SOURCE CLEARED THE FLOOR FOR THIS SPAN"
+                      : describeAbsence(sourceAbsence ?? data?.influenceAbsence ?? { kind: "not_measured" }).title}
+                  </div>
+                )}
               </section>
               <button
                 type="button"
@@ -660,7 +708,7 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
                   {(selected.sources ?? []).map((source) => (
                     <button
                       type="button"
-                      className={`lens-evidence-row effect-${source.effect}`}
+                      className={`lens-evidence-row effect-${source.effect} ${evidenceStateBadge(source.evidenceState).className}`}
                       onClick={() => {
                         setMode("sources");
                         setSelectedSourceId(source.sourceId);
@@ -672,7 +720,40 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
                       <output>{source.deltaNats >= 0 ? "+" : ""}{source.deltaNats.toFixed(4)} nats</output>
                     </button>
                   ))}
-                  {!selected.sources?.length && <div className="lens-unavailable">UNRESOLVED</div>}
+                  {!selected.sources?.length && (
+                    <div className="lens-unavailable">
+                      {!data?.sources.length
+                        ? describeAbsence(sourceAbsence ?? data?.influenceAbsence ?? { kind: "not_measured" }).title
+                        : selected.observedSources?.length
+                          ? "NO SOURCE CLEARED THE FLOOR FOR THIS TOKEN"
+                          : "NOT MEASURED"}
+                    </div>
+                  )}
+                  {/* Below-floor links are shown separately, never merged into the cleared list above --
+                      an observed-but-insufficient delta must stay visually and structurally distinct from
+                      a causally_supported one (this feature's binding constraint). */}
+                  {Boolean(selected.observedSources?.length) && (
+                    <div className="lens-evidence-observed-group">
+                      <span className="lens-evidence-observed-label">
+                        MEASURED · BELOW FLOOR ({selected.observedSources?.length})
+                      </span>
+                      {(selected.observedSources ?? []).map((source) => (
+                        <button
+                          type="button"
+                          className={`lens-evidence-row effect-${source.effect} ${evidenceStateBadge(source.evidenceState).className}`}
+                          onClick={() => {
+                            setMode("sources");
+                            setSelectedSourceId(source.sourceId);
+                          }}
+                          key={source.sourceId}
+                        >
+                          <strong>{source.label}</strong>
+                          <span>{source.effect.toUpperCase()} · {evidenceStateBadge(source.evidenceState).label}</span>
+                          <output>{source.deltaNats >= 0 ? "+" : ""}{source.deltaNats.toFixed(4)} nats</output>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </section>
               )}
 

@@ -44,6 +44,7 @@ function decorateTokens(text: string, sources: SourceReading[]): TokenReading[] 
         label: primary.label || `${primary.role} context`,
         effect: index % 29 === 0 ? "suppresses" : "supports",
         deltaNats: index % 29 === 0 ? -.08 - index % 7 / 100 : .09 + index % 11 / 100,
+        evidenceState: "causally_supported",
       });
       if (index % 13 === 0) {
         const secondary = measured[(measured.indexOf(primary) + 3) % measured.length];
@@ -53,6 +54,7 @@ function decorateTokens(text: string, sources: SourceReading[]): TokenReading[] 
             label: secondary.label || `${secondary.role} context`,
             effect: "supports",
             deltaNats: .06 + index % 5 / 100,
+            evidenceState: "causally_supported",
           });
         }
       }
