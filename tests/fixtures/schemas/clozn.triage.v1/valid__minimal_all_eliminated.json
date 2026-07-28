@@ -1,0 +1,29 @@
+{
+  "schema_version": "clozn.triage.v1",
+  "generated_at": "2026-07-27T00:00:00+00:00",
+  "baseline_run_id": "run_baseline_0001",
+  "candidate_run_id": "run_candidate_0001",
+  "steps": [
+    {
+      "kind": "identity_diff:model",
+      "status": "matched",
+      "inputs": {},
+      "observations": [
+        {"path": "identity.model_sha256", "baseline": "a" , "candidate": "a"}
+      ],
+      "artifact_refs": [],
+      "cost": {"model_runs": 0}
+    }
+  ],
+  "summary": {
+    "classification": "undetermined",
+    "confidence_basis": "eliminated",
+    "caveats": [],
+    "eliminated": ["identity_diff:model"],
+    "observed": [],
+    "correlated": [],
+    "causally_supported": [],
+    "inconclusive": [],
+    "not_run": []
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "schema_version": "clozn.triage.v2",
+  "generated_at": "2026-07-27T00:00:00+00:00",
+  "baseline_run_id": "run_baseline_0001",
+  "candidate_run_id": "run_candidate_0001",
+  "steps": [],
+  "summary": {
+    "classification": "undetermined",
+    "confidence_basis": "not_run",
+    "caveats": []
+  }
+}
