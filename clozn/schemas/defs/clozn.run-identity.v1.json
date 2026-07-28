@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.run-identity.v1",
+  "title": "Immutable reproduction identity for a run record",
+  "description": "The identity block assembled by clozn.runs.identity.runtime_identity(). Every field except captured_at is OPTIONAL by design: clozn omits a key it cannot honestly measure rather than null-padding it, so absence stays visible and is never mistaken for a measured value. Extensions contributed by clozn.runs.identity_ext providers land under `ext`, namespaced by provider, so features can add identity facets without editing this schema.",
+
+  "type": "object",
+  "required": ["captured_at"],
+  "properties": {
+    "captured_at": {
+      "type": "string",
+      "description": "ISO-8601 UTC timestamp of when this identity block was assembled.",
+      "minLength": 1
+    },
+    "model_path": {
+      "type": "string",
+      "description": "Absolute path to the model file as resolved at run time."
+    },
+    "model_sha256": {
+      "type": "string",
+      "description": "SHA-256 of the exact model bytes. Preferred source is the engine's own /health field, computed once at boot.",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "model_size_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "template_fingerprint": {
+      "type": "string",
+      "description": "First 16 hex chars of the SHA-256 of CANONICAL_CONVERSATION rendered through the run's chat template. Fingerprints template AND tokenizer rendering behavior together.",
+      "pattern": "^[0-9a-f]{16}$"
+    },
+    "engine_build": {
+      "type": "string",
+      "description": "Build identifier for the clozn-server binary. Absent on engine builds whose /health does not report one -- absence means 'not reported', never 'unbuilt'."
+    },
+    "clozn_version": {
+      "type": "string"
+    },
+    "ext": {
+      "type": "object",
+      "description": "Namespaced identity facets contributed by clozn.runs.identity_ext providers. Each key is a provider name (e.g. 'engine_artifact', 'adapter', 'machine'); each value is that provider's own object. A reader that does not recognise a namespace must preserve it, not drop it.",
+      "additionalProperties": {
+        "type": "object"
+      }
+    }
+  }
+}

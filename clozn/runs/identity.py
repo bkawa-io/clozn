@@ -45,6 +45,7 @@ from datetime import datetime, timezone
 
 from clozn._io import atomic_write_json
 from clozn.artifacts.contracts import sha256_file
+from clozn.runs import identity_ext
 
 
 _CACHE_DIR = os.path.join(os.path.expanduser("~/.clozn"), "cache")
@@ -227,6 +228,20 @@ def runtime_identity(*, model_path=None, model_sha256_hint=None, apply_template_
         version = clozn_version or _clozn_version()
         if version:
             out["clozn_version"] = version
+
+        # Feature-owned identity facets (engine artifact, adapter, machine/runtime, ...) contributed by
+        # clozn/runs/identity_providers/*.py. Kept out of this function's body on purpose: those facets
+        # belong to different features, and merging them here by hand would make this one function the
+        # thing every feature branch has to edit. collect() never raises and omits a namespace it could
+        # not establish, so the "omit, never null-pad" rule above holds inside `ext` too.
+        extensions = identity_ext.collect({
+            "model_path": model_path,
+            "model_sha256": out.get("model_sha256"),
+            "engine_health": engine_health,
+            "apply_template_fn": apply_template_fn,
+        })
+        if extensions:
+            out["ext"] = extensions
     except Exception:
         pass
     out["captured_at"] = datetime.now(timezone.utc).isoformat()
