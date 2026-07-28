@@ -1,0 +1,15 @@
+{
+  "schema_version": "clozn.engine-manifest.v1",
+  "clozn_version": "1.0.0",
+  "artifacts": [
+    {
+      "os": "linux",
+      "arch": "x86_64",
+      "backend": "cpu",
+      "url": "https://github.com/example/clozn/releases/download/v1.0.0/clozn-engine-1.0.0-linux-x86_64-cpu.tar.gz",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "size_bytes": 123456,
+      "entrypoint": "bin/clozn-server"
+    }
+  ]
+}

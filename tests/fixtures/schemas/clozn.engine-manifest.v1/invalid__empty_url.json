@@ -1,0 +1,16 @@
+{
+  "schema_version": "clozn.engine-manifest.v1",
+  "clozn_version": "1.0.0",
+  "protocol_version": "1.0",
+  "artifacts": [
+    {
+      "os": "linux",
+      "arch": "x86_64",
+      "backend": "cpu",
+      "url": "",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "size_bytes": 123,
+      "entrypoint": "bin/clozn-server"
+    }
+  ]
+}

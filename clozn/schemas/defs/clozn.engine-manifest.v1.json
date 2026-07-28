@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.engine-manifest.v1",
+  "title": "Release manifest for native clozn-server engine artifacts",
+  "description": "Published alongside a tagged clozn release (feature 01: native distribution and managed setup). `clozn setup` fetches this document (by default from a GitHub Release asset, overridable via CLOZN_ENGINE_MANIFEST_URL for development/testing) and picks the narrowest artifact that matches the running machine. Every artifact is downloaded to a temp file, sha256-verified BEFORE extraction, and only then installed -- see clozn/setup/install.py. Unknown top-level and per-artifact fields are tolerated for forward compatibility; required fields are never inferred from context.",
+
+  "type": "object",
+  "required": ["schema_version", "clozn_version", "protocol_version", "artifacts"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "clozn.engine-manifest.v1"
+    },
+    "clozn_version": {
+      "type": "string",
+      "description": "The clozn Python package version this manifest was published for. clozn setup upgrade/rollback compare this against clozn.__version__ to warn on a protocol-incompatible pairing.",
+      "minLength": 1
+    },
+    "protocol_version": {
+      "type": "string",
+      "description": "The worker<->supervisor wire-contract version every listed artifact speaks (clozn.protocol.PROTOCOL_VERSION's own 'MAJOR.MINOR' string format -- see clozn/protocol.py). A manifest whose major this supervisor does not support in clozn.protocol.SUPPORTED_MAJORS must be rejected before any artifact is selected.",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/artifact" }
+    }
+  },
+
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "required": ["os", "arch", "backend", "url", "sha256", "size_bytes", "entrypoint"],
+      "properties": {
+        "os": {
+          "type": "string",
+          "enum": ["windows", "linux", "macos"]
+        },
+        "arch": {
+          "type": "string",
+          "enum": ["x86_64", "arm64"]
+        },
+        "backend": {
+          "type": "string",
+          "description": "cpu is always a candidate; cuda and metal are the v1 support-matrix's single accelerated backend per platform (roadmap: 'do not advertise unsupported matrices').",
+          "enum": ["cpu", "cuda", "metal"]
+        },
+        "cuda_major": {
+          "type": "integer",
+          "description": "Required in practice when backend is cuda (checked in clozn/setup/manifest.py, not here -- this schema validates shape, cross-field policy lives in selection code). Absent for cpu/metal artifacts.",
+          "minimum": 1
+        },
+        "url": {
+          "type": "string",
+          "description": "In production this must be an https:// URL (roadmap: 'Require HTTPS for release downloads') -- enforced by clozn/setup/transport.py at fetch time, not by this schema, which validates document SHAPE only. A loopback http:// or file:// URL is a legitimate document under this schema (clozn/setup's own test fixtures are exactly that); transport.py is what refuses to fetch anything else outside an explicit development/test override.",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "description": "Lowercase hex SHA-256 of the archive at `url`, verified before extraction.",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "entrypoint": {
+          "type": "string",
+          "description": "Path to the clozn-server executable, relative to the archive root once extracted (e.g. 'bin/clozn-server.exe').",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}
