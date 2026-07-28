@@ -1,0 +1,67 @@
+{
+  "schema_version": "clozn.context-receipt.v1",
+  "run_id": "run_0019f7a3b1c2d_abcdef",
+  "template_fingerprint": "9a4c1f0b7e2d6835",
+  "tokenizer_conflated_with_template": true,
+  "context_window_tokens": 8192,
+  "reserved_output_tokens": 512,
+  "delivered": [
+    {
+      "segment_id": "seg_1a2b3c4d5e6f7081",
+      "source_type": "message",
+      "source_label": "system",
+      "original_order": 0,
+      "delivered_bytes": 42,
+      "included": true,
+      "content_hash": "1a2b3c4d5e6f7081",
+      "redaction_state": "full"
+    },
+    {
+      "segment_id": "seg_2b3c4d5e6f708192",
+      "source_type": "message",
+      "source_label": "user",
+      "original_order": 1,
+      "delivered_bytes": 17,
+      "included": true,
+      "content_hash": "2b3c4d5e6f708192",
+      "redaction_state": "full"
+    }
+  ],
+  "assembled": [
+    {
+      "segment_id": "seg_1a2b3c4d5e6f7081",
+      "source_type": "message",
+      "source_label": "system",
+      "original_order": 0,
+      "included": true,
+      "redaction_state": "full"
+    },
+    {
+      "segment_id": "seg_2b3c4d5e6f708192",
+      "source_type": "message",
+      "source_label": "user",
+      "original_order": 1,
+      "included": true,
+      "redaction_state": "full"
+    }
+  ],
+  "rendered": {
+    "sha256": "3f786850e387550fdab836ed7e6dc881de23001b3f5f1a0f1e9b0b6f4e9a2c17",
+    "token_count": 61,
+    "estimated": false
+  },
+  "omissions": [],
+  "transformations": [
+    {
+      "reason": "template_transformed",
+      "segment_ids": ["seg_1a2b3c4d5e6f7081", "seg_2b3c4d5e6f708192"],
+      "detail": "all delivered messages were rendered through the model's chat template into the exact prompt string; see rendered.sha256"
+    }
+  ],
+  "termination": {
+    "reason": "max_tokens",
+    "reason_raw": "length",
+    "generated_tokens": 512
+  },
+  "privacy": "full"
+}

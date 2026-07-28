@@ -1,0 +1,4 @@
+{
+  "schema_version": "clozn.context-receipt.v1",
+  "termination": {"reason": "eos"}
+}

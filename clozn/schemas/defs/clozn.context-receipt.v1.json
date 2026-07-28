@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.context-receipt.v1",
+  "title": "Context receipt: what reached the model, what changed on the way, what was omitted, and why generation stopped",
+  "description": "Built by clozn.runs.context_receipt.build_context_receipt() and stored on every run's `context_receipt` field (feature 06). This is the FIRST schema-governed version of that field -- runs recorded before 2026-07-27 carry an informal, pre-seam shape (top-level 'schema': 'clozn.context_receipt.v1', note the underscore and the different key name) that predates clozn/schemas/ and was never validated against any schema; those documents are read by clozn.runs.context_receipt.describe() via shape detection, never migrated in place, and never validated against this file. 'delivered' and 'assembled' are metadata-only segment arrays (source type/label/order/byte count/hash/reason) -- they deliberately do NOT carry message content; full content lives on the run's own 'messages'/'assembled_messages'/'final_prompt' fields, governed by the run-level redact/delete lifecycle (clozn.runs.mutations), not by this artifact. 'template_fingerprint' is inherited from clozn.run-identity.v1's own field, which fingerprints template AND tokenizer rendering behavior TOGETHER -- it cannot isolate one from the other, which is why 'tokenizer_conflated_with_template' rides alongside it instead of a separate (and equally unable to isolate) tokenizer_fingerprint field.",
+
+  "type": "object",
+  "required": ["schema_version", "run_id"],
+
+  "$defs": {
+    "segment_reason": {
+      "type": "string",
+      "description": "Controlled omission/transformation reason codes. Several are defined for forward compatibility but have no live detection path in clozn today: clozn is a raw OpenAI/Ollama-compatible relay with no attachment/RAG/document-chunk concept and no server-side history trimming (overlong prompts are rejected outright, never silently trimmed -- see clozn.runs.context_receipt's OVERLONG_POLICY), so context_budget/history_policy/attachment_limit/deduplicated/tool_result_pruned/system_message_merged never fire from clozn's own code today. Only template_transformed (every request is rendered through the chat template) is currently emitted unconditionally.",
+      "enum": [
+        "context_budget", "client_not_delivered", "history_policy", "attachment_limit",
+        "deduplicated", "empty_content", "unsupported_role", "tool_result_pruned",
+        "template_transformed", "system_message_merged", "encoding_error"
+      ]
+    },
+    "segment": {
+      "type": "object",
+      "description": "One user-visible unit (v1: one chat message) tracked from delivery through rendering. Metadata only -- no content field by design; see the top-level description.",
+      "required": ["segment_id", "source_type", "original_order"],
+      "properties": {
+        "segment_id": {
+          "type": "string",
+          "description": "seg_ + first 16 hex chars of sha256(role + \"\\n\" + content), assigned once at the delivered boundary and carried through unchanged -- never recomputed from content at a later stage. Content-derived (not run- or position-scoped) so the same logical turn recurring across two different runs gets the same id, which is what a cross-run comparison (feature 10) needs. A disambiguating _N suffix is appended for the Nth repeat of an identical (role, content) pair within one run's delivered list.",
+          "pattern": "^seg_[0-9a-f]{16}(_[0-9]+)?$"
+        },
+        "source_type": {"type": "string", "enum": ["message"]},
+        "source_label": {"type": "string", "description": "The message's role."},
+        "original_order": {"type": "integer", "minimum": 0},
+        "delivered_bytes": {"type": "integer", "minimum": 0},
+        "delivered_tokens": {"type": "integer", "minimum": 0},
+        "included": {"type": "boolean", "description": "Did this segment survive from delivered into assembled."},
+        "content_hash": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+        "reason": {"$ref": "#/$defs/segment_reason"},
+        "redaction_state": {"type": "string", "enum": ["full", "redacted", "hash_only"]}
+      }
+    },
+    "transformation": {
+      "type": "object",
+      "required": ["reason", "segment_ids"],
+      "properties": {
+        "reason": {"$ref": "#/$defs/segment_reason"},
+        "segment_ids": {"type": "array", "items": {"type": "string"}},
+        "detail": {"type": "string"}
+      }
+    },
+    "omission": {
+      "type": "object",
+      "required": ["segment_id", "reason"],
+      "properties": {
+        "segment_id": {"type": "string"},
+        "reason": {"$ref": "#/$defs/segment_reason"},
+        "detail": {"type": "string"}
+      }
+    }
+  },
+
+  "properties": {
+    "schema_version": {"const": "clozn.context-receipt.v1"},
+    "run_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_-]+$"},
+
+    "template_fingerprint": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{16}$",
+      "description": "clozn.runs.identity.template_fingerprint() reused verbatim -- see tokenizer_conflated_with_template."
+    },
+    "tokenizer_conflated_with_template": {
+      "type": "boolean",
+      "description": "true whenever template_fingerprint is present: it fingerprints template AND tokenizer rendering behavior jointly and cannot attribute a change to either alone. Present as an explicit caveat rather than a separate, equally-unable-to-isolate tokenizer_fingerprint field (feature 05 independently flagged the same limitation)."
+    },
+
+    "context_window_tokens": {"type": "integer", "minimum": 0},
+    "reserved_output_tokens": {"type": "integer", "minimum": 0},
+
+    "delivered": {"type": "array", "items": {"$ref": "#/$defs/segment"}},
+    "assembled": {"type": "array", "items": {"$ref": "#/$defs/segment"}},
+
+    "rendered": {
+      "type": "object",
+      "properties": {
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "token_count": {"type": "integer", "minimum": 0},
+        "estimated": {
+          "type": "boolean",
+          "description": "true if token_count came from a non-exact source. Native-engine runs report exact counts (omit this key -> exact); Torch lab adapters that cannot report an exact count must mark true rather than silently claiming exactness."
+        },
+        "special_tokens": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Not populated in v1 -- no capture point exists for which special tokens the template inserted. Omitted (never an empty-list guess) until one does."
+        }
+      }
+    },
+
+    "omissions": {"type": "array", "items": {"$ref": "#/$defs/omission"}},
+    "transformations": {"type": "array", "items": {"$ref": "#/$defs/transformation"}},
+
+    "termination": {
+      "type": "object",
+      "required": ["reason"],
+      "properties": {
+        "reason": {
+          "type": "string",
+          "enum": [
+            "eos", "stop_sequence", "max_tokens", "context_limit", "client_cancelled",
+            "timeout", "worker_error", "tool_call", "content_filter", "unknown"
+          ]
+        },
+        "reason_raw": {
+          "type": "string",
+          "description": "The raw backend value the normalized reason was derived from (e.g. the engine's own 'eos'/'length'/'steps_exhausted', or a free-text error string), preserved verbatim alongside the controlled code."
+        },
+        "generated_tokens": {"type": "integer", "minimum": 0}
+      }
+    },
+
+    "privacy": {
+      "type": "string",
+      "enum": ["full", "metadata_only", "hashes_only", "off"],
+      "description": "The receipt-privacy tier active when this document was built (clozn.runs.receipt_privacy). Governs how much of THIS artifact's own duplicated content was retained -- independent of the run-level redact/delete lifecycle that governs run['messages'] etc."
+    }
+  }
+}
