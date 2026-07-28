@@ -18,6 +18,7 @@ import urllib.error
 import urllib.request
 import uuid
 
+from clozn import schemas
 from clozn.testkit import ci as testkit_ci
 
 MANIFEST_SCHEMA = "clozn.experiment.v0"
@@ -185,6 +186,17 @@ def validate_result(raw: dict) -> dict:
     result = copy.deepcopy(raw)
     if result.get("schema_version") != RESULT_SCHEMA:
         raise ManifestError(f"result schema_version must be {RESULT_SCHEMA!r}")
+    # Shape check first (clozn.schemas.defs/clozn.experiment.result.v0.json, Seam 2): cheap, and gives a
+    # document that is malformed in an ordinary way (wrong types, an unknown cell status, a pass/fail cell
+    # missing its run evidence) a clear error before the field-by-field checks below -- which assume the
+    # document is AT LEAST well-shaped and would otherwise fail with a less legible message, or not at all
+    # for an invariant the schema covers but the code below does not (e.g. cell.status enum membership).
+    # This does not replace anything below: the schema validator has no keyword for "the cell matrix must
+    # be complete against the manifest" or "the summary must equal _summarize(cells)" -- those stay Python.
+    try:
+        schemas.validate(result, RESULT_SCHEMA)
+    except schemas.ValidationError as exc:
+        raise ManifestError(f"experiment result failed schema validation at {exc.path}: {exc.message}") from exc
     _nonempty(result.get("experiment_id"), "experiment_id")
     _nonempty(result.get("name"), "name")
 
@@ -451,9 +463,27 @@ def run_manifest(raw_manifest: dict, *, default_url: str = DEFAULT_URL, seeds_ov
             "summary": _summarize(cells, manifest["baseline_variant"], [v["name"] for v in manifest["variants"]])}
 
 
+def results_directory() -> str:
+    """Where `clozn experiment run` writes results by default, and where any reader of the local
+    collection (the CLI, the GET /experiment-results HTTP family) looks for them -- one constant so
+    writer and readers cannot silently disagree on the path."""
+    return os.path.expanduser("~/.clozn/experiments")
+
+
 def default_result_path(result: dict, directory: str | None = None) -> str:
-    directory = directory or os.path.expanduser("~/.clozn/experiments")
+    directory = directory or results_directory()
     return os.path.join(directory, result["experiment_id"] + ".json")
+
+
+def list_result_paths(directory: str | None = None) -> list[str]:
+    """Every `*.json` file in the results directory, sorted by name. Empty list -- never an exception --
+    when the directory does not exist yet: a local collection with nothing run yet is not an error."""
+    directory = directory or results_directory()
+    try:
+        entries = os.listdir(directory)
+    except OSError:
+        return []
+    return sorted(os.path.join(directory, name) for name in entries if name.endswith(".json"))
 
 
 def format_summary(result: dict) -> str:
