@@ -9,6 +9,17 @@ from clozn.server import app as cs
 import clozn.runs.store as runlog
 
 
+# Minimal but schema-valid `method` stub (Method requires name/mode/claim_limit/caveat -- see
+# clozn/schemas/defs/clozn.context_answer_influence.v1.json) for tests that monkeypatch the backend
+# with a hand-built dict rather than a real context_answer_influence() call.
+_METHOD_STUB = {
+    "name": "teacher_forced_matched_context_replacement",
+    "mode": "forced_score_intervention",
+    "claim_limit": "behavioral dependence under a controlled prompt intervention",
+    "caveat": "Influence means this context changed the measured output under this intervention.",
+}
+
+
 class ScoreSub:
     def score_tokens(self, messages, ids, **kwargs):
         return [{"id": 41, "piece": "Answer", "logprob": -0.2}]
@@ -72,6 +83,8 @@ def test_influence_map_computes_and_attaches_to_run(isolated, monkeypatch):
         "schema": "clozn.context_answer_influence.v1",
         "status": "ok",
         "available": True,
+        "method": _METHOD_STUB,
+        "identity": {"run_id": rid},
         "prompt_spans": [],
         "answer_spans": [],
         "links": [],
@@ -123,6 +136,8 @@ def test_influence_map_failure_is_not_mistaken_for_a_saved_receipt(isolated, mon
         "schema": "clozn.context_answer_influence.v1",
         "status": "unavailable",
         "available": False,
+        "method": _METHOD_STUB,
+        "identity": {"run_id": rid},
         "error": {"code": "scoring_unavailable", "message": "not available"},
     }
     import clozn.receipts.context_answer_influence as backend
@@ -132,6 +147,52 @@ def test_influence_map_failure_is_not_mistaken_for_a_saved_receipt(isolated, mon
 
     assert status == 422
     assert out == failed
+
+
+def test_influence_map_error_status_maps_to_500(isolated, monkeypatch):
+    """`status == "error"` (an intervention that should have worked did not complete) is a server-side
+    500, distinct from `status == "unavailable"`'s 422 (a precondition was never met). Both are typed,
+    non-silent refusals -- this locks in the one branch of that mapping the existing tests didn't cover."""
+    rid = _seed()
+    broken = {
+        "schema": "clozn.context_answer_influence.v1",
+        "status": "error",
+        "available": False,
+        "method": _METHOD_STUB,
+        "identity": {"run_id": rid},
+        "error": {"code": "intervention_score_failed", "message": "a controlled arm did not complete"},
+    }
+    import clozn.receipts.context_answer_influence as backend
+    monkeypatch.setattr(backend, "context_answer_influence", lambda *_args, **_kwargs: broken)
+
+    status, out = _post(f"/runs/{rid}/influence-map")
+
+    assert status == 500
+    assert out == broken
+    assert "influence_map" not in runlog.get_run(rid)
+
+
+def test_influence_map_schema_violation_is_a_loud_500_not_a_silent_pass(isolated, monkeypatch):
+    """A backend that returns a shape its OWN schema rejects (here: an unknown error.code) must fail
+    loudly at the write boundary, never persist, and never be handed to a caller as if it were trustworthy
+    evidence (roadmap rule 3: no silent fallback)."""
+    rid = _seed()
+    malformed = {
+        "schema": "clozn.context_answer_influence.v1",
+        "status": "unavailable",
+        "available": False,
+        "method": _METHOD_STUB,
+        "identity": {"run_id": rid},
+        "error": {"code": "the_worker_felt_shy_today", "message": "not a real code"},
+    }
+    import clozn.receipts.context_answer_influence as backend
+    monkeypatch.setattr(backend, "context_answer_influence", lambda *_args, **_kwargs: malformed)
+
+    status, out = _post(f"/runs/{rid}/influence-map")
+
+    assert status == 500
+    assert "schema" in out["error"]
+    assert "influence_map" not in runlog.get_run(rid)
 
 
 # ------------------------------------------------------------ GET export path (Phase 3.7 persistence)

@@ -1,0 +1,12 @@
+{
+  "schema": "clozn.context_answer_influence.v1",
+  "status": "proven",
+  "available": true,
+  "method": {
+    "name": "teacher_forced_matched_context_replacement",
+    "mode": "forced_score_intervention",
+    "claim_limit": "behavioral dependence under a controlled prompt intervention",
+    "caveat": "Influence means this context changed the measured output under this intervention."
+  },
+  "identity": {"run_id": "run-1"}
+}

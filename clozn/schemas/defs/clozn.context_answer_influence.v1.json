@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.context_answer_influence.v1",
+  "title": "Context <-> answer influence evidence (Sources evidence lens, feature 07)",
+  "description": "The versioned artifact clozn.receipts.context_answer_influence.context_answer_influence() returns and clozn/server/routes/influence_map.py persists at run['influence_map']. Measures the spec's forced_score_intervention mode ONLY -- never attention_proxy, never a percentage, never a claim about document correctness or hidden reasoning (see method.caveat, present on every shape below). schema/status/available/method/identity are the only keys guaranteed on every call, success or failure -- everything else is present only when it was actually produced, per the project's omit-never-null-pad rule. This retrofits Seam 2 onto an artifact that shipped before clozn/schemas/ existed; the field name is 'schema', not 'schema_version' -- callers must pass the schema name explicitly to clozn.schemas.validate() rather than relying on inference.",
+
+  "type": "object",
+  "required": ["schema", "status", "available", "method", "identity"],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "clozn.context_answer_influence.v1"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["ok", "unavailable", "error"],
+      "description": "'ok' means the full matrix/links below are real measurements. 'unavailable' means a precondition (no scorer, no text context, no recorded continuation) was never met -- not a failure of the method. 'error' means an intervention that should have worked did not complete. Both non-ok statuses always carry 'error'."
+    },
+    "available": {
+      "type": "boolean",
+      "description": "True only when status == 'ok'. Never true with a partially-populated matrix."
+    },
+    "method": { "$ref": "#/$defs/Method" },
+    "identity": {
+      "type": "object",
+      "description": "Which run, model, substrate, and exact rendered-prompt view this evidence is anchored to (clozn.receipts.context_answer_influence._identity()). Not itself a measurement claim."
+    },
+    "error": { "$ref": "#/$defs/Error" },
+    "prompt_sources": {
+      "type": "array",
+      "items": { "type": "object" },
+      "description": "Every candidate prompt source considered, selected or not (selection.selected_source_ids / omitted_source_ids says which). Presence in this list licenses ONLY 'this text was in the assembled prompt' -- never 'measured' or 'influenced'."
+    },
+    "prompt_spans": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/PromptSpan" }
+    },
+    "selection": { "type": "object" },
+    "offsets": {
+      "type": "object",
+      "description": "Always unicode_code_points / half_open per this module -- see PromptSpan/AnswerSpan start/end."
+    },
+    "answer": { "type": "object" },
+    "answer_spans": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/AnswerSpan" }
+    },
+    "continuation": { "type": "object" },
+    "baseline": { "type": "object" },
+    "controls": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "thresholds": {
+      "type": "object",
+      "description": "The method-specific floor a link's abs_delta_nats must clear to be evidence_state=causally_supported. Never a universal 'influence score' (spec's own rule)."
+    },
+    "matrix": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": { "type": "number" }
+      },
+      "description": "The complete measured [prompt_span x answer_span] signed-delta matrix. 'links' below is the same data flattened with per-cell evidence_state; matrix is retained so the interactive lens's sparse top-link view is never mistaken for the whole measured surface (docs/PRODUCT_ROADMAP.md item 7)."
+    },
+    "matrix_shape": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0 },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "matrix_complete": { "type": "boolean" },
+    "links": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Link" }
+    },
+    "summary": { "type": "object" },
+    "redundancy_check": { "type": "object" },
+    "timing": { "type": "object" },
+    "timing_detail": { "type": "object" },
+    "failed_context_span_id": { "type": "string" },
+    "completed_context_span_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "artifact_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Digest of the artifact with wall-clock timing stripped -- stable across re-runs of the identical evidence, per context_answer_influence.py's own test coverage."
+    }
+  },
+
+  "$defs": {
+    "Method": {
+      "type": "object",
+      "required": ["name", "mode", "claim_limit", "caveat"],
+      "properties": {
+        "name": { "type": "string" },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "presence_only",
+            "attention_proxy",
+            "forced_score_intervention",
+            "regeneration_intervention",
+            "unsupported"
+          ],
+          "description": "notes/agent_roadmap/07-sources-evidence-lens.md's exact mode enum. This module always emits forced_score_intervention -- it never reads or reports raw attention weight as evidence."
+        },
+        "generation_used": { "type": "boolean" },
+        "baseline_reused": { "type": "boolean" },
+        "measurement": { "type": "string" },
+        "sign": { "type": "string" },
+        "segmentation": { "type": "string" },
+        "redundancy_check": { "type": "string" },
+        "claim_limit": {
+          "type": "string",
+          "description": "What every delta_nats/effect in this artifact does NOT license: a percentage, an attention explanation, an internal mediation result, or a circuit explanation."
+        },
+        "caveat": {
+          "type": "string",
+          "description": "The spec's required persistent caveat, verbatim: influence means this context changed the measured output under this intervention; it does not prove the document is correct or reveal hidden reasoning. Present on every shape this module returns, success or failure."
+        }
+      }
+    },
+
+    "Error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "invalid_run",
+            "no_text_context",
+            "no_recorded_continuation",
+            "scoring_unavailable",
+            "invalid_baseline_score",
+            "intervention_score_failed",
+            "influence_map_error"
+          ],
+          "description": "The closed set clozn.receipts.context_answer_influence.ERROR_CODES defines. A code outside this enum means the module and this schema have drifted -- fix the schema, do not widen it silently."
+        },
+        "message": { "type": "string" }
+      }
+    },
+
+    "PromptSpan": {
+      "type": "object",
+      "required": ["id", "start", "end", "text"],
+      "properties": {
+        "id": { "type": "string" },
+        "parent_id": { "type": "string" },
+        "level": { "type": "string", "enum": ["coarse", "fine"] },
+        "kind": { "type": "string" },
+        "message_index": { "type": ["integer", "null"] },
+        "role": { "type": "string" },
+        "source_kind": { "type": "string" },
+        "start": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unicode code-point offset, half-open [start, end) into this source's exact text."
+        },
+        "end": { "type": "integer", "minimum": 0 },
+        "text": { "type": "string" },
+        "child_unit_count": { "type": "integer", "minimum": 1 }
+      }
+    },
+
+    "AnswerSpan": {
+      "type": "object",
+      "required": ["id", "start", "end", "text"],
+      "properties": {
+        "id": { "type": "string" },
+        "level": { "type": "string" },
+        "token_index": { "type": "integer", "minimum": 0 },
+        "token_id": { "type": ["integer", "null"] },
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 },
+        "text": { "type": "string" }
+      }
+    },
+
+    "Link": {
+      "type": "object",
+      "required": [
+        "context_span_id", "answer_span_id", "context_index", "answer_index",
+        "delta_nats", "abs_delta_nats", "effect", "clears_floor", "evidence_state"
+      ],
+      "properties": {
+        "context_span_id": { "type": "string" },
+        "answer_span_id": { "type": "string" },
+        "context_index": { "type": "integer", "minimum": 0 },
+        "answer_index": { "type": "integer", "minimum": 0 },
+        "delta_nats": {
+          "type": "number",
+          "description": "Signed teacher-forced logprob delta for ONE recorded answer token under this ONE span's matched-length-filler replacement. Licenses a claim about this exact intervention on this exact recorded continuation only -- never about a freely-regenerated answer, and never that this is the token's only cause (see redundancy_check)."
+        },
+        "abs_delta_nats": { "type": "number", "minimum": 0 },
+        "effect": {
+          "type": "string",
+          "enum": ["supports", "suppresses", "neutral"],
+          "description": "Sign of delta_nats only -- not a magnitude claim comparable across spans of different lengths without also reading the matched-length control."
+        },
+        "clears_floor": {
+          "type": "boolean",
+          "description": "Whether abs_delta_nats met thresholds.cell_abs_delta_nats. False is NOT evidence the source was irrelevant -- see evidence_state."
+        },
+        "evidence_state": {
+          "type": "string",
+          "enum": ["causally_supported", "observed"],
+          "description": "The roadmap's explicit-states vocabulary applied to this one number. causally_supported: this link cleared the measurement floor -- a real, controlled intervention effect. observed: the intervention ran and produced this delta, but it did not clear the floor -- measured absence of a strong effect, never proof of irrelevance."
+        }
+      }
+    }
+  }
+}

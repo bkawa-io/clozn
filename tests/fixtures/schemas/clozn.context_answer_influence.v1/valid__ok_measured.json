@@ -1,0 +1,406 @@
+{
+  "schema": "clozn.context_answer_influence.v1",
+  "status": "ok",
+  "available": true,
+  "method": {
+    "name": "teacher_forced_matched_context_replacement",
+    "mode": "forced_score_intervention",
+    "generation_used": false,
+    "baseline_reused": true,
+    "measurement": "signed_logprob_delta_nats_per_recorded_answer_token",
+    "sign": "positive means the recorded context supported the answer token relative to the matched neutral replacement; negative means it suppressed the token",
+    "segmentation": "coarse_source_aware_spans_v1_refined_coarse_to_fine_on_the_strongest_only",
+    "redundancy_check": "one bounded joint-ablation control on the two most strongly-clearing context spans, reported as an interaction delta, never as an additive percentage",
+    "claim_limit": "behavioral dependence under a controlled prompt intervention; not a percentage, attention explanation, internal mediation result, or circuit explanation",
+    "caveat": "Influence means this context changed the measured output under this intervention. It does not prove the document is correct or reveal hidden reasoning."
+  },
+  "identity": {
+    "run_id": "run-map-1",
+    "model": "qwen-test",
+    "substrate": "FakeScoreSub",
+    "captured": {
+      "model_sha256": "abc",
+      "template_fingerprint": "tpl"
+    },
+    "prompt_view": "assembled_messages",
+    "final_prompt_sha256": "b0f492ae93787d29a1fa74acc95283df7ad02259bcb4836186204b224c691077"
+  },
+  "prompt_sources": [
+    {
+      "id": "p.m000",
+      "message_index": 0,
+      "role": "system",
+      "name": null,
+      "external_source_id": null,
+      "source_kind": "assembled_message",
+      "start": 0,
+      "end": 7,
+      "text": "Policy.",
+      "selected": true
+    },
+    {
+      "id": "p.m001",
+      "message_index": 1,
+      "role": "user",
+      "name": "retrieval",
+      "external_source_id": "doc-7",
+      "source_kind": "assembled_message",
+      "start": 0,
+      "end": 32,
+      "text": "The sky is blue. Grass is green.",
+      "selected": true
+    }
+  ],
+  "prompt_spans": [
+    {
+      "id": "p.m000.c000",
+      "parent_id": "p.m000",
+      "level": "coarse",
+      "kind": "sentence",
+      "message_index": 0,
+      "role": "system",
+      "source_kind": "assembled_message",
+      "start": 0,
+      "end": 7,
+      "text": "Policy.",
+      "child_unit_count": 1
+    },
+    {
+      "id": "p.m001.c000",
+      "parent_id": "p.m001",
+      "level": "coarse",
+      "kind": "sentence",
+      "message_index": 1,
+      "role": "user",
+      "source_kind": "assembled_message",
+      "start": 0,
+      "end": 16,
+      "text": "The sky is blue.",
+      "child_unit_count": 1
+    },
+    {
+      "id": "p.m001.c001",
+      "parent_id": "p.m001",
+      "level": "coarse",
+      "kind": "sentence",
+      "message_index": 1,
+      "role": "user",
+      "source_kind": "assembled_message",
+      "start": 17,
+      "end": 32,
+      "text": "Grass is green.",
+      "child_unit_count": 1
+    }
+  ],
+  "selection": {
+    "strategy": "earliest_policy_then_recent_sources_proportional_chunks_v1",
+    "max_context_spans": 8,
+    "selected_source_ids": [
+      "p.m000",
+      "p.m001"
+    ],
+    "omitted_source_ids": [],
+    "measured_span_count": 3,
+    "complete_for_selected_spans": true,
+    "refinement": {
+      "strategy": "refine_strongest_clearing_coarse_spans_v1",
+      "max_refined_sources": 2,
+      "max_fine_spans_per_source": 3,
+      "fine_target_chunk_chars": 150,
+      "refined_context_span_ids": [],
+      "fine_span_count": 0
+    }
+  },
+  "offsets": {
+    "unit": "unicode_code_points",
+    "interval": "half_open",
+    "prompt_basis": "each prompt source's exact text",
+    "answer_basis": "answer.scored_text"
+  },
+  "answer": {
+    "recorded_text": "Blue grass",
+    "scored_text": "Blue grass",
+    "scored_text_matches_recorded": true,
+    "offset_basis": "scored_text"
+  },
+  "answer_spans": [
+    {
+      "id": "a.t0000",
+      "level": "token",
+      "token_index": 0,
+      "token_id": 101,
+      "start": 0,
+      "end": 4,
+      "text": "Blue"
+    },
+    {
+      "id": "a.t0001",
+      "level": "token",
+      "token_index": 1,
+      "token_id": 102,
+      "start": 4,
+      "end": 10,
+      "text": " grass"
+    }
+  ],
+  "continuation": {
+    "text_exact": true,
+    "token_ids_exact": true,
+    "retokenized": false,
+    "kind": "recorded_token_ids"
+  },
+  "baseline": {
+    "logprobs": [
+      -0.1,
+      -0.2
+    ],
+    "scored_once": true
+  },
+  "controls": [
+    {
+      "context_span_id": "p.m000.c000",
+      "kind": "matched_length_neutral_filler",
+      "recipe": "clozn.matched_length_neutral_filler.v1",
+      "replacement_chars": 7,
+      "source_chars": 7,
+      "length_preserved": true,
+      "replacement_sha256": "5d5bea2a38fcaeabbcc2a645ffbee0bcb07d2d8c6fc64b1989fd61ccc143a0e1",
+      "counterfactual_logprobs": [
+        -0.2,
+        -0.25
+      ]
+    },
+    {
+      "context_span_id": "p.m001.c000",
+      "kind": "matched_length_neutral_filler",
+      "recipe": "clozn.matched_length_neutral_filler.v1",
+      "replacement_chars": 16,
+      "source_chars": 16,
+      "length_preserved": true,
+      "replacement_sha256": "3ad8b3aa1729b0c238b68cf68191600fe948ac8a61ab277add9feaa96ad1a79a",
+      "counterfactual_logprobs": [
+        -1.1,
+        -0.1
+      ]
+    },
+    {
+      "context_span_id": "p.m001.c001",
+      "kind": "matched_length_neutral_filler",
+      "recipe": "clozn.matched_length_neutral_filler.v1",
+      "replacement_chars": 15,
+      "source_chars": 15,
+      "length_preserved": true,
+      "replacement_sha256": "441bf77a3d02ae388c4048691207ff2a7fb47bb3b9643a9fef1779ae37b539dd",
+      "counterfactual_logprobs": [
+        -0.1,
+        -1.2
+      ]
+    }
+  ],
+  "thresholds": {
+    "cell_abs_delta_nats": 0.05,
+    "source_clear_rule": "absolute signed cell delta meets or exceeds cell_abs_delta_nats",
+    "calibration": "fixed_default_not_model_calibrated"
+  },
+  "matrix": [
+    [
+      0.1,
+      0.05
+    ],
+    [
+      1.0,
+      -0.1
+    ],
+    [
+      0.0,
+      1.0
+    ]
+  ],
+  "matrix_shape": [
+    3,
+    2
+  ],
+  "matrix_complete": true,
+  "links": [
+    {
+      "context_span_id": "p.m000.c000",
+      "answer_span_id": "a.t0000",
+      "context_index": 0,
+      "answer_index": 0,
+      "delta_nats": 0.1,
+      "abs_delta_nats": 0.1,
+      "effect": "supports",
+      "clears_floor": true,
+      "evidence_state": "causally_supported"
+    },
+    {
+      "context_span_id": "p.m000.c000",
+      "answer_span_id": "a.t0001",
+      "context_index": 0,
+      "answer_index": 1,
+      "delta_nats": 0.05,
+      "abs_delta_nats": 0.05,
+      "effect": "supports",
+      "clears_floor": true,
+      "evidence_state": "causally_supported"
+    },
+    {
+      "context_span_id": "p.m001.c000",
+      "answer_span_id": "a.t0000",
+      "context_index": 1,
+      "answer_index": 0,
+      "delta_nats": 1.0,
+      "abs_delta_nats": 1.0,
+      "effect": "supports",
+      "clears_floor": true,
+      "evidence_state": "causally_supported"
+    },
+    {
+      "context_span_id": "p.m001.c000",
+      "answer_span_id": "a.t0001",
+      "context_index": 1,
+      "answer_index": 1,
+      "delta_nats": -0.1,
+      "abs_delta_nats": 0.1,
+      "effect": "suppresses",
+      "clears_floor": true,
+      "evidence_state": "causally_supported"
+    },
+    {
+      "context_span_id": "p.m001.c001",
+      "answer_span_id": "a.t0000",
+      "context_index": 2,
+      "answer_index": 0,
+      "delta_nats": 0.0,
+      "abs_delta_nats": 0.0,
+      "effect": "neutral",
+      "clears_floor": false,
+      "evidence_state": "observed"
+    },
+    {
+      "context_span_id": "p.m001.c001",
+      "answer_span_id": "a.t0001",
+      "context_index": 2,
+      "answer_index": 1,
+      "delta_nats": 1.0,
+      "abs_delta_nats": 1.0,
+      "effect": "supports",
+      "clears_floor": true,
+      "evidence_state": "causally_supported"
+    }
+  ],
+  "summary": {
+    "has_any_clear_source": true,
+    "no_clear_source": false,
+    "answer_span_ids_without_clear_source": [],
+    "answer_to_context": [
+      {
+        "answer_span_id": "a.t0000",
+        "clear_source": true,
+        "top_context_span_ids": [
+          "p.m001.c000",
+          "p.m000.c000"
+        ]
+      },
+      {
+        "answer_span_id": "a.t0001",
+        "clear_source": true,
+        "top_context_span_ids": [
+          "p.m001.c001",
+          "p.m001.c000",
+          "p.m000.c000"
+        ]
+      }
+    ],
+    "context_to_answer": [
+      {
+        "context_span_id": "p.m000.c000",
+        "clear_effect": true,
+        "top_answer_span_ids": [
+          "a.t0000",
+          "a.t0001"
+        ]
+      },
+      {
+        "context_span_id": "p.m001.c000",
+        "clear_effect": true,
+        "top_answer_span_ids": [
+          "a.t0000",
+          "a.t0001"
+        ]
+      },
+      {
+        "context_span_id": "p.m001.c001",
+        "clear_effect": true,
+        "top_answer_span_ids": [
+          "a.t0001"
+        ]
+      }
+    ]
+  },
+  "redundancy_check": {
+    "performed": true,
+    "context_span_ids": [
+      "p.m001.c000",
+      "p.m001.c001"
+    ],
+    "controls": [
+      {
+        "context_span_id": "p.m001.c000",
+        "kind": "matched_length_neutral_filler",
+        "recipe": "clozn.matched_length_neutral_filler.v1",
+        "replacement_chars": 16,
+        "source_chars": 16,
+        "length_preserved": true,
+        "replacement_sha256": "3ad8b3aa1729b0c238b68cf68191600fe948ac8a61ab277add9feaa96ad1a79a"
+      },
+      {
+        "context_span_id": "p.m001.c001",
+        "kind": "matched_length_neutral_filler",
+        "recipe": "clozn.matched_length_neutral_filler.v1",
+        "replacement_chars": 15,
+        "source_chars": 15,
+        "length_preserved": true,
+        "replacement_sha256": "441bf77a3d02ae388c4048691207ff2a7fb47bb3b9643a9fef1779ae37b539dd"
+      }
+    ],
+    "per_answer_token": [
+      {
+        "answer_span_id": "a.t0000",
+        "individual_sum_nats": 1.0,
+        "joint_delta_nats": 1.0,
+        "interaction_nats": 0.0
+      },
+      {
+        "answer_span_id": "a.t0001",
+        "individual_sum_nats": 0.9,
+        "joint_delta_nats": -0.1,
+        "interaction_nats": -1.0
+      }
+    ],
+    "score_ms": 1.0,
+    "claim_limit": "one bounded interaction measurement between the two most strongly-clearing measured context spans; a near-zero interaction means their individually-measured effects were roughly additive under joint replacement -- it is not evidence the two spans are the model's only causes, and never a percentage of total explanation"
+  },
+  "timing": {
+    "baseline_ms": 1.0,
+    "interventions": [
+      {
+        "context_span_id": "p.m000.c000",
+        "score_ms": 1.0
+      },
+      {
+        "context_span_id": "p.m001.c000",
+        "score_ms": 1.0
+      },
+      {
+        "context_span_id": "p.m001.c001",
+        "score_ms": 1.0
+      }
+    ],
+    "interventions_total_ms": 3.0,
+    "redundancy_check_ms": 1.0,
+    "total_ms": 11.0,
+    "score_calls": 5
+  },
+  "artifact_sha256": "903561e40fb51317dd03949645d5e8b449befcb8a251285b65a35597662063c8"
+}

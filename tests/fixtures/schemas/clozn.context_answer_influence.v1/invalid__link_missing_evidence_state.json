@@ -1,0 +1,24 @@
+{
+  "schema": "clozn.context_answer_influence.v1",
+  "status": "ok",
+  "available": true,
+  "method": {
+    "name": "teacher_forced_matched_context_replacement",
+    "mode": "forced_score_intervention",
+    "claim_limit": "behavioral dependence under a controlled prompt intervention",
+    "caveat": "Influence means this context changed the measured output under this intervention."
+  },
+  "identity": {"run_id": "run-1"},
+  "links": [
+    {
+      "context_span_id": "p.m000.c000",
+      "answer_span_id": "a.t0000",
+      "context_index": 0,
+      "answer_index": 0,
+      "delta_nats": 0.9,
+      "abs_delta_nats": 0.9,
+      "effect": "supports",
+      "clears_floor": true
+    }
+  ]
+}

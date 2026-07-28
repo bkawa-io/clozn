@@ -1,0 +1,6 @@
+{
+  "schema": "clozn.context_answer_influence.v1",
+  "status": "ok",
+  "available": true,
+  "identity": {"run_id": "run-1"}
+}
