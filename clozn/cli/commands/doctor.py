@@ -29,6 +29,7 @@ _OK, _WARN, _FAIL = "OK", "WARN", "FAIL"
 _OUTBOUND_CAPABLE_COMMANDS = (
     "clozn pull <model> -- downloads a GGUF from HuggingFace",
     "clozn plan <owner/repo/file> -- reads a remote GGUF header over HTTP Range before any download",
+    "clozn setup -- downloads a native engine manifest/archive from GitHub Releases (roadmap feature 01)",
 )
 
 
@@ -43,6 +44,24 @@ def _check_python() -> dict:
     if not ok:
         detail += f" (clozn requires >= {'.'.join(map(str, CLOZN_MIN_PYTHON))})"
     return _check("python version", _OK if ok else _FAIL, detail)
+
+
+def _check_package_installed() -> dict:
+    """State 1 of roadmap feature 01's 4-state contract ("Python package installed"). Distinct from
+    _check_python() above (that one is about the INTERPRETER's version, not whether clozn itself is
+    importable) -- this command running at all already proves the import succeeded, so this is really
+    just surfacing the version/commit `clozn version` already reports, as its own explicit state rather
+    than leaving it implied."""
+    try:
+        import clozn
+        from clozn.cli.commands.version import _git_commit
+        detail = clozn.__version__
+        commit = _git_commit()
+        if commit:
+            detail += f" ({commit})"
+        return _check("python package installed", _OK, detail)
+    except Exception as error:                    # pragma: no cover -- clozn imported to run this command at all
+        return _check("python package installed", _WARN, f"could not read version: {error}")
 
 
 def _check_protocol() -> dict:
@@ -134,17 +153,27 @@ def _bootstrap_llama_pin(repo: str) -> "tuple[str, str] | None":
     return None
 
 
-def _check_engine() -> dict:
-    from clozn.cli.engine_process import find_engine, REPO
+def _check_engine(*, deep: bool = False) -> dict:
+    """State 2 of roadmap feature 01's 4-state contract ("compatible engine installed"). Uses
+    find_engine_ex() (not the older 3-tuple find_engine()) so the detail line can say WHICH of the 4
+    discovery tiers produced this engine and, for a `clozn setup`-managed install, its recorded backend.
+    `deep=True` additionally launches the binary with `--version` (clozn.setup.install.qualify_entrypoint
+    -- a model-free process-start check, spec setup-flow step 8) and reports whether the OS could even
+    exec it; it stays a WARN, never a FAIL, on that outcome too -- see this module's docstring on why
+    doctor almost never fails outright."""
+    from clozn.cli.engine_process import find_engine_ex, REPO
     from clozn.cli.main import CloznError
     try:
-        exe, _dll_dirs, gpu = find_engine(prefer_gpu=True)
+        discovery = find_engine_ex(prefer_gpu=True)
     except CloznError:
         return _check("engine binary", _WARN,
-                      "no clozn-server build found. Pip installs the Python supervisor only -- build the "
-                      "C++ worker separately: see docs/DEVELOPMENT.md, or set CLOZN_ENGINE_BIN to a "
-                      "prebuilt clozn-server(.exe).")
-    detail = f"{exe} ({'GPU' if gpu else 'CPU'} build)"
+                      "no clozn-server build found. Pip installs the Python supervisor only -- run "
+                      "`clozn setup` to install one, build the C++ worker separately (see "
+                      "docs/DEVELOPMENT.md), or set CLOZN_ENGINE to a prebuilt clozn-server(.exe).")
+    detail = (f"{discovery.exe} ({'GPU' if discovery.gpu else 'CPU'} build, "
+              f"source={discovery.discovery_source})")
+    if discovery.discovery_source == "managed" and discovery.engine_version:
+        detail += f", engine {discovery.engine_version}"
     pin = _bootstrap_llama_pin(REPO)
     if pin:
         tag, commit = pin
@@ -155,7 +184,39 @@ def _check_engine() -> dict:
         detail += f"; llama.cpp pinned @ {tag} ({commit[:12]}) -- unverified against the built binary"
     else:
         detail += "; llama.cpp pin unavailable (engine/core/third_party/bootstrap_llama.py not found)"
-    return _check("engine binary", _OK, detail)
+    status = _OK
+    if deep:
+        from clozn.setup.install import qualify_entrypoint
+        qualification = qualify_entrypoint([discovery.exe])
+        if qualification["ran"]:
+            detail += f"; --deep: process-start check ran (exit {qualification['returncode']})"
+        else:
+            status = _WARN
+            detail += f"; --deep: process-start check FAILED: {qualification['error']}"
+    result = _check("engine binary", status, detail)
+    result["discovery_source"] = discovery.discovery_source
+    return result
+
+
+def _check_core_inference_qualification() -> dict:
+    """State 3 of roadmap feature 01's 4-state contract. Always WARN, never OK: no bundled fixture GGUF
+    ships with clozn (checked -- there is none in this tree), and doctor is model-free/network-free by
+    design, so this can only ever honestly report "not verified", never "passed". See
+    clozn.setup.install.four_state_report, whose reasoning text this mirrors -- doctor's per-check shape
+    (one label/status/detail row) doesn't compose with that function's nested dict, so the text is
+    duplicated rather than the structure."""
+    return _check("core inference qualification", _WARN,
+                  "not verified (skipped): no bundled fixture model ships with clozn; run "
+                  "`clozn run <model> \"hello\"` against a real model to verify inference yourself.")
+
+
+def _check_white_box_qualification() -> dict:
+    """State 4. Same honesty constraint as state 3, and the same roadmap non-goal this echoes: "Claiming
+    white-box qualification merely because core inference works" is explicitly listed as something this
+    feature must NOT do."""
+    return _check("white-box qualification", _WARN,
+                  "not verified (skipped): requires a model-specific J-lens/SAE artifact; run the "
+                  "relevant `clozn trace-circuit`/explain command against a real model to verify.")
 
 
 def _check_offline() -> dict:
@@ -251,14 +312,19 @@ def _check_bind_loopback() -> dict:
                   f"engine argv hardcodes loopback={engine_hardcodes_loopback})")
 
 
-def _run_all(*, verify_offline: bool = False) -> list:
+def _run_all(*, verify_offline: bool = False, deep: bool = False) -> list:
     checks = [
         _check_python(),
         _check_protocol(),
         _check_studio(),
         _check_models(),
         _check_registry(),
-        _check_engine(),
+        # roadmap feature 01's 4-state contract ("Never compress these into a single 'installed'
+        # status"): one check row per state, always in this order, always all four present.
+        _check_package_installed(),
+        _check_engine(deep=deep),
+        _check_core_inference_qualification(),
+        _check_white_box_qualification(),
     ]
     if verify_offline:
         checks.append(_check_bind_loopback())
@@ -267,7 +333,8 @@ def _run_all(*, verify_offline: bool = False) -> list:
 
 
 def cmd_doctor(args) -> int:
-    results = _run_all(verify_offline=bool(getattr(args, "verify_offline", False)))
+    results = _run_all(verify_offline=bool(getattr(args, "verify_offline", False)),
+                       deep=bool(getattr(args, "deep", False)))
     as_json = getattr(args, "json", False)
     if as_json:
         worst = _FAIL if any(r["status"] == _FAIL for r in results) else \
