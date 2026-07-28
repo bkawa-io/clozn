@@ -35,6 +35,10 @@ import time
 from clozn._io import atomic_write_json
 
 VERSION = 1
+# Seam 2 (docs/SEAMS.md): this bundle IS clozn.behavior-profile.v1 -- see
+# clozn/schemas/defs/clozn.behavior-profile.v1.json's own docstring for why this retrofits the
+# existing store rather than standing up a second "behavior profile" artifact.
+SCHEMA_VERSION = "clozn.behavior-profile.v1"
 DEFAULT_DIR = os.path.join(os.path.expanduser("~"), ".clozn", "profiles")
 
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
@@ -48,7 +52,8 @@ def new_profile(name: str, description: str = "") -> dict:
     """A fresh, empty bundle. Names are slug-safe (they become filenames)."""
     if not _NAME_RE.match(name or ""):
         raise ValueError(f"profile name must match {_NAME_RE.pattern!r}, got {name!r}")
-    return {"version": VERSION, "name": name, "description": description,
+    return {"version": VERSION, "schema_version": SCHEMA_VERSION, "name": name,
+            "description": description,
             "cards": [], "dials": {}, "response_policies": [], "custom_dials": [], "facts": [],
             "created_at": _now(), "updated_at": _now()}
 
@@ -65,6 +70,7 @@ def validate(p: dict) -> dict:
     if int(p.get("version", 1)) > VERSION:
         raise ValueError(f"profile version {p.get('version')} is newer than supported {VERSION}")
     p.setdefault("version", VERSION)
+    p.setdefault("schema_version", SCHEMA_VERSION)
     p.setdefault("description", "")
     cards_in = p.get("cards")
     cards_in = cards_in if isinstance(cards_in, list) else []   # a non-list container degrades to empty too
@@ -117,6 +123,20 @@ def validate(p: dict) -> dict:
 
     p.setdefault("created_at", _now())
     p["updated_at"] = _now()
+
+    # Seam 2: every stored artifact validates against its schema before it is handed back to a
+    # caller (docs/SEAMS.md). Only container SHAPES are asserted (see the schema's own docstring),
+    # which the normalization above already guarantees on every path -- so this is a machine-checked
+    # restatement of an existing contract, not a new way for a hand-edited bundle to fail. A
+    # ValidationError (document doesn't conform) is re-raised as the same ValueError every OTHER
+    # shape problem in this function already raises, so existing callers (clozn/server/routes/
+    # profiles.py catches ValueError/KeyError/TypeError) keep working unchanged. A SchemaError (the
+    # SHIPPED SCHEMA ITSELF is broken) is a genuine bug, not user input, and is left to propagate.
+    from clozn import schemas as _schemas
+    try:
+        _schemas.validate(p, SCHEMA_VERSION)
+    except _schemas.ValidationError as exc:
+        raise ValueError(f"profile bundle failed schema validation: {exc}") from exc
     return p
 
 

@@ -1,0 +1,6 @@
+{
+  "schema_version": "clozn.behavior-profile.v1",
+  "version": 1,
+  "name": "work",
+  "dials": {"concise": "not-a-number"}
+}

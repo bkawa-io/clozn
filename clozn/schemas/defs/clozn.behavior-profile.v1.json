@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.behavior-profile.v1",
+  "title": "A named persona/behavior-profile bundle",
+  "description": "The document clozn.profiles.store.ProfileStore persists at ~/.clozn/profiles/<name>.json (clozn/profiles/store.py). This IS the artifact agent_roadmap/08-reversible-behavior-fixes.md's spec calls a 'behavior profile': `dials` is the control-vector half, `response_policies` is the prompt-policy half (each entry a clozn.replay.corrective.CORRECTION_PRESETS key). Deliberately retrofitted onto the EXISTING bundle rather than standing up a second, parallel store -- corrective_retries.py already mutates and transactionally undoes the response_policies half of this exact document (clozn/behavior/corrective_retries.py). `cards`/`custom_dials`/`facts` are carried, never applied (memory cards were cut from the product 2026-07-27); they stay in the schema only so an older bundle's export/import round-trip stays lossless. Only container SHAPES are asserted here (object vs array, dial values numeric), matching exactly what clozn.profiles.store.validate() already guarantees on every path that reaches this schema -- retrofitting adds a machine-checkable contract, not a new behavioral constraint, so a legitimately hand-edited bundle that already passed validate() must never fail this schema.",
+  "type": "object",
+  "required": ["schema_version", "name"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "clozn.behavior-profile.v1"
+    },
+    "name": {
+      "type": "string",
+      "description": "Slug-safe bundle name; also the filename stem.",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+    },
+    "dials": {
+      "type": "object",
+      "description": "Control-vector dial settings applied on profile switch (clozn.profiles.store.apply_dials).",
+      "additionalProperties": {"type": "number"}
+    },
+    "response_policies": {
+      "type": "array",
+      "description": "Prompt-policy corrective presets active for this profile -- each entry a clozn.replay.corrective.CORRECTION_PRESETS key.",
+      "items": {"type": "string"}
+    },
+    "custom_dials": {
+      "type": "array",
+      "description": "Recompilable custom-dial recipes (pole descriptions), carried verbatim.",
+      "items": {"type": "object"}
+    },
+    "facts": {
+      "type": "array",
+      "description": "Slot-store fact sources, carried verbatim (recompiled on profile switch).",
+      "items": {"type": "object"}
+    },
+    "cards": {
+      "type": "array",
+      "description": "Carried, never applied -- memory cards were cut from the product 2026-07-27.",
+      "items": {"type": "object"}
+    }
+  }
+}
