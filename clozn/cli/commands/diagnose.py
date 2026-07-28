@@ -10,7 +10,10 @@ def add_subparser(subparsers) -> None:
     parser = subparsers.add_parser(
         "diagnose", help="explain recorded latency and output cutoff without generating")
     parser.add_argument(
-        "target", help="'last' for the latest matching run, or an exact run id")
+        "target", nargs="?", default=None,
+        help="'last' for the latest matching run, or an exact run id. Omit and pass --last instead.")
+    parser.add_argument("--last", action="store_true",
+                        help="alias for target 'last' (clozn diagnose --last --performance)")
     parser.add_argument("--session", default=None,
                         help="for 'last', exact caller-known X-Clozn-Session-Id")
     parser.add_argument("--client-id", default=None,
@@ -20,8 +23,24 @@ def add_subparser(subparsers) -> None:
     parser.add_argument("--model", default=None, help="for 'last', model filter")
     parser.add_argument("--include-derived", action="store_true",
                         help="allow replay/branch/fork runs when selecting 'last'")
+    parser.add_argument("--performance", action="store_true",
+                        help="also show the clozn.performance-trace.v1 phase/metric/rule-engine report "
+                             "(clozn.runs.perf_diagnosis) instead of the why-slow/why-cut-off report")
     parser.add_argument("--json", action="store_true", help="print the structured diagnosis")
     parser.set_defaults(fn=cmd_diagnose)
+
+
+def _resolve_target(args) -> str:
+    from clozn.cli.main import CloznError
+
+    target = args.target
+    if args.last:
+        if target not in (None, "last"):
+            raise CloznError("--last cannot be combined with an explicit run id; drop one")
+        target = "last"
+    if target is None:
+        raise CloznError("give a run id, 'last', or --last")
+    return target
 
 
 def _select_run(args, runlog):
@@ -77,11 +96,73 @@ def format_diagnosis(report: dict) -> str:
     return "\n".join(lines)
 
 
+def _phase_line(phase: dict) -> str:
+    name = str(phase.get("name") or "unknown").replace("_", " ")
+    seconds = (phase.get("duration_ns") or 0) / 1e9
+    owner = phase.get("owner")
+    suffix = f"  ({owner})" if isinstance(owner, str) and owner else ""
+    return f"  {name:20} {seconds:6.1f}s{suffix}"
+
+
+def format_performance(report: dict) -> str:
+    """Render the clozn.performance-trace.v1 report without adding a cause its `diagnoses` didn't fire.
+
+    Fired rules are shown as LIKELY CAUSE/POSSIBLE FIX pairs; rules this run's evidence could not support
+    are listed by name so their absence is never mistaken for 'nothing wrong here' (the survey finding
+    behind this whole module: most rules cannot fire until deeper phase instrumentation ships).
+    """
+    lines = [f"performance - {report.get('run_id') or '?'}", "", "PHASES (monotonic)"]
+    phases = report.get("phases") if isinstance(report.get("phases"), list) else []
+    if phases:
+        lines.extend(_phase_line(p) for p in phases if isinstance(p, dict))
+    else:
+        lines.append("  no phase is instrumented for this run yet")
+
+    metrics = report.get("metrics") if isinstance(report.get("metrics"), dict) else {}
+    if metrics:
+        lines.extend(["", "METRICS"])
+        lines.extend(f"  {key:28} {value}" for key, value in metrics.items())
+
+    diagnoses = report.get("diagnoses") if isinstance(report.get("diagnoses"), list) else []
+    fired = [d for d in diagnoses if isinstance(d, dict) and d.get("status") == "fired"]
+    unavailable = [d.get("rule") for d in diagnoses
+                   if isinstance(d, dict) and d.get("status") == "unavailable"]
+
+    lines.extend(["", "LIKELY CAUSE"])
+    if fired:
+        for item in fired:
+            lines.append(f"  {item.get('likely_cause', '')}")
+            lines.extend(["", "POSSIBLE FIX", f"  {item.get('possible_fix', '')}"])
+    else:
+        lines.append("  No cause could be identified from currently recorded evidence.")
+
+    if unavailable:
+        lines.extend(["", "EVIDENCE NOT YET AVAILABLE",
+                      f"  {', '.join(str(r) for r in unavailable)}"])
+    return "\n".join(lines)
+
+
 def cmd_diagnose(args) -> int:
     import clozn.runs.store as runlog
 
+    args.target = _resolve_target(args)
     run = _select_run(args, runlog)
     related = runlog.iter_runs(limit=200)
+
+    if args.performance:
+        from clozn.cli.main import CloznError
+        from clozn.runs.perf_diagnosis import build_performance_report
+        from clozn.runs.perf_trace import PerfTraceError
+        try:
+            report = build_performance_report(run, related_runs=related)
+        except PerfTraceError as exc:
+            raise CloznError(str(exc))
+        if args.json:
+            print(json.dumps(report, indent=2, ensure_ascii=False))
+        else:
+            print(format_performance(report))
+        return 0
+
     report = diagnose(run, related_runs=related)
     if args.json:
         print(json.dumps(report, indent=2, ensure_ascii=False))

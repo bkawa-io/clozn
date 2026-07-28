@@ -1,0 +1,13 @@
+{
+  "schema_version": "clozn.performance-trace.v1",
+  "run_id": "run_clean",
+  "clock": "monotonic",
+  "diagnoses": [
+    {
+      "rule": "large_context",
+      "rule_version": "1",
+      "status": "not_fired",
+      "reason": "the prompt used 12% of the context window, well under the threshold this rule checks"
+    }
+  ]
+}

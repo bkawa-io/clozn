@@ -1,0 +1,8 @@
+{
+  "schema_version": "clozn.performance-trace.v1",
+  "run_id": "run_bad_phase",
+  "clock": "monotonic",
+  "phases": [
+    {"name": "decode", "owner": "clozn_worker"}
+  ]
+}

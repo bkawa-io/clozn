@@ -1,0 +1,8 @@
+{
+  "schema_version": "clozn.performance-trace.v1",
+  "run_id": "run_bad_status",
+  "clock": "monotonic",
+  "diagnoses": [
+    {"rule": "slow_decode", "rule_version": "1", "status": "maybe"}
+  ]
+}
