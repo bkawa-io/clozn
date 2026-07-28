@@ -340,6 +340,9 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
             finish_reason=finish_reason,
             meta=meta,
             trace=norm_trace,
+            run_id=rid,
+            identity=identity,
+            error=error,
         )
         rec = {
             "id": rid,
