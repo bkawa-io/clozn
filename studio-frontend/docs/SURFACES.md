@@ -189,7 +189,7 @@ in the table below. `SlotHost` owns the mechanism, never the vocabulary.
 
 | slot | host | `data` | notes |
 |---|---|---|---|
-| _(none yet)_ | | | the first host to expose one documents it here |
+| `lens.evidence` | `src/features/lens/Lens.tsx`, inside the `lens-context` card (below the source list) | `{ runId: string }` | Feature 06's context-receipt panel (`src/slots/lens.evidence/context-receipt.tsx`) is the only current occupant. `data.runId` is the currently-selected run in Lens; a slot panel here is responsible for its own fetch (see `src/data/context-receipt.ts` for the pattern: a dedicated data module per slot feature rather than growing the shared `data/api.ts`). Rendered only once `runId` is non-empty. |
 
 ## Verification
 

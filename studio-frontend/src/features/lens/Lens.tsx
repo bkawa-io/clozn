@@ -20,6 +20,7 @@ import type {
   SourceReading,
   TokenReading,
 } from "../../data/types";
+import { SlotHost } from "../../components/SlotHost";
 import { ConfidencePlot } from "../observatory/ConfidencePlot";
 import {
   aggregateSources,
@@ -382,6 +383,7 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
               >{sourceStatus === "measuring" ? "MEASURING SOURCES" : "MEASURE SOURCES"}</button>
             </div>
           )}
+          {runId && <SlotHost slot="lens.evidence" data={{ runId }} />}
         </div>
       </section>
 
