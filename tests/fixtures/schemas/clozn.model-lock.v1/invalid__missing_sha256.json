@@ -1,0 +1,8 @@
+{
+  "schema_version": "clozn.model-lock.v1",
+  "models": {
+    "baseline": {
+      "url": "https://example.com/models/base.gguf"
+    }
+  }
+}

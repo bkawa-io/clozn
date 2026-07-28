@@ -1,0 +1,16 @@
+{
+  "schema_version": "clozn.ci-report.v1",
+  "mode": "baseline",
+  "overall": "pass",
+  "generated_at": "2026-07-27T12:00:00+00:00",
+  "exit_code": 0,
+  "checks": {
+    "golden": {
+      "ran": true,
+      "budget": {"min_pass_rate": 0.9},
+      "observed": {"n": 1, "n_correct": 1, "pass_rate": 1.0},
+      "reason": null,
+      "worst_offenders": []
+    }
+  }
+}

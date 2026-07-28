@@ -771,7 +771,8 @@ def test_cmd_ci_baseline_bad_model_raises_cloznerror(iso):
 
 def _check_args(**overrides):
     base = dict(baseline=None, experiment=None, model=None, url=ci._DEFAULT_URL,
-               allow_model_change=False, report=None, json=False, cpu=False,
+               allow_model_change=False, report=None, github_summary=None, junit_report=None,
+               json=False, cpu=False,
                max_execution_errors=0, max_target_regressions=0, max_guard_regressions=0,
                min_target_gains=0, require_run_identity=False)
     base.update(overrides)
@@ -959,3 +960,88 @@ def test_cmd_ci_check_baseline_without_model_exit_2(iso, capsys):
     rc = ci.cmd_ci_check(_check_args(baseline=path))
     assert rc == 2
     assert "MODEL is required" in capsys.readouterr().err
+
+
+# ================================================================================== clozn.ci-report.v1 (feature 02)
+# The report schema itself (clozn/schemas/defs/clozn.ci-report.v1.json) is exercised by fixtures under
+# tests/fixtures/schemas/clozn.ci-report.v1/ via tests/test_schema_contracts.py's filesystem walk -- these
+# tests instead prove the REAL reports run_gate/gate_experiment_result/cmd_ci_check produce actually
+# conform to it (not just a fixture this file imagined), and that the new --github-summary/--junit-report
+# flags are wired end to end.
+
+def test_run_gate_report_is_schema_stamped_and_validates(iso, monkeypatch):
+    from clozn import schemas
+    model_path = _model_file(iso)
+    baseline = _passing_golden_baseline(model_path)
+    monkeypatch.setattr(ci, "run_golden_check", lambda url, which: {
+        "n": 10, "n_correct": 9, "pass_rate": 0.9, "wrong": [], "model": None, "model_sha256": None,
+    })
+    report = ci.run_gate(baseline=baseline, model_path=model_path)
+    assert report["schema_version"] == ci.CI_REPORT_SCHEMA
+    assert report["mode"] == "baseline"
+    # run_gate alone never sets exit_code (cmd_ci_check adds it) -- the schema requires it, so a raw
+    # run_gate report is expected to fail validation until cmd_ci_check finishes assembling it.
+    with pytest.raises(schemas.ValidationError, match="exit_code"):
+        schemas.validate(report, ci.CI_REPORT_SCHEMA)
+    report["exit_code"] = 0
+    schemas.validate(report, ci.CI_REPORT_SCHEMA)      # does not raise
+
+
+def test_gate_experiment_result_report_is_schema_stamped_and_validates():
+    from clozn import schemas
+    report = ci.gate_experiment_result(result=_experiment_result(), min_target_gains=1)
+    assert report["schema_version"] == ci.CI_REPORT_SCHEMA
+    assert report["mode"] == "experiment"
+    report["exit_code"] = 0
+    schemas.validate(report, ci.CI_REPORT_SCHEMA)      # does not raise
+
+
+def test_cmd_ci_check_experiment_report_written_by_report_flag_validates(iso):
+    from clozn import schemas
+    path, report_path = str(iso / "experiment.json"), str(iso / "report.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(_experiment_result(), f)
+    rc = ci.cmd_ci_check(_check_args(experiment=path, min_target_gains=1, report=report_path))
+    assert rc == 0
+    with open(report_path, encoding="utf-8") as f:
+        written = json.load(f)
+    schemas.validate(written, ci.CI_REPORT_SCHEMA)      # does not raise
+
+
+def test_cmd_ci_check_writes_github_summary(iso):
+    baseline_path = str(iso / "experiment.json")
+    with open(baseline_path, "w", encoding="utf-8") as f:
+        json.dump(_experiment_result(), f)
+    summary_path = str(iso / "summary.md")
+    rc = ci.cmd_ci_check(_check_args(experiment=baseline_path, min_target_gains=1,
+                                     github_summary=summary_path))
+    assert rc == 0
+    with open(summary_path, encoding="utf-8") as f:
+        text = f.read()
+    assert text.startswith("# clozn ci check -- PASS")
+    assert "exp_fixture" in text
+
+
+def test_cmd_ci_check_writes_junit_report(iso):
+    import xml.etree.ElementTree as ET
+    baseline_path = str(iso / "experiment.json")
+    with open(baseline_path, "w", encoding="utf-8") as f:
+        json.dump(_experiment_result(), f)
+    junit_path = str(iso / "junit.xml")
+    rc = ci.cmd_ci_check(_check_args(experiment=baseline_path, min_target_gains=1,
+                                     junit_report=junit_path))
+    assert rc == 0
+    with open(junit_path, encoding="utf-8") as f:
+        root = ET.fromstring(f.read())
+    assert root.find("testsuite").get("name") == "clozn ci check (experiment)"
+
+
+def test_cmd_ci_check_without_the_new_flags_writes_neither_file(iso):
+    """--github-summary/--junit-report are opt-in; every existing invocation without them must keep
+    working exactly as before (no stray files appear)."""
+    baseline_path = str(iso / "experiment.json")
+    with open(baseline_path, "w", encoding="utf-8") as f:
+        json.dump(_experiment_result(), f)
+    rc = ci.cmd_ci_check(_check_args(experiment=baseline_path, min_target_gains=1))
+    assert rc == 0
+    assert set(os.listdir(iso)) == {"experiment.json"}
