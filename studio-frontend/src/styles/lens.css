@@ -242,10 +242,10 @@
   z-index: 3;
   display: grid;
   flex: 0 0 auto;
-  min-height: 178px;
-  max-height: 210px;
+  min-height: 268px;
+  max-height: 340px;
   grid-template-columns: 118px minmax(0, 1fr);
-  grid-template-rows: 68px minmax(108px, 1fr);
+  grid-template-rows: 68px minmax(96px, 1fr) 17px minmax(96px, 1fr);
   border-bottom: 1px solid var(--line);
   background:
     linear-gradient(115deg, color-mix(in srgb, var(--signal-cyan) 5%, transparent), transparent 42%),
@@ -499,6 +499,225 @@
 
 .lens-performance-state.is-error {
   color: var(--danger);
+}
+
+/* -- Rule engine (clozn.performance-trace.v1 diagnoses) ------------------------------------------
+   A deliberately separate block from .lens-performance-diagnosis above: that section's
+   observed/not_observed/unavailable reads clozn.runs.diagnosis's per-phase evidence; this one's
+   fired/not_fired/unavailable reads clozn.runs.perf_diagnosis's versioned rule engine, which names a
+   likely cause and possible fix rather than just a phase's presence. Kept visually distinct (own label
+   row, own color language) so the two vocabularies are never mistaken for one another. */
+
+.lens-performance-rules-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  grid-column: 2;
+  grid-row: 3;
+  padding: 0 11px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-raised) 40%, transparent);
+}
+
+.lens-performance-rules-label span,
+.lens-performance-rules-label strong {
+  font-family: var(--font-machine);
+  font-weight: 500;
+}
+
+.lens-performance-rules-label span {
+  color: var(--ink-faint);
+  font-size: 5.5px;
+  letter-spacing: .08em;
+}
+
+.lens-performance-rules-label strong {
+  color: var(--ink-soft);
+  font-size: 6.5px;
+  text-transform: uppercase;
+}
+
+.lens-performance-rules {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-column: 2;
+  grid-row: 4;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.lens-performance-rules > nav {
+  display: grid;
+  min-width: 0;
+  overflow-x: auto;
+  border-right: 1px solid var(--line);
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.lens-performance-rules > nav button {
+  display: grid;
+  min-width: 0;
+  align-content: center;
+  justify-items: start;
+  gap: 3px;
+  padding: 7px;
+  border-right: 1px solid var(--line);
+  color: var(--ink-faint);
+  background: transparent;
+  text-align: left;
+}
+
+.lens-performance-rules > nav button:last-child {
+  border-right: 0;
+}
+
+.lens-performance-rules > nav button:hover,
+.lens-performance-rules > nav button.is-selected {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel-raised) 62%, transparent);
+}
+
+.lens-performance-rules > nav button.is-selected {
+  box-shadow: inset 0 -2px var(--signal-peach);
+}
+
+/* The "unavailable" dot is hollow, not just a different color -- "we cannot check this" must survive
+   grayscale/colorblind rendering, not rely on hue alone. */
+.lens-performance-rules > nav i {
+  width: 5px;
+  height: 5px;
+  background: var(--ink-faint);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--ink-faint) 58%, transparent);
+}
+
+.lens-performance-rules > nav .status-fired i {
+  background: var(--signal-peach);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--signal-peach) 75%, transparent);
+}
+
+.lens-performance-rules > nav .status-not-fired i {
+  background: var(--signal-blue);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--signal-blue) 65%, transparent);
+}
+
+.lens-performance-rules > nav .status-unavailable i {
+  background: transparent;
+  border: 1px solid var(--ink-faint);
+  box-shadow: none;
+}
+
+.lens-performance-rules > nav span,
+.lens-performance-rules > nav small {
+  overflow: hidden;
+  font-family: var(--font-machine);
+  font-size: 5.5px;
+  letter-spacing: .06em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lens-performance-rules > nav span {
+  color: var(--ink-soft);
+}
+
+.lens-performance-rules > nav small {
+  color: var(--ink-faint);
+}
+
+.lens-performance-rules > nav .status-unavailable small {
+  font-style: italic;
+}
+
+.lens-performance-rules-detail {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 9px 11px;
+  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.lens-performance-rules-detail > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lens-performance-rules-detail > header strong,
+.lens-performance-rules-detail > header span {
+  font-family: var(--font-machine);
+  font-size: 6px;
+  font-weight: 500;
+  letter-spacing: .07em;
+}
+
+.lens-performance-rules-detail > header strong {
+  color: var(--ink-soft);
+}
+
+.lens-performance-rules-detail > header span {
+  color: var(--ink-faint);
+}
+
+.lens-performance-rules-detail > header span.status-fired {
+  color: color-mix(in srgb, var(--signal-peach) 72%, var(--ink));
+}
+
+.lens-performance-rules-detail > header span.status-not-fired {
+  color: color-mix(in srgb, var(--signal-blue) 62%, var(--ink));
+}
+
+.lens-performance-rules-detail > header span.status-unavailable {
+  color: var(--ink-faint);
+  font-style: italic;
+}
+
+.lens-performance-rules-detail p {
+  margin: 6px 0 0;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 6.5px;
+  line-height: 1.45;
+}
+
+.lens-performance-rules-detail p.rule-evidence-state {
+  color: var(--ink-faint);
+  font-size: 5.5px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.lens-performance-rules-detail p.rule-fix b {
+  margin-right: 5px;
+  color: var(--ink);
+}
+
+.lens-performance-rules-detail dl {
+  display: grid;
+  gap: 3px;
+  margin: 7px 0 0;
+}
+
+.lens-performance-rules-detail dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lens-performance-rules-detail dt,
+.lens-performance-rules-detail dd {
+  margin: 0;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 5.5px;
+}
+
+.lens-performance-rules-detail dd {
+  color: var(--ink-soft);
 }
 
 .lens-response-stage {
@@ -1193,6 +1412,15 @@
     min-width: 58px;
     flex: 1 0 58px;
   }
+
+  .lens-performance-rules > nav {
+    display: flex;
+  }
+
+  .lens-performance-rules > nav button {
+    min-width: 58px;
+    flex: 1 0 58px;
+  }
 }
 
 @media (max-width: 860px) {
@@ -1232,6 +1460,10 @@
   }
 
   .lens-performance-diagnosis {
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr);
+  }
+
+  .lens-performance-rules {
     grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr);
   }
 
@@ -1336,6 +1568,27 @@
     min-height: 62px;
     border-right: 0;
     border-bottom: 1px solid var(--line);
+  }
+
+  .lens-performance-rules-label {
+    min-height: 26px;
+    border-right: 0;
+  }
+
+  .lens-performance-rules {
+    display: flex;
+    min-height: 186px;
+    flex-direction: column;
+  }
+
+  .lens-performance-rules > nav {
+    min-height: 62px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .lens-performance-rules-detail {
+    min-height: 116px;
   }
 
   .lens-performance-detail {

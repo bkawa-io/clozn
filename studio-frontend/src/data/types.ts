@@ -156,6 +156,58 @@ export interface RunPerformance {
   gpuLayers?: number;
   samplerMode?: string;
   diagnosis?: RunDiagnosis;
+  rules?: PerformanceRuleReport;
+}
+
+// -- clozn.performance-trace.v1 (GET /runs/<id>/performance) --------------------------------------
+//
+// A DIFFERENT vocabulary from RunDiagnosis above, on purpose: RunDiagnosis's observed/not_observed/
+// unavailable is clozn.runs.diagnosis's per-phase evidence read. PerformanceRuleReport's fired/not_fired/
+// unavailable is clozn.runs.perf_diagnosis's versioned rule engine -- it names a likely cause and possible
+// fix, not just a phase's presence. Keeping the two status enums as distinct TS unions (rather than
+// widening one to fit both) makes it a type error to render a rule-engine entry with the diagnosis
+// component's status classes, or vice versa.
+export type PerformanceRuleStatus = "fired" | "not_fired" | "unavailable";
+
+// This artifact's rule engine never emits "causally_supported" -- no rule here re-runs a request with one
+// variable changed, which is the only thing that would earn it (see clozn/runs/perf_diagnosis.py's module
+// docstring). The type still allows the value for forward compatibility with the schema, which reserves it
+// for a future replay-backed rule; the UI must not render "correlated" as if it meant "causally_supported".
+export type PerformanceEvidenceState = "observed" | "correlated" | "causally_supported";
+
+export interface PerformanceRuleEvidence {
+  path: string;
+  value: unknown;
+}
+
+export interface PerformanceRuleDiagnosis {
+  rule: string;
+  ruleVersion: string;
+  status: PerformanceRuleStatus;
+  /** Present when status is "unavailable" (what evidence is missing) or "not_fired" (what was checked). */
+  reason?: string;
+  /** Present when status is "fired". Never stronger than "correlated" from this module -- see above. */
+  evidenceState?: PerformanceEvidenceState;
+  likelyCause?: string;
+  possibleFix?: string;
+  evidence: PerformanceRuleEvidence[];
+}
+
+export interface PerformancePhase {
+  name: string;
+  owner?: string;
+  durationNs?: number;
+}
+
+export interface PerformanceRuleReport {
+  schemaVersion: string;
+  phases: PerformancePhase[];
+  metrics: Record<string, number>;
+  /** Always one entry per rule the engine knows about (see the backend module docstring) when this run's
+   * trace could be built at all -- absence of this whole object means the fetch itself failed or the run
+   * could not produce a trace, not that every rule was clean. The UI must render those two cases visibly
+   * differently. */
+  diagnoses: PerformanceRuleDiagnosis[];
 }
 
 export interface ConceptCandidate {

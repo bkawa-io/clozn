@@ -3,6 +3,12 @@ import type {
   ConceptCandidate,
   ContextCoverage,
   ObservatoryData,
+  PerformanceEvidenceState,
+  PerformancePhase,
+  PerformanceRuleDiagnosis,
+  PerformanceRuleEvidence,
+  PerformanceRuleReport,
+  PerformanceRuleStatus,
   RunConfiguration,
   RunConcepts,
   RunDiagnosis,
@@ -204,14 +210,93 @@ function runDiagnosis(value: unknown): RunDiagnosis | undefined {
   };
 }
 
+const RULE_STATUSES: readonly PerformanceRuleStatus[] = ["fired", "not_fired", "unavailable"];
+const EVIDENCE_STATES: readonly PerformanceEvidenceState[] = ["observed", "correlated", "causally_supported"];
+
+function performanceRuleEvidence(value: unknown): PerformanceRuleEvidence[] {
+  return records(value).flatMap((entry) => {
+    if (typeof entry.path !== "string" || !("value" in entry)) return [];
+    return [{ path: entry.path, value: entry.value }];
+  });
+}
+
+function performanceRuleDiagnosis(value: unknown): PerformanceRuleDiagnosis | undefined {
+  const item = record(value);
+  const status = item.status;
+  if (
+    typeof item.rule !== "string"
+    || typeof item.rule_version !== "string"
+    || !RULE_STATUSES.includes(status as PerformanceRuleStatus)
+  ) {
+    return undefined;
+  }
+  const evidenceState = EVIDENCE_STATES.includes(item.evidence_state as PerformanceEvidenceState)
+    ? (item.evidence_state as PerformanceEvidenceState)
+    : undefined;
+  return {
+    rule: item.rule,
+    ruleVersion: item.rule_version,
+    status: status as PerformanceRuleStatus,
+    reason: typeof item.reason === "string" ? item.reason : undefined,
+    evidenceState,
+    likelyCause: typeof item.likely_cause === "string" ? item.likely_cause : undefined,
+    possibleFix: typeof item.possible_fix === "string" ? item.possible_fix : undefined,
+    evidence: performanceRuleEvidence(item.evidence),
+  };
+}
+
+function performancePhase(value: unknown): PerformancePhase | undefined {
+  const item = record(value);
+  if (typeof item.name !== "string" || !item.name) return undefined;
+  return {
+    name: item.name,
+    owner: typeof item.owner === "string" ? item.owner : undefined,
+    durationNs: typeof item.duration_ns === "number" && Number.isFinite(item.duration_ns)
+      ? item.duration_ns
+      : undefined,
+  };
+}
+
+function performanceMetrics(value: unknown): Record<string, number> {
+  const body = record(value);
+  const out: Record<string, number> = {};
+  for (const [key, raw] of Object.entries(body)) {
+    if (typeof raw === "number" && Number.isFinite(raw)) out[key] = raw;
+  }
+  return out;
+}
+
+// clozn.performance-trace.v1 -- see clozn/schemas/defs/clozn.performance-trace.v1.json and
+// clozn/runs/perf_diagnosis.py. Kept as its own parser (not folded into runDiagnosis above) because it is
+// a genuinely different artifact with a different status vocabulary -- see types.ts's PerformanceRuleReport
+// doc comment for why the two are not merged into one shape.
+function performanceRuleReport(value: unknown): PerformanceRuleReport | undefined {
+  const body = record(value);
+  if (typeof body.schema_version !== "string" || typeof body.run_id !== "string") return undefined;
+  const diagnoses = records(body.diagnoses).flatMap((item) => {
+    const parsed = performanceRuleDiagnosis(item);
+    return parsed ? [parsed] : [];
+  });
+  return {
+    schemaVersion: body.schema_version,
+    phases: records(body.phases).flatMap((item) => {
+      const phase = performancePhase(item);
+      return phase ? [phase] : [];
+    }),
+    metrics: performanceMetrics(body.metrics),
+    diagnoses,
+  };
+}
+
 export async function loadRunPerformance(
   runId: string,
   signal?: AbortSignal,
 ): Promise<RunPerformance> {
   const encoded = encodeURIComponent(runId);
-  const [runBody, diagnosisBody] = await Promise.all([
+  const [runBody, diagnosisBody, ruleReportBody] = await Promise.all([
     getJSON(`/runs/${encoded}`, signal),
     getJSON(`/runs/${encoded}/diagnosis`, signal),
+    getJSON(`/runs/${encoded}/performance`, signal),
   ]);
   if (!runBody) throw new Error("Run not found");
 
@@ -293,6 +378,7 @@ export async function loadRunPerformance(
         ? meta.sampling
         : undefined,
     diagnosis: runDiagnosis(diagnosisBody),
+    rules: performanceRuleReport(ruleReportBody),
   };
 }
 
