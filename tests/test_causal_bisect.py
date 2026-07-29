@@ -70,10 +70,36 @@ _COMPATIBLE = {
     },
 }
 
+# Same pair, but also permits head_transplant (head_count matches exactly) -- used by every head-window
+# test below. residual_transplant stays permitted too: run_bisect() gates on it unconditionally at
+# preflight regardless of search_kinds (see run_bisect's very first checks).
+_COMPATIBLE_WITH_HEAD = dict(_COMPATIBLE, head_count={"state": "same", "value_a": 2, "value_b": 2})
+_COMPATIBLE_WITH_HEAD["verdict"] = {
+    "overall": "compatible", "reasons": [],
+    "operations": {
+        "per_token_comparison": {"permitted": True, "reason": "tokenizers match exactly."},
+        "residual_transplant": {"permitted": True, "reason": "hidden_size matches exactly (1)."},
+        "head_transplant": {"permitted": True, "reason": "head_count matches exactly (2)."},
+    },
+}
+
+# Same as _COMPATIBLE_WITH_HEAD but head_transplant is refused (head_count differs) -- used to prove
+# hooks_unavailable/bounds_applied name the gate reason, never silently skip head.
+_COMPATIBLE_HEAD_BLOCKED = dict(_COMPATIBLE, head_count={"state": "differs", "value_a": 2, "value_b": 4})
+_COMPATIBLE_HEAD_BLOCKED["verdict"] = {
+    "overall": "compatible_with_caveats", "reasons": ["head_count differs (2 vs 4)."],
+    "operations": {
+        "per_token_comparison": {"permitted": True, "reason": "tokenizers match exactly."},
+        "residual_transplant": {"permitted": True, "reason": "hidden_size matches exactly (1)."},
+        "head_transplant": {"permitted": False, "reason": "head_count differs (2 vs 4); a head index would "
+                                                           "not refer to the same slice on both models."},
+    },
+}
+
 
 def _resp(*, top1_id, top1_piece, top1_logprob, target_id=None, target_piece=None, target_logprob=None,
           sum_logprob=-1.0, n_prompt=2, n_cont=1, captured=None, applied=None,
-          applied_field="ffn_write_applied"):
+          applied_field="ffn_write_applied", head_rows=None, head_dims=None):
     topk = [{"id": top1_id, "piece": top1_piece, "logprob": top1_logprob}]
     if target_id is not None and target_id != top1_id:
         topk.append({"id": target_id, "piece": target_piece, "logprob": target_logprob})
@@ -82,6 +108,10 @@ def _resp(*, top1_id, top1_piece, top1_logprob, target_id=None, target_piece=Non
           "sum_logprob": sum_logprob}
     if captured is not None:
         out["ffn_captured"] = captured
+    if head_rows is not None:
+        out["head_rows"] = head_rows
+    if head_dims is not None:
+        out["head_dims"] = head_dims
     if applied is not None:
         out[applied_field] = applied
     return out
@@ -89,6 +119,17 @@ def _resp(*, top1_id, top1_piece, top1_logprob, target_id=None, target_piece=Non
 
 def _captured(layers, position, value):
     return {str(l): {str(position): [float(value)]} for l in layers}
+
+
+def _head_rows(layers, position, *, d_head, n_head, value=1.0):
+    """head_rows shaped for `layers` at `position`, ne0=d_head*n_head, every head's slice filled with
+    `value` -- paired with `_head_dims` below."""
+    row = [float(value)] * (d_head * n_head)
+    return {str(l): {str(position): list(row)} for l in layers}
+
+
+def _head_dims(*, d_head, n_head):
+    return {"ne0": d_head * n_head, "n_head": n_head, "d_head": d_head}
 
 
 def _base_kwargs(**over):
@@ -123,13 +164,20 @@ def test_tile_window_size_one_is_all_singletons():
     assert cb._tile([0, 1, 2], 1) == [[0], [1], [2]]
 
 
-def test_pick_shuffled_layers_returns_disjoint_same_size_set():
-    picked = cb._pick_shuffled_layers([0, 1], [0, 1, 2, 3])
+def test_pick_shuffled_sites_returns_disjoint_same_size_set():
+    picked = cb._pick_shuffled_sites([0, 1], [0, 1, 2, 3])
     assert picked == [2, 3]
 
 
-def test_pick_shuffled_layers_none_when_no_room():
-    assert cb._pick_shuffled_layers([0, 1, 2, 3], [0, 1, 2, 3]) is None
+def test_pick_shuffled_sites_none_when_no_room():
+    assert cb._pick_shuffled_sites([0, 1, 2, 3], [0, 1, 2, 3]) is None
+
+
+def test_pick_shuffled_sites_works_with_head_layer_head_tuples():
+    """Sites need only be hashable -- (layer, head) tuples (head windows) work exactly like plain layer
+    ints (ffn windows)."""
+    picked = cb._pick_shuffled_sites([(0, 0), (0, 1)], [(0, 0), (0, 1), (1, 0), (1, 1)])
+    assert picked == [(1, 0), (1, 1)]
 
 
 def test_pick_any_other_layer_avoids_the_given_layer():
@@ -348,10 +396,10 @@ _USABLE = [0, 1, 2, 3, 4, 5]
 
 def _window_kwargs(**over):
     base = dict(
-        hook="ffn", layers=[0, 1], depth=0,
-        ref_vectors_by_layer={l: {2: [1.0]} for l in _USABLE},
-        self_vectors_by_layer={l: {2: [0.5]} for l in _USABLE},
-        usable_layers=_USABLE, baseline_metrics={"top1_token_id": 9, "top1_is_target": False},
+        hook="ffn", sites=[0, 1], depth=0,
+        ref_vectors_by_site={l: {2: [1.0]} for l in _USABLE},
+        self_vectors_by_site={l: {2: [0.5]} for l in _USABLE},
+        usable_sites=_USABLE, baseline_metrics={"top1_token_id": 9, "top1_is_target": False},
         positions=[2], prompt_ids=[1, 2], continuation_ids=[9], n_prompt=2, n_cont=1, readout_position=2,
         target_token_id=5, topk=3, rng=random.Random(0), reference_target_logprob=None,
         primary_metric="reference_token_logprob_recovery",
@@ -423,7 +471,7 @@ def test_run_window_omits_shuffled_arm_when_no_disjoint_layers_available():
         _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, applied=True),
         _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1),
     ])
-    kwargs = _window_kwargs(layers=[0, 1, 2, 3, 4, 5], usable_layers=[0, 1, 2, 3, 4, 5])   # full range: no room
+    kwargs = _window_kwargs(sites=[0, 1, 2, 3, 4, 5], usable_sites=[0, 1, 2, 3, 4, 5])   # full range: no room
     result = cb._run_window(candidate_engine=engine, **kwargs)
     assert "shuffled_window" not in result["arms"]
     assert len(engine.calls) == 3
@@ -437,6 +485,19 @@ def test_run_window_arm_call_failure_is_reported_not_raised():
     assert "engine boom" in result["reasons"][0]
 
 
+_HEAD_USABLE = [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1)]
+
+
+def _head_window_kwargs(**over):
+    base = dict(
+        hook="head", sites=[(0, 0), (0, 1)],
+        ref_vectors_by_site={s: {2: [1.0, 2.0]} for s in _HEAD_USABLE},
+        self_vectors_by_site={s: {2: [0.5, 0.5]} for s in _HEAD_USABLE},
+        usable_sites=_HEAD_USABLE)
+    base.update(over)
+    return _window_kwargs(**base)
+
+
 def test_run_window_uses_head_write_field_for_head_hook():
     engine = FakeEngine([
         _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0),
@@ -444,10 +505,31 @@ def test_run_window_uses_head_write_field_for_head_hook():
         _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1),
         _resp(top1_id=9, top1_piece="x", top1_logprob=-1.05),
     ])
-    result = cb._run_window(candidate_engine=engine, **_window_kwargs(hook="head"))
+    result = cb._run_window(candidate_engine=engine, **_head_window_kwargs())
     assert result["hook"] == "head"
+    assert result["layers"] == [0, 0]
+    assert result["heads"] == [0, 1]
     for call in engine.calls:
         assert "head_write" in call and "ffn_write" not in call
+        for spec in call["head_write"]:
+            assert "head" in spec and "layer" in spec
+
+
+def test_run_window_head_write_spec_addresses_the_right_layer_and_head():
+    """REQUIRED PROOF: a head window's write specs name a real (layer, head) pair per site -- not just
+    the write-field dispatch (the low-level mechanism check above), but the actual addressed slice."""
+    engine = FakeEngine([
+        _resp(top1_id=5, top1_piece="y", top1_logprob=-0.1),                      # reference_transplant
+        _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, applied=True,
+             applied_field="head_write_applied"),                                 # candidate_self_transplant
+        _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1),                      # random_equal_norm
+        _resp(top1_id=9, top1_piece="x", top1_logprob=-1.05),                     # shuffled_window
+    ])
+    result = cb._run_window(candidate_engine=engine, **_head_window_kwargs(sites=[(1, 0), (2, 1)]))
+    assert result["retained"] is True
+    reference_call = engine.calls[0]
+    specs_by_layer_head = {(s["layer"], s["head"]) for s in reference_call["head_write"]}
+    assert specs_by_layer_head == {(1, 0), (2, 1)}
 
 
 # ==================================================================================== run_bisect(): preflight
@@ -695,25 +777,339 @@ def test_residual_only_search_never_windows_and_verdict_is_never_distributed(mon
     assert doc["verdict"]["label"] == "localized_site"
 
 
-def test_head_hook_refused_by_transplant_is_recorded_as_unavailable_not_a_crash(monkeypatch):
+def test_head_missing_indices_is_recorded_as_unavailable_not_a_crash():
+    """A head site needs BOTH a layer and a head index -- head_layers alone (the old, broken shape) must
+    not silently attempt anything; it must be named in hooks_unavailable, never implied as searched."""
     events = []
     ref_engine = FakeEngine([])
     cand_engine = FakeEngine([])
-
-    def fake_run_site(*, site, **kwargs):
-        return {"ok": False, "error": f"site.hook must be one of ['ffn', 'residual'], got {site['hook']!r}"}
-
-    monkeypatch.setattr(cb.transplant, "run_site", fake_run_site)
     out = cb.run_bisect(**_base_kwargs(
-        search_kinds=("head",), head_layers=[1, 2],
+        pair_compat=_COMPATIBLE_WITH_HEAD,
+        search_kinds=("head",), head_layers=[1, 2],   # head_indices NOT supplied
         reference_loader=_loader(ref_engine, "ref", events),
         candidate_loader=_loader(cand_engine, "cand", events)))
 
     assert out["ok"] is True
     doc = out["document"]
     assert doc["verdict"]["label"] == "unavailable"
-    assert any(h["hook"] == "head" for h in doc["search"]["hooks_unavailable"])
-    assert all(not s["ok"] for s in doc["single_site_tests"])
+    unavailable = [h for h in doc["search"]["hooks_unavailable"] if h["hook"] == "head"]
+    assert unavailable and "head_layers and head_indices must both be supplied" in unavailable[0]["reason"]
+    assert doc["single_site_tests"] == []
+    assert doc["window_tests"] == []
+    assert any(b.startswith("head: not searched this run --") for b in doc["coverage"]["bounds_applied"])
+
+
+def test_head_blocked_by_pair_compatibility_is_recorded_as_unavailable_with_the_real_reason():
+    """head_count mismatch blocks head_transplant (pair_compatibility's own gate) -- the artifact must
+    name THAT reason, not a generic one, and must not imply attention was ever examined."""
+    events = []
+    ref_engine = FakeEngine([])
+    cand_engine = FakeEngine([])
+    out = cb.run_bisect(**_base_kwargs(
+        pair_compat=_COMPATIBLE_HEAD_BLOCKED,
+        search_kinds=("head",), head_layers=[0, 1], head_indices=[0, 1],
+        reference_loader=_loader(ref_engine, "ref", events),
+        candidate_loader=_loader(cand_engine, "cand", events)))
+
+    assert out["ok"] is True
+    doc = out["document"]
+    unavailable = [h for h in doc["search"]["hooks_unavailable"] if h["hook"] == "head"]
+    assert unavailable and "head_count differs" in unavailable[0]["reason"]
+    assert events == []            # refused before any engine was ever loaded
+    assert doc["verdict"]["label"] == "unavailable"
+
+
+# ==================================================================================== run_bisect(): head windows
+
+def _head_grid_scenario(*, d_head=1, n_head=2):
+    """head_layers=[0, 1], head_indices=[0, 1] -> grid (0,0),(0,1),(1,0),(1,1). Reference and candidate
+    baseline both capture cleanly (head_dims/head_rows present for both layers)."""
+    ref_engine = FakeEngine([
+        _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0,
+             head_rows=_head_rows([0, 1], 2, d_head=d_head, n_head=n_head, value=1.0),
+             head_dims=_head_dims(d_head=d_head, n_head=n_head)),
+    ])
+    baseline = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, target_id=5, target_piece="y",
+                     target_logprob=-3.0,
+                     head_rows=_head_rows([0, 1], 2, d_head=d_head, n_head=n_head, value=0.5),
+                     head_dims=_head_dims(d_head=d_head, n_head=n_head))
+    return ref_engine, baseline
+
+
+def test_head_only_window_search_reaches_distributed_restoration(monkeypatch):
+    """REQUIRED PROOF: a head-only window search (no ffn, no residual) CAN reach distributed_restoration
+    -- the broad, unbisected 4-site (2 layers x 2 heads) window beats control, and both narrower halves
+    (bisecting across heads within a layer, and across layers) do not."""
+    events = []
+    ref_engine, baseline = _head_grid_scenario()
+
+    coarse_ref = _resp(top1_id=5, top1_piece="y", top1_logprob=-0.1)                    # flips to target
+    coarse_self = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, applied=True,
+                        applied_field="head_write_applied")
+    coarse_rand = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1)                   # does not flip
+    # halfA = [(0,0),(0,1)] (two heads, same layer): reference does not flip -> not retained.
+    a_ref = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0)
+    a_self = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, applied=True, applied_field="head_write_applied")
+    a_rand = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1)
+    a_shuf = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.05)
+    # halfB = [(1,0),(1,1)]: same -- not retained.
+    b_ref = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0)
+    b_self = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, applied=True, applied_field="head_write_applied")
+    b_rand = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1)
+    b_shuf = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.05)
+    cand_engine = FakeEngine([baseline, coarse_ref, coarse_self, coarse_rand,
+                              a_ref, a_self, a_rand, a_shuf, b_ref, b_self, b_rand, b_shuf])
+
+    out = cb.run_bisect(**_base_kwargs(
+        pair_compat=_COMPATIBLE_WITH_HEAD,
+        search_kinds=("head",), head_layers=[0, 1], head_indices=[0, 1], window_size=4,
+        reference_loader=_loader(ref_engine, "ref", events),
+        candidate_loader=_loader(cand_engine, "cand", events)))
+
+    assert out["ok"] is True
+    doc = out["document"]
+    schemas.validate(doc)
+    assert doc["search"]["composable_kinds_searched"] == ["head"]
+    assert doc["verdict"]["label"] == "distributed_restoration"
+    assert doc["verdict"]["evidence"]["windows"] == [{"hook": "head", "layers": [0, 0, 1, 1], "heads": [0, 1, 0, 1]}]
+    assert len(doc["window_tests"]) == 3                          # coarse + 2 halves
+    assert doc["single_site_tests"] == []                         # never bisected down to a leaf
+    assert any("head windows are tiled at window_size=4" in b for b in doc["coverage"]["bounds_applied"])
+    assert any(b.startswith("head: candidate grid was 2 head_layers x 2 head_indices = 4")
+              for b in doc["coverage"]["bounds_applied"])
+
+
+def test_head_window_perturbation_sensitive_when_random_control_also_flips(monkeypatch):
+    """REQUIRED PROOF: a head window where the reference arm flips the answer but the random equal-norm
+    control flips it too must be perturbation_sensitive, never a localized_* label."""
+    events = []
+    ref_engine, baseline = _head_grid_scenario()
+    # single window: head_layers=[0], head_indices=[0,1] -> sites (0,0),(0,1); both reference AND random
+    # flip the top-1 answer -- knife-edge perturbation sensitivity, not reference-specific evidence.
+    window_ref = _resp(top1_id=5, top1_piece="y", top1_logprob=-0.1)
+    window_self = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, applied=True,
+                        applied_field="head_write_applied")
+    window_rand = _resp(top1_id=5, top1_piece="y", top1_logprob=-0.2)     # random ALSO flips
+    cand_engine = FakeEngine([baseline, window_ref, window_self, window_rand])
+
+    out = cb.run_bisect(**_base_kwargs(
+        pair_compat=_COMPATIBLE_WITH_HEAD,
+        search_kinds=("head",), head_layers=[0], head_indices=[0, 1], window_size=4,
+        reference_loader=_loader(ref_engine, "ref", events),
+        candidate_loader=_loader(cand_engine, "cand", events)))
+
+    assert out["ok"] is True
+    doc = out["document"]
+    schemas.validate(doc)
+    assert doc["verdict"]["label"] == "perturbation_sensitive"
+    assert doc["verdict"]["label"] not in ("localized_site", "localized_window", "distributed_restoration")
+    assert doc["window_tests"][0]["retained"] is False
+    assert doc["window_tests"][0]["beat_control"] is False
+
+
+def test_head_grid_narrowed_by_max_head_sites_is_named_in_bounds_applied(monkeypatch):
+    """REQUIRED PROOF: the max_head_sites combinatorial bound is never silent -- when the usable grid
+    exceeds it, bounds_applied names the exact cap and how many sites were kept vs dropped."""
+    events = []
+    ref_engine, baseline = _head_grid_scenario()
+    # 4-site grid narrowed to max_head_sites=2 -- whichever 2 survive, only ONE window (size 2) is tested
+    # (no bisection since it is not retained), so exactly 2 further engine calls after baseline.
+    window_ref = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0)     # does not flip
+    window_self = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, applied=True,
+                        applied_field="head_write_applied")
+    window_rand = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1)
+    cand_engine = FakeEngine([baseline, window_ref, window_self, window_rand])
+
+    out = cb.run_bisect(**_base_kwargs(
+        pair_compat=_COMPATIBLE_WITH_HEAD,
+        search_kinds=("head",), head_layers=[0, 1], head_indices=[0, 1], window_size=4, max_head_sites=2,
+        reference_loader=_loader(ref_engine, "ref", events),
+        candidate_loader=_loader(cand_engine, "cand", events)))
+
+    assert out["ok"] is True
+    doc = out["document"]
+    schemas.validate(doc)
+    assert doc["coverage"]["max_head_sites"] == 2
+    assert any("max_head_sites=2: kept the top 2 of 4 usable head sites" in b
+              for b in doc["coverage"]["bounds_applied"])
+    assert len(doc["window_tests"]) == 1
+    assert len(doc["window_tests"][0]["layers"]) == 2
+
+
+def test_head_coverage_names_head_when_it_ran_vs_when_it_did_not(monkeypatch):
+    """REQUIRED PROOF: coverage.bounds_applied distinguishes 'head windows ran' from 'head was not
+    searched' in plain, differently-worded text -- a no_restoration/inconclusive verdict elsewhere in the
+    document must never be misread as having examined attention when it did not."""
+    events_ran = []
+    ref_engine, baseline = _head_grid_scenario()
+    window_ref = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0)
+    window_self = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, applied=True,
+                        applied_field="head_write_applied")
+    window_rand = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1)
+    cand_engine = FakeEngine([baseline, window_ref, window_self, window_rand])
+    ran = cb.run_bisect(**_base_kwargs(
+        pair_compat=_COMPATIBLE_WITH_HEAD,
+        search_kinds=("head",), head_layers=[0], head_indices=[0, 1], window_size=4,
+        reference_loader=_loader(ref_engine, "ref", events_ran),
+        candidate_loader=_loader(cand_engine, "cand", events_ran)))
+    assert ran["ok"] is True
+    ran_bounds = ran["document"]["coverage"]["bounds_applied"]
+    assert any(b.startswith("head: candidate grid was") and "searched" in b for b in ran_bounds)
+    assert "head" in ran["document"]["search"]["composable_kinds_searched"]
+
+    events_absent = []
+    absent = cb.run_bisect(**_base_kwargs(
+        pair_compat=_COMPATIBLE_WITH_HEAD,
+        search_kinds=("ffn",),      # head not even requested this run
+        reference_loader=_loader(FakeEngine([_resp(top1_id=9, top1_piece="x", top1_logprob=-1.0)]),
+                                 "ref", events_absent),
+        candidate_loader=_loader(FakeEngine([]), "cand", events_absent)))
+    assert absent["ok"] is True
+    absent_bounds = absent["document"]["coverage"]["bounds_applied"]
+    assert not any(b.startswith("head:") for b in absent_bounds)   # head wasn't requested -- no head line at all
+    assert "head" not in absent["document"]["search"]["composable_kinds_searched"]
+
+
+def test_head_trivial_single_site_uses_explicit_head_source_and_no_window_search(monkeypatch):
+    """A head_layers/head_indices pair of length 1 each is a single (layer, head) site -- tested directly
+    via transplant.run_site() (source=explicit_head), never through the window harness."""
+    events = []
+    ref_engine = FakeEngine([])
+    cand_engine = FakeEngine([])
+
+    def fake_run_site(*, site, **kwargs):
+        assert site == {"hook": "head", "layer": 3, "head": 1}
+        return {"ok": True, "document": {"schema_version": "clozn.transplant.v1",
+                                         "analysis": {"instrument_sane": True,
+                                                     "reference_moved_toward_reference": True,
+                                                     "reference_specific": True}}}
+
+    monkeypatch.setattr(cb.transplant, "run_site", fake_run_site)
+    out = cb.run_bisect(**_base_kwargs(
+        pair_compat=_COMPATIBLE_WITH_HEAD,
+        search_kinds=("head",), head_layers=[3], head_indices=[1],
+        reference_loader=_loader(ref_engine, "ref", events),
+        candidate_loader=_loader(cand_engine, "cand", events)))
+
+    assert out["ok"] is True
+    doc = out["document"]
+    schemas.validate(doc)
+    assert doc["window_tests"] == []
+    assert doc["search"]["composable_kinds_searched"] == []       # no window search ran -- structural invariant
+    assert len(doc["single_site_tests"]) == 1
+    site = doc["single_site_tests"][0]
+    assert site == {"hook": "head", "layer": 3, "head": 1, "source": "explicit_head", "ok": True,
+                    "transplant": {"schema_version": "clozn.transplant.v1",
+                                  "analysis": {"instrument_sane": True,
+                                              "reference_moved_toward_reference": True,
+                                              "reference_specific": True}}}
+    assert doc["verdict"]["label"] == "localized_site"
+    assert doc["verdict"]["evidence"]["sites"] == [{"hook": "head", "layer": 3, "head": 1}]
+    # a trivial 1x1 head request never enters the shared candidate residency at all (no window search
+    # ran); transplant.run_site() manages its own loaders, which this test stubs out entirely.
+    assert events == []
+
+
+def test_head_and_ffn_windows_both_run_in_one_search_sharing_candidate_residency(monkeypatch):
+    """ffn and head each get their own independent window search, but the candidate model is loaded only
+    ONCE for both (sequential model orchestration: never reload the candidate between composable kinds)."""
+    events = []
+    ref_ffn_capture = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, captured=_captured([0, 1, 2, 3], 2, 1.0))
+    ref_head_capture = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0,
+                             head_rows=_head_rows([0, 1], 2, d_head=1, n_head=2, value=1.0),
+                             head_dims=_head_dims(d_head=1, n_head=2))
+    ref_engine = FakeEngine([ref_ffn_capture, ref_head_capture])
+
+    ffn_baseline = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, captured=_captured([0, 1, 2, 3], 2, 0.5))
+    ffn_w01 = [_resp(top1_id=9, top1_piece="x", top1_logprob=-1.0),
+              _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, applied=True),
+              _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1),
+              _resp(top1_id=9, top1_piece="x", top1_logprob=-1.05)]
+    ffn_w23 = [_resp(top1_id=9, top1_piece="x", top1_logprob=-1.0),
+              _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, applied=True),
+              _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1),
+              _resp(top1_id=9, top1_piece="x", top1_logprob=-1.05)]
+    head_baseline = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0,
+                          head_rows=_head_rows([0, 1], 2, d_head=1, n_head=2, value=0.5),
+                          head_dims=_head_dims(d_head=1, n_head=2))
+    head_window = [_resp(top1_id=9, top1_piece="x", top1_logprob=-1.0),
+                  _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, applied=True,
+                       applied_field="head_write_applied"),
+                  _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1)]
+    cand_engine = FakeEngine([ffn_baseline] + ffn_w01 + ffn_w23 + [head_baseline] + head_window)
+
+    out = cb.run_bisect(**_base_kwargs(
+        pair_compat=_COMPATIBLE_WITH_HEAD,
+        search_kinds=("ffn", "head"), window_size=2, head_layers=[0, 1], head_indices=[0, 1],
+        reference_loader=_loader(ref_engine, "ref", events),
+        candidate_loader=_loader(cand_engine, "cand", events)))
+
+    assert out["ok"] is True
+    doc = out["document"]
+    schemas.validate(doc)
+    assert sorted(doc["search"]["composable_kinds_searched"]) == ["ffn", "head"]
+    hooks_seen = {w["hook"] for w in doc["window_tests"]}
+    assert hooks_seen == {"ffn", "head"}
+    # exactly one enter/exit pair for the candidate -- never reloaded between kinds.
+    assert events.count("enter:cand") == 1
+    assert events.count("exit:cand") == 1
+    # reference IS reloaded once per composable kind (ffn's own forward, then head's own forward).
+    assert events.count("enter:ref") == 2
+    assert events.count("exit:ref") == 2
+
+
+def test_head_window_bisects_down_to_a_confirmed_leaf_site(monkeypatch):
+    """A head window search that narrows all the way to a single (layer, head) site hands that site to
+    transplant.run_site() (source=bisection_leaf, hook='head', a real head index in the site dict --
+    the exact wiring the OLD head_layers-only code was missing) and reads reference_specific verbatim."""
+    events = []
+    ref_engine, baseline = _head_grid_scenario()
+
+    coarse_ref = _resp(top1_id=5, top1_piece="y", top1_logprob=-0.1)                   # coarse flips
+    coarse_self = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, applied=True,
+                        applied_field="head_write_applied")
+    coarse_rand = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1)
+    # halfA = [(0,0),(0,1)]: ALSO retained (reference flips, random and self behave) -> bisects to leaves.
+    a_ref = _resp(top1_id=5, top1_piece="y", top1_logprob=-0.1)
+    a_self = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, applied=True, applied_field="head_write_applied")
+    a_rand = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1)
+    a_shuf = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.05)
+    # halfB = [(1,0),(1,1)]: not retained -- no further bisection there.
+    b_ref = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0)
+    b_self = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, applied=True, applied_field="head_write_applied")
+    b_rand = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1)
+    b_shuf = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.05)
+    cand_engine = FakeEngine([baseline, coarse_ref, coarse_self, coarse_rand,
+                              a_ref, a_self, a_rand, a_shuf, b_ref, b_self, b_rand, b_shuf])
+
+    confirmed_sites = []
+
+    def fake_run_site(*, site, shuffled_layer, **kwargs):
+        assert site["hook"] == "head"
+        assert "head" in site and isinstance(site["head"], int)   # the exact field the old code omitted
+        confirmed_sites.append((site["layer"], site["head"]))
+        localizes = site == {"hook": "head", "layer": 0, "head": 0}
+        analysis = {"instrument_sane": True, "reference_moved_toward_reference": localizes,
+                   "reference_specific": localizes, "reasons": ["stub"]}
+        return {"ok": True, "document": {"schema_version": "clozn.transplant.v1", "analysis": analysis,
+                                         "site": dict(site)}}
+
+    monkeypatch.setattr(cb.transplant, "run_site", fake_run_site)
+    out = cb.run_bisect(**_base_kwargs(
+        pair_compat=_COMPATIBLE_WITH_HEAD,
+        search_kinds=("head",), head_layers=[0, 1], head_indices=[0, 1], window_size=4,
+        reference_loader=_loader(ref_engine, "ref", events),
+        candidate_loader=_loader(cand_engine, "cand", events)))
+
+    assert out["ok"] is True
+    doc = out["document"]
+    schemas.validate(doc)
+    assert set(confirmed_sites) == {(0, 0), (0, 1)}          # exactly the two bisected-down leaves
+    leaf_tests = [s for s in doc["single_site_tests"] if s["hook"] == "head"]
+    assert {s["source"] for s in leaf_tests} == {"bisection_leaf"}
+    assert {(s["layer"], s["head"]) for s in leaf_tests} == {(0, 0), (0, 1)}
+    assert doc["verdict"]["label"] == "localized_site"
+    assert doc["verdict"]["evidence"]["sites"] == [{"hook": "head", "layer": 0, "head": 0}]
 
 
 def test_batched_screen_requested_is_honestly_recorded_as_unused(monkeypatch):

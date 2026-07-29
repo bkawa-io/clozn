@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "clozn.causal-bisect.v1",
   "title": "Causal bisect -- coarse-to-fine search for where a reference model's behavior localizes in a candidate",
-  "description": "clozn.analysis.causal_bisect's output: a coarse-to-fine search over clozn.analysis.transplant's controlled-transplant primitive, restricted to COMPOSABLE hook kinds (ffn/head) for any multi-site WINDOW, because residual (l_out) sites overwrite the stream and cannot be combined into a window without one write erasing another (see the module docstring). Windows are tiled, tested, and (when retained -- the reference arm beat the random equal-norm control) recursively bisected down to individual sites, which are re-tested with clozn.analysis.transplant.run_site() directly so the stored reference_specific verdict is never recomputed. residual and head sites may also be tested individually (never windowed) when the caller supplies explicit candidate layers. A verdict is a substantive claim only when instrument_sane held for the evidence it rests on; distributed_restoration is reachable ONLY when a composable-kind window search actually ran.",
+  "description": "clozn.analysis.causal_bisect's output: a coarse-to-fine search over clozn.analysis.transplant's controlled-transplant primitive, restricted to COMPOSABLE hook kinds (ffn/head) for any multi-site WINDOW, because residual (l_out) sites overwrite the stream and cannot be combined into a window without one write erasing another (see the module docstring). Both ffn (per-layer) and head (per layer+head) sites compose into windows -- each kind gets its OWN independent tile-and-bisect search (a single window is always one kind; a joint ffn+head window write is not implemented in this slice, see the module docstring). Windows are tiled, tested, and (when retained -- the reference arm beat the random equal-norm control) recursively bisected down to individual sites, which are re-tested with clozn.analysis.transplant.run_site() directly so the stored reference_specific verdict is never recomputed. residual sites (never windowed) and a trivial single (layer, head) request are tested individually when the caller supplies explicit candidate layers. A verdict is a substantive claim only when instrument_sane held for the evidence it rests on; distributed_restoration is reachable ONLY when a composable-kind window search actually ran.",
 
   "type": "object",
   "required": ["schema_version", "generated_at", "reference_model", "candidate_model", "pair_compatibility",
@@ -66,6 +66,10 @@
       "properties": {
         "window_size": {"type": "integer", "minimum": 1},
         "max_windows": {"type": "integer", "minimum": 1},
+        "max_head_sites": {
+          "type": "integer", "minimum": 1,
+          "description": "Optional cap on the head_layers x head_indices grid: when the usable grid exceeds this, only the top max_head_sites sites by observational reference-vs-candidate divergence were tiled/bisected -- see bounds_applied for the exact counts."
+        },
         "layer_range_searched": {"type": "object", "additionalProperties": true},
         "bounds_applied": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1}
       },
@@ -79,6 +83,10 @@
       "properties": {
         "hook": {"enum": ["residual", "ffn", "head"]},
         "layers": {"type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 1},
+        "heads": {
+          "type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 1,
+          "description": "hook=head windows only: the head index for each site, positionally parallel to `layers` (layers[i]/heads[i] together name site i -- a layer may repeat when multiple heads at that layer are in the same window)."
+        },
         "depth": {"type": "integer", "minimum": 0},
         "instrument_sane": {"type": "boolean"},
         "moved": {"type": "boolean"},
@@ -98,6 +106,10 @@
       "properties": {
         "hook": {"enum": ["residual", "ffn", "head"]},
         "layer": {"type": "integer", "minimum": 0},
+        "head": {
+          "type": "integer", "minimum": 0,
+          "description": "hook=head only: which query head this site addresses."
+        },
         "source": {"enum": ["bisection_leaf", "explicit_residual", "explicit_head"]},
         "ok": {"type": "boolean"},
         "transplant": {"type": "object", "additionalProperties": true},
