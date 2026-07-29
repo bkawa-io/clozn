@@ -1,0 +1,21 @@
+{
+  "schema_version": "clozn.pair-compatibility.v1",
+  "model_a": {},
+  "model_b": {},
+  "tokenizer": {"state": "exact", "method": "hash"},
+  "template": {"state": "same", "method": "hash"},
+  "architecture": {"state": "same", "value_a": "qwen2", "value_b": "qwen2"},
+  "layer_count": {"state": "same", "value_a": 28, "value_b": 28},
+  "hidden_size": {"state": "same", "value_a": 3584, "value_b": 3584},
+  "vocab_size": {"state": "same", "value_a": 152064, "value_b": 152064},
+  "writable_layers": {},
+  "verdict": {
+    "overall": "compatible",
+    "reasons": [],
+    "operations": {
+      "per_token_comparison": {"permitted": true, "reason": "ok"},
+      "residual_transplant": {"permitted": true, "reason": "ok"}
+    },
+    "confidence": 0.99
+  }
+}

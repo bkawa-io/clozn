@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.pair-compatibility.v1",
+  "title": "Model-pair compatibility contract",
+  "description": "The shared, versioned preflight several features consume instead of each reimplementing it (diff-model, Experiments, mechanistic diff, Studio Compare, causal bisect) -- see clozn/analysis/pair_compatibility.py. Every dimension reports an explicit state ('same'/'differs'/'unknown', or 'exact'/'differs'/'unknown' for tokenizer) rather than a bare boolean, because different downstream operations have different requirements: per-token comparison needs the tokenizer to match exactly; a residual transplant needs hidden_size to match exactly. A value that could not be honestly measured on one or both sides is OMITTED (value_a/value_b), never null-padded -- absence must stay visible.",
+
+  "type": "object",
+  "required": ["schema_version", "model_a", "model_b", "tokenizer", "template", "architecture",
+               "layer_count", "hidden_size", "vocab_size", "writable_layers", "verdict"],
+
+  "$defs": {
+    "model_ref": {
+      "type": "object",
+      "description": "Identifying facts about one side of the pair. Every field is optional -- omitted, never null, when not known.",
+      "properties": {
+        "label": {"type": "string", "minLength": 1},
+        "filename": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "string_dimension": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {"enum": ["same", "differs", "unknown"]},
+        "value_a": {"type": "string"},
+        "value_b": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "int_dimension": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {"enum": ["same", "differs", "unknown"]},
+        "value_a": {"type": "integer", "minimum": 0},
+        "value_b": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "tokenizer_contract": {
+      "type": "object",
+      "description": "'exact' (not 'same') on purpose -- the one dimension with a hard downstream refusal (per-token comparison). 'method' records how the state was determined: a live behavioral probe through two engines, or a static GGUF tokenizer_sha256 digest comparison (no engine needed).",
+      "required": ["state", "method"],
+      "properties": {
+        "state": {"enum": ["exact", "differs", "unknown"]},
+        "method": {"enum": ["probe", "hash", "unknown"]},
+        "failed_probes": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        }
+      },
+      "additionalProperties": false
+    },
+    "template_contract": {
+      "type": "object",
+      "description": "A template mismatch is a labeled CAVEAT, never a refusal. 'policy_applied' records which rendering policy a caller used (e.g. diff-model's 'reference' vs 'own') when applicable -- omitted for callers with no such policy.",
+      "required": ["state", "method"],
+      "properties": {
+        "state": {"enum": ["same", "differs", "unknown"]},
+        "method": {"enum": ["probe", "hash", "unknown"]},
+        "policy_applied": {"enum": ["reference", "own"]},
+        "caveat": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "layer_range": {
+      "type": "object",
+      "description": "Writable layer indices are [min, max_exclusive) -- mirrors GgmlAdapter::add_write_state's own gate (engine/core/src/model_ggml.cpp): layer 0 and the final layer are never writable.",
+      "required": ["min", "max_exclusive"],
+      "properties": {
+        "min": {"type": "integer", "minimum": 0},
+        "max_exclusive": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "operation_permission": {
+      "type": "object",
+      "required": ["permitted", "reason"],
+      "properties": {
+        "permitted": {"type": "boolean"},
+        "reason": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    }
+  },
+
+  "properties": {
+    "schema_version": {"const": "clozn.pair-compatibility.v1"},
+    "generated_at": {"type": "string", "minLength": 1},
+    "model_a": {"$ref": "#/$defs/model_ref"},
+    "model_b": {"$ref": "#/$defs/model_ref"},
+    "tokenizer": {"$ref": "#/$defs/tokenizer_contract"},
+    "template": {"$ref": "#/$defs/template_contract"},
+    "architecture": {"$ref": "#/$defs/string_dimension"},
+    "layer_count": {"$ref": "#/$defs/int_dimension"},
+    "hidden_size": {"$ref": "#/$defs/int_dimension"},
+    "vocab_size": {"$ref": "#/$defs/int_dimension"},
+    "writable_layers": {
+      "type": "object",
+      "description": "Per-model writable layer range, present only for the side(s) whose layer_count is known.",
+      "properties": {
+        "model_a": {"$ref": "#/$defs/layer_range"},
+        "model_b": {"$ref": "#/$defs/layer_range"}
+      },
+      "additionalProperties": false
+    },
+    "verdict": {
+      "type": "object",
+      "description": "'overall' is a summary; 'operations' is the machine-readable per-question answer a caller should actually branch on -- 'may I do per-token comparison' and 'may I do a residual transplant' have different requirements and can disagree.",
+      "required": ["overall", "reasons", "operations"],
+      "properties": {
+        "overall": {"enum": ["compatible", "compatible_with_caveats", "incompatible"]},
+        "reasons": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "operations": {
+          "type": "object",
+          "required": ["per_token_comparison", "residual_transplant"],
+          "properties": {
+            "per_token_comparison": {"$ref": "#/$defs/operation_permission"},
+            "residual_transplant": {"$ref": "#/$defs/operation_permission"}
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": true
+}

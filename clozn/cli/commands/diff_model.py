@@ -61,6 +61,16 @@ policy, verdict classification) -- all rendering below the ladder line reuses `q
 verbatim (relabeled headline only), and every caveat string `quant_receipts.py` attaches to a receipt rides
 through unchanged.
 
+SLICE 3.1: the tokenizer preflight (`check_tokenizer_compat`/`_tokenizer_refusal_message`) and the
+template-policy probe (`check_template_match`) now live in `clozn.analysis.pair_compatibility` -- the
+SHARED, versioned model-pair compatibility contract several features consume (diff-model, Experiments,
+mechanistic diff, Studio Compare, causal bisect) instead of each reimplementing this preflight. This
+module imports them under their original names (see the import block below) so its own observable
+behavior -- the exact refusal wording, the exact caveat text, `--own-templates`' exact semantics -- is
+byte-for-byte unchanged; `tests/test_diff_model.py` is the regression net that proves it. What stays HERE
+(diff-model-specific, not shared): the verdict classification (`classify_verdict`), the ladder
+orchestration (`run_direction`/`run_diff_model`), and all rendering.
+
 Model-free / unit-tested (no engine, no GPU -- tests/test_diff_model.py): `check_tokenizer_compat` and
 `check_template_match` against fake engines exposing only `.score`/`.apply_template`; `classify_verdict`
 against FIXTURE receipts built with `quant_receipts.diff_quant_scores` (mirrors test_quant_check.py's own
@@ -90,117 +100,19 @@ from clozn.cli.engine_process import _free_port, spawn_engine
 import clozn.cli.commands.quant_check as qc
 
 # ------------------------------------------------------------------------------------ tokenizer preflight
-
-# A short, fixed prefix every probe is scored after -- keeps the /score call shape identical to a real
-# forced-scoring call (prompt + continuation) without needing chat messages/apply_template at all: the
-# preflight's whole point is to compare TOKENIZATION, which is orthogonal to chat templating.
-_TOKENIZER_PROBE_PREFIX = "Consider the following: "
-
-# ~4 diverse probes (per the design): a plain English sentence, digits/arithmetic, a code snippet with
-# symbols, and a unicode/multilingual string -- chosen to stress different tokenizer code paths (BPE
-# merges on common words, digit-splitting behavior, punctuation/whitespace-sensitive code tokens, and
-# multi-byte/non-Latin scripts + emoji), not for statistical coverage.
-_TOKENIZER_PROBES = [
-    ("plain_english", "The quick brown fox jumps over the lazy dog while the sun sets slowly."),
-    ("digits_arithmetic", "12345 + 67890 = 80235, and roughly 3.14159 times 2 is 6.28318."),
-    ("code_snippet", "def add(a, b):\n    return a + b  # sum two numbers; edge case: a is None"),
-    ("unicode_multilingual", "Café naïve résumé — 日本語 中文"
-                             "测试 \U0001F680"),
-]
-
-
-def check_tokenizer_compat(sub_a, sub_b) -> dict:
-    """The mandatory preflight (see module docstring's THE TRAP): for each of `_TOKENIZER_PROBES`, call
-    EACH engine's own `.score(prompt=_TOKENIZER_PROBE_PREFIX, continuation=probe, topk=0)` -- letting
-    that engine's OWN tokenizer segment the probe text into ids, exactly as it would any real
-    continuation -- and compare the returned token id sequence AND piece-string sequence position by
-    position (plain list equality already does this: different order, different length, or any single
-    differing element all read as a mismatch). `sub_a`/`sub_b` are `quant_check._EngineScoreSub`-shaped
-    (or anything exposing `.engine.score(...)`) -- production wraps two real `EngineClient`s, tests wrap
-    fakes.
-
-    Returns {"compatible": bool, "probes": [{"probe", "text", "ids_match", "pieces_match", "n_a", "n_b"},
-    ...]} -- "compatible" is True only if EVERY probe's ids AND pieces matched. Never raises: a probe
-    whose scoring blew up on either arm is recorded as a hard mismatch (ids_match/pieces_match False),
-    never silently skipped, since an engine that can't even score a plain probe string is itself grounds
-    for refusing to diff."""
-    probes_out = []
-    all_compatible = True
-    for name, text in _TOKENIZER_PROBES:
-        try:
-            resp_a = sub_a.engine.score(prompt=_TOKENIZER_PROBE_PREFIX, continuation=text, topk=0)
-            resp_b = sub_b.engine.score(prompt=_TOKENIZER_PROBE_PREFIX, continuation=text, topk=0)
-            toks_a = resp_a.get("tokens", []) if isinstance(resp_a, dict) else []
-            toks_b = resp_b.get("tokens", []) if isinstance(resp_b, dict) else []
-            ids_a = [t.get("id") for t in toks_a if isinstance(t, dict)]
-            ids_b = [t.get("id") for t in toks_b if isinstance(t, dict)]
-            pieces_a = [t.get("piece") for t in toks_a if isinstance(t, dict)]
-            pieces_b = [t.get("piece") for t in toks_b if isinstance(t, dict)]
-            ids_match = bool(ids_a) and ids_a == ids_b
-            pieces_match = bool(pieces_a) and pieces_a == pieces_b
-        except Exception:
-            ids_a, ids_b, ids_match, pieces_match = [], [], False, False
-        if not (ids_match and pieces_match):
-            all_compatible = False
-        probes_out.append({"probe": name, "text": text, "ids_match": ids_match,
-                           "pieces_match": pieces_match, "n_a": len(ids_a), "n_b": len(ids_b)})
-    return {"compatible": all_compatible, "probes": probes_out}
-
-
-def _tokenizer_refusal_message(compat: dict) -> str:
-    """The refusal text for an incompatible tokenizer preflight -- states plainly why per-token diffing is
-    meaningless here (not just THAT it failed), and suggests the fix (a same-family pair)."""
-    bad = [p["probe"] for p in (compat.get("probes") or []) if not (p.get("ids_match") and p.get("pieces_match"))]
-    return (
-        "diff-model refuses: the reference and candidate do not tokenize identically (failed probe(s): "
-        f"{', '.join(bad) or 'unknown'}). Per-token teacher-forced diffing is meaningless across different "
-        "tokenizers -- a token id (or even a matching id with a different piece string) means something "
-        "different in each vocabulary, so a per-position 'preserved' or 'flipped' verdict would be comparing "
-        "unrelated units, not the same model's behavior under two conditions. This usually means the two "
-        "files are not close enough in lineage to diff this way (e.g. a merge stapled together checkpoints "
-        "from different tokenizer vintages). Compare same-tokenizer-family pairs instead -- a base model "
-        "and its own fine-tune/LoRA, or two checkpoints of the same run."
-    )
-
-
-# ---------------------------------------------------------------------------------------- template policy
-
-_CANONICAL_TEMPLATE_MESSAGES = [
-    {"role": "system", "content": "You are a helpful assistant."},
-    {"role": "user", "content": "What is the capital of France?"},
-]
-
-_TEMPLATE_DIFFER_REFERENCE_CAVEAT = (
-    "chat templates differ between the reference and the candidate; both arms were scored on the "
-    "REFERENCE model's rendering (the default policy), so this diff isolates WEIGHTS -- the candidate is "
-    "being evaluated slightly off its own deployed chat format. Pass --own-templates to measure the "
-    "candidate's actual deployed behavior instead (weights AND template both in play)."
+# Delegated to clozn.analysis.pair_compatibility (slice 3.1's shared model-pair compatibility contract --
+# see this module's docstring). Imported under the original names so every existing caller/test in this
+# file (`check_tokenizer_compat`, `_TOKENIZER_PROBES`, `_tokenizer_refusal_message`) keeps working
+# unmodified; `pair_compatibility` is the single implementation now.
+from clozn.analysis.pair_compatibility import (           # noqa: E402
+    TOKENIZER_PROBES as _TOKENIZER_PROBES,
+    check_tokenizer_compat,
+    tokenizer_refusal_message as _tokenizer_refusal_message,
+    CANONICAL_TEMPLATE_MESSAGES as _CANONICAL_TEMPLATE_MESSAGES,
+    TEMPLATE_DIFFER_REFERENCE_CAVEAT as _TEMPLATE_DIFFER_REFERENCE_CAVEAT,
+    TEMPLATE_OWN_CAVEAT as _TEMPLATE_OWN_CAVEAT,
+    check_template_match,
 )
-
-_TEMPLATE_OWN_CAVEAT = (
-    "--own-templates: each model rendered its OWN chat template. This measures the candidate's DEPLOYED "
-    "behavior including template differences, not an isolated weights diff -- a divergence below could "
-    "come from the template change, the weights change, or both, and this run cannot separate them."
-)
-
-
-def check_template_match(sub_a, sub_b) -> dict:
-    """Compares `apply_template` output on a canonical 2-message conversation ([system: "You are a helpful
-    assistant.", user: "What is the capital of France?"]) under both engines. Returns {"match": bool,
-    "rendering_a", "rendering_b"} -- "match" is True only when both renders succeeded and are byte-
-    identical. Never raises: a template render that fails on either side (e.g. no embedded chat template)
-    counts as a mismatch, since the two arms plainly are not rendering the same way in that case either."""
-    try:
-        rendering_a = sub_a.engine.apply_template(list(_CANONICAL_TEMPLATE_MESSAGES))
-    except Exception:
-        rendering_a = None
-    try:
-        rendering_b = sub_b.engine.apply_template(list(_CANONICAL_TEMPLATE_MESSAGES))
-    except Exception:
-        rendering_b = None
-    match = rendering_a is not None and rendering_a == rendering_b
-    return {"match": match, "rendering_a": rendering_a, "rendering_b": rendering_b}
-
 
 # -------------------------------------------------------------------------------------------- the ladder
 
