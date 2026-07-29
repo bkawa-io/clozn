@@ -659,6 +659,58 @@ class EngineClient:
             body["attn_knockout"] = [dict(spec) for spec in attn_knockout]
         return self._post("/score", body)
 
+    def execution_fork(self, *, checkpoint_id: str, truncate_to: int, max_tokens: int,
+                       intervention: Optional[Mapping[str, Any]] = None,
+                       checkpoint_on_finish: bool = False) -> dict:
+        """POST /v1/execution-fork: resume generation from a saved KV checkpoint, truncated back to a
+        prior token position, optionally applying ONE `intervention` on the forked continuation -- the
+        exact-execution-fork primitive the reproduce/prove stack branches a run from.
+
+        `truncate_to` is a token INDEX into the checkpoint's own history (prompt + generated tokens so
+        far), not a byte offset. Per the wire contract: truncate_to > the checkpoint's prompt length has
+        generated-token KV to slice back to (`restore_mode: "live_kv_truncated"`) -- continuing THAT with
+        `intervention: {"type": "none"}` must reproduce the original run's suffix EXACTLY, token for
+        token. truncate_to <= the prompt length has no generated KV to trim to, so the engine re-prefills
+        from scratch instead (`restore_mode: "reprefill"`); that reply must never then claim
+        `exactness.source == "live_kv"` -- callers checking exactness must read BOTH `restore_mode` and
+        `exactness.source` together, never infer one from the other.
+
+        `intervention` is exactly one of the five wire shapes -- {"type": "none"},
+        {"type": "force_token", "token_id": ...}, {"type": "sampling", ...} (any subset of temperature/
+        top_k/top_p/seed/rep_penalty), {"type": "steer", ...} (a steer_vec/steer_layer/steer_coef push,
+        or {"type": "steer", "clear": true}), or {"type": "residual_write", "layer":, "position":,
+        "values": [...]}. Passed through verbatim -- this client does not interpret or validate the
+        shape (the engine does, and refuses cleanly). Omitted (None) leaves the `intervention` key out
+        of the body entirely (the engine's own default), never sent as an explicit null.
+
+        Returns the raw engine reply: {text, tokens, prompt_len, n_past_restored, restore_mode,
+        exactness, sampler_source, steer_source, intervention_applied, checkpoint_id}. Per the repo's
+        "omit, never null-pad" wire rule, any of those keys may be ABSENT on a given reply -- this method
+        does not fill in defaults for missing keys, so callers must read the result with `.get(...)`,
+        never assume a key's presence or convert its absence into an invented value.
+        """
+        if not isinstance(checkpoint_id, str) or not checkpoint_id:
+            raise ValueError(f"checkpoint_id must be a non-empty string, got {checkpoint_id!r}")
+        if not isinstance(truncate_to, int) or isinstance(truncate_to, bool) or truncate_to < 0:
+            raise ValueError(f"truncate_to must be a non-negative integer, got {truncate_to!r}")
+        if not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or max_tokens < 1:
+            raise ValueError(f"max_tokens must be a positive integer, got {max_tokens!r}")
+        if intervention is not None and not isinstance(intervention, Mapping):
+            raise ValueError(f"intervention must be an object (one of the wire shapes) or None, "
+                             f"got {intervention!r}")
+        if not isinstance(checkpoint_on_finish, bool):
+            raise ValueError(f"checkpoint_on_finish must be a bool, got {checkpoint_on_finish!r}")
+
+        body: dict = {
+            "checkpoint_id": checkpoint_id,
+            "truncate_to": truncate_to,
+            "max_tokens": max_tokens,
+            "checkpoint_on_finish": checkpoint_on_finish,
+        }
+        if intervention is not None:
+            body["intervention"] = dict(intervention)
+        return self._post("/v1/execution-fork", body)
+
     def cancel(self, req_id: str) -> dict:
         """POST /cancel: cooperative cancel of a running generation. Idempotent — an unknown or
         already-finished id returns {cancelled: false}. Returns {cancelled: bool, req: str}."""
