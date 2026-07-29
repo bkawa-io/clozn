@@ -28,8 +28,20 @@ only cares about `hidden_size`), and a `hidden_size` mismatch blocks transplant 
 comparison untouched (it only cares about the tokenizer). Collapsing that into one bare boolean would
 either over-refuse or under-refuse depending which operation the caller actually wanted. So every
 dimension below reports an explicit STATE (never a bare bool), and the document's `verdict.operations`
-answers "may I do per-token comparison?" / "may I do residual transplant?" as two separate, reasoned
-yes/no answers a caller can query independently.
+answers "may I do per-token comparison?" / "may I do residual transplant?" / "may I do a head
+transplant?" as separate, reasoned yes/no answers a caller can query independently.
+
+A per-head (`kqv_out-<il>` / `head_write`) transplant is a THIRD such question, with its OWN hard
+requirement, gated independently of the other two: `head_count` (the query-head count -- kqv_out rows
+are per-Q-head even under GQA, per `clozn.receipts.hook_vocabulary`'s GQA note) must match exactly,
+because a head INDEX only refers to the same conceptual slice on both models when they agree on how many
+slices `kqv_out` is divided into. A `head_count` mismatch blocks `head_transplant` and nothing else --
+it does not touch `per_token_comparison` (tokenizer-only) or `residual_transplant` (hidden_size-only),
+mirroring exactly how a `hidden_size` mismatch today blocks only `residual_transplant`. `head_count_kv`
+(the key/value-head count, which differs from `head_count` under GQA) is carried on `gguf_identity` for
+completeness but is deliberately NOT part of this gate: `kqv_out`'s row structure is dimensioned by
+query heads, not KV heads, so KV-head count is not mechanically relevant to whether a `head_write` index
+means the same thing on both sides.
 
 TWO WAYS TO KNOW A DIMENSION
 -----------------------------
@@ -296,7 +308,7 @@ def writable_layer_range(layer_count) -> dict | None:
 # =================================================================================== verdict + operations
 
 def _build_verdict(*, tokenizer: dict, template: dict, architecture: dict, layer_count: dict,
-                    hidden_size: dict, vocab_size: dict) -> dict:
+                    hidden_size: dict, vocab_size: dict, head_count: dict) -> dict:
     reasons: list[str] = []
 
     if tokenizer["state"] == "differs":
@@ -336,6 +348,14 @@ def _build_verdict(*, tokenizer: dict, template: dict, architecture: dict, layer
     elif vocab_size["state"] == "unknown":
         reasons.append("vocab_size is unknown for at least one model.")
 
+    if head_count["state"] == "differs":
+        reasons.append(f"head_count differs ({head_count.get('value_a')} vs {head_count.get('value_b')}); "
+                       "a per-head kqv_out transplant is mechanically impossible -- a head index does not "
+                       "refer to the same slice on models with different query-head counts.")
+    elif head_count["state"] == "unknown":
+        reasons.append("head_count is unknown for at least one model; head transplant cannot be confirmed "
+                       "mechanically possible.")
+
     if tokenizer["state"] == "differs":
         overall = "incompatible"
     elif reasons:
@@ -368,12 +388,25 @@ def _build_verdict(*, tokenizer: dict, template: dict, architecture: dict, layer
         transplant_reason = ("hidden_size is unknown for at least one model; residual transplant cannot be "
                              "confirmed mechanically possible.")
 
+    head_transplant_permitted = head_count["state"] == "same"
+    if head_transplant_permitted:
+        head_transplant_reason = (f"head_count matches exactly ({head_count.get('value_a')}); a kqv_out "
+                                  "head index refers to the same conceptual slice on both models.")
+    elif head_count["state"] == "differs":
+        head_transplant_reason = (f"head_count differs ({head_count.get('value_a')} vs "
+                                  f"{head_count.get('value_b')}); a head index would not refer to the same "
+                                  "slice on both models.")
+    else:
+        head_transplant_reason = ("head_count is unknown for at least one model; head transplant cannot be "
+                                  "confirmed mechanically possible.")
+
     return {
         "overall": overall,
         "reasons": reasons,
         "operations": {
             "per_token_comparison": {"permitted": per_token_permitted, "reason": per_token_reason},
             "residual_transplant": {"permitted": transplant_permitted, "reason": transplant_reason},
+            "head_transplant": {"permitted": head_transplant_permitted, "reason": head_transplant_reason},
         },
     }
 
@@ -408,6 +441,7 @@ def assess(identity_a: Mapping[str, object], identity_b: Mapping[str, object], *
     layer_count = _dimension(identity_a.get("layer_count"), identity_b.get("layer_count"))
     hidden_size = _dimension(identity_a.get("hidden_size"), identity_b.get("hidden_size"))
     vocab_size = _dimension(identity_a.get("vocab_size"), identity_b.get("vocab_size"))
+    head_count = _dimension(identity_a.get("head_count"), identity_b.get("head_count"))
 
     writable_layers: dict = {}
     range_a = writable_layer_range(identity_a.get("layer_count"))
@@ -418,7 +452,8 @@ def assess(identity_a: Mapping[str, object], identity_b: Mapping[str, object], *
         writable_layers["model_b"] = range_b
 
     verdict = _build_verdict(tokenizer=tokenizer, template=template, architecture=architecture,
-                             layer_count=layer_count, hidden_size=hidden_size, vocab_size=vocab_size)
+                             layer_count=layer_count, hidden_size=hidden_size, vocab_size=vocab_size,
+                             head_count=head_count)
 
     doc = {
         "schema_version": SCHEMA_VERSION,
@@ -431,6 +466,7 @@ def assess(identity_a: Mapping[str, object], identity_b: Mapping[str, object], *
         "layer_count": layer_count,
         "hidden_size": hidden_size,
         "vocab_size": vocab_size,
+        "head_count": head_count,
         "writable_layers": writable_layers,
         "verdict": verdict,
     }
@@ -464,3 +500,11 @@ def may_residual_transplant(report: dict) -> bool:
     """True iff `report` (an `assess(...)` document) permits a residual transplant."""
     return bool(report.get("verdict", {}).get("operations", {})
                .get("residual_transplant", {}).get("permitted"))
+
+
+def may_head_transplant(report: dict) -> bool:
+    """True iff `report` (an `assess(...)` document) permits a per-head (`kqv_out`/`head_write`)
+    transplant -- gated on `head_count` matching exactly, independent of `residual_transplant`'s own
+    `hidden_size` gate (see this module's docstring)."""
+    return bool(report.get("verdict", {}).get("operations", {})
+               .get("head_transplant", {}).get("permitted"))

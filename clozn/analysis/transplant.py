@@ -1,10 +1,11 @@
-"""transplant.py -- slice 3.4: the CONTROLLED TRANSPLANT primitive.
+"""transplant.py -- slice 3.4 (+ head-site addendum): the CONTROLLED TRANSPLANT primitive.
 
-Take the reference model's internal state at ONE site (a residual `l_out-<layer>` row or an
-`ffn_out-<layer>` MLP-contribution row) and write it into the candidate model, then observe whether the
-candidate's own answer moves toward the reference's -- alongside the four controls that make a "yes"
-mean something instead of an overclaim. This is the foundation the causal bisect (a LATER slice) will
-search over; this module runs and reports ONE site's five arms, nothing more.
+Take the reference model's internal state at ONE site (a residual `l_out-<layer>` row, an
+`ffn_out-<layer>` MLP-contribution row, or a per-Q-head `kqv_out-<layer>` slice) and write it into the
+candidate model, then observe whether the candidate's own answer moves toward the reference's --
+alongside the four controls that make a "yes" mean something instead of an overclaim. This is the
+foundation the causal bisect (a LATER slice) will search over; this module runs and reports ONE site's
+five arms, nothing more.
 
 THE FIVE CONTROLS
 ------------------
@@ -42,21 +43,40 @@ This module never uses the words "localize"/"localized"/"localizing" or "distrib
 that vocabulary belongs to the LATER slice that actually searches across sites for a causal account.
 Everything here is scoped to ONE named site's five measured arms.
 
-WHY pair_compatibility's `residual_transplant` GATES BOTH HOOK KINDS
------------------------------------------------------------------------
-`clozn.analysis.pair_compatibility` (read-only reused here, never modified) models exactly ONE transplant
-operation, named `residual_transplant`, gated on `hidden_size` matching exactly -- because the engine's
-write validation (`values.size() == positions.size() * n_embd` of the TARGET engine, no projection layer
-anywhere) is the same mechanical fact regardless of WHICH n_embd-wide hook is being written. `ffn_write`
-(this module's other supported site kind) carries the IDENTICAL n_embd-width, position-major contract as
-residual `write` (see clozn/receipts/hook_vocabulary.py's `_FFN_OUT.ffn_write`) -- the only thing that
-differs between the two hooks is the writable LAYER RANGE (`[1, n_layer)` for residual, reserving layer 0
-as the read tap's sentinel; `[0, n_layer)` for ffn_out, which has no such reservation), which this module
-computes directly in `_writable_range` rather than asking pair_compatibility to grow a third gate it was
-never asked to model. Per-head `kqv_out` sites are OUT OF SCOPE for this module: `head_write`'s value
-width is `d_head`, only known from a runtime probe (see hook_vocabulary's `d_head_probe`), not statically
-the way `write`/`ffn_write`'s n_embd width is -- a real gap, not a silent omission, left for whichever
-slice next needs per-head transplant.
+WHY pair_compatibility's `residual_transplant` GATES BOTH `residual` AND `ffn` HOOK KINDS
+--------------------------------------------------------------------------------------------
+`clozn.analysis.pair_compatibility` models exactly ONE transplant operation for full-width hooks, named
+`residual_transplant`, gated on `hidden_size` matching exactly -- because the engine's write validation
+(`values.size() == positions.size() * n_embd` of the TARGET engine, no projection layer anywhere) is the
+same mechanical fact regardless of WHICH n_embd-wide hook is being written. `ffn_write` carries the
+IDENTICAL n_embd-width, position-major contract as residual `write` (see clozn/receipts/hook_vocabulary.py's
+`_FFN_OUT.ffn_write`) -- the only thing that differs between the two hooks is the writable LAYER RANGE
+(`[1, n_layer)` for residual, reserving layer 0 as the read tap's sentinel; `[0, n_layer)` for ffn_out,
+which has no such reservation), which this module computes directly in `_writable_range` rather than
+asking pair_compatibility to grow a third gate it was never asked to model.
+
+THE THIRD SITE KIND: `head` (per-Q-head `kqv_out-<layer>`)
+-------------------------------------------------------------
+Per-head `kqv_out` sites were previously scoped OUT of this module because `head_write`'s value width
+(`d_head`) was believed only knowable from a runtime probe -- not statically the way `write`/`ffn_write`'s
+n_embd width is. That is still true for the write's exact byte width (this module never assumes a
+statically-computed `d_head`; every vector it writes for a `head` site is read back from a live
+`head_capture` response's own `head_dims`, exactly as the n_embd-wide hooks trust their own `capture`/
+`ffn_capture` responses -- see "WRITE SPECS REFERENCE TENSORS BY CONTENT ADDRESS" below). What changed is
+that `d_head` IS knowable STATICALLY for the one thing that actually needs a static, no-engine gate: WHICH
+pairs of models are even eligible to attempt a head transplant at all. `clozn.artifacts.contracts.
+gguf_identity` now reads `head_count` (and `head_count_kv`, which differs under GQA) straight from the
+GGUF header via `clozn.cli.fit_planner`'s existing reader -- no new GGUF parser -- and
+`clozn.analysis.pair_compatibility` (mutated by this same slice, alongside this module) exposes that as
+its own `head_count` dimension and a THIRD operation, `head_transplant`, gated on `head_count` matching
+exactly and INDEPENDENT of `residual_transplant`'s `hidden_size` gate (a head_count mismatch blocks
+`head_transplant` and nothing else -- see pair_compatibility's own module docstring). This module calls
+`pair_compatibility.may_head_transplant(pair_compat)` for a `head` site exactly where it calls
+`may_residual_transplant(pair_compat)` for `residual`/`ffn` sites, and additionally range-checks
+`site["head"]` locally against the candidate's own `head_count` (`pair_compat["head_count"]["value_b"]`),
+mirroring how `layer_count["value_b"]` already gates `site["layer"]`/`shuffled_layer` today. The writable
+LAYER range for `head` is `[0, n_layer)`, identical to `ffn` (no layer-0 reservation) -- `_writable_range`
+already covers this via its existing non-`residual` branch.
 
 SEQUENCING -- ONE MODEL RESIDENT AT A TIME
 --------------------------------------------
@@ -102,8 +122,11 @@ _ARM_ORDER = ("reference_transplant", "candidate_self_transplant", "random_equal
 _ALL_ARM_NAMES = _ARM_ORDER + ("no_write_replay",)
 
 # hook -> (capture kwarg names on EngineClient.score, write kwarg name, response field names)
-_HOOK_WRITE_FIELD = {"residual": "write", "ffn": "ffn_write"}
-_HOOK_APPLIED_FIELD = {"residual": "write_applied", "ffn": "ffn_write_applied"}
+_HOOK_WRITE_FIELD = {"residual": "write", "ffn": "ffn_write", "head": "head_write"}
+_HOOK_APPLIED_FIELD = {"residual": "write_applied", "ffn": "ffn_write_applied", "head": "head_write_applied"}
+# "head" is deliberately absent here: its capture response shape (head_rows/head_dims, sliced per-head
+# client-side) differs structurally from residual/ffn's uniform {"<layer>":{"<position>":[floats]}} --
+# see _read_head_vectors, which handles it directly rather than being folded into this generic mapping.
 _HOOK_CAPTURED_FIELD = {"residual": "captured", "ffn": "ffn_captured"}
 
 _ZERO_TOL = 1e-12
@@ -182,17 +205,27 @@ def _call_score(engine, label: str, **kwargs) -> dict:
 def _capture_kwargs(hook: str, layer: int, positions: Sequence[int]) -> dict:
     if hook == "residual":
         return {"capture_layers": [layer], "capture_positions": list(positions)}
+    if hook == "head":
+        # rows=True: this module needs the actual [d_head] slice to write elsewhere, not just the
+        # per-head L2-norm screening signal -- see hook_vocabulary's head_capture.response_shape.
+        return {"head_capture_layers": [layer], "head_capture_positions": list(positions),
+                "head_capture_rows": True}
     return {"ffn_capture_layers": [layer], "ffn_capture_positions": list(positions)}
 
 
-def _write_kwargs(hook: str, *, layer: int, positions: Sequence[int], values: Sequence[float]) -> dict:
+def _write_kwargs(hook: str, *, layer: int, positions: Sequence[int], values: Sequence[float],
+                  head: "int | None" = None) -> dict:
     spec = {"layer": layer, "positions": list(positions), "values": list(values)}
+    if head is not None:
+        spec["head"] = head
     return {_HOOK_WRITE_FIELD[hook]: [spec]}
 
 
 def _read_captured_vectors(response: dict, hook: str, layer: int, positions: Sequence[int]) -> dict:
     """position -> [float, ...] or None (this position did not land -- see hook_vocabulary's
-    known_gap_last_layer / architecture_coverage for why a request can be armed and still yield nothing)."""
+    known_gap_last_layer / architecture_coverage for why a request can be armed and still yield nothing).
+    Residual/ffn only -- see _read_head_vectors for the "head" hook's own (structurally different)
+    capture-response shape."""
     field = _HOOK_CAPTURED_FIELD[hook]
     captured = response.get(field)
     layer_rows = captured.get(str(layer)) if isinstance(captured, dict) else None
@@ -203,6 +236,39 @@ def _read_captured_vectors(response: dict, hook: str, layer: int, positions: Seq
             candidate_row = layer_rows.get(str(position))
             if isinstance(candidate_row, list):
                 row = candidate_row
+        out[position] = row
+    return out
+
+
+def _read_head_vectors(response: dict, layer: int, head: int, positions: Sequence[int]) -> dict:
+    """position -> [float, ...] (length d_head) or None -- the "head" hook's own capture reader.
+
+    Unlike residual/ffn capture, a head_capture response never states d_head as a request parameter:
+    d_head is PROBED by the engine from the live tensor and reported back in `head_dims` (see
+    hook_vocabulary's `d_head_probe` -- 'd_head = ne0/n_head when divisible, else 0, PROBED from the live
+    tensor'). This function trusts that engine-reported d_head as ground truth (never a value this module
+    computed itself from hidden_size/head_count) and slices `head`'s [d_head] rows out of `head_rows`'
+    full [ne0] merged row -- exactly mirroring how the engine itself lays out head h at
+    [h*d_head, (h+1)*d_head) of ne0 (hook_vocabulary's `_KQV_OUT.tensor`). d_head<=0 (the "division did
+    not divide evenly, applies nothing" case) or `head` outside the reported `n_head` both read as every
+    requested position missing -- never a guessed slice."""
+    head_dims = response.get("head_dims")
+    d_head = head_dims.get("d_head") if isinstance(head_dims, dict) else None
+    n_head = head_dims.get("n_head") if isinstance(head_dims, dict) else None
+    if not isinstance(d_head, int) or isinstance(d_head, bool) or d_head <= 0:
+        return {position: None for position in positions}
+    if isinstance(n_head, int) and not isinstance(n_head, bool) and not (0 <= head < n_head):
+        return {position: None for position in positions}
+    head_rows = response.get("head_rows")
+    layer_rows = head_rows.get(str(layer)) if isinstance(head_rows, dict) else None
+    lo, hi = head * d_head, (head + 1) * d_head
+    out: dict = {}
+    for position in positions:
+        row = None
+        if isinstance(layer_rows, dict):
+            full_row = layer_rows.get(str(position))
+            if isinstance(full_row, list) and len(full_row) >= hi:
+                row = [float(x) for x in full_row[lo:hi]]
         out[position] = row
     return out
 
@@ -276,7 +342,8 @@ def _target_metrics(response: dict, *, n_prompt: int, n_cont: int, readout_posit
 
 def _build_arm(*, name: str, hook: str, response: dict, write_layer: "int | None",
               positions: Sequence[int], vectors_by_position: "dict | None", n_prompt: int, n_cont: int,
-              readout_position: int, target_token_id: int, store_tensors: bool) -> dict:
+              readout_position: int, target_token_id: int, store_tensors: bool,
+              head: "int | None" = None) -> dict:
     target = _target_metrics(response, n_prompt=n_prompt, n_cont=n_cont, readout_position=readout_position,
                              target_token_id=target_token_id)
     metrics = dict(target["metrics"])
@@ -295,14 +362,17 @@ def _build_arm(*, name: str, hook: str, response: dict, write_layer: "int | None
         omitted.append({"metric": "write_applied", "reason": f"engine response carried no {applied_field!r} flag"})
 
     write_block: dict = {"layer": write_layer, "positions": list(positions)}
+    if head is not None:
+        write_block["head"] = head
     if store_tensors:
         vectors = []
         for position in positions:
             row = vectors_by_position[position]
-            ref = tensor_store.store_tensor(
-                row, shape=[len(row)],
-                provenance={"role": f"{hook}_transplant_write", "arm": name, "layer": write_layer,
-                           "position": position})
+            provenance = {"role": f"{hook}_transplant_write", "arm": name, "layer": write_layer,
+                         "position": position}
+            if head is not None:
+                provenance["head"] = head
+            ref = tensor_store.store_tensor(row, shape=[len(row)], provenance=provenance)
             vectors.append({"position": position, "tensor": ref})
         write_block["vectors"] = vectors
     return {"name": name, "write": write_block, "metrics": metrics, "omitted": omitted}
@@ -406,7 +476,8 @@ def _writable_range(hook: str, layer_count: int) -> tuple:
     GgmlAdapter::add_write_state's own gate for residual `write` (pair_compatibility.writable_layer_range
     computes the identical range; duplicated here as a plain tuple so this module does not need to build
     a fake pair_compatibility document just to reuse that one helper) and hook_vocabulary's stated
-    `ffn_write` range (every layer has its own FFN block, so layer 0 IS valid there)."""
+    `ffn_write`/`head_write` range (every layer has its own FFN block and attention block, so layer 0 IS
+    valid for both -- unlike residual `write`, which reserves layer 0 as the read tap's sentinel)."""
     if hook == "residual":
         return (1, layer_count)
     return (0, layer_count)
@@ -424,7 +495,9 @@ def run_site(*, pair_compat: Mapping[str, Any], reference_loader: Callable[[], A
     torn down completely), then run baseline + all five arms on the candidate (six forwards, candidate
     resident throughout, never concurrent with the reference) and build a `clozn.transplant.v1` document.
 
-    `site` is `{"hook": "residual"|"ffn", "layer": int}`. `shuffled_layer` must be a DIFFERENT layer
+    `site` is `{"hook": "residual"|"ffn", "layer": int}`, or `{"hook": "head", "layer": int, "head": int}`
+    for a per-Q-head `kqv_out-<layer>` site (`head` selects WHICH query head; range-checked against the
+    candidate's own `pair_compat["head_count"]["value_b"]`). `shuffled_layer` must be a DIFFERENT layer
     within the same writable range -- it is the shuffled-layer control's write target. `write_positions`
     is where the transplant writes; `readout_position` is where each arm's top-1/target-token metrics are
     read (commonly the same position, but kept independent since a write can propagate to a LATER
@@ -447,10 +520,25 @@ def run_site(*, pair_compat: Mapping[str, Any], reference_loader: Callable[[], A
     if not isinstance(layer, int) or isinstance(layer, bool):
         return {"ok": False, "error": "site.layer must be an integer"}
 
-    if not pair_compatibility.may_residual_transplant(pair_compat):
-        reason = (pair_compat.get("verdict", {}).get("operations", {})
-                 .get("residual_transplant", {}).get("reason") or "residual transplant is not permitted")
-        return {"ok": False, "error": f"transplant refused: {reason}"}
+    head_index: "int | None" = None
+    if hook == "head":
+        if not pair_compatibility.may_head_transplant(pair_compat):
+            reason = (pair_compat.get("verdict", {}).get("operations", {})
+                     .get("head_transplant", {}).get("reason") or "head transplant is not permitted")
+            return {"ok": False, "error": f"transplant refused: {reason}"}
+        head_count = (pair_compat.get("head_count") or {}).get("value_b")
+        if not isinstance(head_count, int) or isinstance(head_count, bool):
+            return {"ok": False, "error": "transplant refused: the candidate's head_count is unknown"}
+        head_index = site.get("head")
+        if (not isinstance(head_index, int) or isinstance(head_index, bool)
+                or not (0 <= head_index < head_count)):
+            return {"ok": False,
+                    "error": f"site.head must be an integer in [0, {head_count}) for hook 'head'"}
+    else:
+        if not pair_compatibility.may_residual_transplant(pair_compat):
+            reason = (pair_compat.get("verdict", {}).get("operations", {})
+                     .get("residual_transplant", {}).get("reason") or "residual transplant is not permitted")
+            return {"ok": False, "error": f"transplant refused: {reason}"}
 
     layer_count = (pair_compat.get("layer_count") or {}).get("value_b")
     if not isinstance(layer_count, int) or isinstance(layer_count, bool):
@@ -492,11 +580,15 @@ def run_site(*, pair_compat: Mapping[str, Any], reference_loader: Callable[[], A
                                **_capture_kwargs(hook, layer, positions))
     if not ref_call["ok"]:
         return {"ok": False, "error": ref_call["error"]}
-    ref_vectors = _read_captured_vectors(ref_call["response"], hook, layer, positions)
+    if hook == "head":
+        ref_vectors = _read_head_vectors(ref_call["response"], layer, head_index, positions)
+    else:
+        ref_vectors = _read_captured_vectors(ref_call["response"], hook, layer, positions)
     missing = [p for p, row in ref_vectors.items() if row is None]
     if missing:
+        head_note = f", head={head_index}" if hook == "head" else ""
         return {"ok": False,
-                "error": f"reference capture produced no row at layer={layer}, positions={missing}"}
+                "error": f"reference capture produced no row at layer={layer}{head_note}, positions={missing}"}
 
     # ---- candidate: resident for baseline + all five arms, never concurrent with the reference.
     rng = random.Random(seed)
@@ -507,11 +599,16 @@ def run_site(*, pair_compat: Mapping[str, Any], reference_loader: Callable[[], A
         if not baseline_call["ok"]:
             return {"ok": False, "error": baseline_call["error"]}
         baseline_response = baseline_call["response"]
-        self_vectors = _read_captured_vectors(baseline_response, hook, layer, positions)
+        if hook == "head":
+            self_vectors = _read_head_vectors(baseline_response, layer, head_index, positions)
+        else:
+            self_vectors = _read_captured_vectors(baseline_response, hook, layer, positions)
         self_missing = [p for p, row in self_vectors.items() if row is None]
         if self_missing:
+            head_note = f", head={head_index}" if hook == "head" else ""
             return {"ok": False,
-                    "error": f"candidate self-capture produced no row at layer={layer}, positions={self_missing}"}
+                    "error": f"candidate self-capture produced no row at layer={layer}{head_note}, "
+                             f"positions={self_missing}"}
 
         random_vectors = {p: _random_equal_norm_vector(ref_vectors[p], rng) for p in positions}
 
@@ -526,14 +623,15 @@ def run_site(*, pair_compat: Mapping[str, Any], reference_loader: Callable[[], A
             values = _flatten_position_major(vectors_by_position, positions)
             call = _call_score(candidate_engine, f"{name} arm", prompt_ids=prompt_id_list,
                                continuation_ids=continuation_id_list, topk=topk,
-                               **_write_kwargs(hook, layer=write_layer, positions=positions, values=values))
+                               **_write_kwargs(hook, layer=write_layer, positions=positions, values=values,
+                                              head=head_index))
             if not call["ok"]:
                 return {"ok": False, "error": call["error"]}
             arm_results.append(_build_arm(
                 name=name, hook=hook, response=call["response"], write_layer=write_layer,
                 positions=positions, vectors_by_position=vectors_by_position, n_prompt=n_prompt,
                 n_cont=n_cont, readout_position=readout_position, target_token_id=target_token_id,
-                store_tensors=store_tensors))
+                store_tensors=store_tensors, head=head_index))
 
         no_write_call = _call_score(candidate_engine, "no_write_replay arm", prompt_ids=prompt_id_list,
                                     continuation_ids=continuation_id_list, topk=topk)
@@ -555,7 +653,8 @@ def run_site(*, pair_compat: Mapping[str, Any], reference_loader: Callable[[], A
         "reference_model": dict(pair_compat.get("model_a") or {}),
         "candidate_model": dict(pair_compat.get("model_b") or {}),
         "pair_compatibility": dict(pair_compat),
-        "site": {"hook": hook, "layer": layer},
+        "site": ({"hook": hook, "layer": layer, "head": head_index} if head_index is not None
+                else {"hook": hook, "layer": layer}),
         "shuffled_layer": shuffled_layer,
         "write_positions": positions,
         "readout_position": readout_position,

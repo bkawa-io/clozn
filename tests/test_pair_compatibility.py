@@ -50,7 +50,8 @@ class TemplateEngine:
 
 
 def _identity(*, architecture=None, hidden_size=None, layer_count=None, vocab_size=None,
-             tokenizer_sha256=None, chat_template_sha256=None, sha256=None, filename=None):
+             head_count=None, head_count_kv=None, tokenizer_sha256=None, chat_template_sha256=None,
+             sha256=None, filename=None):
     """A synthetic `gguf_identity(...)`-shaped dict -- only the keys pair_compatibility actually reads,
     with a value simply absent (never None) when a case wants a field "not measured". Real gguf_identity
     always returns every key it computes; tests exercise the "unknown" path by omitting a key entirely,
@@ -64,6 +65,10 @@ def _identity(*, architecture=None, hidden_size=None, layer_count=None, vocab_si
         out["layer_count"] = layer_count
     if vocab_size is not None:
         out["vocab_size"] = vocab_size
+    if head_count is not None:
+        out["head_count"] = head_count
+    if head_count_kv is not None:
+        out["head_count_kv"] = head_count_kv
     if tokenizer_sha256 is not None:
         out["tokenizer_sha256"] = tokenizer_sha256
     if chat_template_sha256 is not None:
@@ -76,11 +81,11 @@ def _identity(*, architecture=None, hidden_size=None, layer_count=None, vocab_si
 
 
 _FULL_A = dict(architecture="qwen2", hidden_size=3584, layer_count=28, vocab_size=152064,
-              tokenizer_sha256="tok-aaa", chat_template_sha256="tpl-aaa",
+              head_count=28, head_count_kv=4, tokenizer_sha256="tok-aaa", chat_template_sha256="tpl-aaa",
               sha256="a" * 64, filename="a.gguf")
 _FULL_B_SAME = dict(architecture="qwen2", hidden_size=3584, layer_count=28, vocab_size=152064,
-                    tokenizer_sha256="tok-aaa", chat_template_sha256="tpl-aaa",
-                    sha256="b" * 64, filename="b.gguf")
+                    head_count=28, head_count_kv=4, tokenizer_sha256="tok-aaa",
+                    chat_template_sha256="tpl-aaa", sha256="b" * 64, filename="b.gguf")
 
 
 # ==================================================================================== check_tokenizer_compat
@@ -181,10 +186,12 @@ def test_assess_all_dimensions_same_is_fully_compatible():
     assert doc["layer_count"]["state"] == "same"
     assert doc["hidden_size"]["state"] == "same"
     assert doc["vocab_size"]["state"] == "same"
+    assert doc["head_count"]["state"] == "same"
     assert doc["verdict"]["overall"] == "compatible"
     assert doc["verdict"]["reasons"] == []
     assert doc["verdict"]["operations"]["per_token_comparison"]["permitted"] is True
     assert doc["verdict"]["operations"]["residual_transplant"]["permitted"] is True
+    assert doc["verdict"]["operations"]["head_transplant"]["permitted"] is True
     assert doc["writable_layers"]["model_a"] == {"min": 1, "max_exclusive": 28}
     assert doc["writable_layers"]["model_b"] == {"min": 1, "max_exclusive": 28}
     # schemas.validate already ran inside assess(); re-running here pins the contract explicitly.
@@ -234,11 +241,54 @@ def test_assess_missing_fields_are_unknown_and_values_omitted_not_nulled():
     assert doc["hidden_size"] == {"state": "unknown"}   # no value_a/value_b key at all -- never null
     assert "value_a" not in doc["hidden_size"]
     assert "value_b" not in doc["hidden_size"]
+    assert doc["head_count"] == {"state": "unknown"}
+    assert "value_a" not in doc["head_count"]
+    assert "value_b" not in doc["head_count"]
     assert doc["writable_layers"] == {}   # neither side's layer_count known
     ops = doc["verdict"]["operations"]
     assert ops["per_token_comparison"]["permitted"] is False
     assert ops["residual_transplant"]["permitted"] is False
+    assert ops["head_transplant"]["permitted"] is False
     assert doc["verdict"]["overall"] == "compatible_with_caveats"   # unknown is not a confirmed refusal
+
+
+def test_assess_head_count_differs_blocks_only_head_transplant():
+    """The head-transplant mirror of test_assess_hidden_size_differs_blocks_only_residual_transplant:
+    head_count is gated INDEPENDENTLY of hidden_size -- a head_count mismatch refuses head_transplant
+    but leaves residual_transplant (hidden_size-only) and per_token_comparison (tokenizer-only) alone."""
+    identity_b = dict(_FULL_B_SAME, head_count=16)
+    doc = pc.assess(_FULL_A, identity_b)
+    assert doc["head_count"]["state"] == "differs"
+    assert doc["verdict"]["overall"] == "compatible_with_caveats"
+    ops = doc["verdict"]["operations"]
+    assert ops["per_token_comparison"]["permitted"] is True
+    assert ops["residual_transplant"]["permitted"] is True
+    assert ops["head_transplant"]["permitted"] is False
+    assert "head_count" in ops["head_transplant"]["reason"]
+    assert any("head_count" in r for r in doc["verdict"]["reasons"])
+
+
+def test_assess_head_count_unknown_blocks_head_transplant_only():
+    identity_b = dict(_FULL_B_SAME)
+    del identity_b["head_count"]
+    doc = pc.assess(_FULL_A, identity_b)
+    assert doc["head_count"]["state"] == "unknown"
+    ops = doc["verdict"]["operations"]
+    assert ops["per_token_comparison"]["permitted"] is True
+    assert ops["residual_transplant"]["permitted"] is True
+    assert ops["head_transplant"]["permitted"] is False
+
+
+def test_assess_head_count_kv_is_not_part_of_the_gate():
+    """head_count_kv (GQA's KV-head count) is carried on gguf_identity but deliberately NOT its own
+    pair-compatibility dimension or gate -- kqv_out's row structure is per-Q-head, so only head_count
+    (the query-head count) is mechanically relevant to head_transplant. A head_count_kv difference
+    alone (head_count still matching) must not block anything."""
+    identity_b = dict(_FULL_B_SAME, head_count_kv=1)   # differs from _FULL_A's head_count_kv=4
+    doc = pc.assess(_FULL_A, identity_b)
+    assert "head_count_kv" not in doc
+    assert doc["head_count"]["state"] == "same"
+    assert doc["verdict"]["operations"]["head_transplant"]["permitted"] is True
 
 
 def test_assess_writable_layers_reports_only_the_known_side():
@@ -302,6 +352,7 @@ def test_may_per_token_compare_and_may_residual_transplant():
     doc = pc.assess(_FULL_A, _FULL_B_SAME)
     assert pc.may_per_token_compare(doc) is True
     assert pc.may_residual_transplant(doc) is True
+    assert pc.may_head_transplant(doc) is True
 
     bad_tok = pc.assess(_FULL_A, dict(_FULL_B_SAME, tokenizer_sha256="different"))
     assert pc.may_per_token_compare(bad_tok) is False
@@ -309,10 +360,15 @@ def test_may_per_token_compare_and_may_residual_transplant():
     bad_hidden = pc.assess(_FULL_A, dict(_FULL_B_SAME, hidden_size=1))
     assert pc.may_residual_transplant(bad_hidden) is False
 
+    bad_head = pc.assess(_FULL_A, dict(_FULL_B_SAME, head_count=1))
+    assert pc.may_head_transplant(bad_head) is False
+    assert pc.may_residual_transplant(bad_head) is True   # unaffected -- gated independently
+
 
 def test_predicate_helpers_never_raise_on_a_malformed_report():
     assert pc.may_per_token_compare({}) is False
     assert pc.may_residual_transplant({}) is False
+    assert pc.may_head_transplant({}) is False
 
 
 # ==================================================================================== assess_gguf_pair

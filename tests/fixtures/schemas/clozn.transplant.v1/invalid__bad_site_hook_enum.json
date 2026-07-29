@@ -4,7 +4,7 @@
   "reference_model": {},
   "candidate_model": {},
   "pair_compatibility": {"schema_version": "clozn.pair-compatibility.v1", "verdict": {"overall": "compatible", "reasons": [], "operations": {"per_token_comparison": {"permitted": true, "reason": "x"}, "residual_transplant": {"permitted": true, "reason": "x"}}}},
-  "site": {"hook": "head", "layer": 14},
+  "site": {"hook": "bogus", "layer": 14},
   "shuffled_layer": 10,
   "write_positions": [17],
   "readout_position": 17,
