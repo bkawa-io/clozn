@@ -141,13 +141,59 @@ void GgmlAdapter::clear_head_capture() {
 }
 
 void GgmlAdapter::set_head_writes(const std::vector<HeadWrite>& ws) {
-    head_writes_.clear();
-    for (const HeadWrite& w : ws)
-        if (w.layer >= 0 && w.layer < n_layer_ && w.head >= 0 && !w.positions.empty())
-            head_writes_.push_back(w);
+    // NO silent pre-filter (2026-07-28 honesty fix): every requested spec is kept verbatim, indexed
+    // 1:1 with head_write_landed_, so an out-of-range layer/head or a values.size() that doesn't
+    // match the PROBED d_head shows up as landed=false rather than vanishing before eval_cb ever
+    // runs. All validation now happens in exactly one place (eval_cb below) instead of being split
+    // between here (silently dropping some specs) and there (silently skipping others) with no
+    // record of which happened -- the split was the root cause of head_write_applied:true lying.
+    head_writes_ = ws;
+    head_write_landed_.assign(ws.size(), false);
 }
 
-void GgmlAdapter::clear_head_writes() { head_writes_.clear(); }
+void GgmlAdapter::clear_head_writes() {
+    head_writes_.clear();
+    head_write_landed_.clear();
+}
+
+void GgmlAdapter::set_ffn_capture(const std::vector<int>& layers, const std::vector<int>& positions) {
+    ffn_cap_layers_.clear();
+    for (int il : layers)
+        if (il >= 0 && il < n_layer_) ffn_cap_layers_.push_back(il);  // every layer has its own FFN (layer 0 included)
+    ffn_cap_positions_ = positions;
+    ffn_rows_.clear();
+}
+
+void GgmlAdapter::clear_ffn_capture() {
+    ffn_cap_layers_.clear();
+    ffn_cap_positions_.clear();
+    ffn_rows_.clear();
+}
+
+bool GgmlAdapter::add_ffn_write(int il, const std::vector<int>& positions, const std::vector<float>& values) {
+    // Fully fail-closed: unlike head_write's d_head (only knowable from a live probe of kqv_out),
+    // ffn_out is always n_embd-wide (every build_ffn(...) call site down-projects back to n_embd,
+    // dense or MoE alike -- see models/deepseek2.cpp:379-413), so BOTH the layer range and the
+    // values shape are known STATICALLY. A bad spec returns false here, before any forward runs --
+    // never a silently-dropped write discovered only after the fact.
+    if (il < 0 || il >= n_layer_) return false;   // every layer 0..n_layer-1 has its own FFN block
+    if (n_embd_ <= 0) return false;
+    if (values.size() != positions.size() * static_cast<size_t>(n_embd_)) return false;
+    FfnWrite w;
+    w.layer = il;
+    w.name = "ffn_out-" + std::to_string(il);
+    w.positions = positions;
+    w.buf = values;
+    ffn_writes_.push_back(std::move(w));
+    ffn_write_landed_.push_back(false);   // becomes true in eval_cb iff "ffn_out-<il>" actually fires
+                                           // for this architecture AND every position lands
+    return true;
+}
+
+void GgmlAdapter::clear_ffn_write() {
+    ffn_writes_.clear();
+    ffn_write_landed_.clear();
+}
 
 GgmlAdapter::~GgmlAdapter() {
     clear_lora();                // must run while ctx_ is alive: it detaches from the context first
@@ -286,18 +332,83 @@ bool GgmlAdapter::eval_cb(struct ggml_tensor* t, bool ask) {
                     }
                 }
                 if (want_write) {
-                    for (const HeadWrite& w : head_writes_) {
-                        if (w.layer != hu_il || w.head >= n_head_) continue;
+                    // Honesty fix (2026-07-28): every spec's success is recorded in
+                    // head_write_landed_[si] rather than assumed. "continue" below means "this spec
+                    // did not land" -- landed_[si] simply stays false (its initial value from
+                    // set_head_writes), never flipped to true on a partial or invalid write. The
+                    // route's own post-forward check refuses the whole request unless every requested
+                    // spec landed, so a caller can never mistake a dropped spec for a genuine
+                    // negative causal result.
+                    for (size_t si = 0; si < head_writes_.size(); ++si) {
+                        const HeadWrite& w = head_writes_[si];
+                        if (w.layer != hu_il) continue;
+                        if (w.head < 0 || w.head >= n_head_) continue;   // out-of-range head: never applied
+                        if (w.positions.empty()) continue;
                         if (w.values.size() != w.positions.size() * static_cast<size_t>(d_h))
-                            continue;   // size-validated at the route; skip = never wrong slices
+                            continue;   // values.size() must match the PROBED d_head -- runtime-only fact
+                        bool all_ok = true;
                         for (size_t pi = 0; pi < w.positions.size(); ++pi) {
                             const int r = w.positions[pi] - write_from_;
-                            if (r < 0 || r >= ne1) continue;
+                            if (r < 0 || r >= ne1) { all_ok = false; continue; }  // outside this decode segment
                             const size_t off = (static_cast<size_t>(r) * ne0 +
                                                 static_cast<size_t>(w.head) * d_h) * sizeof(float);
                             ggml_backend_tensor_set(t, w.values.data() + pi * d_h, off,
                                                     static_cast<size_t>(d_h) * sizeof(float));
                         }
+                        if (all_ok) head_write_landed_[si] = true;
+                    }
+                }
+            }
+            return true;
+        }
+    }
+    // FFN (MLP) contribution hook: "ffn_out-<il>" = the feed-forward block's output BEFORE it is
+    // added into the residual stream (verified: models/qwen2.cpp `cb(cur, "ffn_out", il); cur =
+    // ggml_add(ctx0, cur, ffn_inp);` -- the add happens AFTER this callback), full n_embd width like
+    // l_out (no per-head split). UNLIKE kqv_out (one shared llama-graph.cpp call site, present for
+    // virtually every architecture) ffn_out is emitted PER-ARCHITECTURE inside each model's own .cpp
+    // file and is genuinely ABSENT for some (mamba/rwkv/several MoE variants -- see the header
+    // comment) -- so this tensor simply never firing for an unsupported model is a real outcome,
+    // tracked honestly below via ffn_write_landed_ (write) and the route's capture_missing-style
+    // diagnostic (capture), never silently swallowed.
+    int ffn_il = -1;
+    if ((!ffn_writes_.empty() || !ffn_cap_layers_.empty()) &&
+        std::strncmp(nm, "ffn_out-", 8) == 0)
+        ffn_il = std::atoi(nm + 8);
+    if (ffn_il >= 0) {
+        bool want_ffn_cap = false, want_ffn_write = false;
+        for (int L : ffn_cap_layers_) if (L == ffn_il) { want_ffn_cap = true; break; }
+        for (const FfnWrite& w : ffn_writes_) if (w.layer == ffn_il) { want_ffn_write = true; break; }
+        if (want_ffn_cap || want_ffn_write) {
+            if (ask) return true;
+            const int ne0 = static_cast<int>(t->ne[0]);
+            const int ne1 = static_cast<int>(t->ne[1]);
+            if (ne0 == n_embd_ && ne1 > 0) {
+                if (want_ffn_cap) {
+                    std::vector<float> row(static_cast<size_t>(ne0));
+                    for (int pos : ffn_cap_positions_) {
+                        const int r = pos - write_from_;
+                        if (r < 0 || r >= ne1) continue;
+                        ggml_backend_tensor_get(t, row.data(),
+                                                static_cast<size_t>(r) * ne0 * sizeof(float),
+                                                row.size() * sizeof(float));
+                        ffn_rows_[ffn_il][pos] = row;
+                    }
+                }
+                if (want_ffn_write) {
+                    for (size_t si = 0; si < ffn_writes_.size(); ++si) {
+                        const FfnWrite& w = ffn_writes_[si];
+                        if (w.layer != ffn_il) continue;
+                        if (w.buf.size() != w.positions.size() * static_cast<size_t>(n_embd_)) continue;
+                        bool all_ok = !w.positions.empty();
+                        for (size_t pi = 0; pi < w.positions.size(); ++pi) {
+                            const int r = w.positions[pi] - write_from_;
+                            if (r < 0 || r >= ne1) { all_ok = false; continue; }  // outside this decode segment
+                            ggml_backend_tensor_set(t, w.buf.data() + pi * static_cast<size_t>(n_embd_),
+                                                    static_cast<size_t>(r) * n_embd_ * sizeof(float),
+                                                    static_cast<size_t>(n_embd_) * sizeof(float));
+                        }
+                        if (all_ok) ffn_write_landed_[si] = true;
                     }
                 }
             }

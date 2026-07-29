@@ -15,14 +15,14 @@ def test_returns_a_fresh_copy_every_call():
     first["hooks"].append({"tampered": True})
     first["replay_classes"]["vocabulary"].append("invented")
     second = hook_vocabulary()
-    assert len(second["hooks"]) == 2
+    assert len(second["hooks"]) == 4
     assert "invented" not in second["replay_classes"]["vocabulary"]
 
 
-def test_names_the_two_eval_callback_interception_points():
+def test_names_the_four_eval_callback_interception_points():
     doc = hook_vocabulary()
     names = {hook["name"] for hook in doc["hooks"]}
-    assert names == {"l_out-<il>", "kq_soft_max-<il>"}
+    assert names == {"l_out-<il>", "kq_soft_max-<il>", "kqv_out-<il>", "ffn_out-<il>"}
 
 
 def test_l_out_documents_the_layer_zero_read_write_asymmetry():
@@ -69,6 +69,75 @@ def test_kq_soft_max_renormalize_default_discrepancy_is_flagged():
 def test_kq_soft_max_client_head_gap_is_flagged():
     kq = next(hook for hook in hook_vocabulary()["hooks"] if hook["name"] == "kq_soft_max-<il>")
     assert "NO `head` field" in kq["knockout"]["client_head_gap"]
+
+
+def test_kqv_out_documents_additive_composition_and_no_flash_attn_gate():
+    kqv = next(hook for hook in hook_vocabulary()["hooks"] if hook["name"] == "kqv_out-<il>")
+    assert "CONTRIBUTES" in kqv["stream_semantics"]
+    assert "COMPOSE" in kqv["stream_semantics"]
+    assert "additive_writes_probe.py" in kqv["stream_semantics"]
+    assert "flash attention ON" in kqv["materialization_constraint"]
+
+
+def test_kqv_out_head_write_layer_and_head_ranges_are_cited():
+    kqv = next(hook for hook in hook_vocabulary()["hooks"] if hook["name"] == "kqv_out-<il>")
+    assert "[0, n_layer)" in kqv["head_write"]["layer_range"]
+    assert "[0, n_head)" in kqv["head_write"]["head_range"]
+
+
+def test_kqv_out_head_write_documents_the_2026_07_28_honesty_fix():
+    kqv = next(hook for hook in hook_vocabulary()["hooks"] if hook["name"] == "kqv_out-<il>")
+    text = kqv["head_write"]["honesty_fix_2026_07_28"]
+    assert "head_write_applied\": true" in text
+    assert "silently dropped" in text
+    assert "head_write_landed()" in text
+    assert "400" in text
+
+
+def test_ffn_out_is_named_and_documents_additive_composition():
+    doc = hook_vocabulary()
+    names = {hook["name"] for hook in doc["hooks"]}
+    assert "ffn_out-<il>" in names
+    ffn = next(hook for hook in doc["hooks"] if hook["name"] == "ffn_out-<il>")
+    assert "CONTRIBUTES" in ffn["stream_semantics"]
+    assert "COMPOSE" in ffn["stream_semantics"]
+    assert "test_ffn_hook.cpp" in ffn["stream_semantics"]
+    assert "ffn_hook_probe.py" in ffn["stream_semantics"]
+
+
+def test_ffn_out_architecture_coverage_names_present_and_absent_families():
+    ffn = next(hook for hook in hook_vocabulary()["hooks"] if hook["name"] == "ffn_out-<il>")
+    text = ffn["architecture_coverage"]
+    assert "qwen2.cpp" in text and "deepseek2.cpp" in text
+    assert "mamba" in text and "rwkv" in text
+    assert "UNSPECIFIED" in text
+
+
+def test_ffn_out_write_layer_range_includes_zero_unlike_residual_write():
+    ffn = next(hook for hook in hook_vocabulary()["hooks"] if hook["name"] == "ffn_out-<il>")
+    assert "[0, n_layer)" in ffn["ffn_write"]["layer_range"]
+    assert "STATICALLY" in ffn["ffn_write"]["layer_range"]
+
+
+def test_ffn_out_write_tracks_landed_state_for_architecture_coverage_gap():
+    ffn = next(hook for hook in hook_vocabulary()["hooks"] if hook["name"] == "ffn_out-<il>")
+    text = ffn["ffn_write"]["landed_tracking"]
+    assert "ffn_write_landed()" in text
+    assert "ffn_write_applied:true" in text or "ffn_write_applied" in text
+
+
+def test_stream_semantics_summary_makes_overwrite_vs_contribute_impossible_to_miss():
+    doc = hook_vocabulary()
+    summary = doc["stream_semantics_summary"]
+    rows = {row["hook"]: row for row in summary["table"]}
+    assert rows["l_out-<il>"]["semantics"] == "OVERWRITES"
+    assert rows["l_out-<il>"]["composes_across_layers"] is False
+    assert rows["kqv_out-<il>"]["semantics"] == "CONTRIBUTES (additive)"
+    assert rows["kqv_out-<il>"]["composes_across_layers"] is True
+    assert rows["ffn_out-<il>"]["semantics"] == "CONTRIBUTES (additive)"
+    assert rows["ffn_out-<il>"]["composes_across_layers"] is True
+    # top-level, not buried inside one hook's entry -- a skimming reader must be able to find it
+    assert "stream_semantics_summary" in doc
 
 
 def test_checkpoint_restore_mechanism_finding_is_honest():

@@ -1,0 +1,26 @@
+{
+  "schema_version": "clozn.pair-compatibility.v1",
+  "model_a": {"label": "7B", "filename": "model-7b.gguf"},
+  "model_b": {"label": "13B", "filename": "model-13b.gguf"},
+  "tokenizer": {"state": "exact", "method": "probe"},
+  "template": {"state": "same", "method": "probe"},
+  "architecture": {"state": "same", "value_a": "llama", "value_b": "llama"},
+  "layer_count": {"state": "differs", "value_a": 32, "value_b": 40},
+  "hidden_size": {"state": "differs", "value_a": 4096, "value_b": 5120},
+  "vocab_size": {"state": "same", "value_a": 32000, "value_b": 32000},
+  "writable_layers": {
+    "model_a": {"min": 1, "max_exclusive": 32},
+    "model_b": {"min": 1, "max_exclusive": 40}
+  },
+  "verdict": {
+    "overall": "compatible_with_caveats",
+    "reasons": [
+      "hidden_size differs (4096 vs 5120); a residual transplant is mechanically impossible without a projection layer, which clozn does not implement.",
+      "layer_count differs (32 vs 40)."
+    ],
+    "operations": {
+      "per_token_comparison": {"permitted": true, "reason": "tokenizers match exactly; per-token comparison is meaningful."},
+      "residual_transplant": {"permitted": false, "reason": "hidden_size differs (4096 vs 5120); the target engine's write validation requires an exact match and clozn has no projection layer to bridge different residual widths."}
+    }
+  }
+}

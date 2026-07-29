@@ -1,0 +1,36 @@
+{
+  "schema_version": "clozn.pair-compatibility.v1",
+  "model_a": {"filename": "modelA.gguf"},
+  "model_b": {"filename": "modelB.gguf"},
+  "tokenizer": {
+    "state": "differs",
+    "method": "probe",
+    "failed_probes": ["plain_english", "code_snippet"]
+  },
+  "template": {
+    "state": "differs",
+    "method": "probe",
+    "policy_applied": "reference",
+    "caveat": "chat templates differ between the reference and the candidate; both arms were scored on the REFERENCE model's rendering (the default policy), so this diff isolates WEIGHTS."
+  },
+  "architecture": {"state": "differs", "value_a": "qwen2", "value_b": "llama"},
+  "layer_count": {"state": "same", "value_a": 32, "value_b": 32},
+  "hidden_size": {"state": "same", "value_a": 4096, "value_b": 4096},
+  "vocab_size": {"state": "differs", "value_a": 152064, "value_b": 128256},
+  "writable_layers": {
+    "model_a": {"min": 1, "max_exclusive": 32},
+    "model_b": {"min": 1, "max_exclusive": 32}
+  },
+  "verdict": {
+    "overall": "incompatible",
+    "reasons": [
+      "tokenizers differ: a token id (or a matching id with a different piece string) means something different in each vocabulary.",
+      "architectures differ ('qwen2' vs 'llama').",
+      "vocab_size differs (152064 vs 128256)."
+    ],
+    "operations": {
+      "per_token_comparison": {"permitted": false, "reason": "tokenizers differ -- a token id means something different in each vocabulary, so a per-position comparison would be comparing unrelated units, not the same model's behavior under two conditions."},
+      "residual_transplant": {"permitted": true, "reason": "hidden_size matches exactly (4096); the target engine's write validation (values.size() == positions.size() * hidden_size) can be satisfied."}
+    }
+  }
+}

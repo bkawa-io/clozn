@@ -137,6 +137,22 @@ if(CLOZN_BUILD_GGML)
         add_test(NAME ggml_state_write COMMAND test_ggml_state_write)
     endif()
 
+    # ffn_out-<il> hook (feed-forward/MLP contribution, additive analogue of kqv_out) + the
+    # 2026-07-28 head_write/ffn_write honesty fix -- on a REAL model. SKIPS without a GGUF arg,
+    # same convention as test_ggml_state_write above.
+    add_executable(test_ffn_hook tests/test_ffn_hook.cpp)
+    target_link_libraries(test_ffn_hook PRIVATE clozn_ggml)
+    if(WIN32)
+        add_test(
+            NAME ffn_hook
+            COMMAND ${CMAKE_COMMAND} -E env
+                "PATH=$<TARGET_FILE_DIR:llama>;$ENV{PATH}"
+                $<TARGET_FILE:test_ffn_hook>
+        )
+    else()
+        add_test(NAME ffn_hook COMMAND test_ffn_hook)
+    endif()
+
     # clozn-bench — the §9 quant-calibration sweep: quantize f16 -> Q8/Q5/Q4 in-process and
     # report size + token-agreement-vs-f16 + tok/s (the honest quality column for the quant axis).
     add_executable(clozn-bench tools/clozn_bench.cpp)

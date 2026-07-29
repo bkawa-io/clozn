@@ -648,6 +648,84 @@ void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx) {
             return;
         }
 
+        // FFN (MLP) contribution hook: ffn_capture reads the raw MLP-contribution row at
+        // "ffn_out-<il>" (full n_embd width, no per-head split -- the additive counterpart to
+        // residual `capture`); ffn_write overwrites it before the residual add consumes it (the
+        // additive counterpart to residual `write`, and -- like head_write -- COMPOSES with writes
+        // at other layers instead of overwriting them, since ffn_out/kqv_out are both ADDED into the
+        // stream, never replacing it the way l_out's write does). Unlike residual `write` (layer 0
+        // reserved as the read tap's sentinel) every layer 0..n_layer-1 has its own FFN block, so
+        // layer 0 IS valid here. Refused alongside arms, same rule as every other per-position hook
+        // (unvalidated multi-seq tensor layout).
+        std::vector<int> ffn_cap_layers, ffn_cap_positions;
+        if (body.contains("ffn_capture")) {
+            const json& fb = body["ffn_capture"];
+            if (fb.is_object()) {
+                if (fb.contains("layers") && fb["layers"].is_array())
+                    ffn_cap_layers = fb["layers"].get<std::vector<int>>();
+                if (fb.contains("positions") && fb["positions"].is_array())
+                    ffn_cap_positions = fb["positions"].get<std::vector<int>>();
+            }
+            if (ffn_cap_layers.empty() || ffn_cap_positions.empty()) {
+                res.status = 400;
+                res.set_content(json{{"error", "ffn_capture needs {layers:[int], positions:[int]}"}}.dump(),
+                                "application/json");
+                return;
+            }
+            for (int p : ffn_cap_positions) {
+                if (p < 0 || p >= n_total) {
+                    res.status = 400;
+                    res.set_content(json{{"error", "ffn_capture position out of range"},
+                                         {"position", p}, {"n_tokens", n_total}}.dump(),
+                                    "application/json");
+                    return;
+                }
+            }
+        }
+        std::vector<WriteReq> ffn_write_reqs;
+        if (body.contains("ffn_write")) {
+            json specs = json::array();
+            if (body["ffn_write"].is_object()) specs.push_back(body["ffn_write"]);
+            else if (body["ffn_write"].is_array()) specs = body["ffn_write"];
+            for (const json& wb : specs) {
+                WriteReq w{};
+                w.layer = wb.is_object() ? wb.value("layer", -1) : -1;
+                if (wb.is_object() && wb.contains("positions") && wb["positions"].is_array())
+                    w.positions = wb["positions"].get<std::vector<int>>();
+                if (wb.is_object() && wb.contains("values") && wb["values"].is_array())
+                    w.values = wb["values"].get<std::vector<float>>();
+                if (w.layer < 0 || w.positions.empty() || w.values.empty()) {
+                    res.status = 400;
+                    res.set_content(json{{"error",
+                        "each ffn_write spec needs {layer >= 0, positions:[int], values:[float] = positions*n_embd}"}}.dump(),
+                        "application/json");
+                    return;
+                }
+                for (int p : w.positions) {
+                    if (p < 0 || p >= n_total) {
+                        res.status = 400;
+                        res.set_content(json{{"error", "ffn_write position out of range"}, {"position", p},
+                                             {"n_tokens", n_total}}.dump(), "application/json");
+                        return;
+                    }
+                }
+                ffn_write_reqs.push_back(std::move(w));
+            }
+            if (ffn_write_reqs.empty()) {
+                res.status = 400;
+                res.set_content(json{{"error", "ffn_write must be an object or non-empty array of specs"}}.dump(),
+                                "application/json");
+                return;
+            }
+        }
+        if ((!ffn_cap_layers.empty() || !ffn_write_reqs.empty()) && has_arms) {
+            res.status = 400;
+            res.set_content(json{{"error", "ffn_capture/ffn_write cannot be combined with arms "
+                                           "(unvalidated under multi-seq batching)"}}.dump(),
+                            "application/json");
+            return;
+        }
+
         try {
             ForwardResult fwd;
             CaptureFrame cap_frame;             // filled synchronously by the capture sink (if armed)
@@ -655,9 +733,15 @@ void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx) {
             std::map<int, std::map<int, std::vector<float>>> head_norms_out, head_rows_out;
             std::map<std::string, int> head_dims_out;
             std::vector<int> cap_layers_armed;  // layers that survived set_capture_layers validation
+            std::vector<bool> head_write_landed_out;
+            std::map<int, std::map<int, std::vector<float>>> ffn_rows_out;
+            std::vector<bool> ffn_write_landed_out;
+            std::vector<int> ffn_cap_layers_armed;  // layers that survived set_ffn_capture validation
+            int n_embd_out = 0;
             {
                 ContextPool::Lease lease = pool.acquire();
                 GgmlAdapter& ad = *lease;
+                n_embd_out = ad.n_embd();
                 const bool steering = !steer_concept.empty() && steer_coef != 0.0 && steer_probes.ready();
                 const bool raw_steer = !steer_vec.empty();
                 const bool writing = !write_reqs.empty();
@@ -665,6 +749,8 @@ void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx) {
                 const bool knocking = !knockouts.empty();
                 const bool head_capturing = !head_cap_layers.empty();
                 const bool head_writing = !head_writes.empty();
+                const bool ffn_capturing = !ffn_cap_layers.empty();
+                const bool ffn_writing = !ffn_write_reqs.empty();
                 auto cleanup = [&]() {
                     if (steering || raw_steer) ad.clear_steer();
                     if (writing || has_arms) ad.clear_write();
@@ -672,6 +758,8 @@ void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx) {
                     if (knocking) ad.clear_attn_knockouts();
                     if (head_capturing) ad.clear_head_capture();
                     if (head_writing) ad.clear_head_writes();
+                    if (ffn_capturing) ad.clear_ffn_capture();
+                    if (ffn_writing) ad.clear_ffn_write();
                     if (attn_capture_query >= 0) {
                         // rows are copied into the response BEFORE cleanup runs on the success
                         // path; on the throw path there is nothing to keep.
@@ -745,7 +833,43 @@ void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx) {
                     }
                     if (head_capturing)
                         ad.set_head_capture(head_cap_layers, head_cap_positions, head_cap_rows);
-                    if (head_writing) ad.set_head_writes(head_writes);
+                    if (head_writing) {
+                        // Fail-closed upfront (2026-07-28 honesty fix): layer/head bounds are known
+                        // STATICALLY (ad.n_layer()/ad.n_head()), so an out-of-range spec is refused
+                        // here, before any forward runs -- closing the "layer n_layer+50 returns 200
+                        // with head_write_applied:true and writes nothing" gap. The other bug class
+                        // (values.size() mismatched against the PROBED d_head) can only be detected
+                        // from inside the forward that would apply it; the post-forward landed check
+                        // below closes that one.
+                        for (const auto& w : head_writes) {
+                            if (w.layer >= ad.n_layer())
+                                throw std::invalid_argument("head_write layer out of range [0, n_layer)");
+                            if (w.head >= ad.n_head())
+                                throw std::invalid_argument("head_write head out of range [0, n_head)");
+                        }
+                        ad.set_head_writes(head_writes);
+                    }
+                    if (ffn_writing) {
+                        // add_ffn_write is fully fail-closed (layer AND values-shape are both known
+                        // statically for ffn_out, unlike head_write's d_head) -- any rejected spec
+                        // throws immediately, before any forward runs, mirroring residual `write`'s
+                        // existing add_write_state contract exactly.
+                        for (const WriteReq& w : ffn_write_reqs) {
+                            if (!ad.add_ffn_write(w.layer, w.positions, w.values)) {
+                                throw std::invalid_argument(
+                                    "ffn_write rejected: layer must be in [0, n_layer) and values.size "
+                                    "must equal positions.size * n_embd (n_embd " +
+                                    std::to_string(ad.n_embd()) + ", layer " +
+                                    std::to_string(w.layer) + ")");
+                            }
+                        }
+                    }
+                    if (ffn_capturing) {
+                        ad.set_ffn_capture(ffn_cap_layers, ffn_cap_positions);
+                        ffn_cap_layers_armed = ad.ffn_capture_layers();  // invalid layers were dropped
+                        if (ffn_cap_layers_armed.empty())
+                            throw std::invalid_argument("ffn_capture layers all out of range [0, n_layer)");
+                    }
                     if (has_arms) {
                         // Per-arm writes ride the standard write path: arm a's position p is
                         // batch row a*n_total + p (ar_forward_score_arms runs with
@@ -773,6 +897,49 @@ void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx) {
                         head_norms_out = ad.head_norms();
                         head_rows_out = ad.head_rows();
                         head_dims_out = ad.head_dims();
+                        if (head_writing) head_write_landed_out = ad.head_write_landed();
+                    }
+                    if (ffn_capturing) ffn_rows_out = ad.ffn_rows();
+                    if (ffn_writing) ffn_write_landed_out = ad.ffn_write_landed();
+                    // Honesty gate (2026-07-28): a write whose request shape was valid but that did
+                    // not actually land (values.size() mismatched the PROBED d_head; or, for
+                    // ffn_write, this model's architecture never names the tensor "ffn_out") must
+                    // never be reported as a success alongside a score that was computed WITHOUT it.
+                    // Refuse the whole request (discard the already-computed scores) rather than
+                    // return a misleading 200 -- the same rule /score's own residual `capture` already
+                    // follows when nothing lands. This is what makes "head_write_applied: true" /
+                    // "ffn_write_applied: true" further down in this handler an honest claim: if
+                    // either would be false, the request never reaches the response-building code —
+                    // it throws here instead, caught by the block below.
+                    if (head_writing) {
+                        for (size_t i = 0; i < head_write_landed_out.size(); ++i) {
+                            if (!head_write_landed_out[i]) {
+                                throw std::runtime_error(
+                                    "head_write[" + std::to_string(i) + "] (layer=" +
+                                    std::to_string(head_writes[i].layer) + ", head=" +
+                                    std::to_string(head_writes[i].head) + ") did not land: values.size() "
+                                    "did not match the probed d_head for this architecture (see "
+                                    "head_dims in a head_capture response), or a position fell outside "
+                                    "this decode's segment. No write happened, so the scores above "
+                                    "would not reflect the requested intervention; the request is "
+                                    "refused rather than returned.");
+                            }
+                        }
+                    }
+                    if (ffn_writing) {
+                        for (size_t i = 0; i < ffn_write_landed_out.size(); ++i) {
+                            if (!ffn_write_landed_out[i]) {
+                                throw std::runtime_error(
+                                    "ffn_write[" + std::to_string(i) + "] (layer=" +
+                                    std::to_string(ffn_write_reqs[i].layer) + ") did not land: this "
+                                    "model's architecture may not name its MLP contribution tensor "
+                                    "\"ffn_out\" (verified present for qwen2/llama/gemma4/qwen35/"
+                                    "deepseek2(mistral4)/dream; known absent for e.g. mamba/rwkv and "
+                                    "several MoE variants -- see model_ggml.hpp's ffn_out class "
+                                    "comment), or a position fell outside this decode's segment. No "
+                                    "write happened, so the request is refused rather than returned.");
+                            }
+                        }
                     }
                     cleanup();
                 } catch (...) {
@@ -897,9 +1064,48 @@ void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx) {
                     }
                 }
                 if (!head_writes.empty()) {
+                    // Honest by construction: if any spec had NOT landed, the honesty gate above
+                    // already threw and this code is unreachable -- true here always means true.
                     resp["head_write_applied"] = true;
                     resp["n_head_writes"] = head_writes.size();
                 }
+            }
+            if (!ffn_write_reqs.empty()) {
+                // Same guarantee as head_write_applied above: the honesty gate already refused the
+                // request (400) if any ffn_write spec didn't land, so reaching here means every one did.
+                resp["ffn_write_applied"] = true;
+                resp["n_ffn_writes"] = static_cast<int>(ffn_write_reqs.size());
+            }
+            if (!ffn_cap_layers.empty()) {
+                // ffn_captured: {"<layer>": {"<position>": [n_embd floats], ...}, ...} -- mirrors
+                // residual `capture`'s response shape exactly (raw rows, no per-head norm summary,
+                // since ffn_out has no head structure). A capture is a READ: unlike ffn_write it is
+                // NOT hard-refused on a partial result (that's the residual `capture` precedent too)
+                // -- a layer that armed but yielded nothing (this architecture's graph never names
+                // "ffn_out") is listed in ffn_capture_missing instead, and only a TOTAL void is a 400.
+                json ffn_json = json::object();
+                for (const auto& lv : ffn_rows_out) {
+                    json rows = json::object();
+                    for (const auto& pv : lv.second) rows[std::to_string(pv.first)] = pv.second;
+                    if (!rows.empty()) ffn_json[std::to_string(lv.first)] = std::move(rows);
+                }
+                json ffn_missing = json::array();
+                for (int L : ffn_cap_layers_armed)
+                    if (!ffn_json.contains(std::to_string(L))) ffn_missing.push_back(L);
+                if (ffn_json.empty()) {
+                    res.status = 400;
+                    res.set_content(json{{"error", "ffn_capture produced no rows for any requested "
+                                                   "layer; this model's architecture may not name its "
+                                                   "MLP contribution tensor \"ffn_out\" (see "
+                                                   "model_ggml.hpp's ffn_out class comment for the "
+                                                   "known-present/known-absent architecture list)"},
+                                         {"requested", ffn_cap_layers},
+                                         {"armed", ffn_cap_layers_armed}}.dump(), "application/json");
+                    return;
+                }
+                resp["ffn_captured"] = std::move(ffn_json);
+                resp["n_embd"] = n_embd_out;
+                if (!ffn_missing.empty()) resp["ffn_capture_missing"] = std::move(ffn_missing);
             }
             if (!capture_layers.empty()) {
                 // captured: {"<layer>": {"<pos>": [n_embd floats], ...}, ...} — the residual rows the
