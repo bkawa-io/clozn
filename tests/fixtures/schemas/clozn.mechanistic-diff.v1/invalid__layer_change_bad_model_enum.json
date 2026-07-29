@@ -1,0 +1,20 @@
+{
+  "schema_version": "clozn.mechanistic-diff.v1",
+  "generated_at": "2026-07-28T00:00:00Z",
+  "reference_model": {},
+  "candidate_model": {},
+  "pair_compatibility": {"schema_version": "clozn.pair-compatibility.v1", "verdict": {}},
+  "continuation": {"n_prompt": 1, "n_cont": 1},
+  "layers_requested": [1, 2],
+  "positions_requested": [1],
+  "layer_capture": [
+    {"layer": 1, "reference_captured": true, "candidate_captured": true},
+    {"layer": 2, "reference_captured": true, "candidate_captured": true}
+  ],
+  "position_metrics": [],
+  "residual_points": [],
+  "layer_change": [
+    {"model": "both", "position": 1, "from_layer": 1, "to_layer": 2,
+     "metrics": {"residual_cosine_similarity": 0.5}, "omitted": []}
+  ]
+}

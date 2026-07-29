@@ -1,0 +1,13 @@
+{
+  "schema_version": "clozn.mechanistic-diff.v2",
+  "generated_at": "2026-07-28T00:00:00Z",
+  "reference_model": {},
+  "candidate_model": {},
+  "pair_compatibility": {"schema_version": "clozn.pair-compatibility.v1", "verdict": {}},
+  "continuation": {"n_prompt": 1, "n_cont": 1},
+  "layers_requested": [1],
+  "positions_requested": [1],
+  "layer_capture": [],
+  "position_metrics": [],
+  "residual_points": []
+}
