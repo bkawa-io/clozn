@@ -148,3 +148,54 @@ would have been unknowable without re-running with independent seeds.
 * Positions bisected are each prompt's FIRST disagreement only (one flip per prompt, matching the
   original transplant-localization method) — later disagreements in the same continuation, when a
   prompt had more than one, were never bisected.
+
+## Site-overlap analysis — is this a circuit? No.
+
+Post-hoc analysis over the same n=30 artifact (no new run). For each disagreement, the ffn layers
+whose single-site confirmation came back `reference_specific=True`:
+
+```
+L 0 (early)  2      L14 (mid )  3      L22 (late)  2      L25 (late)  6
+L 7 (early)  1      L15 (mid )  1      L23 (late)  2      L26 (late)  4
+L 8 (early)  1      L19 (late)  2      L24 (late)  5
+L11 (mid )  1      L20 (late)  2
+L13 (mid )  1      L21 (late)  1
+```
+12/30 records had >=1 ffn site beat control; 15 distinct layers ever did; 34 (record, layer) hits.
+
+**The sites recur strongly.** The top three layers (24, 25, 26) hold **15/34 = 44%** of all hits,
+where a uniform spread over 28 layers would give ~11%. Restoration is not scattered.
+
+**But the recurrence is TASK-INDEPENDENT, which is what rules out a circuit reading:**
+
+| layer | hits | categories | candidates |
+|---|---|---|---|
+| L24 | 5 | arithmetic, factual_recall, multilingual | Q2_K, Q4_K_M |
+| L25 | 6 | arithmetic, structured_json, multilingual, multi_step_reasoning | Q2_K, Q4_K_M |
+| L26 | 4 | arithmetic, multilingual | Q2_K, Q4_K_M |
+
+A circuit would be task-SPECIFIC — arithmetic regressions restoring at one locus, multilingual at
+another. Instead the same late layers restore everything regardless of task, and across both quant
+levels. That is the signature of a **geometric property of the quantizer** (rounding damage
+accumulates toward the output end) rather than of a reusable computational component.
+
+**This reconciles with [DISTRIBUTED_FUNCTION.md](DISTRIBUTED_FUNCTION.md) rather than contradicting
+it.** Those studies asked where a *capability* lives in one model (answer: nowhere localizable).
+This asks where the *difference* between two models concentrates. A distributed function can have
+concentrated damage — load rides every cable of a bridge, but a frayed cable localizes the failure,
+not the load-bearing. Both hold simultaneously.
+
+**Caveat that cannot be removed from this data:** the last layers are also where a write has the most
+raw leverage on logits, so "late layers quantize worst" and "late writes move output most" predict
+the same pattern. The same-depth random control shows it is not pure leverage (the reference
+direction beats equal-norm noise 53% of the time in the late band), but the two are not cleanly
+separated here. At n=30 (4-5 per category) task-independence is a strong hint, not a proof.
+
+**What would flip this back toward circuits:** task-SPECIFIC recurrence — a layer restoring
+arithmetic but not multilingual. Not observed here, but per-category n is too small to exclude. That
+needs more bisects per category, i.e. a new GPU run.
+
+**Engineering read, which needs no circuit claim:** quantization damage concentrates in the last ~3
+MLP layers independent of task. That is a directly testable mixed-precision hypothesis (protect
+late-MLP precision) and is externally checkable against activation-aware quantization / outlier-
+feature literature.
