@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.transplant.v1",
+  "title": "Controlled cross-model activation transplant -- the five-arm control harness",
+  "description": "clozn.analysis.transplant's output: at ONE candidate-model site (a residual `l_out` layer or an `ffn_out` layer), write the reference model's captured internal state into the candidate and observe whether the candidate's answer moves toward the reference's -- alongside the four controls (candidate_self_transplant, random_equal_norm, shuffled_layer, no_write_replay) that make a 'yes' interpretable rather than an overclaim. This is a PRIMITIVE, not a search: it reports what happened at ONE named site under all five arms plus a structural verdict on whether the reference arm's movement is reference-specific. It never claims a site is a cause of anything model-wide -- that vocabulary belongs to a later slice that actually searches across sites. A metric that could not be honestly computed is OMITTED from the relevant `metrics` object and named in the sibling `omitted` list with a reason -- never a zero or a guess standing in for a measurement.",
+
+  "type": "object",
+  "required": ["schema_version", "generated_at", "reference_model", "candidate_model", "pair_compatibility",
+               "site", "shuffled_layer", "write_positions", "readout_position", "target_token_id",
+               "continuation", "replay_class", "random_seed", "baseline", "arms", "analysis"],
+
+  "$defs": {
+    "model_ref": {
+      "type": "object",
+      "description": "Identifying facts about one side of the pair, mirroring clozn.pair-compatibility.v1's own model_ref (this document embeds that contract's model_a/model_b verbatim as reference_model/candidate_model).",
+      "properties": {
+        "label": {"type": "string", "minLength": 1},
+        "filename": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+
+    "metric_omission": {
+      "type": "object",
+      "description": "One metric that could not be honestly computed, and why. Never paired with a same-named key in the sibling `metrics` object.",
+      "required": ["metric", "reason"],
+      "properties": {
+        "metric": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+
+    "tensor_ref": {
+      "type": "object",
+      "description": "A content-addressed reference into clozn.analysis.tensor_store -- the raw float32 vector actually written for this arm, at this position, for a later slice (or a human) to re-inspect or re-apply exactly.",
+      "required": ["sha256", "dtype", "shape"],
+      "properties": {
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "dtype": {"const": "float32"},
+        "shape": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+        "bytes": {"type": "integer", "minimum": 0},
+        "write_failed": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+
+    "site": {
+      "type": "object",
+      "description": "hook='residual' writes/captures the l_out-<layer> residual-stream row (OVERWRITE semantics -- see hook_vocabulary's stream_semantics_summary); hook='ffn' writes/captures the ffn_out-<layer> MLP-contribution row (CONTRIBUTES/additive semantics). Both are full n_embd-width, position-major, and share the SAME mechanical hidden_size gate (see clozn.analysis.transplant's module docstring for why pair_compatibility's residual_transplant verdict is reused for the ffn hook too). Per-head kqv_out sites are out of scope for this schema version -- head_write's value width (d_head) is only known from a runtime probe, not statically, unlike the two hooks here.",
+      "required": ["hook", "layer"],
+      "properties": {
+        "hook": {"enum": ["residual", "ffn"]},
+        "layer": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+
+    "vector_entry": {
+      "type": "object",
+      "required": ["position", "tensor"],
+      "properties": {
+        "position": {"type": "integer", "minimum": 0},
+        "tensor": {"$ref": "#/$defs/tensor_ref"}
+      },
+      "additionalProperties": false
+    },
+
+    "write_spec": {
+      "type": "object",
+      "description": "The write actually issued to the candidate engine for this arm: layer/positions match the engine wire contract exactly (values.size() == positions.size() * n_embd, position-major); `vectors` is present only when store_tensors=True.",
+      "required": ["layer", "positions"],
+      "properties": {
+        "layer": {"type": "integer", "minimum": 0},
+        "positions": {"type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 1},
+        "vectors": {"type": "array", "items": {"$ref": "#/$defs/vector_entry"}}
+      },
+      "additionalProperties": false
+    },
+
+    "arm_metrics": {
+      "type": "object",
+      "description": "target_token_logprob/rank read the CANDIDATE's own /score output at readout_position for target_token_id (typically the reference model's own top-1 answer there -- the thing a transplant is being tested for RECOVERING, per the prior transplant-localization study's own method, docs/research/DISTRIBUTED_FUNCTION.md). top1_is_target is the discrete 'did the candidate's own top-1 answer become target_token_id' signal this harness's reference_specific rule is built on.",
+      "properties": {
+        "sum_logprob": {"type": "number"},
+        "target_token_logprob": {"type": "number"},
+        "target_token_rank": {"type": "integer", "minimum": 0},
+        "target_token_piece": {"type": "string"},
+        "top1_token_id": {"type": "integer", "minimum": 0},
+        "top1_token_piece": {"type": "string"},
+        "top1_is_target": {"type": "boolean"},
+        "write_applied": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+
+    "arm": {
+      "type": "object",
+      "description": "`write` is OMITTED entirely (never null) for the no_write_replay arm -- it issues no write at all.",
+      "required": ["name", "metrics", "omitted"],
+      "properties": {
+        "name": {"enum": ["reference_transplant", "candidate_self_transplant", "random_equal_norm",
+                          "shuffled_layer", "no_write_replay"]},
+        "write": {"$ref": "#/$defs/write_spec"},
+        "metrics": {"$ref": "#/$defs/arm_metrics"},
+        "omitted": {"type": "array", "items": {"$ref": "#/$defs/metric_omission"}}
+      },
+      "additionalProperties": false
+    }
+  },
+
+  "properties": {
+    "schema_version": {"const": "clozn.transplant.v1"},
+    "generated_at": {"type": "string", "minLength": 1},
+    "reference_model": {"$ref": "#/$defs/model_ref"},
+    "candidate_model": {"$ref": "#/$defs/model_ref"},
+    "pair_compatibility": {
+      "type": "object",
+      "description": "The full clozn.pair-compatibility.v1 document that gated this transplant, embedded verbatim -- a stored result is self-describing about what compatibility was actually confirmed before it was produced.",
+      "required": ["schema_version", "verdict"],
+      "properties": {
+        "schema_version": {"const": "clozn.pair-compatibility.v1"}
+      },
+      "additionalProperties": true
+    },
+    "site": {"$ref": "#/$defs/site"},
+    "shuffled_layer": {
+      "type": "integer", "minimum": 0,
+      "description": "The DIFFERENT, dimensionally-compatible layer the shuffled_layer control arm writes the SAME reference vector to -- never equal to site.layer."
+    },
+    "write_positions": {"type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 1},
+    "readout_position": {
+      "type": "integer", "minimum": 0,
+      "description": "The continuation position whose top-1/target-token metrics are read to judge whether an arm 'moved the output toward the reference'."
+    },
+    "target_token_id": {"type": "integer", "minimum": 0},
+    "target_token_piece": {"type": "string"},
+    "continuation": {
+      "type": "object",
+      "required": ["n_prompt", "n_cont"],
+      "properties": {
+        "n_prompt": {"type": "integer", "minimum": 0},
+        "n_cont": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "replay_class": {"enum": ["bit_identical_greedy", "re_prefilled", "stochastic_sampled", "unknown"]},
+    "random_seed": {
+      "type": "integer",
+      "description": "The seed the random_equal_norm control's direction was drawn from -- recorded so that arm is exactly reproducible, not just described."
+    },
+    "baseline": {
+      "type": "object",
+      "description": "The candidate's own no-write score, read at readout_position -- what every arm's movement is measured relative to.",
+      "required": ["metrics", "omitted"],
+      "properties": {
+        "metrics": {"$ref": "#/$defs/arm_metrics"},
+        "omitted": {"type": "array", "items": {"$ref": "#/$defs/metric_omission"}}
+      },
+      "additionalProperties": false
+    },
+    "arms": {
+      "type": "array",
+      "description": "Exactly the five control arms, in execution order: reference_transplant, candidate_self_transplant, random_equal_norm, shuffled_layer, no_write_replay.",
+      "items": {"$ref": "#/$defs/arm"},
+      "minItems": 5,
+      "maxItems": 5
+    },
+    "analysis": {
+      "type": "object",
+      "description": "The structural verdict this schema exists to make unskippable. instrument_sane is False (never assumed True) whenever candidate_self_transplant could not be confirmed to reproduce baseline, or any write-bearing arm's write_applied was not confirmed true -- and when instrument_sane is False, reference_specific is OMITTED rather than computed, because every write-bearing arm is uninterpretable at that point. reference_specific (when present) is True only if the reference arm's top-1 flipped to target_token_id AND the random_equal_norm control's did not -- the exact rule this project's prior transplant-localization study needed a control to enforce after its first pass overclaimed (docs/research/DISTRIBUTED_FUNCTION.md).",
+      "required": ["instrument_sane", "reasons"],
+      "properties": {
+        "instrument_sane": {"type": "boolean"},
+        "baseline_already_matches_target": {"type": "boolean"},
+        "reference_moved_toward_reference": {"type": "boolean"},
+        "random_moved_toward_reference": {"type": "boolean"},
+        "reference_specific": {"type": "boolean"},
+        "reasons": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": true
+}
