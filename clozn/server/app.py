@@ -846,16 +846,23 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
 
         def _log_run(self, source, messages, response, model, started, error=None, trace=None,
                      mem_out=None, finish_reason=None, finish_reason_fallback=None, extra_meta=None,
-                     output_contract=None):
+                     output_contract=None, sections=None):
             """Persist this interaction as an inspectable run (never let logging break the request).
-            mem_out (prompt mode): the {applied, gate, strength?} record the generation path filled --
-            what memory ACTUALLY rode this turn (the topic gate may have omitted the block).
+            mem_out: the {final_prompt, assembled_messages, active_dials?, actual_prompt_tokens?} record
+            the generation path filled in -- what the substrate actually did with this turn. (Used to also
+            carry the memory manifest -- applied cards, gate, strength -- until the 2026-07-27 cards cut;
+            see the body below for what survives.)
             extra_meta (optional): additional {key: value} pairs folded into the run's `meta` block on top
             of the substrate/build-commit/capture-tier fields this method already assembles -- e.g. sse.py
             tags a failed stream with {"stream_failure": "client_disconnected" | "worker_disconnected"} so
             the Runs page (and anyone reading the record later) can tell those two failure modes apart
             instead of both just showing an opaque `error` string. None-valued entries are dropped (same
             "don't record a guess" rule _without_unknowns applies elsewhere).
+            `sections` (optional): the caller's own explicit-or-auto prompt-section manifest (see
+            clozn.runs.sections) -- e.g. openai.py's /v1/chat/completions builds one from the incoming
+            messages before this is called. Threaded straight through to runlog.record; this method does
+            not itself derive or augment it (the memory-card-folding this used to do here was removed with
+            the rest of memory on 2026-07-27 -- there is no card manifest left to fold in).
             Returns the new run's id (str) on success, else None -- any failure along the way is swallowed,
             never raised. The M5 any-client bridge surfaces this id to the caller; None means "nothing to
             surface", not an error the request should see."""
@@ -956,6 +963,9 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 request_started = getattr(self, "_request_wall_started", None)
                 if isinstance(request_started, (int, float)) and request_started <= time.time():
                     started = min(started, request_started)
+                # `sections` (prompt-section influence manifest) is threaded straight through to
+                # runlog.record below, exactly as the caller passed it in -- see this method's own
+                # docstring for why nothing here derives or augments it anymore.
                 rid = runlog.record(source=source, client=self._client(self.headers.get("User-Agent", "")),
                                     model=str(model), substrate=_subname(), messages=messages, response=response,
                                     behavior={"active_dials": dials}, started=started, error=error,
@@ -965,7 +975,7 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                                     reasoning=reasoning, session_key=session_key,
                                     client_key=client_key, client_key_source=client_key_source,
                                     project_key=project_key,
-                                    output_contract=output_contract)
+                                    output_contract=output_contract, sections=sections)
                 self._maybe_snapshot_turn(rid, messages, trace, error)
                 self._last_logged_run_id = rid
                 return rid                        # M5 bridge: the run id, for callers that want to surface it

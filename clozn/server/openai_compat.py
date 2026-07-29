@@ -143,6 +143,9 @@ def _number_in(body: Mapping[str, Any], field: str, low: float, high: float,
     return number
 
 
+_MESSAGE_KNOWN_FIELDS = {"role", "content", "clozn_section"}
+
+
 def _normalize_messages(value: Any) -> list[dict[str, str]]:
     if not isinstance(value, list) or not value:
         _fail("messages must be a non-empty list of text {role, content} objects", "messages")
@@ -151,7 +154,7 @@ def _normalize_messages(value: Any) -> list[dict[str, str]]:
         param = f"messages[{index}]"
         if not isinstance(message, Mapping):
             _fail("each message must be an object", param)
-        extra = set(message) - {"role", "content"}
+        extra = set(message) - _MESSAGE_KNOWN_FIELDS
         if extra:
             field = sorted(extra)[0]
             _fail(f"message field '{field}' is unsupported; Clozn accepts text-only messages", f"{param}.{field}")
@@ -163,7 +166,16 @@ def _normalize_messages(value: Any) -> list[dict[str, str]]:
             _fail("message content must be a string (multimodal parts are unsupported)", f"{param}.content")
         # Local GGUF templates generally predate the developer role.  Its instruction semantics map to
         # system for this text-only surface; the public matrix documents this normalization explicitly.
-        out.append({"role": "system" if role == "developer" else str(role), "content": content})
+        normalized = {"role": "system" if role == "developer" else str(role), "content": content}
+        # clozn_section (prompt-section influence, clozn.runs.sections): an opt-in per-message tag naming
+        # which ablatable section this message belongs to. Carried through UNVALIDATED here beyond "is it
+        # present" -- clozn.runs.sections.sections_from_messages already tolerates a malformed value (not a
+        # non-empty string) by treating the message as untagged, per its own module docstring, so this
+        # layer doesn't need a second copy of that rule. Absent for a standard OpenAI client, so its
+        # request/response stays byte-identical to before this field existed.
+        if "clozn_section" in message:
+            normalized["clozn_section"] = message["clozn_section"]
+        out.append(normalized)
     return out
 
 

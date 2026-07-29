@@ -11,10 +11,16 @@ be trusted to answer about itself):
                           aggregate confidence % -- that scalar self-report probe is dead (it saturates at
                           every scale -- a measured dead end). {"available": false, ...}
                           when the run carries no per-token trace at all (the HF chat path may not).
-  * influences_active -- the memory manifest's cards (each resolved to its provenance quote + turn via
-                          the run's own record) and gate value, plus the active tone dials. Every entry is
-                          tagged causal_verified:null -- ACTIVE is not PROOF; only M2's on-demand ablation
-                          receipt may ever set this true. This module never runs that receipt.
+  * influences_active -- the active tone dials logged as having ridden this reply, plus the run's
+                          `sections` manifest (prompt sections: rag_context/system-prompt/etc., each
+                          with its name/source/char_count/preview -- see clozn.runs.sections). Memory
+                          cards and anchored memory were cut from the product on 2026-07-27, so dials +
+                          sections are the whole story. Every entry -- dial OR section -- is tagged
+                          causal_verified:null -- ACTIVE is not PROOF; only M2's on-demand ablation
+                          receipt may ever set this true. This module never runs that receipt. A run
+                          recorded before section capture landed carries no `sections` field at all --
+                          surfaced as an explicit {"available": false, "note": ...}, never a
+                          silently-empty list.
   * concepts           -- the engine's sae:<id> feature readouts, when a run happens to carry them.
                           {"available": false, ...} otherwise (true today for every run: no current
                           logging path threads concept readouts onto the stored record -- see the
@@ -42,6 +48,8 @@ LOW_CONF = 0.5
 
 _NO_TRACE_NOTE = "token trace captured on the engine path"
 _NO_CONCEPTS_NOTE = "no named concept readout was captured for this run."
+_NO_SECTIONS_NOTE = ("no section manifest was captured for this run (predates section capture, or this "
+                     "run's source doesn't produce one).")
 
 
 def _as_list(x) -> list:
@@ -98,16 +106,48 @@ def _confidence(run: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------------------- influences_active
-def _influences_active(run: dict) -> dict:
-    """The active tone dials logged as having ridden this reply.
+def _section_entry(sec: dict) -> dict:
+    """One section from the run's manifest, reshaped for display: id/name/source/char_count/preview,
+    always tagged causal_verified:null (the same invariant as a card or dial entry -- ACTIVE is not
+    PROOF; only M2's on-demand section-ablation receipt, `exclude_sections`, may ever prove one caused
+    the reply, and it never runs from here). Guards every field individually so one malformed section in
+    the manifest can't take the others down with it."""
+    return {
+        "id": sec.get("id"),
+        "name": sec.get("name"),
+        "source": sec.get("source"),
+        "char_count": sec.get("char_count"),
+        "preview": sec.get("preview"),
+        "causal_verified": None,
+    }
 
-    Memory cards and anchored memory were cut from the product on 2026-07-27, so dials are the whole
-    story: steering is the only thing that shapes a reply. Every entry is tagged causal_verified:null --
-    ACTIVE is not PROOF, and only an on-demand ablation receipt may ever flip it."""
+
+def _sections_active(run: dict) -> dict:
+    """The run's `sections` manifest (prompt sections -- rag_context/system-prompt/etc., the fixed
+    schema clozn.runs.sections/store produce), reshaped into the same {"available": ..., ...} degrade
+    shape as `_confidence`/`_concepts`: a run predating section capture (or whose source never produces
+    one) carries no `sections` field at all, and that is reported honestly rather than as a silently
+    empty list -- there's a real difference between "captured, and there were none" (not currently
+    distinguished further here, since the manifest producer always omits the field entirely when it has
+    nothing to say) and "never captured"."""
+    manifest = run.get("sections")
+    if not isinstance(manifest, list):
+        return {"available": False, "note": _NO_SECTIONS_NOTE}
+    sections = [_section_entry(s) for s in manifest if isinstance(s, dict)]
+    return {"available": True, "sections": sections}
+
+
+def _influences_active(run: dict) -> dict:
+    """The active tone dials logged as having ridden this reply, plus the run's section manifest.
+
+    Memory cards and anchored memory were cut from the product on 2026-07-27, so dials + sections are
+    the whole story: steering is the only thing that shapes a reply, and `sections` records which PARTS
+    of the prompt could have shaped it. Every entry -- dial or section -- is tagged causal_verified:null
+    -- ACTIVE is not PROOF, and only an on-demand ablation receipt may ever flip it."""
     behavior = _as_dict(run.get("behavior"))
     dials_raw = _as_dict(behavior.get("active_dials"))
     dials = [{"name": k, "value": v, "causal_verified": None} for k, v in dials_raw.items()]
-    out = {"dials": dials}
+    out = {"dials": dials, "sections": _sections_active(run)}
     if not dials:
         out["note"] = "no dial was active on this turn"
     return out
@@ -172,7 +212,8 @@ def explain(run: dict | None) -> dict:
     try:
         influences = _influences_active(run)
     except Exception:
-        influences = {"cards": [], "gate": None, "mode": None, "dials": [],
+        influences = {"dials": [],
+                      "sections": {"available": False, "note": _NO_SECTIONS_NOTE},
                       "note": "influence manifest unavailable"}
     try:
         concepts = _concepts(run)

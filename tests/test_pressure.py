@@ -617,11 +617,13 @@ class RecordingHandler:
         pass
 
     def _log_run(self, source, messages, response, model, started, error=None, trace=None,
-                mem_out=None, finish_reason=None, finish_reason_fallback=None, extra_meta=None):
+                mem_out=None, finish_reason=None, finish_reason_fallback=None, extra_meta=None,
+                sections=None):
         self.log_calls.append(dict(source=source, messages=messages, response=response, model=model,
                                    started=started, error=error, trace=trace, mem_out=mem_out,
                                    finish_reason=finish_reason,
-                                   finish_reason_fallback=finish_reason_fallback, extra_meta=extra_meta))
+                                   finish_reason_fallback=finish_reason_fallback, extra_meta=extra_meta,
+                                   sections=sections))
         return "run_test"
 
 
