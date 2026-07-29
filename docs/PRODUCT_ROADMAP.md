@@ -57,6 +57,25 @@ research result. Bands are planning aids, not commitments.
   jlens artifact rebuild + SAE import; facts full efficacy tuning. Deferred follow-up: refresh the
   stale provenance_battery summary blocks by re-running under --no-flash-attn.
 
+**2026-07-28 STALENESS WARNING — read before trusting the table below.** This file was last edited
+2026-07-24 (`4132323`). As of 2026-07-28, `main` is **135 commits ahead** of that edit and the
+delivery-status table has NOT been re-audited against them. Treat every DONE / IN PROGRESS row as
+accurate *as of 2026-07-24*, not as current. Two drifts are confirmed by direct code reading rather
+than inference, and are named here as representative, not exhaustive:
+
+- **§7 item 2 (versioned hook/intervention contracts)** is marked IN PROGRESS in the table below.
+  Since then `clozn.hook_vocabulary.v1` and `clozn.intervention_manifest.v1` have SHIPPED
+  (`clozn/receipts/hook_vocabulary.py`, `clozn/receipts/intervention_manifest.py`), the former served
+  verbatim at `GET /contracts/hooks`, the latter hash-compatible with clozn-client's own manifest
+  builder. Scope limit worth recording: the manifest's arms are `attention_knockout` / `steer` /
+  `steer_vec` only — **residual writes are not covered by it**, so any feature needing multi-write
+  replay extends it as `.v2` (schemas are immutable once released; see `clozn/schemas/__init__.py`).
+- **The Studio rewrite is undocumented here.** `studio-frontend/` (React 19 + Vite + TypeScript,
+  built into `studio/next/`, served at `/`) does not appear anywhere in this file.
+
+Re-auditing the full table is its own task and has not been done. Do not cite a row below as current
+status without checking it against `main` first.
+
 Status meanings: **DONE** means the acceptance language in this roadmap is implemented and tested;
 **IN PROGRESS** means a useful slice is shipped but named acceptance work remains. Items not listed
 below are still queued/not started. Commit IDs are included so this snapshot can be audited against
@@ -372,6 +391,62 @@ not revenue.*
    report; replay honesty labels (bit-identical vs re-prefilled vs stochastic); every panel names
    method/artifact/controls. **M.**
 5. **Open export** — manifest + tensor bundles + a generated notebook that reproduces a receipt. **M.**
+
+**Added 2026-07-28 (BK-directed).** Three features, to be built in this order because 6 supplies the
+action substrate for 8, and 7 supplies its deepest comparison evidence. **Sequencing rule, binding:**
+do not build the polished workbench (8) before 6 and 7 emit versioned artifacts — otherwise the
+frontend hard-codes another generation of temporary API shapes. This restates roadmap rule 7
+(schema-first) for a case where the temptation to invert it is strong.
+
+6. **Exact execution forks** — restore a KV checkpoint, truncate it to an arbitrary token position,
+   change one declared variable, continue. **M.**
+   *Claim boundary, explicit:* this is an **exactness** claim, NOT a performance claim. §11 killed
+   "KV-prefix-reuse perf promises" and that kill stands — nothing here may be framed as a speed
+   feature. The claim is: *continuing unchanged from a fork point reproduces the original suffix
+   token-for-token.* Exactness is **regime-scoped from the start**: truncating above the prompt
+   boundary re-decodes a generated token at batch shape 1, matching its original decode, and is
+   bit-exact; forking at the prompt/generation boundary re-prefills instead, because the last prompt
+   token was originally decoded inside the full prefill batch. That is the batch-shape landmine,
+   which has already fired three times in this repo (see the Engine debt tail row above) — it is
+   designed around here, not discovered by testing. The `reprefill` path must never report itself as
+   `live_kv` exactness.
+   *Substrate already shipped:* `GgmlAdapter::evict_from` (KV truncation), checkpoint save/restore,
+   sampler provenance (re-seed + `rng_discard`, not a serialized RNG), steering-in-checkpoints.
+   *Known defects this work fixes:* `checkpoint_on_finish` with `stream:true` saves a checkpoint and
+   never returns its id; `/health` does not advertise checkpoint capability; `/v1/branch` re-prefills
+   from `ckpt.tokens` and drops both `has_steer` and `has_sampler`, so batched branching is **not**
+   an exact-fork substrate for steered runs today.
+7. **Cross-model mechanistic diff and causal bisect** — where two compatible executions diverge
+   internally, and which divergences causally matter. **L.** Serves the Model CI wedge (§0) most
+   directly of the three: "why did my quant regress" is a model-developer question.
+   *Hard v1 scope gate:* same architecture, tokenizer, layer count, and **residual width** — the
+   width limit is not conservatism, it is mechanical: `/score` writes require
+   `values.size() == positions.size() * n_embd` of the target engine and there is no projection
+   layer. Writable layers are `[1, n_layer)`; the final layer cannot be captured whole-sequence.
+   *Method warning, load-bearing:* a residual write **overwrites** the row, so transplanting a layer
+   *window* `[a..b]` is mathematically identical to transplanting at `b` alone. A coarse-to-fine
+   window bisect over the residual stream therefore cannot distinguish localized from distributed —
+   it can only find the shallowest layer at which a full overwrite suffices. v1 ships that honestly
+   as a **sufficiency frontier** and omits `distributed_restoration` from the verdict vocabulary
+   until necessity testing (transplant all-but-L) or composable sub-layer writes (`head_write` at
+   `kqv_out-<il>`) exist. The verdict taxonomy otherwise stands, and encodes the transplant study's
+   own correction: FP transplant fixed 5/12 quant flips but the random equal-norm control fixed
+   3/12, leaving 3/12 genuinely FP-specific.
+   *Prerequisite:* `EngineClient.score()` exposes neither `capture` nor `write` nor `arms`; existing
+   callers bypass the SDK with raw `urllib`. Batched `arms` is `batched_approximate` (~0.19 nats) —
+   screening only, never receipts.
+8. **Unified token workbench** — refactor Scope/Observatory so one selected token anchors all
+   evidence (`run × output token × optional reference run`). **M.** Least aligned of the three with
+   the §0 Model CI wedge; sequence it last on those grounds as well as the dependency ones.
+   *Two unlisted prerequisites, both real:* (a) there is **no async job system** anywhere in this
+   codebase — `POST /runs/<id>/influence-map` computes synchronously in the request handler; the
+   only "cancel" is a client-side `AbortSignal` that drops the connection while the server keeps
+   computing. Any progress/cancellation surface is new work, not reuse. (b) `studio-frontend/` has
+   **no test framework** — the standing checks are a copy-linter, `tsc -b`, and an SSR smoke render
+   that explicitly cannot run effects.
+   *Constraint:* the UI's evidence vocabularies are deliberately separate closed unions per artifact
+   type, guarded by `never`-exhaustiveness switches so they can never be cross-rendered. Do not
+   collapse them into one flat status enum.
 
 Then breadth, in this order: head/source-position tracing (lane R5), TransformerLens/NNsight
 bridges, Neuronpedia/HF publish flows. Deprioritized: J-lens fitting inside the fast runtime, SAE

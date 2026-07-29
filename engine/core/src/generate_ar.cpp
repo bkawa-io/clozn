@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <memory>
 #include <random>
 #include <set>
@@ -16,6 +17,21 @@
 namespace clozn {
 
 namespace {
+
+// Honest softmax readout for a FORCED token (execution-fork's "force_token" intervention): the
+// forced commit bypasses sample_committed_candidate entirely (no penalty, no temperature, no
+// draw), so its reported "confidence" is the RAW model probability under the untouched
+// distribution -- the same stable float64 softmax sample.cpp's greedy path uses, evaluated at one
+// token instead of an argmax. Never confabulated (never a bare 1.0); a receipt, not a narration.
+double raw_token_probability(const ForwardResult& fwd, int token_id) {
+    const int vocab = fwd.vocab;
+    const float* row = fwd.row(0);  // ar_forward always returns exactly one row (see model_ggml.cpp)
+    double mx = row[0];
+    for (int t = 1; t < vocab; ++t) if (row[t] > mx) mx = row[t];
+    double denom = 0.0;
+    for (int t = 0; t < vocab; ++t) denom += std::exp(static_cast<double>(row[t]) - mx);
+    return std::exp(static_cast<double>(row[token_id]) - mx) / denom;
+}
 
 std::string regex_escape(const std::string& value) {
     static const std::string metacharacters = R"(.^$|()*+?[]{}\)";
@@ -193,7 +209,9 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
                            int prefix_rows,
                            const std::vector<int>* reference,
                            const GrammarConfig* grammar,
-                           const EngineCheckpoint* resume_from) {
+                           const EngineCheckpoint* resume_from,
+                           int resume_truncate_to,
+                           const int* force_first_token) {
     if (prompt_ids.empty()) throw std::invalid_argument("prompt_ids must be non-empty");
     if (config.max_new < 1) throw std::invalid_argument("max_new must be >= 1");
     if (resume_from != nullptr) {
@@ -204,11 +222,18 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
         if (resume_from->n_past < 1 ||
             resume_from->n_past > static_cast<int>(resume_from->tokens.size()))
             throw std::invalid_argument("resume_from: n_past out of range for the saved tokens");
+        if (resume_truncate_to >= 0 &&
+            (resume_truncate_to < 1 || resume_truncate_to > resume_from->n_past))
+            throw std::invalid_argument("resume_truncate_to out of range [1, resume_from->n_past]");
         if (prefix_embd != nullptr && prefix_rows > 0)
             throw std::invalid_argument("resume_from cannot be combined with a soft prefix (the "
                                         "prefix is already inside the saved KV, if it was there "
                                         "at checkpoint time)");
+    } else if (resume_truncate_to >= 0) {
+        throw std::invalid_argument("resume_truncate_to requires resume_from");
     }
+    if (force_first_token != nullptr && *force_first_token < 0)
+        throw std::invalid_argument("force_first_token must be a valid (non-negative) token id");
 
     // Early-stop-on-divergence is armed only with a non-empty reference. This is a pure termination
     // condition -- nothing about sampling, batching, or the KV path changes -- so the generated prefix
@@ -232,7 +257,16 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
     };
     const clock::time_point t_start = clock::now();
 
-    const int p = static_cast<int>(prompt_ids.size());
+    // Effective prompt length for THIS run: normally the full prompt_ids, but a resume with an
+    // explicit truncation point (execution-fork) uses only prompt_ids[0, resume_truncate_to) -- the
+    // tail the checkpoint carried PAST that point must never enter the repetition-penalty board or
+    // the reported board (it's being regenerated, not replayed). resume_truncate_to == -1 (every
+    // caller before execution-fork) reduces to resume_from->n_past, which already equals
+    // prompt_ids.size() at both existing checkpoint-creation sites -- byte-identical to the prior
+    // `p = prompt_ids.size()` for every existing call site.
+    const int p = (resume_from != nullptr)
+                      ? ((resume_truncate_to >= 0) ? resume_truncate_to : resume_from->n_past)
+                      : static_cast<int>(prompt_ids.size());
     emit(GenStarted{0, p, 0, config.max_new});  // block_len 0: AR has no blocks
 
     // Causal attention + a fresh KV cache -- EXCEPT on a KV-blob resume, where load_checkpoint
@@ -251,7 +285,9 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
 
     std::mt19937_64 rng(sample.seed);
     if (sample.rng_discard > 0) rng.discard(sample.rng_discard);  // sampled-resume fast-forward
-    std::vector<int> seq = prompt_ids;  // full running sequence (for the repetition penalty)
+    // Running sequence for the repetition penalty: prompt_ids truncated to `p` (identical to the
+    // full prompt_ids whenever p == prompt_ids.size(), i.e. every call site before execution-fork).
+    std::vector<int> seq(prompt_ids.begin(), prompt_ids.begin() + p);
     SampleOpts sopts;
     sopts.temperature = sample.temperature;
     sopts.rep_penalty = sample.rep_penalty;
@@ -289,7 +325,7 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
     int n_past;
     if (resume_from != nullptr) {
         adapter.load_checkpoint(*resume_from);
-        const int np = resume_from->n_past;
+        const int np = p;  // == resume_truncate_to when set, else resume_from->n_past (unchanged)
         adapter.evict_from(np - 1);
         fwd = adapter.ar_forward({resume_from->tokens[static_cast<size_t>(np - 1)]}, np - 1);
         n_past = np;
@@ -307,9 +343,25 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
         // 500: a generation that reaches the context window stops, it never overflows.
         if (n_past >= n_ctx) { reason = "length"; break; }
         const std::vector<int> want = {n_past};  // the position about to be generated
-        const Candidate cand = sample_committed_candidate(fwd, n_past, sopts);
-        const int tok = cand.token_id;
-        const double conf = cand.confidence;
+
+        // Execution-fork "force_token": override ONLY the first slot of this call with a caller-
+        // supplied token instead of sampling it -- no draw consumed (the rng stays exactly where
+        // sample.rng_discard left it, ready for k==1's real sample), no penalty/temperature/grammar
+        // applied. Reported confidence is still an honest measurement (raw_token_probability), not
+        // a confabulated 1.0.
+        int tok;
+        double conf;
+        if (k == 0 && force_first_token != nullptr) {
+            tok = *force_first_token;
+            if (tok >= adapter.config().vocab_size)
+                throw std::invalid_argument("force_first_token: token id outside the model vocabulary");
+            conf = raw_token_probability(fwd, tok);
+            if (sopts.constraint != nullptr) sopts.constraint->accept(tok);  // keep grammar state honest
+        } else {
+            const Candidate cand = sample_committed_candidate(fwd, n_past, sopts);
+            tok = cand.token_id;
+            conf = cand.confidence;
+        }
 
         // The commit + the logit-lens (what this slot is considering = the distribution we sampled).
         emit(TokensCommitted{t, 0, {CommitItem{n_past, tok, conf}}});
@@ -381,7 +433,10 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
     result.ref_active = ref_active;    // divergence checking was armed (a reference was supplied)
     result.diverged = diverged;        // true => stopped early at diverged_at; false + ref_active => matched fully
     result.diverged_at = diverged_at;  // generation index of the first divergent token (-1 if none)
-    result.board = prompt_ids;
+    // Truncated to `p` for the same reason `seq` above is: a resumed execution-fork must never
+    // report the checkpoint's PAST-truncate_to tail as part of this run's board (that tail is being
+    // regenerated, not replayed). Identical to `prompt_ids` whenever p == prompt_ids.size().
+    result.board.assign(prompt_ids.begin(), prompt_ids.begin() + p);
     result.board.insert(result.board.end(), generated.begin(), generated.end());
 
     const double wall_ms = ms_since(t_start);
