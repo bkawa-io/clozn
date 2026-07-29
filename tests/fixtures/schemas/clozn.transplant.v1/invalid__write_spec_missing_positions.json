@@ -1,0 +1,24 @@
+{
+  "schema_version": "clozn.transplant.v1",
+  "generated_at": "2026-07-28T00:00:00Z",
+  "reference_model": {},
+  "candidate_model": {},
+  "pair_compatibility": {"schema_version": "clozn.pair-compatibility.v1", "verdict": {"overall": "compatible", "reasons": [], "operations": {"per_token_comparison": {"permitted": true, "reason": "x"}, "residual_transplant": {"permitted": true, "reason": "x"}}}},
+  "site": {"hook": "residual", "layer": 14},
+  "shuffled_layer": 10,
+  "write_positions": [17],
+  "readout_position": 17,
+  "target_token_id": 402,
+  "continuation": {"n_prompt": 17, "n_cont": 1},
+  "replay_class": "re_prefilled",
+  "random_seed": 0,
+  "baseline": {"metrics": {}, "omitted": []},
+  "arms": [
+    {"name": "reference_transplant", "write": {"layer": 14}, "metrics": {}, "omitted": []},
+    {"name": "candidate_self_transplant", "metrics": {}, "omitted": []},
+    {"name": "random_equal_norm", "metrics": {}, "omitted": []},
+    {"name": "shuffled_layer", "metrics": {}, "omitted": []},
+    {"name": "no_write_replay", "metrics": {}, "omitted": []}
+  ],
+  "analysis": {"instrument_sane": true, "reasons": ["x"]}
+}

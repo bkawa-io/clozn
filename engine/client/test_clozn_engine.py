@@ -110,6 +110,53 @@ def test_score_omits_attn_knockout_when_absent():
     assert "attn_knockout" not in body
 
 
+def test_score_forwards_write_head_write_ffn_write_verbatim():
+    """Slice 3.4 (controlled transplant): write/head_write/ffn_write must pass through to the wire
+    body unmodified, as copies (never the caller's own list/dict objects aliased into the request)."""
+    eng = _Stub([{"n_prompt": 2, "n_cont": 1, "tokens": [], "sum_logprob": -0.5}])
+    write = [{"layer": 5, "positions": [1], "values": [0.1, 0.2]}]
+    head_write = [{"layer": 3, "head": 1, "positions": [1], "values": [0.5]}]
+    ffn_write = [{"layer": 4, "positions": [1], "values": [0.3, 0.4]}]
+    eng.score(prompt="hi", continuation_ids=[7], write=write, head_write=head_write, ffn_write=ffn_write)
+    _method, _path, body = eng.calls[0]
+    assert body["write"] == write and body["write"] is not write and body["write"][0] is not write[0]
+    assert body["head_write"] == head_write and body["head_write"] is not head_write
+    assert body["ffn_write"] == ffn_write and body["ffn_write"] is not ffn_write
+
+
+def test_score_omits_write_fields_when_absent():
+    eng = _Stub([{"n_prompt": 2, "n_cont": 1, "tokens": [], "sum_logprob": -0.5}])
+    eng.score(prompt="hi", continuation_ids=[7])
+    _method, _path, body = eng.calls[0]
+    assert "write" not in body and "head_write" not in body and "ffn_write" not in body
+
+
+def test_score_head_capture_needs_both_layers_and_positions():
+    eng = _Stub([])
+    try:
+        eng.score(prompt="hi", continuation_ids=[7], head_capture_layers=[1])
+    except ValueError as exc:
+        assert "head_capture" in str(exc)
+    else:
+        raise AssertionError("score() accepted head_capture_layers without head_capture_positions")
+
+
+def test_score_forwards_head_capture_and_ffn_capture():
+    eng = _Stub([{"n_prompt": 2, "n_cont": 1, "tokens": [], "sum_logprob": -0.5}])
+    eng.score(prompt="hi", continuation_ids=[7], head_capture_layers=[2], head_capture_positions=[0],
+              head_capture_rows=True, ffn_capture_layers=[3], ffn_capture_positions=[0, 1])
+    _method, _path, body = eng.calls[0]
+    assert body["head_capture"] == {"layers": [2], "positions": [0], "rows": True}
+    assert body["ffn_capture"] == {"layers": [3], "positions": [0, 1]}
+
+
+def test_score_omits_head_capture_rows_when_false():
+    eng = _Stub([{"n_prompt": 2, "n_cont": 1, "tokens": [], "sum_logprob": -0.5}])
+    eng.score(prompt="hi", continuation_ids=[7], head_capture_layers=[2], head_capture_positions=[0])
+    _method, _path, body = eng.calls[0]
+    assert body["head_capture"] == {"layers": [2], "positions": [0]}
+
+
 def test_unembed_row_sends_token_id_and_parses():
     eng = _Stub([{"token_id": 42, "piece": " ocean", "d_model": 4, "vector": [1.0, 2.0, 3.0, 4.0]}])
     r = eng.unembed_row(42)

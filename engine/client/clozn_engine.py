@@ -622,7 +622,15 @@ class EngineClient:
               topk: int = 0, steer: Optional[dict] = None, steer_vec: Optional[ArrayLike] = None,
               attn_knockout: Optional[Sequence[Mapping[str, Any]]] = None,
               capture_layers: Optional[Sequence[int]] = None,
-              capture_positions: Optional[Sequence[int]] = None) -> dict:
+              capture_positions: Optional[Sequence[int]] = None,
+              write: Optional[Sequence[Mapping[str, Any]]] = None,
+              head_write: Optional[Sequence[Mapping[str, Any]]] = None,
+              ffn_write: Optional[Sequence[Mapping[str, Any]]] = None,
+              head_capture_layers: Optional[Sequence[int]] = None,
+              head_capture_positions: Optional[Sequence[int]] = None,
+              head_capture_rows: bool = False,
+              ffn_capture_layers: Optional[Sequence[int]] = None,
+              ffn_capture_positions: Optional[Sequence[int]] = None) -> dict:
         """POST /score: teacher-forced per-token logprob of a continuation under given conditions --
         NEVER sampling (the reproduce-and-prove foundation).
         One causal decode of prompt++continuation on the engine reads back, for each continuation
@@ -657,9 +665,41 @@ class EngineClient:
             `capture_missing` list (never a silently-absent or zero-filled entry); a request where
             NOTHING landed for any requested layer is a 400, not an empty 200.
 
+        `write`/`head_write`/`ffn_write` (slice 3.4, controlled transplant): zero or more write specs
+        applied during THIS forward, riding the same teacher-forced pass as `topk`/`capture` -- see
+        clozn.receipts.hook_vocabulary's l_out-<il>/kqv_out-<il>/ffn_out-<il> entries for exact wire
+        shapes, layer ranges, and (the single most important fact for composing more than one) which
+        of the three OVERWRITE the residual stream (`write`) vs CONTRIBUTE/ADD into it (`head_write`,
+        `ffn_write`). Each is passed through verbatim as a list of specs, copied (never the caller's
+        own list/dict objects) so a caller mutating its own spec afterward cannot retroactively change
+        an already-sent request; this client does not validate shapes or ranges -- the engine does,
+        and (2026-07-28 honesty fix) fails closed: a malformed or out-of-range spec is refused with a
+        400 rather than silently applied to nothing, so `*_applied: true` in a response unconditionally
+        means the write landed.
+          * `write`: [{layer, positions, values}, ...] -- residual `l_out-<layer>` OVERWRITE; layer
+            must be in `[1, n_layer)` (0 is the read tap's final-layer sentinel, never writable).
+          * `head_write`: [{layer, head, positions, values}, ...] -- per-Q-head `kqv_out-<layer>` slice,
+            PRE-W_o, additive; layer in `[0, n_layer)`, head in `[0, n_head)`; `values` length is
+            `positions.size() * d_head`, and d_head is only known from a `head_capture` probe (it is
+            NOT knowable statically the way `write`/`ffn_write`'s n_embd width is).
+          * `ffn_write`: [{layer, positions, values}, ...] -- `ffn_out-<layer>` MLP contribution,
+            additive, full n_embd width like `write`; layer in `[0, n_layer)` (every layer has its own
+            FFN block, so unlike `write` there is no reserved layer 0).
+
+        `head_capture_layers`/`head_capture_positions`/`head_capture_rows` and `ffn_capture_layers`/
+        `ffn_capture_positions` mirror `capture_layers`/`capture_positions` above for the other two
+        hooks (both halves of a pair must be given together, same 400-on-one-without-the-other
+        contract): `head_capture` returns per-head L2 norms (plus full merged rows when
+        `head_capture_rows=True`) at `kqv_out-<layer>`; `ffn_capture` returns the raw `ffn_out-<layer>`
+        row. Neither is knowable to have "landed" from the request shape alone for `ffn_capture` (some
+        architectures never name the `ffn_out` tensor); the response's own `ffn_capture_missing` list
+        is the honest source, exactly like residual `capture_missing`.
+
         Returns {n_prompt, n_cont, tokens:[{id, piece, logprob, topk?}], sum_logprob}, plus (when
         capture was requested and produced at least one row) {captured: {"<layer>": {"<pos>": [n_embd
-        floats], ...}, ...}, n_embd, capture_missing?: [layer, ...]}.
+        floats], ...}, ...}, n_embd, capture_missing?: [layer, ...]}, plus whichever of
+        write_applied/head_write_applied/ffn_write_applied/head_norms/head_rows/head_dims/
+        ffn_captured/ffn_capture_missing this request's own fields actually triggered.
         """
         body: dict = {"topk": int(topk)}
         if prompt_ids is not None:
@@ -681,6 +721,25 @@ class EngineClient:
                 raise ValueError("capture needs both capture_layers and capture_positions")
             body["capture"] = {"layers": [int(x) for x in capture_layers],
                                "positions": [int(x) for x in capture_positions]}
+        if write is not None:
+            body["write"] = [dict(spec) for spec in write]
+        if head_write is not None:
+            body["head_write"] = [dict(spec) for spec in head_write]
+        if ffn_write is not None:
+            body["ffn_write"] = [dict(spec) for spec in ffn_write]
+        if head_capture_layers is not None or head_capture_positions is not None:
+            if head_capture_layers is None or head_capture_positions is None:
+                raise ValueError("head_capture needs both head_capture_layers and head_capture_positions")
+            head_capture_body: dict = {"layers": [int(x) for x in head_capture_layers],
+                                       "positions": [int(x) for x in head_capture_positions]}
+            if head_capture_rows:
+                head_capture_body["rows"] = True
+            body["head_capture"] = head_capture_body
+        if ffn_capture_layers is not None or ffn_capture_positions is not None:
+            if ffn_capture_layers is None or ffn_capture_positions is None:
+                raise ValueError("ffn_capture needs both ffn_capture_layers and ffn_capture_positions")
+            body["ffn_capture"] = {"layers": [int(x) for x in ffn_capture_layers],
+                                   "positions": [int(x) for x in ffn_capture_positions]}
         return self._post("/score", body)
 
     def execution_fork(self, *, checkpoint_id: str, truncate_to: int, max_tokens: int,

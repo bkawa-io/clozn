@@ -1,0 +1,43 @@
+{
+  "schema_version": "clozn.transplant.v1",
+  "generated_at": "2026-07-28T00:00:00Z",
+  "reference_model": {},
+  "candidate_model": {},
+  "pair_compatibility": {
+    "schema_version": "clozn.pair-compatibility.v1",
+    "verdict": {
+      "overall": "compatible", "reasons": [],
+      "operations": {
+        "per_token_comparison": {"permitted": true, "reason": "tokenizers match exactly."},
+        "residual_transplant": {"permitted": true, "reason": "hidden_size matches exactly (4)."}
+      }
+    }
+  },
+  "site": {"hook": "ffn", "layer": 3},
+  "shuffled_layer": 1,
+  "write_positions": [5],
+  "readout_position": 5,
+  "target_token_id": 9,
+  "continuation": {"n_prompt": 5, "n_cont": 1},
+  "replay_class": "re_prefilled",
+  "random_seed": 7,
+  "baseline": {
+    "metrics": {"sum_logprob": -0.6, "top1_token_id": 3, "top1_is_target": false},
+    "omitted": [
+      {"metric": "target_token_logprob", "reason": "target_token_id=9 is neither the forced continuation token here nor present in the returned top-k"}
+    ]
+  },
+  "arms": [
+    {"name": "reference_transplant", "metrics": {"sum_logprob": -0.6, "top1_token_id": 3, "top1_is_target": false, "write_applied": true}, "omitted": []},
+    {"name": "candidate_self_transplant", "metrics": {"sum_logprob": -0.9, "top1_token_id": 7, "top1_is_target": false, "write_applied": true}, "omitted": []},
+    {"name": "random_equal_norm", "metrics": {"sum_logprob": -0.6, "top1_token_id": 3, "top1_is_target": false, "write_applied": true}, "omitted": []},
+    {"name": "shuffled_layer", "metrics": {"sum_logprob": -0.6, "top1_token_id": 3, "top1_is_target": false, "write_applied": true}, "omitted": []},
+    {"name": "no_write_replay", "metrics": {"sum_logprob": -0.6, "top1_token_id": 3, "top1_is_target": false}, "omitted": []}
+  ],
+  "analysis": {
+    "instrument_sane": false,
+    "reasons": [
+      "candidate_self_transplant changed the top-1 token (from writing the candidate's own captured state back into itself) -- the write path itself is not a no-op here, so no other arm's result is interpretable until this is fixed."
+    ]
+  }
+}
