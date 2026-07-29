@@ -119,6 +119,29 @@ def test_gguf_identity_pins_file_tokenizer_and_dimensions(model):
     assert identity["quantization"] == "Q4_K_M"
     assert len(identity["tokenizer_sha256"]) == 64
     assert len(identity["chat_template_sha256"]) == 64
+    # _header() (this file's fixture) never sets head_count/head_count_kv -- omitted as None, mirroring
+    # every other header-sourced field here when the underlying GGUF metadata key is absent.
+    assert identity["head_count"] is None
+    assert identity["head_count_kv"] is None
+
+
+def test_gguf_identity_reads_head_count_and_kv_head_count_from_the_same_header_reader(tmp_path, monkeypatch):
+    """clozn.analysis.pair_compatibility's head_count dimension (and the head-site transplant addendum)
+    need the query/kv head counts -- read via the SAME gguf_header_from_path() call gguf_identity()
+    already makes, reusing clozn.cli.fit_planner's own reader rather than a second GGUF parser."""
+    path = tmp_path / "gqa-Q4_K_M.gguf"
+    path.write_bytes(b"exact gguf bytes")
+
+    def _gqa_header(_path):
+        header = _header(path)
+        header["head_count"] = 28
+        header["head_count_kv"] = 4
+        return header
+
+    monkeypatch.setattr(contracts, "gguf_header_from_path", _gqa_header)
+    identity = contracts.gguf_identity(path)
+    assert identity["head_count"] == 28
+    assert identity["head_count_kv"] == 4
 
 
 def test_valid_artifact_checks_every_payload(model, tmp_path):

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "clozn.pair-compatibility.v1",
   "title": "Model-pair compatibility contract",
-  "description": "The shared, versioned preflight several features consume instead of each reimplementing it (diff-model, Experiments, mechanistic diff, Studio Compare, causal bisect) -- see clozn/analysis/pair_compatibility.py. Every dimension reports an explicit state ('same'/'differs'/'unknown', or 'exact'/'differs'/'unknown' for tokenizer) rather than a bare boolean, because different downstream operations have different requirements: per-token comparison needs the tokenizer to match exactly; a residual transplant needs hidden_size to match exactly. A value that could not be honestly measured on one or both sides is OMITTED (value_a/value_b), never null-padded -- absence must stay visible.",
+  "description": "The shared, versioned preflight several features consume instead of each reimplementing it (diff-model, Experiments, mechanistic diff, Studio Compare, causal bisect) -- see clozn/analysis/pair_compatibility.py. Every dimension reports an explicit state ('same'/'differs'/'unknown', or 'exact'/'differs'/'unknown' for tokenizer) rather than a bare boolean, because different downstream operations have different requirements: per-token comparison needs the tokenizer to match exactly; a residual transplant needs hidden_size to match exactly; a per-head (kqv_out/head_write) transplant needs head_count to match exactly, gated independently of the other two. A value that could not be honestly measured on one or both sides is OMITTED (value_a/value_b), never null-padded -- absence must stay visible. `head_count` is OPTIONAL at this schema version (added additively after v1's initial release): an older stored document that predates it, and its verdict.operations lacking `head_transplant`, both remain valid documents -- see clozn/schemas/__init__.py's immutability rule.",
 
   "type": "object",
   "required": ["schema_version", "model_a", "model_b", "tokenizer", "template", "architecture",
@@ -97,6 +97,7 @@
     "layer_count": {"$ref": "#/$defs/int_dimension"},
     "hidden_size": {"$ref": "#/$defs/int_dimension"},
     "vocab_size": {"$ref": "#/$defs/int_dimension"},
+    "head_count": {"$ref": "#/$defs/int_dimension"},
     "writable_layers": {
       "type": "object",
       "description": "Per-model writable layer range, present only for the side(s) whose layer_count is known.",
@@ -118,10 +119,12 @@
         },
         "operations": {
           "type": "object",
+          "description": "'head_transplant' is OPTIONAL at this schema version (added additively -- see the top-level description): a document produced before this addition simply omits it, never carries it as null.",
           "required": ["per_token_comparison", "residual_transplant"],
           "properties": {
             "per_token_comparison": {"$ref": "#/$defs/operation_permission"},
-            "residual_transplant": {"$ref": "#/$defs/operation_permission"}
+            "residual_transplant": {"$ref": "#/$defs/operation_permission"},
+            "head_transplant": {"$ref": "#/$defs/operation_permission"}
           }
         }
       },

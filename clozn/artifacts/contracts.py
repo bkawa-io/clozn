@@ -93,6 +93,16 @@ def gguf_identity(path: str | os.PathLike[str], *, include_file_hash: bool = Tru
         "hidden_size": header.get("embedding_length"),
         "layer_count": header.get("n_layers"),
         "vocab_size": vocab_size,
+        # head_count/head_count_kv: read via the SAME gguf_header_from_path() call above -- reusing
+        # clozn.cli.fit_planner's existing header reader rather than writing a third GGUF parser. These
+        # are the query-head and key/value-head counts respectively; they differ under GQA (grouped-
+        # query attention), which is why both are carried rather than just one. d_head (the per-head
+        # slice width a `head_write`/`kqv_out-<il>` transplant needs) is `hidden_size // head_count`
+        # (query heads -- kqv_out rows are per-Q-head even when KV heads are fewer, per
+        # clozn.receipts.hook_vocabulary's GQA note); callers needing d_head compute it from these two
+        # fields, this module does not compute it itself.
+        "head_count": header.get("head_count"),
+        "head_count_kv": header.get("head_count_kv"),
         "tokenizer_sha256": _json_digest(tokenizer),
         "chat_template_sha256": _json_digest(metadata.get("tokenizer.chat_template")),
         "quantization": header.get("quant"),

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "clozn.transplant.v1",
   "title": "Controlled cross-model activation transplant -- the five-arm control harness",
-  "description": "clozn.analysis.transplant's output: at ONE candidate-model site (a residual `l_out` layer or an `ffn_out` layer), write the reference model's captured internal state into the candidate and observe whether the candidate's answer moves toward the reference's -- alongside the four controls (candidate_self_transplant, random_equal_norm, shuffled_layer, no_write_replay) that make a 'yes' interpretable rather than an overclaim. This is a PRIMITIVE, not a search: it reports what happened at ONE named site under all five arms plus a structural verdict on whether the reference arm's movement is reference-specific. It never claims a site is a cause of anything model-wide -- that vocabulary belongs to a later slice that actually searches across sites. A metric that could not be honestly computed is OMITTED from the relevant `metrics` object and named in the sibling `omitted` list with a reason -- never a zero or a guess standing in for a measurement.",
+  "description": "clozn.analysis.transplant's output: at ONE candidate-model site (a residual `l_out` layer, an `ffn_out` layer, or a per-Q-head `kqv_out` slice), write the reference model's captured internal state into the candidate and observe whether the candidate's answer moves toward the reference's -- alongside the four controls (candidate_self_transplant, random_equal_norm, shuffled_layer, no_write_replay) that make a 'yes' interpretable rather than an overclaim. This is a PRIMITIVE, not a search: it reports what happened at ONE named site under all five arms plus a structural verdict on whether the reference arm's movement is reference-specific. It never claims a site is a cause of anything model-wide -- that vocabulary belongs to a later slice that actually searches across sites. A metric that could not be honestly computed is OMITTED from the relevant `metrics` object and named in the sibling `omitted` list with a reason -- never a zero or a guess standing in for a measurement.",
 
   "type": "object",
   "required": ["schema_version", "generated_at", "reference_model", "candidate_model", "pair_compatibility",
@@ -48,11 +48,12 @@
 
     "site": {
       "type": "object",
-      "description": "hook='residual' writes/captures the l_out-<layer> residual-stream row (OVERWRITE semantics -- see hook_vocabulary's stream_semantics_summary); hook='ffn' writes/captures the ffn_out-<layer> MLP-contribution row (CONTRIBUTES/additive semantics). Both are full n_embd-width, position-major, and share the SAME mechanical hidden_size gate (see clozn.analysis.transplant's module docstring for why pair_compatibility's residual_transplant verdict is reused for the ffn hook too). Per-head kqv_out sites are out of scope for this schema version -- head_write's value width (d_head) is only known from a runtime probe, not statically, unlike the two hooks here.",
+      "description": "hook='residual' writes/captures the l_out-<layer> residual-stream row (OVERWRITE semantics -- see hook_vocabulary's stream_semantics_summary); hook='ffn' writes/captures the ffn_out-<layer> MLP-contribution row (CONTRIBUTES/additive semantics); both are full n_embd-width, position-major, and share the SAME mechanical hidden_size gate (see clozn.analysis.transplant's module docstring for why pair_compatibility's residual_transplant verdict is reused for the ffn hook too). hook='head' writes/captures a per-Q-head kqv_out-<layer> slice (CONTRIBUTES/additive semantics, same as ffn) -- 'head' selects WHICH query head and is REQUIRED when hook='head' (omitted for the other two hooks); gated on pair_compatibility's own head_count dimension/head_transplant operation, independent of hidden_size/residual_transplant.",
       "required": ["hook", "layer"],
       "properties": {
-        "hook": {"enum": ["residual", "ffn"]},
-        "layer": {"type": "integer", "minimum": 0}
+        "hook": {"enum": ["residual", "ffn", "head"]},
+        "layer": {"type": "integer", "minimum": 0},
+        "head": {"type": "integer", "minimum": 0}
       },
       "additionalProperties": false
     },
@@ -69,10 +70,11 @@
 
     "write_spec": {
       "type": "object",
-      "description": "The write actually issued to the candidate engine for this arm: layer/positions match the engine wire contract exactly (values.size() == positions.size() * n_embd, position-major); `vectors` is present only when store_tensors=True.",
+      "description": "The write actually issued to the candidate engine for this arm: layer/positions match the engine wire contract exactly (values.size() == positions.size() * n_embd for residual/ffn, or positions.size() * d_head for head, position-major); `vectors` is present only when store_tensors=True. `head` is present only for a hook='head' site (which query head this write targeted).",
       "required": ["layer", "positions"],
       "properties": {
         "layer": {"type": "integer", "minimum": 0},
+        "head": {"type": "integer", "minimum": 0},
         "positions": {"type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 1},
         "vectors": {"type": "array", "items": {"$ref": "#/$defs/vector_entry"}}
       },

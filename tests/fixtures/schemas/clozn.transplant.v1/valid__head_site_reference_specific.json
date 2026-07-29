@@ -1,0 +1,150 @@
+{
+  "schema_version": "clozn.transplant.v1",
+  "generated_at": "2026-07-28T00:00:00Z",
+  "reference_model": {"label": "reference", "filename": "ref-fp16.gguf", "sha256": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"},
+  "candidate_model": {"label": "candidate", "filename": "cand-q2k.gguf", "sha256": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"},
+  "pair_compatibility": {
+    "schema_version": "clozn.pair-compatibility.v1",
+    "model_a": {"label": "reference"},
+    "model_b": {"label": "candidate"},
+    "hidden_size": {"state": "same", "value_a": 896, "value_b": 896},
+    "layer_count": {"state": "same", "value_a": 24, "value_b": 24},
+    "head_count": {"state": "same", "value_a": 14, "value_b": 14},
+    "verdict": {
+      "overall": "compatible", "reasons": [],
+      "operations": {
+        "per_token_comparison": {"permitted": true, "reason": "tokenizers match exactly."},
+        "residual_transplant": {"permitted": true, "reason": "hidden_size matches exactly (896)."},
+        "head_transplant": {"permitted": true, "reason": "head_count matches exactly (14)."}
+      }
+    }
+  },
+  "site": {"hook": "head", "layer": 14, "head": 3},
+  "shuffled_layer": 10,
+  "write_positions": [17],
+  "readout_position": 17,
+  "target_token_id": 402,
+  "continuation": {"n_prompt": 17, "n_cont": 1},
+  "replay_class": "re_prefilled",
+  "random_seed": 0,
+  "baseline": {
+    "metrics": {
+      "sum_logprob": -1.2,
+      "target_token_logprob": -3.1,
+      "target_token_rank": 4,
+      "top1_token_id": 88,
+      "top1_token_piece": " 41",
+      "top1_is_target": false
+    },
+    "omitted": []
+  },
+  "arms": [
+    {
+      "name": "reference_transplant",
+      "write": {
+        "layer": 14,
+        "head": 3,
+        "positions": [17],
+        "vectors": [
+          {"position": 17, "tensor": {"sha256": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3", "dtype": "float32", "shape": [64], "bytes": 256}}
+        ]
+      },
+      "metrics": {
+        "sum_logprob": -0.4,
+        "target_token_logprob": -0.2,
+        "target_token_rank": 0,
+        "top1_token_id": 402,
+        "top1_token_piece": " 47",
+        "top1_is_target": true,
+        "write_applied": true
+      },
+      "omitted": []
+    },
+    {
+      "name": "candidate_self_transplant",
+      "write": {
+        "layer": 14,
+        "head": 3,
+        "positions": [17],
+        "vectors": [
+          {"position": 17, "tensor": {"sha256": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4", "dtype": "float32", "shape": [64], "bytes": 256}}
+        ]
+      },
+      "metrics": {
+        "sum_logprob": -1.2,
+        "target_token_logprob": -3.1,
+        "target_token_rank": 4,
+        "top1_token_id": 88,
+        "top1_token_piece": " 41",
+        "top1_is_target": false,
+        "write_applied": true
+      },
+      "omitted": []
+    },
+    {
+      "name": "random_equal_norm",
+      "write": {
+        "layer": 14,
+        "head": 3,
+        "positions": [17],
+        "vectors": [
+          {"position": 17, "tensor": {"sha256": "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5", "dtype": "float32", "shape": [64], "bytes": 256}}
+        ]
+      },
+      "metrics": {
+        "sum_logprob": -1.9,
+        "target_token_logprob": -4.4,
+        "target_token_rank": 9,
+        "top1_token_id": 55,
+        "top1_token_piece": " 12",
+        "top1_is_target": false,
+        "write_applied": true
+      },
+      "omitted": []
+    },
+    {
+      "name": "shuffled_layer",
+      "write": {
+        "layer": 10,
+        "head": 3,
+        "positions": [17],
+        "vectors": [
+          {"position": 17, "tensor": {"sha256": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3", "dtype": "float32", "shape": [64], "bytes": 256}}
+        ]
+      },
+      "metrics": {
+        "sum_logprob": -1.3,
+        "target_token_logprob": -3.3,
+        "target_token_rank": 5,
+        "top1_token_id": 88,
+        "top1_token_piece": " 41",
+        "top1_is_target": false,
+        "write_applied": true
+      },
+      "omitted": []
+    },
+    {
+      "name": "no_write_replay",
+      "metrics": {
+        "sum_logprob": -1.2,
+        "target_token_logprob": -3.1,
+        "target_token_rank": 4,
+        "top1_token_id": 88,
+        "top1_token_piece": " 41",
+        "top1_is_target": false
+      },
+      "omitted": [
+        {"metric": "write_applied", "reason": "no_write_replay issues no write; this arm has nothing to confirm landed"}
+      ]
+    }
+  ],
+  "analysis": {
+    "instrument_sane": true,
+    "reference_moved_toward_reference": true,
+    "random_moved_toward_reference": false,
+    "reference_specific": true,
+    "reasons": [
+      "the reference transplant flipped the top-1 token to target_token_id and the random equal-norm control did not -- reference-specific by this harness's rule."
+    ]
+  }
+}

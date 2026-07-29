@@ -1,0 +1,27 @@
+{
+  "schema_version": "clozn.pair-compatibility.v1",
+  "model_a": {"label": "reference", "filename": "base.q8_0.gguf"},
+  "model_b": {"label": "candidate", "filename": "gqa-variant.q8_0.gguf"},
+  "tokenizer": {"state": "exact", "method": "hash"},
+  "template": {"state": "same", "method": "hash"},
+  "architecture": {"state": "same", "value_a": "qwen2", "value_b": "qwen2"},
+  "layer_count": {"state": "same", "value_a": 28, "value_b": 28},
+  "hidden_size": {"state": "same", "value_a": 3584, "value_b": 3584},
+  "vocab_size": {"state": "same", "value_a": 152064, "value_b": 152064},
+  "head_count": {"state": "differs", "value_a": 28, "value_b": 16},
+  "writable_layers": {
+    "model_a": {"min": 1, "max_exclusive": 28},
+    "model_b": {"min": 1, "max_exclusive": 28}
+  },
+  "verdict": {
+    "overall": "compatible_with_caveats",
+    "reasons": [
+      "head_count differs (28 vs 16); a per-head kqv_out transplant is mechanically impossible -- a head index does not refer to the same slice on models with different query-head counts."
+    ],
+    "operations": {
+      "per_token_comparison": {"permitted": true, "reason": "tokenizers match exactly; per-token comparison is meaningful."},
+      "residual_transplant": {"permitted": true, "reason": "hidden_size matches exactly (3584); the target engine's write validation (values.size() == positions.size() * hidden_size) can be satisfied."},
+      "head_transplant": {"permitted": false, "reason": "head_count differs (28 vs 16); a head index would not refer to the same slice on both models."}
+    }
+  }
+}
