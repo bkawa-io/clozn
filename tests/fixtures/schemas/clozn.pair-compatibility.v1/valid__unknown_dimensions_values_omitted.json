@@ -1,0 +1,29 @@
+{
+  "schema_version": "clozn.pair-compatibility.v1",
+  "model_a": {"filename": "onlyA.gguf"},
+  "model_b": {},
+  "tokenizer": {"state": "unknown", "method": "unknown"},
+  "template": {"state": "unknown", "method": "unknown"},
+  "architecture": {"state": "unknown", "value_a": "qwen2"},
+  "layer_count": {"state": "unknown", "value_a": 28},
+  "hidden_size": {"state": "unknown", "value_a": 3584},
+  "vocab_size": {"state": "unknown"},
+  "writable_layers": {
+    "model_a": {"min": 1, "max_exclusive": 28}
+  },
+  "verdict": {
+    "overall": "compatible_with_caveats",
+    "reasons": [
+      "tokenizer compatibility could not be determined (no probe result and no tokenizer_sha256 available on one or both sides).",
+      "chat template compatibility could not be determined.",
+      "architecture is unknown for at least one model.",
+      "hidden_size is unknown for at least one model; residual transplant cannot be confirmed mechanically possible.",
+      "layer_count is unknown for at least one model.",
+      "vocab_size is unknown for at least one model."
+    ],
+    "operations": {
+      "per_token_comparison": {"permitted": false, "reason": "tokenizer compatibility is unknown; refusing per-token comparison until it is confirmed (no silent degrade -- see docs/SEAMS.md rule 3)."},
+      "residual_transplant": {"permitted": false, "reason": "hidden_size is unknown for at least one model; residual transplant cannot be confirmed mechanically possible."}
+    }
+  }
+}
