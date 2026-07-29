@@ -284,7 +284,8 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
            reasoning: dict | None = None, session_key: str | None = None,
            client_key: str | None = None, client_key_source: str | None = None,
            project_key: str | None = None,
-           output_contract: dict | None = None) -> str | None:
+           output_contract: dict | None = None,
+           sections: list | None = None) -> str | None:
     """Persist a completed run and return its id. Logging failures remain non-fatal.
 
     `identity` (roadmap S4.3): the immutable reproduction-identity block from
@@ -292,7 +293,15 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
     clozn_version, captured_at. A top-level field (like memory/behavior/trace), not folded into
     `meta`, so receipts.bundle and future consumers can read it without picking through REPRO_META_KEYS.
     Callers that don't pass one (older call sites, replay/fork, the CLI run path) simply get {} --
-    honestly "no identity captured for this run," not a fabricated one."""
+    honestly "no identity captured for this run," not a fabricated one.
+
+    `sections` (prompt-section influence foundation, clozn.runs.sections): the run's ablatable-section
+    manifest, if the caller built one -- explicit `clozn_section` tags or the deterministic auto-chunker,
+    per clozn.runs.sections's own docstring (a third source, memory-card locations, was cut from the
+    product along with the rest of memory on 2026-07-27). Stored as the top-level `sections` field ONLY
+    when non-empty; an old caller that never passes it (every replay/fork/timetravel call site today) gets
+    exactly the schema it always got -- no `sections` key at all, not a null or empty list -- so this is
+    purely additive and nothing downstream needs to special-case its absence."""
     try:
         _ensure()
         started = started if started is not None else time.time()
@@ -383,6 +392,8 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
             "context_receipt": context_receipt,
             "warnings": warnings_for(finish_reason, meta),
         }
+        if sections:
+            rec["sections"] = list(sections)
         rec["flags"] = _flags(rec)
         if not _put(rec):
             return None

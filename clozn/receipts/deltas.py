@@ -17,6 +17,8 @@ def _key(influence: dict) -> str:
         return f"card:{influence['card_id']}"
     if influence.get("dial"):
         return f"dial:{influence['dial']}"
+    if influence.get("section"):
+        return f"section:{influence['section']}"
     if influence.get("memory_off"):
         return "memory_off"
     if influence.get("behavior_off"):
@@ -34,6 +36,9 @@ def _ablation_changes(influence: dict) -> dict | None:
     dial = influence.get("dial")
     if dial:
         return {"behavior_overrides": {str(dial): 0.0}}
+    section = influence.get("section")
+    if section:
+        return {"exclude_sections": [str(section)]}
     if influence.get("memory_off"):
         return {"memory_off": True}
     if influence.get("behavior_off"):
@@ -41,15 +46,48 @@ def _ablation_changes(influence: dict) -> dict | None:
     return None
 
 
+def _section_influences(manifest: dict) -> tuple[list, list]:
+    """Sections from the M1 manifest (`influences_active.sections`, produced by explain.py from a run's
+    `sections` field) as receipt influence specs -- (influences, skipped), the same two-list shape
+    `_fired_influences` already returns for cards/dials, so core.py's caller can just `.extend()` both.
+
+    SOURCE WHITELIST: `clozn.runs.sections` only ever produces `source: "api"` or `"auto"` today (memory
+    cards, and the third `"memory_card"` section source that used to shadow a fired card's own richer
+    `card_id` ablation path, were cut from the product on 2026-07-27 along with the rest of memory). The
+    `in ("api", "auto")` check below is kept as a defensive whitelist rather than dropped outright -- a
+    run recorded before that cut may still carry a stray `"memory_card"`-sourced entry in its manifest,
+    and this must skip it rather than try to ablate a source this codebase no longer knows how to."""
+    sections = ((manifest or {}).get("influences_active") or {}).get("sections") or {}
+    if isinstance(sections, dict):                     # explain.py's {"available": .., "sections": [...]}
+        sections = sections.get("sections") or []
+    influences: list = []
+    skipped: list = []
+    for sec in sections if isinstance(sections, list) else []:
+        if not isinstance(sec, dict):
+            continue
+        if sec.get("source") not in ("api", "auto"):
+            continue                                    # unknown/legacy source (e.g. old "memory_card"
+                                                          # entries) -- see SOURCE WHITELIST above
+        name = sec.get("name")
+        if not name:
+            skipped.append({"influence": {"section_source": sec.get("source")},
+                            "reason": "section has no name recorded; per-section ablation needs a name"})
+            continue
+        influences.append({"section": name, "source": sec.get("source")})
+    return influences, skipped
+
+
 def _merge_ablation_changes(influences: list) -> dict:
     """Joint replay changes that ablate every influence at once."""
     ids: list = []
     overrides: dict = {}
+    sections: list = []
     memory_off = behavior_off = False
     for inf in influences:
         c = _ablation_changes(inf) or {}
         ids.extend(c.get("disabled_memory_ids") or [])
         overrides.update(c.get("behavior_overrides") or {})
+        sections.extend(c.get("exclude_sections") or [])
         memory_off = memory_off or bool(c.get("memory_off"))
         behavior_off = behavior_off or bool(c.get("behavior_off"))
     merged: dict = {}
@@ -57,6 +95,8 @@ def _merge_ablation_changes(influences: list) -> dict:
         merged["disabled_memory_ids"] = ids
     if overrides:
         merged["behavior_overrides"] = overrides
+    if sections:
+        merged["exclude_sections"] = sections
     if memory_off:
         merged["memory_off"] = True
     if behavior_off:
@@ -69,6 +109,9 @@ def _cost_note(influence: dict) -> str:
     if influence.get("card_id") or influence.get("memory_off"):
         return ("cost: a front-of-context memory ablation changes the shared prefix, so the ablated arm "
                 "re-prefills the whole context (no KV reuse) -- the expensive case.")
+    if influence.get("section"):
+        return ("cost: a section ablation edits the prompt content itself, so the ablated arm re-prefills "
+                "the whole context (no KV reuse) -- the same expensive case as a memory ablation.")
     return ("cost: a dial ablation acts at decode time, so the prompt KV stays reusable -- cheap relative "
             "to a memory ablation.")
 
@@ -79,6 +122,11 @@ def _unapplied_note(ablated_child: dict, changes: dict) -> str | None:
         return notes["disabled_memory_ids"]
     if changes.get("edited_memory") and "edited_memory" in notes:
         return notes["edited_memory"]
+    if changes.get("exclude_sections") and "exclude_sections" in notes:
+        sec_notes = notes["exclude_sections"]
+        if isinstance(sec_notes, dict):
+            return "; ".join(f"{k}: {v}" for k, v in sec_notes.items())
+        return str(sec_notes)
     return None
 
 
@@ -97,6 +145,13 @@ def _build_receipt(influence: dict, baseline_child: dict, ablated_child: dict, c
         "note": _NOTE_BASELINE,
         "cost_note": _cost_note(influence),
     }
+    if isinstance(influence, dict) and influence.get("section"):
+        # section receipts carry the same honesty fields every other receipt does (above); this just
+        # tags WHICH kind of influence it is and its manifest identity, for a consumer rendering cards/
+        # dials/sections side by side without having to sniff `influence`'s shape.
+        out["kind"] = "section"
+        out["section_name"] = influence.get("section")
+        out["section_source"] = influence.get("source")
     # Early-stop (prove-all perf): the ablated arm halted at the first token that left the baseline, so the
     # ablated reply above is a bit-exact PREFIX up to that divergence -- NOT the full ablated reply (the rest
     # was never generated; that's the saved decode). has_effect is still exact (a prefix that already differs

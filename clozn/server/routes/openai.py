@@ -378,6 +378,27 @@ def try_post(h, p, body):
     from clozn.runs.think_tags import sanitize_messages
     msgs = sanitize_messages(msgs)
 
+    # PROMPT-SECTION INFLUENCE (foundation): build the ablatable-section manifest AFTER footer-stripping
+    # (which can shrink an echoed assistant message's content) but BEFORE clozn_section is popped just
+    # below -- building it any earlier would let a stripped footer's length change drift a section's char
+    # offsets out from under the message content this run actually records. Explicit tags win; absent any,
+    # the deterministic auto-chunker stands in, so every run (tagged or not) gets a manifest for the
+    # (separately-owned) receipts system to later measure against. clozn_section is then popped off every
+    # message so the engine/template path (and the guard/corrective/structured paths below) never sees our
+    # extension field -- a standard OpenAI client that never sends the tag gets a byte-identical prompt
+    # either way; this is additive, never a behavior change to the reply itself. Guarded: a chunker bug
+    # must never break a chat. Built this early (before corrective-policy injection / structured-io
+    # lowering can further reshape `msgs`) so a guard/corrective/structured request still pops the tag
+    # cleanly even though those paths don't thread `sections` through to a receipt.
+    from clozn.runs import sections as clozn_sections
+    try:
+        section_manifest = clozn_sections.sections_from_messages(msgs)
+        if section_manifest is None:
+            section_manifest = clozn_sections.auto_chunk_messages(msgs)
+    except Exception:
+        section_manifest = []
+    msgs = [{k: v for k, v in message.items() if k != "clozn_section"} for message in msgs]
+
     # CLOSED-LOOP DISPOSITION GUARDRAILS (FRONTIER_BETS section 9.1 / experiment A1.1), opt-in, default
     # off -- see generation_guard.py's own module docstring for the full honesty framing (present-tense
     # detect-and-correct, NEVER predictive/lead-time/"acts on intent"). Parsed here, before the corrective-
@@ -512,7 +533,7 @@ def try_post(h, p, body):
                      receipt=body.get("clozn_receipt", receipt_enabled()),
                      journal_messages=journal_messages,
                      corrective_evidence=corrective_evidence,
-                     task=calibration_task)
+                     task=calibration_task, sections=section_manifest)
         return True
     from clozn.server.generation_gateway import instrumented_chat
     run_meta = {}
@@ -526,7 +547,8 @@ def try_post(h, p, body):
                                       journal_messages=journal_messages,
                                       extra_meta=run_meta or None,
                                       output_processor=output_processor,
-                                      native_structured=native_structured)
+                                      native_structured=native_structured,
+                                      sections=section_manifest)
     except StructuredIOError as exc:
         error = exc.as_error()
         error["type"] = "model_output_error"

@@ -72,6 +72,7 @@ def instrumented_chat(handler, messages: list, *, model: str, max_tokens: int = 
                       journal_messages: list | None = None,
                       output_processor: Callable[[str, Any, str | None], Any] | None = None,
                       native_structured: Mapping[str, Any] | None = None,
+                      sections: list | None = None,
                       ) -> InstrumentedChatResult:
     """Run chat through the active substrate and persist the resulting evidence.
 
@@ -82,6 +83,13 @@ def instrumented_chat(handler, messages: list, *, model: str, max_tokens: int = 
 
     Generation errors are journaled before being re-raised so callers can preserve
     their protocol-specific error envelope without losing the failed experiment.
+
+    ``sections`` (optional): a caller-built prompt-section manifest (clozn.runs.sections) threaded
+    straight through to every ``handler._log_run`` call below, so a route that builds one (today, only
+    openai.py's /v1/chat/completions) gets it recorded on every outcome -- error, structured-output
+    failure, and success alike -- not just the happy path. Callers that don't build one (ollama.py) simply
+    don't pass it, and every _log_run call below already treats an absent/empty manifest as "nothing to
+    store" (see runlog.record's own omit-not-null-pad contract).
     """
     sub = ctx.active_sub(handler)
     if not (sub and getattr(sub, "chat", None)):
@@ -114,7 +122,7 @@ def instrumented_chat(handler, messages: list, *, model: str, max_tokens: int = 
             reply = sub.chat(messages, int(max_tokens), sample, **chat_kw)
     except Exception as exc:
         handler._log_run(source, logged_messages, "", model, started, error=str(exc),
-                         mem_out=memout, extra_meta=extra_meta)
+                         mem_out=memout, extra_meta=extra_meta, sections=sections)
         raise
 
     raw_reply = str(reply)
@@ -145,6 +153,7 @@ def instrumented_chat(handler, messages: list, *, model: str, max_tokens: int = 
                 finish_reason_fallback=None if finish else public_finish,
                 extra_meta=failure_meta,
                 output_contract=evidence if isinstance(evidence, dict) else None,
+                sections=sections,
             )
             try:
                 exc.run_id = rid
@@ -166,7 +175,8 @@ def instrumented_chat(handler, messages: list, *, model: str, max_tokens: int = 
                            trace=trace_steps, mem_out=memout, finish_reason=finish,
                            finish_reason_fallback=None if finish else public_finish,
                            extra_meta=success_meta,
-                           output_contract=evidence if isinstance(evidence, dict) else None)
+                           output_contract=evidence if isinstance(evidence, dict) else None,
+                           sections=sections)
     if output_processor is not None and rid is None:
         from clozn.server.structured_io import StructuredIOError
         persistence = StructuredIOError(

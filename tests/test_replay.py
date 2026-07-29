@@ -303,3 +303,98 @@ def test_returns_none_on_chat_exception_and_restores(store):
 
 def test_returns_none_on_empty_run(store):
     assert replay.replay(None, {}, FakeSub()) is None
+
+
+# --- exclude_sections: content-level ablation against the run's `sections` manifest -----------------------
+#
+# FakeSub's chat() doesn't itself care about message CONTENT (it only echoes memory/dial state), so these
+# tests read the spliced text back off the persisted child run's `messages` field -- runlog.record(messages=
+# ...) stores exactly the list replay() actually called chat() with, so this is an end-to-end proof (real
+# runlog round trip, no mock) that the right prompt reached generation.
+
+def _sec_run(rid: str, messages: list, sections: list) -> dict:
+    return {"id": rid, "model": "clozn-qwen", "substrate": "QwenSubstrate",
+            "messages": messages, "sections": sections}
+
+
+def test_exclude_sections_removes_a_whole_tagged_message(store):
+    block = "RAG CONTEXT BLOCK: the user likes tea."
+    run = _sec_run("run_sec_whole",
+                   messages=[{"role": "system", "content": "base system prompt"},
+                            {"role": "user", "content": block},
+                            {"role": "user", "content": "What is the answer?"}],
+                   sections=[{"id": "sec_rag", "name": "rag_context", "source": "auto",
+                             "parts": [{"message_index": 1, "start": 0, "end": len(block)}],
+                             "char_count": len(block), "preview": block[:20]}])
+    child = replay.replay(run, {"exclude_sections": ["rag_context"]}, FakeSub())
+    assert child is not None
+    assert child["messages"] == [{"role": "system", "content": "base system prompt"},
+                                 {"role": "user", "content": "What is the answer?"}]
+    assert child["changes_applied"] == {"exclude_sections": ["rag_context"]}
+    assert child["sections_excluded"] == ["rag_context"]
+    assert "notes" not in child["memory"]                  # fully applied -> no honesty note needed
+
+
+def test_exclude_sections_splices_a_mid_message_span(store):
+    prefix, marker, suffix = "Prefix. ", "[[RAG:info]]", " Suffix."
+    content = prefix + marker + suffix
+    run = _sec_run("run_sec_splice",
+                   messages=[{"role": "user", "content": content}],
+                   sections=[{"id": "sec_rag", "name": "rag_context", "source": "auto",
+                             "parts": [{"message_index": 0, "start": len(prefix),
+                                       "end": len(prefix) + len(marker)}],
+                             "char_count": len(marker), "preview": marker}])
+    child = replay.replay(run, {"exclude_sections": ["rag_context"]}, FakeSub())
+    assert child is not None
+    assert child["messages"] == [{"role": "user", "content": prefix + suffix}]
+    assert "notes" not in child["memory"]
+
+
+def test_exclude_sections_removes_multiple_parts_right_to_left(store):
+    # two spans in the SAME message, listed out of order -- the strip must not let removing the first
+    # invalidate the second's offsets (hence right-to-left internally).
+    a, one, mid, two, c = "A ", "[ONE]", " B ", "[TWO]", " C"
+    content = a + one + mid + two + c
+    part_two = {"message_index": 0, "start": len(a + one + mid), "end": len(a + one + mid + two)}
+    part_one = {"message_index": 0, "start": len(a), "end": len(a + one)}
+    run = _sec_run("run_sec_multi",
+                   messages=[{"role": "user", "content": content}],
+                   sections=[{"id": "sec_tags", "name": "tags", "source": "auto",
+                             "parts": [part_two, part_one],   # deliberately out of order
+                             "char_count": len(one) + len(two), "preview": "[ONE]...[TWO]"}])
+    child = replay.replay(run, {"exclude_sections": ["tags"]}, FakeSub())
+    assert child is not None
+    assert child["messages"] == [{"role": "user", "content": a + mid + c}]
+
+
+def test_exclude_sections_unknown_name_is_a_graceful_skip(store):
+    run = _sec_run("run_sec_unknown",
+                   messages=[{"role": "user", "content": "hello"}],
+                   sections=[{"id": "sec_x", "name": "system_prompt", "source": "auto",
+                             "parts": [{"message_index": 0, "start": 0, "end": 5}],
+                             "char_count": 5, "preview": "hello"}])
+    child = replay.replay(run, {"exclude_sections": ["not_a_real_section"]}, FakeSub())
+    assert child is not None
+    assert child["messages"] == run["messages"]             # unchanged -- nothing matched
+    assert "sections_excluded" in child and child["sections_excluded"] == []
+    note = child["memory"]["notes"]["exclude_sections"]["not_a_real_section"]
+    assert "not_a_real_section" in note and "no section named" in note
+
+
+def test_exclude_sections_on_a_run_with_no_manifest_is_a_graceful_noop(store):
+    """Old runs (pre-section-capture) carry no `sections` key at all -- exclude_sections must degrade to a
+    no-op + an honest note, never raise and never silently fabricate a manifest."""
+    child = replay.replay(RUN, {"exclude_sections": ["rag_context"]}, FakeSub())
+    assert child is not None
+    assert child["messages"] == RUN["messages"]
+    note = child["memory"]["notes"]["exclude_sections"]["rag_context"]
+    assert "no section manifest" in note
+
+
+def test_exclude_sections_leaves_plain_replay_paths_untouched(store):
+    """No exclude_sections key at all -> behaves exactly like every pre-existing change type (this is the
+    regression guard: the section-splice code path must be a no-op when unused)."""
+    child = replay.replay(RUN, {"memory_off": True}, FakeSub(mem=FakeMem(strength=1.0)))
+    assert child is not None
+    assert child["messages"] == RUN["messages"]
+    assert "sections_excluded" not in child
