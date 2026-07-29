@@ -1,0 +1,35 @@
+{
+  "schema_version": "clozn.mechanistic-diff.v1",
+  "generated_at": "2026-07-28T00:00:00Z",
+  "reference_model": {},
+  "candidate_model": {},
+  "pair_compatibility": {
+    "schema_version": "clozn.pair-compatibility.v1",
+    "verdict": {"overall": "compatible_with_caveats", "reasons": ["layer_count differs (28 vs 24)."],
+      "operations": {
+        "per_token_comparison": {"permitted": true, "reason": "tokenizers match exactly."},
+        "residual_transplant": {"permitted": true, "reason": "hidden_size matches."}
+      }}
+  },
+  "continuation": {"n_prompt": 4, "n_cont": 1},
+  "layers_requested": [10],
+  "positions_requested": [4],
+  "layer_capture": [
+    {"layer": 10, "reference_captured": true, "candidate_captured": true}
+  ],
+  "position_metrics": [
+    {"position": 4, "metrics": {}, "omitted": [
+      {"metric": "reference_token_logit_delta", "reason": "the engine's own tokens[] response was shorter than n_cont implied -- token-level data is unavailable at this position"},
+      {"metric": "reference_token_rank_reference", "reason": "the engine's own tokens[] response was shorter than n_cont implied -- token-level data is unavailable at this position"},
+      {"metric": "reference_token_rank_candidate", "reason": "the engine's own tokens[] response was shorter than n_cont implied -- token-level data is unavailable at this position"},
+      {"metric": "reference_token_rank_movement", "reason": "the engine's own tokens[] response was shorter than n_cont implied -- token-level data is unavailable at this position"},
+      {"metric": "candidate_token_logit_delta", "reason": "the engine's own tokens[] response was shorter than n_cont implied -- token-level data is unavailable at this position"},
+      {"metric": "candidate_token_rank_reference", "reason": "the engine's own tokens[] response was shorter than n_cont implied -- token-level data is unavailable at this position"},
+      {"metric": "candidate_token_rank_candidate", "reason": "the engine's own tokens[] response was shorter than n_cont implied -- token-level data is unavailable at this position"},
+      {"metric": "candidate_token_rank_movement", "reason": "the engine's own tokens[] response was shorter than n_cont implied -- token-level data is unavailable at this position"}
+    ]}
+  ],
+  "residual_points": [
+    {"layer": 10, "position": 4, "metrics": {"residual_cosine_similarity": -0.1, "residual_l2_normalized": 1.9}, "omitted": []}
+  ]
+}

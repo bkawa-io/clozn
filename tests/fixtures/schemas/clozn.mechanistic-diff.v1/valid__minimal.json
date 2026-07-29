@@ -1,0 +1,59 @@
+{
+  "schema_version": "clozn.mechanistic-diff.v1",
+  "generated_at": "2026-07-28T00:00:00Z",
+  "reference_model": {"label": "reference", "filename": "ref.gguf",
+                       "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "candidate_model": {"label": "candidate", "filename": "cand.gguf",
+                       "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+  "pair_compatibility": {
+    "schema_version": "clozn.pair-compatibility.v1",
+    "verdict": {
+      "overall": "compatible",
+      "reasons": [],
+      "operations": {
+        "per_token_comparison": {"permitted": true, "reason": "tokenizers match exactly; per-token comparison is meaningful."},
+        "residual_transplant": {"permitted": true, "reason": "hidden_size matches exactly (3584); the target engine's write validation can be satisfied."}
+      }
+    }
+  },
+  "continuation": {"n_prompt": 3, "n_cont": 2},
+  "layers_requested": [2],
+  "positions_requested": [3],
+  "layer_capture": [
+    {"layer": 2, "reference_captured": true, "candidate_captured": true}
+  ],
+  "position_metrics": [
+    {
+      "position": 3,
+      "reference_token_id": 100,
+      "reference_token_piece": " Paris",
+      "candidate_token_id": 100,
+      "candidate_token_piece": " Paris",
+      "metrics": {
+        "reference_token_logit_delta": -0.0123,
+        "reference_token_rank_reference": 0,
+        "reference_token_rank_candidate": 0,
+        "reference_token_rank_movement": 0,
+        "candidate_token_logit_delta": -0.0123,
+        "candidate_token_rank_reference": 0,
+        "candidate_token_rank_candidate": 0,
+        "candidate_token_rank_movement": 0
+      },
+      "omitted": []
+    }
+  ],
+  "residual_points": [
+    {
+      "layer": 2,
+      "position": 3,
+      "metrics": {"residual_cosine_similarity": 0.987, "residual_l2_normalized": 0.041},
+      "omitted": [],
+      "tensors": {
+        "reference": {"sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                      "dtype": "float32", "shape": [4], "bytes": 16},
+        "candidate": {"sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                      "dtype": "float32", "shape": [4], "bytes": 16}
+      }
+    }
+  ]
+}

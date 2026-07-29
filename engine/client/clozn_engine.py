@@ -620,7 +620,9 @@ class EngineClient:
     def score(self, prompt: Optional[str] = None, prompt_ids: Optional[Sequence[int]] = None,
               continuation_ids: Optional[Sequence[int]] = None, continuation: Optional[str] = None,
               topk: int = 0, steer: Optional[dict] = None, steer_vec: Optional[ArrayLike] = None,
-              attn_knockout: Optional[Sequence[Mapping[str, Any]]] = None) -> dict:
+              attn_knockout: Optional[Sequence[Mapping[str, Any]]] = None,
+              capture_layers: Optional[Sequence[int]] = None,
+              capture_positions: Optional[Sequence[int]] = None) -> dict:
         """POST /score: teacher-forced per-token logprob of a continuation under given conditions --
         NEVER sampling (the reproduce-and-prove foundation).
         One causal decode of prompt++continuation on the engine reads back, for each continuation
@@ -640,7 +642,24 @@ class EngineClient:
         --no-flash-attn requirement (GET /health.capabilities.attn_knockout). Passed through verbatim;
         this client does not validate the specs (the engine does, and refuses cleanly).
 
-        Returns {n_prompt, n_cont, tokens:[{id, piece, logprob, topk?}], sum_logprob}.
+        `capture_layers`/`capture_positions` (slice 3.2, mechanistic diff): read back the residual-
+        stream row at every (layer, position) in the cross product of the two lists, from this SAME
+        forward -- both must be given together (either omitted leaves `capture` out of the body
+        entirely; the engine 400s on one without the other). Two engine constraints, both real and
+        neither validated client-side (the engine refuses cleanly; this client passes the lists
+        through verbatim):
+          * writable layers (write_state/steer) are `[1, n_layer)`; the CAPTURE-armed range happens to
+            be the same `[1, n_layer)` mechanically, but capture has its own FUNCTIONAL limit on top of
+            it -- the last layer (n_layer-1) is armed yet always yields zero rows for a whole-sequence
+            capture: llama.cpp's inp_out_ids optimization only materializes the logit rows there. Do
+            not assume "armed" means "will actually return data."
+          * a layer that is armed but captures nothing is reported honestly via the response's
+            `capture_missing` list (never a silently-absent or zero-filled entry); a request where
+            NOTHING landed for any requested layer is a 400, not an empty 200.
+
+        Returns {n_prompt, n_cont, tokens:[{id, piece, logprob, topk?}], sum_logprob}, plus (when
+        capture was requested and produced at least one row) {captured: {"<layer>": {"<pos>": [n_embd
+        floats], ...}, ...}, n_embd, capture_missing?: [layer, ...]}.
         """
         body: dict = {"topk": int(topk)}
         if prompt_ids is not None:
@@ -657,6 +676,11 @@ class EngineClient:
             body["steer_vec"] = flatten_values(steer_vec)
         if attn_knockout is not None:
             body["attn_knockout"] = [dict(spec) for spec in attn_knockout]
+        if capture_layers is not None or capture_positions is not None:
+            if capture_layers is None or capture_positions is None:
+                raise ValueError("capture needs both capture_layers and capture_positions")
+            body["capture"] = {"layers": [int(x) for x in capture_layers],
+                               "positions": [int(x) for x in capture_positions]}
         return self._post("/score", body)
 
     def execution_fork(self, *, checkpoint_id: str, truncate_to: int, max_tokens: int,

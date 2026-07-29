@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.mechanistic-diff.v1",
+  "title": "Cross-model mechanistic divergence map (observational)",
+  "description": "clozn.analysis.mechanistic_diff's output: WHERE two pair-compatible model executions differ internally over the SAME teacher-forced continuation, at a configurable layer/position grid. This slice is purely OBSERVATIONAL -- it contains no causal claim about why a divergence exists, only where and how large it measures as. A metric that could not be honestly computed (a layer the engine could not capture, a position outside the scored continuation, a token absent from a returned top-k list) is OMITTED from the relevant `metrics` object and named in that entry's `omitted` list with a reason -- never a zero standing in for 'no divergence'.",
+
+  "type": "object",
+  "required": ["schema_version", "generated_at", "reference_model", "candidate_model", "pair_compatibility",
+               "continuation", "layers_requested", "positions_requested", "layer_capture",
+               "position_metrics", "residual_points"],
+
+  "$defs": {
+    "model_ref": {
+      "type": "object",
+      "description": "Identifying facts about one side of the pair, mirroring clozn.pair-compatibility.v1's own model_ref (this document embeds that contract's model_a/model_b verbatim as reference_model/candidate_model, so a stored diff is self-describing without a second lookup).",
+      "properties": {
+        "label": {"type": "string", "minLength": 1},
+        "filename": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+
+    "metric_omission": {
+      "type": "object",
+      "description": "One metric that could not be honestly computed at this point, and why. Never paired with a same-named key in the sibling `metrics` object -- a metric is either present with a value or named here, never both.",
+      "required": ["metric", "reason"],
+      "properties": {
+        "metric": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+
+    "tensor_ref": {
+      "type": "object",
+      "description": "A content-addressed reference into clozn.analysis.tensor_store -- the raw captured residual row backing a residual_points entry, for a later slice (or a human) to re-inspect.",
+      "required": ["sha256", "dtype", "shape"],
+      "properties": {
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "dtype": {"const": "float32"},
+        "shape": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+        "bytes": {"type": "integer", "minimum": 0},
+        "write_failed": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+
+    "layer_capture_entry": {
+      "type": "object",
+      "description": "Per requested layer, whether each side's engine actually captured it. A layer can be within a model's writable [1, n_layer) range and still capture nothing -- the known case is the last layer (n_layer-1): llama.cpp's inp_out_ids optimization only materializes logit rows there, so a whole-sequence capture request for it is always empty. `note` explains a False -- never left for the reader to guess.",
+      "required": ["layer", "reference_captured", "candidate_captured"],
+      "properties": {
+        "layer": {"type": "integer", "minimum": 0},
+        "reference_captured": {"type": "boolean"},
+        "candidate_captured": {"type": "boolean"},
+        "note": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+
+    "position_metrics_fields": {
+      "type": "object",
+      "description": "Layer-invariant per-position quantities read off each model's own /score output distribution at that continuation position (not a per-layer readout -- see the module docstring). 'logit_delta' is computed from the log-softmax value the wire protocol actually returns (a monotonic transform of the true logit, not the raw pre-softmax logit itself, which the wire format does not expose), always as candidate-minus-reference. 'rank_movement' is rank_under_candidate minus rank_under_reference (positive = the token fell in relative rank under the candidate).",
+      "properties": {
+        "reference_token_logit_delta": {"type": "number"},
+        "reference_token_rank_reference": {"type": "integer", "minimum": 0},
+        "reference_token_rank_candidate": {"type": "integer", "minimum": 0},
+        "reference_token_rank_movement": {"type": "integer"},
+        "candidate_token_logit_delta": {"type": "number"},
+        "candidate_token_rank_reference": {"type": "integer", "minimum": 0},
+        "candidate_token_rank_candidate": {"type": "integer", "minimum": 0},
+        "candidate_token_rank_movement": {"type": "integer"}
+      },
+      "additionalProperties": false
+    },
+
+    "position_metrics_entry": {
+      "type": "object",
+      "required": ["position", "metrics", "omitted"],
+      "properties": {
+        "position": {"type": "integer", "minimum": 0},
+        "reference_token_id": {"type": "integer", "minimum": 0},
+        "reference_token_piece": {"type": "string"},
+        "candidate_token_id": {"type": "integer", "minimum": 0},
+        "candidate_token_piece": {"type": "string"},
+        "metrics": {"$ref": "#/$defs/position_metrics_fields"},
+        "omitted": {"type": "array", "items": {"$ref": "#/$defs/metric_omission"}}
+      },
+      "additionalProperties": false
+    },
+
+    "residual_metrics_fields": {
+      "type": "object",
+      "description": "residual_cosine_similarity: cosine of the two captured residual rows, clipped to [-1, 1]. residual_l2_normalized: ||reference - candidate|| / ((||reference|| + ||candidate||) / 2) -- the raw L2 distance divided by the pair's average magnitude, so the number stays comparable across layers whose typical residual norm differs (early layers are small, late layers large).",
+      "properties": {
+        "residual_cosine_similarity": {"type": "number", "minimum": -1.0, "maximum": 1.0},
+        "residual_l2_normalized": {"type": "number", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+
+    "residual_point": {
+      "type": "object",
+      "required": ["layer", "position", "metrics", "omitted"],
+      "properties": {
+        "layer": {"type": "integer", "minimum": 0},
+        "position": {"type": "integer", "minimum": 0},
+        "metrics": {"$ref": "#/$defs/residual_metrics_fields"},
+        "omitted": {"type": "array", "items": {"$ref": "#/$defs/metric_omission"}},
+        "tensors": {
+          "type": "object",
+          "properties": {
+            "reference": {"$ref": "#/$defs/tensor_ref"},
+            "candidate": {"$ref": "#/$defs/tensor_ref"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "layer_change_entry": {
+      "type": "object",
+      "description": "How much ONE model's own residual changed between two consecutive entries of the requested layer grid, at one position -- a within-model depth-wise reading, never a cross-model comparison (see residual_point for that).",
+      "required": ["model", "position", "from_layer", "to_layer", "metrics", "omitted"],
+      "properties": {
+        "model": {"enum": ["reference", "candidate"]},
+        "position": {"type": "integer", "minimum": 0},
+        "from_layer": {"type": "integer", "minimum": 0},
+        "to_layer": {"type": "integer", "minimum": 0},
+        "metrics": {"$ref": "#/$defs/residual_metrics_fields"},
+        "omitted": {"type": "array", "items": {"$ref": "#/$defs/metric_omission"}}
+      },
+      "additionalProperties": false
+    }
+  },
+
+  "properties": {
+    "schema_version": {"const": "clozn.mechanistic-diff.v1"},
+    "generated_at": {"type": "string", "minLength": 1},
+    "reference_model": {"$ref": "#/$defs/model_ref"},
+    "candidate_model": {"$ref": "#/$defs/model_ref"},
+    "pair_compatibility": {
+      "type": "object",
+      "description": "The full clozn.pair-compatibility.v1 document that gated this capture, embedded verbatim -- a stored diff is self-describing about what compatibility was actually confirmed before it was produced.",
+      "required": ["schema_version", "verdict"],
+      "properties": {
+        "schema_version": {"const": "clozn.pair-compatibility.v1"}
+      },
+      "additionalProperties": true
+    },
+    "continuation": {
+      "type": "object",
+      "required": ["n_prompt", "n_cont"],
+      "properties": {
+        "n_prompt": {"type": "integer", "minimum": 0},
+        "n_cont": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "layers_requested": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+    "positions_requested": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+    "layer_capture": {"type": "array", "items": {"$ref": "#/$defs/layer_capture_entry"}},
+    "position_metrics": {"type": "array", "items": {"$ref": "#/$defs/position_metrics_entry"}},
+    "residual_points": {"type": "array", "items": {"$ref": "#/$defs/residual_point"}},
+    "layer_change": {
+      "type": "array",
+      "description": "Optional -- present only when at least two requested layers were captured for the same model at the same position, giving at least one consecutive pair to compare.",
+      "items": {"$ref": "#/$defs/layer_change_entry"}
+    }
+  },
+  "additionalProperties": true
+}

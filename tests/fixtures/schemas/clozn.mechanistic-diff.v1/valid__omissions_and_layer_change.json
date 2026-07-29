@@ -1,0 +1,72 @@
+{
+  "schema_version": "clozn.mechanistic-diff.v1",
+  "generated_at": "2026-07-28T00:00:00Z",
+  "reference_model": {"filename": "ref.gguf"},
+  "candidate_model": {"filename": "cand.gguf"},
+  "pair_compatibility": {
+    "schema_version": "clozn.pair-compatibility.v1",
+    "verdict": {"overall": "compatible", "reasons": [], "operations": {
+      "per_token_comparison": {"permitted": true, "reason": "tokenizers match exactly."},
+      "residual_transplant": {"permitted": true, "reason": "hidden_size matches."}
+    }}
+  },
+  "continuation": {"n_prompt": 5, "n_cont": 3},
+  "layers_requested": [2, 3, 27],
+  "positions_requested": [6, 10],
+  "layer_capture": [
+    {"layer": 2, "reference_captured": true, "candidate_captured": true},
+    {"layer": 3, "reference_captured": true, "candidate_captured": true},
+    {"layer": 27, "reference_captured": false, "candidate_captured": false,
+     "note": "reference: layer armed for capture but produced no rows (commonly the last layer -- llama.cpp's inp_out_ids optimization only materializes logit rows there, so a whole-sequence capture request for it is always empty); candidate: layer armed for capture but produced no rows (commonly the last layer -- llama.cpp's inp_out_ids optimization only materializes logit rows there, so a whole-sequence capture request for it is always empty)"}
+  ],
+  "position_metrics": [
+    {
+      "position": 6,
+      "reference_token_id": 42,
+      "metrics": {
+        "reference_token_logit_delta": -1.5,
+        "reference_token_rank_reference": 0,
+        "reference_token_rank_movement": 4
+      },
+      "omitted": [
+        {"metric": "reference_token_rank_candidate", "reason": "the forced token does not appear in the candidate model's returned top-5"},
+        {"metric": "candidate_token_logit_delta", "reason": "topk was not requested or returned empty (topk=0); the candidate's own top-1 token could not be determined"},
+        {"metric": "candidate_token_rank_reference", "reason": "topk was not requested or returned empty (topk=0); the candidate's own top-1 token could not be determined"},
+        {"metric": "candidate_token_rank_candidate", "reason": "topk was not requested or returned empty (topk=0); the candidate's own top-1 token could not be determined"},
+        {"metric": "candidate_token_rank_movement", "reason": "topk was not requested or returned empty (topk=0); the candidate's own top-1 token could not be determined"}
+      ]
+    },
+    {
+      "position": 20,
+      "metrics": {},
+      "omitted": [
+        {"metric": "reference_token_logit_delta", "reason": "position 20 is outside the scored continuation range [5, 8) -- no forced/candidate token exists there to compare"},
+        {"metric": "reference_token_rank_reference", "reason": "position 20 is outside the scored continuation range [5, 8) -- no forced/candidate token exists there to compare"},
+        {"metric": "reference_token_rank_candidate", "reason": "position 20 is outside the scored continuation range [5, 8) -- no forced/candidate token exists there to compare"},
+        {"metric": "reference_token_rank_movement", "reason": "position 20 is outside the scored continuation range [5, 8) -- no forced/candidate token exists there to compare"},
+        {"metric": "candidate_token_logit_delta", "reason": "position 20 is outside the scored continuation range [5, 8) -- no forced/candidate token exists there to compare"},
+        {"metric": "candidate_token_rank_reference", "reason": "position 20 is outside the scored continuation range [5, 8) -- no forced/candidate token exists there to compare"},
+        {"metric": "candidate_token_rank_candidate", "reason": "position 20 is outside the scored continuation range [5, 8) -- no forced/candidate token exists there to compare"},
+        {"metric": "candidate_token_rank_movement", "reason": "position 20 is outside the scored continuation range [5, 8) -- no forced/candidate token exists there to compare"}
+      ]
+    }
+  ],
+  "residual_points": [
+    {"layer": 2, "position": 6, "metrics": {"residual_cosine_similarity": 0.91, "residual_l2_normalized": 0.2}, "omitted": []},
+    {"layer": 3, "position": 6, "metrics": {"residual_cosine_similarity": 0.85, "residual_l2_normalized": 0.3}, "omitted": []},
+    {"layer": 27, "position": 6, "metrics": {},
+     "omitted": [
+       {"metric": "residual_cosine_similarity", "reason": "reference residual was not captured at this layer (see layer_capture)"},
+       {"metric": "residual_l2_normalized", "reason": "reference residual was not captured at this layer (see layer_capture)"}
+     ]}
+  ],
+  "layer_change": [
+    {"model": "reference", "position": 6, "from_layer": 2, "to_layer": 3,
+     "metrics": {"residual_cosine_similarity": 0.72, "residual_l2_normalized": 0.55}, "omitted": []},
+    {"model": "candidate", "position": 6, "from_layer": 2, "to_layer": 3,
+     "metrics": {}, "omitted": [
+       {"metric": "residual_cosine_similarity", "reason": "a captured residual vector was all-zero (direction undefined)"},
+       {"metric": "residual_l2_normalized", "reason": "both captured residual vectors were (near-)zero (normalization undefined)"}
+     ]}
+  ]
+}
