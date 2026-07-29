@@ -118,7 +118,10 @@ def test_receipt_privacy_get_default_and_post_sets_it(tmp_path, monkeypatch):
 
     posted = Handler("/receipt-privacy")
     assert route.try_post(posted, "/receipt-privacy", {"tier": "hashes_only"}) is True
-    assert posted.body == {"ok": True, "tier": "hashes_only"}
+    assert posted.body["ok"] is True
+    assert posted.body["tier"] == "hashes_only"
+    assert posted.body["mutation"]["status"] == "applied"
+    assert posted.body["compatibility_mode"] == "atomic_preview_apply"
 
     after = Handler("/receipt-privacy")
     route.try_get(after, "/receipt-privacy")
@@ -131,6 +134,73 @@ def test_receipt_privacy_post_rejects_unknown_tier(tmp_path, monkeypatch):
     h = Handler("/receipt-privacy")
     assert route.try_post(h, "/receipt-privacy", {"tier": "telepathy"}) is True
     assert h.status == 400
+
+
+def test_receipt_privacy_explicit_preview_apply_and_undo(tmp_path, monkeypatch):
+    import clozn.settings as settings
+    monkeypatch.setattr(settings, "SETTINGS_PATH", str(tmp_path / "studio_settings.json"))
+
+    previewed = Handler("/receipt-privacy")
+    assert route.try_post(previewed, "/receipt-privacy", {
+        "action": "preview", "tier": "metadata_only",
+    }) is True
+    assert previewed.status == 200
+    preview = previewed.body["preview"]
+    assert preview["current"] == {"exists": False, "tier": "full"}
+    assert preview["expected"] == {"exists": False}
+    assert preview["target"] == settings.SETTINGS_PATH
+
+    applied = Handler("/receipt-privacy")
+    assert route.try_post(applied, "/receipt-privacy", {
+        "action": "apply",
+        "tier": "metadata_only",
+        "expected": preview["expected"],
+    }) is True
+    assert applied.status == 200
+    assert applied.body["mutation"]["status"] == "applied"
+    transaction_id = applied.body["mutation"]["transaction_id"]
+
+    undone = Handler("/receipt-privacy")
+    assert route.try_post(undone, "/receipt-privacy", {
+        "action": "undo", "transaction_id": transaction_id,
+    }) is True
+    assert undone.status == 200
+    assert undone.body["mutation"]["status"] == "removed"
+    assert undone.body["tier"] == "full"
+
+    repeated = Handler("/receipt-privacy")
+    route.try_post(repeated, "/receipt-privacy", {
+        "action": "undo", "transaction_id": transaction_id,
+    })
+    assert repeated.body["mutation"]["status"] == "already_undone"
+
+
+def test_receipt_privacy_explicit_apply_requires_expected_and_refuses_drift(tmp_path, monkeypatch):
+    import clozn.settings as settings
+    target = tmp_path / "studio_settings.json"
+    monkeypatch.setattr(settings, "SETTINGS_PATH", str(target))
+
+    missing = Handler("/receipt-privacy")
+    route.try_post(missing, "/receipt-privacy", {
+        "action": "apply", "tier": "off",
+    })
+    assert missing.status == 400
+    assert "expected.exists" in missing.body["error"]
+
+    previewed = Handler("/receipt-privacy")
+    route.try_post(previewed, "/receipt-privacy", {
+        "action": "preview", "tier": "off",
+    })
+    target.write_text('{"external": true}', encoding="utf-8")
+    drifted = Handler("/receipt-privacy")
+    route.try_post(drifted, "/receipt-privacy", {
+        "action": "apply",
+        "tier": "off",
+        "expected": previewed.body["preview"]["expected"],
+    })
+    assert drifted.status == 409
+    assert drifted.body["code"] == "settings_drift"
+    assert json.loads(target.read_text(encoding="utf-8")) == {"external": True}
 
 
 # ---------------------------------------------------------------------------------------------------

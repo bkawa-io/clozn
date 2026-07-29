@@ -24,7 +24,8 @@
     "score_arms",
     "checkpoint",
     "execution_fork",
-    "execution_fork_regimes"
+    "execution_fork_regimes",
+    "performance_timing"
   ],
   "stream_frame_envelope": [
     "req",

@@ -13,6 +13,7 @@ export type ReceiptShape = "new" | "legacy" | "absent" | "unrecognized";
 
 export interface ReceiptSegment {
   segmentId?: string;
+  clientSourceId?: string;
   sourceType?: string;
   sourceLabel?: string;
   originalOrder?: number;
@@ -40,12 +41,17 @@ export interface ReceiptTransformation {
 export interface ReceiptTermination {
   reason?: string;
   reasonRaw?: string;
+  source?: string;
   generatedTokens?: number;
 }
 
 export interface ReceiptRendered {
   sha256?: string;
+  bytes?: number;
+  tokens?: number;
   tokenCount?: number;
+  templateFingerprint?: string;
+  contentAvailable?: boolean;
   /** Present only when the backend has an explicit opinion. Absent = the backend has not said either way. */
   estimated?: boolean;
   specialTokens?: string[];
@@ -140,6 +146,7 @@ function parseSegment(raw: unknown): ReceiptSegment {
   const segment = record(raw);
   return {
     segmentId: str(segment.segment_id),
+    clientSourceId: str(segment.client_source_id),
     sourceType: str(segment.source_type),
     sourceLabel: str(segment.source_label),
     originalOrder: num(segment.original_order),
@@ -172,6 +179,7 @@ function parseTermination(raw: unknown): ReceiptTermination | undefined {
   return {
     reason: str(termination.reason),
     reasonRaw: str(termination.reason_raw),
+    source: str(termination.source),
     generatedTokens: num(termination.generated_tokens),
   };
 }
@@ -181,7 +189,11 @@ function parseRendered(raw: unknown): ReceiptRendered | undefined {
   if (!Object.keys(rendered).length) return undefined;
   return {
     sha256: str(rendered.sha256),
+    bytes: num(rendered.bytes),
+    tokens: num(rendered.tokens),
     tokenCount: num(rendered.token_count),
+    templateFingerprint: str(rendered.template_fingerprint),
+    contentAvailable: bool(rendered.content_available),
     estimated: bool(rendered.estimated),
     specialTokens: Array.isArray(rendered.special_tokens) ? rendered.special_tokens.map(String) : undefined,
   };

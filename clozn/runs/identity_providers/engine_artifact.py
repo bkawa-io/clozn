@@ -3,7 +3,7 @@ running engine, its backend, its managed-install artifact sha256/version, and th
 own /health already reported.
 
 Everything here is read out of `context`, never recomputed -- discovery_source/backend/artifact_sha256/
-engine_version arrive via runtime_identity()'s `extra_context` kwarg (populated by
+engine_version/build_id/llama_cpp_commit arrive via runtime_identity()'s `extra_context` kwarg (populated by
 clozn.server.substrates._engine_discovery_context() from CLOZN_ENGINE_* env vars
 clozn.cli.runtime_process.spawn_runtime() sets on the gateway subprocess), and protocol_version comes
 straight off the SAME engine_health dict every other facet in clozn.runs.identity already reads. Any
@@ -14,7 +14,10 @@ from __future__ import annotations
 
 NAME = "engine_artifact"
 
-_CONTEXT_FIELDS = ("discovery_source", "backend", "artifact_sha256", "engine_version")
+_CONTEXT_FIELDS = (
+    "discovery_source", "backend", "artifact_sha256", "engine_version",
+    "build_id", "llama_cpp_commit",
+)
 
 
 def identity(context):

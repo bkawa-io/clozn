@@ -100,28 +100,40 @@ def _phase_line(phase: dict) -> str:
     name = str(phase.get("name") or "unknown").replace("_", " ")
     seconds = (phase.get("duration_ns") or 0) / 1e9
     owner = phase.get("owner")
+    measurement = str(phase.get("measurement") or "measured").upper()
+    aggregation = str(phase.get("aggregation") or "exclusive").replace("_", " ").upper()
     suffix = f"  ({owner})" if isinstance(owner, str) and owner else ""
-    return f"  {name:20} {seconds:6.1f}s{suffix}"
+    return f"  {name:20} {seconds:8.3f}s  {measurement:9} {aggregation:12}{suffix}"
 
 
 def format_performance(report: dict) -> str:
     """Render the clozn.performance-trace.v1 report without adding a cause its `diagnoses` didn't fire.
 
-    Fired rules are shown as LIKELY CAUSE/POSSIBLE FIX pairs; rules this run's evidence could not support
-    are listed by name so their absence is never mistaken for 'nothing wrong here' (the survey finding
-    behind this whole module: most rules cannot fire until deeper phase instrumentation ships).
+    Fired rules are shown as LIKELY CAUSE/POSSIBLE FIX pairs; rules this particular run's evidence could
+    not support are listed by name so their absence is never mistaken for 'nothing wrong here'.
     """
     lines = [f"performance - {report.get('run_id') or '?'}", "", "PHASES (monotonic)"]
     phases = report.get("phases") if isinstance(report.get("phases"), list) else []
     if phases:
         lines.extend(_phase_line(p) for p in phases if isinstance(p, dict))
     else:
-        lines.append("  no phase is instrumented for this run yet")
+        lines.append("  no measured phase was recorded for this run")
 
     metrics = report.get("metrics") if isinstance(report.get("metrics"), dict) else {}
     if metrics:
         lines.extend(["", "METRICS"])
         lines.extend(f"  {key:28} {value}" for key, value in metrics.items())
+
+    aggregation = report.get("aggregation") if isinstance(report.get("aggregation"), dict) else {}
+    if aggregation:
+        known_s = (aggregation.get("known_duration_ns") or 0) / 1e9
+        lines.extend(["", "ACCOUNTED TIME", f"  known measured phases       {known_s:.3f}s"])
+        if isinstance(aggregation.get("unaccounted_duration_ns"), int):
+            lines.append(
+                f"  unaccounted                 {aggregation['unaccounted_duration_ns'] / 1e9:.3f}s"
+            )
+        if isinstance(aggregation.get("measurement_coverage"), (int, float)):
+            lines.append(f"  coverage                    {aggregation['measurement_coverage'] * 100:.1f}%")
 
     diagnoses = report.get("diagnoses") if isinstance(report.get("diagnoses"), list) else []
     fired = [d for d in diagnoses if isinstance(d, dict) and d.get("status") == "fired"]

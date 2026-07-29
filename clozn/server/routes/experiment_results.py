@@ -1,5 +1,9 @@
-"""GET /experiment-results[...]: a read-only HTTP surface over the local clozn.experiment.result.v0
-artifacts `clozn experiment run` already writes to ~/.clozn/experiments/ (clozn.experiments.suite).
+"""Experiment-result review services over authoritative local clozn.experiment.result.v0 artifacts.
+
+The list/detail/cell/trend endpoints are read-only. Promotion is the one write service and is deliberately
+separate from result storage: preview is pure; apply writes only an explicitly named regression-suite
+artifact under ~/.clozn/regression-suites after expected-hash and redaction-review checks. CI preview
+returns copyable text and never writes a repository workflow.
 
 This is the backend half of notes/agent_roadmap/04-studio-experiments-workspace.md ("Studio reads and
 composes existing experiment/run artifacts" -- no new experiment engine or scorer lives here). Three
@@ -67,9 +71,10 @@ def _thin_cell(cell: dict) -> dict:
 
 
 def _list_entry(result: dict) -> dict:
+    from clozn.experiments import suite
     manifest = result.get("manifest") or {}
     summary = result.get("summary") or {}
-    return {
+    entry = {
         "experiment_id": result.get("experiment_id"),
         "name": result.get("name"),
         "created_at": result.get("created_at"),
@@ -78,7 +83,12 @@ def _list_entry(result: dict) -> dict:
         "seeds": result.get("seeds"),
         "cell_count": len(result.get("cells") or []),
         "aggregates": summary.get("aggregates"),
+        "suite_fingerprint": suite.result_fingerprint(result),
     }
+    for field in ("vcs", "artifact_provenance"):
+        if field in result:
+            entry[field] = result[field]
+    return entry
 
 
 def _load_all():
@@ -113,6 +123,25 @@ def _not_found(h, experiment_id: str) -> None:
 def try_get(h, p):
     if not p.startswith(_PREFIX):
         return False
+
+    if p == _PREFIX + "/trends":
+        from clozn.experiments import history, suite
+        query = parse_qs(urlsplit(h.path).query, keep_blank_values=True)
+        digest = _one(query, "fingerprint")
+        if digest is not None and (
+                len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest)):
+            h._json(400, {"error": "fingerprint must be a lowercase SHA-256 digest"})
+            return True
+        entries, broken = _load_all()
+        index = history.build_trend_index(result for _path, result in entries)
+        payload = (
+            history.select_compatible(
+                index, {"algorithm": suite.FINGERPRINT_ALGORITHM, "sha256": digest})
+            if digest is not None else index
+        )
+        payload["broken"] = [{"path": path, "error": error} for path, error in broken]
+        h._json(200, payload)
+        return True
 
     if p == _PREFIX:
         query = parse_qs(urlsplit(h.path).query, keep_blank_values=True)
@@ -162,6 +191,21 @@ def try_get(h, p):
         h._json(200, {"experiment_id": experiment_id, "cells": cells})
         return True
 
+    if rest.endswith("/trends"):
+        experiment_id = rest[:-len("/trends")]
+        result = _find(experiment_id)
+        if result is None:
+            _not_found(h, experiment_id)
+            return True
+        from clozn.experiments import history, suite
+        entries, broken = _load_all()
+        index = history.build_trend_index(item for _path, item in entries)
+        payload = history.select_compatible(index, suite.result_fingerprint(result))
+        payload["experiment_id"] = experiment_id
+        payload["broken"] = [{"path": path, "error": error} for path, error in broken]
+        h._json(200, payload)
+        return True
+
     if "/artifacts/" in rest:
         experiment_id, _, name = rest.partition("/artifacts/")
         result = _find(experiment_id)
@@ -182,6 +226,53 @@ def try_get(h, p):
         thin = dict(result)
         thin["cells"] = [_thin_cell(cell) for cell in result.get("cells") or []]
         h._json(200, thin)
+        return True
+
+    return False
+
+
+def try_post(h, p, body):
+    if not p.startswith(_PREFIX + "/"):
+        return False
+    rest = p[len(_PREFIX) + 1:]
+
+    if rest.endswith("/promotion-preview") or rest.endswith("/promotion-apply"):
+        apply = rest.endswith("/promotion-apply")
+        suffix = "/promotion-apply" if apply else "/promotion-preview"
+        experiment_id = rest[:-len(suffix)]
+        result = _find(experiment_id)
+        if result is None:
+            _not_found(h, experiment_id)
+            return True
+        from clozn.experiments import promotion
+        try:
+            destination = promotion.resolve_destination(body.get("destination"))
+            payload = (
+                promotion.apply_promotion(result, destination, body)
+                if apply else promotion.preview_promotion(result, destination, body)
+            )
+        except promotion.DestinationDriftError as exc:
+            h._json(409, {"error": str(exc)})
+            return True
+        except promotion.PromotionServiceError as exc:
+            h._json(400, {"error": str(exc)})
+            return True
+        h._json(200, payload)
+        return True
+
+    if rest.endswith("/ci-preview"):
+        experiment_id = rest[:-len("/ci-preview")]
+        result = _find(experiment_id)
+        if result is None:
+            _not_found(h, experiment_id)
+            return True
+        from clozn.experiments import action_contract
+        try:
+            payload = action_contract.ci_preview(result, body)
+        except action_contract.ActionContractError as exc:
+            h._json(400, {"error": str(exc)})
+            return True
+        h._json(200, payload)
         return True
 
     return False

@@ -3,15 +3,20 @@ import type {
   BrokenResult,
   CaseDef,
   CellRun,
+  CiPreview,
+  CompatibleTrends,
   ExperimentDetail,
   ExperimentList,
   ExperimentListEntry,
   ExperimentSummary,
   FullCell,
   Manifest,
+  PromotionPreview,
+  PromotionTransaction,
   RunIdentity,
   StatusCounts,
   SuiteAggregate,
+  SuiteFingerprint,
   ThinCell,
   VariantComparison,
   VariantDef,
@@ -69,7 +74,52 @@ async function get(url: string, signal?: AbortSignal): Promise<JsonRecord> {
   return body;
 }
 
+async function post(url: string, payload: JsonRecord, signal?: AbortSignal): Promise<JsonRecord> {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  let body: JsonRecord = {};
+  try {
+    body = record(await response.json());
+  } catch {
+    // The HTTP status remains authoritative when the route returns no JSON body.
+  }
+  if (!response.ok) throw new Error(errorText(body, response.status));
+  return body;
+}
+
 // --- normalizers -----------------------------------------------------------------------------
+
+function fingerprint(value: unknown): SuiteFingerprint | null {
+  const f = record(value);
+  const algorithm = str(f.algorithm);
+  const sha256 = str(f.sha256);
+  return algorithm && sha256 ? { algorithm, sha256 } : null;
+}
+
+function vcs(value: unknown) {
+  if (!value || typeof value !== "object") return null;
+  const v = record(value);
+  return {
+    repository: str(v.repository) ?? undefined,
+    commit: str(v.commit) ?? undefined,
+    branch: str(v.branch) ?? undefined,
+  };
+}
+
+function provenance(value: unknown) {
+  if (!value || typeof value !== "object") return null;
+  const p = record(value);
+  return {
+    workflowUrl: str(p.workflow_url) ?? undefined,
+    artifactUrl: str(p.artifact_url) ?? undefined,
+    localOpenCommand: str(p.local_open_command) ?? undefined,
+    expiresAt: str(p.expires_at) ?? undefined,
+  };
+}
 
 function statusCounts(value: unknown): StatusCounts {
   const c = record(value);
@@ -134,6 +184,9 @@ function listEntry(value: unknown): ExperimentListEntry {
     seeds: list(e.seeds, (v) => num(v) ?? 0),
     cellCount: num(e.cell_count) ?? 0,
     aggregates: e.aggregates ? aggregates(e.aggregates) : null,
+    suiteFingerprint: fingerprint(e.suite_fingerprint),
+    vcs: vcs(e.vcs),
+    artifactProvenance: provenance(e.artifact_provenance),
   };
 }
 
@@ -255,6 +308,9 @@ function experimentDetail(value: unknown): ExperimentDetail {
     createdAt: str(d.created_at),
     manifest: manifest(d.manifest),
     manifestSha256: str(d.manifest_sha256),
+    suiteFingerprint: fingerprint(d.suite_fingerprint),
+    vcs: vcs(d.vcs),
+    artifactProvenance: provenance(d.artifact_provenance),
     seeds: list(d.seeds, (v) => num(v) ?? 0),
     summary: summary(d.summary),
     cells: list(d.cells, thinCell),
@@ -308,6 +364,157 @@ export async function loadExperimentCells(
   const query = params.toString();
   const body = await get(`/experiment-results/${encodeURIComponent(id)}/cells${query ? `?${query}` : ""}`, signal);
   return list(body.cells, fullCell);
+}
+
+export async function loadExperimentTrends(
+  id: string,
+  signal?: AbortSignal,
+): Promise<CompatibleTrends> {
+  const body = await get(`/experiment-results/${encodeURIComponent(id)}/trends`, signal);
+  const fp = fingerprint(body.suite_fingerprint);
+  if (!fp) throw new Error("Trend response omitted its suite fingerprint");
+  return {
+    suiteFingerprint: fp,
+    points: list(body.points, (value) => {
+      const point = record(value);
+      const pointFingerprint = fingerprint(point.suite_fingerprint);
+      if (!pointFingerprint) throw new Error("Trend point omitted its suite fingerprint");
+      const instability = record(point.replicate_instability);
+      return {
+        experimentId: str(point.experiment_id) ?? "",
+        name: str(point.name) ?? "(unnamed)",
+        createdAt: str(point.created_at),
+        suiteFingerprint: pointFingerprint,
+        identity: Object.fromEntries(
+          Object.entries(record(point.identity)).map(([key, values]) => [
+            key, list(values, (item) => String(item)),
+          ]),
+        ),
+        vcs: vcs(point.vcs),
+        artifactProvenance: provenance(point.artifact_provenance),
+        baselineVariant: str(point.baseline_variant),
+        aggregates: aggregates(point.aggregates),
+        comparisonCounts: Object.fromEntries(
+          Object.entries(record(point.comparison_counts)).map(([variant, counts]) => [
+            variant,
+            Object.fromEntries(
+              Object.entries(record(counts)).map(([name, count]) => [name, num(count) ?? 0]),
+            ),
+          ]),
+        ),
+        errorCells: num(point.error_cells) ?? 0,
+        replicateInstability: {
+          coordinateCount: num(instability.coordinate_count) ?? 0,
+          coordinates: list(instability.coordinates, (item) => {
+            const row = record(item);
+            return {
+              suite: str(row.suite) ?? "",
+              case: str(row.case) ?? "",
+              variant: str(row.variant) ?? "",
+              statuses: list(row.statuses, (status) => String(status)),
+            };
+          }),
+        },
+      };
+    }),
+    broken: list(body.broken, (item) => {
+      const broken = record(item);
+      return { path: str(broken.path) ?? "", error: str(broken.error) ?? "" };
+    }),
+  };
+}
+
+export interface PromotionRequest {
+  suite: string;
+  case: string;
+  variant: string;
+  seed: number;
+  destination: string;
+  case_name?: string;
+  suite_name?: string;
+  replacements?: Record<string, string>;
+  expected_destination_hash?: string;
+  acknowledged_findings?: string[];
+}
+
+function promotionPreview(value: unknown): PromotionPreview {
+  const p = record(value);
+  const diff = record(p.destination_diff);
+  return {
+    sourceRunId: str(p.source_run_id) ?? "",
+    role: (str(p.role) ?? "target") as "target" | "guard",
+    candidateCase: record(p.candidate_case),
+    destination: str(p.destination) ?? "",
+    destinationDiff: {
+      operation: str(diff.operation) ?? "",
+      beforeCaseCount: num(diff.before_case_count) ?? 0,
+      afterCaseCount: num(diff.after_case_count) ?? 0,
+      addedCase: str(diff.added_case) ?? "",
+    },
+    expectedDestinationHash: str(p.expected_destination_hash) ?? "",
+    proposedDestinationSha256: str(p.proposed_destination_sha256) ?? "",
+    redactionFindings: list(p.redaction_findings, (item) => {
+      const finding = record(item);
+      return {
+        id: str(finding.id) ?? "",
+        kind: str(finding.kind) ?? "",
+        path: str(finding.path) ?? "",
+        start: num(finding.start) ?? 0,
+        end: num(finding.end) ?? 0,
+        preview: str(finding.preview) ?? "",
+      };
+    }),
+    requiredAcknowledgements: list(p.required_acknowledgements, (item) => String(item)),
+  };
+}
+
+export async function previewPromotion(
+  id: string,
+  request: PromotionRequest,
+  signal?: AbortSignal,
+): Promise<PromotionPreview> {
+  return promotionPreview(await post(
+    `/experiment-results/${encodeURIComponent(id)}/promotion-preview`,
+    request as unknown as JsonRecord,
+    signal,
+  ));
+}
+
+export async function applyPromotion(
+  id: string,
+  request: PromotionRequest,
+  signal?: AbortSignal,
+): Promise<PromotionTransaction> {
+  const body = await post(
+    `/experiment-results/${encodeURIComponent(id)}/promotion-apply`,
+    request as unknown as JsonRecord,
+    signal,
+  );
+  return {
+    transactionId: str(body.transaction_id) ?? "",
+    transactionPath: str(body.transaction_path) ?? "",
+    destination: str(body.destination) ?? "",
+    destinationSha256: str(body.destination_sha256) ?? "",
+    backup: str(body.backup),
+    role: (str(body.role) ?? "target") as "target" | "guard",
+  };
+}
+
+export async function generateCiPreview(
+  id: string,
+  inputs: JsonRecord,
+  signal?: AbortSignal,
+): Promise<CiPreview> {
+  const body = await post(
+    `/experiment-results/${encodeURIComponent(id)}/ci-preview`, inputs, signal);
+  const fp = fingerprint(body.suite_fingerprint);
+  if (!fp) throw new Error("CI preview omitted its suite fingerprint");
+  return {
+    suiteFingerprint: fp,
+    cacheKey: str(body.cache_key) ?? "",
+    workflowYaml: str(body.workflow_yaml) ?? "",
+    inputs: record(body.inputs),
+  };
 }
 
 /** The CLI equivalent of opening exactly this cell locally -- zero new backend work, per the roadmap

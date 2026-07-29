@@ -5,10 +5,8 @@ Every test passes an explicit `home=str(tmp_path)`, so nothing here can ever tou
 the ctx.HOME-monkeypatch dance clozn.cli.* tests use).
 
 The "extracted engine binary" in every fixture archive is actually a tiny Python script, invoked via
-`argv_prefix=[sys.executable]` (install.py's own test-only seam) -- qualify_entrypoint() ends up running
-`python <extracted-script> --version`, which is a faithful stand-in for `<real-binary> --version` without
-needing a compiled, platform-specific executable this test suite could not produce. See install.py's
-qualify_entrypoint docstring for why a real clozn-server build does NOT support --version today.
+`argv_prefix=[sys.executable]` (install.py's own test-only seam). It implements the real model-free
+`--version --json` build-info contract without needing a compiled, platform-specific executable.
 """
 from __future__ import annotations
 
@@ -28,13 +26,37 @@ from clozn.setup import registry as registry_mod
 from clozn.setup.errors import LockError, SelectionError, SetupError, TransportError, VerificationError
 from clozn.setup.lock import SetupLock
 
-FAKE_SERVER_SCRIPT = (
-    "import sys\n"
-    "if '--version' in sys.argv[1:]:\n"
-    "    print('fake-clozn-server 9.9.9-test')\n"
-    "    sys.exit(0)\n"
-    "sys.exit(2)\n"
-)
+LLAMA_COMMIT = "88a39274ecf88ba11686acd357b59685b1cbf03d"
+FEATURE_FLAGS = {
+    "jlens": True, "lora": True, "native_chat_io": True, "sae": False, "whitebox": True,
+}
+
+
+def _build_info(*, engine_version="1.0.0", backend="cpu", build_id=None,
+                protocol_version="1.0"):
+    return {
+        "engine_version": engine_version,
+        "build_id": build_id or f"release-{engine_version}-{backend}",
+        "protocol_version": protocol_version,
+        "backend": backend,
+        "llama_cpp_commit": LLAMA_COMMIT,
+        "feature_flags": FEATURE_FLAGS,
+    }
+
+
+def _server_script(build_info=None, *, exit_code=0, raw_stdout=None):
+    build_info = build_info or _build_info()
+    output = json.dumps(build_info) if raw_stdout is None else raw_stdout
+    return (
+        "import sys\n"
+        "if sys.argv[1:] == ['--version', '--json']:\n"
+        f"    print({output!r})\n"
+        f"    sys.exit({exit_code})\n"
+        "sys.exit(2)\n"
+    )
+
+
+FAKE_SERVER_SCRIPT = _server_script()
 
 
 @pytest.fixture
@@ -52,16 +74,18 @@ def http_server(tmp_path):
         thread.join(timeout=5)
 
 
-def _write_zip_archive(path, *, entrypoint="bin/clozn-server", extra_members=None) -> bytes:
+def _write_zip_archive(path, *, entrypoint="bin/clozn-server", extra_members=None,
+                       server_script=FAKE_SERVER_SCRIPT) -> bytes:
     with zipfile.ZipFile(path, "w") as zf:
-        zf.writestr(entrypoint, FAKE_SERVER_SCRIPT)
+        zf.writestr(entrypoint, server_script)
         for name, content in (extra_members or {}).items():
             zf.writestr(name, content)
     return path.read_bytes()
 
 
 def _manifest(artifact_url, sha256, size_bytes, *, entrypoint="bin/clozn-server",
-              clozn_version="1.0.0", os_name="linux", arch="x86_64", backend="cpu"):
+              clozn_version="1.0.0", os_name="linux", arch="x86_64", backend="cpu",
+              build_id=None, llama_cpp_commit=LLAMA_COMMIT, feature_flags=None):
     return {
         "schema_version": "clozn.engine-manifest.v1",
         "clozn_version": clozn_version,
@@ -69,6 +93,9 @@ def _manifest(artifact_url, sha256, size_bytes, *, entrypoint="bin/clozn-server"
         "artifacts": [{
             "os": os_name, "arch": arch, "backend": backend,
             "url": artifact_url, "sha256": sha256, "size_bytes": size_bytes, "entrypoint": entrypoint,
+            "build_id": build_id or f"release-{clozn_version}-{backend}",
+            "llama_cpp_commit": llama_cpp_commit,
+            "feature_flags": FEATURE_FLAGS if feature_flags is None else feature_flags,
         }],
     }
 
@@ -78,7 +105,16 @@ def _serve_manifest_and_archive(http_server, **manifest_kwargs):
     URL. `manifest_kwargs` forwards to _manifest() for the non-computed fields (entrypoint/version/etc)."""
     serve_dir, base_url = http_server
     archive_path = serve_dir / "clozn-engine-1.0.0.zip"
-    data = _write_zip_archive(archive_path, entrypoint=manifest_kwargs.get("entrypoint", "bin/clozn-server"))
+    clozn_version = manifest_kwargs.get("clozn_version", "1.0.0")
+    backend = manifest_kwargs.get("backend", "cpu")
+    build_id = manifest_kwargs.get("build_id") or f"release-{clozn_version}-{backend}"
+    script = _server_script(_build_info(
+        engine_version=clozn_version, backend=backend, build_id=build_id))
+    data = _write_zip_archive(
+        archive_path,
+        entrypoint=manifest_kwargs.get("entrypoint", "bin/clozn-server"),
+        server_script=script,
+    )
     sha256 = hashlib.sha256(data).hexdigest()
     doc = _manifest(f"{base_url}/clozn-engine-1.0.0.zip", sha256, len(data), **manifest_kwargs)
     (serve_dir / "manifest.json").write_text(json.dumps(doc), encoding="utf-8")
@@ -89,6 +125,21 @@ PLATFORM = {"os": "linux", "arch": "x86_64", "gpu_backend": None, "cuda_major": 
 
 
 # ------------------------------------------------------------------------------------------- plan_install
+
+def test_default_manifest_urls_use_release_authority_and_versioned_tags(monkeypatch):
+    monkeypatch.delenv("CLOZN_ENGINE_MANIFEST_URL", raising=False)
+    assert install.resolve_manifest_url() == (
+        "https://github.com/bkawa-io/clozn/releases/latest/download/clozn-engine-manifest.json"
+    )
+    assert install.resolve_manifest_url(version="1.2.3") == (
+        "https://github.com/bkawa-io/clozn/releases/download/v1.2.3/clozn-engine-manifest.json"
+    )
+
+
+def test_manifest_url_override_wins_for_development(monkeypatch):
+    monkeypatch.setenv("CLOZN_ENGINE_MANIFEST_URL", "http://127.0.0.1:9999/test.json")
+    assert install.resolve_manifest_url(version="1.2.3") == "http://127.0.0.1:9999/test.json"
+
 
 def test_plan_install_never_touches_disk(http_server, tmp_path):
     url = _serve_manifest_and_archive(http_server)
@@ -122,7 +173,10 @@ def test_run_install_happy_path(http_server, tmp_path):
                                  argv_prefix=[sys.executable])
     assert result["action"] == "installed"
     assert result["record"]["qualification"]["ran"] is True
+    assert result["record"]["qualification"]["qualified"] is True
     assert result["record"]["qualification"]["returncode"] == 0
+    assert result["record"]["build_id"] == "release-1.0.0-cpu"
+    assert result["record"]["llama_cpp_commit"] == LLAMA_COMMIT
 
     reg = registry_mod.load(home)
     assert reg["active"] == "1.0.0/linux-x86_64-cpu"
@@ -216,6 +270,35 @@ def test_run_install_a_second_engine_upgrade_retains_previous_for_rollback(http_
     assert os.path.isfile(reg["installed"]["1.0.0/linux-x86_64-cpu"]["entrypoint"])
 
 
+def test_build_identity_mismatch_preserves_previous_active_engine(http_server, tmp_path):
+    url_v1 = _serve_manifest_and_archive(http_server)
+    home = str(tmp_path / "home")
+    install.run_install(manifest_url=url_v1, home=home, platform=PLATFORM,
+                        argv_prefix=[sys.executable])
+
+    serve_dir, base_url = http_server
+    archive_path = serve_dir / "clozn-engine-1.1.0.zip"
+    wrong_identity = _build_info(engine_version="9.9.9")
+    data = _write_zip_archive(archive_path, server_script=_server_script(wrong_identity))
+    doc = _manifest(
+        f"{base_url}/{archive_path.name}", hashlib.sha256(data).hexdigest(), len(data),
+        clozn_version="1.1.0",
+    )
+    manifest_path = serve_dir / "manifest-v1.1.0.json"
+    manifest_path.write_text(json.dumps(doc), encoding="utf-8")
+
+    with pytest.raises(SetupError, match="manifest/build disagreement for engine_version"):
+        install.run_install(
+            manifest_url=f"{base_url}/{manifest_path.name}", home=home, platform=PLATFORM,
+            argv_prefix=[sys.executable],
+        )
+
+    reg = registry_mod.load(home)
+    assert reg["active"] == "1.0.0/linux-x86_64-cpu"
+    assert "1.1.0/linux-x86_64-cpu" not in reg["installed"]
+    assert not (tmp_path / "home" / "engines" / "1.1.0").exists()
+
+
 def test_run_install_refuses_a_concurrent_invocation(http_server, tmp_path):
     url = _serve_manifest_and_archive(http_server)
     home = str(tmp_path / "home")
@@ -280,6 +363,7 @@ def test_read_status_on_a_fresh_home_reports_nothing_installed(tmp_path):
 def test_qualify_entrypoint_reports_ran_false_for_a_missing_file(tmp_path):
     result = install.qualify_entrypoint([str(tmp_path / "does-not-exist")])
     assert result["ran"] is False
+    assert result["qualified"] is False
 
 
 def test_qualify_entrypoint_reports_ran_true_with_exit_code(tmp_path):
@@ -287,18 +371,43 @@ def test_qualify_entrypoint_reports_ran_true_with_exit_code(tmp_path):
     script.write_text(FAKE_SERVER_SCRIPT, encoding="utf-8")
     result = install.qualify_entrypoint([sys.executable, str(script)])
     assert result["ran"] is True
+    assert result["qualified"] is True
     assert result["returncode"] == 0
-    assert "fake-clozn-server" in result["stdout"]
+    assert result["build_info"]["llama_cpp_commit"] == LLAMA_COMMIT
 
 
-def test_qualify_entrypoint_treats_a_nonzero_exit_as_ran_not_a_failure(tmp_path):
-    """The real clozn-server does not implement --version yet (see the module docstring this mirrors) --
-    a nonzero exit must still count as 'ran', or every real engine build would fail qualification."""
+def test_qualify_entrypoint_rejects_a_nonzero_build_info_exit(tmp_path):
     script = tmp_path / "no_version_flag.py"
     script.write_text("import sys\nsys.exit(2)\n", encoding="utf-8")
     result = install.qualify_entrypoint([sys.executable, str(script)])
     assert result["ran"] is True
+    assert result["qualified"] is False
     assert result["returncode"] == 2
+
+
+def test_qualify_entrypoint_rejects_malformed_build_info(tmp_path):
+    script = tmp_path / "malformed.py"
+    script.write_text(_server_script(raw_stdout="not-json"), encoding="utf-8")
+    result = install.qualify_entrypoint([sys.executable, str(script)])
+    assert result["qualified"] is False
+    assert "malformed build-info JSON" in result["error"]
+
+
+def test_qualify_entrypoint_rejects_an_incompatible_protocol(tmp_path):
+    script = tmp_path / "wrong_protocol.py"
+    script.write_text(_server_script(_build_info(protocol_version="99.0")), encoding="utf-8")
+    result = install.qualify_entrypoint([sys.executable, str(script)])
+    assert result["qualified"] is False
+    assert "protocol_version is incompatible" in result["error"]
+
+
+def test_qualify_entrypoint_rejects_manifest_build_disagreement(tmp_path):
+    script = tmp_path / "wrong_backend.py"
+    script.write_text(_server_script(), encoding="utf-8")
+    result = install.qualify_entrypoint(
+        [sys.executable, str(script)], expected={"backend": "cuda"})
+    assert result["qualified"] is False
+    assert "manifest/build disagreement for backend" in result["error"]
 
 
 # --------------------------------------------------------------------------------------- tarball artifacts

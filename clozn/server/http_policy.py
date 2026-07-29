@@ -125,5 +125,8 @@ def send_cors_headers(handler) -> bool:
         return not origin
     handler.send_header("Access-Control-Allow-Origin", origin)
     handler.send_header("Vary", "Origin")
-    handler.send_header("Access-Control-Expose-Headers", "X-Clozn-Run-Id")
+    handler.send_header(
+        "Access-Control-Expose-Headers",
+        "X-Clozn-Run-Id, X-Clozn-Influence-Cache",
+    )
     return True

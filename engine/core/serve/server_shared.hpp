@@ -398,6 +398,7 @@ public:
             json meta{{"kind", "end"}, {"substrate", substrate_}, {"reason", gf->reason},
                       {"new_tokens", gf->new_tokens}, {"wall_ms", gf->wall_ms},
                       {"steps_total", gf->steps_total}, {"tok_per_s", gf->tok_per_s}};
+            meta["timing"] = json::parse(worker_timing_json(*gf));
             emit_control(gf->t, meta);
             return;
         }

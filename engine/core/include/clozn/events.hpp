@@ -5,6 +5,7 @@
 // mapping layer — replayable across the lab and the C++ core.
 #pragma once
 
+#include <cstdint>
 #include <cstdio>
 #include <string>
 #include <utility>
@@ -75,6 +76,19 @@ struct BlockFinalized {
     int steps_used;
 };
 
+// One protocol-native timing phase. start_ns is local to this worker request's steady-clock origin;
+// -1 means the duration is measured but its offset is not available. aggregation keeps overlapping
+// transport/context spans visible without allowing consumers to double-count them.
+struct PerformancePhase {
+    std::string name;
+    std::string owner = "clozn_worker";
+    std::int64_t duration_ns = 0;
+    std::int64_t start_ns = -1;
+    std::string aggregation = "exclusive";
+    std::string scope;
+    std::vector<std::string> includes;
+};
+
 struct GenFinished {
     int t;
     std::string reason;  // "eos" | "length" | "steps_exhausted"
@@ -82,6 +96,10 @@ struct GenFinished {
     double wall_ms;
     int steps_total;
     double tok_per_s;
+    std::vector<PerformancePhase> timing_phases;
+    int prompt_tokens = 0;
+    double prompt_tok_per_s = -1.0;
+    double decode_tok_per_s = -1.0;
 };
 
 // White-box feature tap (Tier 2): per-pass concept-feature activations on the active block. `features`
@@ -146,6 +164,9 @@ using Event = std::variant<GenStarted, BlockStarted, TokensCommitted, TokensRevi
 // §5.1 wire form: one JSON object per event, {"t": ..., "type": "...", **payload} — byte-compatible
 // with the lab's event_to_dict / to_jsonl_line so logs replay across both runtimes.
 std::string to_jsonl_line(const Event& event);
+
+// Versioned optional timing object embedded in GenFinished wire forms.
+std::string worker_timing_json(const GenFinished& event);
 
 // Flight-recorder log: one event per line, replayable. Returns false if the file can't be opened.
 bool write_jsonl(const std::vector<Event>& events, const std::string& path);

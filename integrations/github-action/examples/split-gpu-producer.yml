@@ -1,0 +1,49 @@
+name: Clozn trusted GPU producer and ordinary verifier
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  produce:
+    runs-on: [self-hosted, gpu, ephemeral]
+    steps:
+      # actions/checkout v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: bkawa-io/clozn-action@v1
+        with:
+          mode: run
+          trusted-run: "true"
+          clozn-version: "0.1.0"
+          engine-version: "0.1.0"
+          manifest: experiments/release-gate.json
+          model-lock: models/clozn.lock.json
+          evidence: artifacts/clozn-experiment-result.json
+          producer-argv: >-
+            ["python", "ci/produce_experiment.py",
+             "--manifest", "{manifest}",
+             "--baseline", "{model:baseline}",
+             "--candidate", "{model:candidate}",
+             "--out", "{evidence}"]
+          artifact-name: clozn-gpu-evidence
+
+  verify:
+    needs: produce
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      # actions/download-artifact v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: clozn-gpu-evidence
+          path: incoming
+      - uses: bkawa-io/clozn-action@v1
+        with:
+          mode: verify
+          clozn-version: "0.1.0"
+          evidence: incoming/clozn-experiment-result.json
+          max-execution-errors: "0"
+          max-target-regressions: "0"
+          max-guard-regressions: "0"

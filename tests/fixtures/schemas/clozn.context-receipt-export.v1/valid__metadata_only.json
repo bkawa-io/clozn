@@ -1,0 +1,12 @@
+{
+  "schema_version": "clozn.context-receipt-export.v1",
+  "run_id": "run_export",
+  "source_receipt_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "privacy": "metadata_only",
+  "omitted_fields": ["survived.final_prompt", "survived.assembled_messages"],
+  "context_receipt": {
+    "schema_version": "clozn.context-receipt.v1",
+    "run_id": "run_export",
+    "privacy": "metadata_only"
+  }
+}

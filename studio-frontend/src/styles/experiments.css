@@ -216,12 +216,226 @@
 .experiments-variant-comparison .is-guard-regression { color: var(--danger); }
 .experiments-variant-comparison .is-guard-fix { color: var(--signal-mint); }
 
+/* ------------------------------------------------------------- compatible history --------------- */
+
+.experiments-history > .instrument-head > code {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 8px;
+}
+
+.experiments-history-state {
+  padding: 14px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 8px;
+}
+
+.experiments-history-state.is-error {
+  color: var(--danger);
+}
+
+.experiments-history-table {
+  padding: 8px 14px 14px;
+}
+
+.experiments-history-head,
+.experiments-history-row {
+  display: grid;
+  grid-template-columns: 140px minmax(220px, 1.4fr) minmax(220px, 1.3fr) minmax(140px, .8fr);
+  gap: 12px;
+  padding: 8px 10px;
+}
+
+.experiments-history-head {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .09em;
+}
+
+.experiments-history-row {
+  border-top: 1px solid var(--line);
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 8px;
+}
+
+.experiments-history-row > span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow-wrap: anywhere;
+}
+
+.experiments-history-row small,
+.experiments-history-missing {
+  color: var(--ink-faint);
+  font-size: 7px;
+}
+
+.experiments-history-links {
+  align-items: flex-start;
+  flex-direction: row !important;
+  flex-wrap: wrap;
+}
+
+.experiments-history-links b {
+  color: var(--danger);
+}
+
+.experiments-history-links a {
+  color: var(--signal-blue);
+}
+
+.experiments-history-links button {
+  border: 0;
+  padding: 0;
+  color: var(--signal-blue);
+  background: transparent;
+  font: inherit;
+}
+
 /* ---------------------------------------------------------------- matrix ------------------------ */
 
 .experiments-matrix-instrument {
   display: flex;
   flex-direction: column;
   min-height: 460px;
+}
+
+/* ------------------------------------------------------------- promotion + CI preview ------------ */
+
+.experiments-promotion,
+.experiments-ci-body {
+  display: grid;
+  gap: 10px;
+}
+
+.experiments-promotion-fields,
+.experiments-ci-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.experiments-promotion-fields label,
+.experiments-ci-fields label {
+  display: grid;
+  gap: 3px;
+}
+
+.experiments-promotion-fields label.is-wide {
+  grid-column: 1 / -1;
+}
+
+.experiments-promotion-fields label > span,
+.experiments-ci-fields label > span {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .08em;
+}
+
+.experiments-promotion input,
+.experiments-promotion textarea,
+.experiments-ci-preview input {
+  min-height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  padding: 5px 7px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel-raised) 72%, transparent);
+  font-family: var(--font-machine);
+  font-size: 8px;
+}
+
+.experiments-promotion textarea {
+  min-height: 62px;
+  resize: vertical;
+}
+
+.experiments-promotion > button,
+.experiments-promotion-preview > button,
+.experiments-ci-body > button,
+.experiments-ci-output > button {
+  width: fit-content;
+  border: 1px solid var(--line-strong);
+  padding: 6px 9px;
+  color: var(--ink);
+  background: var(--panel-raised);
+  font-family: var(--font-machine);
+  font-size: 7px;
+}
+
+.experiments-promotion button:disabled,
+.experiments-ci-preview button:disabled {
+  color: var(--ink-faint);
+  cursor: not-allowed;
+}
+
+.experiments-promotion-preview {
+  display: grid;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  font-family: var(--font-machine);
+  font-size: 8px;
+}
+
+.experiments-promotion-preview code {
+  color: var(--ink-faint);
+  overflow-wrap: anywhere;
+}
+
+.experiments-promotion-preview ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.experiments-promotion-preview li label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.experiments-promotion-preview .is-clean,
+.experiments-promotion-success {
+  color: var(--signal-mint);
+  font-family: var(--font-machine);
+  font-size: 8px;
+  overflow-wrap: anywhere;
+}
+
+.experiments-ci-body {
+  padding: 12px 14px 14px;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 8px;
+}
+
+.experiments-ci-output {
+  display: grid;
+  gap: 7px;
+}
+
+.experiments-ci-output > span {
+  color: var(--ink-faint);
+  overflow-wrap: anywhere;
+}
+
+.experiments-ci-output pre {
+  max-height: 420px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  padding: 10px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel-raised) 60%, transparent);
+  font-size: 8px;
 }
 
 .experiments-matrix-head {
@@ -695,6 +909,20 @@
   }
 
   .experiments-outputs-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .experiments-history-head,
+  .experiments-history-row {
+    grid-template-columns: 1fr;
+  }
+
+  .experiments-history-head {
+    display: none;
+  }
+
+  .experiments-promotion-fields,
+  .experiments-ci-fields {
     grid-template-columns: 1fr;
   }
 }

@@ -16,7 +16,7 @@ The ordered qualification levels are the ones serialized in `docs/qualification/
 | Level | What passed | Per-model work |
 |---|---|---|
 | **Discovered** | GGUF identity, architecture, dimensions, tokenizer, and embedded chat template can be read | no training |
-| **Core** | chat, OpenAI/native streaming, prompt-card memory, run persistence, scoring, receipts, worker restart, and cleanup | run basic + deep smoke |
+| **Core** | chat, OpenAI/native streaming, run persistence, scoring, receipts, worker restart, and cleanup | run basic + deep smoke |
 | **White-box** | activation taps, steering writes, and teacher-forced scoring work at valid layers for this architecture | targeted read/write qualification |
 | **Calibrated** | model-scoped dial directions and safe ranges passed their sweep | forward-pass sweep + curation |
 | **Lens-qualified** | a model-scoped J-lens manifest and payload passed identity, checksum, dimension, and quant-transfer checks | offline fit + transfer qualification |
@@ -26,8 +26,8 @@ implied by core or J-lens qualification.
 
 “Any AR GGUF” therefore names the **core runtime contract**, not a claim that every file on the internet
 has already been tested. A candidate still needs to load in the pinned engine, contain a usable embedded
-chat template, and pass the appropriate qualification rung. LLaDA/Dream remain a separate diffusion lane;
-autoregressive forced scoring and receipts do not automatically carry over.
+chat template, and pass the appropriate qualification rung. Historical LLaDA/Dream work is not a
+current product lane; its measurements remain in the archived diffusion design documents.
 
 ## Claims and evidence
 

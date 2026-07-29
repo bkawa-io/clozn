@@ -28,6 +28,9 @@ True or False (SEAMS.md rule 2: omit, never null-pad).
 """
 from __future__ import annotations
 
+import hashlib
+import json
+
 from clozn.behavior.steering import axes as _axes
 from clozn.replay.corrective import CORRECTION_PRESETS
 
@@ -53,6 +56,8 @@ _LABELS = {
     "stop-repeating": "Stop repeating yourself",
 }
 
+SCOPES = ("once", "session", "profile")
+
 
 def _prompt_policy_backend(action_id: str) -> dict:
     """Every registry action has one -- CORRECTION_PRESETS backs all 6 default actions."""
@@ -61,14 +66,47 @@ def _prompt_policy_backend(action_id: str) -> dict:
         "recipe_version": "1",
         "parameters": {"preset": action_id},
         "qualification": "generic",
+        "qualification_id": "clozn.prompt-policy.generic.v1",
+        "available": True,
     }
+
+
+def _control_qualification_id(steer, dial: str) -> str:
+    """Stable evidence identity for the live calibration that qualified a dial.
+
+    EngineSteer intentionally exposes qualification through ``ceiling_for`` rather than a
+    product-wide registry id.  Hash the exact calibration entry and include the best model
+    identity the adapter carries, so a result never says only "qualified" with no evidence key.
+    """
+    model_id = str(
+        getattr(steer, "_jlens_model_sha256", None)
+        or getattr(steer, "model_sha256", None)
+        or "model-identity-unreported"
+    )
+    calibration = getattr(steer, "calibration", None)
+    entry = calibration.get(dial) if isinstance(calibration, dict) else None
+    payload = json.dumps(
+        {"model": model_id, "dial": dial, "calibration": entry},
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return "clozn.control-vector-qualification.v1:" + hashlib.sha256(
+        payload.encode("utf-8")
+    ).hexdigest()[:24]
 
 
 def _control_vector_backend(action_id: str, steer) -> dict:
     dial = _DIAL_FOR_ACTION.get(action_id)
     if dial is None:
-        return {"type": "unsupported",
-                "reason": f"no control-vector dial exists for {action_id!r}"}
+        reason = f"no control-vector dial exists for {action_id!r}"
+        return {
+            "type": "unsupported",
+            "requested_type": "control_vector",
+            "available": False,
+            "reason": reason,
+            "unavailability_reason": reason,
+        }
     axis = _axes.AXES.get(dial) or {}
     declared_max = float(axis.get("max", 1.5))
     backend = {
@@ -77,6 +115,8 @@ def _control_vector_backend(action_id: str, steer) -> dict:
         "parameters": {"dial": dial},
         "qualification": "model_build_exact",
         "safe_bounds": {"declared_max": declared_max},
+        "available": False,
+        "unavailability_reason": "no live exact-model calibration was supplied",
     }
     if steer is not None and hasattr(steer, "ceiling_for"):
         try:
@@ -86,12 +126,18 @@ def _control_vector_backend(action_id: str, steer) -> dict:
             # fail the whole registry or guess at a bool (SEAMS.md rule 2: omit, never null-pad).
             return backend
         backend["qualified"] = bool(calibrated)
+        backend["available"] = bool(calibrated)
         backend["safe_bounds"]["enforced_ceiling"] = float(ceiling)
-        if not calibrated:
-            backend["reason"] = (
+        if calibrated:
+            backend["qualification_id"] = _control_qualification_id(steer, dial)
+            backend.pop("unavailability_reason", None)
+        else:
+            reason = (
                 f"no calibration for this exact model; {dial!r} is capped at the generic "
                 f"uncalibrated ceiling, not its declared max"
             )
+            backend["reason"] = reason
+            backend["unavailability_reason"] = reason
     return backend
 
 
@@ -99,8 +145,14 @@ def _sampling_policy_backend() -> dict:
     """No action in this registry version has a sampling-policy recipe (spec non-goal: "a
     general-purpose steering-vector laboratory"). Declared unsupported explicitly rather than
     omitted, so the vocabulary stays visible even where nothing uses it yet."""
-    return {"type": "unsupported",
-            "reason": "no sampling-policy action is implemented in this registry version"}
+    reason = "no sampling-policy action is implemented in this registry version"
+    return {
+        "type": "unsupported",
+        "requested_type": "sampling_policy",
+        "available": False,
+        "reason": reason,
+        "unavailability_reason": reason,
+    }
 
 
 def _action_entry(action_id: str, steer) -> dict:
@@ -109,6 +161,12 @@ def _action_entry(action_id: str, steer) -> dict:
         "label": _LABELS[action_id],
         "description": CORRECTION_PRESETS[action_id],
         "conflicts": [],
+        "scopes": list(SCOPES),
+        "eligibility": {
+            "eligible": True,
+            "note": "run-specific scope eligibility is returned by /runs/{id}/corrective-actions",
+        },
+        "evaluation_metrics": ["word_count", "repetition", "formatting"],
         "backends": [
             _prompt_policy_backend(action_id),
             _control_vector_backend(action_id, steer),

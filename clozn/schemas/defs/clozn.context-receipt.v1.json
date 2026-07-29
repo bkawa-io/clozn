@@ -28,7 +28,16 @@
           "pattern": "^seg_[0-9a-f]{16}(_[0-9]+)?$"
         },
         "source_type": {"type": "string", "enum": ["message"]},
-        "source_label": {"type": "string", "description": "The message's role."},
+        "source_label": {
+          "type": "string",
+          "description": "Explicit client label when supplied through clozn_sources; otherwise the message role."
+        },
+        "client_source_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Optional stable client identity supplied explicitly at the request boundary. Unique within a request; never inferred."
+        },
         "original_order": {"type": "integer", "minimum": 0},
         "delivered_bytes": {"type": "integer", "minimum": 0},
         "delivered_tokens": {"type": "integer", "minimum": 0},
@@ -82,7 +91,25 @@
       "type": "object",
       "properties": {
         "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Exact UTF-8 byte count at the inference boundary."
+        },
+        "tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Exact worker-reported rendered prompt token count."
+        },
         "token_count": {"type": "integer", "minimum": 0},
+        "template_fingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{16}$"
+        },
+        "content_available": {
+          "type": "boolean",
+          "description": "Whether this receipt's survived block still contains the exact rendered text under its privacy tier."
+        },
         "estimated": {
           "type": "boolean",
           "description": "true if token_count came from a non-exact source. Native-engine runs report exact counts (omit this key -> exact); Torch lab adapters that cannot report an exact count must mark true rather than silently claiming exactness."
@@ -112,6 +139,10 @@
         "reason_raw": {
           "type": "string",
           "description": "The raw backend value the normalized reason was derived from (e.g. the engine's own 'eos'/'length'/'steps_exhausted', or a free-text error string), preserved verbatim alongside the controlled code."
+        },
+        "source": {
+          "type": "string",
+          "description": "Capture layer that supplied the raw reason, for example substrate, worker_event, or fallback."
         },
         "generated_tokens": {"type": "integer", "minimum": 0}
       }

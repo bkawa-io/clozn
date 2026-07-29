@@ -1,4 +1,8 @@
-import type { TokenReading, TokenSourceReading } from "../../data/types";
+import type {
+  InfluenceEvidenceState,
+  TokenReading,
+  TokenSourceReading,
+} from "../../data/types";
 
 export interface ResponseClaim {
   start: number;
@@ -26,6 +30,9 @@ export interface SourceAggregate {
   effect: TokenSourceReading["effect"];
   deltaNats: number;
   tokenCount: number;
+  clearTokenCount: number;
+  observedTokenCount: number;
+  evidenceStates: InfluenceEvidenceState[];
 }
 
 export interface InfluenceSplit {
@@ -108,19 +115,28 @@ export function aggregateSources(tokens: TokenReading[], start: number, end: num
     label: string;
     deltaNats: number;
     tokenIndexes: Set<number>;
+    clearTokenIndexes: Set<number>;
+    observedTokenIndexes: Set<number>;
   }>();
 
   for (let index = Math.max(0, start); index <= Math.min(end, tokens.length - 1); index += 1) {
     if (!tokens[index].text) continue;
-    for (const source of tokens[index].sources ?? []) {
+    const readings = [
+      ...(tokens[index].sources ?? []).map((source) => ({ source, clear: true })),
+      ...(tokens[index].observedSources ?? []).map((source) => ({ source, clear: false })),
+    ];
+    for (const { source, clear } of readings) {
       const aggregate = aggregates.get(source.sourceId) ?? {
         sourceId: source.sourceId,
         label: source.label,
         deltaNats: 0,
         tokenIndexes: new Set<number>(),
+        clearTokenIndexes: new Set<number>(),
+        observedTokenIndexes: new Set<number>(),
       };
       aggregate.deltaNats += source.deltaNats;
       aggregate.tokenIndexes.add(index);
+      (clear ? aggregate.clearTokenIndexes : aggregate.observedTokenIndexes).add(index);
       aggregates.set(source.sourceId, aggregate);
     }
   }
@@ -131,6 +147,12 @@ export function aggregateSources(tokens: TokenReading[], start: number, end: num
       label: source.label,
       deltaNats: source.deltaNats,
       tokenCount: source.tokenIndexes.size,
+      clearTokenCount: source.clearTokenIndexes.size,
+      observedTokenCount: source.observedTokenIndexes.size,
+      evidenceStates: [
+        ...(source.clearTokenIndexes.size ? ["causally_supported" as const] : []),
+        ...(source.observedTokenIndexes.size ? ["observed" as const] : []),
+      ],
       effect: source.deltaNats > 0 ? "supports" : source.deltaNats < 0 ? "suppresses" : "neutral",
     }))
     .sort((a, b) => Math.abs(b.deltaNats) - Math.abs(a.deltaNats));

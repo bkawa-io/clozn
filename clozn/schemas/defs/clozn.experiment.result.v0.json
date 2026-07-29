@@ -16,6 +16,12 @@
       "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"
     },
     "manifest_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "suite_fingerprint": {
+      "description": "Versioned canonical hash of behavior-bearing suite content. Optional only for backward compatibility with result artifacts created before canonical-json-v1.",
+      "$ref": "#/$defs/SuiteFingerprint"
+    },
+    "vcs": { "$ref": "#/$defs/VcsMetadata" },
+    "artifact_provenance": { "$ref": "#/$defs/ArtifactProvenance" },
     "manifest": { "$ref": "#/$defs/Manifest" },
     "seeds": {
       "type": "array",
@@ -30,6 +36,37 @@
   },
 
   "$defs": {
+    "SuiteFingerprint": {
+      "type": "object",
+      "required": ["algorithm", "sha256"],
+      "properties": {
+        "algorithm": { "const": "canonical-json-v1" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      },
+      "additionalProperties": false
+    },
+
+    "VcsMetadata": {
+      "type": "object",
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "commit": { "type": "string", "minLength": 1 },
+        "branch": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+
+    "ArtifactProvenance": {
+      "type": "object",
+      "properties": {
+        "workflow_url": { "type": "string", "minLength": 1 },
+        "artifact_url": { "type": "string", "minLength": 1 },
+        "local_open_command": { "type": "string", "minLength": 1 },
+        "expires_at": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+
     "Message": {
       "type": "object",
       "required": ["role", "content"],

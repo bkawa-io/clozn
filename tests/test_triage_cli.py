@@ -114,6 +114,7 @@ def test_triage_defaults():
     assert ns.case is None and ns.variant is None and ns.seed is None
     assert ns.deep is False and ns.json is False and ns.force is False
     assert ns.out is None and ns.steps is None
+    assert ns.plan is False and ns.dry_run is False
 
 
 def test_triage_does_not_collide_with_the_existing_diagnose_command():
@@ -293,6 +294,26 @@ def test_cmd_triage_from_experiment_result_end_to_end(tmp_path, capsys):
     assert doc["case_id"] == "greeting"
     assert "identity_diff:template" in doc["summary"]["observed"]
     assert "identity_diff:model" in doc["summary"]["eliminated"]
+
+
+def test_cmd_triage_plan_is_zero_run_and_embeds_controlled_artifact(iso, capsys):
+    b_id = _make_run(
+        messages=[{"role": "user", "content": "full"}], response="good",
+        meta={"sampling": "greedy", "temperature": 0.0})
+    c_id = _make_run(
+        messages=[{"role": "user", "content": "short"}], response="bad",
+        meta={"sampling": "greedy", "temperature": 0.0})
+    rc = trg.cmd_triage(_base_args(
+        baseline_run=b_id, candidate_run=c_id, plan=True, dry_run=False,
+        match="exact_output", port=0, json=True,
+    ))
+    assert rc == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["execution_status"] == "planned"
+    assert doc["controlled_tests"]["budget"]["runs_used"] == 0
+    context = next(s for s in doc["steps"] if s["kind"] == "context_swap")
+    assert context["ran"] is False
+    assert context["stop_reason"] == "planned"
 
 
 def test_format_triage_never_names_a_classification_without_a_causal_step():

@@ -177,6 +177,38 @@ and never presented as present before an actual adapter computes the readout.
 
 ## The wire (SSE + JSON)
 
+### Optional worker timing
+
+Workers advertising `capabilities.performance_timing: true` attach a versioned `timing` object to the
+terminal `gen_finished` event (and to the `meta.kind="end"` StateStep control frame):
+
+```json
+{
+  "schema_version": "clozn.worker-timing.v1",
+  "unit": "nanoseconds",
+  "clock": "steady_clock",
+  "clock_owner": "clozn_worker",
+  "phases": [
+    {"name": "prefill", "owner": "clozn_worker", "duration_ns": 12000000,
+     "measurement": "measured", "aggregation": "exclusive"},
+    {"name": "decode", "owner": "clozn_worker", "duration_ns": 87000000,
+     "measurement": "measured", "aggregation": "exclusive"}
+  ],
+  "metrics": {
+    "prompt_tokens": 128,
+    "generated_tokens": 32,
+    "prompt_tokens_per_second": 10666.7,
+    "decode_tokens_per_second": 367.8
+  }
+}
+```
+
+Fields are additive: an older worker may omit `timing` and clients must continue to accept the legacy
+`wall_ms`/`tok_per_s` fields. Durations are measured in the named process's monotonic domain. A client
+must never subtract a worker offset from a gateway offset; it may only sum non-overlapping durations.
+Missing phases are absent, never reported as zero or inferred from wall time. `aggregation:"overlapping"`
+and `"context_only"` phases remain useful attribution but do not contribute to known in-request time.
+
 **Light frame by default, heavy state on demand.** Streaming the full activation tensor every
 step is gigabytes; most consumers want tokens + readouts + meta. So:
 

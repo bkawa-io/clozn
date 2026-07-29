@@ -1,0 +1,24 @@
+{
+  "schema_version": "clozn.context-answer-influence-export.v1",
+  "source_schema": "clozn.context_answer_influence.v1",
+  "source_artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "privacy": "metadata_only",
+  "status": "ok",
+  "available": true,
+  "method": {
+    "name": "teacher_forced_matched_context_replacement",
+    "version": "1",
+    "mode": "forced_score_intervention",
+    "claim_limit": "behavioral dependence only",
+    "caveat": "does not reveal hidden reasoning"
+  },
+  "identity": {},
+  "cache_identity": {},
+  "thresholds": {},
+  "prompt_sources": [],
+  "selection": {},
+  "prompt_spans": [{"id": "p1", "start": 0, "end": 1, "text_bytes": 1}],
+  "answer_spans": [],
+  "links": [],
+  "summary": {}
+}

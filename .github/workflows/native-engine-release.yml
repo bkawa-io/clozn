@@ -1,0 +1,266 @@
+name: Native engine release
+
+# Publishing is intentionally manual.  A normal dispatch builds and validates
+# the complete release bundle without changing GitHub or PyPI.  Maintainers
+# must dispatch against an existing v<VERSION> tag, opt in to publishing, and
+# pass the protected `release` / `pypi` environments to make anything public.
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the validated bundle and then the Python distributions
+        type: boolean
+        default: false
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-engine-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  verify-python:
+    name: Python suite and clean-room package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Derive the single release version
+        id: version
+        run: echo "value=$(python scripts/release/native_release.py version)" >> "$GITHUB_OUTPUT"
+      - name: Install the existing test and build toolchain
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build pytest
+          python -m pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install \
+            "transformers==4.57.6" "tokenizers==0.22.2" "numpy==2.4.6" \
+            "openai==2.46.0" "ollama==0.6.2"
+          npm ci --prefix tests/clients
+      - name: Run the product test suite
+        run: python -m pytest tests/ clozn/ -q
+      - name: Prove the wheel in a clean environment
+        run: python scripts/release/clean_room_install_test.py
+      - name: Build the Python release distributions
+        run: python -m build --sdist --wheel --outdir release/python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-distributions
+          if-no-files-found: error
+          retention-days: 7
+          path: release/python/*
+
+  native:
+    name: ${{ matrix.cell }}
+    needs: verify-python
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            cell: linux/x86_64/cpu
+            slug: linux-x86_64-cpu
+            server: clozn-server
+            metal: "OFF"
+          - runner: windows-2025
+            cell: windows/x86_64/cpu
+            slug: windows-x86_64-cpu
+            server: clozn-server.exe
+            metal: "OFF"
+          - runner: macos-14
+            cell: macos/arm64/metal
+            slug: macos-arm64-metal
+            server: clozn-server
+            metal: "ON"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Enable the MSVC build environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Install Linux build prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++
+      - name: Reconstruct the pinned llama.cpp source
+        run: python engine/core/third_party/bootstrap_llama.py
+      - name: Configure the release worker
+        shell: bash
+        run: |
+          cmake -S engine/core -B engine/core/build-release -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCLOZN_BUILD_GGML=ON \
+            -DCLOZN_BUILD_SERVE=ON \
+            -DCLOZN_ENGINE_BUILD_ID="clozn-${{ needs.verify-python.outputs.version }}-${{ matrix.slug }}" \
+            -DGGML_CUDA=OFF \
+            -DGGML_METAL=${{ matrix.metal }}
+      - name: Build the release worker
+        run: cmake --build engine/core/build-release --target clozn-server -j 2
+      - name: Collect the worker with its runtime dependencies
+        # clozn-server has no RUNTIME_OUTPUT_DIRECTORY override, so Ninja emits
+        # it at the build root while llama.cpp places runtime dependencies in
+        # build-release/bin.  Normalize that split before the release staging
+        # tool copies and qualifies the complete runtime directory.
+        run: |
+          cmake -E make_directory engine/core/build-release/bin
+          cmake -E copy_if_different "engine/core/build-release/${{ matrix.server }}" "engine/core/build-release/bin/${{ matrix.server }}"
+      - name: Stage runtime files
+        run: >-
+          python scripts/release/native_release.py stage
+          --bin-dir engine/core/build-release/bin
+          --stage-root release/stage
+          --server-name ${{ matrix.server }}
+          --license LICENSE
+      - name: Qualify, package, and attest on the native runner
+        shell: bash
+        run: |
+          version="${{ needs.verify-python.outputs.version }}"
+          archive="clozn-engine-${version}-${{ matrix.slug }}.zip"
+          url="https://github.com/bkawa-io/clozn/releases/download/v${version}/${archive}"
+          mkdir -p release/out
+          python scripts/release/native_release.py package \
+            --stage-root release/stage \
+            --archive "release/out/${archive}" \
+            --record "release/out/${{ matrix.slug }}.release-artifact.json" \
+            --entrypoint "bin/${{ matrix.server }}" \
+            --cell "${{ matrix.cell }}" \
+            --url "${url}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.slug }}
+          if-no-files-found: error
+          retention-days: 7
+          path: release/out/*
+
+  manifest:
+    name: Exact matrix and final manifest
+    if: always()
+    needs:
+      - verify-python
+      - native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Prepare the aggregation directory
+        run: mkdir -p release/collected
+      - name: Download every successful native cell
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: native-*
+          path: release/collected
+          merge-multiple: true
+      - name: Generate only from an exact, fully qualified matrix
+        run: >-
+          python scripts/release/native_release.py manifest
+          --records-dir release/collected
+          --output release/collected/clozn-engine-manifest.json
+          --expect linux/x86_64/cpu
+          --expect windows/x86_64/cpu
+          --expect macos/arm64/metal
+      - name: Validate the generated document through product parsing
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from clozn.setup.manifest import parse_manifest
+          path = Path("release/collected/clozn-engine-manifest.json")
+          parsed = parse_manifest(json.loads(path.read_text(encoding="utf-8")))
+          assert len(parsed["artifacts"]) == 3
+          print(f"validated {path} with {len(parsed['artifacts'])} artifacts")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-release-bundle
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            release/collected/*.zip
+            release/collected/clozn-engine-manifest.json
+
+  publish-github:
+    name: Publish one atomic GitHub engine release
+    if: >-
+      github.event.inputs.publish == 'true' &&
+      startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - verify-python
+      - manifest
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.authority.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-release-bundle
+          path: release/bundle
+      - name: Refuse a tag/version mismatch or an existing release
+        id: authority
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify-python.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          test "${tag}" = "v${VERSION}"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            echo "Release ${tag} already exists; refusing to mutate it." >&2
+            exit 1
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+      - name: Create a draft, upload all engine assets, then make it visible
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.authority.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mapfile -t assets < <(find release/bundle -maxdepth 1 -type f -print | sort)
+          test "${#assets[@]}" -eq 4
+          gh release create "${TAG}" "${assets[@]}" \
+            --draft --verify-tag --generate-notes --title "Clozn ${TAG}"
+          test "$(gh release view "${TAG}" --json isDraft --jq .isDraft)" = "true"
+          test "$(gh release view "${TAG}" --json assets --jq '.assets | length')" -eq 4
+          gh release edit "${TAG}" --draft=false
+
+  publish-pypi:
+    name: Publish Python only after the engine release
+    if: github.event.inputs.publish == 'true'
+    needs:
+      - publish-github
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-distributions
+          path: release/python
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: release/python/

@@ -18,16 +18,13 @@ human terminal report from the same dict; this module does not re-implement that
 GitHub-specific formats the feature spec calls out (a job/check-summary table and a JUnit XML export),
 which terminal output has no use for.
 
-THE "EVIDENCE" COLUMN IS HONEST, NOT COMPLETE
-------------------------------------------------
-The spec's job-summary table has an "Evidence" column (a receipt/run path). `run_id` -- the only field
-that could resolve to one -- is present on `_check_diff`'s and `_check_tiny`'s worst_offenders, but is
-NOT present on `_check_golden`'s ("wrong" probes carry no run_id) or on any of `gate_experiment_result`'s
-four experiment-mode budget checks' worst_offenders (their `label` dict is case/seed/status only -- see
-`ci_check.py`'s `_variant_budget_check`). Because these renderers must stay pure over the report alone
-(no re-reading the original experiment artifact to backfill it), the table below renders "-" for Evidence
-wherever `run_id` is genuinely absent from the report, rather than fabricating a path. That gap is real,
-tracked product debt, not a bug in this renderer -- see the feature 02 plan's "receipts.zip" deferral.
+THE "EVIDENCE" COLUMN IS HONEST
+--------------------------------
+Experiment comparisons carry baseline/candidate run IDs when their cells recorded
+them and an explicit ``evidence_unavailable`` reason otherwise.  The report-level
+metadata-only receipt index is the sole allowlist consumed by
+``clozn.receipts.ci_bundle``.  This renderer still uses only the report: it never
+looks in the local run journal or invents a path when evidence is absent.
 """
 from __future__ import annotations
 
@@ -127,7 +124,10 @@ def _experiment_rows(report: dict) -> list[tuple]:
             rows.append((
                 item.get("case", "-"), role, item.get("seed", "-"), result_label,
                 item.get("baseline_status", "-"), item.get("candidate_status", "-"),
-                item.get("run_id") or "-",
+                item.get("run_id") or (
+                    f"unavailable: {item['evidence_unavailable']}"
+                    if item.get("evidence_unavailable") else "-"
+                ),
             ))
     return rows
 
@@ -178,6 +178,17 @@ def render_job_summary(report: dict) -> str:
     if drift:
         lines.append("\n## Identity")
         lines.extend(drift)
+
+    receipt_index = report.get("receipt_index") or {}
+    entries = receipt_index.get("entries") or []
+    if entries:
+        available = sum(1 for entry in entries if entry.get("run_id"))
+        unavailable = len(entries) - available
+        lines.append("\n## Receipt evidence")
+        lines.append(
+            f"{available} indexed run(s), {unavailable} explicitly unavailable; "
+            f"default export privacy: `{receipt_index.get('privacy', 'metadata_only')}`."
+        )
 
     lines.append("\n## Reproduce locally")
     lines.append(f"```\n{_remediation_command(report)}\n```")

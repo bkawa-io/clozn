@@ -10,6 +10,32 @@
     "schema_version": {"const": "clozn.run-diff.v1"},
     "run_a": {"type": "string", "minLength": 1},
     "run_b": {"type": "string", "minLength": 1},
+    "comparison_selection": {
+      "type": "object",
+      "description": "Which reference/candidate pair was chosen and why. Automatic modes exclude internal child runs unless explicitly opted in.",
+      "required": ["mode", "reference_run_id", "candidate_run_id", "reason"],
+      "properties": {
+        "mode": {"enum": ["explicit", "previous_compatible", "same_session", "same_client", "same_task", "pinned"]},
+        "reference_run_id": {"type": "string", "minLength": 1},
+        "candidate_run_id": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1},
+        "basis": {"type": "object"}
+      }
+    },
+    "summary_axes": {
+      "type": "object",
+      "description": "Fixed plain-language top summary. Each axis reports changed, unchanged or unavailable; this is a change-state view, not evidence strength.",
+      "properties": {
+        "model": {"$ref": "#/$defs/axis"},
+        "adapter": {"$ref": "#/$defs/axis"},
+        "template": {"$ref": "#/$defs/axis"},
+        "context": {"$ref": "#/$defs/axis"},
+        "sampling": {"$ref": "#/$defs/axis"},
+        "engine": {"$ref": "#/$defs/axis"},
+        "tool_parse": {"$ref": "#/$defs/axis"},
+        "output": {"$ref": "#/$defs/axis"}
+      }
+    },
     "generated_at": {
       "type": "string",
       "description": "ISO-8601 UTC timestamp of when this comparison was computed (not when either run happened)."
@@ -37,6 +63,14 @@
   },
 
   "$defs": {
+    "axis": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": {"enum": ["changed", "unchanged", "unavailable"]},
+        "note": {"type": "string"}
+      }
+    },
     "difference": {
       "type": "object",
       "required": ["dimension", "kind", "rank", "evidence"],

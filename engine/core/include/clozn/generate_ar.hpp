@@ -99,6 +99,7 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
                            // used, which is what makes bit-exactness achievable (and it is the
                            // acceptance bar: greedy resume suffix == greedy re-prefill suffix).
                            const EngineCheckpoint* resume_from = nullptr,
+
                            // Execution-fork truncation (engine-debt: exact forks from an EARLIER
                            // point than the checkpoint's own n_past). -1 (default) => resume at
                            // resume_from->n_past, byte-identical to the original resume behavior
@@ -116,7 +117,11 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
                            // token on. nullptr (default) = no force, unchanged behavior. Independent
                            // of resume_from: also applies on an ordinary fresh prefill, which is how
                            // the execution-fork reprefill regime forces its first token.
-                           const int* force_first_token = nullptr);
+                           const int* force_first_token = nullptr,
+                           // Already-measured worker phases for this request (template/tokenization)
+                           // plus optional process-startup context. Their clocks are the same worker
+                           // steady clock, but offsets may be absent when their local origin differs.
+                           const std::vector<PerformancePhase>* request_phases = nullptr);
 
 // Batched multi-sequence branching: prefill a shared prompt once, then decode N independent
 // continuations in parallel using a single llama_decode per step. Each branch gets its own

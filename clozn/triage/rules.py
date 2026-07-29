@@ -93,8 +93,9 @@ def classify(steps: list) -> dict:
         "classification": classification,
         "confidence_basis": confidence_basis,
         "caveats": caveats,
+        "entangled": len(causal_kinds) > 1,
     }
-    for name in ("eliminated", "observed", "correlated", "causally_supported", "inconclusive",
+    for name in ("eliminated", "observed", "correlated", "reproduced", "causally_supported", "inconclusive",
                 "not_run", "unsupported"):
         summary[name] = sorted(buckets.get(name) or [])
     return summary

@@ -17,6 +17,17 @@ did loading one change something else?"*
 
 At the engine level the flags are `--lora PATH` and `--lora-scale F`.
 
+Validate a converted adapter without loading a model or importing optional ML packages:
+
+```bash
+clozn adapter validate tune.gguf --base BASE.gguf
+```
+
+This reads the GGUF metadata and exact hash, checks that it declares `general.type=adapter` and
+`adapter.type=lora`, optionally checks the base architecture, and prints an executable conversion
+command pinned to Clozn's llama.cpp commit. The converter runs in a separate environment containing its
+Torch/Transformers/Safetensors dependencies; they are not Clozn product dependencies.
+
 ## What happens when it cannot attach
 
 **The worker refuses to start.** It does not fall back to the base model.
@@ -102,12 +113,51 @@ runner (`run_direction`), and the honesty-labeled verdict classifier (`classify_
 unmodified against a base engine and an adapter-loaded engine. Comparing base vs. base+adapter is a
 boot-step change, not a diff-logic change.
 
-## Not yet built
+## Comparison command
 
-- `clozn diff-adapter` — the fine-tune author's one-command "what did my adapter change?", over the
-  ladder above.
+`clozn diff-adapter MODEL ADAPTER` is the fine-tune author's one-command "what did my adapter change?"
+surface over the ladder above. It boots a base arm and a base-plus-adapter arm, holds the model,
+tokenizer, template, and quantization constant, and refuses a candidate worker that cannot attach the
+adapter.
+
+## Merged-export equivalence
+
+After merging an adapter into a deployment GGUF, validate the exact output with:
+
+```bash
+clozn validate-export BASE.gguf \
+  --adapter tune.gguf \
+  --merged merged.gguf \
+  --suite examples/adapter-export-suite.v1.json \
+  --out export-receipt.json
+```
+
+The command performs static tokenizer, template, vocabulary, architecture, adapter-metadata,
+quantization-declaration, artifact-hash, and engine-artifact preflight before loading a model. It then
+verifies each worker's effective `/health` identity. A missing or mismatched adapter fails before suite
+cases begin.
+
+For every case and seed, the base-plus-adapter arm generates once. Its exact continuation token IDs are
+teacher-forced through all three arms. The `base_plus_adapter` versus `merged` delta is the primary
+assertion; `base` versus `base_plus_adapter` remains the control. The versioned
+`clozn.adapter-export-receipt.v1` artifact records per-case/seed run IDs, numeric token deltas, assertion
+budgets, and one explicit verdict:
+
+- `equivalent_within_budget`
+- `behavioral_mismatch`
+- `identity_mismatch`
+- `execution_error`
+- `inconclusive`
+
+The receipt never claims byte equivalence or proof of semantic equivalence. When base and merged declare
+different quantizations, it says so explicitly and limits the claim to measured behavior within the
+suite's budgets.
+
+## Remaining limitations
+
 - Multiple simultaneous adapters. `llama_set_adapters_lora` takes an array with per-adapter scales; this
   build attaches exactly one.
-- `clozn validate-export` — checking that a merged export matches base+adapter.
 - Hot-swapping an adapter on a live worker. `clear_lora()` exists, but nothing proves a detach returns a
   context to its exact prior state, and that proof would have to be built rather than assumed.
+- The merged-export runner and bad-merge path are covered model-free, but a known live merged GGUF still
+  needs to pass before that exact conversion pipeline is qualified.

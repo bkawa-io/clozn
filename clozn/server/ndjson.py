@@ -31,11 +31,9 @@ a documented decision, not an oversight:
     ``EngineSubstrate.chat_stream`` captures it onto the call's RequestContext the same way it already
     captures ``engine_req`` (see substrates.py + request_context.py). Omitted when the substrate never
     reported one (older engine build, or a test double).
-  * ``load_duration``, ``prompt_eval_duration``, ``eval_duration`` are NEVER emitted: clozn's engine is
-    one always-resident worker process (there is no per-request model load to time), and the engine's
-    SSE frames carry per-token committal timestamps but no separate prompt-phase-vs-decode-phase
-    wall-clock split -- there is nothing honest to report for any of the three, so all three are
-    omitted rather than guessed or zero-filled.
+  * ``load_duration``, ``prompt_eval_duration``, and ``eval_duration`` are emitted only when a new
+    worker's versioned terminal timing object measured the corresponding model-load, prefill, and decode
+    phases. Older workers and partial streams continue to omit them rather than guessing.
 
 ``done_reason`` maps clozn's own two finish reasons (``"stop"``, ``"length"``) to themselves -- the
 only two Ollama also defines for a normal completion -- and is OMITTED (never invented) for anything
@@ -59,12 +57,28 @@ def _iso_now() -> str:
 _DONE_REASON = {"stop": "stop", "length": "length"}
 
 
-def _timing_fields(started: float, ended: float, trace, prompt_tokens) -> dict:
+def _timing_fields(started: float, ended: float, trace, prompt_tokens, generation_timing=None) -> dict:
     out = {"total_duration": int((ended - started) * 1_000_000_000)}
     if trace is not None:
         out["eval_count"] = len(trace)
     if prompt_tokens is not None:
         out["prompt_eval_count"] = int(prompt_tokens)
+    timing = generation_timing if isinstance(generation_timing, dict) else {}
+    prefill_ms = timing.get("prefill_duration_ms")
+    decode_ms = timing.get("generation_duration_ms")
+    if isinstance(prefill_ms, (int, float)) and not isinstance(prefill_ms, bool) and prefill_ms >= 0:
+        out["prompt_eval_duration"] = round(prefill_ms * 1_000_000)
+    if isinstance(decode_ms, (int, float)) and not isinstance(decode_ms, bool) and decode_ms >= 0:
+        out["eval_duration"] = round(decode_ms * 1_000_000)
+    worker_timing = timing.get("worker_timing")
+    if isinstance(worker_timing, dict):
+        for phase in worker_timing.get("phases", []):
+            if (
+                isinstance(phase, dict) and phase.get("name") == "model_load"
+                and isinstance(phase.get("duration_ns"), int) and phase["duration_ns"] >= 0
+            ):
+                out["load_duration"] = phase["duration_ns"]
+                break
     return out
 
 
@@ -106,12 +120,20 @@ def ndjson_stream(handler, messages, max_new, model, *, operation, sample=True, 
     def _write(obj):
         """Write one NDJSON line. Returns the captured OSError on a client disconnect, else None --
         mirrors sse.py's `_write` closure so the two streaming paths fail identically."""
+        flush_started_ns = time.monotonic_ns()
         try:
             handler.wfile.write((json.dumps(obj) + "\n").encode("utf-8"))
             handler.wfile.flush()
             return None
         except OSError as write_err:
             return write_err
+        finally:
+            recorder = getattr(handler, "_record_gateway_phase", None)
+            if callable(recorder):
+                recorder(
+                    "stream_flush", time.monotonic_ns() - flush_started_ns,
+                    owner="client", aggregation="overlapping",
+                )
 
     t0 = time.time()
     acc: list[str] = []
@@ -179,7 +201,9 @@ def ndjson_stream(handler, messages, max_new, model, *, operation, sample=True, 
                                extra_meta={**policy_meta, "compatibility_api": "ollama",
                                            "ollama_operation": operation})
         ended = time.time()
-        timing = _timing_fields(t0, ended, trace, prompt_tokens)
+        request_context = getattr(sub, "_request", None)
+        generation_timing = getattr(request_context, "generation_timing", None)
+        timing = _timing_fields(t0, ended, trace, prompt_tokens, generation_timing)
         from clozn.runs.context_receipt import warnings_for
         cutoff_warnings = warnings_for(fr, {"max_tokens": int(max_new)})
         if cutoff_warnings:

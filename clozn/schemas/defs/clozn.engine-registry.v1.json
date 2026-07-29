@@ -47,6 +47,18 @@
           "type": "string",
           "pattern": "^[0-9]+\\.[0-9]+$"
         },
+        "build_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._+\\-]+$"
+        },
+        "llama_cpp_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "feature_flags": {
+          "type": "object",
+          "additionalProperties": { "type": "boolean" }
+        },
         "entrypoint": {
           "type": "string",
           "description": "Absolute path to the extracted clozn-server executable.",

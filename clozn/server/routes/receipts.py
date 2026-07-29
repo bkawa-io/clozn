@@ -13,7 +13,10 @@ def try_get(h, p):
         from clozn.experiments import experiment as clozn_experiment
         h._json(200, {"types": clozn_experiment.catalog()})
         return True
-    if p.startswith("/runs/") and p.endswith("/export"):   # one-call download: run + M1 explain + trace
+    if (p.startswith("/runs/") and p.endswith("/export")
+            and "/" not in p[len("/runs/"):-len("/export")]):
+        # one-call download: run + M1 explain + trace.  Do not greedily
+        # shadow nested, typed exports such as /runs/<id>/influence-map/export.
         import clozn.runs.store as runlog
         import clozn.receipts.explain as explain
         import clozn.receipts.bundle as receipt_bundle

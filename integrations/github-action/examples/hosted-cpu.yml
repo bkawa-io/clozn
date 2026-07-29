@@ -1,0 +1,35 @@
+name: Clozn hosted CPU tiny-quant gate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tiny-cpu:
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: bkawa-io/clozn-action@v1
+        with:
+          mode: run
+          trusted-run: "true"
+          clozn-version: "0.1.0"
+          engine-version: "0.1.0"
+          manifest: examples/tiny-cpu/deliberate-regression.experiment.json
+          model-lock: examples/tiny-cpu/clozn.lock.json
+          evidence: artifacts/tiny-cpu-result.json
+          producer-argv: >-
+            ["python", "examples/tiny-cpu/produce.py",
+             "--manifest", "{manifest}",
+             "--model", "{model:candidate}",
+             "--out", "{evidence}"]
+          max-target-regressions: "0"
+          max-guard-regressions: "0"
+
+# The checked-in lock used by this example must name a genuinely small CPU
+# quant, include its exact SHA-256 and size, and remain reviewable. The
+# deliberate-regression suite is expected to make this workflow fail with a
+# target/guard budget row—not with an infrastructure error.

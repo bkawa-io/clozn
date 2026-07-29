@@ -34,6 +34,20 @@
             "items": {"type": "string"},
             "description": "Other action ids this action cannot be combined with. Empty until a real conflicting pair exists."
           },
+          "scopes": {
+            "type": "array",
+            "items": {"type": "string", "enum": ["once", "session", "profile"]},
+            "minItems": 1
+          },
+          "eligibility": {
+            "type": "object",
+            "required": ["eligible"],
+            "properties": {
+              "eligible": {"type": "boolean"},
+              "note": {"type": "string"},
+              "reason": {"type": "string"}
+            }
+          },
           "evaluation_metrics": {
             "type": "array",
             "items": {"type": "string"}
@@ -49,6 +63,11 @@
                   "type": "string",
                   "enum": ["prompt_policy", "control_vector", "sampling_policy", "unsupported"]
                 },
+                "requested_type": {
+                  "type": "string",
+                  "enum": ["prompt_policy", "control_vector", "sampling_policy"]
+                },
+                "available": {"type": "boolean"},
                 "recipe_version": {"type": "string"},
                 "parameters": {"type": "object"},
                 "safe_bounds": {"type": "object"},
@@ -61,7 +80,9 @@
                   "type": "boolean",
                   "description": "Live-checked against the currently loaded model when a steer object was supplied to build_registry(); omitted entirely (never guessed) when no live model was available to check."
                 },
-                "reason": {"type": "string"}
+                "qualification_id": {"type": "string", "minLength": 1},
+                "reason": {"type": "string"},
+                "unavailability_reason": {"type": "string"}
               }
             }
           }

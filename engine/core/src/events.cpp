@@ -61,6 +61,39 @@ std::string items_array(const std::vector<ReviseItem>& items) {
     return out;
 }
 
+std::string timing_json_impl(const GenFinished& e) {
+    std::string out =
+        "{\"schema_version\":\"clozn.worker-timing.v1\",\"unit\":\"nanoseconds\","
+        "\"clock\":\"steady_clock\",\"clock_owner\":\"clozn_worker\",\"phases\":[";
+    for (size_t i = 0; i < e.timing_phases.size(); ++i) {
+        const PerformancePhase& phase = e.timing_phases[i];
+        if (i) out += ",";
+        out += "{\"name\":" + jstr(phase.name)
+             + ",\"owner\":" + jstr(phase.owner)
+             + ",\"duration_ns\":" + std::to_string(phase.duration_ns)
+             + ",\"measurement\":\"measured\",\"aggregation\":" + jstr(phase.aggregation);
+        if (phase.start_ns >= 0) out += ",\"start_ns\":" + std::to_string(phase.start_ns);
+        if (!phase.scope.empty()) out += ",\"scope\":" + jstr(phase.scope);
+        if (!phase.includes.empty()) {
+            out += ",\"includes\":[";
+            for (size_t j = 0; j < phase.includes.size(); ++j) {
+                if (j) out += ",";
+                out += jstr(phase.includes[j]);
+            }
+            out += "]";
+        }
+        out += "}";
+    }
+    out += "],\"metrics\":{\"prompt_tokens\":" + std::to_string(e.prompt_tokens)
+         + ",\"generated_tokens\":" + std::to_string(e.new_tokens);
+    if (e.prompt_tok_per_s >= 0.0)
+        out += ",\"prompt_tokens_per_second\":" + num(e.prompt_tok_per_s);
+    if (e.decode_tok_per_s >= 0.0)
+        out += ",\"decode_tokens_per_second\":" + num(e.decode_tok_per_s);
+    out += "}}";
+    return out;
+}
+
 // One visitor producing the §5.1 wire form {"t", "type", **payload}. Same schema/keys as the lab's
 // event_to_dict (float text may differ; ints/keys/structure match), so consumers parse either.
 std::string readouts_array(const std::vector<WorkspaceReadoutItem>& items) {
@@ -122,7 +155,8 @@ struct ToJsonl {
         std::snprintf(mid, sizeof(mid), ", \"new_tokens\": %d, \"wall_ms\": ", e.new_tokens);
         char end[64];
         std::snprintf(end, sizeof(end), ", \"steps_total\": %d, \"tok_per_s\": ", e.steps_total);
-        return std::string(b) + jstr(e.reason) + mid + num(e.wall_ms) + end + num(e.tok_per_s) + "}";
+        return std::string(b) + jstr(e.reason) + mid + num(e.wall_ms) + end + num(e.tok_per_s)
+             + ", \"timing\": " + timing_json_impl(e) + "}";
     }
     std::string operator()(const StepFeatures& e) const {
         std::string out = "{\"t\": " + std::to_string(e.t) + ", \"type\": \"step_features\", \"block\": "
@@ -177,6 +211,10 @@ struct ToJsonl {
 
 std::string to_jsonl_line(const Event& event) {
     return std::visit(ToJsonl{}, event);
+}
+
+std::string worker_timing_json(const GenFinished& event) {
+    return timing_json_impl(event);
 }
 
 bool write_jsonl(const std::vector<Event>& events, const std::string& path) {

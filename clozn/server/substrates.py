@@ -191,7 +191,8 @@ class Substrate:
         return None
 
 
-# roadmap feature 01: CLOZN_ENGINE_DISCOVERY_SOURCE/BACKEND/ARTIFACT_SHA256/VERSION are set by
+# roadmap feature 01: CLOZN_ENGINE_DISCOVERY_SOURCE/BACKEND/ARTIFACT_SHA256/VERSION/BUILD_ID and
+# LLAMA_CPP_COMMIT are set by
 # clozn.cli.runtime_process.spawn_runtime() on the gateway subprocess's own environment -- this process
 # (clozn.server.app, launched as `python -m clozn.server.app`) is a SEPARATE process from the `clozn
 # serve` CLI that called clozn.cli.engine_process.find_engine_ex(), so these facts have no other way to
@@ -201,12 +202,14 @@ _ENGINE_DISCOVERY_ENV_KEYS = {
     "backend": "CLOZN_ENGINE_BACKEND",
     "artifact_sha256": "CLOZN_ENGINE_ARTIFACT_SHA256",
     "engine_version": "CLOZN_ENGINE_VERSION",
+    "build_id": "CLOZN_ENGINE_BUILD_ID",
+    "llama_cpp_commit": "CLOZN_ENGINE_LLAMA_CPP_COMMIT",
 }
 
 
 def _engine_discovery_context() -> dict:
-    """{'discovery_source', 'backend', 'artifact_sha256', 'engine_version'} restricted to whichever of
-    those CLOZN_ENGINE_* env vars are actually set -- an unset one is omitted, never null-padded (the
+    """Managed-engine discovery/build fields restricted to whichever CLOZN_ENGINE_* environment values
+    are actually set -- an unset one is omitted, never null-padded (the
     same rule clozn.runs.identity follows everywhere else), so e.g. a repo-local dev build honestly
     reports no artifact_sha256 rather than an empty string. Fed to
     clozn.runs.identity.runtime_identity(extra_context=...), which clozn.runs.identity_providers.
@@ -455,7 +458,16 @@ class EngineSubstrate(Substrate):
         # (A topic-gated memory-card block was composed and injected here until the 2026-07-27 cards cut.
         # Nothing prepends a system block on this path now, so the messages reach the template as given.)
         template_usage = {}
-        prompt = ctx._engine_tmpl(self.engine, messages, usage_out=template_usage)
+        gateway_phases = []
+        template_started_ns = time.monotonic_ns()
+        try:
+            prompt = ctx._engine_tmpl(self.engine, messages, usage_out=template_usage)
+        finally:
+            gateway_phases.append({
+                "name": "prompt_template", "owner": "clozn_gateway",
+                "duration_ns": max(0, time.monotonic_ns() - template_started_ns),
+                "measurement": "measured", "aggregation": "exclusive",
+            })
         if mem_out is not None:
             # final_prompt = the EXACT rendered string the model saw (backlog #5); assembled_messages is its
             # pre-template form. Both recorded so the run is inspectable at either level.
@@ -481,11 +493,23 @@ class EngineSubstrate(Substrate):
                 traced_kw["usage_out"] = usage
         except Exception:
             pass
-        reply_raw, steps, finish, divinfo = ctx._engine_complete_traced(
-            self.engine, prompt, max_new, kw, **traced_kw)
+        dispatch_started_ns = time.monotonic_ns()
+        try:
+            reply_raw, steps, finish, divinfo = ctx._engine_complete_traced(
+                self.engine, prompt, max_new, kw, **traced_kw)
+        finally:
+            gateway_phases.append({
+                "name": "worker_dispatch", "owner": "clozn_gateway",
+                "duration_ns": max(0, time.monotonic_ns() - dispatch_started_ns),
+                "measurement": "measured", "aggregation": "overlapping",
+            })
+            from clozn.runs.perf_spans import timing_document
+            req.gateway_timing = timing_document(gateway_phases)
         if isinstance(usage.get("prompt_tokens"), int):
             req.prompt_tokens = usage["prompt_tokens"]
         req.generation_timing = dict(usage.get("generation_timing") or {})
+        raw_reason = usage.get("raw_finish_reason")
+        req.finish_reason_raw = raw_reason if isinstance(raw_reason, str) else None
         req.finish_reason = finish                          # stash for last_finish_reason() (the log path)
         req.diverged, req.diverged_at = divinfo             # stash for last_divergence()
         # (The anchored-memory loop guard lived here -- it only ran when an anchored bag had actually
@@ -562,18 +586,27 @@ class EngineSubstrate(Substrate):
         # Publish the memory decision even if the worker fails.  It describes what was assembled for
         # this request, not a claim that generation succeeded.
         req.memory_manifest = dict(memory_manifest)
-        response = self.engine.complete_chat(
-            assembled,
-            tools=tools,
-            tool_choice=tool_choice,
-            json_schema=json_schema,
-            parallel_tool_calls=parallel_tool_calls,
-            add_generation_prompt=add_generation_prompt,
-            enable_thinking=enable_thinking,
-            reasoning_format=reasoning_format,
-            max_tokens=int(max_new),
-            **options,
-        )
+        dispatch_started_ns = time.monotonic_ns()
+        try:
+            response = self.engine.complete_chat(
+                assembled,
+                tools=tools,
+                tool_choice=tool_choice,
+                json_schema=json_schema,
+                parallel_tool_calls=parallel_tool_calls,
+                add_generation_prompt=add_generation_prompt,
+                enable_thinking=enable_thinking,
+                reasoning_format=reasoning_format,
+                max_tokens=int(max_new),
+                **options,
+            )
+        finally:
+            from clozn.runs.perf_spans import timing_document
+            req.gateway_timing = timing_document([{
+                "name": "worker_dispatch", "owner": "clozn_gateway",
+                "duration_ns": max(0, time.monotonic_ns() - dispatch_started_ns),
+                "measurement": "measured", "aggregation": "overlapping",
+            }])
 
         choice = response["choices"][0]
         chat_io = response["chat_io"]
@@ -590,6 +623,7 @@ class EngineSubstrate(Substrate):
         import clozn.runs.store as runlog
         steps = runlog.accumulate_ar_events(native_events)
         req.generation_timing = runlog.generation_timing_from_frames(native_events)
+        req.finish_reason_raw = runlog.raw_finish_reason_from_frames(native_events)
         req.trace = list(steps)
         if trace_out is not None:
             trace_out.extend(steps)
@@ -722,6 +756,11 @@ class EngineSubstrate(Substrate):
         logs WHY the engine stopped instead of a hard-coded 'stop'."""
         return getattr(self, "_last_finish_reason", None)
 
+    def last_finish_reason_raw(self):
+        """The worker event's raw stop cause before protocol normalization, when available."""
+        request = getattr(self, "_request", None)
+        return getattr(request, "finish_reason_raw", None)
+
     def last_prompt_tokens(self):
         """The prompt token count the engine's own `gen_started` frame reported for the most recent
         chat_stream, or None (a non-streaming chat() call, an engine build too old to send the field, or
@@ -790,6 +829,13 @@ class EngineSubstrate(Substrate):
         meta.update(getattr(self, "_last_generation_meta", None) or {})
         request = getattr(self, "_request", None)
         meta.update(dict(getattr(request, "generation_timing", None) or {}))
+        gateway_timing = getattr(request, "gateway_timing", None)
+        if isinstance(gateway_timing, dict) and gateway_timing.get("phases"):
+            meta["gateway_timing"] = dict(gateway_timing)
+        raw_reason = getattr(request, "finish_reason_raw", None)
+        if isinstance(raw_reason, str) and raw_reason:
+            meta["finish_reason_raw"] = raw_reason
+            meta["finish_reason_source"] = "worker_event"
         prompt_tokens = getattr(self, "_last_prompt_tokens", None)
         if isinstance(prompt_tokens, int):
             meta["prompt_tokens"] = prompt_tokens
@@ -856,7 +902,16 @@ class EngineSubstrate(Substrate):
         # TONE: built EXACTLY as chat() builds it. (The memory-card block chat() used to compose here
         # went with the 2026-07-27 cards cut; the two paths stay in lockstep, both now block-free.)
         template_usage = {}
-        prompt = ctx._engine_tmpl(self.engine, messages, usage_out=template_usage)
+        gateway_phases = []
+        template_started_ns = time.monotonic_ns()
+        try:
+            prompt = ctx._engine_tmpl(self.engine, messages, usage_out=template_usage)
+        finally:
+            gateway_phases.append({
+                "name": "prompt_template", "owner": "clozn_gateway",
+                "duration_ns": max(0, time.monotonic_ns() - template_started_ns),
+                "measurement": "measured", "aggregation": "exclusive",
+            })
         if mem_out is not None:
             # final_prompt = the EXACT rendered string the model saw (backlog #5); kept in lockstep with chat().
             mem_out.update(assembled_messages=list(messages), final_prompt=prompt)
@@ -885,6 +940,7 @@ class EngineSubstrate(Substrate):
                                       data=json.dumps(body).encode("utf-8"),
                                       headers={"Content-Type": "application/json"})
         frames = []
+        dispatch_started_ns = time.monotonic_ns()
         try:
             resp = urllib.request.urlopen(wreq, timeout=getattr(self.engine, "timeout", 600))
         except urllib.error.HTTPError as he:
@@ -954,12 +1010,21 @@ class EngineSubstrate(Substrate):
                 req.trace = []
             try:
                 req.finish_reason = runlog.finish_reason_from_frames(frames)
+                req.finish_reason_raw = runlog.raw_finish_reason_from_frames(frames)
             except Exception:
                 req.finish_reason = None
+                req.finish_reason_raw = None
             try:
                 req.generation_timing = runlog.generation_timing_from_frames(frames)
             except Exception:
                 req.generation_timing = {}
+            gateway_phases.append({
+                "name": "worker_dispatch", "owner": "clozn_gateway",
+                "duration_ns": max(0, time.monotonic_ns() - dispatch_started_ns),
+                "measurement": "measured", "aggregation": "overlapping",
+            })
+            from clozn.runs.perf_spans import timing_document
+            req.gateway_timing = timing_document(gateway_phases)
             # (A streaming-twin loop guard lived here. It only ran when anchored memory had actually
             # ridden the turn -- mem_out["anchored"] -- which no longer happens, so it was dead code
             # after the anchored removal. Generic repetition detection survives in
@@ -1107,6 +1172,9 @@ def _engine_complete_traced(engine, prompt, max_tokens, kw, sample=None, usage_o
                 timing = runlog.generation_timing_from_frames(frames)
                 if timing:
                     usage_out["generation_timing"] = timing
+                raw_reason = runlog.raw_finish_reason_from_frames(frames)
+                if raw_reason:
+                    usage_out["raw_finish_reason"] = raw_reason
             return text, steps, finish, (diverged, diverged_at)
     except Exception:
         pass

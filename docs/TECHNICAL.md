@@ -1,5 +1,9 @@
 # Cloze — Technical Deep-Dive
 
+> **Historical diffusion-research archive.** The measurements and implementation notes below preserve
+> the original research record. They do not describe a current Clozn product substrate; see
+> [CAPABILITIES.md](CAPABILITIES.md).
+
 > **Read this for a detailed engineering account.** It states exactly what Cloze is today, what it
 > isn't, what the numbers mean, and where they
 > came from. Every figure here is a real, committed run — the JSONL event logs that produced the

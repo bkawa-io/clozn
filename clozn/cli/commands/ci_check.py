@@ -15,9 +15,10 @@ in clozn/cli/ci_report_render.py -- a GitHub Actions job-summary Markdown table 
 so an external action can `cat` them onto `$GITHUB_STEP_SUMMARY` / hand them to a JUnit-aware reporter
 without this repo taking on any GitHub-API dependency. `clozn model-lock verify FILE`
 (clozn/cli/commands/model_lock.py, clozn/models/lockfile.py) separately validates a checked-in
-`clozn.model-lock.v1` lockfile with no network access; it is not wired into this gate at all yet --
-resolving a pinned lockfile entry into a downloaded, verified local model is deferred, out-of-repo "run
-mode" work.
+`clozn.model-lock.v1` lockfile with no network access. The separate
+`clozn model-lock fetch` command owns the explicitly networked, SHA-verified
+resolver used by the publication-ready Action run-mode source; it is never
+called by this verify command.
 
 WHY NOT `clozn.testkit.ci` -- that module (clozn/testkit/ci.py) is a DIFFERENT, pre-existing thing: a
 live suite orchestrator (Client/run_case/run_suite/diff_suites) that calls a running gateway's /v1/chat/
@@ -424,6 +425,7 @@ def gate_experiment_result(*, result: dict, max_execution_errors: int = 0,
             raise CIExperimentArtifactError(f"{name} must be a non-negative integer")
 
     manifest, cells, variants, seeds = _validated_experiment_cells(result)
+    from clozn.experiments import suite as experiment_suite
     baseline = manifest["baseline_variant"]
     candidates = [variant for variant in variants if variant != baseline]
     by_key = {(cell["suite"], cell["case"], cell["seed"], cell["variant"]): cell for cell in cells}
@@ -434,6 +436,13 @@ def gate_experiment_result(*, result: dict, max_execution_errors: int = 0,
         integrity_findings.append({
             "kind": "manifest_sha256_mismatch", "expected": expected_digest,
             "observed": result.get("manifest_sha256"),
+        })
+    expected_fingerprint = experiment_suite.suite_fingerprint(manifest, seeds=seeds)
+    claimed_fingerprint = result.get("suite_fingerprint")
+    if claimed_fingerprint is not None and claimed_fingerprint != expected_fingerprint:
+        integrity_findings.append({
+            "kind": "suite_fingerprint_mismatch", "expected": expected_fingerprint,
+            "observed": claimed_fingerprint,
         })
 
     variant_shas: dict[str, set[str]] = {variant: set() for variant in variants}
@@ -464,9 +473,26 @@ def gate_experiment_result(*, result: dict, max_execution_errors: int = 0,
 
     errors = [
         {"suite": cell["suite"], "case": cell["case"], "variant": cell["variant"],
-         "seed": cell["seed"], "error": cell.get("error")}
+         "seed": cell["seed"], "error": cell.get("error"),
+         **(
+             {"run_id": cell["run_id"]}
+             if isinstance(cell.get("run_id"), str) and cell["run_id"] else
+             {"evidence_unavailable": "execution-error cell has no recorded run ID"}
+         )}
         for cell in cells if cell["status"] == "error"
     ]
+    receipt_index = []
+    for cell in cells:
+        entry = {
+            key: cell[key] for key in ("suite", "case", "variant", "seed", "status")
+        }
+        run_id = cell.get("run_id")
+        if isinstance(run_id, str) and run_id:
+            entry["run_id"] = run_id
+            entry["privacy"] = "metadata_only"
+        else:
+            entry["evidence_unavailable"] = "cell has no recorded run ID"
+        receipt_index.append(entry)
     comparisons = {}
     for candidate in candidates:
         row = {"target_gains": [], "target_regressions": [], "guard_regressions": []}
@@ -475,8 +501,22 @@ def gate_experiment_result(*, result: dict, max_execution_errors: int = 0,
                 for seed in seeds:
                     base = by_key[(suite_name, case["name"], seed, baseline)]
                     current = by_key[(suite_name, case["name"], seed, candidate)]
-                    label = {"case": case["name"], "seed": seed,
-                             "baseline_status": base["status"], "candidate_status": current["status"]}
+                    label = {
+                        "case": case["name"],
+                        "seed": seed,
+                        "baseline_status": base["status"],
+                        "candidate_status": current["status"],
+                    }
+                    for prefix, cell in (("baseline", base), ("candidate", current)):
+                        run_id = cell.get("run_id")
+                        if isinstance(run_id, str) and run_id:
+                            label[f"{prefix}_run_id"] = run_id
+                    if isinstance(current.get("run_id"), str) and current["run_id"]:
+                        label["run_id"] = current["run_id"]
+                    else:
+                        label["evidence_unavailable"] = (
+                            "candidate cell has no recorded run ID"
+                        )
                     if suite_name == "target" and base["status"] == "fail" and current["status"] == "pass":
                         row["target_gains"].append(label)
                     # A previously-passing assertion becoming unscored/error is not proof it still holds.
@@ -501,6 +541,7 @@ def gate_experiment_result(*, result: dict, max_execution_errors: int = 0,
         "artifact_integrity": {
             "ran": True, "passed": not integrity_findings,
             "budget": {"manifest_digest_match": True, "cell_run_id_match": True,
+                       "suite_fingerprint_match": True,
                        "require_run_identity": bool(require_run_identity),
                        "stable_identity_within_variant": True},
             "observed": {"findings": len(integrity_findings),
@@ -531,8 +572,14 @@ def gate_experiment_result(*, result: dict, max_execution_errors: int = 0,
         "artifact": {"schema_version": result.get("schema_version"),
                      "experiment_id": result.get("experiment_id"), "name": result.get("name"),
                      "manifest_sha256": result.get("manifest_sha256"), "baseline_variant": baseline,
+                     "suite_fingerprint": expected_fingerprint,
                      "candidate_variants": candidates, "cells": len(cells)},
-        "checks": checks, "generated_at": _now_iso(),
+        "checks": checks,
+        "receipt_index": {
+            "privacy": "metadata_only",
+            "entries": receipt_index,
+        },
+        "generated_at": _now_iso(),
     }
 
 

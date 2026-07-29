@@ -100,13 +100,66 @@ def try_get(h, p):
 def try_post(h, p, body):
     if p == "/receipt-privacy":
         from clozn.runs import receipt_privacy
-        name = str((body or {}).get("tier", "")).strip().lower()
-        if name not in receipt_privacy.TIERS:
-            h._json(400, {"error": f"unknown tier (want one of {list(receipt_privacy.TIERS)})"})
+        body = body if isinstance(body, dict) else {}
+        action = str(body.get("action") or "compat_apply").strip().lower()
+        try:
+            if action == "undo":
+                mutation = receipt_privacy.undo_tier(body.get("transaction_id"))
+                h._json(200, {
+                    "ok": True,
+                    "tier": receipt_privacy.tier(),
+                    "mutation": mutation,
+                })
+                return True
+
+            name = body.get("tier")
+            if action == "preview":
+                h._json(200, {
+                    "ok": True,
+                    "tier": str(name or "").strip().lower(),
+                    "preview": receipt_privacy.preview_tier(name),
+                })
+                return True
+
+            if action == "apply":
+                expected = body.get("expected")
+                if not isinstance(expected, dict) or not isinstance(expected.get("exists"), bool):
+                    raise receipt_privacy.PrivacyMutationError(
+                        "apply requires expected.exists from a fresh preview"
+                    )
+                mutation = receipt_privacy.apply_tier(
+                    name,
+                    expected_exists=expected["exists"],
+                    expected_sha256=expected.get("sha256"),
+                )
+            elif action == "compat_apply":
+                # Backward-compatible one-shot POST. It still uses the same
+                # preview/CAS transaction path; new callers should split these
+                # into explicit preview and apply requests.
+                preview = receipt_privacy.preview_tier(name)
+                mutation = receipt_privacy.apply_tier(
+                    name,
+                    expected_exists=preview["expected"]["exists"],
+                    expected_sha256=preview["expected"].get("sha256"),
+                )
+            else:
+                raise receipt_privacy.PrivacyMutationError(
+                    "action must be preview, apply, or undo"
+                )
+        except receipt_privacy.PrivacyDriftError as exc:
+            h._json(409, {"ok": False, "error": str(exc), "code": "settings_drift"})
             return True
-        if not receipt_privacy.set_tier(name):
-            h._json(200, {"ok": False, "reason": "could not persist the tier setting"})
+        except receipt_privacy.PrivacyMutationError as exc:
+            h._json(400, {"ok": False, "error": str(exc)})
             return True
-        h._json(200, {"ok": True, "tier": name})
+        except (OSError, ValueError) as exc:
+            h._json(500, {"ok": False, "error": f"could not persist the tier setting: {exc}"})
+            return True
+        h._json(200, {
+            "ok": True,
+            "tier": str(name or "").strip().lower(),
+            "mutation": mutation,
+            **({"compatibility_mode": "atomic_preview_apply"} if action == "compat_apply" else {}),
+        })
         return True
     return False

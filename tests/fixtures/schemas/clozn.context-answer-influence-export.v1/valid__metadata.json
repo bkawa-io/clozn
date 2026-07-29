@@ -1,0 +1,47 @@
+{
+  "schema_version": "clozn.context-answer-influence-export.v1",
+  "source_schema": "clozn.context_answer_influence.v1",
+  "source_artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "privacy": "metadata_only",
+  "status": "ok",
+  "available": true,
+  "method": {
+    "name": "teacher_forced_matched_context_replacement",
+    "version": "1",
+    "mode": "forced_score_intervention",
+    "claim_limit": "behavioral dependence only",
+    "caveat": "does not reveal hidden reasoning"
+  },
+  "identity": {"run_id": "run-1"},
+  "cache_identity": {"method_version": "1"},
+  "thresholds": {"cell_abs_delta_nats": 0.05},
+  "prompt_sources": [{
+    "id": "p.m000",
+    "start": 0,
+    "end": 7,
+    "selected": true,
+    "text_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "text_bytes": 7
+  }],
+  "selection": {
+    "strategy": "bounded",
+    "selected_source_ids": ["p.m000"],
+    "omitted_source_ids": []
+  },
+  "prompt_spans": [{
+    "id": "p.m000.c000",
+    "start": 0,
+    "end": 7,
+    "text_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "text_bytes": 7
+  }],
+  "answer_spans": [{
+    "id": "a.t0000",
+    "start": 0,
+    "end": 6,
+    "text_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "text_bytes": 6
+  }],
+  "links": [],
+  "summary": {}
+}

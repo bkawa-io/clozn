@@ -136,15 +136,9 @@ Within the autoloaded group, dispatch order is by module name.
 **A great deal of this roadmap is already partly implemented.** The pack was written against the product
 vision, not against a file-by-file audit of the tree. Before designing anything, find out what exists:
 
-```
-clozn/receipts/          24 modules
-clozn/behavior/          steering, preferences, corrective_retries, feedback
-clozn/replay/            exact replay
-clozn/runs/              identity, journal
-clozn/cli/commands/      context.py  diagnose.py  doctor.py  explain.py  connect.py
-                         regression_suite.py  retry.py  runs_privacy.py  provenance.py
-tests/                   153 files, incl. test_context_receipt.py, test_connect_cli.py
-```
+For orientation, inspect `clozn/receipts/`, `clozn/behavior/`, `clozn/replay/`, `clozn/runs/`, and
+`clozn/cli/commands/` before adding a parallel implementation. File and test counts are deliberately
+omitted here because they drift whenever a feature lands.
 
 An agent that greenfields a parallel implementation of something already in the tree has produced work
 that will be thrown away. Extending existing code is the expected outcome; replacing it needs a stated
@@ -152,8 +146,8 @@ reason.
 
 ## Testing
 
-- `python -m pytest tests/ -q` — full suite, ~60s, **2338 passed / 17 skipped is the green baseline.**
-  It must still be green when you finish.
+- `python -m pytest tests/ -q` — run the full current suite. Do not copy a historical pass/skip count
+  into documentation as a permanent baseline.
 - Model-free by default (roadmap rule 8). No GPU, no model download in unit or contract tests.
 - Prefer fixture-driven tests that a later feature extends by adding a file.
 

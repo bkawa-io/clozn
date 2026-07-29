@@ -55,7 +55,7 @@ def _empty_sequence(value: Any) -> bool:
 CHAT_SUPPORTED_FIELDS = frozenset({
     "model", "messages", "max_tokens", "max_completion_tokens", "temperature", "top_p", "seed",
     "stream", "top_k", "repeat_penalty", "clozn_trust", "clozn_receipt", "clozn_lens", "clozn_selective",
-    "clozn_guard", "tools", "tool_choice", "parallel_tool_calls", "response_format",
+    "clozn_guard", "clozn_sources", "tools", "tool_choice", "parallel_tool_calls", "response_format",
 })
 
 # Accepted only at the listed neutral value, then removed.  These are compatibility affordances, not
@@ -167,6 +167,57 @@ def _normalize_messages(value: Any) -> list[dict[str, str]]:
     return out
 
 
+def _normalize_sources(value: Any, *, message_count: int) -> list[dict[str, Any]]:
+    """Validate the explicit source-identity extension without touching message content.
+
+    The extension is a list of ``{message_index, source_id, label?}`` records.  It is deliberately
+    separate from OpenAI message objects so ordinary clients remain byte-for-byte compatible and
+    unsupported message fields still fail clearly.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        _fail("clozn_sources must be a list", "clozn_sources")
+    normalized: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    seen_indexes: set[int] = set()
+    for position, raw in enumerate(value):
+        param = f"clozn_sources[{position}]"
+        if not isinstance(raw, Mapping):
+            _fail("each clozn_sources entry must be an object", param)
+        extra = set(raw) - {"message_index", "source_id", "label"}
+        if extra:
+            field = sorted(extra)[0]
+            _fail(f"source metadata field '{field}' is unsupported", f"{param}.{field}")
+        index = raw.get("message_index")
+        if not _is_int(index) or index < 0 or index >= message_count:
+            _fail(
+                f"message_index must identify one of the request's {message_count} messages",
+                f"{param}.message_index",
+            )
+        source_id = raw.get("source_id")
+        if not isinstance(source_id, str) or not source_id.strip() or len(source_id) > 256:
+            _fail("source_id must be a non-empty string of at most 256 characters",
+                  f"{param}.source_id")
+        source_id = source_id.strip()
+        if source_id in seen_ids:
+            _fail("source_id values must be unique within a request", f"{param}.source_id")
+        if index in seen_indexes:
+            _fail("each message_index may have at most one source identity",
+                  f"{param}.message_index")
+        item: dict[str, Any] = {"message_index": int(index), "source_id": source_id}
+        label = raw.get("label")
+        if label is not None:
+            if not isinstance(label, str) or not label.strip() or len(label) > 256:
+                _fail("label must be a non-empty string of at most 256 characters",
+                      f"{param}.label")
+            item["label"] = label.strip()
+        normalized.append(item)
+        seen_ids.add(source_id)
+        seen_indexes.add(int(index))
+    return normalized
+
+
 def normalize_chat_request(body: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(body, Mapping):
         _fail("request body must be a JSON object", "body")
@@ -198,8 +249,15 @@ def normalize_chat_request(body: Mapping[str, Any]) -> dict[str, Any]:
         out["_structured_contract"] = structured
     else:
         out["messages"] = _normalize_messages(body.get("messages"))
+    sources = _normalize_sources(body.get("clozn_sources"), message_count=len(out["messages"]))
+    out.pop("clozn_sources", None)
+    if sources:
+        out["_clozn_sources"] = sources
 
     if structured.get("mode"):
+        if sources:
+            _fail("clozn_sources cannot be combined with structured I/O in v1", "clozn_sources",
+                  code="unsupported_parameter")
         for extension in ("clozn_trust", "clozn_receipt", "clozn_lens", "clozn_selective", "clozn_guard"):
             if body.get(extension):
                 _fail(f"{extension} cannot be combined with structured I/O in v1", extension,

@@ -28,6 +28,9 @@ def test_registry_covers_every_correction_preset_once():
     ids = [a["id"] for a in doc["actions"]]
     assert ids == list(CORRECTION_PRESETS)
     assert len(set(ids)) == len(ids)
+    for action in doc["actions"]:
+        assert action["scopes"] == ["once", "session", "profile"]
+        assert len(set(action["scopes"])) == len(action["scopes"])
 
 
 def test_registry_validates_against_its_own_schema():

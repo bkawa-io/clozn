@@ -30,6 +30,8 @@ from .forced import _FORCED_MEAN_THRESHOLD, _forced_deltas, _matched_length_fill
 
 
 SCHEMA = "clozn.context_answer_influence.v1"
+EXPORT_SCHEMA = "clozn.context-answer-influence-export.v1"
+CACHE_METHOD_VERSION = "1"
 
 # The spec-facing mode enum (notes/agent_roadmap/07-sources-evidence-lens.md's "Measurement modes"):
 # presence_only / attention_proxy / forced_score_intervention / regeneration_intervention / unsupported.
@@ -77,6 +79,7 @@ _CONTROL_RECIPE = "clozn.matched_length_neutral_filler.v1"
 
 _METHOD = {
     "name": "teacher_forced_matched_context_replacement",
+    "version": CACHE_METHOD_VERSION,
     "mode": MODE,
     "generation_used": False,
     "baseline_reused": True,
@@ -96,6 +99,22 @@ _METHOD = {
     ),
     "caveat": _PERSISTENT_CAVEAT,
 }
+
+
+class InfluenceComputationCancelled(RuntimeError):
+    """Cooperative stop requested between bounded scoring arms."""
+
+
+def _checkpoint(cancel_requested, progress, phase: str, completed: int, total: int) -> None:
+    """Report bounded progress and stop before the next scoring/persistence phase."""
+    if callable(cancel_requested) and cancel_requested():
+        raise InfluenceComputationCancelled("context-answer influence measurement cancelled")
+    if callable(progress):
+        progress(
+            phase=phase,
+            completed=max(0, int(completed)),
+            total=max(0, int(total)),
+        )
 
 
 def _round(value: float) -> float:
@@ -129,6 +148,41 @@ def _identity(run: dict, *, prompt_view: str) -> dict:
     }
 
 
+def cache_identity(run: dict) -> dict:
+    """Return the complete identity that licenses reuse of a measured map.
+
+    The receipt digest deliberately commits the whole receipt rather than only
+    its segment IDs: a privacy-safe metadata change, truncation decision, or
+    rendered-prompt change must invalidate the map just as a model/engine
+    change does.
+    """
+    run = run if isinstance(run, dict) else {}
+    captured = run.get("identity")
+    captured = captured if isinstance(captured, dict) else {}
+    engine = {
+        key: deepcopy(value)
+        for key, value in captured.items()
+        if key != "captured_at"
+    }
+    return {
+        "run_id": str(run.get("id") or ""),
+        "model": str(run.get("model") or ""),
+        "substrate": str(run.get("substrate") or ""),
+        "model_engine_identity_sha256": _digest(engine),
+        "method_version": CACHE_METHOD_VERSION,
+        "context_receipt_sha256": _digest(run.get("context_receipt")),
+    }
+
+
+def cache_matches(run: dict, artifact: dict) -> bool:
+    return (
+        isinstance(artifact, dict)
+        and artifact.get("schema") == SCHEMA
+        and artifact.get("available") is True
+        and artifact.get("cache_identity") == cache_identity(run)
+    )
+
+
 def _base_result(run: dict, *, prompt_view: str) -> dict:
     return {
         "schema": SCHEMA,
@@ -136,7 +190,95 @@ def _base_result(run: dict, *, prompt_view: str) -> dict:
         "available": False,
         "method": deepcopy(_METHOD),
         "identity": _identity(run, prompt_view=prompt_view),
+        "cache_identity": cache_identity(run),
     }
+
+
+def _hashed_text(value) -> dict:
+    if not isinstance(value, str):
+        return {}
+    return {
+        "text_sha256": hashlib.sha256(value.encode("utf-8")).hexdigest(),
+        "text_bytes": len(value.encode("utf-8")),
+    }
+
+
+def portable_export(artifact: dict, *, privacy: str = "metadata_only") -> dict:
+    """Normalize a live map into a portable, privacy-safe evidence artifact.
+
+    ``metadata_only`` is intentionally the default and cannot carry prompt or
+    answer text. ``full`` is an explicit opt-in for callers that already have
+    authority to read the stored map. The numeric evidence and typed states are
+    identical in both tiers.
+    """
+    if privacy not in {"metadata_only", "full"}:
+        raise ValueError("privacy must be metadata_only or full")
+    if not (isinstance(artifact, dict) and artifact.get("schema") == SCHEMA):
+        raise ValueError(f"a {SCHEMA} artifact is required")
+
+    def span(item: dict, *, answer: bool = False) -> dict:
+        item = item if isinstance(item, dict) else {}
+        keys = (
+            ("id", "level", "token_index", "token_id", "start", "end")
+            if answer else
+            (
+                "id", "parent_id", "level", "kind", "message_index", "role", "name",
+                "source_kind", "segment_id", "client_source_id", "source_label",
+                "external_source_id", "selected",
+                "start", "end", "byte_start", "byte_end", "child_unit_count",
+            )
+        )
+        out = {key: deepcopy(item[key]) for key in keys if item.get(key) is not None}
+        out.update(_hashed_text(item.get("text")))
+        if privacy == "full" and isinstance(item.get("text"), str):
+            out["text"] = item["text"]
+        return out
+
+    method = artifact.get("method")
+    method = deepcopy(method) if isinstance(method, dict) else {}
+    method.setdefault("version", "legacy_unversioned")
+    source_digest = _digest(artifact)
+    exported = {
+        "schema_version": EXPORT_SCHEMA,
+        "source_schema": SCHEMA,
+        "source_artifact_sha256": source_digest,
+        "privacy": privacy,
+        "status": artifact.get("status", "unavailable"),
+        "available": artifact.get("available") is True,
+        "method": method,
+        "identity": deepcopy(artifact.get("identity") or {}),
+        "cache_identity": deepcopy(artifact.get("cache_identity") or {}),
+        "thresholds": deepcopy(artifact.get("thresholds") or {}),
+        "prompt_sources": [
+            span(item) for item in artifact.get("prompt_sources", [])
+            if isinstance(item, dict)
+        ],
+        "selection": deepcopy(artifact.get("selection") or {}),
+        "prompt_spans": [
+            span(item) for item in artifact.get("prompt_spans", [])
+            if isinstance(item, dict)
+        ],
+        "answer_spans": [
+            span(item, answer=True) for item in artifact.get("answer_spans", [])
+            if isinstance(item, dict)
+        ],
+        "links": deepcopy(artifact.get("links") or []),
+        "summary": deepcopy(artifact.get("summary") or {}),
+    }
+    if isinstance(artifact.get("error"), dict):
+        exported["error"] = deepcopy(artifact["error"])
+    if privacy == "full":
+        exported["answer"] = deepcopy(artifact.get("answer") or {})
+    else:
+        answer = artifact.get("answer")
+        answer = answer if isinstance(answer, dict) else {}
+        hashes = {}
+        for key, value in answer.items():
+            if isinstance(value, str):
+                hashes[key] = _hashed_text(value)
+        if hashes:
+            exported["answer_hashes"] = hashes
+    return exported
 
 
 def _failed(run: dict, *, prompt_view: str, status: str, code: str, message: str,
@@ -215,22 +357,33 @@ def _text_ranges(text: str, *, target_chunk_chars: int) -> list[dict]:
     return ranges
 
 
-def _message_source(message: dict, index: int, *, prompt_view: str) -> dict | None:
+def _message_source(message: dict, index: int, *, prompt_view: str,
+                    receipt_source: dict | None = None) -> dict | None:
     content = message.get("content") if isinstance(message, dict) else None
     if not isinstance(content, str) or not content.strip():
         return None
     role = str(message.get("role") or "unknown")
-    external_id = message.get("source_id", message.get("id"))
+    receipt_source = receipt_source if isinstance(receipt_source, dict) else {}
+    external_id = receipt_source.get(
+        "client_source_id", message.get("source_id", message.get("id"))
+    )
     name = message.get("name")
+    source_label = receipt_source.get("source_label")
     return {
         "id": f"p.m{index:03d}",
         "target": "message",
         "message_index": index,
         "role": role,
-        "name": str(name) if isinstance(name, (str, int)) else None,
+        "name": (
+            str(source_label) if isinstance(source_label, str) and source_label
+            else str(name) if isinstance(name, (str, int)) else None
+        ),
         "external_source_id": (
             str(external_id) if isinstance(external_id, (str, int)) else None
         ),
+        "segment_id": receipt_source.get("segment_id"),
+        "client_source_id": receipt_source.get("client_source_id"),
+        "source_label": source_label,
         "source_kind": "assembled_message" if prompt_view == "assembled_messages" else "message",
         "start": 0,
         "end": len(content),
@@ -238,7 +391,8 @@ def _message_source(message: dict, index: int, *, prompt_view: str) -> dict | No
     }
 
 
-def _sources(messages: list, *, prompt_view: str, block: str | None) -> list[dict]:
+def _sources(messages: list, *, prompt_view: str, block: str | None,
+             receipt_sources: dict[int, dict] | None = None) -> list[dict]:
     sources = []
     # A fallback prompt block is scored through score_arm's block argument.  Treat
     # it as a virtual system source so the map does not silently omit injected
@@ -257,7 +411,10 @@ def _sources(messages: list, *, prompt_view: str, block: str | None) -> list[dic
             "text": block,
         })
     for index, message in enumerate(messages):
-        source = _message_source(message, index, prompt_view=prompt_view)
+        source = _message_source(
+            message, index, prompt_view=prompt_view,
+            receipt_source=(receipt_sources or {}).get(index),
+        )
         if source is not None:
             sources.append(source)
     return sources
@@ -322,7 +479,8 @@ def _partition_units(units: list[dict], count: int) -> list[list[dict]]:
 def segment_context(messages: list, *, block: str | None = None,
                     prompt_view: str = "assembled_messages",
                     max_spans: int = DEFAULT_MAX_CONTEXT_SPANS,
-                    target_chunk_chars: int = DEFAULT_TARGET_CHUNK_CHARS) -> dict:
+                    target_chunk_chars: int = DEFAULT_TARGET_CHUNK_CHARS,
+                    receipt_sources: dict[int, dict] | None = None) -> dict:
     """Segment exact prompt sources into at most ``max_spans`` coarse spans.
 
     No span crosses a message/source boundary.  Every span retains exact source
@@ -330,7 +488,9 @@ def segment_context(messages: list, *, block: str | None = None,
     IDs (``p.mNNN.cNNN``) leave room for later fine descendants.
     """
     limit = max(1, int(max_spans))
-    all_sources = _sources(messages, prompt_view=prompt_view, block=block)
+    all_sources = _sources(
+        messages, prompt_view=prompt_view, block=block, receipt_sources=receipt_sources,
+    )
     selected, omitted_ids = _select_sources(all_sources, limit)
     units = {
         source["id"]: _text_ranges(source["text"], target_chunk_chars=target_chunk_chars)
@@ -346,6 +506,8 @@ def segment_context(messages: list, *, block: str | None = None,
         for coarse_index, group in enumerate(groups):
             start, end = group[0]["start"], group[-1]["end"]
             kind = group[0]["kind"] if len(group) == 1 else "chunk"
+            byte_start = len(source["text"][:start].encode("utf-8"))
+            byte_end = len(source["text"][:end].encode("utf-8"))
             spans.append({
                 "id": f"{source['id']}.c{coarse_index:03d}",
                 "parent_id": source["id"],
@@ -355,8 +517,14 @@ def segment_context(messages: list, *, block: str | None = None,
                 "message_index": source["message_index"],
                 "role": source["role"],
                 "source_kind": source["source_kind"],
+                **({"segment_id": source["segment_id"]} if source.get("segment_id") else {}),
+                **({"client_source_id": source["client_source_id"]}
+                   if source.get("client_source_id") else {}),
+                **({"source_label": source["source_label"]} if source.get("source_label") else {}),
                 "start": start,
                 "end": end,
+                "byte_start": byte_start,
+                "byte_end": byte_end,
                 "text": source["text"][start:end],
                 "child_unit_count": len(group),
             })
@@ -378,6 +546,28 @@ def segment_context(messages: list, *, block: str | None = None,
             "complete_for_selected_spans": True,
         },
     }
+
+
+def _receipt_sources(run: dict) -> dict[int, dict]:
+    """Index canonical Context Receipt identities without regenerating them."""
+    receipt = run.get("context_receipt")
+    if not isinstance(receipt, dict):
+        return {}
+    indexed: dict[int, dict] = {}
+    for segment in receipt.get("delivered") or []:
+        if not isinstance(segment, dict):
+            continue
+        index = segment.get("original_order")
+        if not isinstance(index, int) or isinstance(index, bool):
+            continue
+        identity = {
+            key: segment[key]
+            for key in ("segment_id", "client_source_id", "source_label")
+            if isinstance(segment.get(key), str) and segment.get(key)
+        }
+        if identity:
+            indexed[index] = identity
+    return indexed
 
 
 def _replace_span(messages: list, block: str | None, span: dict) -> tuple[list, str | None, dict]:
@@ -431,8 +621,18 @@ def _refine_span(span: dict, *, target_chunk_chars: int, max_fine_spans: int) ->
             "message_index": span["message_index"],
             "role": span["role"],
             "source_kind": span["source_kind"],
+            **({"segment_id": span["segment_id"]} if span.get("segment_id") else {}),
+            **({"client_source_id": span["client_source_id"]}
+               if span.get("client_source_id") else {}),
+            **({"source_label": span["source_label"]} if span.get("source_label") else {}),
             "start": span["start"] + local_start,
             "end": span["start"] + local_end,
+            "byte_start": span.get("byte_start", 0) + len(
+                span["text"][:local_start].encode("utf-8")
+            ),
+            "byte_end": span.get("byte_start", 0) + len(
+                span["text"][:local_end].encode("utf-8")
+            ),
             "text": span["text"][local_start:local_end],
             "child_unit_count": len(group),
         })
@@ -643,7 +843,9 @@ def context_answer_influence(run: dict, sub, *, max_context_spans: int = DEFAULT
                              max_fine_spans_per_source: int = DEFAULT_MAX_FINE_SPANS_PER_SOURCE,
                              fine_target_chunk_chars: int = DEFAULT_FINE_TARGET_CHUNK_CHARS,
                              check_redundant_pair: bool = True,
-                             clock=time.perf_counter) -> dict:
+                             clock=time.perf_counter,
+                             progress=None,
+                             cancel_requested=None) -> dict:
     """Build one portable ``clozn.context_answer_influence.v1`` evidence object.
 
     Successful maps make ``1 + len(prompt_spans)`` score calls: one baseline (reused for every arm)
@@ -678,6 +880,7 @@ def context_answer_influence(run: dict, sub, *, max_context_spans: int = DEFAULT
         segmented = segment_context(
             messages, block=block, prompt_view=prompt_view,
             max_spans=max_context_spans, target_chunk_chars=target_chunk_chars,
+            receipt_sources=_receipt_sources(run),
         )
         prompt_spans = segmented["spans"]
         prompt_evidence = {
@@ -701,6 +904,8 @@ def context_answer_influence(run: dict, sub, *, max_context_spans: int = DEFAULT
                 started=started, clock=clock, **prompt_evidence,
             )
 
+        coarse_total = 1 + len(prompt_spans)
+        _checkpoint(cancel_requested, progress, "coarse", 0, coarse_total)
         baseline_started = clock()
         baseline_tokens, baseline_ok = rederive.score_arm(
             sub, conditions, messages=messages, block=block,
@@ -721,6 +926,7 @@ def context_answer_influence(run: dict, sub, *, max_context_spans: int = DEFAULT
                 started=started, clock=clock, timing_detail={"baseline_ms": _round(baseline_ms)},
                 **prompt_evidence,
             )
+        _checkpoint(cancel_requested, progress, "coarse", 1, coarse_total)
 
         answer_spans, answer = _answer_spans(baseline, str(conditions.get("response") or ""))
 
@@ -743,7 +949,11 @@ def context_answer_influence(run: dict, sub, *, max_context_spans: int = DEFAULT
         matrix = []
         controls = []
         intervention_times = []
-        for span in prompt_spans:
+        for coarse_completed, span in enumerate(prompt_spans, start=2):
+            _checkpoint(
+                cancel_requested, progress, "coarse",
+                coarse_completed - 1, coarse_total,
+            )
             ok, row, control, arm_ms = _score_one(span)
             intervention_times.append({"context_span_id": span["id"], "score_ms": _round(arm_ms)})
             if not ok:
@@ -762,6 +972,10 @@ def context_answer_influence(run: dict, sub, *, max_context_spans: int = DEFAULT
                 )
             matrix.append(row)
             controls.append(control)
+            _checkpoint(
+                cancel_requested, progress, "coarse",
+                coarse_completed, coarse_total,
+            )
 
         floor = max(0.0, float(min_abs_delta_nats))
 
@@ -778,8 +992,9 @@ def context_answer_influence(run: dict, sub, *, max_context_spans: int = DEFAULT
             ),
             key=lambda item: (-item[0], item[1]),
         )
+        refinement_plan = []
         for magnitude, _span_id, coarse_index in strongest_first:
-            if len(refined_span_ids) >= max(0, int(max_refined_sources)):
+            if len(refinement_plan) >= max(0, int(max_refined_sources)):
                 break
             if magnitude < floor:
                 break
@@ -790,7 +1005,17 @@ def context_answer_influence(run: dict, sub, *, max_context_spans: int = DEFAULT
             )
             if len(fine_spans) < 2:
                 continue
+            refinement_plan.append((coarse_span, fine_spans))
+
+        refine_total = sum(len(fine_spans) for _, fine_spans in refinement_plan)
+        refine_completed = 0
+        _checkpoint(cancel_requested, progress, "refine", 0, refine_total)
+        for coarse_span, fine_spans in refinement_plan:
             for fine_span in fine_spans:
+                _checkpoint(
+                    cancel_requested, progress, "refine",
+                    refine_completed, refine_total,
+                )
                 ok, row, control, arm_ms = _score_one(fine_span)
                 intervention_times.append({"context_span_id": fine_span["id"], "score_ms": _round(arm_ms)})
                 if not ok:
@@ -813,6 +1038,11 @@ def context_answer_influence(run: dict, sub, *, max_context_spans: int = DEFAULT
                 prompt_spans.append(fine_span)
                 matrix.append(row)
                 controls.append(control)
+                refine_completed += 1
+                _checkpoint(
+                    cancel_requested, progress, "refine",
+                    refine_completed, refine_total,
+                )
             refined_span_ids.append(coarse_span["id"])
         refined_span_ids = frozenset(refined_span_ids)
 
@@ -841,6 +1071,7 @@ def context_answer_influence(run: dict, sub, *, max_context_spans: int = DEFAULT
 
         # Bounded check: does the strongest redundant pair of context spans behave additively or
         # overlap when replaced together? One extra score call at most, only when >= 2 spans clear.
+        _checkpoint(cancel_requested, progress, "finalize", 0, 1)
         redundancy = (
             _redundancy_check(
                 sub, conditions, messages, block, prompt_spans=prompt_spans, matrix=matrix,
@@ -926,7 +1157,10 @@ def context_answer_influence(run: dict, sub, *, max_context_spans: int = DEFAULT
                 if key != "score_ms"
             }
         result["artifact_sha256"] = _digest(artifact_payload)
+        _checkpoint(cancel_requested, progress, "finalize", 1, 1)
         return result
+    except InfluenceComputationCancelled:
+        raise
     except Exception as exc:
         return _failed(
             run, prompt_view=prompt_view, status="error", code="influence_map_error",

@@ -15,9 +15,9 @@ Wire shape:
       -> 400 missing ?a=/?b=, or the comparison engine reported a non-ok result (malformed run content)
       -> 404 run(s) not found
 
-POST /runs/compare/replay (the spec's named execution endpoint) is deliberately NOT implemented here:
-actually running a proposed swap needs a live substrate/GPU (clozn.replay.replay.replay()) and is a
-separately-scoped, deferred slice -- this module only ever reads already-recorded runs.
+  POST /runs/compare/test
+      -> a bounded clozn.run-change-test.v1 artifact. `plan`/`dry_run` is model-free; live execution
+         requires the gateway's active substrate and persists each control/treatment arm as a child run.
 """
 from __future__ import annotations
 
@@ -35,17 +35,35 @@ def try_get(h, p):
 
     q = parse_qs(urlparse(h.path).query)
     rid_a, rid_b = (q.get("a") or [""])[0], (q.get("b") or [""])[0]
-    if not rid_a or not rid_b:
-        h._json(400, {"error": "need ?a=<run_id>&b=<run_id> -- two recorded run ids"})
+    against = (q.get("against") or [""])[0]
+    pinned = (q.get("reference") or [""])[0]
+    include_children = (q.get("include_child_runs") or [""])[0] in ("1", "true", "yes")
+    if not rid_b:
+        h._json(400, {"error": "need ?b=<candidate_run_id> and either ?a=<reference_run_id> "
+                               "or ?against=previous_compatible|same_session|same_client|same_task"})
         return True
 
-    run_a, run_b = runlog.get_run(rid_a), runlog.get_run(rid_b)
+    run_b = runlog.get_run(rid_b)
+    selection = None
+    if run_b is not None and not rid_a:
+        mode = "pinned" if pinned else against
+        selected = run_diff.select_reference_run(
+            run_b, runlog.iter_runs(), mode=mode, reference_run_id=pinned or None,
+            include_child_runs=include_children,
+        )
+        if not selected.get("ok"):
+            h._json(400, {"error": selected.get("error") or "comparison selection failed"})
+            return True
+        run_a, selection = selected["run"], selected["selection"]
+        rid_a = run_a["id"]
+    else:
+        run_a = runlog.get_run(rid_a)
     missing = [rid for rid, run in ((rid_a, run_a), (rid_b, run_b)) if run is None]
     if missing:
         h._json(404, {"error": "run(s) not found: " + ", ".join(missing), "missing": missing})
         return True
 
-    result = run_diff.compare_runs(run_a, run_b)
+    result = run_diff.compare_runs(run_a, run_b, selection=selection)
     if not result.get("ok"):
         h._json(400, {"error": result.get("error") or "comparison failed for an unknown reason"})
         return True
@@ -55,4 +73,56 @@ def try_get(h, p):
         result["replay_plan"] = run_diff.plan_replay(run_a, run_b, result)
 
     h._json(200, result)
+    return True
+
+
+def try_post(h, p, body):
+    if p != "/runs/compare/test":
+        return False
+
+    import clozn.runs.store as runlog
+    from clozn.replay import controlled
+
+    body = body if isinstance(body, dict) else {}
+    rid_a, rid_b = str(body.get("a") or ""), str(body.get("b") or "")
+    if not rid_a or not rid_b:
+        h._json(400, {"error": "need body fields a and b with two recorded run ids"})
+        return True
+    run_a, run_b = runlog.get_run(rid_a), runlog.get_run(rid_b)
+    missing = [rid for rid, run in ((rid_a, run_a), (rid_b, run_b)) if run is None]
+    if missing:
+        h._json(404, {"error": "run(s) not found: " + ", ".join(missing), "missing": missing})
+        return True
+
+    tests = body.get("tests")
+    if isinstance(tests, str):
+        tests = [item.strip() for item in tests.split(",") if item.strip()]
+    dry_run = bool(body.get("dry_run") or body.get("plan"))
+    try:
+        max_runs = body.get("max_runs", controlled.DEFAULT_MAX_RUNS)
+        max_seconds = body.get("max_seconds", controlled.DEFAULT_MAX_SECONDS)
+        match_criterion = body.get("match_criterion", "exact_output")
+        if dry_run:
+            document = controlled.plan_change_tests(
+                run_a, run_b, tests=tests, max_runs=max_runs, max_seconds=max_seconds,
+                match_criterion=match_criterion,
+            )
+        else:
+            from clozn.server import app as ctx
+            substrate = ctx.active_sub(h)
+            if not (substrate and callable(getattr(substrate, "chat", None))):
+                h._json(503, {"error": "controlled tests require a ready product model worker"})
+                return True
+            document = controlled.execute_change_tests(
+                run_a, run_b, runner=controlled.SubstrateReplayRunner(substrate),
+                tests=tests, max_runs=max_runs, max_seconds=max_seconds,
+                match_criterion=match_criterion,
+            )
+    except controlled.ControlledTestError as exc:
+        h._json(400, {"error": str(exc)})
+        return True
+    except Exception as exc:
+        h._json(500, {"error": f"controlled tests failed: {type(exc).__name__}: {exc}"})
+        return True
+    h._json(200, document)
     return True

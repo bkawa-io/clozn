@@ -30,11 +30,11 @@ def test_default_families_include_every_declared_step_family():
     assert any(k.startswith("identity_diff:") for k in kinds)
     assert any(k.startswith("context_diff:") for k in kinds)
     assert "template_swap" in kinds        # replay family, always not_run in this build
-    assert "quant_export_diff" in kinds
-    assert "tool_contract_diff" in kinds
+    assert any(kind.startswith("quant_export_diff:") for kind in kinds)
+    assert any(kind.startswith("tool_contract_diff:") for kind in kinds)
     assert "internal_localization" in kinds
-    unimplemented_kinds = {"template_swap", "context_swap", "sampling_swap", "quant_export_diff",
-                           "tool_contract_diff", "internal_localization"}
+    unimplemented_kinds = {"template_swap", "context_swap", "sampling_swap",
+                           "internal_localization"}
     for kind in unimplemented_kinds:
         step = next(s for s in doc["steps"] if s["kind"] == kind)
         assert step["status"] == "not_run"
@@ -99,7 +99,8 @@ def test_unimplemented_steps_rejects_an_unknown_family():
 
 def test_all_families_covers_both_implemented_and_stub_families():
     assert set(ALL_FAMILIES) == {
-        "identity", "context", "replay", "quant_export", "tool_contract", "internal_localization",
+        "identity", "context", "sampling", "replay", "quant_export", "tool_contract",
+        "internal_localization",
     }
 
 
@@ -111,3 +112,71 @@ def test_summary_is_recomputable_and_matches_rules_classify_directly():
         families=["identity"],
     )
     assert doc["summary"] == classify(doc["steps"])
+
+
+def _controlled_document(*, status="completed", test_status="causally_supported"):
+    return {
+        "schema_version": "clozn.run-change-test.v1",
+        "generated_at": "2026-07-28T00:00:00+00:00",
+        "run_a": "run_b", "run_b": "run_c", "status": status, "dry_run": False,
+        "match_criterion": {"kind": "exact_output", "note": "exact hashes only"},
+        "budget": {
+            "max_runs": 2, "max_seconds": 30, "runs_used": 2, "duration_ms": 5,
+            "remaining_runs": 0, "remaining_seconds": 29.995,
+            **({"stop_reason": "budget_exhausted"} if status == "budget_exhausted" else {}),
+        },
+        "tests": [{
+            "kind": "context", "status": test_status, "ran": True, "runs_used": 2,
+            "duration_ms": 5,
+            "budget": {
+                "max_runs": 2, "max_seconds": 30, "runs_used": 2, "duration_ms": 5,
+                "remaining_runs": 0, "remaining_seconds": 29.995,
+                **({"stop_reason": "budget_exhausted"} if status == "budget_exhausted" else {}),
+            },
+            "evidence": [
+                {"run_id": "run_control", "arm": "control"},
+                {"run_id": "run_treatment", "arm": "treatment"},
+            ],
+            "arms": [
+                {"name": "control", "status": "completed", "duration_ms": 2,
+                 "match_target": "candidate", "run_id": "run_control"},
+                {"name": "treatment", "status": "completed", "duration_ms": 3,
+                 "match_target": "baseline", "run_id": "run_treatment"},
+            ],
+            "reason": "controlled recovery",
+        }],
+        "summary": {
+            "classification": "context" if test_status == "causally_supported" else "undetermined",
+            "causally_supported": ["context"] if test_status == "causally_supported" else [],
+            "entangled": False,
+        },
+    }
+
+
+def test_controlled_test_artifact_maps_child_runs_and_cost_into_triage_steps():
+    controlled = _controlled_document()
+    doc = build_triage_artifact(
+        baseline_run=_run("run_b"), candidate_run=_run("run_c"),
+        families=["replay"], max_runs=2, max_seconds=30,
+        controlled_test_artifact=controlled,
+    )
+    step = doc["steps"][0]
+    assert step["kind"] == "context_swap"
+    assert step["status"] == "causally_supported"
+    assert step["runs_used"] == 2
+    assert step["artifact_refs"] == ["run_control", "run_treatment"]
+    assert doc["summary"]["classification"] == "context_swap"
+    assert doc["controlled_tests"] == controlled
+
+
+def test_budget_exhaustion_marks_later_unimplemented_tiers():
+    controlled = _controlled_document(status="budget_exhausted", test_status="inconclusive")
+    doc = build_triage_artifact(
+        baseline_run=_run("run_b"), candidate_run=_run("run_c"),
+        families=["replay", "internal_localization"], deep=True,
+        max_runs=2, max_seconds=30, controlled_test_artifact=controlled,
+    )
+    later = [s for s in doc["steps"] if s["kind"] == "internal_localization"]
+    assert later
+    assert all(s["stop_reason"] == "budget_exhausted" for s in later)
+    assert all(s["reason"].startswith("budget_exhausted") for s in later)

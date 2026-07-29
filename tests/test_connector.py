@@ -83,8 +83,10 @@ def test_aider_connector_apply_then_undo_round_trips(tmp_path):
     original = config.read_bytes()
     connector = conn.AiderConnector(config_path=config)
 
-    transaction = connector.apply(base_url="http://127.0.0.1:8080", model="clozn", api_key="local",
-                                  state_path=state)
+    plan = connector.plan(base_url="http://127.0.0.1:8080", model="clozn", api_key="local",
+                          state_path=state)
+    transaction = connector.apply(plan, base_url="http://127.0.0.1:8080", model="clozn",
+                                  api_key="local", state_path=state)
     assert transaction.app == "aider"
     assert transaction.report["status"] == "updated"
     assert config.read_bytes() != original
@@ -93,4 +95,25 @@ def test_aider_connector_apply_then_undo_round_trips(tmp_path):
     assert undone.app == "aider"
     assert undone.status == "restored"
     assert config.read_bytes() == original
+    assert not state.exists()
+
+
+def test_aider_connector_apply_refuses_drift_since_plan(tmp_path):
+    config = tmp_path / ".aider.conf.yml"
+    state = tmp_path / "state.json"
+    config.write_text("dark-mode: true\n", encoding="utf-8")
+    connector = conn.AiderConnector(config_path=config)
+    kwargs = {
+        "base_url": "http://127.0.0.1:8080",
+        "model": "clozn",
+        "api_key": "local",
+        "state_path": state,
+    }
+    plan = connector.plan(**kwargs)
+    config.write_text("external: edit\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="changed since preview"):
+        connector.apply(plan, **kwargs)
+
+    assert config.read_text(encoding="utf-8") == "external: edit\n"
     assert not state.exists()

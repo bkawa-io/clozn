@@ -98,6 +98,27 @@ def test_delivered_segments_carry_order_label_and_hash():
     assert delivered[0]["segment_id"] != delivered[1]["segment_id"]
 
 
+def test_explicit_client_source_identity_is_carried_and_never_regenerated():
+    receipt = build_context_receipt(
+        messages=[
+            {
+                "role": "user",
+                "content": "supplied document",
+                "source_id": "doc-stable-7",
+                "source_label": "Policy handbook",
+            }
+        ],
+        assembled_messages=[{"role": "user", "content": "supplied document"}],
+        run_id="run_source",
+    )
+    delivered = receipt["delivered"][0]
+    assembled = receipt["assembled"][0]
+    assert delivered["client_source_id"] == "doc-stable-7"
+    assert delivered["source_label"] == "Policy handbook"
+    assert assembled["segment_id"] == delivered["segment_id"]
+    assert assembled["client_source_id"] == "doc-stable-7"
+
+
 def test_repeated_identical_message_gets_disambiguated_id():
     receipt = build_context_receipt(
         messages=[{"role": "user", "content": "yes"}, {"role": "user", "content": "yes"}],
@@ -266,7 +287,24 @@ def test_rendered_sha256_and_exact_token_count():
     import hashlib
     assert receipt["rendered"]["sha256"] == hashlib.sha256(b"THE EXACT PROMPT").hexdigest()
     assert receipt["rendered"]["token_count"] == 42
+    assert receipt["rendered"]["tokens"] == 42
+    assert receipt["rendered"]["bytes"] == len(b"THE EXACT PROMPT")
+    assert receipt["rendered"]["content_available"] is True
     assert receipt["rendered"]["estimated"] is False
+
+
+def test_raw_worker_finish_reason_survives_normalization():
+    out = normalize_termination(
+        "stop", None,
+        {"finish_reason_raw": "eos", "finish_reason_source": "worker_event"},
+        {"generated_tokens": 3},
+    )
+    assert out == {
+        "reason": "eos",
+        "reason_raw": "eos",
+        "source": "worker_event",
+        "generated_tokens": 3,
+    }
 
 
 def test_rendered_omitted_when_nothing_measurable():
@@ -443,6 +481,33 @@ def test_context_detailed_shows_segments_and_transformations(tmp_path, monkeypat
     assert "SEGMENTS" in output
     assert "TRANSFORMATIONS" in output
     assert "template_transformed" in output
+
+
+def test_context_export_is_metadata_only_and_refuses_overwrite(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
+    rid = runlog.record(
+        source="cli",
+        messages=[{"role": "user", "content": "PRIVATE PROMPT"}],
+        assembled_messages=[{"role": "user", "content": "PRIVATE PROMPT"}],
+        final_prompt="RENDERED PRIVATE PROMPT",
+        response="PRIVATE RESPONSE",
+        started=1.0,
+    )
+    target = tmp_path / "receipt.json"
+    assert cli.main([
+        "context", "export", rid, "--out", str(target), "--privacy", "metadata_only"
+    ]) == 0
+    capsys.readouterr()
+    exported = json.loads(target.read_text(encoding="utf-8"))
+    assert exported["schema_version"] == "clozn.context-receipt-export.v1"
+    assert exported["privacy"] == "metadata_only"
+    assert exported["source_receipt_sha256"]
+    encoded = json.dumps(exported)
+    assert "PRIVATE PROMPT" not in encoded
+    assert "PRIVATE RESPONSE" not in encoded
+    assert cli.main([
+        "context", "export", rid, "--out", str(target), "--privacy", "metadata_only"
+    ]) != 0
 
 
 def test_cli_renders_a_legacy_shaped_run_without_crashing(tmp_path, monkeypatch, capsys):

@@ -1,0 +1,46 @@
+{
+  "schema_version": "clozn.run-change-test.v1",
+  "generated_at": "2026-07-28T00:00:00+00:00",
+  "run_a": "run_a",
+  "run_b": "run_b",
+  "status": "planned",
+  "dry_run": true,
+  "match_criterion": {
+    "kind": "exact_output",
+    "note": "exact recorded evidence only"
+  },
+  "budget": {
+    "max_runs": 2,
+    "max_seconds": 30,
+    "runs_used": 0,
+    "duration_ms": 0,
+    "remaining_runs": 2,
+    "remaining_seconds": 30
+  },
+  "tests": [
+    {
+      "kind": "context",
+      "status": "not_run",
+      "ran": false,
+      "runs_used": 0,
+      "duration_ms": 0,
+      "budget": {
+        "max_runs": 2,
+        "max_seconds": 30,
+        "runs_used": 0,
+        "duration_ms": 0,
+        "remaining_runs": 2,
+        "remaining_seconds": 30
+      },
+      "evidence": [],
+      "arms": [],
+      "stop_reason": "planned",
+      "reason": "planned only"
+    }
+  ],
+  "summary": {
+    "classification": "undetermined",
+    "causally_supported": [],
+    "entangled": false
+  }
+}

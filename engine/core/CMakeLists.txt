@@ -12,6 +12,33 @@ project(clozn_core LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Build identity is part of the install qualification contract. The Python package remains the release
+# version source of truth; release automation may set a unique build ID, but it may not independently
+# override the engine version or llama.cpp source revision.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/../../clozn/__init__.py" _clozn_version_line
+     REGEX "^__version__[ \t]*=")
+string(REGEX MATCH "\"([^\"]+)\"" _clozn_version_match "${_clozn_version_line}")
+set(CLOZN_ENGINE_VERSION "${CMAKE_MATCH_1}")
+if(NOT CLOZN_ENGINE_VERSION)
+    message(FATAL_ERROR "could not derive CLOZN_ENGINE_VERSION from clozn/__init__.py")
+endif()
+
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bootstrap_llama.py" _clozn_llama_commit_line
+     REGEX "^COMMIT[ \t]*=")
+string(REGEX MATCH "\"([0-9a-f]+)\"" _clozn_llama_commit_match "${_clozn_llama_commit_line}")
+set(CLOZN_LLAMA_CPP_COMMIT "${CMAKE_MATCH_1}")
+string(LENGTH "${CLOZN_LLAMA_CPP_COMMIT}" _clozn_llama_commit_length)
+if(NOT _clozn_llama_commit_length EQUAL 40)
+    message(FATAL_ERROR "could not derive the pinned llama.cpp commit from bootstrap_llama.py")
+endif()
+
+set(CLOZN_ENGINE_BUILD_ID "development" CACHE STRING
+    "Immutable release build identifier embedded in clozn-server")
+if(NOT CLOZN_ENGINE_BUILD_ID MATCHES "^[A-Za-z0-9._+-]+$")
+    message(FATAL_ERROR
+        "CLOZN_ENGINE_BUILD_ID must contain only letters, digits, dot, underscore, plus, or hyphen")
+endif()
+
 # clozn_runtime: the sampler + the event spine + the attention-mask builder. Backend-free —
 # clozn/sample.hpp speaks only to the abstract ForwardResult/Candidate/Mask types, so no model
 # backend lives here either. blocks.cpp survives only for attention_mask() (still called, always
@@ -194,6 +221,18 @@ if(CLOZN_BUILD_SERVE AND CLOZN_BUILD_GGML)
         serve/routes_whitebox.cpp
         serve/routes_state.cpp
         ${_vendor}/cpp-httplib/httplib.cpp)
+    if(GGML_CUDA)
+        set(_clozn_engine_backend "cuda")
+    elseif(GGML_METAL)
+        set(_clozn_engine_backend "metal")
+    else()
+        set(_clozn_engine_backend "cpu")
+    endif()
+    target_compile_definitions(clozn-server PRIVATE
+        CLOZN_ENGINE_VERSION="${CLOZN_ENGINE_VERSION}"
+        CLOZN_ENGINE_BUILD_ID="${CLOZN_ENGINE_BUILD_ID}"
+        CLOZN_ENGINE_BACKEND="${_clozn_engine_backend}"
+        CLOZN_LLAMA_CPP_COMMIT="${CLOZN_LLAMA_CPP_COMMIT}")
     target_include_directories(clozn-server PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/serve ${_vendor}/cpp-httplib ${_vendor})
     target_link_libraries(clozn-server PRIVATE clozn_ggml llama-common)
     if(CLOZN_BUILD_SAE)

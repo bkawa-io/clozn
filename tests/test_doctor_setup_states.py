@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 
 import pytest
 
@@ -67,25 +66,37 @@ def test_check_engine_deep_false_never_launches_anything(isolated, tmp_path, mon
     assert "--deep" not in result["detail"]
 
 
-def test_check_engine_deep_true_runs_a_process_start_check_and_warns_on_failure(isolated, tmp_path):
+def test_check_engine_deep_true_runs_build_identity_check_and_warns_on_failure(isolated, tmp_path):
     """The fake exe above is not a real Win32/ELF binary, so a genuine subprocess launch attempt fails --
     this is exactly the "found_but_not_launchable" case qualify_entrypoint()/four_state_report() define,
-    proving --deep actually exercises the process-start check rather than trusting the file's existence."""
+    proving --deep actually exercises build identity rather than trusting the file's existence."""
     _touch_exe(tmp_path, "engine_core/build-cpu/clozn-server.exe")
     result = doctor._check_engine(deep=True)
     assert result["status"] == "WARN"
     assert "--deep" in result["detail"]
 
 
-def test_check_engine_deep_true_passes_for_a_genuinely_launchable_binary(isolated, tmp_path):
-    import shutil
-    exe_path = tmp_path / "engine_core" / "build-cpu" / ("clozn-server.exe" if sys.platform == "win32"
-                                                          else "clozn-server")
-    exe_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy(sys.executable, exe_path)
+def test_check_engine_deep_true_passes_for_qualified_build_identity(
+        isolated, tmp_path, monkeypatch):
+    _touch_exe(tmp_path, "engine_core/build-cpu/clozn-server.exe")
+    build_info = {
+        "engine_version": "0.1.0",
+        "build_id": "development",
+        "protocol_version": "1.0",
+        "backend": "cpu",
+        "llama_cpp_commit": "88a39274ecf88ba11686acd357b59685b1cbf03d",
+        "feature_flags": {"lora": True},
+    }
+    monkeypatch.setattr(
+        "clozn.setup.install.qualify_entrypoint",
+        lambda argv, *, expected=None: {
+            "ran": True, "qualified": True, "returncode": 0,
+            "stdout": json.dumps(build_info), "stderr": "", "build_info": build_info,
+        },
+    )
     result = doctor._check_engine(deep=True)
     assert result["status"] == "OK"
-    assert "process-start check ran" in result["detail"]
+    assert "identity verified" in result["detail"]
 
 
 def test_check_core_inference_qualification_is_always_warn_not_ok():

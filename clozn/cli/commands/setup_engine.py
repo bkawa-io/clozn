@@ -111,8 +111,8 @@ def _emit_install_result(result: dict, as_json: bool, *, label: str) -> int:
         print(f"clozn {label}: installed and activated {result['install_key']}")
     engine_state = states["compatible_engine_installed"]
     print(f"  compatible engine installed: {engine_state['status']}")
-    if engine_state["status"] == "found_but_not_launchable":
-        print(f"    WARNING: {engine_state.get('process_start_check', {}).get('error')}")
+    if engine_state["status"] in ("found_but_not_launchable", "found_but_not_qualified"):
+        print(f"    WARNING: {engine_state.get('build_identity_check', {}).get('error')}")
     print(f"  core inference qualification: {states['core_inference_qualification']['status']} "
          f"({states['core_inference_qualification']['reason']})")
     print(f"  white-box qualification: {states['white_box_qualification']['status']} "

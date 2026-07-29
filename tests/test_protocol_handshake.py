@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "protocol" / "fixtures" / "handshake.json"
 CPP_HEADER = ROOT / "engine" / "core" / "serve" / "server_shared.hpp"
 CPP_HEALTH = ROOT / "engine" / "core" / "serve" / "server_main.cpp"
+CPP_CMAKE = ROOT / "engine" / "core" / "CMakeLists.txt"
 
 
 @pytest.fixture(scope="module")
@@ -55,6 +56,29 @@ def test_cpp_health_capability_keys_match_fixture(fixture):
     assert block, "capabilities literal not found in the /health handler"
     keys = set(re.findall(r'\{"(\w+)",', block.group(1)))
     assert keys == set(fixture["capabilities"])
+
+
+def test_cpp_model_free_build_info_contract_is_embedded():
+    """Setup qualification must be possible before a GGUF is parsed or loaded."""
+    src = CPP_HEALTH.read_text(encoding="utf-8")
+    required = {
+        "engine_version", "build_id", "protocol_version", "backend",
+        "llama_cpp_commit", "feature_flags",
+    }
+    block = re.search(r"static json engine_build_info\(\) \{(.*?)\n\}", src, re.DOTALL)
+    assert block, "engine_build_info() not found in server_main.cpp"
+    assert required.issubset(set(re.findall(r'\{"(\w+)",', block.group(1))))
+    version_branch = src.index('std::string(argv[1]) == "--version"')
+    usage_or_model = src.index("if (argc < 2)")
+    assert version_branch < usage_or_model, "build-info path must run before model argument/loading"
+
+    cmake = CPP_CMAKE.read_text(encoding="utf-8")
+    for define in (
+        "CLOZN_ENGINE_VERSION", "CLOZN_ENGINE_BUILD_ID",
+        "CLOZN_ENGINE_BACKEND", "CLOZN_LLAMA_CPP_COMMIT",
+    ):
+        assert f'{define}="${{{define if define != "CLOZN_ENGINE_BACKEND" else "_clozn_engine_backend"}}}"' \
+            in cmake
 
 
 def test_supervisor_accepts_same_major():

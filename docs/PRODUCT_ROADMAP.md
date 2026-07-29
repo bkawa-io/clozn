@@ -1,5 +1,9 @@
 # Clozn Product Roadmap — 2026-07-20
 
+> **Historical planning snapshot.** Status statements below describe the repository at their recorded
+> dates and may name surfaces later removed. Use [CAPABILITIES.md](CAPABILITIES.md) for current-user
+> capability and release status.
+
 **The ordering authority for product work.** Synthesized from four inputs: the two independent
 positioning audits of 2026-07-20 (`notes/PRODUCT_POSITIONING_2026-07.md` = market research per
 persona; `notes/POSITIONING_AUDIT_B_2026-07.md` = repo/capability audit + feature matrices), the
@@ -90,7 +94,7 @@ below are still queued/not started. Commit IDs are included so this snapshot can
 | Phase 1.2 — Experiment object v0 | **DONE** | `clozn experiment run/show` executes target + guard cases × base/tuned/quant/prompt/dial variants × seeds, retains instrumented run evidence, and supports per-cell drill-down (`64d0f20`). |
 | Phase 1.3 — reproduction receipt | **DONE** | Runs and exported receipt bundles carry model SHA-256, tokenizer/template rendering fingerprint, sampler/seed metadata, engine build when exposed, and Clozn version; CLI runs use the same identity producer (`0d62101`, `04af391`). Missing upstream identity remains visibly omitted rather than fabricated. |
 | Phase 1.4 — headless CI gate | **DONE** | `clozn ci baseline/check` has deterministic exit codes, budgets, identity policy, and JSON reports (`64d5c8e`). `clozn ci check --experiment` validates a complete Phase-1.2 artifact, recomputes paired target/guard changes from raw cells, applies per-candidate budgets, and can require stable model identity (`fc7e28d`). |
-| Phase 1.5 — deployment equivalence v0 | **DONE** | `clozn validate-export` checks tokenizer/template/BOS-EOS/vocab compatibility plus known-answer behavioral drift (`b61c505`). |
+| Phase 1.5 — deployment equivalence | **IN PROGRESS; local acceptance MET** | `clozn validate-export` now performs the LoRA closeout's three-arm base/base-plus-adapter/merged check, fails on static or effective identity drift, gates teacher-forced deltas, and writes `clozn.adapter-export-receipt.v1`. Model-free known-good and deliberately bad merges are covered; a live known merged GGUF qualification remains required. |
 | Phase 1.6 — positioning collateral | **DONE** | README now leads with Model CI + an inspectable no-switch runtime and links the real Qwen reasoning-SFT case study (`5d6439f`). The worked experiment found one target gain and one structured-output guard regression; the strict identity-qualified CI policy rejected it. |
 | Phase 2.1 — Ollama NDJSON streaming | **DONE** | Default-stream semantics, NDJSON framing, cancellation, finish reasons, and one instrumented final run are implemented and tested (`fd4f68e`). |
 | Phase 2.2 — honest Ollama fields/tags | **DONE** | Unsupported top-level/options fields are rejected, supported sampler options are forwarded, and `/api/tags` uses the real digest or omits it (`fd4f68e`). |

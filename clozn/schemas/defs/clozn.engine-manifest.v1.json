@@ -31,7 +31,10 @@
   "$defs": {
     "artifact": {
       "type": "object",
-      "required": ["os", "arch", "backend", "url", "sha256", "size_bytes", "entrypoint"],
+      "required": [
+        "os", "arch", "backend", "url", "sha256", "size_bytes", "entrypoint",
+        "build_id", "llama_cpp_commit", "feature_flags"
+      ],
       "properties": {
         "os": {
           "type": "string",
@@ -69,6 +72,21 @@
           "type": "string",
           "description": "Path to the clozn-server executable, relative to the archive root once extracted (e.g. 'bin/clozn-server.exe').",
           "minLength": 1
+        },
+        "build_id": {
+          "type": "string",
+          "description": "Immutable release-pipeline identifier embedded into this exact clozn-server build. Development builds report `development`; published artifacts must use a release-unique value.",
+          "pattern": "^[A-Za-z0-9._+\\-]+$"
+        },
+        "llama_cpp_commit": {
+          "type": "string",
+          "description": "Full pinned upstream llama.cpp commit embedded into the binary at build time.",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "feature_flags": {
+          "type": "object",
+          "description": "Compile-time feature claims that must exactly match `clozn-server --version --json`.",
+          "additionalProperties": { "type": "boolean" }
         }
       }
     }

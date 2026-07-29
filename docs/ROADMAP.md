@@ -1,5 +1,9 @@
 # Clozn Roadmap
 
+> **Historical planning snapshot.** This document preserves sequencing and rationale from the July 2026
+> build-out; it is not the current capability or release contract. Use
+> [CAPABILITIES.md](CAPABILITIES.md) for merged/released/qualified status.
+
 The consolidated map: the thesis, what's shipped, and where the open work lives.
 
 > **The thesis:** as hardware commoditizes capability, **control becomes the product** — trust,

@@ -357,6 +357,7 @@ def try_post(h, p, body):
         _api_error(h, 400, str(exc), param="clozn_task", code="invalid_parameter")
         return True
     structured = body.pop("_structured_contract", None)
+    source_metadata = body.pop("_clozn_sources", [])
     sub = ctx.active_sub(h)
     if not (sub and getattr(sub, "chat", None)):
         h._json(503, {"error": {"message": "model worker unavailable", "type": "service_unavailable"}})
@@ -393,6 +394,14 @@ def try_post(h, p, body):
         _api_error(h, 400, str(exc), param="clozn_guard", code="invalid_parameter")
         return True
     if guard_spec is not None:
+        if source_metadata:
+            _api_error(
+                h, 409,
+                "clozn_sources cannot be combined with clozn_guard in v1 because the guarded "
+                "journal path cannot yet preserve the supplied source identity",
+                param="clozn_sources", code="unsupported_parameter",
+            )
+            return True
         if body.get("stream"):
             # STREAMING IS DEFERRED (see the module docstring): a streamed reply's early tokens are
             # already delivered before any correction could happen, so silently ignoring the guard on a
@@ -434,6 +443,12 @@ def try_post(h, p, body):
         return True
 
     delivered_messages = msgs
+    journal_delivered_messages = [dict(message) for message in delivered_messages]
+    for source in source_metadata:
+        index = source["message_index"]
+        journal_delivered_messages[index]["source_id"] = source["source_id"]
+        if source.get("label"):
+            journal_delivered_messages[index]["source_label"] = source["label"]
     from clozn.server.generation_gateway import apply_corrective_policy
     msgs, corrective_evidence = apply_corrective_policy(h, delivered_messages)
     if structured and corrective_evidence:
@@ -445,7 +460,9 @@ def try_post(h, p, body):
             code="corrective_policy_inapplicable",
         )
         return True
-    journal_messages = delivered_messages if corrective_evidence else None
+    journal_messages = (
+        journal_delivered_messages if corrective_evidence or source_metadata else None
+    )
     output_processor = None
     native_structured = None
     if structured:

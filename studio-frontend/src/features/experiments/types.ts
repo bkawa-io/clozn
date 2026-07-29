@@ -32,6 +32,24 @@ export interface SuiteAggregate {
 /** variant name -> per-suite aggregate. A variant/suite pair is absent, not zeroed, if never run. */
 export type Aggregates = Record<string, Partial<Record<SuiteName, SuiteAggregate>>>;
 
+export interface SuiteFingerprint {
+  algorithm: string;
+  sha256: string;
+}
+
+export interface VcsMetadata {
+  repository?: string;
+  commit?: string;
+  branch?: string;
+}
+
+export interface ArtifactProvenance {
+  workflowUrl?: string;
+  artifactUrl?: string;
+  localOpenCommand?: string;
+  expiresAt?: string;
+}
+
 export interface ComparisonLabel {
   case: string;
   seed: number;
@@ -62,6 +80,9 @@ export interface ExperimentListEntry {
   seeds: number[];
   cellCount: number;
   aggregates: Aggregates | null;
+  suiteFingerprint: SuiteFingerprint | null;
+  vcs: VcsMetadata | null;
+  artifactProvenance: ArtifactProvenance | null;
 }
 
 export interface BrokenResult {
@@ -133,6 +154,9 @@ export interface ExperimentDetail {
   createdAt: string | null;
   manifest: Manifest;
   manifestSha256: string | null;
+  suiteFingerprint: SuiteFingerprint | null;
+  vcs: VcsMetadata | null;
+  artifactProvenance: ArtifactProvenance | null;
   seeds: number[];
   summary: ExperimentSummary;
   /** Every cell in the case x variant x seed matrix, thinned -- see ThinCell. */
@@ -165,4 +189,70 @@ export interface FullCell extends ThinCell {
   response: string | null;
   receipts: Record<string, unknown> | null;
   run: CellRun | null;
+}
+
+export interface TrendPoint {
+  experimentId: string;
+  name: string;
+  createdAt: string | null;
+  suiteFingerprint: SuiteFingerprint;
+  identity: Record<string, string[]>;
+  vcs: VcsMetadata | null;
+  artifactProvenance: ArtifactProvenance | null;
+  baselineVariant: string | null;
+  aggregates: Aggregates;
+  comparisonCounts: Record<string, Record<string, number>>;
+  errorCells: number;
+  replicateInstability: {
+    coordinateCount: number;
+    coordinates: { suite: string; case: string; variant: string; statuses: string[] }[];
+  };
+}
+
+export interface CompatibleTrends {
+  suiteFingerprint: SuiteFingerprint;
+  points: TrendPoint[];
+  broken: BrokenResult[];
+}
+
+export interface RedactionFinding {
+  id: string;
+  kind: string;
+  path: string;
+  start: number;
+  end: number;
+  preview: string;
+}
+
+export interface PromotionPreview {
+  sourceRunId: string;
+  role: SuiteName;
+  candidateCase: Record<string, unknown>;
+  destination: string;
+  destinationDiff: {
+    operation: string;
+    beforeCaseCount: number;
+    afterCaseCount: number;
+    addedCase: string;
+  };
+  expectedDestinationHash: string;
+  proposedDestinationSha256: string;
+  redactionFindings: RedactionFinding[];
+  requiredAcknowledgements: string[];
+}
+
+export interface PromotionTransaction {
+  transactionId: string;
+  transactionPath: string;
+  destination: string;
+  destinationSha256: string;
+  backup: string | null;
+  role: SuiteName;
+}
+
+export interface CiPreview {
+  suiteFingerprint: SuiteFingerprint;
+  cacheKey: string;
+  workflowYaml: string;
+  inputs: Record<string, unknown>;
 }

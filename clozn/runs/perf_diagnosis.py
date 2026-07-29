@@ -1,70 +1,22 @@
-"""clozn/runs/perf_diagnosis.py -- the versioned rule engine over clozn.performance-trace.v1 evidence.
+"""Versioned evidence rules over ``clozn.performance-trace.v1``.
 
-Distinct from (and does not replace) clozn.runs.diagnosis, which already renders honest per-phase
-observed/unavailable findings and a why-slow/why-cut-off narrative. This module adds the one thing that
-was missing on top of it: the spec's seven named rules (cold_model_load, large_context, slow_decode,
-client_backpressure, queue_contention, adapter_reload, memory_pressure), each producing a single
-"likely cause + possible fix" pair naming the evidence that triggered it -- never auto-changing settings.
+Every report contains all seven named rules. ``fired`` means the required measured evidence was present
+and crossed the versioned threshold; ``not_fired`` means it was present and checked; ``unavailable``
+means it was absent. The distinction prevents missing instrumentation from reading as a clean bill of
+health. No rule changes settings, and no correlation-only rule is upgraded to causal support.
 
-THE BINDING DISCIPLINE: A SURVEY FINDING THAT REFRAMED THIS MODULE
-----------------------------------------------------------------------
-A repo-wide grep for the fields these rules would need (load_duration_ms, prefill/prompt_eval duration,
-kv/context allocation duration, per-request queue-wait duration, adapter-reload evidence, client
-stream-backpressure timestamps) turns up no production writer for any of them -- only
-clozn.runs.diagnosis's reader, the OTel exporter, and synthetic test fixtures. So today, only two of the
-seven rules (large_context, slow_decode) can genuinely fire against real traffic; the other five
-structurally cannot, for lack of instrumentation this cycle deliberately does not add (see the
-09-performance-diagnosis plan's Slice 6, deferred pending coordination with feature 01's engine-discovery
-refactor). The failure this discipline exists to prevent: a rule engine that silently returns nothing for
-five of seven rules reads to a user as "nothing wrong here," which is exactly the false reassurance this
-whole feature exists to rule out. diagnose_performance() therefore ALWAYS returns one entry per rule, in a
-fixed order, whether or not it could fire.
-
-THREE STATUSES, NOT TWO
---------------------------
-Each entry's `status` is one of:
-
-  fired       -- the rule's evidence was present and its condition was met. Carries `evidence_state`
-                 (never stronger than "correlated" in this module: nothing here re-runs a request with
-                 one variable changed, which is the only thing that would earn "causally_supported" --
-                 see roadmap rule 1), `likely_cause`, `possible_fix`, and the `evidence` that triggered it.
-  not_fired   -- the rule's evidence WAS present and was evaluated, but the condition was not met: an
-                 explicit, present "checked and it's clean" entry, never silence. Only large_context and
-                 slow_decode can produce this today, since they are the only two with a genuine evidence
-                 path on real runs.
-  unavailable -- the evidence this rule needs does not exist on this run at all, almost always because no
-                 code path records it yet. Carries `reason` naming exactly what's missing. This is what
-                 the other five rules (and large_context/slow_decode when their specific fields are
-                 absent) report on every real run today.
-
-`not_fired` and `unavailable` are deliberately different words for a deliberately different fact:
-conflating "we checked and it's fine" with "we have no way to check" would itself be a narration-ahead-
-of-evidence bug -- a user seeing "large_context: unavailable" on a run with a tiny prompt and fast decode
-would wrongly conclude the rule never works, when it actually ran and found nothing wrong.
-
-HOW large_context AND slow_decode EARN REAL EVIDENCE WITHOUT NEW INSTRUMENTATION
-------------------------------------------------------------------------------------
-large_context: context_receipt.limits (feature 06's already-shipped artifact) gives prompt/context token
-counts on real runs today, and meta.generation_duration_ms (genuinely worker-timed, see
-clozn.runs.perf_trace's module docstring) lets this rule isolate a "non-decode share" of the request's
-wall-clock time. That is NOT proof the non-decode time was spent on prefill specifically -- it could be
-queue wait or model load too, none of which is separated yet -- so this rule is careful to say "non-decode
-time" in its likely_cause text, never "prefill time", and never claims more than `correlated`.
-
-slow_decode: rather than a stored baseline-key system (the spec's "Baselines" section, out of scope this
-cycle) or the CLI's roofline throughput predictor (clozn.cli.throughput_predictor -- deliberately not
-imported here: clozn/runs/ has no existing dependency on clozn/cli/, and pulling one in for a single rule
-would be a new, unprecedented layering direction for one module to introduce), this rule compares the
-run's own meta.generation_tokens_per_second against the median of OTHER already-journaled runs sharing its
-model identity -- the exact `related_runs` pattern clozn.runs.diagnosis already established for
-client_auxiliary_calls. No new storage, no cross-layer import: it is evidence already sitting in the
-journal, read the same way a sibling module already reads it.
+Slow-decode baselines match model identity plus recorded backend/offload shape, so CPU and GPU runs are
+not mixed. Large-context prefers the measured prefill phase and retains a clearly labeled legacy
+non-decode fallback for old workers. Startup, queue, stream-flush, and adapter rules only evaluate when
+their corresponding measured phase exists.
 """
 from __future__ import annotations
 
 import statistics
 from collections.abc import Mapping, Sequence
 from typing import Any
+
+from clozn import schemas
 
 RULE_VERSION = "1"
 
@@ -80,6 +32,8 @@ _CONTEXT_OCCUPANCY_THRESHOLD = 0.6     # prompt_tokens / context_window_tokens
 _NONDECODE_SHARE_THRESHOLD = 0.3       # (wall_clock_ms - decode_ms) / wall_clock_ms
 _SLOW_DECODE_RATIO_THRESHOLD = 0.6     # this_run_tok_s <= peer_median_tok_s * this ratio
 _MIN_PEER_RUNS = 2                     # fewer than this many comparable runs -> no baseline yet
+_QUEUE_SHARE_THRESHOLD = 0.1           # measured queue wait / request wall
+_BACKPRESSURE_SHARE_THRESHOLD = 0.1    # measured write+flush blocking / request wall
 
 
 def _object(value: Any) -> Mapping[str, Any]:
@@ -119,6 +73,28 @@ def _entry(rule: str, *, status: str, reason: str | None = None, evidence_state:
     return out
 
 
+def _measured_phase(run: Mapping[str, Any], name: str) -> Mapping[str, Any] | None:
+    """First measured phase named ``name`` from the derived trace, or None.
+
+    Going through perf_trace centralizes validation of units and clock ownership. A malformed timing
+    document therefore makes only this rule unavailable; it never breaks the report.
+    """
+    try:
+        from clozn.runs.perf_trace import build_trace
+        for phase in build_trace(run).get("phases", []):
+            if phase.get("name") == name and phase.get("measurement", "measured") == "measured":
+                return phase
+    except Exception:
+        pass
+    return None
+
+
+def _phase_ms(run: Mapping[str, Any], name: str) -> float | None:
+    phase = _measured_phase(run, name)
+    duration_ns = _integer(_object(phase).get("duration_ns")) if phase is not None else None
+    return None if duration_ns is None else duration_ns / 1_000_000
+
+
 # ------------------------------------------------------------------------------------- large_context
 
 def _large_context(run: Mapping[str, Any], related_runs) -> dict:
@@ -134,38 +110,48 @@ def _large_context(run: Mapping[str, Any], related_runs) -> dict:
     timing = _object(run.get("timing"))
     meta = _object(run.get("meta"))
     wall_ms = _number(timing.get("duration_ms"))
+    prefill_ms = _phase_ms(run, "prefill")
     decode_ms = _number(meta.get("generation_duration_ms"))
-    if wall_ms is None or decode_ms is None:
+    if wall_ms is None or (prefill_ms is None and decode_ms is None):
         return _entry(
             "large_context", status="unavailable",
-            reason="timing.duration_ms and/or meta.generation_duration_ms were not recorded, so the "
-                   "non-decode share of elapsed time cannot be isolated")
+            reason="timing.duration_ms and neither a measured prefill phase nor a legacy decode duration "
+                   "were recorded")
 
     occupancy = prompt_tokens / context_window
-    nondecode_ms = max(0.0, wall_ms - decode_ms)
-    nondecode_share = (nondecode_ms / wall_ms) if wall_ms > 0 else 0.0
+    if prefill_ms is not None:
+        prompt_share = (prefill_ms / wall_ms) if wall_ms > 0 else 0.0
+        prompt_path = "phases.prefill.duration_ms"
+        prompt_duration_ms = prefill_ms
+    else:
+        nondecode_ms = max(0.0, wall_ms - decode_ms)
+        prompt_share = (nondecode_ms / wall_ms) if wall_ms > 0 else 0.0
+        prompt_path = "derived.non_decode_duration_ms"
+        prompt_duration_ms = nondecode_ms
     evidence = [
         _evidence("context_receipt.limits.prompt_tokens", prompt_tokens),
         _evidence("context_receipt.limits.context_window_tokens", context_window),
         _evidence("timing.duration_ms", wall_ms),
-        _evidence("meta.generation_duration_ms", decode_ms),
+        _evidence(prompt_path, round(prompt_duration_ms, 3)),
     ]
-    if occupancy >= _CONTEXT_OCCUPANCY_THRESHOLD and nondecode_share >= _NONDECODE_SHARE_THRESHOLD:
+    if occupancy >= _CONTEXT_OCCUPANCY_THRESHOLD and prompt_share >= _NONDECODE_SHARE_THRESHOLD:
+        attribution = (
+            "measured prompt prefill"
+            if prefill_ms is not None
+            else "legacy non-decode time (this worker does not yet time prefill separately)"
+        )
         return _entry(
             "large_context", status="fired", evidence_state="correlated",
             likely_cause=(
-                f"The prompt used {occupancy * 100:.0f}% of the context window, and decode accounted "
-                f"for only {(1 - nondecode_share) * 100:.0f}% of the request's total wall time -- "
-                f"consistent with (not proven to be) slow prompt processing. This codebase does not "
-                f"yet time prefill separately from queueing or model load, so the non-decode share "
-                f"cannot be attributed to prompt evaluation alone."),
+                f"The prompt used {occupancy * 100:.0f}% of the context window, and {attribution} "
+                f"accounted for {prompt_share * 100:.0f}% of request wall time."),
             possible_fix="Reduce the prompt size or context window, or inspect what's being included "
                          "in context.",
             evidence=evidence)
     return _entry(
         "large_context", status="not_fired",
-        reason=(f"the prompt used {occupancy * 100:.0f}% of the context window and non-decode time was "
-                f"{nondecode_share * 100:.0f}% of the request -- below this rule's thresholds "
+        reason=(f"the prompt used {occupancy * 100:.0f}% of the context window and prompt-processing "
+                f"time was {prompt_share * 100:.0f}% of the request -- below this rule's thresholds "
                 f"({_CONTEXT_OCCUPANCY_THRESHOLD * 100:.0f}% / {_NONDECODE_SHARE_THRESHOLD * 100:.0f}%)"),
         evidence=evidence)
 
@@ -179,6 +165,7 @@ def _peer_decode_rates(run: Mapping[str, Any], related_runs) -> list[float]:
     this_identity = _object(run.get("identity"))
     this_sha = this_identity.get("model_sha256") if isinstance(this_identity.get("model_sha256"), str) else None
     this_model = run.get("model") if isinstance(run.get("model"), str) and run.get("model") else None
+    this_meta = _object(run.get("meta"))
 
     rates: list[float] = []
     for candidate in related_runs if isinstance(related_runs, Sequence) else ():
@@ -198,7 +185,17 @@ def _peer_decode_rates(run: Mapping[str, Any], related_runs) -> list[float]:
                 continue
         else:
             continue      # this run identifies no model at all -- nothing safe to compare against
-        rate = _number(_object(candidate.get("meta")).get("generation_tokens_per_second"))
+        candidate_meta = _object(candidate.get("meta"))
+        # A model-relative baseline also keeps the backend/offload shape fixed when this run recorded
+        # it. Comparing a CPU run to CUDA peers would manufacture a "regression" from configuration.
+        comparable = True
+        for key in ("device", "gpu_layers", "quant", "backend"):
+            if key in this_meta and candidate_meta.get(key) != this_meta.get(key):
+                comparable = False
+                break
+        if not comparable:
+            continue
+        rate = _number(candidate_meta.get("generation_tokens_per_second"))
         if rate is not None and rate > 0:
             rates.append(rate)
     return rates
@@ -242,36 +239,93 @@ def _slow_decode(run: Mapping[str, Any], related_runs) -> dict:
         evidence=evidence)
 
 
-# ---------------------------------------------------------------- rules with no evidence path today
-
 def _cold_model_load(run: Mapping[str, Any], related_runs) -> dict:
+    phase = _measured_phase(run, "model_load")
+    if phase is None:
+        return _entry(
+            "cold_model_load", status="unavailable",
+            reason="no measured model_load phase was recorded on this run")
+    duration_ms = _integer(phase.get("duration_ns")) / 1_000_000
+    evidence = [_evidence("phases.model_load.duration_ms", round(duration_ms, 3))]
+    if duration_ms > 0:
+        return _entry(
+            "cold_model_load", status="fired", evidence_state="observed",
+            likely_cause=f"This run was associated with a {duration_ms:.0f} ms worker model load.",
+            possible_fix="Keep the worker warm between requests or start it before latency-sensitive work.",
+            evidence=evidence)
     return _entry(
-        "cold_model_load", status="unavailable",
-        reason="no model-load duration is recorded on this run; no code path in this codebase writes "
-               "load_duration_ms yet (clozn.cli.engine_process.spawn_engine times its own health-poll "
-               "loop but never stores the duration)")
+        "cold_model_load", status="not_fired",
+        reason="the worker explicitly recorded a zero-duration model_load phase", evidence=evidence)
 
 
 def _client_backpressure(run: Mapping[str, Any], related_runs) -> dict:
+    flush_ms = _phase_ms(run, "stream_flush")
+    wall_ms = _number(_object(run.get("timing")).get("duration_ms"))
+    if flush_ms is None or wall_ms is None:
+        return _entry(
+            "client_backpressure", status="unavailable",
+            reason="a measured stream_flush phase and timing.duration_ms were not both recorded")
+    share = flush_ms / wall_ms if wall_ms > 0 else 0.0
+    evidence = [
+        _evidence("phases.stream_flush.duration_ms", round(flush_ms, 3)),
+        _evidence("timing.duration_ms", wall_ms),
+    ]
+    if share >= _BACKPRESSURE_SHARE_THRESHOLD:
+        return _entry(
+            "client_backpressure", status="fired", evidence_state="correlated",
+            likely_cause=(
+                f"Gateway writes/flushes blocked for {share * 100:.0f}% of request wall time. The "
+                "span overlaps worker progress, so this is correlated with a slow reader, not proof."
+            ),
+            possible_fix="Read streamed chunks promptly or avoid a slow proxy between the client and gateway.",
+            evidence=evidence)
     return _entry(
-        "client_backpressure", status="unavailable",
-        reason="no stream-write-vs-generation-complete timestamps are recorded; this codebase has no "
-               "instrumentation on the SSE write path yet")
+        "client_backpressure", status="not_fired",
+        reason=f"stream writes/flushes used {share * 100:.1f}% of wall time, below the rule threshold",
+        evidence=evidence)
 
 
 def _queue_contention(run: Mapping[str, Any], related_runs) -> dict:
+    queue_ms = _phase_ms(run, "gateway_queue")
+    wall_ms = _number(_object(run.get("timing")).get("duration_ms"))
+    if queue_ms is None or wall_ms is None:
+        return _entry(
+            "queue_contention", status="unavailable",
+            reason="a measured gateway_queue phase and timing.duration_ms were not both recorded")
+    share = queue_ms / wall_ms if wall_ms > 0 else 0.0
+    evidence = [
+        _evidence("phases.gateway_queue.duration_ms", round(queue_ms, 3)),
+        _evidence("timing.duration_ms", wall_ms),
+    ]
+    if share >= _QUEUE_SHARE_THRESHOLD:
+        return _entry(
+            "queue_contention", status="fired", evidence_state="observed",
+            likely_cause=f"The request spent {share * 100:.0f}% of its wall time waiting at the gateway.",
+            possible_fix="Reduce concurrent generations, increase worker capacity, or schedule this run later.",
+            evidence=evidence)
     return _entry(
-        "queue_contention", status="unavailable",
-        reason="no per-request queue-wait duration is recorded on any run; "
-               "clozn.server.request_gate.RequestGate tracks live active/waiting counts but does not "
-               "persist them onto a run")
+        "queue_contention", status="not_fired",
+        reason=f"gateway queue wait used {share * 100:.1f}% of wall time, below the rule threshold",
+        evidence=evidence)
 
 
 def _adapter_reload(run: Mapping[str, Any], related_runs) -> dict:
+    phase = _measured_phase(run, "adapter_attach")
+    if phase is None:
+        return _entry(
+            "adapter_reload", status="unavailable",
+            reason="no measured adapter_attach phase was recorded on this run")
+    duration_ms = _integer(phase.get("duration_ns")) / 1_000_000
+    evidence = [_evidence("phases.adapter_attach.duration_ms", round(duration_ms, 3))]
+    if duration_ms > 0:
+        return _entry(
+            "adapter_reload", status="fired", evidence_state="observed",
+            likely_cause=f"An adapter attach added {duration_ms:.0f} ms of process-startup work.",
+            possible_fix="Reuse a worker with the adapter already attached instead of restarting it.",
+            evidence=evidence)
     return _entry(
-        "adapter_reload", status="unavailable",
-        reason="no adapter-load timing or repeat-load evidence is recorded on any run; adapter loading "
-               "is the LoRA adapter workflow's domain and is not yet instrumented")
+        "adapter_reload", status="not_fired",
+        reason="the worker explicitly recorded a zero-duration adapter_attach phase", evidence=evidence)
 
 
 def _memory_pressure(run: Mapping[str, Any], related_runs) -> dict:
@@ -339,4 +393,14 @@ def build_performance_report(run, related_runs=()) -> dict:
 
     trace = perf_trace.build_trace(run)
     diagnoses = diagnose_performance(run, related_runs)
-    return perf_trace.attach_diagnoses(trace, diagnoses)
+    report = perf_trace.attach_diagnoses(trace, diagnoses)
+    fired = [entry["rule"] for entry in diagnoses if entry.get("status") == "fired"]
+    evaluable = [entry for entry in diagnoses if entry.get("status") != "unavailable"]
+    report["regression_attribution"] = {
+        "status": "attributed" if fired else ("not_detected" if evaluable else "unavailable"),
+        "rules": fired,
+        "evaluable_rule_count": len(evaluable),
+        "evidence_state": "correlated" if fired else "observed",
+    }
+    schemas.validate(report, perf_trace.SCHEMA)
+    return report

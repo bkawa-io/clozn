@@ -1,5 +1,9 @@
 # Cloze — Local Diffusion-LM Runtime — Design Doc (v0.1)
 
+> **Historical diffusion-design archive.** This document is retained to explain the engine's research
+> lineage and old code references. It is not a current product plan or command reference; see
+> [CAPABILITIES.md](CAPABILITIES.md).
+
 **Name:** Cloze (CLI: `cloze`)
 **One-liner:** A local runtime and serving layer for diffusion language models (dLLMs) — quantized, cached, streamable, and model-agnostic — built on ggml/llama.cpp kernels.
 **Status:** Living design doc — Phase 1 (lab) implemented; Phase 3 (C++ `core/`) in progress

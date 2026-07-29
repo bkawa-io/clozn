@@ -33,6 +33,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cctype>
 #include <cmath>
 #include <condition_variable>
@@ -59,7 +60,57 @@
 using json = nlohmann::json;
 using namespace clozn;
 
+#ifndef CLOZN_ENGINE_VERSION
+#define CLOZN_ENGINE_VERSION "development"
+#endif
+#ifndef CLOZN_ENGINE_BUILD_ID
+#define CLOZN_ENGINE_BUILD_ID "development"
+#endif
+#ifndef CLOZN_ENGINE_BACKEND
+#define CLOZN_ENGINE_BACKEND "cpu"
+#endif
+#ifndef CLOZN_LLAMA_CPP_COMMIT
+#define CLOZN_LLAMA_CPP_COMMIT "0000000000000000000000000000000000000000"
+#endif
+
+static json engine_build_info() {
+    json feature_flags{
+        {"jlens", true},
+        {"lora", true},
+        {"native_chat_io", true},
+        {"whitebox", true},
+#ifdef CLOZN_SAE
+        {"sae", true},
+#else
+        {"sae", false},
+#endif
+    };
+    return {
+        {"engine_version", CLOZN_ENGINE_VERSION},
+        {"build_id", CLOZN_ENGINE_BUILD_ID},
+        {"protocol_version", PROTOCOL_VERSION},
+        {"backend", CLOZN_ENGINE_BACKEND},
+        {"llama_cpp_commit", CLOZN_LLAMA_CPP_COMMIT},
+        {"feature_flags", feature_flags},
+    };
+}
+
 int main(int argc, char** argv) {
+    // Build identity is deliberately available before model parsing/loading. `clozn setup` executes
+    // this model-free path inside staging and refuses promotion unless it agrees with the release
+    // manifest. Human output stays useful for direct diagnostics; --json is the machine contract.
+    if (argc >= 2 && std::string(argv[1]) == "--version") {
+        const bool as_json = argc >= 3 && std::string(argv[2]) == "--json";
+        const json info = engine_build_info();
+        if (as_json) {
+            std::printf("%s\n", info.dump().c_str());
+        } else {
+            std::printf("clozn-server %s (build %s, protocol %s, backend %s, llama.cpp %.12s)\n",
+                        CLOZN_ENGINE_VERSION, CLOZN_ENGINE_BUILD_ID, PROTOCOL_VERSION,
+                        CLOZN_ENGINE_BACKEND, CLOZN_LLAMA_CPP_COMMIT);
+        }
+        return 0;
+    }
     if (argc < 2) {
         std::fprintf(stderr, "usage: %s <model.gguf> [--port N] [--host H] [--gpu-layers N] "
                              "[--ar | --diffusion] [--mask-token ID] [--eos ID] [--ctx N] [--workers N] "
@@ -114,15 +165,31 @@ int main(int argc, char** argv) {
     if (workers < 1) workers = 1;
     if (sae_k < 1) sae_k = 1;
     llama_log_set(quiet_log, nullptr);
+    using PerfClock = std::chrono::steady_clock;
+    auto duration_ns = [](PerfClock::time_point started) {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(
+            PerfClock::now() - started).count();
+    };
+    std::vector<PerformancePhase> startup_timing_phases;
+
     // One copy of the weights, N contexts over it — concurrent requests, one model in (V)RAM.
+    const PerfClock::time_point model_load_started = PerfClock::now();
     auto model = std::make_shared<GgmlModel>(model_path, mask_token, eos, gpu_layers);
+    startup_timing_phases.push_back(PerformancePhase{
+        "model_load", "model_load", duration_ns(model_load_started), -1,
+        "context_only", "process_startup"});
+    const PerfClock::time_point context_create_started = PerfClock::now();
     ContextPool pool(model, workers, n_ctx, flash_attn);
+    startup_timing_phases.push_back(PerformancePhase{
+        "context_create", "clozn_worker", duration_ns(context_create_started), -1,
+        "context_only", "process_startup", {"kv_allocate"}});
 
     // A requested adapter that fails to attach ABORTS the worker rather than serving the base model.
     // Roadmap rule 3 (no silent fallback) is at its sharpest here: someone evaluating a fine-tune who
     // silently gets base-model output would draw a conclusion about weights that were never loaded --
     // a wrong answer that looks exactly like a right one, and one no downstream receipt could catch.
     if (!lora_path.empty()) {
+        const PerfClock::time_point adapter_attach_started = PerfClock::now();
         std::string lora_err;
         if (!pool.attach_lora(lora_path, lora_scale, &lora_err)) {
             std::fprintf(stderr, "clozn-server: %s\n", lora_err.c_str());
@@ -130,6 +197,9 @@ int main(int argc, char** argv) {
         }
         std::fprintf(stderr, "clozn-server: LoRA attached: %s (scale %.3f)\n",
                      lora_path.c_str(), static_cast<double>(lora_scale));
+        startup_timing_phases.push_back(PerformancePhase{
+            "adapter_attach", "clozn_worker", duration_ns(adapter_attach_started), -1,
+            "context_only", "process_startup"});
     }
     if (!flash_attn)
         std::fprintf(stderr, "[clozn-server] flash attention DISABLED: attention weights "
@@ -260,6 +330,7 @@ int main(int argc, char** argv) {
     // SSE streaming route below so POST /cancel can reach a generation running on another worker
     // thread, and so a dead client socket is noticed the next time that request tries to write a frame.
     CancelRegistry cancel_registry;
+    std::atomic<bool> startup_timing_claimed{false};
 
     int model_n_embd = 0;
     int model_n_layer = 0;
@@ -317,6 +388,7 @@ int main(int argc, char** argv) {
                                           // n_past (force_token/sampling/steer/residual_write),
                                           // labeled with the regime that made it exact
             {"execution_fork_regimes", execution_fork_regimes},
+            {"performance_timing", true}, // versioned optional timing object on gen_finished
         };
         json h{{"status", "ok"},
                {"protocol_version", PROTOCOL_VERSION},        // worker <-> supervisor wire contract
@@ -407,6 +479,7 @@ int main(int argc, char** argv) {
         // modified between those operations. Streaming is deliberately rejected here: the public
         // structured route buffers until validation anyway.
         std::optional<PreparedChat> atomic_prepared_chat;
+        std::vector<PerformancePhase> request_timing_phases;
         if (body.contains("chat_request")) {
             if (body.contains("prepared_chat")) {
                 res.status = 400;
@@ -455,7 +528,10 @@ int main(int argc, char** argv) {
                     throw std::invalid_argument(
                         "chat_request requires active tools or json_schema structured output");
                 }
+                const PerfClock::time_point prompt_template_started = PerfClock::now();
                 atomic_prepared_chat = chat_templates->prepare(request);
+                request_timing_phases.push_back(PerformancePhase{
+                    "prompt_template", "clozn_worker", duration_ns(prompt_template_started)});
                 const PreparedChat& prepared = *atomic_prepared_chat;
                 json triggers = json::array();
                 for (const ChatGrammarTrigger& trigger : prepared.grammar_triggers) {
@@ -727,6 +803,7 @@ int main(int argc, char** argv) {
         }
 
         // Encode inputs via the model's vocab (no context needed — fully concurrent).
+        const PerfClock::time_point tokenize_started = PerfClock::now();
         std::vector<int> prompt_ids, suffix_ids;
         int gap = 0;
         if (is_infill) {
@@ -736,6 +813,8 @@ int main(int argc, char** argv) {
         } else {
             prompt_ids = model->encode(body.value("prompt", std::string()));
         }
+        request_timing_phases.push_back(PerformancePhase{
+            "tokenize", "clozn_worker", duration_ns(tokenize_started)});
         if (prompt_ids.empty() && !(is_infill && !suffix_ids.empty())) {
             res.status = 400;
             res.set_content(json{{"error", "empty prompt"}}.dump(), "application/json");
@@ -773,9 +852,16 @@ int main(int argc, char** argv) {
 
         // One call into the runtime on a POOLED context (acquire blocks until one is free, so N
         // workers run N requests concurrently; the Lease releases it on any exit).
-        auto run = [&pool, &concept_probes, &steer_probes, &sae_serve, prompt_ids, suffix_ids, gap, cfg, sample, is_infill, ar_mode, features, steer_concept, steer_coef, steer_layer, prefix_embd, prefix_rows, steer_vec, reference_tokens, lens_on, lens_layer, plane, readout_layers, write_reqs, chat_grammar, want_ckpt, ckpt_id_out, &ckpt_mtx, &checkpoints](
+        auto run = [&pool, &concept_probes, &steer_probes, &sae_serve, prompt_ids, suffix_ids, gap, cfg, sample, is_infill, ar_mode, features, steer_concept, steer_coef, steer_layer, prefix_embd, prefix_rows, steer_vec, reference_tokens, lens_on, lens_layer, plane, readout_layers, write_reqs, chat_grammar, want_ckpt, ckpt_id_out, &ckpt_mtx, &checkpoints, request_timing_phases, &startup_timing_phases, &startup_timing_claimed, duration_ns](
                        const std::function<void(const Event&)>& on_event) {
+            std::vector<PerformancePhase> phases = request_timing_phases;
+            const PerfClock::time_point worker_start_started = PerfClock::now();
             ContextPool::Lease lease = pool.acquire();
+            phases.push_back(PerformancePhase{
+                "worker_start", "clozn_worker", duration_ns(worker_start_started)});
+            if (!startup_timing_claimed.exchange(true, std::memory_order_relaxed)) {
+                phases.insert(phases.end(), startup_timing_phases.begin(), startup_timing_phases.end());
+            }
             // white-box tap on for this request (off by default); the live lens implies it — the
             // per-token StepActivations events ARE its input (consumed into jlens_live frames downstream).
             (*lease).set_emit_activations(features || lens_on);
@@ -866,7 +952,10 @@ int main(int argc, char** argv) {
                 GenerateResult r = generate_ar(*lease, prompt_ids, cfg, ev, sample, probes,
                                      prefix_embd.empty() ? nullptr : &prefix_embd, prefix_rows,
                                      reference_tokens.empty() ? nullptr : &reference_tokens,
-                                     chat_grammar ? &*chat_grammar : nullptr);
+                                     chat_grammar ? &*chat_grammar : nullptr, nullptr,
+                                     // resume_truncate_to / force_first_token: execution-fork only,
+                                     // defaults here -- this is ordinary generation, not a fork.
+                                     -1, nullptr, &phases);
                 if (want_ckpt && ar_mode) {
                     // Top-up: the loop's final committed token may not be decoded into the KV
                     // yet (it breaks before the decode when max_new is reached). Decode it with
