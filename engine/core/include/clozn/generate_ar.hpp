@@ -98,7 +98,25 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
                            // -- the same single-token batch shape the original sequential decode
                            // used, which is what makes bit-exactness achievable (and it is the
                            // acceptance bar: greedy resume suffix == greedy re-prefill suffix).
-                           const EngineCheckpoint* resume_from = nullptr);
+                           const EngineCheckpoint* resume_from = nullptr,
+                           // Execution-fork truncation (engine-debt: exact forks from an EARLIER
+                           // point than the checkpoint's own n_past). -1 (default) => resume at
+                           // resume_from->n_past, byte-identical to the original resume behavior
+                           // above. >= 1 => bridge-decode at THIS position instead (must be in
+                           // [1, resume_from->n_past]) -- the live-KV half of the execution-fork
+                           // regime split. Requires resume_from; the caller (server_main.cpp) owns
+                           // deciding whether live-KV truncation is even valid at this point (it is
+                           // NOT, for a point at or before the checkpoint's prompt boundary -- see
+                           // EngineCheckpoint::prompt_tokens and the /v1/execution-fork route,
+                           // which re-prefills instead in that regime rather than passing this).
+                           int resume_truncate_to = -1,
+                           // Force the FIRST generated token of THIS call (the execution-fork
+                           // "force_token" intervention) instead of sampling it; generation then
+                           // continues normally (greedy or sampled, per `sample`) from the second
+                           // token on. nullptr (default) = no force, unchanged behavior. Independent
+                           // of resume_from: also applies on an ordinary fresh prefill, which is how
+                           // the execution-fork reprefill regime forces its first token.
+                           const int* force_first_token = nullptr);
 
 // Batched multi-sequence branching: prefill a shared prompt once, then decode N independent
 // continuations in parallel using a single llama_decode per step. Each branch gets its own

@@ -90,6 +90,14 @@ struct EngineCheckpoint {
     std::vector<uint8_t> kv_data;   // serialized KV cache (seq 0) via llama_state_seq_get_data
     std::vector<int> tokens;         // full token sequence fed into the KV (prompt + generated so far)
     int n_past = 0;                  // positions covered by the KV cache
+    // The prompt/generated boundary: tokens[0, prompt_tokens) is the ORIGINAL prefill batch,
+    // tokens[prompt_tokens, n_past) is the one-token-at-a-time generated tail. Populated by the
+    // CALLER at checkpoint-creation time (save_checkpoint itself doesn't know the boundary), same
+    // as has_sampler/has_steer below. 0 = unknown (a checkpoint whose caller never declared it) --
+    // execution-fork treats 0 as "cannot determine the regime split" and refuses rather than guess
+    // which side of the batch-shape landmine (docs: the reprefill-vs-live-KV split) truncate_to
+    // falls on.
+    int prompt_tokens = 0;
     bool causal = true;              // attention mode at checkpoint time
     // Declared sampler provenance (engine debt: sampler state in checkpoints). The checkpoint
     // flow is caller-reconstructive (POST tokens -> prefill -> save), so there is no live RNG to
