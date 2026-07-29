@@ -1,0 +1,71 @@
+{
+  "schema_version": "clozn.causal-bisect.v1",
+  "generated_at": "2026-07-28T00:00:00Z",
+  "reference_model": {"label": "reference", "filename": "ref.gguf"},
+  "candidate_model": {"label": "candidate", "filename": "cand.gguf"},
+  "pair_compatibility": {
+    "schema_version": "clozn.pair-compatibility.v1",
+    "hidden_size": {"state": "same", "value_a": 4, "value_b": 4},
+    "layer_count": {"state": "same", "value_a": 8, "value_b": 8},
+    "verdict": {"overall": "compatible", "reasons": [],
+                "operations": {"per_token_comparison": {"permitted": true, "reason": "ok"},
+                               "residual_transplant": {"permitted": true, "reason": "hidden_size matches (4)"}}}
+  },
+  "target_token_id": 5,
+  "readout_position": 2,
+  "write_positions": [2],
+  "continuation": {"n_prompt": 2, "n_cont": 1},
+  "primary_metric": "reference_token_logprob_recovery",
+  "reference_target_logprob": -0.1,
+  "seed": 0,
+  "search": {
+    "kinds_requested": ["ffn"],
+    "composable_kinds_searched": ["ffn"],
+    "window_capable_kinds": ["ffn"],
+    "hooks_unavailable": [],
+    "screening": {"requested": true, "used": false, "reason": "arms only supports residual write specs"}
+  },
+  "coverage": {
+    "window_size": 4,
+    "max_windows": 8,
+    "layer_range_searched": {
+      "ffn": {"writable_min": 0, "writable_max_exclusive": 8, "usable_layers_count": 8,
+              "usable_layers": [0, 1, 2, 3, 4, 5, 6, 7]}
+    },
+    "bounds_applied": ["ffn windows are tiled at window_size=4 layers per coarse window"]
+  },
+  "window_tests": [
+    {
+      "hook": "ffn", "layers": [0, 1, 2, 3], "depth": 0,
+      "instrument_sane": true, "moved": true, "beat_control": true, "retained": true,
+      "reasons": ["the reference transplant flipped the top-1 token to target_token_id and the random equal-norm control did not."],
+      "arms": {"reference_transplant": {"top1_token_id": 5, "top1_is_target": true},
+               "candidate_self_transplant": {"top1_token_id": 9, "top1_is_target": false, "write_applied": true},
+               "random_equal_norm": {"top1_token_id": 9, "top1_is_target": false}},
+      "movement_metrics": {"reference_transplant": {"state": "selected", "primary_metric": "reference_token_logprob_recovery"}}
+    },
+    {
+      "hook": "ffn", "layers": [0, 1], "depth": 1,
+      "instrument_sane": true, "moved": false, "beat_control": false, "retained": false,
+      "reasons": ["the reference transplant did not flip the top-1 token to target_token_id for this window."],
+      "arms": {}
+    },
+    {
+      "hook": "ffn", "layers": [2, 3], "depth": 1,
+      "instrument_sane": true, "moved": true, "beat_control": true, "retained": true,
+      "reasons": ["the reference transplant flipped the top-1 token to target_token_id and the random equal-norm control did not."],
+      "arms": {}
+    }
+  ],
+  "single_site_tests": [
+    {"hook": "ffn", "layer": 2, "source": "bisection_leaf", "ok": true,
+     "transplant": {"schema_version": "clozn.transplant.v1", "analysis": {"instrument_sane": true, "reference_specific": false}}},
+    {"hook": "ffn", "layer": 3, "source": "bisection_leaf", "ok": false,
+     "error": "reference_transplant arm failed: RuntimeError: engine boom"}
+  ],
+  "verdict": {
+    "label": "localized_window",
+    "reasons": ["a window narrower than the original coarse tiling beat the random equal-norm control; no single site within it independently did"],
+    "evidence": {"windows": [{"hook": "ffn", "layers": [2, 3]}]}
+  }
+}

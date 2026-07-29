@@ -1,0 +1,37 @@
+{
+  "schema_version": "clozn.causal-bisect.v1",
+  "generated_at": "2026-07-28T00:00:00Z",
+  "reference_model": {"label": "reference"},
+  "candidate_model": {"label": "candidate"},
+  "pair_compatibility": {
+    "schema_version": "clozn.pair-compatibility.v1",
+    "verdict": {"overall": "compatible", "reasons": [],
+                "operations": {"per_token_comparison": {"permitted": true, "reason": "ok"},
+                               "residual_transplant": {"permitted": true, "reason": "hidden_size matches"}}}
+  },
+  "target_token_id": 5,
+  "readout_position": 2,
+  "write_positions": [2],
+  "continuation": {"n_prompt": 2, "n_cont": 1},
+  "primary_metric": "reference_token_logprob_recovery",
+  "seed": 0,
+  "search": {
+    "kinds_requested": ["ffn"],
+    "composable_kinds_searched": [],
+    "window_capable_kinds": ["ffn"],
+    "hooks_unavailable": [{"hook": "ffn", "reason": "ffn_out is not present on this architecture"}],
+    "screening": {"requested": false, "used": false}
+  },
+  "coverage": {
+    "window_size": 4,
+    "layer_range_searched": {},
+    "bounds_applied": ["ffn windows are tiled at window_size=4 layers per coarse window"]
+  },
+  "window_tests": [],
+  "single_site_tests": [],
+  "verdict": {
+    "label": "unavailable",
+    "reasons": ["every requested hook kind was unavailable: ffn"],
+    "evidence": {}
+  }
+}

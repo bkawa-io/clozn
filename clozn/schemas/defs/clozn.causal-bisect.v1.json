@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.causal-bisect.v1",
+  "title": "Causal bisect -- coarse-to-fine search for where a reference model's behavior localizes in a candidate",
+  "description": "clozn.analysis.causal_bisect's output: a coarse-to-fine search over clozn.analysis.transplant's controlled-transplant primitive, restricted to COMPOSABLE hook kinds (ffn/head) for any multi-site WINDOW, because residual (l_out) sites overwrite the stream and cannot be combined into a window without one write erasing another (see the module docstring). Windows are tiled, tested, and (when retained -- the reference arm beat the random equal-norm control) recursively bisected down to individual sites, which are re-tested with clozn.analysis.transplant.run_site() directly so the stored reference_specific verdict is never recomputed. residual and head sites may also be tested individually (never windowed) when the caller supplies explicit candidate layers. A verdict is a substantive claim only when instrument_sane held for the evidence it rests on; distributed_restoration is reachable ONLY when a composable-kind window search actually ran.",
+
+  "type": "object",
+  "required": ["schema_version", "generated_at", "reference_model", "candidate_model", "pair_compatibility",
+               "target_token_id", "readout_position", "write_positions", "continuation", "primary_metric",
+               "search", "coverage", "window_tests", "single_site_tests", "verdict"],
+
+  "$defs": {
+    "model_ref": {
+      "type": "object",
+      "properties": {
+        "label": {"type": "string", "minLength": 1},
+        "filename": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+
+    "hook_reason": {
+      "type": "object",
+      "required": ["hook", "reason"],
+      "properties": {
+        "hook": {"enum": ["residual", "ffn", "head"]},
+        "reason": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+
+    "screening": {
+      "type": "object",
+      "description": "batched `arms` multi-sequence scoring (engine numerical_regime 'batched_approximate', ~0.19 nats measured drift) is SCREENING ONLY, never a receipt. `used=true` requires every surviving candidate to be re-confirmed with a normal sequential /score call before it appears elsewhere in this document.",
+      "required": ["requested", "used"],
+      "properties": {
+        "requested": {"type": "boolean"},
+        "used": {"type": "boolean"},
+        "reason": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+
+    "search": {
+      "type": "object",
+      "required": ["kinds_requested", "composable_kinds_searched", "window_capable_kinds",
+                   "hooks_unavailable", "screening"],
+      "properties": {
+        "kinds_requested": {"type": "array", "items": {"enum": ["residual", "ffn", "head"]}},
+        "composable_kinds_searched": {
+          "type": "array", "items": {"enum": ["ffn", "head"]},
+          "description": "Composable kinds for which at least one multi-site WINDOW was actually tested. distributed_restoration in the verdict is unreachable when this is empty -- enforced structurally in clozn.analysis.causal_bisect, not merely by convention."
+        },
+        "window_capable_kinds": {"type": "array", "items": {"enum": ["ffn", "head"]}},
+        "hooks_unavailable": {"type": "array", "items": {"$ref": "#/$defs/hook_reason"}},
+        "screening": {"$ref": "#/$defs/screening"}
+      },
+      "additionalProperties": false
+    },
+
+    "coverage": {
+      "type": "object",
+      "description": "No silent caps: every bound the search applied (window tiling size, a max-windows cap, which explicit residual/head layers were tested) is named here in plain language, never merely implied by an empty result.",
+      "required": ["window_size", "layer_range_searched", "bounds_applied"],
+      "properties": {
+        "window_size": {"type": "integer", "minimum": 1},
+        "max_windows": {"type": "integer", "minimum": 1},
+        "layer_range_searched": {"type": "object", "additionalProperties": true},
+        "bounds_applied": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1}
+      },
+      "additionalProperties": false
+    },
+
+    "window_test": {
+      "type": "object",
+      "description": "One multi-site window transplant test (composable kinds only). `retained=true` only when instrument_sane AND beat_control are both true -- the same structural rule clozn.analysis.transplant applies at a single site, generalized to a set of jointly-written sites.",
+      "required": ["hook", "layers", "depth", "instrument_sane", "retained", "reasons"],
+      "properties": {
+        "hook": {"enum": ["residual", "ffn", "head"]},
+        "layers": {"type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 1},
+        "depth": {"type": "integer", "minimum": 0},
+        "instrument_sane": {"type": "boolean"},
+        "moved": {"type": "boolean"},
+        "beat_control": {"type": "boolean"},
+        "retained": {"type": "boolean"},
+        "reasons": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "arms": {"type": "object", "additionalProperties": true},
+        "movement_metrics": {"type": "object", "additionalProperties": true}
+      },
+      "additionalProperties": false
+    },
+
+    "single_site_test": {
+      "type": "object",
+      "description": "hook=residual is only ever tested here, never in window_tests (single-site only). ok=true carries the FULL clozn.transplant.v1 document verbatim from clozn.analysis.transplant.run_site() -- reference_specific is read from it, never recomputed.",
+      "required": ["hook", "layer", "source", "ok"],
+      "properties": {
+        "hook": {"enum": ["residual", "ffn", "head"]},
+        "layer": {"type": "integer", "minimum": 0},
+        "source": {"enum": ["bisection_leaf", "explicit_residual", "explicit_head"]},
+        "ok": {"type": "boolean"},
+        "transplant": {"type": "object", "additionalProperties": true},
+        "error": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+
+    "verdict": {
+      "type": "object",
+      "description": "label is the ONLY substantive-claim surface; a document with instrument_sane false for every result it could have rested on must carry 'inconclusive', never a positive or negative substantive label.",
+      "required": ["label", "reasons"],
+      "properties": {
+        "label": {"enum": ["localized_site", "localized_window", "distributed_restoration",
+                           "perturbation_sensitive", "no_restoration", "inconclusive", "unavailable"]},
+        "reasons": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+        "evidence": {"type": "object", "additionalProperties": true}
+      },
+      "additionalProperties": false
+    }
+  },
+
+  "properties": {
+    "schema_version": {"const": "clozn.causal-bisect.v1"},
+    "generated_at": {"type": "string", "minLength": 1},
+    "reference_model": {"$ref": "#/$defs/model_ref"},
+    "candidate_model": {"$ref": "#/$defs/model_ref"},
+    "pair_compatibility": {
+      "type": "object",
+      "required": ["schema_version", "verdict"],
+      "properties": {"schema_version": {"const": "clozn.pair-compatibility.v1"}},
+      "additionalProperties": true
+    },
+    "target_token_id": {"type": "integer", "minimum": 0},
+    "readout_position": {"type": "integer", "minimum": 0},
+    "write_positions": {"type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 1},
+    "continuation": {
+      "type": "object",
+      "required": ["n_prompt", "n_cont"],
+      "properties": {
+        "n_prompt": {"type": "integer", "minimum": 0},
+        "n_cont": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "primary_metric": {
+      "type": "string", "minLength": 1,
+      "description": "One of clozn.analysis.restoration_metrics.METRIC_KINDS, named by the caller from the originating case -- never defaulted or picked here."
+    },
+    "reference_target_logprob": {
+      "type": "number",
+      "description": "Optional: the reference model's own logprob for target_token_id at readout_position, when the caller supplied one. Enables gap_closed_fraction in movement_metrics; omitted results simply report movement without a reference anchor."
+    },
+    "seed": {"type": "integer"},
+    "search": {"$ref": "#/$defs/search"},
+    "coverage": {"$ref": "#/$defs/coverage"},
+    "window_tests": {"type": "array", "items": {"$ref": "#/$defs/window_test"}},
+    "single_site_tests": {"type": "array", "items": {"$ref": "#/$defs/single_site_test"}},
+    "verdict": {"$ref": "#/$defs/verdict"}
+  },
+  "additionalProperties": true
+}
