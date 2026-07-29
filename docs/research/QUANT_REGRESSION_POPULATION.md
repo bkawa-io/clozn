@@ -8,6 +8,21 @@ causal verdicts? Not "can we find a localized one" — the distribution itself i
 **Scripts:** `scripts/tracer/quant_regression_mine.py`, `scripts/tracer/quant_regression_bisect.py`.
 **Artifacts (local, gitignored):** `runs/experiments/quant_regression_{mine,population_report}.json`.
 
+**Note on this revision:** this branch was worked by two separate agent sessions concurrently, in the
+same shared main working tree (no isolation), each unaware of the other. Both used the identical
+Phase-1 corpus/mine output (298 prompts; deterministic teacher-forced greedy decode against fixed
+weights, so identical inputs reproduce identical Phase-1 numbers regardless of which process ran it)
+and the identical, since-fixed, per-disagreement seed scheme in `quant_regression_bisect.py`. One
+session ran Phase 2 at the script's default `--sample-size 26`; this revision ran it at `--sample-size
+30`, category-stratified with the SAME deterministic round-robin, so the 30-sample run's first 26
+entries are literally the earlier session's 26 (confirmed: their verdict counts are a strict subset of
+this run's). This is reproducibility evidence for the pipeline (same seeds → same verdicts across two
+independent process invocations), not independent replication on a different sample — the two runs
+share 26 of their 30 data points. Numbers below are the full n=30 run; the earlier n=26 figures are
+superseded but were consistent with it wherever they overlap. Flagged here rather than silently
+reconciled, since concurrent, un-coordinated writes to the same branch/working tree is itself worth
+a maintainer's attention.
+
 ## Why this study exists
 
 An earlier pass tried 15 prompts, found 4 Q2_K disagreements, bisected exactly ONE, got
@@ -32,61 +47,104 @@ composable attention sites did not exist yet.
 generation.** An earlier 15-prompt pass had reported "Q4_K_M disagrees on 0/15" — pure small-sample
 noise against the real 42.6%.
 
-## Phase 2 — causal bisect (26 category-stratified disagreements, both hook paths)
+## Phase 2 — causal bisect (30 category-stratified disagreements, both hook paths)
+
+30 disagreements (16 Q2_K, 14 Q4_K_M), stratified round-robin over the 7 categories (5 arithmetic, 5
+factual_recall, 4 each of the other five) out of the pools mined in Phase 1 (sizes: arithmetic 87,
+factual_recall 62, multilingual 67, instruction_following 52, multi_step_reasoning 54,
+code_completion 42, structured_json 16). Each disagreement's FIRST disagreement position was bisected
+over BOTH hooks independently: `ffn` (full writable range, window_size=max(4,n_layer//4)=7,
+max_windows=4) and `head` (full `head_layers × head_indices` grid captured, narrowed to the top 16
+sites by observational divergence, window_size=4, max_windows=4). `store_tensors=False`; `seed` varied
+per disagreement (see below). 60 total bisect runs, 0 errors.
 
 ```
-ffn  (MLP)        localized_site 9 | localized_window 3 | distributed 5 |
-                  perturbation_sensitive 1 | no_restoration 8
-head (attention)  localized_site 4 |                      distributed 2 |
-                  no_restoration 20
+ffn  (MLP)        localized_site 12 | localized_window 3 | distributed 5 |
+                  perturbation_sensitive 1 | no_restoration 9
+head (attention)  localized_site 4  |                      distributed 2 |
+                  perturbation_sensitive 1 | no_restoration 23
 ```
 
-**17/26 on the MLP path; 6/26 on attention.** Every causal verdict cleared an independent random
-equal-norm control. Instrument sanity 388/388 (rate 1.0) — the candidate self-transplant was a
-verified no-op in every observation, so the write path never confounded a result.
+**20/30 (66.7%) on the MLP path beat the random-equal-norm control; 6/30 (20.0%) on attention.**
+Every causal verdict cleared an independent random-equal-norm control — that is what "beat control"
+means here, structurally, not just a label. Instrument sanity 482/482 (rate 1.0) — the candidate
+self-transplant was a verified no-op in every observation, so the write path never confounded a
+result.
 
-Depth gradient (share of tested sites beating control), monotonic:
+Depth gradient (share of tested sites beating control), monotonic on ffn:
 
-| hook | band | tested | moved | beat control | |
+| hook | band | tested | moved | beat control | % |
 |---|---|---|---|---|---|
-| ffn | early | 273 | 57 | 41 | 15.0% |
-| ffn | mid | 319 | 134 | 87 | 27.3% |
-| ffn | late | 434 | 247 | 217 | 50.0% |
-| head | late | 460 | 60 | 49 | 10.7% |
+| ffn | early | 335 | 86 | 69 | 20.6% |
+| ffn | mid | 395 | 181 | 131 | 33.2% |
+| ffn | late | 525 | 314 | 279 | 53.1% |
+| head | late | 524 | 64 | 49 | 9.4% |
 
-By category (hooks pooled, causal share): structured_json 6/8, code_completion 5/8, arithmetic 3/8,
-factual_recall 3/8, multilingual 3/6, multi_step_reasoning 2/8, instruction_following 2/6.
-**The phase-1 inverse relationship holds: structured_json has the lowest disagreement rate and the
-highest localization rate.** Rare failures are localizable; common ones are distributed.
+(head has NO early/mid rows: every one of its 524 tested sites, across all 30 disagreements, fell in
+the late band — see Limits below, this is a coverage artifact of `max_head_sites`'s divergence
+ranking, not a finding that early/mid attention heads are irrelevant.)
+
+By category (hooks pooled, causal share): structured_json 5/8 (62.5%), code_completion 5/8 (62.5%),
+multilingual 4/8 (50.0%), instruction_following 3/8 (37.5%), arithmetic 4/10 (40.0%), factual_recall
+3/10 (30.0%), multi_step_reasoning 2/8 (25.0%). **The phase-1 inverse relationship holds:
+structured_json has the lowest disagreement rate (Phase 1) and among the highest localization rates
+(Phase 2).** Rare failures are more often localizable; common ones are more often distributed or
+unrestored.
 
 ## The seed confound (found, retracted, corrected)
 
-The first Phase-2 run was **retracted**. `transplant.run_site()` builds its RNG as
-`random.Random(seed)` fresh per call and `causal_bisect.run_bisect()` threads ONE seed to every
-leaf; the driver passed `seed=1` uniformly. `random.Random(1)` reproduces an identical float
-sequence on every construction, and every ffn site shares one vector width — so **all 87 control
-arms in that run used the same frozen direction, merely rescaled**, verified in the artifact
-(1 distinct `random_seed`, against 12 in the corrected run).
+The first Phase-2 run (n=30, archived locally as
+`_quant_regression_population_report_SEED_CONFOUND_v1.json`, gitignored) was **retracted**.
+`transplant.run_site()` builds its RNG as `random.Random(seed)` fresh per call, and
+`causal_bisect.run_bisect()` threads ONE `seed` to every leaf's `run_site()` call unconditionally;
+the driver passed `seed=1` uniformly across all 30 disagreements. `random.Random(1)` reproduces an
+identical float sequence on every construction, and every ffn site shares one vector width (n_embd) —
+so **every single-site leaf confirmation in that run, across every disagreement, shared the same
+frozen raw random direction, merely rescaled to each site's own reference-vector norm.** This is
+`clozn/analysis/transplant.py` and `causal_bisect.py` working exactly as documented (a caller-supplied
+seed IS supposed to be reproducible) — the gap was in this experiment's OWN calling convention, not
+in those modules, and was fixed here (`seed = seed_base + sample_index`, varied per disagreement)
+rather than by touching `clozn/analysis/`.
 
-What exposed it: the run returned 12 `localized_site`/30 on ffn, far above this project's prior of
-~3/12 reference-specific ([DISTRIBUTED_FUNCTION.md](DISTRIBUTED_FUNCTION.md)). **A result that
-overturns a hard-won prior is the moment to audit the controls, not to report the news.**
+What exposed it: the retracted run returned 12 `localized_site`/30 on ffn, far above this project's
+prior of ~3/12 reference-specific ([DISTRIBUTED_FUNCTION.md](DISTRIBUTED_FUNCTION.md)). **A result
+that overturns a hard-won prior is the moment to audit the controls, not to report the news.**
 
-Measured impact, same cases re-run: 2 of 32 (id, hook) pairs changed verdict — one
-`distributed → perturbation_sensitive`, one `localized_window → distributed`. Restricted to the 13
-pairs where controls actually ran, 2/13. The seed-1 draw happened to behave typically. **That is
-luck, not vindication:** had it been weak, identical code would have produced a fabricated result
-with no outward sign, and the impact was unknowable without re-running.
+Measured impact, same 30 disagreements re-run with the fix: of 60 comparable (id, hook) pairs, **3
+changed verdict label** — `Q2_K__144/ffn: distributed_restoration → perturbation_sensitive`,
+`Q2_K__213/ffn: localized_window → distributed_restoration` (both moves make the finding LESS
+localized, i.e. the frozen weak control had been making these two look more precise than the
+independent draw supports), and `Q4_K_M__57/head: distributed_restoration → localized_site` (this one
+moves the OTHER way — MORE localized under the fix). The verdict histogram's shape survives
+essentially unchanged (ffn localized_site 12→12, head localized_site 3→4). **This is a small,
+non-systematically-biased impact, not a null one — and it was luck, not vindication:** had the
+frozen seed-1 draw happened to be an unusually weak perturbation direction in this ~3584-dim residual
+width, identical code would have produced a fabricated result with no outward sign, and the impact
+would have been unknowable without re-running with independent seeds.
 
 ## Limits — these bound the claim
 
-* **The second-order confound is NOT closed.** 14 of 26 records had multi-leaf searches sharing one
-  seed draw across leaves within a single disagreement — more than half the sample. `run_bisect()`
-  threads one seed to every leaf; closing it means changing that seeding contract in
-  `clozn/analysis/`, which this experiment was scoped not to touch.
-* **The head search reached LATE layers only** (`max_head_sites=16`, ranked by observational
-  divergence, which concentrated there). "Attention carries less signal" is qualified by coverage,
-  not established across the stack.
-* **Not population rates.** The sample is category-stratified, not random over the 568 mined
-  disagreements. n=26.
+* **The second-order confound is NOT closed.** 17 of the 60 (disagreement, hook) documents (13 of the
+  30 disagreements) had multi-leaf searches sharing one seed draw across leaves WITHIN that single
+  disagreement (rescaled per leaf's own reference norm, not independently redrawn) — over 40% of the
+  sample. `run_bisect()` threads one `seed` to every leaf unconditionally; closing it means changing
+  that seeding contract in `clozn/analysis/`, which this experiment was scoped not to touch. Reported,
+  not patched around.
+* **The head search reached the LATE layer band almost exclusively** (`max_head_sites=16`, ranked by
+  observational reference-vs-candidate divergence — which, empirically, concentrated there: all 524
+  tested head sites across all 30 disagreements fell in the late third of the network). "Attention
+  carries less signal" is qualified by this coverage gap, not established across the stack — a
+  divergence-agnostic or depth-stratified head sampling strategy might find early/mid-layer attention
+  effects this design structurally could not see.
+* **Not population rates.** The sample is category-stratified, not randomly drawn from the 568 mined
+  disagreements (253 Q2_K + 127 Q4_K_M prompts with ≥1 disagreement, more positions than that). n=30.
+* **Depth leverage is a live alternative explanation for the depth gradient itself.** A late-layer ffn
+  transplant is mechanically a bigger, more direct lever on the final logits (less remaining
+  computation to alter or wash out the intervention) than an early-layer one, independent of where
+  quantization damage actually originates. This design cannot cleanly separate "damage lives late" from
+  "late interventions have more raw power to flip a decision" — both predict the same monotonic
+  gradient measured above.
 * Verdicts are per (disagreement, hook); no correction for multiple comparisons was applied.
+* Positions bisected are each prompt's FIRST disagreement only (one flip per prompt, matching the
+  original transplant-localization method) — later disagreements in the same continuation, when a
+  prompt had more than one, were never bisected.
