@@ -1,0 +1,70 @@
+{
+  "schema_version": "clozn.causal-bisect.v1",
+  "generated_at": "2026-07-28T00:00:00Z",
+  "reference_model": {"label": "reference", "filename": "ref.gguf"},
+  "candidate_model": {"label": "candidate", "filename": "cand.gguf"},
+  "pair_compatibility": {
+    "schema_version": "clozn.pair-compatibility.v1",
+    "hidden_size": {"state": "same", "value_a": 4, "value_b": 4},
+    "layer_count": {"state": "same", "value_a": 8, "value_b": 8},
+    "head_count": {"state": "same", "value_a": 2, "value_b": 2},
+    "verdict": {"overall": "compatible", "reasons": [],
+                "operations": {"per_token_comparison": {"permitted": true, "reason": "ok"},
+                               "residual_transplant": {"permitted": true, "reason": "hidden_size matches (4)"},
+                               "head_transplant": {"permitted": true, "reason": "head_count matches (2)"}}}
+  },
+  "target_token_id": 5,
+  "readout_position": 2,
+  "write_positions": [2],
+  "continuation": {"n_prompt": 2, "n_cont": 1},
+  "primary_metric": "reference_token_logprob_recovery",
+  "seed": 0,
+  "search": {
+    "kinds_requested": ["head"],
+    "composable_kinds_searched": ["head"],
+    "window_capable_kinds": ["ffn", "head"],
+    "hooks_unavailable": [],
+    "screening": {"requested": false, "used": false}
+  },
+  "coverage": {
+    "window_size": 4,
+    "max_head_sites": 8,
+    "layer_range_searched": {
+      "head": {"writable_min": 0, "writable_max_exclusive": 8, "head_layers_requested": [0, 1],
+               "head_indices_requested": [0, 1], "usable_sites_count": 4}
+    },
+    "bounds_applied": [
+      "kinds_requested=['head']: only these hook kind(s) were searched this run",
+      "head windows are tiled at window_size=4 (layer, head) sites per coarse window before any bisection",
+      "head: candidate grid was 2 head_layers x 2 head_indices = 4 (layer, head) sites (caller-supplied, never an implicit full-architecture sweep); 4 were usable on both models and searched"
+    ]
+  },
+  "window_tests": [
+    {
+      "hook": "head", "layers": [0, 0, 1, 1], "heads": [0, 1, 0, 1], "depth": 0,
+      "instrument_sane": true, "moved": true, "beat_control": true, "retained": true,
+      "reasons": ["the reference transplant flipped the top-1 token to target_token_id and the random equal-norm control did not."],
+      "arms": {"reference_transplant": {"top1_token_id": 5, "top1_is_target": true},
+               "candidate_self_transplant": {"top1_token_id": 9, "top1_is_target": false, "write_applied": true},
+               "random_equal_norm": {"top1_token_id": 9, "top1_is_target": false}}
+    },
+    {
+      "hook": "head", "layers": [0, 0], "heads": [0, 1], "depth": 1,
+      "instrument_sane": true, "moved": false, "beat_control": false, "retained": false,
+      "reasons": ["the reference transplant did not flip the top-1 token to target_token_id for this window."],
+      "arms": {}
+    },
+    {
+      "hook": "head", "layers": [1, 1], "heads": [0, 1], "depth": 1,
+      "instrument_sane": true, "moved": false, "beat_control": false, "retained": false,
+      "reasons": ["the reference transplant did not flip the top-1 token to target_token_id for this window."],
+      "arms": {}
+    }
+  ],
+  "single_site_tests": [],
+  "verdict": {
+    "label": "distributed_restoration",
+    "reasons": ["a broad, coarse (unbisected) multi-site window beat the random equal-norm control, and every narrower window or individual site tested inside it did not"],
+    "evidence": {"windows": [{"hook": "head", "layers": [0, 0, 1, 1], "heads": [0, 1, 0, 1]}]}
+  }
+}

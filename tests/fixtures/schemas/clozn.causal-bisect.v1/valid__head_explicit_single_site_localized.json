@@ -1,0 +1,45 @@
+{
+  "schema_version": "clozn.causal-bisect.v1",
+  "generated_at": "2026-07-28T00:00:00Z",
+  "reference_model": {"label": "reference"},
+  "candidate_model": {"label": "candidate"},
+  "pair_compatibility": {
+    "schema_version": "clozn.pair-compatibility.v1",
+    "head_count": {"state": "same", "value_a": 2, "value_b": 2},
+    "verdict": {"overall": "compatible", "reasons": [],
+                "operations": {"per_token_comparison": {"permitted": true, "reason": "ok"},
+                               "residual_transplant": {"permitted": true, "reason": "hidden_size matches"},
+                               "head_transplant": {"permitted": true, "reason": "head_count matches (2)"}}}
+  },
+  "target_token_id": 5,
+  "readout_position": 2,
+  "write_positions": [2],
+  "continuation": {"n_prompt": 2, "n_cont": 1},
+  "primary_metric": "reference_token_logprob_recovery",
+  "seed": 0,
+  "search": {
+    "kinds_requested": ["head"],
+    "composable_kinds_searched": [],
+    "window_capable_kinds": ["ffn", "head"],
+    "hooks_unavailable": [],
+    "screening": {"requested": false, "used": false}
+  },
+  "coverage": {
+    "window_size": 4,
+    "layer_range_searched": {},
+    "bounds_applied": [
+      "head: head_layers/head_indices each had exactly one entry -- a single (layer, head) site was tested directly (source=explicit_head), no window search"
+    ]
+  },
+  "window_tests": [],
+  "single_site_tests": [
+    {"hook": "head", "layer": 3, "head": 1, "source": "explicit_head", "ok": true,
+     "transplant": {"schema_version": "clozn.transplant.v1",
+                    "analysis": {"instrument_sane": true, "reference_specific": true}}}
+  ],
+  "verdict": {
+    "label": "localized_site",
+    "reasons": ["the reference arm beat the random equal-norm control at an individual site (reference_specific=True on clozn.transplant.v1)"],
+    "evidence": {"sites": [{"hook": "head", "layer": 3, "head": 1}]}
+  }
+}
