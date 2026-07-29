@@ -284,6 +284,11 @@ int main(int argc, char** argv) {
 #ifdef CLOZN_SAE
         sae_on = sae_serve.on;
 #endif
+        // Hoisted out of the capabilities literal on purpose: tests/test_protocol_handshake.py pins
+        // the capability vocabulary by regex-extracting `{"key",` pairs from the literal below, so a
+        // nested json::array({"a","b"}) inside it would read its ELEMENTS as capability names. Keep
+        // every non-scalar capability value in a named variable so that guard stays honest.
+        json execution_fork_regimes = json::array({"live_kv_truncated", "reprefill"});
         json capabilities{
             {"streaming", true},          // SSE event stream on stream:true
             {"state_stream", true},       // protocol:true reshapes frames to StateStep
@@ -311,7 +316,7 @@ int main(int argc, char** argv) {
                                           // checkpoint at an arbitrary EARLIER point than its own
                                           // n_past (force_token/sampling/steer/residual_write),
                                           // labeled with the regime that made it exact
-            {"execution_fork_regimes", json::array({"live_kv_truncated", "reprefill"})},
+            {"execution_fork_regimes", execution_fork_regimes},
         };
         json h{{"status", "ok"},
                {"protocol_version", PROTOCOL_VERSION},        // worker <-> supervisor wire contract

@@ -21,7 +21,10 @@
     "readout",
     "attn_knockout",
     "lora",
-    "score_arms"
+    "score_arms",
+    "checkpoint",
+    "execution_fork",
+    "execution_fork_regimes"
   ],
   "stream_frame_envelope": [
     "req",
