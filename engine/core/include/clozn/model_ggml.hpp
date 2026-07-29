@@ -202,6 +202,68 @@ public:
     // dims observed at the last head hook: {ne0, d_head, n_head} -- the slice-0 shape probe.
     // d_head = ne0 / n_head_ when divisible, else 0 (probe FAILED -- architecture unsupported).
     const std::map<std::string, int>& head_dims() const { return head_dims_; }
+    // Per-spec landing (2026-07-28 honesty fix): true at index i iff the i-th spec passed to
+    // set_head_writes (in request order) actually wrote EVERY one of its requested positions during
+    // the last forward. False for an out-of-range layer/head, a values.size() that didn't match the
+    // PROBED d_head (only knowable once the tensor has actually been seen), or a position outside
+    // the decoded segment. set_head_writes no longer pre-filters invalid specs -- validity is decided
+    // exactly once, here, so a caller can never mistake a request that merely PARSED for one that
+    // actually landed. A route/caller must check this (or refuse the whole response unless every
+    // entry is true) rather than assume a structurally well-formed request succeeded.
+    const std::vector<bool>& head_write_landed() const { return head_write_landed_; }
+
+    // --- FFN (MLP) contribution hook (the additive analogue of kqv_out, for the feed-forward block) ---
+    // The FIFTH eval_cb hook: "ffn_out-<il>" is the feed-forward block's contribution BEFORE it is
+    // added into the residual stream (verified against models/qwen2.cpp: `cb(cur, "ffn_out", il);`
+    // immediately precedes `cur = ggml_add(ctx0, cur, ffn_inp);` -- the residual add happens AFTER
+    // this callback fires) -- the exact additive-not-overwrite analogue of kqv_out, but full n_embd
+    // width (no per-head split; the MLP has no head structure to slice). Verified present, by direct
+    // file read, for every architecture this repo's ~/.clozn/models set actually uses: models/qwen2.cpp
+    // (Qwen2.5), models/llama.cpp (Llama-3.x), models/gemma4.cpp (gemma-4), models/qwen35.cpp
+    // (Qwen3.5), models/dream.cpp (dream-v0), and models/deepseek2.cpp (Ministral/mistral4 --
+    // llama_model_mistral4 inherits llama_model_deepseek2's graph verbatim per models/models.h:1108,
+    // and deepseek2's own `cb(cur,"ffn_out",il)` fires on BOTH its dense-layer branch (models/
+    // deepseek2.cpp:384) and its MoE branch (:413, after moe_out+ffn_shexp are combined) -- so a
+    // MoE-vs-dense layer split inside one model still names the tensor uniformly).
+    //
+    // UNLIKE kqv_out (emitted from ONE shared helper in llama-graph.cpp, so present for essentially
+    // every attention architecture) ffn_out is emitted PER-ARCHITECTURE, directly inside each model's
+    // own .cpp file -- a repo-wide grep for the literal `cb(cur, "ffn_out", il)` found it MISSING from
+    // 35 of this tree's 133 model files: state-space/no-conventional-FFN architectures (mamba*,
+    // rwkv*), several MoE variants that route through a differently-named combine step (qwen2moe,
+    // qwen3moe, olmoe, phimoe, openai-moe, smallthinker), and several encoder-only bert variants. So
+    // "the tensor never fires for this model" is a REAL, architecture-dependent outcome here, not
+    // just a shape-probe edge case the way kqv_out's d_head==0 is -- ffn_capture/ffn_write track
+    // whether the tensor was actually SEEN per request (ffn_write_landed_ below; the route mirrors
+    // residual `capture`'s capture_missing diagnostic for reads) so an unsupported architecture gets
+    // an honest empty/refused result, never a silent no-op.
+    //
+    // ffn_capture: read the raw [n_embd] MLP-contribution row at requested (layer, position) pairs --
+    // no norm summary (unlike head_capture there is no per-head split to compress away). ffn_write:
+    // overwrite the MLP contribution at requested positions before the residual add consumes it
+    // (values = positions.size()*n_embd floats, row-major per position -- the SAME shape convention
+    // as residual `write`). UNLIKE residual `write` (layer 0 RESERVED as the read tap's final-layer
+    // sentinel, so writes start at layer 1) every layer 0..n_layer-1 has its own FFN block, so layer 0
+    // IS a valid ffn_write/ffn_capture target.
+    void set_ffn_capture(const std::vector<int>& layers, const std::vector<int>& positions);
+    void clear_ffn_capture();
+    // layer -> pos -> [n_embd] raw MLP-contribution row (from the last forward with capture armed)
+    const std::map<int, std::map<int, std::vector<float>>>& ffn_rows() const { return ffn_rows_; }
+    // Layers that survived range validation [0, n_layer) -- mirrors GgmlAdapter::capture_layers().
+    const std::vector<int>& ffn_capture_layers() const { return ffn_cap_layers_; }
+    // REPLACE-per-call-site semantics mirror add_write_state: returns false (and adds nothing) when
+    // layer is out of [0, n_layer) or values.size() != positions.size()*n_embd -- BOTH are known
+    // STATICALLY (n_embd never needs a runtime probe, unlike kqv_out's d_head), so this is the fully
+    // fail-closed path: a caller/route sees `false` and can refuse the whole request BEFORE any
+    // forward ever runs, never a silently-dropped spec discovered after the fact.
+    bool add_ffn_write(int il, const std::vector<int>& positions, const std::vector<float>& values);
+    void clear_ffn_write();
+    // Per-spec landing, aligned with the order add_ffn_write was called (1:1 -- add_ffn_write never
+    // partially adds): true iff eval_cb actually saw "ffn_out-<il>" for that spec's layer AND wrote
+    // every one of its requested positions. False for an architecture whose graph never names the
+    // tensor "ffn_out" (see the class comment above) -- the runtime existence check add_ffn_write's
+    // static shape validation cannot perform by itself.
+    const std::vector<bool>& ffn_write_landed() const { return ffn_write_landed_; }
 
     // Standalone: load a fresh model + create a context over it (the original API).
     // device_logits_passthrough: when set AND the active-block logits land in a device buffer
@@ -488,9 +550,22 @@ private:
     std::vector<int> head_cap_positions_;
     bool head_cap_rows_ = false;
     std::vector<HeadWrite> head_writes_;
+    std::vector<bool> head_write_landed_;   // parallel to head_writes_ -- see head_write_landed()
     std::map<int, std::map<int, std::vector<float>>> head_norms_;
     std::map<int, std::map<int, std::vector<float>>> head_rows_;
     std::map<std::string, int> head_dims_;
+    // FFN contribution hook state (ffn_out-<il>): capture set + write specs + per-spec landing.
+    struct FfnWrite {
+        int layer = 0;
+        std::string name;              // "ffn_out-<layer>"
+        std::vector<int> positions;
+        std::vector<float> buf;        // [positions.size()*n_embd] new MLP-contribution rows
+    };
+    std::vector<FfnWrite> ffn_writes_;
+    std::vector<bool> ffn_write_landed_;               // parallel to ffn_writes_
+    std::vector<int> ffn_cap_layers_;
+    std::vector<int> ffn_cap_positions_;
+    std::map<int, std::map<int, std::vector<float>>> ffn_rows_;   // layer -> pos -> [n_embd] row
     std::vector<float> diff_prefix_;     // [diff_m_ * n_embd] diffusion soft prefix, laid as a frozen block [0,diff_m_)
     int diff_m_ = 0;                     // diffusion prefix length (0 = none)
     // Multi-observer capture plane (Phase 2.3): eval_cb fills cap_bufs_ for every layer in the

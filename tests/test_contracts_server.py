@@ -86,7 +86,9 @@ def test_get_hooks_returns_the_versioned_document(isolated):
     status, out = _get("/contracts/hooks")
     assert status == 200
     assert out["schema"] == "clozn.hook_vocabulary.v1"
-    assert {hook["name"] for hook in out["hooks"]} == {"l_out-<il>", "kq_soft_max-<il>"}
+    assert {hook["name"] for hook in out["hooks"]} == {
+        "l_out-<il>", "kq_soft_max-<il>", "kqv_out-<il>", "ffn_out-<il>",
+    }
 
 
 def test_get_hooks_works_with_no_substrate_at_all(isolated):
