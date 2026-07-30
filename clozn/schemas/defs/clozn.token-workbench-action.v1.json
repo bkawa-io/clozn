@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.token-workbench-action.v1",
+  "title": "One cached result of a Milestone F token-workbench action",
+  "description": "Cache-by-identity entry for an expensive token-workbench action (currently: causal_trace), stored on the run under token_workbench_actions so a repeat request with the same run identity + token index + method version + request params + worker identity is a cache hit, never a recompute. `result` is the underlying producer's own artifact (e.g. clozn.analysis.tracer.trace()'s receipt), embedded verbatim -- this schema never reshapes it into a new vocabulary.",
+  "type": "object",
+  "required": [
+    "schema_version", "action", "cache_key", "method_version", "run_id", "index", "computed_at",
+    "outcome"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.token-workbench-action.v1"},
+    "action": {"enum": ["causal_trace", "fork", "mechanistic_diff"]},
+    "cache_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "method_version": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "index": {"type": "integer", "minimum": 0},
+    "computed_at": {"type": "string", "minLength": 1},
+    "outcome": {"type": "string", "minLength": 1},
+    "result": {"type": "object"}
+  }
+}

@@ -1,9 +1,22 @@
-"""Bounded local lifecycle for context-answer influence-map jobs.
+"""Bounded local lifecycle for background jobs -- originally influence-map only, now the ONE shared job
+registry every bounded async action in the gateway uses (Milestone F: the token-workbench action
+endpoints reuse this verbatim rather than forking a parallel registry/cancellation story -- see
+clozn/runs/token_workbench_actions.py and clozn/server/routes/token_workbench_actions.py).
 
-Jobs are process-local convenience state, not durable evidence.  The computed
-map remains attached to the run only at the existing persistence boundary.
-Cancellation and persistence share one per-job lock: once a cancel response
-acknowledges cancellation, that job cannot subsequently enter its commit.
+Jobs are process-local convenience state, not durable evidence.  A computed result is attached to its
+run (or wherever its own producer persists it) only at that artifact's OWN existing persistence
+boundary -- this registry never decides how/where a result is stored, only how its computation's
+lifecycle (queued/running/persisting/completed/failed/cancelled) is tracked and cancelled.
+Cancellation and persistence share one per-job lock: once a cancel response acknowledges cancellation,
+that job cannot subsequently enter its commit.
+
+`kind` (added for Milestone F, additive/backward-compatible: defaults to "influence_map" so every
+existing caller/snapshot shape is unchanged) distinguishes which action a job belongs to
+("influence_map" | "causal_trace" | "fork" | ...) purely for observability -- it changes no lifecycle
+behavior. One registry, one `JOBS` singleton, one capacity budget shared across every kind: a causal-
+trace job and an influence-map job compete for the SAME bounded thread pool and job-table slots, which
+is intentional (a single, honest capacity story rather than per-kind budgets that could be gamed by
+spreading load across kinds).
 """
 from __future__ import annotations
 
@@ -30,9 +43,9 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _safe_error(exc: Exception) -> dict:
+def _safe_error(exc: Exception, *, kind: str = "influence_map") -> dict:
     return {
-        "code": "influence_map_job_failed",
+        "code": f"{kind}_job_failed",
         "message": f"{type(exc).__name__}: {exc}",
     }
 
@@ -57,6 +70,7 @@ def _progress(phase: str, completed: int, total: int) -> dict:
 class _Job:
     job_id: str
     run_id: str
+    kind: str = "influence_map"
     state: str = "queued"
     created_at: str = field(default_factory=_now_iso)
     updated_at: str = field(default_factory=_now_iso)
@@ -67,6 +81,7 @@ class _Job:
     persisted: bool = False
     cached: bool = False
     error: dict | None = None
+    result: dict | None = None
 
 
 class JobControl:
@@ -77,6 +92,18 @@ class JobControl:
 
     def cancel_requested(self) -> bool:
         return self._job.cancel_event.is_set()
+
+    def attach_result(self, payload: dict) -> None:
+        """Stash the eventual artifact ON the job snapshot itself (Milestone F addition, additive/
+        opt-in: a worker that never calls this -- every influence-map worker today -- leaves
+        `result` out of its snapshot exactly as before; `omit, never null-pad`). Lets a caller poll
+        ONE job resource to both watch progress and read the terminal artifact, instead of a second
+        bespoke fetch endpoint per action. Only takes effect while the job is not yet cancelled, so a
+        cancelled job never surfaces a result it raced to attach."""
+        with self._job.lock:
+            if self._job.cancel_event.is_set() and not self._job.persisted:
+                raise JobCancelled("job cancelled before its result was attached")
+            self._job.result = dict(payload) if isinstance(payload, dict) else payload
 
     def checkpoint(self, *, phase: str, completed: int, total: int) -> None:
         with self._job.lock:
@@ -137,12 +164,14 @@ class InfluenceJobRegistry:
             if len(self._jobs) < self.max_jobs:
                 return
 
-    def start(self, run_id: str, worker=None, *, cached: bool = False) -> dict:
+    def start(self, run_id: str, worker=None, *, cached: bool = False, kind: str = "influence_map") -> dict:
         with self._lock:
             self._prune_locked()
             if len(self._jobs) >= self.max_jobs:
-                raise JobCapacityError("influence-map job capacity is full")
-            job = _Job(job_id=f"infjob_{uuid.uuid4().hex}", run_id=run_id, cached=bool(cached))
+                raise JobCapacityError("job capacity is full")
+            job = _Job(
+                job_id=f"infjob_{uuid.uuid4().hex}", run_id=run_id, kind=str(kind or "influence_map"),
+                cached=bool(cached))
             self._jobs[job.job_id] = job
             if cached:
                 with job.lock:
@@ -200,7 +229,7 @@ class InfluenceJobRegistry:
         except Exception as exc:
             with job.lock:
                 job.state = "failed"
-                job.error = _safe_error(exc)
+                job.error = _safe_error(exc, kind=job.kind)
                 job.updated_at = _now_iso()
         self._mark_terminal(job)
 
@@ -252,6 +281,7 @@ class InfluenceJobRegistry:
             "schema_version": JOB_SCHEMA,
             "job_id": job.job_id,
             "run_id": job.run_id,
+            "kind": job.kind,
             "state": job.state,
             "progress": dict(job.progress),
             "cancel_requested": job.cancel_requested,
@@ -262,6 +292,8 @@ class InfluenceJobRegistry:
         }
         if job.error:
             out["error"] = dict(job.error)
+        if job.result is not None:
+            out["result"] = dict(job.result) if isinstance(job.result, dict) else job.result
         return out
 
     def clear_for_tests(self) -> None:

@@ -1,0 +1,10 @@
+{
+  "schema_version": "clozn.token-workbench-action.v1",
+  "action": "causal_trace",
+  "cache_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "method_version": "causal_trace.v1",
+  "run_id": "run_0019fb1479b18_96e8c5",
+  "index": 0,
+  "computed_at": "2026-07-30T00:00:01+00:00",
+  "outcome": "blocked"
+}

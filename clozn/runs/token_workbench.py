@@ -55,40 +55,21 @@ def _drop_none(d: dict) -> dict:
     return {k: v for k, v in d.items() if v is not None}
 
 
-def _find_action(investigation_doc: Mapping, action_id: str) -> dict | None:
-    """One of investigation's OWN `clozn.run-investigation.v1` action descriptors (id/label/kind/
-    method/href/availability/reason/...), verbatim -- NOT this module's own `Action` shape. Callers
-    that attach it to a capability entry must project it through `_workbench_action` first; investigation
-    actions are a richer, separate vocabulary and must never be passed through as-is into a capability's
-    closed `action` field."""
-    for action in investigation_doc.get("actions") or []:
-        if isinstance(action, Mapping) and action.get("id") == action_id:
-            return deepcopy(dict(action))
-    return None
-
-
 def _workbench_action(method: str, href: str, *, request_body: dict | None = None) -> dict:
     """This module's own small `{method, href, request_body?}` action shape (clozn.token-workbench.v1's
     `Action` $def) -- deliberately narrower than investigation's own action vocabulary. A capability
     entry's `available`/`status`/`reason` already carries the readiness facts; `action` is only ever a
-    navigation pointer, never a second copy of investigation's id/label/kind/availability/reason."""
+    navigation pointer, never a second copy of investigation's id/label/kind/availability/reason.
+
+    Every capability's `action` points at a REAL, live Milestone F endpoint
+    (clozn/server/routes/token_workbench_actions.py) as of this module's Milestone F update -- not the
+    pre-Milestone-F routes those actions used to describe (POST /runs/<id>/fork,
+    POST /runs/<id>/causal-trace, POST /runs/<id>/influence-map/jobs), which remain live but are no
+    longer what this preview recommends."""
     out: dict[str, Any] = {"method": method, "href": href}
     if request_body is not None:
         out["request_body"] = dict(request_body)
     return out
-
-
-def _project_investigation_action(action: Mapping | None) -> dict | None:
-    """Project one investigation action descriptor down to this module's own Action shape, if present."""
-    if not isinstance(action, Mapping):
-        return None
-    method = action.get("method")
-    href = action.get("href")
-    if not (isinstance(method, str) and method and isinstance(href, str) and href):
-        return None
-    request_body = action.get("request_body")
-    return _workbench_action(
-        method, href, request_body=request_body if isinstance(request_body, Mapping) else None)
 
 
 # ------------------------------------------------------------------------------------------- sections
@@ -249,7 +230,7 @@ def _exact_fork_capability(run: Mapping[str, Any], index: int, *, worker_ready: 
     capture_parent_checkpoint) so this preview cannot silently drift from what that route actually
     accepts. It is a preview, not authoritative: the POST route re-validates independently and is the
     only thing allowed to actually capture a checkpoint."""
-    action = _workbench_action("POST", f"/runs/{run.get('id')}/fork")
+    action = _workbench_action("POST", f"/runs/{run.get('id')}/tokens/{index}/fork")
     if not worker_ready:
         return {
             "available": False, "snapshot_state": "worker_unreachable",
@@ -317,7 +298,7 @@ def _exact_fork_capability(run: Mapping[str, Any], index: int, *, worker_ready: 
     return {"available": True, "snapshot_state": "not_attempted", "action": action}
 
 
-def _source_measurement_capability(investigation_doc: Mapping[str, Any]) -> dict:
+def _source_measurement_capability(investigation_doc: Mapping[str, Any], run_id: str, index: int) -> dict:
     section = (investigation_doc.get("sections") or {}).get("prompt_source_influence")
     if not isinstance(section, Mapping):
         return {
@@ -337,15 +318,16 @@ def _source_measurement_capability(investigation_doc: Mapping[str, Any]) -> dict
             reason if isinstance(reason, str) and reason
             else f"prompt/source influence evidence is {state}, not a completed measurement"
         )
-    action = _project_investigation_action(_find_action(investigation_doc, "measure_prompt_source_influence"))
-    if action is not None:
-        out["action"] = action
+    # Milestone F: source-measure IS this same investigation evidence, requested through the token-
+    # workbench's OWN action surface (which delegates read-only to the identical influence-map job
+    # machinery investigation.py's own action already pointed at) -- point here, not at the legacy
+    # investigation action, now that it exists.
+    out["action"] = _workbench_action("POST", f"/runs/{run_id}/tokens/{index}/source-measure")
     return out
 
 
 def _causal_trace_capability(run: Mapping[str, Any], index: int, *, worker_ready: bool) -> dict:
-    action = _workbench_action(
-        "POST", f"/runs/{run.get('id')}/causal-trace", request_body={"position": index})
+    action = _workbench_action("POST", f"/runs/{run.get('id')}/tokens/{index}/causal-trace")
     final_prompt = run.get("final_prompt")
     if not (isinstance(final_prompt, str) and final_prompt):
         return {
@@ -376,7 +358,8 @@ def _causal_trace_capability(run: Mapping[str, Any], index: int, *, worker_ready
 
 
 def _mechanistic_diff_capability(
-    run: Mapping[str, Any], *, reference_run_id: str | None, reference_run: Mapping[str, Any] | None,
+    run: Mapping[str, Any], index: int, *, reference_run_id: str | None,
+    reference_run: Mapping[str, Any] | None,
 ) -> dict:
     if not reference_run_id:
         return {
@@ -410,10 +393,13 @@ def _mechanistic_diff_capability(
             "reference run has a different recorded model identity, eligible for a cross-model "
             "mechanistic diff"
         ),
+        # Milestone F: POST here first -- it runs the SAME pair-compatibility gate this preview just
+        # ran, authoritatively, and is honest about whether cross-model EXECUTION is wired yet (as of
+        # this milestone, it is not; see clozn.runs.token_workbench_actions's module docstring). The
+        # CLI (`clozn diff-model`) remains the only way to actually execute one today.
         "action": _workbench_action(
-            "CLI",
-            f"clozn diff-model --reference {run.get('model')} --candidate {reference_run.get('model')}",
-        ),
+            "POST", f"/runs/{run.get('id')}/tokens/{index}/mechanistic-diff",
+            request_body={"reference_run_id": reference_run_id}),
     }
 
 
@@ -455,10 +441,10 @@ def build(
         },
         "capabilities": {
             "exact_fork": _exact_fork_capability(run, index, worker_ready=worker_ready),
-            "source_measurement": _source_measurement_capability(investigation_doc),
+            "source_measurement": _source_measurement_capability(investigation_doc, run_id, index),
             "causal_trace": _causal_trace_capability(run, index, worker_ready=worker_ready),
             "mechanistic_diff": _mechanistic_diff_capability(
-                run, reference_run_id=reference_run_id, reference_run=reference_run),
+                run, index, reference_run_id=reference_run_id, reference_run=reference_run),
         },
     }
     if reference_run_id:
