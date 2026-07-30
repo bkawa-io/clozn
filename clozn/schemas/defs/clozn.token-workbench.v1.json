@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.token-workbench.v1",
+  "title": "Read-only synthesis of the evidence and actions available for one token of one recorded run",
+  "description": "A projection over existing immutable run/investigation artifacts, scoped to one response-token index. Building this document must not execute a model measurement, call a live worker, or mutate a run. The capabilities block never flattens its four entries into one shared status enum -- each carries its own native vocabulary (or, for mechanistic_diff, a plain typed reason) rather than a cross-artifact score.",
+  "type": "object",
+  "required": ["schema_version", "run_id", "index", "sections", "capabilities"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.token-workbench.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "index": {"type": "integer", "minimum": 0},
+    "reference_run_id": {"type": "string", "minLength": 1},
+    "sections": {
+      "type": "object",
+      "required": ["run", "token", "context", "comparison", "readouts"],
+      "additionalProperties": false,
+      "properties": {
+        "run": {"$ref": "#/$defs/RunSection"},
+        "token": {"$ref": "#/$defs/TokenSection"},
+        "context": {"$ref": "#/$defs/EvidenceSection"},
+        "comparison": {"$ref": "#/$defs/EvidenceSection"},
+        "readouts": {"$ref": "#/$defs/EvidenceSection"}
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "required": ["exact_fork", "source_measurement", "causal_trace", "mechanistic_diff"],
+      "additionalProperties": false,
+      "properties": {
+        "exact_fork": {"$ref": "#/$defs/ExactForkCapability"},
+        "source_measurement": {"$ref": "#/$defs/SourceMeasurementCapability"},
+        "causal_trace": {"$ref": "#/$defs/CausalTraceCapability"},
+        "mechanistic_diff": {"$ref": "#/$defs/MechanisticDiffCapability"}
+      }
+    }
+  },
+  "$defs": {
+    "Action": {
+      "type": "object",
+      "required": ["method", "href"],
+      "additionalProperties": false,
+      "properties": {
+        "method": {"enum": ["GET", "POST", "CLI"]},
+        "href": {"type": "string", "minLength": 1},
+        "request_body": {"type": "object"}
+      }
+    },
+    "RunSection": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": true,
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "substrate": {"type": "string", "minLength": 1},
+        "source": {"type": "string", "minLength": 1},
+        "parent_run_id": {"type": "string", "minLength": 1},
+        "token_count": {"type": "integer", "minimum": 0},
+        "model_sha256": {"type": "string", "minLength": 1},
+        "href": {"type": "string", "minLength": 1}
+      }
+    },
+    "TokenAlternative": {
+      "type": "object",
+      "required": ["piece"],
+      "additionalProperties": false,
+      "properties": {
+        "piece": {"type": "string"},
+        "token_id": {"type": "integer", "minimum": 0},
+        "prob": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "TokenSection": {
+      "type": "object",
+      "required": ["index", "piece", "alternatives"],
+      "additionalProperties": true,
+      "properties": {
+        "index": {"type": "integer", "minimum": 0},
+        "piece": {"type": "string"},
+        "token_id": {"type": "integer", "minimum": 0},
+        "prefix_kept": {"type": "string"},
+        "alternatives": {"type": "array", "items": {"$ref": "#/$defs/TokenAlternative"}}
+      }
+    },
+    "EvidenceSection": {
+      "type": "object",
+      "description": "The outer availability wrapper this artifact family (clozn.run-investigation.v1) already uses. `state`'s permitted values are this section's OWN, distinct per section -- never one shared cross-section enum.",
+      "required": ["state"],
+      "additionalProperties": true,
+      "properties": {
+        "state": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    },
+    "ExactForkCapability": {
+      "type": "object",
+      "required": ["available", "snapshot_state"],
+      "additionalProperties": false,
+      "properties": {
+        "available": {"type": "boolean"},
+        "snapshot_state": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1},
+        "action": {"$ref": "#/$defs/Action"}
+      }
+    },
+    "SourceMeasurementCapability": {
+      "type": "object",
+      "required": ["available", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "available": {"type": "boolean"},
+        "status": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1},
+        "action": {"$ref": "#/$defs/Action"}
+      }
+    },
+    "CausalTraceCapability": {
+      "type": "object",
+      "required": ["available", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "available": {"type": "boolean"},
+        "status": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1},
+        "action": {"$ref": "#/$defs/Action"}
+      }
+    },
+    "MechanisticDiffCapability": {
+      "type": "object",
+      "required": ["available", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "available": {"type": "boolean"},
+        "reason": {"type": "string", "minLength": 1},
+        "action": {"$ref": "#/$defs/Action"}
+      }
+    }
+  }
+}

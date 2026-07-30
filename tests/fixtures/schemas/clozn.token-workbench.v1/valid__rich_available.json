@@ -1,0 +1,84 @@
+{
+  "schema_version": "clozn.token-workbench.v1",
+  "run_id": "run_0019fb1479b18_96e8c5",
+  "index": 1,
+  "reference_run_id": "run_reference0001",
+  "sections": {
+    "run": {
+      "id": "run_0019fb1479b18_96e8c5",
+      "model": "fixture-model",
+      "substrate": "engine",
+      "source": "engine_chat",
+      "parent_run_id": "run_parent00001",
+      "token_count": 3,
+      "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "href": "/runs/run_0019fb1479b18_96e8c5"
+    },
+    "token": {
+      "index": 1,
+      "piece": " two",
+      "token_id": 22,
+      "prefix_kept": "one",
+      "alternatives": [
+        {"piece": " four", "token_id": 44, "prob": 0.02}
+      ]
+    },
+    "context": {
+      "state": "delivered_not_measured",
+      "artifact": {
+        "schema": "clozn.context-receipt.v1",
+        "method": "gateway_context_receipt",
+        "native_status": "current"
+      },
+      "privacy": "metadata_only",
+      "delivered": [],
+      "assembled": [],
+      "omitted": []
+    },
+    "comparison": {
+      "state": "supported",
+      "reference_run_id": "run_reference0001",
+      "selection": {"mode": "explicit", "reference_run_id": "run_reference0001"},
+      "comparison": {"ok": true, "schema_version": "clozn.run-diff.v1"},
+      "href": "/runs/compare?a=run_reference0001&b=run_0019fb1479b18_96e8c5"
+    },
+    "readouts": {
+      "state": "supported",
+      "measurements": {"confidence": 0.83, "logprob": -0.186, "topk_entropy": 0.41},
+      "workspace_readouts": []
+    }
+  },
+  "capabilities": {
+    "exact_fork": {
+      "available": true,
+      "snapshot_state": "not_attempted",
+      "action": {"method": "POST", "href": "/runs/run_0019fb1479b18_96e8c5/fork"}
+    },
+    "source_measurement": {
+      "available": true,
+      "status": "measured_effect",
+      "action": {
+        "method": "POST",
+        "href": "/runs/run_0019fb1479b18_96e8c5/influence-map/jobs",
+        "request_body": {}
+      }
+    },
+    "causal_trace": {
+      "available": true,
+      "status": "ready",
+      "action": {
+        "method": "POST",
+        "href": "/runs/run_0019fb1479b18_96e8c5/causal-trace",
+        "request_body": {"position": 1}
+      }
+    },
+    "mechanistic_diff": {
+      "available": true,
+      "reason": "reference run has a different recorded model identity, eligible for a cross-model mechanistic diff",
+      "action": {
+        "method": "CLI",
+        "href": "clozn diff-model --reference fixture-model --candidate other-model"
+      }
+    }
+  }
+}
