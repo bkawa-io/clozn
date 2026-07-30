@@ -1,0 +1,24 @@
+{
+  "schema_version": "clozn.diagnosis-narrative.v1",
+  "generated_at": "2026-07-30T00:00:00Z",
+  "run_id": "run_x",
+  "comparison_available": false,
+  "findings_schema_version": "clozn.diagnosis-findings.v1",
+  "headline": "1 ranked finding(s).",
+  "registers": {
+    "observed_changes": [],
+    "measured_effects": [
+      {
+        "rank": 1,
+        "basis": "guess",
+        "rule_id": "R03",
+        "severity": "medium",
+        "confidence": "pattern_match",
+        "text": "conflicting_instructions (R03): a conflict was found",
+        "evidence": [{"kind": "finding", "rule_id": "R03"}]
+      }
+    ],
+    "plausible_but_unproven": []
+  },
+  "summary": {"counts": {"observed_changes": 0, "measured_effects": 1, "plausible_but_unproven": 0}}
+}

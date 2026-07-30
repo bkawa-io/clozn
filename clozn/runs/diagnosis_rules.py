@@ -471,7 +471,7 @@ def _rule_context_budget_pressure(ctx: "_Context") -> dict:
     if termination.get("reason") == "context_limit":
         return _finding_entry(
             rule_id, rule_name, status="finding", severity="high", confidence="exact",
-            summary="generation stopped because the context window was reached (context_receipt.termination.reason == 'context_limit').",
+            summary="generation stopped at the context window (context_receipt.termination.reason == 'context_limit').",
             evidence=[_field_evidence("context_receipt.termination.reason", "context_limit")],
             suggested_actions=[_action("increase_context_budget",
                                        "reduce prompt size or use a model/config with a larger context window")],
@@ -920,8 +920,8 @@ def _rule_output_stopped_length(ctx: "_Context") -> dict:
     term_reason = termination.get("reason") if isinstance(termination.get("reason"), str) else None
 
     if term_reason in ("max_tokens", "context_limit"):
-        cause = ("the requested output-token limit was reached" if term_reason == "max_tokens"
-                else "the model's context window was reached during generation")
+        stopped_at = ("the requested output-token limit" if term_reason == "max_tokens"
+                     else "the model's context window, during generation")
         evidence = [_field_evidence("context_receipt.termination.reason", term_reason)]
         if isinstance(termination.get("generated_tokens"), int) and not isinstance(
                 termination.get("generated_tokens"), bool):
@@ -929,7 +929,7 @@ def _rule_output_stopped_length(ctx: "_Context") -> dict:
                                             termination["generated_tokens"]))
         return _finding_entry(
             rule_id, rule_name, status="finding", severity="high", confidence="exact",
-            summary=f"generation stopped because {cause}.", evidence=evidence,
+            summary=f"generation stopped at {stopped_at}.", evidence=evidence,
             suggested_actions=[_action("increase_max_tokens", "raise the output token budget")
                               if term_reason == "max_tokens" else
                               _action("increase_context_budget", "reduce prompt size or raise the context window")],
@@ -944,8 +944,8 @@ def _rule_output_stopped_length(ctx: "_Context") -> dict:
         return _finding_entry(
             rule_id, rule_name, status="finding", severity="high", confidence="exact",
             summary="generation stopped at a token-budget limit (finish_reason == 'length'); no "
-                   "context_receipt.termination evidence was recorded to separate output-cap from "
-                   "context-window causes.",
+                   "context_receipt.termination evidence was recorded to distinguish an output-token cap "
+                   "from a context-window limit.",
             evidence=[_field_evidence("finish_reason", "length")],
             suggested_actions=[_action("increase_max_tokens", "raise the output token budget")],
             limitations=["without context_receipt.termination this rule cannot separate an output-token "

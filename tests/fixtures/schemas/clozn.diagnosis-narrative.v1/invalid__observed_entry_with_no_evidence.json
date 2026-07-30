@@ -1,0 +1,21 @@
+{
+  "schema_version": "clozn.diagnosis-narrative.v1",
+  "generated_at": "2026-07-30T00:00:00Z",
+  "run_id": "run_x",
+  "comparison_available": true,
+  "findings_schema_version": "clozn.diagnosis-findings.v1",
+  "headline": "1 structural difference(s) against the comparison run; no ranked findings.",
+  "registers": {
+    "observed_changes": [
+      {
+        "dimension": "generation.temperature",
+        "kind": "changed",
+        "text": "temperature changed (0 -> 0.8).",
+        "evidence": []
+      }
+    ],
+    "measured_effects": [],
+    "plausible_but_unproven": []
+  },
+  "summary": {"counts": {"observed_changes": 1, "measured_effects": 0, "plausible_but_unproven": 0}}
+}

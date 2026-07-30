@@ -1,0 +1,70 @@
+{
+  "schema_version": "clozn.diagnosis-narrative.v1",
+  "generated_at": "2026-07-30T00:00:00Z",
+  "run_id": "run_fixture_b",
+  "comparison_available": true,
+  "findings_schema_version": "clozn.diagnosis-findings.v1",
+  "headline": "3 structural difference(s) against the comparison run; 1 ranked finding(s).",
+  "registers": {
+    "observed_changes": [
+      {
+        "dimension": "generation.temperature",
+        "kind": "changed",
+        "text": "temperature changed (0.0 -> 0.8).",
+        "evidence": [
+          {
+            "kind": "diff_field",
+            "dimension": "generation.temperature"
+          }
+        ]
+      },
+      {
+        "dimension": "output.response_length_words",
+        "kind": "changed",
+        "text": "response length changed (1 words -> 5 words).",
+        "evidence": [
+          {
+            "kind": "diff_field",
+            "dimension": "output.response_length_words"
+          }
+        ]
+      },
+      {
+        "dimension": "output.text",
+        "kind": "changed",
+        "text": "the response text differs.",
+        "evidence": [
+          {
+            "kind": "diff_field",
+            "dimension": "output.text"
+          }
+        ]
+      }
+    ],
+    "measured_effects": [
+      {
+        "rank": 1,
+        "basis": "rule_finding",
+        "rule_id": "R12",
+        "severity": "medium",
+        "confidence": "exact",
+        "text": "run_to_run_drift (R12): 1 identity/setting dimension(s) differ from the supplied comparison run: generation.temperature.",
+        "evidence": [
+          {
+            "kind": "finding",
+            "rule_id": "R12"
+          }
+        ]
+      }
+    ],
+    "plausible_but_unproven": []
+  },
+  "summary": {
+    "counts": {
+      "observed_changes": 3,
+      "measured_effects": 1,
+      "plausible_but_unproven": 0
+    }
+  },
+  "comparison_run_id": "run_fixture_a"
+}

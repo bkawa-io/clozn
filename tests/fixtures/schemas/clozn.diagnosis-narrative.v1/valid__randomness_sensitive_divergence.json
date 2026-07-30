@@ -1,0 +1,59 @@
+{
+  "schema_version": "clozn.diagnosis-narrative.v1",
+  "generated_at": "2026-07-30T00:05:00Z",
+  "run_id": "run_fixture_d",
+  "comparison_available": true,
+  "findings_schema_version": "clozn.diagnosis-findings.v1",
+  "headline": "2 structural difference(s) against the comparison run; no ranked findings; 1 plausible-but-unproven note(s).",
+  "registers": {
+    "observed_changes": [
+      {
+        "dimension": "output.response_length_words",
+        "kind": "changed",
+        "text": "response length changed (1 words -> 4 words).",
+        "evidence": [
+          {
+            "kind": "diff_field",
+            "dimension": "output.response_length_words"
+          }
+        ]
+      },
+      {
+        "dimension": "output.text",
+        "kind": "changed",
+        "text": "the response text differs.",
+        "evidence": [
+          {
+            "kind": "diff_field",
+            "dimension": "output.text"
+          }
+        ]
+      }
+    ],
+    "measured_effects": [],
+    "plausible_but_unproven": [
+      {
+        "text": "identity and generation settings matched the comparison run exactly, but the output still differs; this may be sampling-sensitive (an unpinned seed, or backend nondeterminism) rather than a measured factor.",
+        "note": "not backed by a clozn.diagnosis-findings.v1 rule finding -- named as a plausible possibility only, never ranked above registers.measured_effects",
+        "evidence": [
+          {
+            "kind": "diff_field",
+            "dimension": "output.response_length_words"
+          },
+          {
+            "kind": "diff_field",
+            "dimension": "output.text"
+          }
+        ]
+      }
+    ]
+  },
+  "summary": {
+    "counts": {
+      "observed_changes": 2,
+      "measured_effects": 0,
+      "plausible_but_unproven": 1
+    }
+  },
+  "comparison_run_id": "run_fixture_c"
+}

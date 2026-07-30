@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.diagnosis-narrative.v1",
+  "title": "Plain-language 'Why?' narrative over clozn.diagnosis-findings.v1 and a structural run comparison (D2)",
+  "description": "clozn.runs.diagnosis_narratives.narrate()'s output. NEVER persisted as a stored blob -- like clozn.diagnosis-findings.v1 (D1) and clozn.performance-trace.v1, it is recomputed fresh on every call from its inputs (a run, an optional comparison run, an optional already-computed clozn.diagnosis-findings.v1 document); a registered schema is still warranted because this document's SHAPE is a contract multiple consumers (this module's own HTTP route, a future D5 guided-repair UI) rely on, and roadmap rule 7's 'stored artifact' language has never been read in this codebase as exempting a recomputed-on-demand JSON shape -- see clozn.performance-trace.v1 for the exact same precedent. THE BOUNDARY THIS SCHEMA ENCODES: run comparison is STRUCTURAL DIFFERENCE, never causal attribution. `registers.observed_changes` states structural facts from clozn.analysis.run_diff.compare_runs() ONLY -- it is never ranked and never implies one change explains another. `registers.measured_effects` is a RANKED list, but every entry is required to name a `rule_id` from a real clozn.diagnosis-findings.v1 status=='finding' entry (or, for a future intervention artifact, `basis: \"intervention\"`) -- 'no finding, no factor' is enforced by this schema's own required fields, not merely by convention. `registers.plausible_but_unproven` carries a hypothesis (currently: an output difference despite identical identity/settings, i.e. possible sampling sensitivity) explicitly marked unproven and is NEVER assigned a `rank` -- the schema has no `rank` property on that entry shape at all, so a document that tried to rank one would fail validation, not merely convention review.",
+
+  "type": "object",
+  "required": ["schema_version", "generated_at", "run_id", "comparison_available", "findings_schema_version",
+               "headline", "registers", "summary"],
+
+  "$defs": {
+    "evidence_ref": {
+      "type": "object",
+      "description": "Every narrative sentence links back to evidence: a clozn.diagnosis-findings.v1 rule_id, a clozn.analysis.run_diff dotted dimension path, or a clozn.text-span-addresses.v1 address_id -- never a bare, unlinked sentence.",
+      "oneOf": [
+        {
+          "type": "object", "required": ["kind", "rule_id"],
+          "properties": {"kind": {"const": "finding"}, "rule_id": {"type": "string", "pattern": "^R[0-9]{2}$"}},
+          "additionalProperties": false
+        },
+        {
+          "type": "object", "required": ["kind", "dimension"],
+          "properties": {"kind": {"const": "diff_field"}, "dimension": {"type": "string", "minLength": 1}},
+          "additionalProperties": false
+        },
+        {
+          "type": "object", "required": ["kind", "address_id"],
+          "properties": {"kind": {"const": "text_span"},
+                        "address_id": {"type": "string", "pattern": "^span_[0-9a-f]{24}$"}},
+          "additionalProperties": false
+        }
+      ]
+    },
+    "observed_entry": {
+      "type": "object",
+      "description": "One structural fact from clozn.analysis.run_diff.compare_runs()'s own differences[] -- a plain statement of what changed, never a claim about why.",
+      "required": ["dimension", "kind", "text", "evidence"],
+      "properties": {
+        "dimension": {"type": "string", "minLength": 1},
+        "kind": {"enum": ["changed", "added", "removed", "unavailable", "diff_failed"]},
+        "text": {"type": "string", "minLength": 1},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence_ref"}, "minItems": 1}
+      },
+      "additionalProperties": false
+    },
+    "measured_entry": {
+      "type": "object",
+      "description": "One RANKED contributing factor. required, never optional: rule_id names the exact clozn.diagnosis-findings.v1 entry (status=='finding') this factor is backed by -- 'no finding, no factor'.",
+      "required": ["rank", "basis", "rule_id", "severity", "confidence", "text", "evidence"],
+      "properties": {
+        "rank": {"type": "integer", "minimum": 1},
+        "basis": {
+          "enum": ["intervention", "rule_finding"],
+          "description": "'intervention': backed by an actual measured intervention (today: R08/R09's context_answer_influence forced_score_intervention). 'rule_finding': backed by another clozn.diagnosis-findings.v1 status=='finding' entry -- still a real, evidenced detection, never a guess."
+        },
+        "rule_id": {"type": "string", "pattern": "^R[0-9]{2}$"},
+        "severity": {"enum": ["info", "low", "medium", "high"]},
+        "confidence": {"enum": ["exact", "pattern_match", "derived"]},
+        "text": {"type": "string", "minLength": 1},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence_ref"}, "minItems": 1}
+      },
+      "additionalProperties": false
+    },
+    "plausible_entry": {
+      "type": "object",
+      "description": "A clearly-labeled, UNPROVEN hypothesis -- deliberately has no `rank`, no `severity`, no `confidence`, no `rule_id`: this schema structurally forbids ranking a plausible entry above (or alongside) a measured one.",
+      "required": ["text", "note", "evidence"],
+      "properties": {
+        "text": {"type": "string", "minLength": 1},
+        "note": {
+          "type": "string", "minLength": 1,
+          "description": "States explicitly that this entry is not backed by a rule finding and is never ranked above registers.measured_effects."
+        },
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence_ref"}, "minItems": 1}
+      },
+      "additionalProperties": false
+    },
+    "registers": {
+      "type": "object",
+      "required": ["observed_changes", "measured_effects", "plausible_but_unproven"],
+      "properties": {
+        "observed_changes": {"type": "array", "items": {"$ref": "#/$defs/observed_entry"}},
+        "measured_effects": {"type": "array", "items": {"$ref": "#/$defs/measured_entry"}},
+        "plausible_but_unproven": {"type": "array", "items": {"$ref": "#/$defs/plausible_entry"}}
+      },
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "object",
+      "required": ["counts"],
+      "properties": {
+        "counts": {
+          "type": "object",
+          "required": ["observed_changes", "measured_effects", "plausible_but_unproven"],
+          "properties": {
+            "observed_changes": {"type": "integer", "minimum": 0},
+            "measured_effects": {"type": "integer", "minimum": 0},
+            "plausible_but_unproven": {"type": "integer", "minimum": 0}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+
+  "properties": {
+    "schema_version": {"const": "clozn.diagnosis-narrative.v1"},
+    "generated_at": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "comparison_run_id": {
+      "type": "string", "minLength": 1,
+      "description": "Present only when a comparison run was supplied -- omitted, never null, otherwise."
+    },
+    "comparison_available": {"type": "boolean"},
+    "findings_schema_version": {
+      "const": "clozn.diagnosis-findings.v1",
+      "description": "Names the schema of the clozn.diagnosis-findings.v1 document this narrative was built from (supplied by the caller or computed internally) -- the full document is not embedded here; a caller reading `registers.measured_effects[].rule_id` is expected to have it alongside (the HTTP route returns both in one response)."
+    },
+    "headline": {"type": "string", "minLength": 1},
+    "registers": {"$ref": "#/$defs/registers"},
+    "summary": {"$ref": "#/$defs/summary"}
+  },
+  "additionalProperties": false
+}

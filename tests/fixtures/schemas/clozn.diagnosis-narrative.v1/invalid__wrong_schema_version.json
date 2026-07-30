@@ -1,0 +1,10 @@
+{
+  "schema_version": "clozn.diagnosis-narrative.v0",
+  "generated_at": "2026-07-30T00:00:00Z",
+  "run_id": "run_x",
+  "comparison_available": false,
+  "findings_schema_version": "clozn.diagnosis-findings.v1",
+  "headline": "no ranked findings.",
+  "registers": {"observed_changes": [], "measured_effects": [], "plausible_but_unproven": []},
+  "summary": {"counts": {"observed_changes": 0, "measured_effects": 0, "plausible_but_unproven": 0}}
+}
