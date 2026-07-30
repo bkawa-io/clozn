@@ -86,10 +86,24 @@ def _load_libc():
         return _LIBC
     _LIBC_LOAD_ATTEMPTED = True
     try:
-        import ctypes.util
-
-        name = ctypes.util.find_library("c") or "libc.so.6"
-        _LIBC = ctypes.CDLL(name, use_errno=True)
+        # `ctypes.util.find_library("c")` is deliberately NOT used here. On Linux it SHELLS OUT --
+        # to /sbin/ldconfig, gcc, or objdump depending on what is installed -- so it would run a
+        # subprocess on the path of every guarded spawn. That is wasteful in production and actively
+        # wrong under test: `subprocess.run` opens its child via `with Popen(...)`, so any suite that
+        # monkeypatches Popen sees a phantom call it never made. That is exactly how this landed --
+        # CI caught `test_two_preloads_boot_independently_and_transport_exact_projection` failing
+        # because the spurious call became `gateway_calls[0]`, displacing the real gateway spawn.
+        #
+        # `CDLL(None)` is dlopen(NULL): a handle to the already-loaded main program, whose symbol
+        # table includes libc (and therefore prctl) on any glibc or musl system. No file search, no
+        # subprocess, no I/O. The explicit soname is kept only as a fallback for the exotic case
+        # where the main program somehow does not expose it.
+        try:
+            _LIBC = ctypes.CDLL(None, use_errno=True)
+            _LIBC.prctl          # resolve now, in the PARENT -- see this function's docstring
+        except Exception:
+            _LIBC = ctypes.CDLL("libc.so.6", use_errno=True)
+            _LIBC.prctl
     except Exception as exc:
         _LIBC = None
         _warn_once(

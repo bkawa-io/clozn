@@ -63,6 +63,47 @@ class ProcessGuardUnitTests(unittest.TestCase):
     def setUp(self):
         process_guard._WARNED.clear()
 
+    def test_loading_libc_never_shells_out(self):
+        """Regression, Linux-only in effect but asserted everywhere.
+
+        The first version of this module resolved libc with `ctypes.util.find_library("c")`, which on
+        Linux SHELLS OUT to ldconfig/gcc/objdump. That put a subprocess on the path of every guarded
+        spawn, and it broke `test_managed_model_bootstrap` in CI (never locally -- Windows does not
+        take that branch): `subprocess.run` opens its child via `with Popen(...)`, so a suite that
+        monkeypatches Popen recorded a phantom call, and `gateway_calls[0]` stopped being the real
+        gateway spawn.
+
+        HONEST LIMIT, measured rather than assumed: this test would NOT have caught the original bug
+        on Windows. `ctypes.util.find_library("c")` spawns nothing here (verified: 0 subprocesses on
+        win32), so a local run stayed green while CI went red. It runs unconditionally anyway because
+        it costs nothing and catches any shelling strategy on whatever platform it executes on -- but
+        the lane that actually protects this invariant is Linux CI, not this box. Which is the whole
+        reason the bug shipped in the first place.
+        """
+        calls = []
+        real_popen = subprocess.Popen
+
+        def recording_popen(*args, **kwargs):
+            calls.append(args)
+            return real_popen(*args, **kwargs)
+
+        process_guard._LIBC = None
+        process_guard._LIBC_LOAD_ATTEMPTED = False
+        subprocess.Popen = recording_popen
+        try:
+            process_guard._load_libc()
+            process_guard.subprocess_kwargs()
+        finally:
+            subprocess.Popen = real_popen
+            process_guard._LIBC_LOAD_ATTEMPTED = False
+            process_guard._LIBC = None
+
+        self.assertEqual(
+            calls, [],
+            "resolving libc for the parent-death guard spawned a subprocess; it must not -- "
+            "use ctypes.CDLL(None) (dlopen of the already-loaded image), never find_library",
+        )
+
     def test_unsupported_platform_reports_honestly_and_degrades(self):
         """macOS (or any platform with no kernel primitive) must return False, never claim success."""
         class _FakeProc:
