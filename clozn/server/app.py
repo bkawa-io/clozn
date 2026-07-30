@@ -31,7 +31,7 @@ from clozn.server.config import HERE, REPO_ROOT, DEMO, CLOZN_DIR   # noqa: E402 
 from clozn.server.http_policy import (                            # noqa: E402
     DEFAULT_ALLOW_HEADERS, client_gone, max_request_bytes, origin_allowed, request_origin, send_cors_headers,
 )
-from clozn.server.request_gate import RequestGate                 # noqa: E402
+from clozn.server.request_gate import RequestGate, rejection_response   # noqa: E402
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer   # noqa: E402
 
@@ -48,11 +48,38 @@ POST_GATE = RequestGate.from_env()
 # of the only two POST paths audited to touch NEITHER the substrate's generation state NOR steer/memory:
 #   /capture/tier -- a bare settings-file flag (clozn.runs.capture_mode), unrelated to SUB entirely.
 #   /substrate    -- POST always 410s (routes/health.py); it never reaches the substrate at all.
-# Every other POST -- every /memory/* and /steer/* mutation, plus every generation endpoint -- still reads
-# or writes that shared state and stays fully serialized. The risk of a wrong "this is safe" call here is a
-# corrupted run record or a torn dial read, so the bar is "audited to touch nothing substrate-shaped", not
-# a coarse heuristic like "looks read-only".
+# Every other POST -- every /memory/* and /steer/* mutation, plus fork/checkpoint/replay/journal and
+# everything else NOT in _GENERATION_POST_PATHS below -- still reads or writes worker-shaped state and
+# stays fully serialized through POST_GATE. The risk of a wrong "this is safe" call here is a corrupted
+# run record or a torn dial read, so the bar is "audited to touch nothing substrate-shaped", not a coarse
+# heuristic like "looks read-only".
 _GATE_EXEMPT_POSTS = frozenset({"/capture/tier", "/substrate", "/cancel"})
+
+# RT-05: the closed set of routes that resolve a model through
+# clozn.server.model_routing.select_for_handler (ADR 004's native/OpenAI/
+# Ollama generation surfaces -- see docs/design/004-multi-model-routing-
+# contract.md's Protocol table). do_POST does NOT acquire POST_GATE for
+# these; select_for_handler acquires a PER-WORKER generation gate itself,
+# AFTER selection (and any RT-04 cold-load coalescing) succeeds -- see that
+# function's docstring for why gating must happen there, not here. In
+# managed mode this is the entire reason two different models can now
+# generate concurrently instead of contending for one global turn; in
+# legacy (no managed router) mode, select_for_handler reuses POST_GATE
+# itself as the one worker's gate, so behavior there is byte-for-byte
+# unchanged. Every other POST path -- including every route this process
+# does not itself understand the worker-scope of (fork, checkpoint, replay,
+# journal, ...) -- still goes through POST_GATE below, and in managed mode
+# ALSO drains every configured worker's generation gate first (see
+# WorkerGateRegistry.acquire_all's docstring): a POST this process cannot
+# prove is worker-agnostic must never run concurrently with generation on
+# a worker it might touch.
+_GENERATION_POST_PATHS = frozenset({
+    "/api/clozn/generate",
+    "/v1/completions",
+    "/v1/chat/completions",
+    "/api/generate",
+    "/api/chat",
+})
 
 try:
     from clozn_engine import EngineClient, EngineError
@@ -1156,6 +1183,18 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 finally:
                     clear_handler_selection(self)
                 return
+            if p in _GENERATION_POST_PATHS:
+                # See _GENERATION_POST_PATHS' module-level comment: gating for these happens inside
+                # select_for_handler, AFTER model selection/cold-load succeeds, keyed to the ONE worker
+                # this specific request resolved to. Acquiring anything here, before that resolution,
+                # would serialize the very requests RT-04's cold-load coalescing needs to see arrive
+                # concurrently. clear_handler_selection releases whatever permit select_for_handler
+                # acquired, exactly once, whether the route succeeded, raised, or never reached selection.
+                try:
+                    self._dispatch_post(p, body)
+                finally:
+                    clear_handler_selection(self)
+                return
             queue_started_ns = time.monotonic_ns()
             rejected = POST_GATE.acquire(cancel_check=lambda: client_gone(self))
             self._record_gateway_phase(
@@ -1163,23 +1202,47 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 aggregation="exclusive",
             )
             if rejected:
-                # "cancelled": client_gone(self) fired while this request was queued -- the requester is
-                # confirmed gone, so this response is best-effort only (mirrors "full"/"timeout": nothing
-                # here relies on it actually being delivered). 499 (nginx's convention for "client closed
-                # the request") -- there is no standard status for this, but it is the least-ambiguous
-                # existing one for observability (access logs, metrics) even if nobody reads the body.
-                status = {"full": 429, "timeout": 503, "cancelled": 499}[rejected]
-                message = {"full": "request queue is full",
-                           "timeout": "request timed out while waiting for the model",
-                           "cancelled": "client disconnected while queued"}[rejected]
-                self._json(status, {"error": {"message": message, "type": "server_busy"}},
-                           extra_headers={"Retry-After": "1"})
+                self._reject_post_gate(rejected)
                 return
+            # RT-05 safety net: this POST is not one of the known generation paths, so this process does
+            # not know which (if any) single worker it touches -- fork/checkpoint/replay/journal/steer/
+            # memory all land here. In managed mode it must still never run concurrently with generation
+            # on a worker it might touch (checkpoint harvest, steer.strength, ...) -- see
+            # WorkerGateRegistry.acquire_all's docstring. Draining every configured worker's turn gives
+            # this the exact same "nothing else is running" guarantee POST_GATE alone used to give
+            # everything, scoped down to just this unclassified bucket.
+            router = MODEL_ROUTER
+            registry = getattr(router, "gate", None) if router is not None else None
+            exclusive_release = None
+            if registry is not None:
+                exclusive_started_ns = time.monotonic_ns()
+                exclusive_rejected, exclusive_release = registry.acquire_all(
+                    cancel_check=lambda: client_gone(self)
+                )
+                self._record_gateway_phase(
+                    "gateway_queue", time.monotonic_ns() - exclusive_started_ns,
+                    aggregation="exclusive",
+                )
+                if exclusive_rejected:
+                    POST_GATE.release()
+                    self._reject_post_gate(exclusive_rejected)
+                    return
             try:
                 self._dispatch_post(p, body)
             finally:
+                if exclusive_release is not None:
+                    exclusive_release()
                 POST_GATE.release()
                 clear_handler_selection(self)
+
+        def _reject_post_gate(self, rejected):
+            # "cancelled": client_gone(self) fired while this request was queued -- the requester is
+            # confirmed gone, so this response is best-effort only (mirrors "full"/"timeout": nothing
+            # here relies on it actually being delivered). 499 (nginx's convention for "client closed
+            # the request") -- there is no standard status for this, but it is the least-ambiguous
+            # existing one for observability (access logs, metrics) even if nobody reads the body.
+            status, payload, extra_headers = rejection_response(rejected)
+            self._json(status, payload, extra_headers=extra_headers)
 
         def _dispatch_post(self, p, body):
             for mod in _POST_ROUTES:
@@ -1255,6 +1318,20 @@ def main():
     else:
         print("clozn gateway: connecting to private model worker ...", flush=True)
         SUB = EngineSubstrate()
+    # RT-05: warm the run store's SQLite schema single-threaded, before ThreadingHTTPServer starts
+    # dispatching any request handler thread below. clozn/runs/store.py auto-migrates on first use
+    # (_ensure()), but a from-scratch database's CREATE TABLE/migration is not safe against two threads
+    # racing to run it for the very first time at once -- harmless before RT-05 (POST_GATE fully
+    # serialized every request, so record() was never actually called concurrently), but RT-05's
+    # per-worker generation gate now lets two different workers' first requests reach it together. This
+    # closes that gap without touching clozn/runs/store.py (a file this ticket does not own): by the
+    # time the server below can accept its first connection, the schema already exists, so any request
+    # count/order sees only the fast, already-migrated _ensure() path. Never fatal to boot.
+    try:
+        import clozn.runs.store as _runlog_warmup
+        _runlog_warmup.list_runs(limit=1)
+    except Exception:
+        pass
     srv = ThreadingHTTPServer((ARGS.host, ARGS.port), make_handler())
     print(f"\n  Clozn -> http://{ARGS.host}:{ARGS.port}/\n", flush=True)
     srv.serve_forever()

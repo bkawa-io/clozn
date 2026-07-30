@@ -15,10 +15,12 @@ import json
 import os
 import secrets
 import threading
+import time
 from typing import Callable, Iterable, Mapping
 
 from clozn import schemas
 from clozn.protocol import check_worker_protocol
+from clozn.server.request_gate import WorkerGateRegistry
 
 
 SCHEMA_VERSION = "clozn.model-routing.v1"
@@ -30,8 +32,21 @@ _ERRORS = {
     "model_load_failed": (503, True, "load"),
     "model_load_timeout": (504, True, "load"),
     "no_evictable_worker": (503, True, "eviction"),
+    # RT-05: the generation-concurrency gate's own admission outcomes.  Reuses
+    # the exact RequestGate vocabulary ("full"/"timeout"/"cancelled") --
+    # see _GATE_OUTCOME_CODES below -- mapped onto clozn.model-routing.v1's
+    # pre-existing generation_queue/request phases.
+    "generation_queue_full": (429, True, "generation_queue"),
+    "queue_timeout": (504, True, "generation_queue"),
+    "request_cancelled": (499, False, "request"),
     "worker_failed": (502, True, "generation"),
     "worker_identity_mismatch": (502, False, "handshake"),
+}
+# RequestGate.acquire()'s three rejection outcomes -> the matching typed code.
+_GATE_OUTCOME_CODES = {
+    "full": "generation_queue_full",
+    "timeout": "queue_timeout",
+    "cancelled": "request_cancelled",
 }
 _WHITE_BOX_CAPABILITIES = ("sae", "jlens", "attn_knockout")
 
@@ -292,6 +307,12 @@ class ModelSelection:
     artifact: dict | None
     runtime_key: dict | None = None
     worker_identity: dict | None = None
+    # RT-05: the per-worker generation-concurrency permit this selection is
+    # already holding, if any (None for a legacy/no-gate selection). apply()
+    # stashes it on the handler so do_POST's existing clear_handler_selection
+    # release path returns it, exactly once, regardless of which route ran or
+    # whether it raised.
+    gate_release: Callable[[], None] | None = None
 
     def __post_init__(self) -> None:
         # A control-plane consumer needs these two exact facts even when no
@@ -319,6 +340,8 @@ class ModelSelection:
         handler._model_routing_artifact = (
             deepcopy(self.artifact) if self.artifact is not None else None
         )
+        if self.gate_release is not None:
+            handler._generation_gate_release = self.gate_release
 
 
 class PreloadedModelRouter:
@@ -338,6 +361,7 @@ class PreloadedModelRouter:
         loader: ColdLoader | None = None,
         engine_factory: Callable[[int], object] | None = None,
         substrate_factory: Callable[[object], object] | None = None,
+        gate: WorkerGateRegistry | None = None,
     ) -> None:
         bindings = tuple(bindings)
         preload_model_ids = tuple(preload_model_ids)
@@ -402,6 +426,16 @@ class PreloadedModelRouter:
         # same successful cold load don't each redundantly rebuild the
         # engine/substrate pair; the first to arrive wins and the rest reuse it.
         self._upgrade_lock = threading.Lock()
+        # RT-05: optional per-worker generation-concurrency gate.  None (the
+        # default) preserves RT-04's exact original behavior -- select()
+        # returns a ready ModelSelection with no gate_release and nobody
+        # queues.  When configured, generation on one worker no longer
+        # contends with generation on a different one -- see
+        # request_gate.WorkerGateRegistry's module docstring for the full
+        # safety argument (why this is sound given the engine's single
+        # active-generation-path limit and EngineSubstrate's per-worker,
+        # not shared, mutable request/steer state).
+        self._gate = gate
 
     @classmethod
     def from_projection(
@@ -411,6 +445,7 @@ class PreloadedModelRouter:
         engine_factory: Callable[[int], object],
         substrate_factory: Callable[[object], object],
         loader: ColdLoader | None = None,
+        gate: WorkerGateRegistry | None = None,
     ) -> "PreloadedModelRouter":
         """Build gateway bindings from ``WorkerRegistry.routing_projection``."""
         if not isinstance(projection, Mapping):
@@ -451,7 +486,19 @@ class PreloadedModelRouter:
             loader=loader,
             engine_factory=engine_factory,
             substrate_factory=substrate_factory,
+            gate=gate,
         )
+
+    @property
+    def gate(self) -> WorkerGateRegistry | None:
+        """The configured per-worker generation-concurrency registry, if any.
+
+        Read by app.py's do_POST to drain every worker's turn before an
+        unclassified POST (fork, checkpoint, replay, steer/memory, ...) runs
+        -- see WorkerGateRegistry.acquire_all's docstring for why that safety
+        net exists.
+        """
+        return self._gate
 
     def model_ids(self) -> list[str]:
         return sorted(self._by_id)
@@ -621,6 +668,7 @@ class PreloadedModelRouter:
         field_present: bool,
         surface: str,
         route: str,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> ModelSelection:
         if field_present:
             literal = requested_model if isinstance(requested_model, str) else None
@@ -699,6 +747,35 @@ class PreloadedModelRouter:
 
         if load_event is None:
             load_event = self._load_event("ready", ready=True)
+
+        # RT-05: the worker is ready and identity-qualified.  If a
+        # concurrency gate is configured, admit this request into that
+        # SPECIFIC worker's bounded generation queue -- never a different
+        # worker's, and never the whole gateway's.  A rejection here is a
+        # typed, retryable error carrying the same real load_event computed
+        # above (this attempt never fabricates a generation run: the model
+        # loaded fine, the gateway's own queue is what said no).
+        gate_release = None
+        if self._gate is not None:
+            outcome, gate_release = self._gate.acquire_generation(
+                binding.model_id, cancel_check=cancel_check
+            )
+            if outcome is not None:
+                code = _GATE_OUTCOME_CODES[outcome]
+                raise self._error(
+                    base,
+                    code=code,
+                    lifecycle_state="ready",
+                    message=(
+                        f"generation queue for {binding.model_id!r} "
+                        + ("timed out waiting for its turn" if outcome == "timeout"
+                           else "is full" if outcome == "full"
+                           else "was abandoned: the client disconnected while queued")
+                    ),
+                    binding=binding,
+                    load_event=load_event,
+                )
+
         receipt = self._attempt_receipt(
             requested_model, selection_source, binding, load_event
         )
@@ -718,6 +795,7 @@ class PreloadedModelRouter:
             artifact=artifact,
             runtime_key=binding.runtime_key,
             worker_identity=binding.worker_identity,
+            gate_release=gate_release,
         )
 
     def _cold_load(
@@ -922,13 +1000,25 @@ class ProjectionFileRouter:
         *,
         engine_factory: Callable[[int], object],
         substrate_factory: Callable[[object], object],
+        gate: "WorkerGateRegistry | bool" = True,
     ) -> None:
+        """``gate``: ``True`` (default) auto-builds one ``WorkerGateRegistry``
+        from the first projection's configured model IDs, so the real
+        managed-mode gateway (``clozn.server.app.main``) gets RT-05's
+        per-worker generation concurrency with no extra wiring.  ``False``
+        disables gating entirely (RT-04's original fully-ungated behavior).
+        An explicit ``WorkerGateRegistry`` lets a caller (tests, or a future
+        supervisor integration) own and share one across routers/restarts."""
         self.path = os.path.abspath(os.fspath(path))
         self._engine_factory = engine_factory
         self._substrate_factory = substrate_factory
         self._fingerprint: str | None = None
         self._router: PreloadedModelRouter | None = None
         self._lock = threading.Lock()
+        self._gate_setting = gate
+        self._built_gate: WorkerGateRegistry | None = (
+            gate if isinstance(gate, WorkerGateRegistry) else None
+        )
         self.refresh(force=True)
 
     def _read_projection(self) -> tuple[str, dict]:
@@ -965,10 +1055,28 @@ class ProjectionFileRouter:
         with self._lock:
             if not force and fingerprint == self._fingerprint:
                 return False
+            if self._gate_setting is True and self._built_gate is None:
+                # Built once, from the first projection's configured model
+                # IDs (a closed, config-driven set that a later cold load or
+                # eviction never adds to or removes from -- see
+                # WorkerRegistry's docstring). Every later refresh() reuses
+                # this SAME registry so an in-flight or queued generation
+                # permit is never orphaned by a routine projection update
+                # (e.g. a sibling worker's restart).
+                model_ids = sorted({
+                    raw.get("model_id") for raw in (projection.get("models") or [])
+                    if isinstance(raw, Mapping) and isinstance(raw.get("model_id"), str)
+                })
+                if model_ids:
+                    self._built_gate = WorkerGateRegistry(model_ids)
+            gate = (
+                self._built_gate if self._gate_setting is not False else None
+            )
             router = PreloadedModelRouter.from_projection(
                 projection,
                 engine_factory=self._engine_factory,
                 substrate_factory=self._substrate_factory,
+                gate=gate,
             )
             self._router = router
             self._fingerprint = fingerprint
@@ -1001,11 +1109,29 @@ class ProjectionFileRouter:
     def control_pair(self) -> tuple[object | None, object | None]:
         return self._current().control_pair()
 
+    @property
+    def gate(self) -> WorkerGateRegistry | None:
+        """The one long-lived WorkerGateRegistry, stable across refresh()
+        rebuilds -- see __init__'s docstring for why a fresh registry per
+        refresh would orphan in-flight/queued permits."""
+        with self._lock:
+            return self._built_gate if self._gate_setting is not False else None
+
 
 def clear_handler_selection(handler) -> None:
+    # RT-05: release any generation-concurrency permit this request holds
+    # BEFORE clearing the attribute, and unconditionally -- do_POST calls
+    # this in a `finally`, so it runs exactly once whether the route
+    # succeeded, raised, or never got this far (in which case there is
+    # nothing to release: apply() only ever sets this after a real
+    # acquisition, so a bare getattr default of None is always correct).
+    release = getattr(handler, "_generation_gate_release", None)
+    if release is not None:
+        release()
     for name in (
         "_route_sub", "_route_engine", "_route_subname",
         "_selected_model_id", "_model_routing_artifact",
+        "_generation_gate_release",
     ):
         if hasattr(handler, name):
             delattr(handler, name)
@@ -1054,8 +1180,18 @@ def select_for_handler(
     process's original single substrate.  That path deliberately creates no
     synthetic runtime receipt because the legacy supervisor did not provide an
     ADR 004 key; existing one-model clients keep their historical behavior.
+
+    RT-05: this is also where generation-concurrency gating happens now --
+    NOT in do_POST before dispatch.  Gating here, after selection succeeds,
+    is deliberate: RT-04's cold-load coalescing (WorkerRegistry.ensure_loaded)
+    needs every concurrent request for one cold model to reach select() at
+    once so exactly one becomes the loader; gating any earlier would
+    serialize them at the HTTP layer and the coalescing single-flight
+    guarantee would never actually get exercised under concurrency.
     """
     from clozn.server import app as ctx
+    from clozn.server.http_policy import client_gone
+    from clozn.server.request_gate import rejection_response
 
     clear_handler_selection(handler)
     router = getattr(ctx, "MODEL_ROUTER", None)
@@ -1069,20 +1205,66 @@ def select_for_handler(
             return ModelSelection(
                 model_id=selected, sub=sub, engine=engine, artifact=None
             )
+        # Legacy (no managed router) mode has exactly one worker, so it
+        # reuses ctx.POST_GATE itself as that one worker's generation gate --
+        # the SAME object app.py's do_POST already uses for every other POST
+        # in this mode, preserving today's exact full serialization (no
+        # regression, no new parallelism: there is only ever one worker
+        # here). do_POST skips its own pre-dispatch POST_GATE acquisition
+        # for the known generation paths precisely so this is the only
+        # acquisition, never a double one.
+        gate = getattr(ctx, "POST_GATE", None)
+        gate_release = None
+        if gate is not None:
+            queue_started_ns = time.monotonic_ns()
+            outcome = gate.acquire(cancel_check=lambda: client_gone(handler))
+            record_phase = getattr(handler, "_record_gateway_phase", None)
+            if record_phase is not None:
+                record_phase(
+                    "gateway_queue", time.monotonic_ns() - queue_started_ns,
+                    aggregation="exclusive",
+                )
+            if outcome is not None:
+                status, payload, extra_headers = rejection_response(outcome)
+                handler._json(status, payload, extra_headers=extra_headers)
+                return None
+            gate_release = gate.release
         selection = ModelSelection(
-            model_id=selected, sub=sub, engine=engine, artifact=None
+            model_id=selected, sub=sub, engine=engine, artifact=None,
+            gate_release=gate_release,
         )
         selection.apply(handler)
         return selection
+    # Times the whole call (resolution + any cold-load wait + generation-gate
+    # admission) as one "gateway_queue" phase -- everything here happens
+    # before generation starts, so it is queue time, not model execution
+    # time (that is worker_dispatch, recorded separately inside
+    # chat()/chat_stream()). A cold load's own wait is additionally broken
+    # out on the receipt's load_event.wait_ms for anyone who needs that finer
+    # split.
+    queue_started_ns = time.monotonic_ns()
     try:
         selection = router.select(
             body.get("model"),
             field_present="model" in body,
             surface=surface,
             route=route,
+            cancel_check=lambda: client_gone(handler),
         )
     except ModelRoutingError as error:
+        record_phase = getattr(handler, "_record_gateway_phase", None)
+        if record_phase is not None:
+            record_phase(
+                "gateway_queue", time.monotonic_ns() - queue_started_ns,
+                aggregation="exclusive",
+            )
         _emit_error(handler, error, surface)
         return None
+    record_phase = getattr(handler, "_record_gateway_phase", None)
+    if record_phase is not None:
+        record_phase(
+            "gateway_queue", time.monotonic_ns() - queue_started_ns,
+            aggregation="exclusive",
+        )
     selection.apply(handler)
     return selection
