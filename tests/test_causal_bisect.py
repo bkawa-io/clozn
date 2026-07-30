@@ -990,8 +990,14 @@ def test_head_grid_narrowed_by_max_head_sites_is_named_in_bounds_applied(monkeyp
     doc = out["document"]
     schemas.validate(doc)
     assert doc["coverage"]["max_head_sites"] == 2
-    assert any("max_head_sites=2: kept the top 2 of 4 usable head sites" in b
-              for b in doc["coverage"]["bounds_applied"])
+    # default strategy is now 'stratified_divergence' (GAP 1) -- this toy 4-layer fixture only spans ONE
+    # depth band ("early", since layer_count=4 means the whole writable [0,4) range is one third), so
+    # stratification degenerates to exactly the old global top-2-by-divergence result: still 2 kept of 4.
+    assert doc["head_site_selection"] == {"strategy": "stratified_divergence", "cap_field": "max_head_sites",
+                                          "depth_bands": ["early", "mid", "late"]}
+    assert any("max_head_sites=2 via head_site_selection='stratified_divergence': kept 2 of 4 usable head "
+              "sites" in b for b in doc["coverage"]["bounds_applied"])
+    assert any("early: kept 2/4" in b for b in doc["coverage"]["bounds_applied"])
     assert len(doc["window_tests"]) == 1
     assert len(doc["window_tests"][0]["layers"]) == 2
 
@@ -1269,3 +1275,560 @@ def test_reference_specific_is_read_verbatim_never_recomputed(monkeypatch):
     assert confirmed
     for s in confirmed:
         assert s["transplant"]["analysis"]["reasons"] == ["sentinel value for identity check"]
+
+
+# =============================================================== GAP 1: stratified head-site selection
+
+def test_depth_band_thirds_of_the_writable_range():
+    assert cb._depth_band(0, 0, 9) == "early"
+    assert cb._depth_band(2, 0, 9) == "early"
+    assert cb._depth_band(3, 0, 9) == "mid"
+    assert cb._depth_band(5, 0, 9) == "mid"
+    assert cb._depth_band(6, 0, 9) == "late"
+    assert cb._depth_band(8, 0, 9) == "late"
+
+
+def test_stratified_head_selection_reaches_every_populated_band_even_when_divergence_is_late_biased():
+    """REQUIRED PROOF (GAP 1): the exact failure mode measured in docs/research/
+    QUANT_REGRESSION_POPULATION.md's Limits section -- divergence increases monotonically with layer, so
+    a global top-N (the OLD 'divergence' strategy) would keep ONLY late sites. The stratified default
+    must not."""
+    sites = [(layer, head) for layer in range(9) for head in range(2)]
+
+    def rank_key(site):
+        return (-site[0], site[0], site[1])   # "smaller is better": larger layer = more divergent = ranks first
+
+    kept, report = cb._stratified_head_selection(sites, lo=0, hi=9, cap=6, rank_key=rank_key)
+    represented = {cb._depth_band(layer, 0, 9) for layer, _head in kept}
+    assert represented == {"early", "mid", "late"}      # GAP 1: all three bands reachable
+    assert len(kept) == 6
+    assert report == {
+        "early": {"candidates": 6, "kept": 2}, "mid": {"candidates": 6, "kept": 2},
+        "late": {"candidates": 6, "kept": 2},
+    }
+    # a GLOBAL top-6 by the SAME rank_key would have kept only the three largest layers (6/7/8, both
+    # heads each -- all "late") -- the concrete contrast that makes this a fix, not just a different
+    # tie-break: the measured real-world failure (docs/research/QUANT_REGRESSION_POPULATION.md) is
+    # exactly this shape, a global top-N collapsing entirely into one band.
+    global_top6 = {s for s in sorted(sites, key=rank_key)[:6]}
+    assert {cb._depth_band(l, 0, 9) for l, _h in global_top6} == {"late"}
+
+
+def test_stratified_head_selection_single_populated_band_degenerates_to_old_top_n():
+    """When the caller's own head_layers only reach ONE band, stratification cannot manufacture coverage
+    that was never in the input -- it must fall back to exactly the old global top-N within that band."""
+    sites = [(0, 0), (0, 1), (1, 0), (1, 1)]     # all "early" under a small writable range
+
+    def rank_key(site):
+        return (-(site[0] * 2 + site[1]), site[0], site[1])
+
+    kept, report = cb._stratified_head_selection(sites, lo=0, hi=4, cap=2, rank_key=rank_key)
+    old_top2 = set(sorted(sites, key=rank_key)[:2])
+    assert kept == old_top2
+    assert report == {"early": {"candidates": 4, "kept": 2}}
+
+
+def test_stratified_head_selection_redistributes_when_a_band_is_smaller_than_its_share():
+    """A band with fewer candidates than its fair share must not waste its unused slots -- they go to
+    other bands still populated, never leaving the cap under-filled while candidates remain elsewhere."""
+    sites = [(0, 0)] + [(layer, 0) for layer in range(3, 9)]   # early: 1 site; mid+late: 6 sites
+
+    def rank_key(site):
+        return (-site[0], site[0], site[1])
+
+    kept, report = cb._stratified_head_selection(sites, lo=0, hi=9, cap=5, rank_key=rank_key)
+    assert len(kept) == 5                       # cap fully used, even though early only had 1 candidate
+    assert report["early"] == {"candidates": 1, "kept": 1}
+    assert report["mid"]["kept"] + report["late"]["kept"] == 4
+
+
+def test_run_bisect_head_only_search_reaches_early_and_mid_bands_under_the_default_strategy(monkeypatch):
+    """REQUIRED PROOF, end to end (GAP 1): a 9-layer candidate whose observational divergence increases
+    monotonically with layer (the exact measured pattern) still gets early- and mid-band head sites
+    bisected/tested when max_head_sites narrows the grid, under run_bisect's own DEFAULT strategy -- no
+    caller opt-in required."""
+    events = []
+    layers = list(range(9))
+
+    def _varying_head_rows(value_for_layer):
+        return {str(l): {"2": [float(value_for_layer(l))]} for l in layers}
+
+    pair_compat = dict(_COMPATIBLE_WITH_HEAD)
+    pair_compat["layer_count"] = {"state": "same", "value_a": 9, "value_b": 9}
+
+    ref_engine = FakeEngine([
+        _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0,
+             head_rows=_varying_head_rows(lambda l: 1.0), head_dims=_head_dims(d_head=1, n_head=1)),
+    ])
+    baseline = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0,
+                     head_rows=_varying_head_rows(lambda l: 1.0 - 0.1 * l),   # divergence grows with layer
+                     head_dims=_head_dims(d_head=1, n_head=1))
+    window_ref = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0)      # does not flip -- kept simple
+    window_self = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, applied=True,
+                        applied_field="head_write_applied")
+    window_rand = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1)
+    cand_engine = FakeEngine([baseline, window_ref, window_self, window_rand])
+
+    out = cb.run_bisect(**_base_kwargs(
+        pair_compat=pair_compat, search_kinds=("head",), head_layers=layers, head_indices=[0],
+        window_size=4, max_head_sites=3,
+        reference_loader=_loader(ref_engine, "ref", events),
+        candidate_loader=_loader(cand_engine, "cand", events)))
+
+    assert out["ok"] is True
+    doc = out["document"]
+    schemas.validate(doc)
+    assert doc["head_site_selection"]["strategy"] == "stratified_divergence"
+    assert len(doc["window_tests"]) == 1
+    kept_layers = doc["window_tests"][0]["layers"]
+    represented = {cb._depth_band(l, 0, 9) for l in kept_layers}
+    assert represented == {"early", "mid", "late"}    # the actual measured gap: this used to be {"late"} only
+    assert kept_layers == [2, 5, 8]                   # deterministic: best-by-divergence within each band
+    assert any("early: kept 1/3, mid: kept 1/3, late: kept 1/3" in b
+              for b in doc["coverage"]["bounds_applied"])
+
+
+def test_run_bisect_head_site_selection_divergence_strategy_is_still_selectable(monkeypatch):
+    """The original, un-stratified selection is kept reachable by name, never removed -- a caller can
+    still reproduce a historical run's exact (late-concentrated) selection by asking for it explicitly."""
+    events = []
+    layers = list(range(9))
+
+    def _varying_head_rows(value_for_layer):
+        return {str(l): {"2": [float(value_for_layer(l))]} for l in layers}
+
+    pair_compat = dict(_COMPATIBLE_WITH_HEAD)
+    pair_compat["layer_count"] = {"state": "same", "value_a": 9, "value_b": 9}
+
+    ref_engine = FakeEngine([
+        _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0,
+             head_rows=_varying_head_rows(lambda l: 1.0), head_dims=_head_dims(d_head=1, n_head=1)),
+    ])
+    baseline = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0,
+                     head_rows=_varying_head_rows(lambda l: 1.0 - 0.1 * l),
+                     head_dims=_head_dims(d_head=1, n_head=1))
+    window_ref = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0)
+    window_self = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, applied=True,
+                        applied_field="head_write_applied")
+    window_rand = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1)
+    cand_engine = FakeEngine([baseline, window_ref, window_self, window_rand])
+
+    out = cb.run_bisect(**_base_kwargs(
+        pair_compat=pair_compat, search_kinds=("head",), head_layers=layers, head_indices=[0],
+        window_size=4, max_head_sites=3, head_site_selection="divergence",
+        reference_loader=_loader(ref_engine, "ref", events),
+        candidate_loader=_loader(cand_engine, "cand", events)))
+
+    assert out["ok"] is True
+    doc = out["document"]
+    schemas.validate(doc)
+    assert doc["head_site_selection"]["strategy"] == "divergence"
+    kept_layers = doc["window_tests"][0]["layers"]
+    assert kept_layers == [6, 7, 8]                    # global top-3: all late, the un-fixed behavior
+    assert any("max_head_sites=3 via head_site_selection='divergence': kept the top 3 of 9" in b
+              for b in doc["coverage"]["bounds_applied"])
+
+
+def test_refuses_unknown_head_site_selection():
+    out = cb.run_bisect(**_base_kwargs(
+        head_site_selection="bogus",
+        reference_loader=lambda: (_ for _ in ()).throw(AssertionError("must refuse before loading")),
+        candidate_loader=lambda: (_ for _ in ()).throw(AssertionError("must refuse before loading"))))
+    assert out["ok"] is False
+    assert "head_site_selection" in out["error"]
+
+
+# ========================================================================= GAP 2: mixed ffn+head windows
+
+def _mixed_self_resp(top1_id, top1_piece, top1_logprob, *, ffn_applied=True, head_applied=True):
+    r = _resp(top1_id=top1_id, top1_piece=top1_piece, top1_logprob=top1_logprob)
+    r["ffn_write_applied"] = ffn_applied
+    r["head_write_applied"] = head_applied
+    return r
+
+
+def _mixed_window_kwargs(**over):
+    units = [("ffn", 0), ("head", (1, 0))]
+    base = dict(
+        units=units, depth=0,
+        ref_vectors_by_unit={u: {2: [1.0]} for u in units},
+        self_vectors_by_unit={u: {2: [0.5]} for u in units},
+        usable_units=units,          # no room for a shuffled control by default -- kept simple
+        baseline_metrics={"top1_token_id": 9, "top1_is_target": False},
+        positions=[2], prompt_ids=[1, 2], continuation_ids=[9], n_prompt=2, n_cont=1, readout_position=2,
+        target_token_id=5, topk=3, rng=random.Random(0), reference_target_logprob=None,
+        primary_metric="reference_token_logprob_recovery",
+    )
+    base.update(over)
+    return base
+
+
+def test_pick_shuffled_units_matches_pick_shuffled_sites_for_a_single_hook_list():
+    """REQUIRED PROOF: the mixed-aware picker is a strict generalization, never a behavior change, for a
+    unit list that happens to be single-hook."""
+    units = [("ffn", 0), ("ffn", 1)]
+    usable = [("ffn", 0), ("ffn", 1), ("ffn", 2), ("ffn", 3)]
+    picked = cb._pick_shuffled_units(units, usable)
+    plain_sites = [0, 1]
+    plain_usable = [0, 1, 2, 3]
+    plain_picked = cb._pick_shuffled_sites(plain_sites, plain_usable)
+    assert [s for _hook, s in picked] == plain_picked
+
+
+def test_pick_shuffled_units_stays_within_the_same_hook_per_unit():
+    """A shuffled control must stay dimensionally compatible -- an ffn replacement for an ffn unit, a
+    head replacement for a head unit, never crossed."""
+    units = [("ffn", 0), ("head", (1, 0))]
+    usable = [("ffn", 0), ("ffn", 1), ("ffn", 2), ("head", (1, 0)), ("head", (1, 1))]
+    picked = cb._pick_shuffled_units(units, usable)
+    assert picked is not None
+    assert picked[0][0] == "ffn" and picked[0] != ("ffn", 0)
+    assert picked[1][0] == "head" and picked[1] != ("head", (1, 0))
+
+
+def test_pick_shuffled_units_none_when_one_hook_has_no_room():
+    units = [("ffn", 0), ("head", (1, 0))]
+    usable = [("ffn", 0), ("head", (1, 0)), ("head", (1, 1))]   # no OTHER ffn site available anywhere
+    assert cb._pick_shuffled_units(units, usable) is None
+
+
+def test_run_mixed_window_builds_both_write_kwargs_in_one_call_and_retains_on_beating_control():
+    """REQUIRED PROOF (GAP 2): a mixed ffn+head window is representable (both write kwargs land in ONE
+    /score call per arm) and RETAINED only when the reference arm beats the random equal-norm control --
+    the same five-arm rule, generalized, never weakened."""
+    engine = FakeEngine([
+        _resp(top1_id=5, top1_piece="y", top1_logprob=-0.1),         # reference_transplant: flips
+        _mixed_self_resp(9, "x", -1.0),                               # candidate_self_transplant: sane
+        _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1),         # random_equal_norm: does not flip
+    ])
+    result = cb._run_mixed_window(candidate_engine=engine, **_mixed_window_kwargs())
+    assert result["hook"] == "mixed"
+    assert result["sites"] == [{"hook": "ffn", "layer": 0}, {"hook": "head", "layer": 1, "head": 0}]
+    assert result["layers"] == [0, 1]
+    assert result["instrument_sane"] is True
+    assert result["moved"] is True
+    assert result["beat_control"] is True
+    assert result["retained"] is True
+    assert "shuffled_window" not in result["arms"]        # usable_units == units -- no room, correctly omitted
+    assert len(engine.calls) == 3
+    for call in engine.calls:
+        assert "ffn_write" in call and "head_write" in call
+    ref_call = engine.calls[0]
+    assert ref_call["ffn_write"] == [{"layer": 0, "positions": [2], "values": [1.0]}]
+    assert ref_call["head_write"] == [{"layer": 1, "head": 0, "positions": [2], "values": [1.0]}]
+    self_call = engine.calls[1]
+    assert self_call["ffn_write"] == [{"layer": 0, "positions": [2], "values": [0.5]}]
+    assert self_call["head_write"] == [{"layer": 1, "head": 0, "positions": [2], "values": [0.5]}]
+
+
+def test_run_mixed_window_not_retained_when_random_control_also_flips():
+    engine = FakeEngine([
+        _resp(top1_id=5, top1_piece="y", top1_logprob=-0.1),
+        _mixed_self_resp(9, "x", -1.0),
+        _resp(top1_id=5, top1_piece="y", top1_logprob=-0.2),          # random ALSO flips
+    ])
+    result = cb._run_mixed_window(candidate_engine=engine, **_mixed_window_kwargs())
+    assert result["instrument_sane"] is True
+    assert result["moved"] is True
+    assert result["beat_control"] is False
+    assert result["retained"] is False
+
+
+def test_run_mixed_window_instrument_not_sane_when_only_one_hooks_write_is_unconfirmed():
+    """Both `ffn_write_applied` and `head_write_applied` must confirm true -- a mixed window's instrument
+    is only as sane as its WEAKEST hook's own write confirmation."""
+    self_resp = _mixed_self_resp(9, "x", -1.0, ffn_applied=True, head_applied=False)
+    engine = FakeEngine([
+        _resp(top1_id=5, top1_piece="y", top1_logprob=-0.1),
+        self_resp,
+        _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1),
+    ])
+    result = cb._run_mixed_window(candidate_engine=engine, **_mixed_window_kwargs())
+    assert result["instrument_sane"] is False
+    assert result["retained"] is False
+    assert result["arms"]["candidate_self_transplant"]["write_applied_by_hook"] == {"ffn": True, "head": False}
+
+
+def test_run_mixed_window_arm_call_failure_is_reported_not_raised():
+    engine = FakeEngine([RuntimeError("mixed engine boom")])
+    result = cb._run_mixed_window(candidate_engine=engine, **_mixed_window_kwargs())
+    assert result["instrument_sane"] is False
+    assert result["retained"] is False
+    assert "mixed engine boom" in result["reasons"][0]
+    assert result["sites"] == [{"hook": "ffn", "layer": 0}, {"hook": "head", "layer": 1, "head": 0}]
+
+
+def test_run_mixed_window_uses_shuffled_window_when_room_exists():
+    kwargs = _mixed_window_kwargs(
+        usable_units=[("ffn", 0), ("ffn", 1), ("head", (1, 0)), ("head", (1, 1))],
+        ref_vectors_by_unit={("ffn", 0): {2: [1.0]}, ("ffn", 1): {2: [1.0]}, ("head", (1, 0)): {2: [1.0]},
+                            ("head", (1, 1)): {2: [1.0]}},
+        self_vectors_by_unit={("ffn", 0): {2: [0.5]}, ("ffn", 1): {2: [0.5]}, ("head", (1, 0)): {2: [0.5]},
+                             ("head", (1, 1)): {2: [0.5]}},
+    )
+    engine = FakeEngine([
+        _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0),
+        _mixed_self_resp(9, "x", -1.0),
+        _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1),
+        _resp(top1_id=9, top1_piece="x", top1_logprob=-1.05),         # shuffled_window
+    ])
+    result = cb._run_mixed_window(candidate_engine=engine, **kwargs)
+    assert "shuffled_window" in result["arms"]
+    assert len(engine.calls) == 4
+    shuffled_call = engine.calls[3]
+    assert "ffn_write" in shuffled_call and "head_write" in shuffled_call
+    assert shuffled_call["ffn_write"][0]["layer"] == 1          # unit ("ffn",0)'s replacement
+    assert shuffled_call["head_write"][0]["head"] == 1          # unit ("head",(1,0))'s replacement
+
+
+def test_site_dict_shapes_ffn_and_head():
+    assert cb._site_dict("ffn", 7) == {"hook": "ffn", "layer": 7}
+    assert cb._site_dict("head", (3, 2)) == {"hook": "head", "layer": 3, "head": 2}
+
+
+# ============================================================= GAP 2: run_bisect(mixed_windows=...) end to end
+
+def test_refuses_mixed_windows_single_hook_entry():
+    out = cb.run_bisect(**_base_kwargs(
+        mixed_windows=[[{"hook": "ffn", "layer": 0}, {"hook": "ffn", "layer": 1}]],
+        reference_loader=lambda: (_ for _ in ()).throw(AssertionError("must refuse before loading")),
+        candidate_loader=lambda: (_ for _ in ()).throw(AssertionError("must refuse before loading"))))
+    assert out["ok"] is False
+    assert "at least one 'ffn' site and at least one 'head' site" in out["error"]
+
+
+def test_refuses_mixed_windows_residual_site():
+    """RULE THAT MUST SURVIVE: residual is single-site only, never windowed -- mixed_windows must refuse
+    a residual site outright, not silently drop it or silently window it."""
+    out = cb.run_bisect(**_base_kwargs(
+        mixed_windows=[[{"hook": "residual", "layer": 1}, {"hook": "head", "layer": 1, "head": 0}]],
+        reference_loader=lambda: (_ for _ in ()).throw(AssertionError("must refuse before loading")),
+        candidate_loader=lambda: (_ for _ in ()).throw(AssertionError("must refuse before loading"))))
+    assert out["ok"] is False
+    assert "residual is single-site only" in out["error"]
+
+
+def test_refuses_mixed_windows_missing_head_index():
+    out = cb.run_bisect(**_base_kwargs(
+        mixed_windows=[[{"hook": "ffn", "layer": 0}, {"hook": "head", "layer": 1}]],
+        reference_loader=lambda: (_ for _ in ()).throw(AssertionError("must refuse before loading")),
+        candidate_loader=lambda: (_ for _ in ()).throw(AssertionError("must refuse before loading"))))
+    assert out["ok"] is False
+    assert "needs an integer site.head" in out["error"]
+
+
+def test_refuses_mixed_windows_single_site_window():
+    out = cb.run_bisect(**_base_kwargs(
+        mixed_windows=[[{"hook": "ffn", "layer": 0}]],
+        reference_loader=lambda: (_ for _ in ()).throw(AssertionError("must refuse before loading")),
+        candidate_loader=lambda: (_ for _ in ()).throw(AssertionError("must refuse before loading"))))
+    assert out["ok"] is False
+    assert "at least 2 sites" in out["error"]
+
+
+def test_refuses_mixed_windows_empty_list():
+    out = cb.run_bisect(**_base_kwargs(
+        mixed_windows=[],
+        reference_loader=lambda: (_ for _ in ()).throw(AssertionError("must refuse before loading")),
+        candidate_loader=lambda: (_ for _ in ()).throw(AssertionError("must refuse before loading"))))
+    assert out["ok"] is False
+    assert "mixed_windows" in out["error"]
+
+
+def test_mixed_windows_unavailable_when_only_ffn_searched(monkeypatch):
+    """`mixed_windows` needs BOTH ffn and head to have actually run -- when only one is requested, it is
+    recorded hooks_unavailable/bounds_applied with the specific reason, never silently dropped."""
+    events = []
+    ref_engine = FakeEngine([
+        _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, captured=_captured([0, 1, 2, 3], 2, 1.0)),
+    ])
+    baseline = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, captured=_captured([0, 1, 2, 3], 2, 0.5))
+    # one ffn coarse window covering the whole 4-layer range, does not flip -- no bisection follows.
+    w_ref = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0)
+    w_self = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, applied=True)
+    w_rand = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1)
+    cand_engine = FakeEngine([baseline, w_ref, w_self, w_rand])
+
+    out = cb.run_bisect(**_base_kwargs(
+        search_kinds=("ffn",), window_size=4,
+        mixed_windows=[[{"hook": "ffn", "layer": 0}, {"hook": "head", "layer": 0, "head": 0}]],
+        reference_loader=_loader(ref_engine, "ref", events),
+        candidate_loader=_loader(cand_engine, "cand", events)))
+
+    assert out["ok"] is True
+    doc = out["document"]
+    schemas.validate(doc)
+    mixed_unavailable = [h for h in doc["search"]["hooks_unavailable"] if h["hook"] == "mixed"]
+    assert mixed_unavailable and "requires BOTH 'ffn' and 'head'" in mixed_unavailable[0]["reason"]
+    assert "ffn usable=True" in mixed_unavailable[0]["reason"]
+    assert "head grid usable=False" in mixed_unavailable[0]["reason"]
+    assert any(b.startswith("mixed:") and "never tested" in b for b in doc["coverage"]["bounds_applied"])
+    assert not any(w["hook"] == "mixed" for w in doc["window_tests"])
+
+
+def test_mixed_windows_end_to_end_retained_only_when_beating_control(monkeypatch):
+    """REQUIRED PROOF (GAP 2), full pipeline: ffn and head each run their own independent search first
+    (unchanged), THEN one caller-supplied mixed window is tested in the SAME candidate residency and
+    beats control -- landing in window_tests with hook='mixed' and a full `sites` record."""
+    events = []
+    ref_ffn_capture = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, captured=_captured([0, 1, 2, 3], 2, 1.0))
+    ref_head_capture = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0,
+                             head_rows=_head_rows([0, 1], 2, d_head=1, n_head=2, value=1.0),
+                             head_dims=_head_dims(d_head=1, n_head=2))
+    ref_engine = FakeEngine([ref_ffn_capture, ref_head_capture])
+
+    ffn_baseline = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, captured=_captured([0, 1, 2, 3], 2, 0.5))
+    # one ffn coarse window [0,1,2,3] (window_size=4), does not flip -- not retained, no bisection.
+    ffn_window = [_resp(top1_id=9, top1_piece="x", top1_logprob=-1.0),
+                 _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, applied=True),
+                 _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1)]
+    head_baseline = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0,
+                          head_rows=_head_rows([0, 1], 2, d_head=1, n_head=2, value=0.5),
+                          head_dims=_head_dims(d_head=1, n_head=2))
+    # one head coarse window [(0,0),(0,1),(1,0),(1,1)] (window_size=4), does not flip either.
+    head_window = [_resp(top1_id=9, top1_piece="x", top1_logprob=-1.0),
+                  _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, applied=True,
+                       applied_field="head_write_applied"),
+                  _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1)]
+    # the mixed window: [ffn layer 2, head (1,0)] -- reference flips, random does not -- retained. Both
+    # ffn (4 usable layers) and head (4 usable sites) have spare usable_units, so a shuffled_window arm
+    # IS attempted too (a 4th response).
+    mixed_ref = _resp(top1_id=5, top1_piece="y", top1_logprob=-0.1)
+    mixed_self = _mixed_self_resp(9, "x", -1.0)
+    mixed_rand = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1)
+    mixed_shuffled = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.05)
+
+    cand_engine = FakeEngine([ffn_baseline] + ffn_window + [head_baseline] + head_window +
+                             [mixed_ref, mixed_self, mixed_rand, mixed_shuffled])
+
+    out = cb.run_bisect(**_base_kwargs(
+        pair_compat=_COMPATIBLE_WITH_HEAD, search_kinds=("ffn", "head"), window_size=4,
+        head_layers=[0, 1], head_indices=[0, 1],
+        mixed_windows=[[{"hook": "ffn", "layer": 2}, {"hook": "head", "layer": 1, "head": 0}]],
+        reference_loader=_loader(ref_engine, "ref", events),
+        candidate_loader=_loader(cand_engine, "cand", events)))
+
+    assert out["ok"] is True
+    doc = out["document"]
+    schemas.validate(doc)
+    mixed_tests = [w for w in doc["window_tests"] if w["hook"] == "mixed"]
+    assert len(mixed_tests) == 1
+    mixed = mixed_tests[0]
+    assert mixed["sites"] == [{"hook": "ffn", "layer": 2}, {"hook": "head", "layer": 1, "head": 0}]
+    assert mixed["layers"] == [1, 2]
+    assert mixed["instrument_sane"] is True
+    assert mixed["beat_control"] is True
+    assert mixed["retained"] is True
+    assert any(b.startswith("mixed: 1 caller-supplied joint ffn+head window(s) were tested exactly as "
+                           "given") and "1 fully captured and tested, 0 skipped" in b
+              for b in doc["coverage"]["bounds_applied"])
+    # never re-loads the candidate for the mixed step -- same residency as the ffn/head searches.
+    assert events.count("enter:cand") == 1
+    assert events.count("exit:cand") == 1
+
+
+def test_mixed_windows_missing_site_coverage_is_reported_not_silently_dropped(monkeypatch):
+    """A mixed window naming a head site OUTSIDE the caller's own head_layers/head_indices grid has no
+    captured vector for it -- that window must be reported as untested with the specific reason, never
+    silently skipped or crash the rest of the search."""
+    events = []
+    ref_ffn_capture = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, captured=_captured([0, 1, 2, 3], 2, 1.0))
+    ref_head_capture = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0,
+                             head_rows=_head_rows([0, 1], 2, d_head=1, n_head=2, value=1.0),
+                             head_dims=_head_dims(d_head=1, n_head=2))
+    ref_engine = FakeEngine([ref_ffn_capture, ref_head_capture])
+
+    ffn_baseline = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, captured=_captured([0, 1, 2, 3], 2, 0.5))
+    ffn_window = [_resp(top1_id=9, top1_piece="x", top1_logprob=-1.0),
+                 _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, applied=True),
+                 _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1)]
+    head_baseline = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0,
+                          head_rows=_head_rows([0, 1], 2, d_head=1, n_head=2, value=0.5),
+                          head_dims=_head_dims(d_head=1, n_head=2))
+    head_window = [_resp(top1_id=9, top1_piece="x", top1_logprob=-1.0),
+                  _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, applied=True,
+                       applied_field="head_write_applied"),
+                  _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1)]
+    cand_engine = FakeEngine([ffn_baseline] + ffn_window + [head_baseline] + head_window)
+
+    out = cb.run_bisect(**_base_kwargs(
+        pair_compat=_COMPATIBLE_WITH_HEAD, search_kinds=("ffn", "head"), window_size=4,
+        head_layers=[0, 1], head_indices=[0, 1],
+        # head=(9, 9) is nowhere in head_layers=[0,1]/head_indices=[0,1] -- not captured, not usable.
+        mixed_windows=[[{"hook": "ffn", "layer": 2}, {"hook": "head", "layer": 9, "head": 9}]],
+        reference_loader=_loader(ref_engine, "ref", events),
+        candidate_loader=_loader(cand_engine, "cand", events)))
+
+    assert out["ok"] is True
+    doc = out["document"]
+    schemas.validate(doc)
+    mixed_tests = [w for w in doc["window_tests"] if w["hook"] == "mixed"]
+    assert len(mixed_tests) == 1
+    assert mixed_tests[0]["retained"] is False
+    assert mixed_tests[0]["instrument_sane"] is False
+    assert "not captured/usable on both models" in mixed_tests[0]["reasons"][0]
+    assert any("0 fully captured and tested, 1 skipped for missing site coverage" in b
+              for b in doc["coverage"]["bounds_applied"])
+
+
+def test_mixed_windows_bisect_down_to_a_confirmed_leaf(monkeypatch):
+    """A mixed window that bisects reduces to ordinary single-hook sites, which flow into the SAME
+    existing single-site confirmation path (transplant.run_site()) -- no new confirmation path exists or
+    is needed."""
+    events = []
+    ref_ffn_capture = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, captured=_captured([0, 1, 2, 3], 2, 1.0))
+    ref_head_capture = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0,
+                             head_rows=_head_rows([0, 1], 2, d_head=1, n_head=2, value=1.0),
+                             head_dims=_head_dims(d_head=1, n_head=2))
+    ref_engine = FakeEngine([ref_ffn_capture, ref_head_capture])
+
+    ffn_baseline = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, captured=_captured([0, 1, 2, 3], 2, 0.5))
+    ffn_window = [_resp(top1_id=9, top1_piece="x", top1_logprob=-1.0),
+                 _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, applied=True),
+                 _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1)]
+    head_baseline = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0,
+                          head_rows=_head_rows([0, 1], 2, d_head=1, n_head=2, value=0.5),
+                          head_dims=_head_dims(d_head=1, n_head=2))
+    head_window = [_resp(top1_id=9, top1_piece="x", top1_logprob=-1.0),
+                  _resp(top1_id=9, top1_piece="x", top1_logprob=-1.0, applied=True,
+                       applied_field="head_write_applied"),
+                  _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1)]
+    # mixed coarse window [ffn:2, head:(1,0)] retained -> bisects into [ffn:2] and [head:(1,0)], both
+    # single-hook, single-site -- neither re-tested by the window harness (len==1), both go to
+    # transplant.run_site() confirmation instead. Spare usable_units on both sides means a
+    # shuffled_window arm is attempted too (a 4th response).
+    mixed_ref = _resp(top1_id=5, top1_piece="y", top1_logprob=-0.1)
+    mixed_self = _mixed_self_resp(9, "x", -1.0)
+    mixed_rand = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.1)
+    mixed_shuffled = _resp(top1_id=9, top1_piece="x", top1_logprob=-1.05)
+    cand_engine = FakeEngine([ffn_baseline] + ffn_window + [head_baseline] + head_window +
+                             [mixed_ref, mixed_self, mixed_rand, mixed_shuffled])
+
+    confirmed = []
+
+    def fake_run_site(*, site, seed, **kwargs):
+        confirmed.append(site)
+        return {"ok": True, "document": {"schema_version": "clozn.transplant.v1",
+                                         "analysis": {"instrument_sane": True,
+                                                     "reference_moved_toward_reference": True,
+                                                     "reference_specific": site.get("hook") == "ffn"}}}
+
+    monkeypatch.setattr(cb.transplant, "run_site", fake_run_site)
+    out = cb.run_bisect(**_base_kwargs(
+        pair_compat=_COMPATIBLE_WITH_HEAD, search_kinds=("ffn", "head"), window_size=4,
+        head_layers=[0, 1], head_indices=[0, 1],
+        mixed_windows=[[{"hook": "ffn", "layer": 2}, {"hook": "head", "layer": 1, "head": 0}]],
+        reference_loader=_loader(ref_engine, "ref", events),
+        candidate_loader=_loader(cand_engine, "cand", events)))
+
+    assert out["ok"] is True
+    doc = out["document"]
+    schemas.validate(doc)
+    assert {"hook": "ffn", "layer": 2} in confirmed
+    assert {"hook": "head", "layer": 1, "head": 0} in confirmed
+    # the mixed coarse window itself, plus nothing narrower (it bisected straight to leaves) -- exactly
+    # one hook='mixed' window_test.
+    assert len([w for w in doc["window_tests"] if w["hook"] == "mixed"]) == 1
+    leaf_sources = {(s["hook"], s.get("layer"), s.get("head")): s["source"] for s in doc["single_site_tests"]}
+    assert leaf_sources[("ffn", 2, None)] == "bisection_leaf"
+    assert leaf_sources[("head", 1, 0)] == "bisection_leaf"

@@ -24,8 +24,32 @@
       "type": "object",
       "required": ["hook", "reason"],
       "properties": {
-        "hook": {"enum": ["residual", "ffn", "head"]},
+        "hook": {"enum": ["residual", "ffn", "head", "mixed"]},
         "reason": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+
+    "mixed_site": {
+      "type": "object",
+      "description": "One site within a hook='mixed' window_test.sites entry -- the authoritative per-site (hook, layer[, head]) record a mixed window's own 'layers'/'heads' cannot represent (see clozn.analysis.causal_bisect's GAP 2 discussion: 'heads' is positionally parallel to 'layers' only for a PURE head window).",
+      "required": ["hook", "layer"],
+      "properties": {
+        "hook": {"enum": ["ffn", "head"]},
+        "layer": {"type": "integer", "minimum": 0},
+        "head": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+
+    "head_site_selection": {
+      "type": "object",
+      "description": "How run_bisect() narrows the head_layers x head_indices grid when it exceeds max_head_sites. ALWAYS present when 'head' was in search_kinds, even when no capping was needed this run (mirrors single_site_seed_derivation's own always-recorded contract). 'stratified_divergence' (the default) allocates the cap across the early/mid/late depth bands the candidate grid actually populates, so a cap cannot silently concentrate every kept site in whichever band diverges most (the coverage artifact measured in docs/research/QUANT_REGRESSION_POPULATION.md's Limits section). 'divergence' is the original, un-stratified, global top-N-by-observational-divergence selection, kept selectable so a caller can reproduce a historical run's exact selection.",
+      "required": ["strategy", "cap_field", "depth_bands"],
+      "properties": {
+        "strategy": {"enum": ["divergence", "stratified_divergence"]},
+        "cap_field": {"const": "max_head_sites"},
+        "depth_bands": {"const": ["early", "mid", "late"]}
       },
       "additionalProperties": false
     },
@@ -78,14 +102,18 @@
 
     "window_test": {
       "type": "object",
-      "description": "One multi-site window transplant test (composable kinds only). `retained=true` only when instrument_sane AND beat_control are both true -- the same structural rule clozn.analysis.transplant applies at a single site, generalized to a set of jointly-written sites.",
+      "description": "One multi-site window transplant test (composable kinds only). `retained=true` only when instrument_sane AND beat_control are both true -- the same structural rule clozn.analysis.transplant applies at a single site, generalized to a set of jointly-written sites. hook='mixed' (GAP 2) is a window whose sites span BOTH ffn and head in one joint write -- `sites` is the authoritative per-site record for it; `layers` still names every layer touched (deduplicated) but `heads` is never populated on a mixed entry (see `sites`'s own description).",
       "required": ["hook", "layers", "depth", "instrument_sane", "retained", "reasons"],
       "properties": {
-        "hook": {"enum": ["residual", "ffn", "head"]},
+        "hook": {"enum": ["residual", "ffn", "head", "mixed"]},
         "layers": {"type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 1},
         "heads": {
           "type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 1,
           "description": "hook=head windows only: the head index for each site, positionally parallel to `layers` (layers[i]/heads[i] together name site i -- a layer may repeat when multiple heads at that layer are in the same window)."
+        },
+        "sites": {
+          "type": "array", "items": {"$ref": "#/$defs/mixed_site"}, "minItems": 2,
+          "description": "hook='mixed' windows only (built via run_bisect's mixed_windows parameter): the authoritative per-site (hook, layer[, head]) list this window's joint write was built from. A reader of a mixed entry should use `sites`, not attempt to reconstruct per-site hook from `layers` alone."
         },
         "depth": {"type": "integer", "minimum": 0},
         "instrument_sane": {"type": "boolean"},
@@ -177,6 +205,7 @@
       },
       "additionalProperties": false
     },
+    "head_site_selection": {"$ref": "#/$defs/head_site_selection"},
     "search": {"$ref": "#/$defs/search"},
     "coverage": {"$ref": "#/$defs/coverage"},
     "window_tests": {"type": "array", "items": {"$ref": "#/$defs/window_test"}},
