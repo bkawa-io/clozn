@@ -1,0 +1,213 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.model-second-opinion.v1",
+  "title": "Model second opinion (E4): a second, already-preloaded model's own answer to a run's delivered messages, compared against the run's already-recorded evidence",
+  "description": "clozn.runs.second_opinion.build_second_opinion's output. `arm_a` (the ANCHOR) is built entirely from the original run's own already-persisted evidence -- it never calls a worker, so it is always available even when the original model is no longer loaded, and it is never replaced or outvoted by `arm_b`. `arm_b` (the SECOND OPINION) is one fresh completion from a different, already-preloaded model given the SAME delivered messages. The two arms are independently typed and independently statused ON PURPOSE: there is no top-level success/failure flag anywhere in this document, because one arm's failure must never invalidate the other's evidence (owner's spec, verbatim). `comparison` is present only when BOTH arms produced comparable natural-language text; every other field it would need is honestly omitted rather than null-padded when the two arms are not directly comparable (different templates, a tool/schema contract, missing text). This document NEVER carries a per-token probability or logprob from either model -- two models' logprobs are not on a shared scale, so this schema has no field for one at all (see the module docstring for why).",
+  "type": "object",
+  "required": [
+    "schema_version", "generated_at", "run_id", "delivered_input", "arm_a", "arm_b", "compatibility"
+  ],
+  "additionalProperties": false,
+
+  "$defs": {
+    "worker_identity": {
+      "type": "object",
+      "description": "Identifying facts about the exact worker behind one arm. Every key OMITTED, never null-padded, when it could not be honestly determined for that arm.",
+      "properties": {
+        "model_sha256": {"type": "string", "minLength": 1},
+        "template_fingerprint": {"type": "string", "minLength": 1},
+        "engine_build": {"type": "string", "minLength": 1},
+        "backend": {"type": "string", "minLength": 1},
+        "context_size": {"type": "integer", "minimum": 1},
+        "worker_id": {"type": "string", "minLength": 1},
+        "worker_generation": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+
+    "arm_a": {
+      "type": "object",
+      "description": "The anchor arm: the run's own already-recorded answer and identity, read verbatim -- no live call, no re-verification, no re-generation. `status` mirrors clozn.answer-claims.v1's own segmentation-state vocabulary (ok/empty/redacted/unavailable) rather than inventing a new one for the same underlying fact.",
+      "required": ["role", "run_id", "status"],
+      "properties": {
+        "role": {"const": "anchor"},
+        "run_id": {"type": "string", "minLength": 1},
+        "model_id": {"type": "string", "minLength": 1},
+        "worker_identity": {"$ref": "#/$defs/worker_identity"},
+        "status": {"enum": ["ok", "empty", "redacted", "unavailable"]},
+        "response_text": {"type": "string"},
+        "finish_reason": {"type": "string", "minLength": 1},
+        "latency_ms": {"type": "number", "minimum": 0},
+        "prompt_tokens": {"type": "integer", "minimum": 0},
+        "generated_tokens": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {"required": ["response_text"], "properties": {"status": {"const": "ok"}}},
+        {
+          "properties": {
+            "status": {"enum": ["empty", "redacted", "unavailable"]},
+            "response_text": false
+          }
+        }
+      ]
+    },
+
+    "refusal": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string", "minLength": 1},
+        "message": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+
+    "arm_b": {
+      "type": "object",
+      "description": "The second-opinion arm: one fresh completion from a DIFFERENT already-preloaded model. `status` is independent of arm_a's -- a `refused` or `generation_error` here never removes arm_a from the document, and never becomes a top-level HTTP failure by itself (see the route docstring for the exact boundary between a pre-flight refusal and a recorded generation_error).",
+      "required": ["role", "requested_model_id", "model_id", "status"],
+      "properties": {
+        "role": {"const": "second_opinion"},
+        "requested_model_id": {"type": "string", "minLength": 1},
+        "model_id": {"type": "string", "minLength": 1},
+        "worker_identity": {"$ref": "#/$defs/worker_identity"},
+        "status": {"enum": ["ok", "refused", "generation_error"]},
+        "refusal": {"$ref": "#/$defs/refusal"},
+        "response_text": {"type": "string"},
+        "finish_reason": {"type": "string", "minLength": 1},
+        "latency_ms": {"type": "number", "minimum": 0},
+        "generated_tokens": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": ["response_text", "latency_ms"],
+          "properties": {"status": {"const": "ok"}, "refusal": false}
+        },
+        {
+          "required": ["refusal"],
+          "properties": {"status": {"enum": ["refused", "generation_error"]}, "response_text": false}
+        }
+      ]
+    },
+
+    "chat_template_compat": {
+      "type": "object",
+      "required": ["state", "method"],
+      "properties": {
+        "state": {"enum": ["same", "differs", "unknown"]},
+        "method": {"const": "template_fingerprint_compare"},
+        "arm_a_template_fingerprint": {"type": "string", "minLength": 1},
+        "arm_b_template_fingerprint": {"type": "string", "minLength": 1},
+        "caveat": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+
+    "context_limit_compat": {
+      "type": "object",
+      "description": "arm_a_prompt_tokens_estimate is measured under the ANCHOR model's own tokenizer, not arm_b's -- different tokenizers segment identical text into different counts, so this is always an ESTIMATE, never an exact fit/no-fit proof for arm_b. Never used to block a generation attempt; recorded as evidence only.",
+      "required": ["state", "method"],
+      "properties": {
+        "state": {"enum": ["within_estimate", "exceeds_estimate", "unknown"]},
+        "method": {"const": "arm_a_recorded_prompt_tokens_vs_arm_b_context_window"},
+        "arm_a_prompt_tokens_estimate": {"type": "integer", "minimum": 0},
+        "arm_b_context_window_tokens": {"type": "integer", "minimum": 1},
+        "caveat": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+
+    "tools_schema_compat": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {"enum": ["none_used", "used_not_replayed"]},
+        "requested_mode": {"type": "string", "minLength": 1},
+        "caveat": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+
+    "qualified_evidence_compat": {
+      "type": "object",
+      "description": "Permanently 'anchor_only' for this schema version: v1 never computes claim-level support (E2) for the second-opinion arm, because that arm is deliberately never persisted as a run and E2's span addressing requires a real run id. Not a per-request failure -- a structural fact about this milestone, recorded so it is never mistaken for a silently-skipped measurement.",
+      "required": ["state", "note"],
+      "properties": {
+        "state": {"const": "anchor_only"},
+        "note": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+
+    "compatibility": {
+      "type": "object",
+      "required": ["chat_template", "context_limit", "tools_or_schema", "qualified_evidence"],
+      "properties": {
+        "chat_template": {"$ref": "#/$defs/chat_template_compat"},
+        "context_limit": {"$ref": "#/$defs/context_limit_compat"},
+        "tools_or_schema": {"$ref": "#/$defs/tools_schema_compat"},
+        "qualified_evidence": {"$ref": "#/$defs/qualified_evidence_compat"}
+      },
+      "additionalProperties": false
+    },
+
+    "delivered_input": {
+      "type": "object",
+      "description": "What was actually sent to arm_b: the SAME sanitized message list arm_a's own recorded `messages` was built from. `identical_across_arms` is always true in v1 -- this implementation never varies the delivered messages per arm -- but stays an explicit, checkable field rather than an assumed constant.",
+      "required": ["message_count", "sha256", "identical_across_arms"],
+      "properties": {
+        "message_count": {"type": "integer", "minimum": 0},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "identical_across_arms": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+
+    "agreement": {
+      "type": "object",
+      "description": "A LEXICAL proxy only -- word-type Jaccard DISTANCE between the two answers (0 = identical word-type sets, 100 = completely disjoint), the exact number clozn's corrective-retry compare view already surfaces. Never a semantic, entailment, or truth-preserving judgment, and never derived from any per-token probability of either model.",
+      "required": ["method", "lexical_difference_percent", "caveat"],
+      "properties": {
+        "method": {"const": "lexical_overlap_heuristic"},
+        "lexical_difference_percent": {"type": "integer", "minimum": 0, "maximum": 100},
+        "caveat": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+
+    "comparison_length": {
+      "type": "object",
+      "required": ["arm_a_words", "arm_b_words"],
+      "properties": {
+        "arm_a_words": {"type": "integer", "minimum": 0},
+        "arm_b_words": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+
+    "comparison": {
+      "type": "object",
+      "description": "Present only when both arms produced comparable, non-empty natural-language text. Claim-level disagreement and support comparison are deliberately NOT fields here in v1 -- see compatibility.qualified_evidence.",
+      "required": ["agreement", "length"],
+      "properties": {
+        "agreement": {"$ref": "#/$defs/agreement"},
+        "format_changed": {"type": "boolean"},
+        "length": {"$ref": "#/$defs/comparison_length"}
+      },
+      "additionalProperties": false
+    }
+  },
+
+  "properties": {
+    "schema_version": {"const": "clozn.model-second-opinion.v1"},
+    "generated_at": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "delivered_input": {"$ref": "#/$defs/delivered_input"},
+    "arm_a": {"$ref": "#/$defs/arm_a"},
+    "arm_b": {"$ref": "#/$defs/arm_b"},
+    "compatibility": {"$ref": "#/$defs/compatibility"},
+    "comparison": {"$ref": "#/$defs/comparison"}
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "schema_version": "clozn.model-second-opinion.v1",
+  "generated_at": "2026-07-30T12:05:00Z",
+  "run_id": "run_def456",
+  "delivered_input": {
+    "message_count": 1,
+    "sha256": "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+    "identical_across_arms": true
+  },
+  "arm_a": {
+    "role": "anchor",
+    "run_id": "run_def456",
+    "model_id": "alpha",
+    "status": "ok",
+    "response_text": "Yes, that should work."
+  },
+  "arm_b": {
+    "role": "second_opinion",
+    "requested_model_id": "gamma",
+    "model_id": "gamma",
+    "status": "generation_error",
+    "refusal": {
+      "code": "generation_error",
+      "message": "ConnectionError: worker socket closed mid-generation"
+    }
+  },
+  "compatibility": {
+    "chat_template": {
+      "state": "unknown",
+      "method": "template_fingerprint_compare"
+    },
+    "context_limit": {
+      "state": "unknown",
+      "method": "arm_a_recorded_prompt_tokens_vs_arm_b_context_window"
+    },
+    "tools_or_schema": {
+      "state": "used_not_replayed",
+      "requested_mode": "json_schema",
+      "caveat": "the original request used a tool/structured-output contract; the second-opinion arm does not replay it."
+    },
+    "qualified_evidence": {
+      "state": "anchor_only",
+      "note": "claim-level support comparison (E2) is available for the anchor run alone."
+    }
+  }
+}
