@@ -221,7 +221,9 @@ def test_exact_fork_available_for_an_organic_run_with_a_ready_worker():
     assert exact_fork == {
         "available": True,
         "snapshot_state": "not_attempted",
-        "action": {"method": "POST", "href": "/runs/run_current/fork"},
+        # Milestone F: points at the token-workbench action endpoint, not the pre-Milestone-F
+        # /runs/<id>/fork route (still live, but no longer what this preview recommends).
+        "action": {"method": "POST", "href": "/runs/run_current/tokens/1/fork"},
     }
 
 
@@ -270,10 +272,10 @@ def test_causal_trace_ready_for_an_organic_run_with_a_ready_worker():
     assert causal == {
         "available": True,
         "status": "ready",
-        "action": {
-            "method": "POST", "href": "/runs/run_current/causal-trace",
-            "request_body": {"position": 1},
-        },
+        # Milestone F: the token-workbench action endpoint carries `index` in the URL itself, so no
+        # request_body hint is needed (unlike the pre-Milestone-F /runs/<id>/causal-trace route, which
+        # took `position` in the body).
+        "action": {"method": "POST", "href": "/runs/run_current/tokens/1/causal-trace"},
     }
 
 
@@ -358,7 +360,13 @@ def test_mechanistic_diff_available_for_a_genuinely_different_model_reference():
     mech = doc["capabilities"]["mechanistic_diff"]
     assert mech["available"] is True
     assert mech["reason"]
-    assert mech["action"]["method"] == "CLI"
+    # Milestone F: points at the token-workbench mechanistic-diff action, which runs this SAME
+    # pair-compatibility gate authoritatively (and is honest that cross-model execution itself is not
+    # yet wired -- clozn diff-model at the CLI remains the only way to actually run one today).
+    assert mech["action"] == {
+        "method": "POST", "href": "/runs/run_current/tokens/1/mechanistic-diff",
+        "request_body": {"reference_run_id": "run_other_model"},
+    }
 
 
 def test_mechanistic_diff_unresolvable_reference_is_labeled_not_404d():
