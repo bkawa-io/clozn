@@ -1,0 +1,21 @@
+{
+  "schema_version": "clozn.investigation-experiment.v1",
+  "experiment_id": "invexp_00000000000000000f05",
+  "run_id": "run_1",
+  "generated_at": "2026-07-29T00:00:00Z",
+  "phase": "completed",
+  "intervention": {"kind": "sampler_change", "overrides": {"temperature": 0.9}},
+  "eligibility": {"state": "eligible"},
+  "plan": {
+    "arm_order": ["baseline", "no_op_replay", "treatment", "random_equal_effect_control"],
+    "resolved": {"kind": "sampler_change", "sampler_overrides": {"temperature": 0.9}}
+  },
+  "arms": {
+    "baseline": {"reply_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "matches_baseline": true},
+    "no_op_replay": {"reply_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "matches_baseline": true},
+    "treatment": {"reply_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+  },
+  "analysis": {"instrument_sane": true, "reasons": ["no control ran"]},
+  "observed": {"treatment_reply_differs_from_baseline": true},
+  "causal_claim": {"licensed": false, "statement": "uncontrolled"}
+}

@@ -1,0 +1,48 @@
+{
+  "schema_version": "clozn.investigation-experiment.v1",
+  "experiment_id": "invexp_0000000000000000000d",
+  "run_id": "run_1",
+  "generated_at": "2026-07-29T00:00:00Z",
+  "phase": "completed",
+  "intervention": {"kind": "sampler_change", "overrides": {"temperature": 0.9}},
+  "eligibility": {"state": "eligible"},
+  "plan": {
+    "arm_order": ["baseline", "no_op_replay", "treatment", "random_equal_effect_control"],
+    "resolved": {
+      "kind": "sampler_change",
+      "sampler_overrides": {"temperature": 0.9},
+      "random_control_note": "no principled equal-magnitude-but-untargeted perturbation is defined for a sampler-parameter change in this slice"
+    }
+  },
+  "arms": {
+    "baseline": {"reply_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "matches_baseline": true},
+    "no_op_replay": {
+      "run_id": "run_child_no_op",
+      "reply_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "matches_baseline": true
+    },
+    "treatment": {
+      "run_id": "run_child_treatment",
+      "reply_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "matches_baseline": false
+    },
+    "random_equal_effect_control": {
+      "available": false,
+      "reason": "no principled equal-magnitude-but-untargeted perturbation is defined for a sampler-parameter change in this slice"
+    }
+  },
+  "analysis": {
+    "instrument_sane": true,
+    "reasons": [
+      "no random_equal_effect_control ran for this intervention (no principled equal-magnitude-but-untargeted perturbation is defined for a sampler-parameter change in this slice); effect_specific cannot be computed."
+    ]
+  },
+  "observed": {
+    "treatment_reply_differs_from_baseline": true,
+    "note": "this records what changed under one greedy regeneration per arm -- a factual diff, never a causal claim."
+  },
+  "causal_claim": {
+    "licensed": false,
+    "statement": "uncontrolled: no random equal-effect control could be run for this intervention in this slice, so an observed difference cannot be distinguished from any similarly-sized change producing the same shift."
+  }
+}

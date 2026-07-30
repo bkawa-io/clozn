@@ -1,0 +1,9 @@
+{
+  "schema_version": "clozn.investigation-experiment.v1",
+  "experiment_id": "invexp_00000000000000000f03",
+  "run_id": "run_1",
+  "generated_at": "2026-07-29T00:00:00Z",
+  "phase": "bogus_phase",
+  "intervention": {"kind": "adapter_scale", "scale": 0},
+  "eligibility": {"state": "refused", "reason": {"code": "adapter_rescale_unavailable_in_planner", "message": "no"}}
+}

@@ -1,0 +1,27 @@
+{
+  "schema_version": "clozn.investigation-experiment.v1",
+  "experiment_id": "invexp_0000000000000000000b",
+  "run_id": "run_1",
+  "generated_at": "2026-07-29T00:00:00Z",
+  "phase": "planned",
+  "intervention": {"kind": "remove_span", "span_address_id": "span_0123456789abcdef01234567"},
+  "eligibility": {"state": "eligible"},
+  "plan": {
+    "arm_order": ["baseline", "no_op_replay", "treatment", "random_equal_effect_control"],
+    "resolved": {
+      "kind": "remove_span",
+      "spans": [
+        {
+          "message_index": 1,
+          "start": 0,
+          "end": 20,
+          "basis_sha256_verified": true,
+          "span_address_id": "span_0123456789abcdef01234567"
+        }
+      ],
+      "random_control_spans": [
+        {"message_index": 1, "start": 25, "end": 45, "basis_sha256_verified": true}
+      ]
+    }
+  }
+}
