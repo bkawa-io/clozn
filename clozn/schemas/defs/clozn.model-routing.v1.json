@@ -34,6 +34,7 @@
                 "/runs/<id>/snapshot/pin",
                 "/runs/<id>/fork",
                 "/runs/<id>/investigation",
+                "/runs/<id>/investigation-experiment",
                 "/runs/<id>/tokens/<index>/workbench",
                 "/runs/<id>/causal-trace",
                 "/runs/<id>/provenance",
