@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.correction-verification.v1",
+  "title": "F6: the outcome of one verify-before-save teaching-loop attempt",
+  "description": "Built by clozn.runs.teaching_loop.verify_and_promote(). A teaching-loop promotion (as opposed to a user hand-confirming their own correction via clozn.runs.corrections.confirm_correction()) is a THREE-step, receipt-carrying claim: a target failure run (the recorded bad outcome), a child retry run (the SAME situation replayed with a drafted, not-yet-confirmed clozn.correction.v1 in effect), and an exact, model-free comparison between them using clozn.replay.controlled.match_run() -- the SAME comparison primitive `compare-runs --test` already uses, never a second implementation of it. `target_run_id`/`child_run_id` are the verification pair: both are exact ids of already-persisted, immutable runs, so anyone can re-read either run independently and check this document's claim for themselves -- never a bare 'verified: true' boolean. `verification` records what the comparison showed (`passed`: the child run did NOT reproduce the target failure under `match_criterion`; `failed`: it did, or the evidence needed to tell was unavailable on one side). `promoted` is true only when `verification` is `passed` AND the correction was still an unconfirmed, non-deleted draft at the moment this ran -- see clozn.runs.teaching_loop's module docstring for the exact mechanism that makes a promoted document impossible to construct without a real, checkable pair. A `failed` verification is never discarded: it is written to the SAME correction_events ledger clozn.correction-export.v1 already exposes (event_type `verification_failed`), so a correction clozn tried and could not verify stays visible as evidence, not silently dropped, and the draft it names remains exactly that -- a draft, never auto-promoted.",
+  "type": "object",
+  "required": [
+    "schema_version", "correction_id", "created_ts", "target_run_id", "child_run_id",
+    "match_criterion", "comparison", "verification", "promoted", "reason", "correction"
+  ],
+  "additionalProperties": false,
+
+  "properties": {
+    "schema_version": {"const": "clozn.correction-verification.v1"},
+    "correction_id": {"type": "string", "pattern": "^corr_[0-9a-f]{24}$"},
+    "created_ts": {"type": "number", "minimum": 0},
+    "target_run_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The recorded failure this teaching-loop attempt tried to fix -- an exact, already-persisted run id, never free text."
+    },
+    "child_run_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The retry run compared against target_run_id -- an exact, already-persisted run id. F6 does not execute this retry itself (out of scope; see the module docstring): it is supplied as evidence, not generated here."
+    },
+    "match_criterion": {
+      "type": "string",
+      "enum": ["exact_output", "tool_parse", "finish_reason", "token_budget"],
+      "description": "The same closed vocabulary clozn.replay.controlled.SUPPORTED_MATCHERS declares -- exact recorded evidence only, never a semantic-similarity judgment."
+    },
+    "comparison": {
+      "type": "object",
+      "required": ["available"],
+      "description": "The verbatim return value of clozn.replay.controlled.match_run(child_run, target_run, match_criterion) -- deliberately NOT re-modeled field-by-field here (its `actual`/`expected` shape varies by criterion; see that function's own docstring), so this schema never drifts out of sync with the one comparison implementation it reuses.",
+      "properties": {
+        "available": {
+          "type": "boolean",
+          "description": "False when the match criterion's evidence could not be read from one or both runs -- a verification can never be 'passed' in that case, regardless of any other field."
+        },
+        "reason": {"type": "string"},
+        "matched": {"type": "boolean"},
+        "actual": {},
+        "expected": {}
+      }
+    },
+    "verification": {
+      "type": "string",
+      "enum": ["passed", "failed"],
+      "description": "'passed': comparison.available is true and comparison.matched is false -- the child run did not reproduce the recorded target failure. 'failed': either the evidence was unavailable, or the child run matched the target failure exactly (the correction changed nothing observable)."
+    },
+    "promoted": {
+      "type": "boolean",
+      "description": "True only when verification is 'passed' AND the correction was confirmed by this call. A 'failed' verification is never promoted; a correction that was already confirmed before this call is refused outright (see clozn.runs.teaching_loop.TeachingLoopStateError) rather than silently re-promoted."
+    },
+    "reason": {"type": "string", "minLength": 1},
+    "correction": {
+      "type": "object",
+      "description": "The resulting clozn.correction.v1 document as currently stored -- still a draft (confirmed_ts absent) when promoted is false, confirmed when promoted is true. Embedded rather than $ref'd: this validator only follows local #/$defs refs (clozn/schemas/_validator.py), and the document was already produced by clozn.runs.corrections' own row->document construction, which is schema-validated at the point a correction is first drafted."
+    }
+  }
+}

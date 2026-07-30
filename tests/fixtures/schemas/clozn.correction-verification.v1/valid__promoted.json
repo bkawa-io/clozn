@@ -1,0 +1,28 @@
+{
+  "schema_version": "clozn.correction-verification.v1",
+  "correction_id": "corr_0123456789abcdef01234567",
+  "created_ts": 200.0,
+  "target_run_id": "run_0019f7a3b1c2d_abcdef",
+  "child_run_id": "run_0019f7a3b1c2e_ghijkl",
+  "match_criterion": "exact_output",
+  "comparison": {
+    "available": true,
+    "matched": false,
+    "actual": {"sha256": "aa", "bytes": 2},
+    "expected": {"sha256": "bb", "bytes": 2}
+  },
+  "verification": "passed",
+  "promoted": true,
+  "reason": "child run did not reproduce target failure under exact_output; correction promoted",
+  "correction": {
+    "schema_version": "clozn.correction.v1",
+    "id": "corr_0123456789abcdef01234567",
+    "scope": {"kind": "session", "value": "session_0123456789abcdef01234567"},
+    "type": "style",
+    "content_hash": "0123456789abcdef",
+    "enabled": true,
+    "created_ts": 100.0,
+    "created_at": "2026-07-30T00:00:00",
+    "confirmed_ts": 200.0
+  }
+}

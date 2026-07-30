@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "clozn.correction-export.v1",
   "title": "F5: a portable export of one correction and its complete append-only event ledger",
-  "description": "Built by clozn.runs.corrections.export_correction(). Carries the correction's current stored document (clozn.correction.v1 -- content omitted if it has been deleted, exactly as the live record reads) plus every event ever recorded against it, oldest first, never filtered or summarized: drafted/confirmed/disabled/enabled/deleted/undone lifecycle events, plus applied/conflict_lost events tying this correction to specific runs. Exporting never mutates the correction or its ledger.",
+  "description": "Built by clozn.runs.corrections.export_correction(). Carries the correction's current stored document (clozn.correction.v1 -- content omitted if it has been deleted, exactly as the live record reads) plus every event ever recorded against it, oldest first, never filtered or summarized: drafted/confirmed/disabled/enabled/deleted/undone lifecycle events, applied/conflict_lost events tying this correction to specific runs, and verification_passed/verification_failed events (F6, clozn.runs.teaching_loop) tying it to a target-failure/child-retry run pair -- a verification_failed row is how a teaching-loop attempt that did NOT fix the target failure stays visible as evidence instead of being silently dropped; the draft it names is never promoted by that event alone. Exporting never mutates the correction or its ledger.",
   "type": "object",
   "required": ["schema_version", "correction_id", "exported_ts", "correction", "events"],
   "additionalProperties": false,
@@ -16,17 +16,18 @@
         "seq": {"type": "integer", "minimum": 1},
         "event_type": {
           "type": "string",
-          "enum": ["drafted", "confirmed", "disabled", "enabled", "deleted", "applied", "conflict_lost"]
+          "enum": ["drafted", "confirmed", "disabled", "enabled", "deleted", "applied", "conflict_lost",
+                   "verification_passed", "verification_failed"]
         },
         "event_ts": {"type": "number", "minimum": 0},
         "run_id": {
           "type": "string",
           "minLength": 1,
-          "description": "Present only on 'applied' and 'conflict_lost' events -- the run this correction shaped, or was surfaced-but-outvoted for."
+          "description": "Present on 'applied' and 'conflict_lost' events (the run this correction shaped, or was surfaced-but-outvoted for) and on 'verification_passed'/'verification_failed' events (the child retry run compared against the target failure -- see `detail.target_run_id` for the other half of the pair)."
         },
         "detail": {
           "type": "object",
-          "description": "Event-specific context, e.g. an 'undo_of' event sequence number, a conflict's winner_id/rule for a conflict_lost row, or a deleted_reason string for a deleted row."
+          "description": "Event-specific context: an 'undo_of' event sequence number; a conflict's winner_id/rule for a conflict_lost row; a deleted_reason string for a deleted row; target_run_id/child_run_id/match_criterion/comparison for a verification_passed or verification_failed row (F6); or promoted_by/target_run_id/child_run_id/match_criterion on a 'confirmed' row that a teaching-loop promotion (rather than a hand confirm) produced."
         }
       }
     }
