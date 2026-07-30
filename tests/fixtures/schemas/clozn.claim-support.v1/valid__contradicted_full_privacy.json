@@ -1,0 +1,30 @@
+{
+  "schema_version": "clozn.claim-support.v1",
+  "run_id": "run-fixture-4",
+  "privacy": "full",
+  "offset_contract": {
+    "unit": "unicode_code_points",
+    "interval": "half_open",
+    "hash_algorithm": "sha256",
+    "canonicalization": "exact_string_utf8_v1"
+  },
+  "source": {
+    "claims_schema_version": "clozn.answer-claims.v1",
+    "influence_map": {
+      "gate": "ok"
+    }
+  },
+  "results": [
+    {
+      "claim_index": 0,
+      "claim_address_id": "span_1ed90fc7f21add58dbf4db59",
+      "status": "contradicted",
+      "method": {
+        "name": "direct_negation"
+      },
+      "source_span_ids": [
+        "span_76f84dcaf045c6b84d7074dd"
+      ]
+    }
+  ]
+}
