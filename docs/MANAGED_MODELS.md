@@ -244,7 +244,11 @@ disconnected `WorkerRegistry` there with no access to those paths and no shared 
 supervisor's real one — spawning duplicate, desynchronized workers instead of coalescing onto the
 supervisor's single-flight guarantee. Wiring a real loader across that process boundary needs its own
 supervisor↔gateway IPC integration, which does not exist yet and is separately owned; see the comment
-at `MODEL_ROUTER`'s construction in `clozn/server/app.py::main()`.
+at `MODEL_ROUTER`'s construction in `clozn/server/app.py::main()`. The design for that integration —
+who arbitrates, the transport, cross-process coalescing, typed failure states, eviction backpressure,
+and why cooperative cancellation of an in-flight worker call still doesn't exist afterward — is
+recorded in [ADR 006](design/006-cross-process-cold-load-protocol.md). It is a proposed decision, not
+implemented; this section remains accurate until it ships.
 
 So, concretely, today: only the workers named in your (possibly overridden) preload set ever exist.
 Requesting a model that isn't preloaded, or one whose preload failed, returns
