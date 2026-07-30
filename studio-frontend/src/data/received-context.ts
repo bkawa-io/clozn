@@ -5,6 +5,8 @@
  * remain owned by `data/context-receipt.ts` and its explicit disclosure UI.
  */
 
+import type { InfluenceEvidenceState } from "./types";
+
 export type InvestigationState =
   | "supported"
   | "measured_effect"
@@ -72,6 +74,103 @@ export interface RunInvestigationReceipt {
     addressCount?: number;
     influenceNativeStatus?: string;
   };
+  /** `sections.prompt_source_influence` -- the cross-linked prompt-span x answer-span evidence "What
+   * mattered?" is built from. Metadata-only, same as everything else this module decodes: spans carry
+   * hashes, ids, and offsets, never literal text. */
+  promptSourceInfluence: PromptSourceInfluenceSection;
+  /** Top-level `actions[]` -- typed action descriptors (href/method/availability), never followed
+   * automatically. `measure_prompt_source_influence` is the one "What mattered?" offers as a button; it
+   * is read here only to decide whether/why that button is enabled, never to trigger it. */
+  actions: InvestigationAction[];
+}
+
+/** One canonical prompt/answer span reference from `clozn.context_answer_influence.v1`'s portable
+ * export (see `context_answer_influence.portable_export`'s `span()` helper) -- an answer span additionally
+ * carries `tokenIndex`/`tokenId` (see `InfluenceAnswerSpan` below). Text is never present at
+ * `metadata_only` privacy: only a SHA-256 + byte count, offsets, and native identity survive. */
+export interface InfluenceSpanRef {
+  id: string;
+  parentId?: string;
+  level?: string;
+  kind?: string;
+  messageIndex?: number;
+  role?: string;
+  name?: string;
+  sourceKind?: string;
+  segmentId?: string;
+  clientSourceId?: string;
+  sourceLabel?: string;
+  externalSourceId?: string;
+  /** Present on `prompt_sources` entries only: whether this source was inside the bounded span budget
+   * `context_answer_influence` actually measured. `false` means the source reached the model (it is
+   * already in the assembled prompt) but this particular measurement run never scored it -- a real,
+   * distinct "not measured" claim, never the same as `received_context.omitted` (never reached the
+   * model at all). */
+  selected?: boolean;
+  start?: number;
+  end?: number;
+  byteStart?: number;
+  byteEnd?: number;
+  childUnitCount?: number;
+  textSha256?: string;
+  textBytes?: number;
+}
+
+export interface InfluenceAnswerSpan extends InfluenceSpanRef {
+  tokenIndex?: number;
+  tokenId?: number;
+}
+
+export type InfluenceLinkEffect = "supports" | "suppresses" | "neutral";
+
+/** One measured (context span, answer span) cell -- `clozn.context_answer_influence.v1`'s own `links[]`,
+ * verbatim field names translated to camelCase. `evidenceState` is the SAME closed union
+ * `data/types.ts` already defines (`causally_supported` | `observed`) -- this module never widens it. */
+export interface InfluenceLink {
+  contextSpanId: string;
+  answerSpanId: string;
+  contextIndex?: number;
+  answerIndex?: number;
+  deltaNats: number;
+  absDeltaNats: number;
+  effect: InfluenceLinkEffect;
+  clearsFloor: boolean;
+  evidenceState: InfluenceEvidenceState;
+}
+
+export interface InfluenceThresholdsSection {
+  cellAbsDeltaNats?: number;
+  sourceClearRule?: string;
+  calibration?: string;
+}
+
+/** `sections.prompt_source_influence` (see `clozn/runs/investigation.py`'s `_influence_section`).
+ * `state` never reports `causally_supported`/`observed` itself -- those live per-link in `links[]`; this
+ * `state` says whether ANY measurement exists at all for this run (`measured_effect` /
+ * `below_measurement_floor`) or why not (`delivered_not_measured` / `unavailable` / `failed` /
+ * `inconclusive`). */
+export interface PromptSourceInfluenceSection {
+  state: InvestigationState;
+  reason?: string;
+  privacy?: string;
+  promptSources: InfluenceSpanRef[];
+  promptSpans: InfluenceSpanRef[];
+  answerSpans: InfluenceAnswerSpan[];
+  links: InfluenceLink[];
+  thresholds: InfluenceThresholdsSection;
+}
+
+/** One entry of the investigation document's top-level `actions[]` -- a typed descriptor for a
+ * measurement/navigation/corrective call a caller MAY make, never one this module (or any reader of it)
+ * calls on its own. */
+export interface InvestigationAction {
+  id: string;
+  label: string;
+  kind: string;
+  method: string;
+  href: string;
+  availability: string;
+  reason?: string;
 }
 
 export interface SpanAddress {
@@ -232,6 +331,131 @@ function parseSpanSection(raw: unknown): RunInvestigationReceipt["spanSection"] 
   };
 }
 
+const LINK_EFFECTS = new Set<InfluenceLinkEffect>(["supports", "suppresses", "neutral"]);
+
+function linkEffect(value: unknown): InfluenceLinkEffect | undefined {
+  return typeof value === "string" && LINK_EFFECTS.has(value as InfluenceLinkEffect)
+    ? value as InfluenceLinkEffect
+    : undefined;
+}
+
+const INFLUENCE_EVIDENCE_STATES = new Set<InfluenceEvidenceState>(["causally_supported", "observed"]);
+
+function influenceEvidenceState(value: unknown): InfluenceEvidenceState | undefined {
+  return typeof value === "string" && INFLUENCE_EVIDENCE_STATES.has(value as InfluenceEvidenceState)
+    ? value as InfluenceEvidenceState
+    : undefined;
+}
+
+function parseSpanRef(raw: unknown): InfluenceSpanRef {
+  const item = record(raw);
+  return {
+    id: str(item.id) ?? "",
+    parentId: str(item.parent_id),
+    level: str(item.level),
+    kind: str(item.kind),
+    messageIndex: num(item.message_index),
+    role: str(item.role),
+    name: str(item.name),
+    sourceKind: str(item.source_kind),
+    segmentId: str(item.segment_id),
+    clientSourceId: str(item.client_source_id),
+    sourceLabel: str(item.source_label),
+    externalSourceId: str(item.external_source_id),
+    selected: bool(item.selected),
+    start: num(item.start),
+    end: num(item.end),
+    byteStart: num(item.byte_start),
+    byteEnd: num(item.byte_end),
+    childUnitCount: num(item.child_unit_count),
+    textSha256: str(item.text_sha256),
+    textBytes: num(item.text_bytes),
+  };
+}
+
+function parseAnswerSpan(raw: unknown): InfluenceAnswerSpan {
+  const item = record(raw);
+  return {
+    ...parseSpanRef(raw),
+    tokenIndex: num(item.token_index),
+    tokenId: num(item.token_id),
+  };
+}
+
+/** `null` when a link is missing a field this module's closed unions require -- dropped rather than
+ * guessed (a cell with no link renders as NOT MEASURED, which is the honest fallback; see
+ * WhatMattered.tsx's cell-state builder). Never upgrades an unrecognized `evidence_state` to a known one. */
+function parseLink(raw: unknown): InfluenceLink | null {
+  const item = record(raw);
+  const contextSpanId = str(item.context_span_id);
+  const answerSpanId = str(item.answer_span_id);
+  const deltaNats = num(item.delta_nats);
+  const absDeltaNats = num(item.abs_delta_nats);
+  const effect = linkEffect(item.effect);
+  const evidenceState = influenceEvidenceState(item.evidence_state);
+  const clearsFloor = bool(item.clears_floor);
+  if (
+    !contextSpanId || !answerSpanId || deltaNats == null || absDeltaNats == null
+    || !effect || !evidenceState || clearsFloor == null
+  ) {
+    return null;
+  }
+  return {
+    contextSpanId,
+    answerSpanId,
+    contextIndex: num(item.context_index),
+    answerIndex: num(item.answer_index),
+    deltaNats,
+    absDeltaNats,
+    effect,
+    clearsFloor,
+    evidenceState,
+  };
+}
+
+function parseThresholds(raw: unknown): InfluenceThresholdsSection {
+  const item = record(raw);
+  return {
+    cellAbsDeltaNats: num(item.cell_abs_delta_nats),
+    sourceClearRule: str(item.source_clear_rule),
+    calibration: str(item.calibration),
+  };
+}
+
+function parsePromptSourceInfluence(raw: unknown): PromptSourceInfluenceSection {
+  const item = record(raw);
+  return {
+    state: investigationState(item.state),
+    reason: str(item.reason),
+    privacy: str(item.privacy),
+    promptSources: records(item.prompt_sources).map(parseSpanRef),
+    promptSpans: records(item.prompt_spans).map(parseSpanRef),
+    answerSpans: records(item.answer_spans).map(parseAnswerSpan),
+    links: records(item.links)
+      .map(parseLink)
+      .filter((link): link is InfluenceLink => link != null),
+    thresholds: parseThresholds(item.thresholds),
+  };
+}
+
+function parseAction(raw: unknown): InvestigationAction | null {
+  const item = record(raw);
+  const id = str(item.id);
+  const href = str(item.href);
+  const method = str(item.method);
+  const availability = str(item.availability);
+  if (!id || !href || !method || !availability) return null;
+  return {
+    id,
+    label: str(item.label) ?? id,
+    kind: str(item.kind) ?? "action",
+    method,
+    href,
+    availability,
+    reason: str(item.reason),
+  };
+}
+
 function parseInvestigation(raw: unknown, requestedRunId: string): RunInvestigationReceipt {
   const document = record(raw);
   const sections = record(document.sections);
@@ -240,6 +464,10 @@ function parseInvestigation(raw: unknown, requestedRunId: string): RunInvestigat
     runId: str(document.run_id) ?? requestedRunId,
     receivedContext: parseReceivedContext(sections.received_context),
     spanSection: parseSpanSection(sections.text_span_addresses),
+    promptSourceInfluence: parsePromptSourceInfluence(sections.prompt_source_influence),
+    actions: records(document.actions)
+      .map(parseAction)
+      .filter((action): action is InvestigationAction => action != null),
   };
 }
 

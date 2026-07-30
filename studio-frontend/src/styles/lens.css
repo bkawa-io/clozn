@@ -2510,3 +2510,371 @@
 .received-context-authorized-body .context-receipt {
   border-top: 0;
 }
+
+/* -----------------------------------------------------------------------------------------------
+   What mattered? -- the cross-linked prompt-span x answer-span heatmap.
+
+   Four cell states, never collapsed: measured effect (solid signal-blue, intensity by |delta|),
+   below the measurement floor (dashed signal-blue, dim -- the SAME "dashed+dim = observed, not
+   confirmed" convention .lens-evidence-row.is-evidence-observed already uses), omitted (solid
+   signal-peach, matching .received-context-row.is-omitted's own vocabulary for "never reached the
+   model"), not measured (dashed ink-faint, matching .received-context-state.is-unavailable). Every
+   cell also carries a short text glyph (F / F+ / F- / B0 / B+ / B- / OM / NM) -- color is never the
+   only signal, see WhatMattered.tsx's own module docstring.
+   ----------------------------------------------------------------------------------------------- */
+
+.what-mattered {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--line);
+}
+
+.what-mattered-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px 7px;
+}
+
+.what-mattered-head h3 {
+  margin: 2px 0 0;
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+
+.what-mattered-overall {
+  padding: 2px 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .08em;
+  white-space: nowrap;
+}
+
+.what-mattered-overall.is-measured_effect {
+  color: var(--signal-blue);
+  border-color: color-mix(in srgb, var(--signal-blue) 48%, var(--line-strong));
+}
+
+.what-mattered-overall.is-below_measurement_floor {
+  color: var(--ink-soft);
+  border-style: dashed;
+}
+
+.what-mattered-overall.is-delivered_not_measured,
+.what-mattered-overall.is-unavailable,
+.what-mattered-overall.is-inconclusive {
+  color: var(--ink-faint);
+  border-style: dashed;
+}
+
+.what-mattered-overall.is-failed {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line-strong));
+}
+
+.what-mattered-boundary {
+  margin: 0;
+  padding: 0 14px 10px;
+  color: var(--ink-faint);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.what-mattered-empty {
+  padding: 10px 14px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .06em;
+}
+
+.what-mattered-notice {
+  display: grid;
+  gap: 3px;
+  margin: 7px 14px;
+  padding: 8px;
+  border: 1px dashed var(--line-strong);
+  color: var(--ink-faint);
+}
+
+.what-mattered-notice strong {
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .08em;
+}
+
+.what-mattered-notice span {
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.what-mattered-notice.is-failed {
+  color: var(--danger);
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line-strong));
+  background: color-mix(in srgb, var(--danger) 5%, transparent);
+}
+
+.what-mattered-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 14px 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.what-mattered-legend li {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  min-width: 0;
+}
+
+.what-mattered-legend b {
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .04em;
+  color: var(--ink);
+}
+
+.what-mattered-legend span {
+  color: var(--ink-faint);
+  font-size: 7px;
+}
+
+.what-mattered-legend li.is-cell-measured b {
+  color: var(--signal-blue);
+}
+
+.what-mattered-legend li.is-cell-below-floor b {
+  color: var(--ink-soft);
+}
+
+.what-mattered-legend li.is-cell-omitted b {
+  color: var(--signal-peach);
+}
+
+.what-mattered-legend li.is-cell-not-measured b {
+  color: var(--ink-faint);
+}
+
+.what-mattered-thresholds {
+  margin: 0 14px 8px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .06em;
+}
+
+.what-mattered-grid-wrap {
+  overflow-x: auto;
+  max-height: 340px;
+  overflow-y: auto;
+  margin: 0 14px 12px;
+  border: 1px solid var(--line);
+}
+
+.what-mattered-grid {
+  border-collapse: collapse;
+  font-family: var(--font-machine);
+  font-size: 6px;
+}
+
+.what-mattered-corner,
+.what-mattered-col-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 4px 5px;
+  border: 1px solid var(--line);
+  background: var(--panel-solid);
+  color: var(--ink-faint);
+  font-weight: 550;
+  letter-spacing: .05em;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.what-mattered-corner {
+  left: 0;
+  z-index: 3;
+}
+
+.what-mattered-col-head {
+  min-width: 20px;
+  text-align: center;
+}
+
+.what-mattered-col-head a {
+  color: var(--signal-violet);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--signal-violet) 45%, transparent);
+  text-underline-offset: 2px;
+}
+
+.what-mattered-col-head a:hover {
+  color: var(--ink);
+}
+
+.what-mattered-row-head {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  background: var(--panel-solid);
+  max-width: 160px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.what-mattered-row-head a,
+.what-mattered-row-head > span {
+  display: block;
+  overflow: hidden;
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.what-mattered-row-head a {
+  color: var(--signal-violet);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--signal-violet) 45%, transparent);
+  text-underline-offset: 2px;
+}
+
+.what-mattered-row-head a:hover {
+  color: var(--ink);
+}
+
+.what-mattered-row-head small {
+  display: block;
+  overflow: hidden;
+  color: var(--ink-faint);
+  font-size: 6px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.what-mattered-row-head.is-not_measured,
+.what-mattered-row-head.is-omitted {
+  opacity: .85;
+}
+
+.what-mattered-cell {
+  padding: 0;
+  min-width: 18px;
+  height: 18px;
+  border: 1px solid var(--line);
+  color: var(--ink-faint);
+  font-size: 6px;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.what-mattered-cell.is-cell-measured {
+  border-color: color-mix(in srgb, var(--signal-blue) 55%, var(--line));
+  background: color-mix(in srgb, var(--signal-blue) calc(12% + var(--cell-intensity, 0) * 55%), transparent);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.what-mattered-cell.is-cell-below-floor {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--signal-blue) 40%, var(--line));
+  background: color-mix(in srgb, var(--signal-blue) calc(4% + var(--cell-intensity, 0) * 18%), transparent);
+  color: var(--ink-soft);
+}
+
+.what-mattered-cell.is-cell-omitted {
+  border-color: color-mix(in srgb, var(--signal-peach) 50%, var(--line));
+  background: color-mix(in srgb, var(--signal-peach) 12%, transparent);
+  color: color-mix(in srgb, var(--signal-peach) 70%, var(--ink-faint));
+}
+
+.what-mattered-cell.is-cell-not-measured {
+  border-style: dashed;
+  color: var(--ink-faint);
+}
+
+.what-mattered-banner {
+  display: grid;
+  gap: 6px;
+  margin: 0 14px 12px;
+  padding: 10px;
+  border: 1px dashed var(--line-strong);
+}
+
+.what-mattered-banner strong {
+  font-family: var(--font-machine);
+  font-size: 8px;
+  letter-spacing: .06em;
+  color: var(--ink);
+}
+
+.what-mattered-banner span {
+  color: var(--ink-faint);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.what-mattered-banner.is-failed {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line-strong));
+  background: color-mix(in srgb, var(--danger) 5%, transparent);
+}
+
+.what-mattered-banner button {
+  justify-self: start;
+  padding: 6px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .08em;
+  background: transparent;
+}
+
+.what-mattered-banner button:hover:not(:disabled) {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel-raised) 42%, transparent);
+}
+
+.what-mattered-banner button:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.what-mattered-measuring {
+  margin: 0;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .05em;
+}
+
+.what-mattered-measure-reason {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 7px;
+}
+
+.what-mattered-measure-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 7px;
+}
