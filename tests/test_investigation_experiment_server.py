@@ -69,13 +69,13 @@ def _organic_run(**overrides):
     receipt carries a segment_id (clozn.runs.context_receipt.segment_id() is called unconditionally
     for every message), so clozn.runs.text_span_addresses gives every span a
     context_receipt.delivered/<segment_id>-anchored native_ref, never a run.messages/message-{index}
-    one -- and clozn.replay.span_bridge._parse_message_index refuses ANY segment_id-anchored ref by
-    construction (see that module's own docstring: resolvable in principle, not wired this slice).
-    Concretely: remove_span/replace_span_neutral/omit_source are refused
-    (span_message_index_unresolvable) against a run straight out of this fixture -- see
-    test_plan_realistic_run_refuses_span_kinds_as_segment_id_unresolvable below, which locks that in
-    as documented, expected behavior rather than a surprise. `_span_addressable_run` below produces
-    the "legacy, no receipt" shape span_bridge actually supports, for tests that need a working span."""
+    one. clozn.replay.span_bridge resolves this shape by reading the receipt's own original_order
+    field and self-verifying against the segment's content_hash (see
+    test_plan_realistic_run_resolves_span_kinds_via_segment_id below) -- fixed after this fixture's
+    own use once locked in the opposite, broken behavior; see that test's docstring for history.
+    `_span_addressable_run` below produces the OTHER native_ref shape span_bridge resolves (the
+    legacy/pre-schema positional `message-{index}` fallback, no receipt at all), for tests that want
+    to exercise that code path specifically rather than the segment_id one."""
     values = {
         "source": "engine_chat",
         "client": "studio",
@@ -96,9 +96,9 @@ def _organic_run(**overrides):
 def _span_addressable_run(**overrides):
     """Like _organic_run, but with context_receipt stripped after recording -- the "pre-schema"/
     legacy shape clozn.runs.text_span_addresses projects straight from run.messages
-    (run.messages/message-{index} native_refs), which clozn.replay.span_bridge CAN resolve to a
-    message_index. Used by every test below that needs a remove_span/replace_span_neutral/omit_source
-    intervention to actually reach "planned" rather than "refused"."""
+    (run.messages/message-{index} native_refs), a SECOND, independent code path in
+    clozn.replay.span_bridge from the segment_id one _organic_run exercises. Used below where a test
+    wants a plain message-{index} address without depending on segment_id resolution."""
     run = _organic_run(**overrides)
     del run["context_receipt"]
     assert runlog.replace_run(run)
@@ -174,14 +174,21 @@ def test_plan_refused_is_a_typed_200_never_a_500(stores):
     assert h.body["eligibility"]["reason"]["code"] == "adapter_rescale_unavailable_in_planner"
 
 
-def test_plan_realistic_run_refuses_span_kinds_as_segment_id_unresolvable(stores):
-    """A run straight out of the normal record() path always carries a context_receipt whose every
-    delivered segment has a segment_id (clozn.runs.context_receipt.segment_id() is unconditional), so
-    every span address is context_receipt.delivered/<segment_id>-anchored -- clozn.replay.span_bridge
-    refuses ANY segment_id-anchored native_ref by construction (its own docstring: "resolvable in
-    principle... not wired this slice"). remove_span/replace_span_neutral are therefore refused
-    against every REALISTIC run today, not just a contrived edge case -- this test locks that in as
-    documented, expected behavior (see _organic_run's own docstring) rather than a silent trap."""
+def test_plan_realistic_run_resolves_span_kinds_via_segment_id(stores):
+    """This test used to lock in a bug as documented, expected behavior: a run straight out of the
+    normal record() path always carries a context_receipt whose every delivered segment has a segment_id
+    (clozn.runs.context_receipt.segment_id() is unconditional), so every span address on a REALISTIC run
+    is context_receipt.delivered/<segment_id>-anchored -- and clozn.replay.span_bridge used to refuse ANY
+    segment_id-anchored native_ref by construction, meaning remove_span/replace_span_neutral/omit_source
+    were refused against every realistic run, never just a contrived edge case (see git history for the
+    prior version of this test, which asserted exactly that refusal).
+
+    Fixed: span_bridge now builds a segment_id -> message_index index by reading the receipt's own
+    original_order field, and self-verifies the message at that index against the segment's recorded
+    content_hash before trusting the lookup (clozn/replay/span_bridge.py's `_segment_id_index` /
+    `_resolved_span_from_address`; resolver-level coverage, including the content-hash-mismatch refusal
+    path, lives in clozn/replay/test_span_bridge.py). A realistic run's first span address now plans
+    successfully instead of refusing."""
     run = _organic_run()
     from clozn.runs.text_span_addresses import build_persisted_text_span_addresses
     address_id = build_persisted_text_span_addresses(run)["addresses"][0]["address_id"]
@@ -189,8 +196,25 @@ def test_plan_realistic_run_refuses_span_kinds_as_segment_id_unresolvable(stores
                         {"intervention": {"kind": "remove_span", "span_address_id": address_id}})
     assert claimed is True
     assert h.status == 200
-    assert h.body["phase"] == "refused"
-    assert h.body["eligibility"]["reason"]["code"] == "span_message_index_unresolvable"
+    assert h.body["phase"] == "planned"
+    assert h.body["plan"]["arm_order"] == [
+        "baseline", "no_op_replay", "treatment", "random_equal_effect_control"]
+
+
+def test_plan_realistic_run_resolves_omit_source_via_segment_id(stores):
+    """The same fix, exercised through the THIRD previously-broken kind: omit_source resolves through
+    span_bridge.resolve_source_spans(), which hit the identical segment_id-anchored refusal on a
+    realistic run before this fix. A message tagged with source_id is required for a client_source_id to
+    exist for omit_source to target."""
+    run = _organic_run(messages=[
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "IGNORE ME", "source_id": "doc-1"},
+    ])
+    claimed, h = _post(None, run["id"], "/plan",
+                        {"intervention": {"kind": "omit_source", "source_id": "doc-1"}})
+    assert claimed is True
+    assert h.status == 200
+    assert h.body["phase"] == "planned"
 
 
 def test_plan_eligible_is_200_planned_with_the_exact_arm_order(stores):

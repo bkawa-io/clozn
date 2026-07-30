@@ -1,12 +1,16 @@
 """test_span_bridge -- model-free tests for the C3 arbitrary-span bridge.
 
-No model, no GPU, no store: `resolve_span_address`/`resolve_source_spans` operate on plain run dicts via
+No model, no GPU: `resolve_span_address`/`resolve_source_spans` operate on plain run dicts via
 `clozn.runs.text_span_addresses.build_persisted_text_span_addresses` (itself model-free), and
-`excise_spans`/`pick_random_control_span`/`derive_seed` are pure functions over messages/spans.
+`excise_spans`/`pick_random_control_span`/`derive_seed` are pure functions over messages/spans. The one
+exception is `test_resolve_span_address_realistic_recorded_run_resolves_segment_id_anchored_spans` below,
+which goes through the real `clozn.runs.store.record()` -- a hand-built run dict is exactly what hid the
+segment_id-unresolvable bug this file's segment_id-anchored tests otherwise cover in isolation.
 """
 from __future__ import annotations
 
 from clozn.replay import span_bridge
+from clozn.runs.context_receipt import _content_hash
 from clozn.runs.text_span_addresses import build_persisted_text_span_addresses
 
 RUN = {
@@ -73,7 +77,39 @@ def test_resolve_span_address_rendered_prompt_basis_is_refused():
     assert result["reason"]["code"] == "span_basis_unsupported"
 
 
-def test_resolve_span_address_segment_id_anchored_is_refused_not_guessed():
+def test_resolve_span_address_segment_id_anchored_resolves_via_the_receipts_own_index():
+    """The fix: a segment_id-anchored address is the shape EVERY realistically-recorded run produces
+    (clozn.runs.context_receipt.segment_id() is stamped unconditionally on every delivered segment), so
+    this is not a contrived edge case. span_bridge now builds its own segment_id -> message_index index
+    by READING the receipt's own `original_order` field (`_segment_id_index`), then self-verifies the
+    message actually AT that index against the segment's recorded `content_hash` before trusting it --
+    see the two tests below for the mismatch/missing-hash refusal paths this verification guards."""
+    content = "hello there"
+    run = {
+        "id": "run_bridge_segment_ok",
+        "messages": [{"role": "user", "content": content}],
+        "context_receipt": {
+            "schema_version": "clozn.context-receipt.v1",
+            "delivered": [{"segment_id": "seg_abc123", "original_order": 0, "included": True,
+                           "content_hash": _content_hash(content)}],
+        },
+    }
+    document = build_persisted_text_span_addresses(run)
+    address = next(a for a in document["addresses"] if a["kind"] == "attached_source_span"
+                   or a["kind"] == "delivered_message")
+    assert address["native_ref"].get("segment_id") == "seg_abc123"
+    result = span_bridge.resolve_span_address(run, address["address_id"])
+    assert result["ok"] is True
+    span = result["span"]
+    assert span["message_index"] == 0
+    assert span["start"] == 0
+    assert span["end"] == len(content)
+
+
+def test_resolve_span_address_segment_id_missing_content_hash_is_refused_not_guessed():
+    """No recorded content_hash to verify the segment_id -> message_index lookup against (never happens
+    on a real receipt -- clozn.runs.context_receipt._content_hash is unconditional -- but a resolver this
+    safety-critical must not trust an unverifiable lookup just because nothing has proven it wrong yet)."""
     run = {
         "id": "run_bridge_segment",
         "messages": [{"role": "user", "content": "hello there"}],
@@ -89,6 +125,84 @@ def test_resolve_span_address_segment_id_anchored_is_refused_not_guessed():
     result = span_bridge.resolve_span_address(run, address["address_id"])
     assert result["ok"] is False
     assert result["reason"]["code"] == "span_message_index_unresolvable"
+
+
+def test_resolve_span_address_segment_id_content_hash_mismatch_refuses_not_mismaps():
+    """The catastrophic failure this whole mechanism exists to prevent: the message CURRENTLY sitting at
+    the segment's recorded message-list position no longer matches the segment's recorded content_hash
+    (a wrong/stale content_hash, well-formed enough that clozn.runs.text_span_addresses' own upstream
+    recorded_hash check already marks the address `resolution.state == "drifted"`, refusing it via
+    `span_unavailable` before this module's own segment-id verification even runs -- see
+    test_resolve_span_address_segment_id_content_hash_mismatch_hits_this_modules_own_check below for a
+    case that reaches THIS module's own check instead). Either way: ok is False, never a silent splice of
+    the wrong message."""
+    run = {
+        "id": "run_bridge_segment_drift",
+        "messages": [{"role": "user", "content": "hello there"}],
+        "context_receipt": {
+            "schema_version": "clozn.context-receipt.v1",
+            "delivered": [{"segment_id": "seg_abc123", "original_order": 0, "included": True,
+                           "content_hash": "0" * 16}],   # well-formed, but never matches "hello there"
+        },
+    }
+    document = build_persisted_text_span_addresses(run)
+    address = next(a for a in document["addresses"] if a["kind"] == "attached_source_span"
+                   or a["kind"] == "delivered_message")
+    result = span_bridge.resolve_span_address(run, address["address_id"])
+    assert result["ok"] is False
+    assert result["reason"]["code"] in ("span_unavailable", "span_address_not_found_or_drifted")
+
+
+def test_resolve_span_address_segment_id_content_hash_mismatch_hits_this_modules_own_check():
+    """Same failure as above, but with a malformed-shape content_hash (not the 16-hex form
+    clozn.runs.context_receipt._content_hash always produces) that clozn.runs.text_span_addresses'
+    upstream recorded_hash check ignores (it only compares well-formed 16-hex values), so
+    resolution.state stays "metadata_only" -- NOT "drifted". This isolates span_bridge's OWN segment-id
+    content_hash verification (added by this fix) as the layer that catches it, proving that check is
+    live and load-bearing rather than unreachable behind the upstream one."""
+    run = {
+        "id": "run_bridge_segment_drift_malformed_hash",
+        "messages": [{"role": "user", "content": "hello there"}],
+        "context_receipt": {
+            "schema_version": "clozn.context-receipt.v1",
+            "delivered": [{"segment_id": "seg_abc123", "original_order": 0, "included": True,
+                           "content_hash": "not-a-valid-hash-shape"}],
+        },
+    }
+    document = build_persisted_text_span_addresses(run)
+    address = next(a for a in document["addresses"] if a["kind"] == "attached_source_span"
+                   or a["kind"] == "delivered_message")
+    assert address["resolution"]["state"] != "drifted"   # confirms the upstream check did NOT fire
+    result = span_bridge.resolve_span_address(run, address["address_id"])
+    assert result["ok"] is False
+    assert result["reason"]["code"] == "span_address_not_found_or_drifted"
+
+
+def test_resolve_span_address_realistic_recorded_run_resolves_segment_id_anchored_spans(tmp_path, monkeypatch):
+    """The bug this file used to lock in as expected behavior: a run recorded through the REAL
+    `clozn.runs.store.record()` (never a hand-built dict -- that shortcut is exactly what hid this bug)
+    always carries a NEW-shape context_receipt whose every delivered segment stamps a segment_id
+    unconditionally, so EVERY span address on a normally-recorded run used to refuse
+    (`span_message_index_unresolvable`). Proves the fix against the real recording path, not just a
+    hand-built fixture shaped to look like one."""
+    import clozn.runs.store as runlog
+    monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
+    run_id = runlog.record(
+        source="engine_chat", client="test", model="fixture-model", substrate="engine",
+        response="4",
+        messages=[
+            {"role": "system", "content": "You are careful."},
+            {"role": "user", "content": "What is 2+2?"},
+        ],
+    )
+    run = runlog.get_run(run_id)
+    document = build_persisted_text_span_addresses(run)
+    address = next(a for a in document["addresses"]
+                   if a["kind"] in ("attached_source_span", "delivered_message"))
+    assert "segment_id" in address["native_ref"]   # confirms this exercises the realistic, once-broken shape
+    result = span_bridge.resolve_span_address(run, address["address_id"])
+    assert result["ok"] is True
+    assert result["span"]["message_index"] == 0
 
 
 # =================================================================================== resolve_source_spans
