@@ -1,0 +1,21 @@
+{
+  "schema_version": "clozn.session-trace.v1",
+  "generated_at": "2026-07-30T00:00:00Z",
+  "session_id": "session_0123456789abcdef01234567",
+  "session": {"id": "session_0123456789abcdef01234567", "privacy": {"visibility": "visible"}},
+  "page": {"cursor": null, "next_cursor": null, "limit": 50, "count": 0},
+  "turns": [],
+  "branches": [],
+  "totals_through_this_page": {
+    "turn_count": 0, "duration_ms_total": 0, "prompt_tokens_total": 0, "generated_tokens_total": 0
+  },
+  "diagnostic_rule_registry": [],
+  "first_went_wrong_candidates": [
+    {
+      "kind": "root_cause",
+      "run_id": "run_a",
+      "recorded_ts": 10.0,
+      "summary": "an unrecognized candidate kind, used only to prove the enum rejects it"
+    }
+  ]
+}
