@@ -203,6 +203,15 @@ separated here. At n=30 (4-5 per category) task-independence is a strong hint, n
 arithmetic but not multilingual. Not observed here, but per-category n is too small to exclude. That
 needs more bisects per category, i.e. a new GPU run.
 
+**That run happened (2026-07-30, see Follow-on below) — read its result before treating the
+task-independence framing above as settled.** At 14 disagreements/category (vs. 4-5 here) across
+`arithmetic`/`multilingual`/`structured_json`, a properly-powered permutation test (the naive one
+had ~0% power at this sample size and was diagnosed and corrected before being trusted — see that
+document) found no site concentrating ≥36% of one category's disagreements to the exclusion of the
+others. That is consistent with, but does **not prove**, the quantizer-geometry reading above — a
+plausible, unfalsified hypothesis, not a closed question. Smaller or more diffuse task-specific
+effects remain outside what either study could detect.
+
 **Engineering read, which needs no circuit claim:** quantization damage concentrates in the last ~3
 MLP layers independent of task. That is a directly testable mixed-precision hypothesis (protect
 late-MLP precision) and is externally checkable against activation-aware quantization / outlier-
@@ -220,3 +229,19 @@ marginal rates, which are noisier at this sample size.** Full method, the denomi
 audit, the random-control specificity discussion, the llama.cpp `use_more_bits()` external
 verification, and the falsification note are in
 [QUANT_MIXED_PRECISION_BANDS.md](QUANT_MIXED_PRECISION_BANDS.md) — not duplicated here.
+
+## Follow-on: does any site restore one task but not another? (2026-07-30)
+
+The open question this document's Site-overlap analysis left explicit — "per-category n is too small
+to exclude" task-specific recurrence — was tested directly: 42 disagreements (14 each of
+`arithmetic`, `multilingual`, `structured_json`, the maximally-different triad this document's own
+data suggested), the same two-hook bisect design, a site × category matrix, and two global permutation
+tests (never per-cell p-values). **The naive version of the test had no demonstrated power at this
+sample size — an injected, perfectly category-exclusive synthetic effect at the maximum testable size
+still failed to reach significance, which is what exposed a real bug in the permutation null before
+any result was trusted.** Corrected and re-run at an analytically-justified, properly-powered
+threshold: no site concentrated ≥36% of one category's disagreements to the exclusion of the others
+(p=0.336, permutation null, 3 qualifying sites); the global structure test agreed (p=0.352, stable
+across its own threshold sweep). Full method, the bug and its fix, the by-chance-purity analysis that
+justified the threshold, the minimum-detectable-effect trace, and the falsification/answerability notes
+are in [QUANT_TASK_SPECIFICITY.md](QUANT_TASK_SPECIFICITY.md) — not duplicated here.
