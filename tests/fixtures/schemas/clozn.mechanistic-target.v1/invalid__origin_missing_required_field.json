@@ -1,0 +1,20 @@
+{
+  "schema_version": "clozn.mechanistic-target.v1",
+  "target_id": "mechtarget_0000000000000005",
+  "generated_at": "2026-07-29T00:00:00Z",
+  "origin": {
+    "kind": "experiment_cell",
+    "experiment_id": "exp_fixture",
+    "suite": "target",
+    "seed": 0,
+    "reference_variant": "base",
+    "candidate_variant": "candidate",
+    "reference_run_id": "run-base-target",
+    "candidate_run_id": "run-candidate-target"
+  },
+  "behavioral_delta": {"summary": "1 assertion failed."},
+  "answer_position": {"kind": "final_response", "note": "no per-token trace"},
+  "reference_model": {"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "candidate_model": {"sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+  "pair_compatibility": {"schema_version": "clozn.pair-compatibility.v1", "verdict": {"overall": "compatible"}}
+}

@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.mechanistic-target.v1",
+  "title": "A concrete behavioral-delta target for cross-model mechanistic analysis",
+  "description": "clozn.analysis.mech_target's output (MECH-CASE-00). The rule this artifact exists to enforce: mechanistic analysis (clozn.analysis.mechanistic_diff, causal_bisect, transplant) must never scan a model pair hunting for interesting activation differences -- it must start from a concrete, already-observed behavioral delta. This document IS that starting point: a specific answer/readout position, the reference and candidate token(s) observed there, both models' identity, and the clozn.pair-compatibility.v1 verdict that permitted building it in the first place. Two origins are supported (see `origin.kind`): a failed clozn.experiment.result.v0 cell (`experiment_cell`), or a per-token disagreement surfaced by diff-model's teacher-forced ladder (`diff_model_position`). This document is purely a TARGET -- it identifies where to look, and carries no causal claim about why the two models diverge there (that is a later slice's job, once it runs controlled interventions with controls; see clozn/analysis/mechanistic_diff.py's own 'purely observational' discipline, which this artifact's vocabulary matches).",
+
+  "type": "object",
+  "required": ["schema_version", "target_id", "generated_at", "origin", "behavioral_delta",
+               "answer_position", "reference_model", "candidate_model", "pair_compatibility"],
+
+  "$defs": {
+    "model_ref": {
+      "type": "object",
+      "description": "Identifying facts about one side of the pair, mirroring clozn.pair-compatibility.v1's own model_a/model_b (embedded verbatim as reference_model/candidate_model).",
+      "properties": {
+        "label": {"type": "string", "minLength": 1},
+        "filename": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+
+    "token_ref": {
+      "type": "object",
+      "description": "One observed token. Both fields are optional and independently omitted (never null-padded) when not honestly known -- e.g. a run with no per-token trace carries a piece but no id.",
+      "properties": {
+        "id": {"type": "integer", "minimum": 0},
+        "piece": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+
+    "answer_position": {
+      "type": "object",
+      "description": "Where the behavioral delta is read off. 'token_index' is an absolute token position (prompt + continuation) suitable for clozn.analysis.mechanistic_diff's own position grid. 'final_response' is used when no single token position carries the delta (e.g. two experiment-cell responses are token-identical but a confidence/causal assertion still failed) -- the target then names the whole response as the readout, and 'note' explains why no narrower position applies.",
+      "required": ["kind"],
+      "properties": {
+        "kind": {"enum": ["token_index", "final_response"]},
+        "index": {"type": "integer", "minimum": 0},
+        "note": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+
+    "origin_experiment_cell": {
+      "type": "object",
+      "description": "Source #1: a failed clozn.experiment.result.v0 cell, compared against its own reference (baseline) variant's cell at the same (suite, case, seed) coordinate.",
+      "required": ["kind", "experiment_id", "suite", "case", "seed", "reference_variant",
+                   "candidate_variant", "reference_run_id", "candidate_run_id"],
+      "properties": {
+        "kind": {"const": "experiment_cell"},
+        "experiment_id": {"type": "string"},
+        "suite": {"enum": ["target", "guard"]},
+        "case": {"type": "string", "minLength": 1},
+        "seed": {"type": "integer"},
+        "reference_variant": {"type": "string", "minLength": 1},
+        "candidate_variant": {"type": "string", "minLength": 1},
+        "reference_run_id": {"type": "string"},
+        "candidate_run_id": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+
+    "origin_diff_model_position": {
+      "type": "object",
+      "description": "Source #2: one per-token disagreement position from diff-model's teacher-forced ladder (clozn.receipts.quant_receipts.diff_quant_scores' `positions` entries) -- a position where the reference and candidate models' own argmax disagreed on the SAME forced continuation.",
+      "required": ["kind", "run_id", "anchor", "position_index"],
+      "properties": {
+        "kind": {"const": "diff_model_position"},
+        "run_id": {"type": "string", "minLength": 1},
+        "anchor": {"enum": ["reference", "candidate"],
+                  "description": "which side generated/recorded the teacher-forced run this position came from"},
+        "position_index": {"type": "integer", "minimum": 0},
+        "label_a": {"type": "string"},
+        "label_b": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+
+    "assertion": {
+      "type": "object",
+      "description": "One clozn.testkit.runner.evaluate() assertion result (name/check/target/expected/actual/status/note) that did not pass on the candidate cell.",
+      "required": ["status"],
+      "properties": {
+        "name": {"type": "string"},
+        "check": {"type": ["string", "null"]},
+        "target": {"type": ["string", "null"]},
+        "status": {"type": "string"},
+        "note": {"type": ["string", "null"]}
+      },
+      "additionalProperties": true
+    }
+  },
+
+  "properties": {
+    "schema_version": {"const": "clozn.mechanistic-target.v1"},
+    "target_id": {"type": "string", "minLength": 1},
+    "generated_at": {"type": "string", "minLength": 1},
+
+    "origin": {
+      "description": "Tagged by 'kind' -- exactly one of the two source shapes below.",
+      "anyOf": [
+        {"$ref": "#/$defs/origin_experiment_cell"},
+        {"$ref": "#/$defs/origin_diff_model_position"}
+      ]
+    },
+
+    "behavioral_delta": {
+      "type": "object",
+      "description": "What changed, and where -- in plain, non-causal, measured language (never 'caused'/'because'/'responsible for'/'localized'). 'failed_assertions' and 'response_diff' are experiment_cell-only; 'position_evidence' is diff_model_position-only; all three are omitted, never null, when not applicable to this target's origin.",
+      "required": ["summary"],
+      "properties": {
+        "summary": {"type": "string", "minLength": 1},
+        "failed_assertions": {"type": "array", "items": {"$ref": "#/$defs/assertion"}},
+        "response_diff": {
+          "type": "object",
+          "description": "clozn.analysis.model_diff.diff_runs() output, embedded verbatim.",
+          "additionalProperties": true
+        },
+        "position_evidence": {
+          "type": "object",
+          "description": "The raw diff_quant_scores() position entry this target was built from, embedded verbatim.",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "answer_position": {"$ref": "#/$defs/answer_position"},
+    "reference_token": {"$ref": "#/$defs/token_ref"},
+    "candidate_token": {"$ref": "#/$defs/token_ref"},
+    "reference_model": {"$ref": "#/$defs/model_ref"},
+    "candidate_model": {"$ref": "#/$defs/model_ref"},
+
+    "pair_compatibility": {
+      "type": "object",
+      "description": "The full clozn.pair-compatibility.v1 document that gated this target, embedded verbatim -- a stored target is self-describing about what compatibility was actually confirmed before it was built.",
+      "required": ["schema_version", "verdict"],
+      "properties": {
+        "schema_version": {"const": "clozn.pair-compatibility.v1"}
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

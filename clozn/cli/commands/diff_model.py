@@ -374,6 +374,21 @@ def add_subparser(sub):
                     "chat template instead of the default policy (both arms rendered under the reference's "
                     "template when the two differ) -- measures the candidate's DEPLOYED behavior including "
                     "template differences, not an isolated weights diff")
+    pd.add_argument("--mechanistic", action="store_true", help="resolve a clozn.mechanistic-target.v1 "
+                    "artifact (MECH-CASE-00) for a failed --case cell against these two model files, "
+                    "instead of running the ordinary per-token ladder -- needs no engine/GPU boot; see "
+                    "clozn/cli/commands/mechanistic.py")
+    pd.add_argument("--case", default=None, metavar="RESULT.json:SUITE/CASE", help="with --mechanistic: "
+                    "an experiment result file and the suite/case whose failing cell anchors the target "
+                    "(e.g. result.json:target/refusal_case)")
+    pd.add_argument("--variant", default="candidate", help="with --mechanistic: which variant's cell is "
+                    "the candidate under test (default: candidate)")
+    pd.add_argument("--reference-variant", default=None, help="with --mechanistic: override the reference "
+                    "variant (default: the manifest's own baseline_variant)")
+    pd.add_argument("--seed", type=int, default=0, help="with --mechanistic: which seed's cell to use "
+                    "(default 0) -- unrelated to --runs/--from-log's own sampling")
+    pd.add_argument("--out", default=None, help="with --mechanistic: explicit output path for the target "
+                    "artifact (default: ~/.clozn/mechanistic-targets/<target_id>.json)")
     pd.set_defaults(fn=cmd_diff_model)
     return pd
 
@@ -391,7 +406,16 @@ def cmd_diff_model(args):
     serve`/`clozn quant-check` use) on --port-a/--port-b (or two free ports), then delegates ALL of the
     new logic to `run_diff_model` (model-free, unit-tested against fakes). Always tears down both engines
     it spawned, even on error -- including the tokenizer-preflight refusal, which raises through the
-    `finally` below exactly like `cmd_quant_check`'s own `ctx.CloznError` does."""
+    `finally` below exactly like `cmd_quant_check`'s own `ctx.CloznError` does.
+
+    `--mechanistic` (MECH-CLI-01) is a DIFFERENT path entirely -- resolving a `clozn.mechanistic-target.v1`
+    artifact for a failed `--case` cell needs no engine/GPU at all (GGUF-header + JSON-file work only), so
+    it is dispatched here, first, before any engine is ever spawned; see
+    `clozn.cli.commands.mechanistic.cmd_diff_model_mechanistic`."""
+    if getattr(args, "mechanistic", False):
+        from clozn.cli.commands import mechanistic
+        return mechanistic.cmd_diff_model_mechanistic(args)
+
     EngineClient = qc._import_engine_client()
 
     model_a = resolve_model(args.reference)
