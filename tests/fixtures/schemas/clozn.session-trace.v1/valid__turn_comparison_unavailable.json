@@ -1,0 +1,49 @@
+{
+  "schema_version": "clozn.session-trace.v1",
+  "generated_at": "2026-07-30T00:00:00Z",
+  "session_id": "session_0123456789abcdef01234567",
+  "session": {
+    "id": "session_0123456789abcdef01234567",
+    "privacy": {"visibility": "hidden"}
+  },
+  "page": {"cursor": "somecursor", "next_cursor": null, "limit": 50, "count": 1},
+  "turns": [
+    {
+      "run_id": "run_c",
+      "recorded_ts": 30.0,
+      "created_at": "2026-07-30T00:00:03",
+      "source": "cli",
+      "client": "tester",
+      "model": "qwen",
+      "prompt_summary": "",
+      "response_summary": "",
+      "redacted": true,
+      "cumulative": {
+        "turn_count": 3,
+        "duration_ms_total": 90,
+        "prompt_tokens_total": 30,
+        "generated_tokens_total": 8
+      },
+      "diagnostic_highlights": {
+        "findings": [],
+        "status_counts": {
+          "finding": 0, "not_observed": 0, "unavailable": 9, "pending": 3, "suppressed": 0
+        }
+      },
+      "turn_comparison": {
+        "available": false,
+        "compared_to_run_id": "run_b",
+        "reason": "run a and run b missing/unreadable -- nothing to compare"
+      }
+    }
+  ],
+  "branches": [],
+  "totals_through_this_page": {
+    "turn_count": 3,
+    "duration_ms_total": 90,
+    "prompt_tokens_total": 30,
+    "generated_tokens_total": 8
+  },
+  "diagnostic_rule_registry": [],
+  "first_went_wrong_candidates": []
+}

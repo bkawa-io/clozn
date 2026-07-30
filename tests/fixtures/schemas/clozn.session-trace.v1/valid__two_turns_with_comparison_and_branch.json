@@ -1,0 +1,126 @@
+{
+  "schema_version": "clozn.session-trace.v1",
+  "generated_at": "2026-07-30T00:00:00Z",
+  "session_id": "session_0123456789abcdef01234567",
+  "session": {
+    "id": "session_0123456789abcdef01234567",
+    "title": "Debug run",
+    "client_key": "client_0123456789abcdef01234567",
+    "privacy": {"visibility": "visible"}
+  },
+  "page": {
+    "cursor": null,
+    "next_cursor": "opaquecursorvalue",
+    "limit": 2,
+    "count": 2
+  },
+  "turns": [
+    {
+      "run_id": "run_a",
+      "recorded_ts": 10.0,
+      "created_at": "2026-07-30T00:00:01",
+      "source": "cli",
+      "client": "tester",
+      "model": "qwen",
+      "prompt_summary": "hi",
+      "response_summary": "ok",
+      "redacted": false,
+      "context_usage": {"prompt_tokens": 10, "context_window_tokens": 4096},
+      "timing": {"duration_ms": 50},
+      "cumulative": {
+        "turn_count": 1,
+        "duration_ms_total": 50,
+        "prompt_tokens_total": 10,
+        "generated_tokens_total": 0
+      },
+      "diagnostic_highlights": {
+        "findings": [],
+        "status_counts": {
+          "finding": 0, "not_observed": 7, "unavailable": 2, "pending": 3, "suppressed": 0
+        }
+      }
+    },
+    {
+      "run_id": "run_b",
+      "recorded_ts": 20.0,
+      "created_at": "2026-07-30T00:00:02",
+      "source": "cli",
+      "client": "tester",
+      "model": "qwen",
+      "prompt_summary": "again",
+      "response_summary": "sure",
+      "redacted": false,
+      "finish_reason": "length",
+      "context_usage": {"prompt_tokens": 20, "generated_tokens": 8},
+      "timing": {"duration_ms": 40},
+      "cumulative": {
+        "turn_count": 2,
+        "duration_ms_total": 90,
+        "prompt_tokens_total": 30,
+        "generated_tokens_total": 8
+      },
+      "diagnostic_highlights": {
+        "findings": [
+          {"rule_id": "R12", "status": "finding", "severity": "medium"}
+        ],
+        "status_counts": {
+          "finding": 1, "not_observed": 6, "unavailable": 2, "pending": 3, "suppressed": 0
+        }
+      },
+      "turn_comparison": {
+        "available": true,
+        "compared_to_run_id": "run_a",
+        "settings_changes": [
+          {"dimension": "generation.temperature", "kind": "added", "value_b": 0.5}
+        ],
+        "context_changes": {
+          "new_segments": [
+            {"dimension": "context.delivered.segments.s2", "kind": "added"}
+          ],
+          "dropped_segments": [],
+          "carried_forward_segment_count": 1,
+          "other_context_differences": []
+        },
+        "classifications": [
+          {"classification": "sampling_changed", "status": "observed",
+           "summary": "1 sampling parameter(s) changed: temperature.",
+           "dimensions": ["generation.temperature"]}
+        ]
+      }
+    }
+  ],
+  "branches": [
+    {
+      "parent_run_id": "run_b",
+      "children": [
+        {"id": "run_b_fork_1", "source": "branch"}
+      ]
+    }
+  ],
+  "totals_through_this_page": {
+    "turn_count": 2,
+    "duration_ms_total": 90,
+    "prompt_tokens_total": 30,
+    "generated_tokens_total": 8
+  },
+  "diagnostic_rule_registry": [
+    {"rule_id": "R01", "rule_name": "input_omitted_or_rejected"},
+    {"rule_id": "R12", "rule_name": "run_to_run_drift"}
+  ],
+  "first_went_wrong_candidates": [
+    {
+      "kind": "first_settings_drift",
+      "run_id": "run_b",
+      "recorded_ts": 20.0,
+      "summary": "identity/generation setting(s) differ from the previous turn: generation.temperature",
+      "compared_to_run_id": "run_a"
+    },
+    {
+      "kind": "first_finding",
+      "run_id": "run_b",
+      "recorded_ts": 20.0,
+      "summary": "diagnostic rule(s) reported a finding on this turn: R12",
+      "rule_ids": ["R12"]
+    }
+  ]
+}

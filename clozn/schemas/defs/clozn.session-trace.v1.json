@@ -1,0 +1,218 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.session-trace.v1",
+  "title": "Cumulative, cross-turn session trace",
+  "description": "F2: clozn.runs.session_trace.build_trace()'s output -- the ordered, paginated evidence trail for one session, composed ENTIRELY from already-persisted run data (clozn.runs.sessions.list_session_runs for ordering/pagination, clozn.analysis.run_diff.compare_runs for turn-to-turn drift, clozn.runs.diagnosis_rules.evaluate for per-turn diagnostics). Never persisted as a stored blob -- like clozn.diagnosis-findings.v1 and clozn.performance-trace.v1, it is recomputed fresh on every call; a registered schema is still warranted because the SHAPE is a contract the conversation investigation view (F3) relies on. 'Difference'/'Classification'/'Finding' below are deliberately LOOSE passthrough projections of clozn.run-diff.v1 and clozn.diagnosis-findings.v1 respectively -- this schema does not re-govern shapes those artifacts' own schemas already own; it only asserts the two anchor fields this module's own code depends on, so it never needs a version bump when either sibling artifact adds a field. first_went_wrong_candidates is a set of DETERMINISTIC heuristic CANDIDATES (first turn with a diagnostic finding, first identity/generation-setting drift, first failed/cancelled run) -- never a causal claim; no entry anywhere in a real document produced by this schema's owning module states or implies that one candidate explains another turn's behavior.",
+  "type": "object",
+  "required": [
+    "schema_version", "generated_at", "session_id", "session", "page", "turns", "branches",
+    "totals_through_this_page", "diagnostic_rule_registry", "first_went_wrong_candidates"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.session-trace.v1"},
+    "generated_at": {"type": "string", "minLength": 1},
+    "session_id": {"type": "string", "minLength": 1},
+    "session": {
+      "type": "object",
+      "required": ["id", "privacy"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "title": {"type": "string", "minLength": 1},
+        "client_key": {"type": "string", "minLength": 1},
+        "privacy": {"type": "object"}
+      }
+    },
+    "page": {
+      "type": "object",
+      "required": ["cursor", "next_cursor", "limit", "count"],
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {"type": ["string", "null"]},
+        "next_cursor": {"type": ["string", "null"]},
+        "limit": {"type": "integer", "minimum": 1},
+        "count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "turns": {"type": "array", "items": {"$ref": "#/$defs/Turn"}},
+    "branches": {"type": "array", "items": {"$ref": "#/$defs/Branch"}},
+    "totals_through_this_page": {"$ref": "#/$defs/Totals"},
+    "diagnostic_rule_registry": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["rule_id", "rule_name"],
+        "additionalProperties": false,
+        "properties": {
+          "rule_id": {"type": "string", "minLength": 1},
+          "rule_name": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "first_went_wrong_candidates": {"type": "array", "items": {"$ref": "#/$defs/Candidate"}}
+  },
+  "$defs": {
+    "Totals": {
+      "type": "object",
+      "required": ["turn_count", "duration_ms_total", "prompt_tokens_total", "generated_tokens_total"],
+      "additionalProperties": false,
+      "properties": {
+        "turn_count": {"type": "integer", "minimum": 0},
+        "duration_ms_total": {"type": "integer", "minimum": 0},
+        "prompt_tokens_total": {"type": "integer", "minimum": 0},
+        "generated_tokens_total": {"type": "integer", "minimum": 0}
+      }
+    },
+    "ContextUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Every key omitted, never zero-padded, when context_receipt.limits did not record it for this turn.",
+      "properties": {
+        "prompt_tokens": {"type": "integer", "minimum": 0},
+        "context_window_tokens": {"type": "integer", "minimum": 0},
+        "requested_max_tokens": {"type": "integer", "minimum": 0},
+        "generated_tokens": {"type": "integer", "minimum": 0}
+      }
+    },
+    "Timing": {
+      "type": "object",
+      "required": ["duration_ms"],
+      "additionalProperties": false,
+      "properties": {"duration_ms": {"type": "integer", "minimum": 0}}
+    },
+    "Difference": {
+      "type": "object",
+      "description": "A loose passthrough of one clozn.analysis.run_diff.compare_runs() differences[] entry -- only 'dimension'/'kind' are asserted here; value_a/value_b/evidence/note are whatever run_diff itself produced, untyped by design (see this schema's top-level description).",
+      "required": ["dimension", "kind"],
+      "properties": {
+        "dimension": {"type": "string", "minLength": 1},
+        "kind": {"type": "string", "minLength": 1}
+      }
+    },
+    "Classification": {
+      "type": "object",
+      "description": "A loose passthrough of one clozn.analysis.run_diff.compare_runs() findings[] entry (its human-readable classification layer, e.g. 'model_changed', 'context_omission').",
+      "required": ["classification", "status", "summary"],
+      "properties": {
+        "classification": {"type": "string", "minLength": 1},
+        "status": {"type": "string", "minLength": 1},
+        "summary": {"type": "string", "minLength": 1},
+        "dimensions": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "Finding": {
+      "type": "object",
+      "description": "A loose passthrough of one clozn.diagnosis-findings.v1 findings[] entry with status=='finding' only -- see clozn.runs.diagnosis_rules for the full rule catalog and status vocabulary. Only the two fields this module's own code depends on are asserted.",
+      "required": ["rule_id", "status"],
+      "properties": {
+        "rule_id": {"type": "string", "minLength": 1},
+        "status": {"const": "finding"}
+      }
+    },
+    "StatusCounts": {
+      "type": "object",
+      "description": "clozn.diagnosis-findings.v1's own five-value status tally for this turn -- always all five keys, since evaluate() always produces exactly one finding entry per rule in RULE_REGISTRY.",
+      "required": ["finding", "not_observed", "unavailable", "pending", "suppressed"],
+      "additionalProperties": false,
+      "properties": {
+        "finding": {"type": "integer", "minimum": 0},
+        "not_observed": {"type": "integer", "minimum": 0},
+        "unavailable": {"type": "integer", "minimum": 0},
+        "pending": {"type": "integer", "minimum": 0},
+        "suppressed": {"type": "integer", "minimum": 0}
+      }
+    },
+    "DiagnosticHighlights": {
+      "type": "object",
+      "required": ["findings", "status_counts"],
+      "additionalProperties": false,
+      "properties": {
+        "findings": {"type": "array", "items": {"$ref": "#/$defs/Finding"}},
+        "status_counts": {"$ref": "#/$defs/StatusCounts"}
+      }
+    },
+    "ContextChanges": {
+      "type": "object",
+      "description": "What entered/left the delivered context since the previous turn -- new_segments/dropped_segments make context CARRIED FORWARD from earlier turns visibly distinct from genuinely NEW input on this turn (everything delivered this turn that is not in new_segments is, by construction, carried forward).",
+      "required": ["new_segments", "dropped_segments", "carried_forward_segment_count"],
+      "additionalProperties": false,
+      "properties": {
+        "new_segments": {"type": "array", "items": {"$ref": "#/$defs/Difference"}},
+        "dropped_segments": {"type": "array", "items": {"$ref": "#/$defs/Difference"}},
+        "carried_forward_segment_count": {"type": "integer", "minimum": 0},
+        "other_context_differences": {"type": "array", "items": {"$ref": "#/$defs/Difference"}}
+      }
+    },
+    "TurnComparison": {
+      "type": "object",
+      "description": "Comparison of this turn against the immediately preceding LINEAR turn (never a branch), via clozn.analysis.run_diff.compare_runs -- never re-derived. Present on every turn except the session's first. available=false means compare_runs() itself could not compare the pair (e.g. a malformed run record); reason then names why, and settings_changes/context_changes/classifications are absent rather than fabricated as empty.",
+      "required": ["available"],
+      "additionalProperties": false,
+      "properties": {
+        "available": {"type": "boolean"},
+        "compared_to_run_id": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1},
+        "settings_changes": {"type": "array", "items": {"$ref": "#/$defs/Difference"}},
+        "context_changes": {"$ref": "#/$defs/ContextChanges"},
+        "classifications": {"type": "array", "items": {"$ref": "#/$defs/Classification"}}
+      }
+    },
+    "Turn": {
+      "type": "object",
+      "required": ["run_id", "recorded_ts", "created_at", "source", "client", "model",
+                  "prompt_summary", "response_summary", "redacted", "cumulative",
+                  "diagnostic_highlights"],
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {"type": "string", "minLength": 1},
+        "recorded_ts": {"type": "number"},
+        "created_at": {"type": "string"},
+        "source": {"type": "string"},
+        "client": {"type": "string"},
+        "model": {"type": "string"},
+        "prompt_summary": {"type": "string"},
+        "response_summary": {"type": "string"},
+        "redacted": {"type": "boolean"},
+        "finish_reason": {"type": "string", "minLength": 1},
+        "error": {"type": "string", "minLength": 1},
+        "context_usage": {"$ref": "#/$defs/ContextUsage"},
+        "timing": {"$ref": "#/$defs/Timing"},
+        "cumulative": {"$ref": "#/$defs/Totals"},
+        "diagnostic_highlights": {"$ref": "#/$defs/DiagnosticHighlights"},
+        "turn_comparison": {"$ref": "#/$defs/TurnComparison"}
+      }
+    },
+    "Branch": {
+      "type": "object",
+      "description": "A run whose parent_run_id points at one of this page's linear turns -- surfaced separately, never flattened into `turns`.",
+      "required": ["parent_run_id", "children"],
+      "additionalProperties": false,
+      "properties": {
+        "parent_run_id": {"type": "string", "minLength": 1},
+        "children": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id"],
+            "properties": {"id": {"type": "string", "minLength": 1}}
+          }
+        }
+      }
+    },
+    "Candidate": {
+      "type": "object",
+      "description": "A deterministic, evidence-referencing CANDIDATE for where the session's evidence trail first shows a problem -- never labeled or implied as 'the cause'. See this schema's top-level description for the exact honesty constraint enforced (in code, not just convention) on every string this module emits.",
+      "required": ["kind", "run_id", "recorded_ts", "summary"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"type": "string", "enum": ["first_finding", "first_settings_drift", "first_failed_run"]},
+        "run_id": {"type": "string", "minLength": 1},
+        "recorded_ts": {"type": "number"},
+        "summary": {"type": "string", "minLength": 1},
+        "compared_to_run_id": {"type": "string", "minLength": 1},
+        "rule_ids": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}
