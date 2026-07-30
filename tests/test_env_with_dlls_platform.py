@@ -29,6 +29,12 @@ def _no_dirs_exist(monkeypatch):
 def test_windows_cpu_uses_path_and_is_unchanged(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setenv("PATH", r"C:\already\here")
+    # `_env_with_dlls` copies os.environ, so the "not in env" assertions below only mean
+    # "this branch did not ADD it" once anything inherited is cleared. GitHub's Linux runners
+    # really do export LD_LIBRARY_PATH (/opt/hostedtoolcache/Python/*/x64/lib), which failed
+    # this test on CI while passing on a Windows dev box that has neither variable set.
+    monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
+    monkeypatch.delenv("DYLD_LIBRARY_PATH", raising=False)
     _no_dirs_exist(monkeypatch)
 
     env = engine_process._env_with_dlls([r"C:\dev\build-serve"], gpu=False)
@@ -78,6 +84,11 @@ def test_linux_uses_ld_library_path_and_leaves_path_untouched(monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setenv("LD_LIBRARY_PATH", "/existing/lib")
     monkeypatch.delenv("CUDA_HOME", raising=False)
+    # Twin of the LD_LIBRARY_PATH problem in the Windows/macOS tests, latent rather than observed:
+    # CI is Linux and never sets DYLD_LIBRARY_PATH, but a developer running this suite ON a Mac
+    # very well might, and would then see this fail for a reason that has nothing to do with the
+    # Linux branch it is testing. Cleared for the same reason, before anyone hits it.
+    monkeypatch.delenv("DYLD_LIBRARY_PATH", raising=False)
     path_before = os.environ.get("PATH", "")
 
     env = engine_process._env_with_dlls(["/repo/engine/core/build-serve"], gpu=False)
@@ -147,6 +158,9 @@ def test_linux_never_touches_windows_cuda_paths(monkeypatch):
 def test_macos_uses_dyld_library_path_and_leaves_path_untouched(monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setenv("DYLD_LIBRARY_PATH", "/existing")
+    # See the note in test_windows_cpu_uses_path_and_is_unchanged: the LD_LIBRARY_PATH assertion
+    # below is about what this branch ADDS, and GitHub's Linux runners export it already.
+    monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
     path_before = os.environ.get("PATH", "")
 
     env = engine_process._env_with_dlls(["/repo/engine/core/build-serve"], gpu=False)
