@@ -1001,6 +1001,7 @@ class ProjectionFileRouter:
         engine_factory: Callable[[int], object],
         substrate_factory: Callable[[object], object],
         gate: "WorkerGateRegistry | bool" = True,
+        loader: ColdLoader | None = None,
     ) -> None:
         """``gate``: ``True`` (default) auto-builds one ``WorkerGateRegistry``
         from the first projection's configured model IDs, so the real
@@ -1008,7 +1009,22 @@ class ProjectionFileRouter:
         per-worker generation concurrency with no extra wiring.  ``False``
         disables gating entirely (RT-04's original fully-ungated behavior).
         An explicit ``WorkerGateRegistry`` lets a caller (tests, or a future
-        supervisor integration) own and share one across routers/restarts."""
+        supervisor integration) own and share one across routers/restarts.
+
+        ``loader``: mirrors ``gate`` -- ``None`` (the default) preserves RT-03's
+        exact original behavior, a not-ready model fails immediately with no
+        cold-load attempt.  A caller may pass a real ``ColdLoader`` (see that
+        type's definition above: ``Callable[[str, float], ColdLoadOutcome]``)
+        to drive RT-04's single-flight cold-load coalescing and idle-LRU
+        eviction on refresh-selected models.  As with ``gate``, this class
+        never constructs one itself -- ``clozn/server`` must never import
+        ``clozn/cli``, so a caller adapts a real ``WorkerRegistry.ensure_loaded``
+        (or an equivalent) to the ``ColdLoader`` shape before passing it in
+        (see ``ColdLoadOutcome``'s docstring). The SAME loader instance is
+        reused across every ``refresh()`` rebuild below, exactly like
+        ``_built_gate`` -- a fresh loader per refresh would be harmless here
+        (unlike the gate, this seam holds no in-flight state of its own) but
+        there is no reason to rebuild what doesn't change."""
         self.path = os.path.abspath(os.fspath(path))
         self._engine_factory = engine_factory
         self._substrate_factory = substrate_factory
@@ -1019,6 +1035,7 @@ class ProjectionFileRouter:
         self._built_gate: WorkerGateRegistry | None = (
             gate if isinstance(gate, WorkerGateRegistry) else None
         )
+        self._loader = loader
         self.refresh(force=True)
 
     def _read_projection(self) -> tuple[str, dict]:
@@ -1076,6 +1093,7 @@ class ProjectionFileRouter:
                 projection,
                 engine_factory=self._engine_factory,
                 substrate_factory=self._substrate_factory,
+                loader=self._loader,
                 gate=gate,
             )
             self._router = router
@@ -1116,6 +1134,14 @@ class ProjectionFileRouter:
         refresh would orphan in-flight/queued permits."""
         with self._lock:
             return self._built_gate if self._gate_setting is not False else None
+
+    @property
+    def loader(self) -> ColdLoader | None:
+        """The configured cold loader, if any -- ``None`` by default (RT-03's
+        original fail-fast behavior). Stable across refresh() rebuilds, same
+        as ``gate``."""
+        with self._lock:
+            return self._loader
 
 
 def clear_handler_selection(handler) -> None:
