@@ -24,6 +24,29 @@ from clozn.server.request_gate import RequestGate
 from clozn.server.routes import health
 
 
+def _stub_engine_discovery(prefer_gpu):
+    """Stand in for `runtime_process._selected_engine_discovery`.
+
+    The boundary tests below assert spawn ORDER and interrupt cleanup -- which process starts first,
+    and whether an interrupted gateway boot terminates the worker it already started. Which engine
+    binary is on disk is incidental to both. Without this stub the real discovery runs, raises
+    "no engine found" on any machine with no local build, and the two invariants go untested exactly
+    where they matter most: CI. Neither CI job builds an engine, so both tests errored there from
+    2026-07-20 until this stub existed -- invisible, because a separate ci.yml bug meant the primary
+    gate never ran at all.
+
+    Stubbed rather than skipped on purpose. A skip would have been honest but would have left these
+    invariants verified only on a developer box that happens to have a build.
+    """
+    return (
+        types.SimpleNamespace(
+            exe="fake-engine", discovery_source="test-stub", backend=None,
+            engine_version=None, build_id=None, llama_cpp_commit=None, gpu=False,
+        ),
+        "0" * 64,
+    )
+
+
 class FakeProcess:
     _next_pid = 2000
 
@@ -276,7 +299,8 @@ class RuntimeBoundaryTests(unittest.TestCase):
 
     def test_spawn_runtime_starts_private_worker_before_gateway(self):
         originals = (runtime_process.spawn_engine, runtime_process.subprocess.Popen,
-                     runtime_process.gateway_health, runtime_process.port_is_open)
+                     runtime_process.gateway_health, runtime_process.port_is_open,
+                     runtime_process._selected_engine_discovery)
         calls = []
         worker = FakeProcess()
         gateway = FakeProcess()
@@ -293,13 +317,15 @@ class RuntimeBoundaryTests(unittest.TestCase):
         runtime_process.subprocess.Popen = fake_popen
         runtime_process.gateway_health = lambda port: {"status": "ok"}
         runtime_process.port_is_open = lambda port: False
+        runtime_process._selected_engine_discovery = _stub_engine_discovery
         try:
             stack = runtime_process.spawn_runtime(runtime_process.RuntimeConfig(
                 model="m.gguf", public_port=8123, worker_port=8456
             ))
         finally:
             (runtime_process.spawn_engine, runtime_process.subprocess.Popen,
-             runtime_process.gateway_health, runtime_process.port_is_open) = originals
+             runtime_process.gateway_health, runtime_process.port_is_open,
+             runtime_process._selected_engine_discovery) = originals
 
         self.assertEqual([call[0] for call in calls], ["worker", "gateway"])
         gateway_call = calls[1]
@@ -325,8 +351,10 @@ class RuntimeBoundaryTests(unittest.TestCase):
 
     def test_interrupted_gateway_boot_terminates_the_worker(self):
         originals = (runtime_process.spawn_engine, runtime_process.subprocess.Popen,
-                     runtime_process.port_is_open)
+                     runtime_process.port_is_open,
+                     runtime_process._selected_engine_discovery)
         worker = FakeProcess()
+        runtime_process._selected_engine_discovery = _stub_engine_discovery
         runtime_process.spawn_engine = lambda *args, **kwargs: (
             worker, {"status": "ok", "mode": "autoregressive"}, False
         )
@@ -341,7 +369,8 @@ class RuntimeBoundaryTests(unittest.TestCase):
                 ))
         finally:
             (runtime_process.spawn_engine, runtime_process.subprocess.Popen,
-             runtime_process.port_is_open) = originals
+             runtime_process.port_is_open,
+             runtime_process._selected_engine_discovery) = originals
         self.assertTrue(worker.terminated)
 
     def test_readiness_requires_the_one_worker(self):
