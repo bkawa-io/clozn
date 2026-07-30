@@ -11,7 +11,8 @@
     "smoke": "vite build --ssr scripts/smoke-render.mjs --outDir .smoke --logLevel warn && node .smoke/smoke-render.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "preview:surfaces": "node scripts/generate-preview.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",
