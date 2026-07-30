@@ -13,9 +13,12 @@ one private worker.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import enum
 import hashlib
 import json
 import math
+import threading
+import time
 from types import MappingProxyType
 from typing import Callable, Iterable, Mapping
 
@@ -25,10 +28,27 @@ from clozn.protocol import check_worker_protocol
 
 
 _HEX = frozenset("0123456789abcdef")
-_LIFECYCLE_STATES = frozenset({"unloaded", "loading", "ready", "evicting", "failed"})
 _WHITE_BOX_CAPABILITY_FLAGS = ("sae", "jlens", "attn_knockout")
 _NON_WORKER_FLAGS = frozenset({"ctx", "adapter", "adapter_scale", "chat", "tmpl"})
 _VALUE_BEARING_WORKER_FLAGS = frozenset({"mask", "eos", "sae", "sae_k", "jlens"})
+
+
+class WorkerLifecycleState(str, enum.Enum):
+    """ADR 004's five worker states -- a typed member, never a bare boolean.
+
+    Mixing in ``str`` means every member compares equal to and JSON-serializes
+    as its plain string value, so existing ``entry.state == "ready"`` checks
+    and every routing projection written to disk keep working unchanged.
+    """
+
+    UNLOADED = "unloaded"
+    LOADING = "loading"
+    READY = "ready"
+    EVICTING = "evicting"
+    FAILED = "failed"
+
+
+_LIFECYCLE_STATES = frozenset(WorkerLifecycleState)
 
 
 class WorkerRegistryConfigError(ValueError):
@@ -45,6 +65,19 @@ class UnknownWorkerModelError(KeyError):
 
 class WorkerIdentityMismatchError(RuntimeError):
     """A live worker's handshake does not match its immutable runtime key."""
+
+
+class WorkerBusyError(RuntimeError):
+    """An explicit ``evict()`` named a worker with active generation/mutation work.
+
+    Cooperative cancellation cannot interrupt an already in-flight private
+    worker call -- protocol 1.1 carries no request ID for it -- so the
+    registry never guesses here; it refuses instead of silently waiting.
+    """
+
+
+class EvictionTimeoutError(RuntimeError):
+    """An explicit wait-for-inflight eviction did not finish before its timeout."""
 
 
 def _require_string(value, field_name: str) -> str:
@@ -283,16 +316,54 @@ class WorkerDefinition:
         object.__setattr__(self, "flags", MappingProxyType(flags))
 
 
+@dataclass(frozen=True)
+class LoadResult:
+    """One ADR 004 load attempt's outcome, whether originating or coalesced.
+
+    Field names mirror ``clozn.model-routing.v1``'s ``LoadEvent`` object
+    exactly (``kind``, ``outcome``, ``coalesced``, ``wait_ms``,
+    ``state_before``, ``state_after``, ``event_id``) so a caller can copy them
+    straight into a routing receipt. ``failure_code``/``error`` are internal
+    detail behind that same typed vocabulary -- never a generic exception for
+    an outcome (timeout, no capacity, load failure) this ticket expects.
+    """
+
+    kind: str
+    outcome: str
+    coalesced: bool
+    wait_ms: int
+    state_before: WorkerLifecycleState
+    state_after: WorkerLifecycleState
+    failure_code: str | None = None
+    error: str | None = None
+    event_id: str | None = None
+
+    @property
+    def ready(self) -> bool:
+        return self.state_after == WorkerLifecycleState.READY
+
+
 @dataclass
 class _WorkerEntry:
     definition: WorkerDefinition
-    state: str = "unloaded"
+    state: WorkerLifecycleState = WorkerLifecycleState.UNLOADED
     handle: WorkerHandle | None = None
     port: int | None = None
     worker_generation: int = 0
     worker_identity: dict | None = None
     failure_code: str | None = None
     last_error: str | None = None
+    # RT-04 additions.  ``condition`` guards and publishes every state
+    # transition below so ``ensure_loaded`` waiters coalesce correctly instead
+    # of polling; ``last_used`` is the idle-LRU eviction clock; the current
+    # load attempt's event ID is shared by its loader and every coalesced
+    # waiter, so they report the *same* runtime event.
+    condition: threading.Condition = field(
+        default_factory=threading.Condition, repr=False, compare=False
+    )
+    last_used: float = field(default_factory=time.monotonic, compare=False)
+    current_event_id: str | None = field(default=None, compare=False)
+    current_load_kind: str | None = field(default=None, compare=False)
 
 
 SpawnWorker = Callable[..., tuple[object, dict, bool]]
@@ -393,6 +464,11 @@ class WorkerRegistry:
         self._health_probe = health_probe
         self._template_probe = template_probe
         self._port_factory = port_factory
+        # Guards the "count residents, maybe evict one" decision across
+        # concurrent ensure_loaded() calls for *different* cold models so two
+        # simultaneous cold loads can never both observe spare capacity and
+        # together overshoot max_loaded_workers.
+        self._capacity_lock = threading.Lock()
 
     def _entry(self, model_id: str) -> _WorkerEntry:
         try:
@@ -555,15 +631,20 @@ class WorkerRegistry:
 
     @staticmethod
     def _failed(entry: _WorkerEntry, code: str, error: BaseException) -> None:
-        entry.state = "failed"
-        entry.failure_code = code
-        entry.last_error = str(error)
-        entry.worker_identity = None
+        with entry.condition:
+            entry.state = WorkerLifecycleState.FAILED
+            entry.failure_code = code
+            entry.last_error = str(error)
+            entry.worker_identity = None
+            entry.condition.notify_all()
 
-    def _start_entry(self, entry: _WorkerEntry) -> bool:
-        entry.state = "loading"
-        entry.failure_code = None
-        entry.last_error = None
+    def _attempt_load(self, entry: _WorkerEntry) -> bool:
+        """Spawn and qualify one worker.  Caller has already set state=loading.
+
+        This is the sole owner of the actual (slow) spawn/handshake work, used
+        identically by the sequential preload path and by ``ensure_loaded``'s
+        coalesced cold-load path -- one code path, so the two can never drift.
+        """
         handle = None
         try:
             port = self._allocate_port(entry)
@@ -602,10 +683,21 @@ class WorkerRegistry:
             )
             self._failed(entry, code, error)
             return False
-        entry.handle = handle
-        entry.worker_identity = identity
-        entry.state = "ready"
+        with entry.condition:
+            entry.handle = handle
+            entry.worker_identity = identity
+            entry.state = WorkerLifecycleState.READY
+            entry.last_used = time.monotonic()
+            entry.condition.notify_all()
         return True
+
+    def _start_entry(self, entry: _WorkerEntry) -> bool:
+        with entry.condition:
+            entry.state = WorkerLifecycleState.LOADING
+            entry.failure_code = None
+            entry.last_error = None
+            entry.condition.notify_all()
+        return self._attempt_load(entry)
 
     def start_preloaded(self) -> dict:
         """Start every preload independently and return a status projection.
@@ -615,7 +707,7 @@ class WorkerRegistry:
         """
         for model_id in self.preload_model_ids:
             entry = self._entry(model_id)
-            if entry.state != "ready":
+            if entry.state != WorkerLifecycleState.READY:
                 self._start_entry(entry)
         return self.status()
 
@@ -626,9 +718,9 @@ class WorkerRegistry:
             raise WorkerRegistryConfigError(
                 f"{model_id!r} is configured but not preloaded"
             )
-        if entry.state != "failed":
+        if entry.state != WorkerLifecycleState.FAILED:
             raise WorkerRegistryConfigError(
-                f"{model_id!r} is {entry.state}, not failed"
+                f"{model_id!r} is {entry.state.value}, not failed"
             )
         return self._start_entry(entry)
 
@@ -636,7 +728,9 @@ class WorkerRegistry:
         handle = entry.handle
         if handle is None:
             return self._start_entry(entry)
-        entry.state = "loading"
+        with entry.condition:
+            entry.state = WorkerLifecycleState.LOADING
+            entry.condition.notify_all()
         try:
             handle.restart()
             next_generation = entry.worker_generation + 1
@@ -656,17 +750,20 @@ class WorkerRegistry:
             entry.handle = None
             self._failed(entry, code, error)
             return False
-        entry.worker_identity = identity
-        entry.state = "ready"
-        entry.failure_code = None
-        entry.last_error = None
+        with entry.condition:
+            entry.worker_identity = identity
+            entry.state = WorkerLifecycleState.READY
+            entry.failure_code = None
+            entry.last_error = None
+            entry.last_used = time.monotonic()
+            entry.condition.notify_all()
         return True
 
     def maintain(self) -> dict:
         """Restart every unexpectedly-dead ready worker independently."""
         for entry in self._by_id.values():
             handle = entry.handle
-            if (entry.state == "ready"
+            if (entry.state == WorkerLifecycleState.READY
                     and handle is not None
                     and handle.process.poll() is not None
                     and not handle.stopping):
@@ -677,7 +774,7 @@ class WorkerRegistry:
         """Probe and re-qualify one worker without touching its siblings."""
         entry = self._entry(model_id)
         handle = entry.handle
-        if entry.state != "ready" or handle is None or entry.port is None:
+        if entry.state != WorkerLifecycleState.READY or handle is None or entry.port is None:
             return False
         if handle.process.poll() is not None:
             entry.handle = None
@@ -708,20 +805,294 @@ class WorkerRegistry:
             return False
 
     def stop(self, model_id: str) -> None:
-        """Stop one configured worker and return it to ``unloaded``."""
+        """Unconditionally stop one configured worker and return it to ``unloaded``.
+
+        This is the explicit shutdown path (``clozn stop``, process teardown);
+        unlike :meth:`evict` it never consults in-flight call state, matching
+        its existing callers, all of which are tearing the whole runtime down.
+        """
         entry = self._entry(model_id)
-        entry.state = "evicting"
-        if entry.handle is not None:
-            entry.handle.stop()
-        entry.handle = None
-        entry.worker_identity = None
-        entry.failure_code = None
-        entry.last_error = None
-        entry.state = "unloaded"
+        self._evict_entry(entry)
 
     def stop_all(self) -> None:
         for model_id in self._by_id:
             self.stop(model_id)
+
+    def touch(self, model_id: str) -> None:
+        """Mark one ready worker as freshly used for idle-LRU accounting."""
+        entry = self._entry(model_id)
+        with entry.condition:
+            if entry.state == WorkerLifecycleState.READY:
+                entry.last_used = time.monotonic()
+
+    def track_call(self, model_id: str):
+        """Context manager marking one in-flight call so eviction respects it.
+
+        ``with registry.track_call("alpha"): ...`` around a private-worker
+        call.  Delegates to :meth:`WorkerHandle.track_call`; raises if the
+        model has no resident worker to call right now.
+        """
+        entry = self._entry(model_id)
+        handle = entry.handle
+        if handle is None:
+            raise WorkerRegistryConfigError(
+                f"{model_id!r} has no resident worker to call"
+            )
+        return handle.track_call()
+
+    def _evict_entry(self, entry: _WorkerEntry) -> None:
+        """Unconditionally stop one worker's process and return it to unloaded.
+
+        Callers (``stop`` and the idle-LRU capacity path) are responsible for
+        deciding *whether* this entry should be touched; this only performs
+        the transition, honestly, through ``evicting``.
+        """
+        with entry.condition:
+            entry.state = WorkerLifecycleState.EVICTING
+            entry.condition.notify_all()
+        handle = entry.handle
+        if handle is not None:
+            handle.stop()
+        with entry.condition:
+            entry.handle = None
+            entry.worker_identity = None
+            entry.failure_code = None
+            entry.last_error = None
+            entry.state = WorkerLifecycleState.UNLOADED
+            entry.condition.notify_all()
+
+    def evict(
+        self,
+        model_id: str,
+        *,
+        wait_for_inflight: bool = False,
+        timeout: float | None = None,
+    ) -> None:
+        """Explicitly evict one ready worker.
+
+        Refuses (``WorkerBusyError``) a worker with active generation or
+        mutation work unless ``wait_for_inflight`` is set.  Cooperative
+        cancellation cannot interrupt an already in-flight private worker call
+        -- protocol 1.1 carries no request ID for it -- so when asked to wait,
+        this honestly blocks for the call to finish instead of pretending to
+        cancel it; a timeout raises rather than silently proceeding.
+        """
+        entry = self._entry(model_id)
+        with entry.condition:
+            if entry.state != WorkerLifecycleState.READY:
+                raise WorkerRegistryConfigError(
+                    f"{model_id!r} is {entry.state.value}, not ready"
+                )
+            handle = entry.handle
+        if handle is not None and handle.busy:
+            if not wait_for_inflight:
+                raise WorkerBusyError(
+                    f"{model_id!r} has active generation or mutation work "
+                    "in flight; pass wait_for_inflight=True to wait honestly"
+                )
+            if not handle.wait_until_idle(timeout):
+                raise EvictionTimeoutError(
+                    f"{model_id!r} still had in-flight work after "
+                    f"{timeout}s; it was not evicted"
+                )
+        self._evict_entry(entry)
+
+    def _select_eviction_candidate(self, *, exclude: _WorkerEntry) -> _WorkerEntry | None:
+        """The least-recently-used idle ready worker, or None if none qualify.
+
+        "Idle" consults real in-flight state (``handle.busy``), never a
+        timestamp alone: a worker with active generation or mutation work is
+        never a candidate, no matter how long ago its load event started.
+        """
+        idle = [
+            other for other in self._by_id.values()
+            if other is not exclude
+            and other.state == WorkerLifecycleState.READY
+            and (other.handle is None or not other.handle.busy)
+        ]
+        if not idle:
+            return None
+        return min(idle, key=lambda other: other.last_used)
+
+    def _ensure_capacity(self, entry: _WorkerEntry) -> "bool | str":
+        """Free one resident slot for ``entry`` if the registry is at its limit.
+
+        Returns True when a slot is already available or was freed by
+        evicting the least-recently-used idle worker, or the typed failure
+        code ``"no_evictable_worker"`` when every other resident worker has
+        active generation or mutation work in flight.  ``entry`` itself has
+        already transitioned to ``loading`` and so already occupies a slot;
+        only *other* residents are counted or considered for eviction.
+        """
+        with self._capacity_lock:
+            occupied = sum(
+                1 for other in self._by_id.values()
+                if other is not entry
+                and other.state in (
+                    WorkerLifecycleState.READY, WorkerLifecycleState.LOADING,
+                )
+            )
+            if occupied < self.max_loaded_workers:
+                return True
+            candidate = self._select_eviction_candidate(exclude=entry)
+            if candidate is None:
+                return "no_evictable_worker"
+            self._evict_entry(candidate)
+            return True
+
+    def ensure_loaded(
+        self, model_id: str, *, timeout: float | None = None
+    ) -> LoadResult:
+        """Resolve ``model_id`` to a resident worker, loading it at most once.
+
+        This is the ADR 004 single-flight guarantee: of any number of
+        concurrent callers naming the same cold (``unloaded``/``failed``)
+        model, exactly one becomes the loader (``coalesced=False``) and every
+        other concurrent caller waits on that same attempt
+        (``coalesced=True``) instead of starting its own spawn.  A burst of
+        traffic on a cold model must never spawn more than one process for it
+        -- that is the entire point of this method.
+
+        When the registry is already at ``max_loaded_workers``, the loader
+        first tries to evict one idle least-recently-used resident (never one
+        with in-flight work); if none is evictable the attempt fails closed
+        with ``no_evictable_worker`` rather than exceeding the configured
+        limit.
+        """
+        entry = self._entry(model_id)
+        start = time.monotonic()
+        deadline = None if timeout is None else start + timeout
+
+        def _elapsed_ms() -> int:
+            return max(0, int((time.monotonic() - start) * 1000))
+
+        with entry.condition:
+            while entry.state == WorkerLifecycleState.EVICTING:
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if deadline is not None and remaining <= 0:
+                    return LoadResult(
+                        kind="cold_load",
+                        outcome="timed_out",
+                        coalesced=True,
+                        wait_ms=_elapsed_ms(),
+                        state_before=WorkerLifecycleState.EVICTING,
+                        state_after=entry.state,
+                        failure_code="queue_timeout",
+                        error="timed out waiting for eviction to finish",
+                        event_id=entry.current_event_id,
+                    )
+                entry.condition.wait(remaining)
+
+            state_before = entry.state
+            if state_before == WorkerLifecycleState.READY:
+                entry.last_used = time.monotonic()
+                return LoadResult(
+                    kind="not_required",
+                    outcome="already_ready",
+                    coalesced=False,
+                    wait_ms=0,
+                    state_before=state_before,
+                    state_after=state_before,
+                    event_id=None,
+                )
+
+            become_loader = state_before != WorkerLifecycleState.LOADING
+            if become_loader:
+                entry.state = WorkerLifecycleState.LOADING
+                entry.failure_code = None
+                entry.last_error = None
+                attempt_generation = entry.worker_generation + 1
+                entry.current_event_id = (
+                    f"load_{entry.definition.runtime_key.key_sha256[:8]}_"
+                    f"{attempt_generation}"
+                )
+                # "reload" vs "cold_load" describes the *event* (was there a
+                # prior failure?), fixed once by whoever actually originates
+                # it.  A coalesced waiter's own state_before is often
+                # "loading" by the time it looks -- it must report the same
+                # kind as the loader for their shared event_id, not derive a
+                # different one from what it happened to observe.
+                entry.current_load_kind = (
+                    "reload" if state_before == WorkerLifecycleState.FAILED
+                    else "cold_load"
+                )
+                entry.condition.notify_all()
+            event_id = entry.current_event_id
+            # current_load_kind is only ever set by this method's own loader
+            # branch below.  A waiter that instead coalesced behind a load
+            # started by _start_entry (start_preloaded/recover_failed, which
+            # have no request-scoped event to publish) falls back to deriving
+            # it from its own observed state_before, same as before this
+            # field existed.
+            kind = entry.current_load_kind or (
+                "reload" if state_before == WorkerLifecycleState.FAILED
+                else "cold_load"
+            )
+
+        if become_loader:
+            capacity = self._ensure_capacity(entry)
+            if capacity is not True:
+                self._failed(entry, capacity, RuntimeError(
+                    f"no idle worker available to evict for {model_id!r}"
+                ))
+                return LoadResult(
+                    kind=kind,
+                    outcome="failed",
+                    coalesced=False,
+                    wait_ms=_elapsed_ms(),
+                    state_before=state_before,
+                    state_after=WorkerLifecycleState.FAILED,
+                    failure_code=capacity,
+                    error=entry.last_error,
+                    event_id=event_id,
+                )
+            ok = self._attempt_load(entry)
+            with entry.condition:
+                final_state = entry.state
+            return LoadResult(
+                kind=kind,
+                outcome="loaded" if ok else "failed",
+                coalesced=False,
+                wait_ms=_elapsed_ms(),
+                state_before=state_before,
+                state_after=final_state,
+                failure_code=entry.failure_code if not ok else None,
+                error=entry.last_error if not ok else None,
+                event_id=event_id,
+            )
+
+        # Coalesced waiter: another thread already owns this load.
+        with entry.condition:
+            while entry.state == WorkerLifecycleState.LOADING:
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if deadline is not None and remaining <= 0:
+                    return LoadResult(
+                        kind=kind,
+                        outcome="timed_out",
+                        coalesced=True,
+                        wait_ms=_elapsed_ms(),
+                        state_before=state_before,
+                        state_after=entry.state,
+                        failure_code="model_load_timeout",
+                        error="timed out waiting for a coalesced load",
+                        event_id=event_id,
+                    )
+                entry.condition.wait(remaining)
+            final_state = entry.state
+            ok = final_state == WorkerLifecycleState.READY
+            if ok:
+                entry.last_used = time.monotonic()
+            return LoadResult(
+                kind=kind,
+                outcome="loaded" if ok else "failed",
+                coalesced=True,
+                wait_ms=_elapsed_ms(),
+                state_before=state_before,
+                state_after=final_state,
+                failure_code=entry.failure_code if not ok else None,
+                error=entry.last_error if not ok else None,
+                event_id=event_id,
+            )
 
     def status(self) -> dict:
         """Privacy-safe, deterministic projection for a later runtime endpoint."""
@@ -734,7 +1105,9 @@ class WorkerRegistry:
             workers.append({
                 "model_id": model_id,
                 "runtime_key_sha256": entry.definition.runtime_key.key_sha256,
-                "state": entry.state,
+                # .value: this dict crosses into JSON/CLI/other-owned modules;
+                # never leak the enum type past this module's boundary.
+                "state": entry.state.value,
                 "default": model_id == self.default_model_id,
                 "preloaded": model_id in self.preload_model_ids,
                 "worker_port": entry.port,

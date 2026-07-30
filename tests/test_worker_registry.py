@@ -1,15 +1,21 @@
 """Model-free tests for the ADR 004 preloaded worker registry."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+import threading
+import time
 
 import pytest
 
 from clozn.cli.worker_registry import (
     AdapterRuntimeIdentity,
+    EvictionTimeoutError,
     RuntimeKey,
     UnknownWorkerModelError,
+    WorkerBusyError,
     WorkerDefinition,
+    WorkerLifecycleState,
     WorkerRegistry,
     WorkerRegistryConfigError,
 )
@@ -493,3 +499,375 @@ def test_health_requalification_and_stop_are_worker_scoped():
     assert status["beta"]["state"] == "unloaded"
     assert status["beta"]["worker_pid"] is None
     assert processes["beta"].terminated is True
+
+
+# --- RT-04: cold load, coalescing, idle-LRU eviction, typed failure states ---
+
+
+def test_ten_concurrent_cold_requests_cause_exactly_one_load():
+    """The load-bearing RT-04 guarantee: a burst on one cold model spawns once.
+
+    Ten real threads call ensure_loaded() for the same never-loaded model at
+    once.  A counting fake spawn proves -- by actually counting invocations,
+    not by inspecting a mock -- that only one process is ever spawned; the
+    other nine coalesce behind it instead of each starting their own load.
+    """
+    definitions = [
+        definition("alpha", model_sha=SHA_A, port=9601),
+        definition("cold", model_sha=SHA_B, port=9602),
+    ]
+    call_count = 0
+    call_lock = threading.Lock()
+    spawn_entered = threading.Event()
+    release = threading.Event()
+    blocking = False
+
+    def spawn(model, port, flags, **kwargs):
+        nonlocal call_count
+        with call_lock:
+            call_count += 1
+        selected = next(item for item in definitions if item.model == model)
+        if blocking:
+            spawn_entered.set()
+            # Block until every concurrent caller has had a real chance to
+            # observe the in-progress load, so coalescing is proven against
+            # genuine overlap rather than a lucky race that happened not to
+            # trigger it.
+            assert release.wait(timeout=5), "test setup: release was never set"
+        return FakeProcess(), handshake(selected, 1), False
+
+    registry = WorkerRegistry(
+        definitions,
+        default_model_id="alpha",
+        preload_model_ids=["alpha"],
+        max_loaded_workers=2,
+        spawn=spawn,
+    )
+    registry.start_preloaded()  # spawns alpha; irrelevant to the "cold" count below
+    call_count = 0
+    blocking = True
+
+    start_barrier = threading.Barrier(10)
+
+    def call_ensure_loaded():
+        start_barrier.wait(timeout=5)
+        return registry.ensure_loaded("cold", timeout=10)
+
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futures = [pool.submit(call_ensure_loaded) for _ in range(10)]
+        assert spawn_entered.wait(timeout=5), "loader never reached spawn"
+        time.sleep(0.05)  # let the other nine threads reach the coalescing wait
+        release.set()
+        results = [future.result(timeout=10) for future in futures]
+
+    assert call_count == 1, (
+        "exactly one process must be spawned for ten concurrent cold requests"
+    )
+    assert all(result.outcome == "loaded" for result in results)
+    assert all(result.state_after == WorkerLifecycleState.READY for result in results)
+    assert all(isinstance(result.state_after, WorkerLifecycleState) for result in results)
+    coalesced_flags = [result.coalesced for result in results]
+    assert coalesced_flags.count(False) == 1
+    assert coalesced_flags.count(True) == 9
+    assert all(result.wait_ms >= 0 for result in results)
+    # Every coalesced waiter reports the same runtime load event as the
+    # loader -- including `kind`, which a waiter cannot derive correctly from
+    # its own state_before alone (it may observe "loading", not the original
+    # "unloaded"/"failed" that decided cold_load vs. reload).
+    assert len({result.event_id for result in results}) == 1
+    assert len({result.kind for result in results}) == 1
+    status = {worker["model_id"]: worker for worker in registry.status()["workers"]}
+    assert status["cold"]["state"] == "ready"
+
+
+def test_ensure_loaded_already_ready_short_circuits_without_spawning():
+    definitions = [definition("alpha", model_sha=SHA_A, port=9603)]
+    calls = {"count": 0}
+
+    def spawn(model, port, flags, **kwargs):
+        calls["count"] += 1
+        selected = next(item for item in definitions if item.model == model)
+        return FakeProcess(), handshake(selected, 1), False
+
+    registry = WorkerRegistry(
+        definitions,
+        default_model_id="alpha",
+        preload_model_ids=["alpha"],
+        max_loaded_workers=1,
+        spawn=spawn,
+    )
+    registry.start_preloaded()
+    assert calls["count"] == 1
+
+    result = registry.ensure_loaded("alpha")
+    assert result.outcome == "already_ready"
+    assert result.kind == "not_required"
+    assert result.coalesced is False
+    assert result.wait_ms == 0
+    assert result.event_id is None
+    assert calls["count"] == 1
+
+
+def test_ensure_loaded_failure_is_typed_and_a_retry_is_a_reload():
+    definitions = [
+        definition("alpha", model_sha=SHA_A, port=9611),
+        definition("cold", model_sha=SHA_B, port=9612),
+    ]
+    attempts = {"count": 0}
+
+    def spawn(model, port, flags, **kwargs):
+        selected = next(item for item in definitions if item.model == model)
+        if selected.model_id == "cold":
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                raise RuntimeError("synthetic boot failure")
+        return FakeProcess(), handshake(selected, 1), False
+
+    registry = WorkerRegistry(
+        definitions,
+        default_model_id="alpha",
+        preload_model_ids=["alpha"],
+        max_loaded_workers=2,
+        spawn=spawn,
+    )
+    registry.start_preloaded()
+
+    first = registry.ensure_loaded("cold")
+    assert first.outcome == "failed"
+    assert first.kind == "cold_load"
+    assert first.coalesced is False
+    assert first.state_before == WorkerLifecycleState.UNLOADED
+    assert first.state_after == WorkerLifecycleState.FAILED
+    assert first.failure_code == "model_load_failed"
+    assert first.error is not None
+    status = {worker["model_id"]: worker for worker in registry.status()["workers"]}
+    assert status["cold"]["state"] == "failed"
+    assert status["cold"]["failure_code"] == "model_load_failed"
+
+    second = registry.ensure_loaded("cold")
+    assert second.outcome == "loaded"
+    assert second.kind == "reload"
+    assert second.coalesced is False
+    assert second.state_before == WorkerLifecycleState.FAILED
+    assert second.state_after == WorkerLifecycleState.READY
+    assert attempts["count"] == 2
+
+
+def test_coalesced_waiter_can_time_out_while_the_loader_keeps_going():
+    """A slow load lets one waiter give up without starting a second spawn."""
+    definitions = [
+        definition("alpha", model_sha=SHA_A, port=9621),
+        definition("cold", model_sha=SHA_B, port=9622),
+    ]
+    call_count = 0
+    call_lock = threading.Lock()
+    spawn_entered = threading.Event()
+    release = threading.Event()
+    blocking = False
+
+    def spawn(model, port, flags, **kwargs):
+        nonlocal call_count
+        with call_lock:
+            call_count += 1
+        selected = next(item for item in definitions if item.model == model)
+        if blocking:
+            spawn_entered.set()
+            assert release.wait(timeout=5), "test setup: release was never set"
+        return FakeProcess(), handshake(selected, 1), False
+
+    registry = WorkerRegistry(
+        definitions,
+        default_model_id="alpha",
+        preload_model_ids=["alpha"],
+        max_loaded_workers=2,
+        spawn=spawn,
+    )
+    registry.start_preloaded()  # spawns alpha; irrelevant to the "cold" count below
+    call_count = 0
+    blocking = True
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        loader_future = pool.submit(registry.ensure_loaded, "cold", timeout=10)
+        assert spawn_entered.wait(timeout=5), "loader never reached spawn"
+
+        waiter_result = registry.ensure_loaded("cold", timeout=0.1)
+        assert waiter_result.outcome == "timed_out"
+        assert waiter_result.coalesced is True
+        assert waiter_result.failure_code == "model_load_timeout"
+        # The waiter legitimately observes the loader's already-flipped state:
+        # by the time it calls in, the loader has moved "cold" to loading.
+        assert waiter_result.state_before == WorkerLifecycleState.LOADING
+
+        release.set()
+        loader_result = loader_future.result(timeout=5)
+
+    assert loader_result.outcome == "loaded"
+    assert loader_result.coalesced is False
+    assert call_count == 1, "a timed-out waiter must never trigger a second spawn"
+
+
+def test_idle_lru_eviction_picks_the_least_recently_used_idle_worker():
+    definitions = [
+        definition("alpha", model_sha=SHA_A, port=9631),
+        definition("beta", model_sha=SHA_B, port=9632),
+        definition("gamma", model_sha=SHA_C, port=9633),
+    ]
+
+    def spawn(model, port, flags, **kwargs):
+        selected = next(item for item in definitions if item.model == model)
+        return FakeProcess(), handshake(selected, 1), False
+
+    registry = WorkerRegistry(
+        definitions,
+        default_model_id="alpha",
+        preload_model_ids=["alpha", "beta"],
+        max_loaded_workers=2,
+        spawn=spawn,
+    )
+    registry.start_preloaded()
+    time.sleep(0.01)
+    registry.touch("beta")  # beta is now more recently used than alpha
+
+    result = registry.ensure_loaded("gamma")
+
+    assert result.outcome == "loaded"
+    status = {worker["model_id"]: worker for worker in registry.status()["workers"]}
+    assert status["alpha"]["state"] == "unloaded"
+    assert status["beta"]["state"] == "ready"
+    assert status["gamma"]["state"] == "ready"
+    assert sum(worker["state"] == "ready" for worker in status.values()) == 2
+
+
+def test_eviction_never_picks_a_worker_with_active_generation_in_flight():
+    """Eviction must consult real in-flight state, not a timestamp alone."""
+    definitions = [
+        definition("alpha", model_sha=SHA_A, port=9641),
+        definition("beta", model_sha=SHA_B, port=9642),
+        definition("gamma", model_sha=SHA_C, port=9643),
+    ]
+
+    def spawn(model, port, flags, **kwargs):
+        selected = next(item for item in definitions if item.model == model)
+        return FakeProcess(), handshake(selected, 1), False
+
+    registry = WorkerRegistry(
+        definitions,
+        default_model_id="alpha",
+        preload_model_ids=["alpha", "beta"],
+        max_loaded_workers=2,
+        spawn=spawn,
+    )
+    registry.start_preloaded()
+    time.sleep(0.01)
+    registry.touch("beta")  # alpha is the idlest worker by the clock alone
+
+    with registry.track_call("alpha"):  # ...but alpha has active work in flight
+        result = registry.ensure_loaded("gamma")
+
+    assert result.outcome == "loaded"
+    status = {worker["model_id"]: worker for worker in registry.status()["workers"]}
+    assert status["alpha"]["state"] == "ready"  # skipped: busy, not idle
+    assert status["beta"]["state"] == "unloaded"  # evicted instead
+    assert status["gamma"]["state"] == "ready"
+
+
+def test_capacity_fails_closed_with_no_evictable_worker_when_everything_is_busy():
+    definitions = [
+        definition("alpha", model_sha=SHA_A, port=9651),
+        definition("beta", model_sha=SHA_B, port=9652),
+        definition("gamma", model_sha=SHA_C, port=9653),
+    ]
+
+    def spawn(model, port, flags, **kwargs):
+        selected = next(item for item in definitions if item.model == model)
+        return FakeProcess(), handshake(selected, 1), False
+
+    registry = WorkerRegistry(
+        definitions,
+        default_model_id="alpha",
+        preload_model_ids=["alpha", "beta"],
+        max_loaded_workers=2,
+        spawn=spawn,
+    )
+    registry.start_preloaded()
+
+    with registry.track_call("alpha"), registry.track_call("beta"):
+        result = registry.ensure_loaded("gamma")
+
+    assert result.outcome == "failed"
+    assert result.failure_code == "no_evictable_worker"
+    assert result.state_after == WorkerLifecycleState.FAILED
+    status = {worker["model_id"]: worker for worker in registry.status()["workers"]}
+    assert status["alpha"]["state"] == "ready"
+    assert status["beta"]["state"] == "ready"
+    assert status["gamma"]["state"] == "failed"
+    # Never exceed the configured resident limit, even on a failed cold load.
+    assert sum(worker["state"] == "ready" for worker in status.values()) == 2
+
+
+def test_evict_refuses_a_busy_worker_and_can_wait_for_it_honestly():
+    definitions = [definition("alpha", model_sha=SHA_A, port=9661)]
+
+    def spawn(model, port, flags, **kwargs):
+        selected = next(item for item in definitions if item.model == model)
+        return FakeProcess(), handshake(selected, 1), False
+
+    registry = WorkerRegistry(
+        definitions,
+        default_model_id="alpha",
+        preload_model_ids=["alpha"],
+        max_loaded_workers=1,
+        spawn=spawn,
+    )
+    registry.start_preloaded()
+
+    release = threading.Event()
+    entered = threading.Event()
+
+    def hold_call():
+        with registry.track_call("alpha"):
+            entered.set()
+            release.wait(timeout=5)
+
+    holder = threading.Thread(target=hold_call)
+    holder.start()
+    assert entered.wait(timeout=5)
+
+    with pytest.raises(WorkerBusyError):
+        registry.evict("alpha")
+
+    with pytest.raises(EvictionTimeoutError):
+        registry.evict("alpha", wait_for_inflight=True, timeout=0.05)
+
+    release.set()
+    holder.join(timeout=5)
+
+    registry.evict("alpha", wait_for_inflight=True, timeout=5)
+    status = {worker["model_id"]: worker for worker in registry.status()["workers"]}
+    assert status["alpha"]["state"] == "unloaded"
+
+
+def test_lifecycle_state_is_a_typed_enum_that_still_compares_as_a_string():
+    definitions = [definition("alpha", model_sha=SHA_A, port=9671)]
+
+    def spawn(model, port, flags, **kwargs):
+        selected = next(item for item in definitions if item.model == model)
+        return FakeProcess(), handshake(selected, 1), False
+
+    registry = WorkerRegistry(
+        definitions,
+        default_model_id="alpha",
+        preload_model_ids=["alpha"],
+        max_loaded_workers=1,
+        spawn=spawn,
+    )
+    registry.start_preloaded()
+
+    result = registry.ensure_loaded("alpha")
+    assert isinstance(result.state_after, WorkerLifecycleState)
+    assert result.state_after == "ready"
+    assert result.state_after == WorkerLifecycleState.READY
+
+    # status() crosses a JSON boundary; the enum type itself must never leak.
+    status = registry.status()["workers"][0]
+    assert type(status["state"]) is str

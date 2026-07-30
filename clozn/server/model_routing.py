@@ -28,6 +28,8 @@ _ERRORS = {
     "unknown_model": (404, False, "resolution"),
     "model_not_ready": (409, True, "resolution"),
     "model_load_failed": (503, True, "load"),
+    "model_load_timeout": (504, True, "load"),
+    "no_evictable_worker": (503, True, "eviction"),
     "worker_failed": (502, True, "generation"),
     "worker_identity_mismatch": (502, False, "handshake"),
 }
@@ -36,6 +38,34 @@ _WHITE_BOX_CAPABILITIES = ("sae", "jlens", "attn_knockout")
 
 class ModelRoutingConfigError(ValueError):
     """The gateway's preloaded binding document is unsafe or ambiguous."""
+
+
+@dataclass(frozen=True)
+class ColdLoadOutcome:
+    """What one cold-load attempt observed, whether originating or coalesced.
+
+    This is the router's side of the RT-04 loader contract.  It is
+    deliberately a plain local dataclass, not ``clozn.cli.worker_registry``'s
+    ``LoadResult`` -- ``clozn/server`` must never import ``clozn/cli`` (see
+    ``routes/models.py``).  A caller wires a loader by adapting a real
+    ``WorkerRegistry.ensure_loaded`` (or an equivalent) to this exact shape;
+    when no loader is configured the router keeps its original RT-03 behavior
+    of failing a not-ready model immediately.
+    """
+
+    state: str
+    kind: str
+    outcome: str
+    coalesced: bool
+    wait_ms: int
+    worker_port: int | None = None
+    worker_identity: Mapping | None = None
+    failure_code: str | None = None
+    message: str | None = None
+    event_id: str | None = None
+
+
+ColdLoader = Callable[[str, float], ColdLoadOutcome]
 
 
 class ModelRoutingError(RuntimeError):
@@ -305,6 +335,9 @@ class PreloadedModelRouter:
         generation_queue_limit: int = 1,
         load_timeout_ms: int = 180_000,
         queue_timeout_ms: int = 600_000,
+        loader: ColdLoader | None = None,
+        engine_factory: Callable[[int], object] | None = None,
+        substrate_factory: Callable[[object], object] | None = None,
     ) -> None:
         bindings = tuple(bindings)
         preload_model_ids = tuple(preload_model_ids)
@@ -344,6 +377,11 @@ class PreloadedModelRouter:
             raise ModelRoutingConfigError(
                 "preloads exceed max_loaded_workers"
             )
+        if loader is not None and (engine_factory is None or substrate_factory is None):
+            raise ModelRoutingConfigError(
+                "a loader requires engine_factory and substrate_factory to "
+                "materialize the worker it loads"
+            )
         self._by_id = by_id
         self.default_model_id = default_model_id
         self.preload_model_ids = preload_model_ids
@@ -354,6 +392,16 @@ class PreloadedModelRouter:
             "load_timeout_ms": load_timeout_ms,
             "queue_timeout_ms": queue_timeout_ms,
         }
+        # RT-04: optional cold-load capability.  None preserves RT-03's exact
+        # original behavior -- a not-ready model fails immediately, no wait.
+        self._loader = loader
+        self._engine_factory = engine_factory
+        self._substrate_factory = substrate_factory
+        # Guards upgrading self._by_id[model_id] from an unloaded/failed
+        # binding to a ready one so concurrent requests that all observed the
+        # same successful cold load don't each redundantly rebuild the
+        # engine/substrate pair; the first to arrive wins and the rest reuse it.
+        self._upgrade_lock = threading.Lock()
 
     @classmethod
     def from_projection(
@@ -362,6 +410,7 @@ class PreloadedModelRouter:
         *,
         engine_factory: Callable[[int], object],
         substrate_factory: Callable[[object], object],
+        loader: ColdLoader | None = None,
     ) -> "PreloadedModelRouter":
         """Build gateway bindings from ``WorkerRegistry.routing_projection``."""
         if not isinstance(projection, Mapping):
@@ -399,6 +448,9 @@ class PreloadedModelRouter:
             default_model_id=projection.get("default_model_id"),
             preload_model_ids=projection.get("preload_model_ids") or [],
             max_loaded_workers=projection.get("max_loaded_workers"),
+            loader=loader,
+            engine_factory=engine_factory,
+            substrate_factory=substrate_factory,
         )
 
     def model_ids(self) -> list[str]:
@@ -533,10 +585,12 @@ class PreloadedModelRouter:
         lifecycle_state: str,
         message: str,
         binding: PreloadedModelBinding | None = None,
+        load_event: dict | None = None,
     ) -> ModelRoutingError:
         status, retryable, phase = _ERRORS[code]
         request = base["request"]
-        load_event = self._load_event(lifecycle_state, ready=False)
+        if load_event is None:
+            load_event = self._load_event(lifecycle_state, ready=False)
         artifact = {
             **base,
             "result": {
@@ -605,24 +659,28 @@ class PreloadedModelRouter:
                 lifecycle_state="unloaded",
                 message=f"unknown model {resolved_id!r}",
             )
+        load_event = None
         if binding.state != "ready":
-            code = (
-                "worker_identity_mismatch"
-                if binding.failure_code == "worker_identity_mismatch"
-                else "model_load_failed"
-                if binding.state == "failed"
-                else "model_not_ready"
-            )
-            raise self._error(
-                base,
-                code=code,
-                lifecycle_state=binding.state,
-                message=(
-                    f"model {resolved_id!r} is {binding.state}; "
-                    "RT-03 dispatches ready preloaded workers only"
-                ),
-                binding=binding,
-            )
+            if self._loader is not None:
+                binding, load_event = self._cold_load(base, binding)
+            else:
+                code = (
+                    "worker_identity_mismatch"
+                    if binding.failure_code == "worker_identity_mismatch"
+                    else "model_load_failed"
+                    if binding.state == "failed"
+                    else "model_not_ready"
+                )
+                raise self._error(
+                    base,
+                    code=code,
+                    lifecycle_state=binding.state,
+                    message=(
+                        f"model {resolved_id!r} is {binding.state}; "
+                        "no loader is configured to load it on demand"
+                    ),
+                    binding=binding,
+                )
         try:
             binding.qualify_live_identity()
         except RuntimeError as exc:
@@ -639,7 +697,8 @@ class PreloadedModelRouter:
                 binding=binding,
             ) from exc
 
-        load_event = self._load_event("ready", ready=True)
+        if load_event is None:
+            load_event = self._load_event("ready", ready=True)
         receipt = self._attempt_receipt(
             requested_model, selection_source, binding, load_event
         )
@@ -660,6 +719,108 @@ class PreloadedModelRouter:
             runtime_key=binding.runtime_key,
             worker_identity=binding.worker_identity,
         )
+
+    def _cold_load(
+        self, base: dict, binding: PreloadedModelBinding
+    ) -> tuple[PreloadedModelBinding, dict]:
+        """Call the configured loader for one not-ready binding and wait.
+
+        Returns the upgraded ready binding and its real ``LoadEvent`` dict on
+        success.  On failure/timeout, raises the matching typed
+        ``ModelRoutingError`` carrying that same real load event (never the
+        generic ``not_started`` placeholder) so a caller can see exactly what
+        kind of attempt this was, whether it was coalesced behind someone
+        else's load, and how long it waited.
+        """
+        state_before = binding.state
+        timeout_s = self._limits["load_timeout_ms"] / 1000.0
+        try:
+            outcome = self._loader(binding.model_id, timeout_s)
+        except Exception as exc:
+            load_event = {
+                "event_id": None,
+                "kind": "cold_load",
+                "outcome": "failed",
+                "state_before": state_before,
+                "state_after": "failed",
+                "coalesced": False,
+                "wait_ms": 0,
+            }
+            raise self._error(
+                base,
+                code="model_load_failed",
+                lifecycle_state="failed",
+                message=f"cold load for {binding.model_id!r} raised: {exc}",
+                binding=binding,
+                load_event=load_event,
+            ) from exc
+        load_event = {
+            "event_id": outcome.event_id,
+            "kind": outcome.kind,
+            "outcome": outcome.outcome,
+            "state_before": state_before,
+            "state_after": outcome.state,
+            "coalesced": outcome.coalesced,
+            "wait_ms": outcome.wait_ms,
+        }
+        if outcome.outcome == "loaded" and outcome.state == "ready":
+            return self._materialize_ready_binding(binding, outcome), load_event
+        code = (
+            "model_load_timeout" if outcome.outcome == "timed_out"
+            else "worker_identity_mismatch"
+            if outcome.failure_code == "worker_identity_mismatch"
+            else "no_evictable_worker" if outcome.failure_code == "no_evictable_worker"
+            else "model_load_failed"
+        )
+        raise self._error(
+            base,
+            code=code,
+            lifecycle_state=outcome.state or "failed",
+            message=(
+                outcome.message
+                or f"model {binding.model_id!r} failed to load "
+                f"({outcome.failure_code or outcome.outcome})"
+            ),
+            binding=binding,
+            load_event=load_event,
+        )
+
+    def _materialize_ready_binding(
+        self, binding: PreloadedModelBinding, outcome: ColdLoadOutcome
+    ) -> PreloadedModelBinding:
+        """Upgrade ``self._by_id[model_id]`` to ready after a successful load.
+
+        Guarded so concurrent requests that all observed the same successful
+        coalesced load reuse one upgraded binding instead of each rebuilding
+        an equivalent engine/substrate pair.
+        """
+        with self._upgrade_lock:
+            current = self._by_id[binding.model_id]
+            if current.state == "ready":
+                return current
+            if (isinstance(outcome.worker_port, bool)
+                    or not isinstance(outcome.worker_port, int)
+                    or not 1 <= outcome.worker_port <= 65535):
+                raise ModelRoutingConfigError(
+                    f"loader reported {binding.model_id!r} ready with no "
+                    "valid private port"
+                )
+            engine = self._engine_factory(outcome.worker_port)
+            sub = self._substrate_factory(engine)
+            upgraded = PreloadedModelBinding(
+                model_id=binding.model_id,
+                resolved_artifact=binding.resolved_artifact,
+                runtime_key=binding.runtime_key,
+                adapter=binding.adapter,
+                state="ready",
+                worker_identity=outcome.worker_identity,
+                sub=sub,
+                engine=engine,
+                preloaded=binding.preloaded,
+                failure_code=None,
+            )
+            self._by_id[binding.model_id] = upgraded
+            return upgraded
 
     def select_control_model(
         self,
