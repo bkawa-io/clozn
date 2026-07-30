@@ -267,3 +267,14 @@ export async function measureCorrectiveSourceUse(
     {},
   ) as unknown as SourceUseComparison;
 }
+
+/** Shared by every panel that drives this preview/confirm flow (DiagnosisRepair.tsx, ClaimVerification.tsx)
+ * -- one copy of each small generic helper rather than one per caller. */
+export function describeCorrectiveFlowError(error: unknown): string {
+  return error instanceof Error ? error.message : "the request failed";
+}
+
+export function correctiveIdempotencyKey(prefix: string): string {
+  const suffix = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${prefix}:${suffix}`;
+}

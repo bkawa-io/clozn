@@ -217,23 +217,26 @@ export interface SpanAddressDocument {
   addresses: SpanAddress[];
 }
 
-type JsonRecord = Record<string, unknown>;
+/** Exported for reuse by data/claimSupport.ts -- the same tiny JSON-decoding primitives this whole
+ * `src/data/` layer already repeats per-file; one shared copy for the two modules that decode the
+ * closely related `clozn.text-span-addresses.v1` family. */
+export type JsonRecord = Record<string, unknown>;
 
-function record(value: unknown): JsonRecord {
+export function record(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as JsonRecord
     : {};
 }
 
-function records(value: unknown): JsonRecord[] {
+export function records(value: unknown): JsonRecord[] {
   return Array.isArray(value) ? value.map(record) : [];
 }
 
-function str(value: unknown): string | undefined {
+export function str(value: unknown): string | undefined {
   return typeof value === "string" && value ? value : undefined;
 }
 
-function num(value: unknown): number | undefined {
+export function num(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
@@ -471,7 +474,9 @@ function parseInvestigation(raw: unknown, requestedRunId: string): RunInvestigat
   };
 }
 
-function parseAddress(raw: unknown): SpanAddress | null {
+/** Exported for reuse by data/claimSupport.ts, which decodes the SAME `clozn.text-span-addresses.v1`
+ * address shape for `kind: "claim"` -- one parser for the one wire shape, never a second copy per kind. */
+export function parseAddress(raw: unknown): SpanAddress | null {
   const address = record(raw);
   const nativeRef = record(address.native_ref);
   const resolution = record(address.resolution);

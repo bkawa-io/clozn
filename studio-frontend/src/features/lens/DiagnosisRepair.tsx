@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import {
   cancelCorrectivePreview,
   confirmCorrectivePreview,
+  correctiveIdempotencyKey as idempotencyKey,
+  describeCorrectiveFlowError as describeError,
   keepCorrectiveResult,
   loadCorrectiveActions,
   previewCorrectiveAction,
@@ -120,15 +122,6 @@ export function findingStatusMeta(status: RepairFindingStatus): { label: string;
       return exhaustive;
     }
   }
-}
-
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : "the request failed";
-}
-
-function idempotencyKey(prefix: string): string {
-  const suffix = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  return `${prefix}:${suffix}`;
 }
 
 function evidenceLabel(item: RepairEvidence): string {

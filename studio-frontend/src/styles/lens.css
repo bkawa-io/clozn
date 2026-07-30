@@ -3565,3 +3565,589 @@
   font-size: 7px;
   letter-spacing: .04em;
 }
+
+/* ================================================================= claim-verify (E3) =========== */
+
+.claim-verify {
+  display: grid;
+  gap: 12px;
+  padding-bottom: 4px;
+}
+
+.claim-verify-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 14px;
+}
+
+.claim-verify-count {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 8px;
+  letter-spacing: .06em;
+}
+
+.claim-verify-boundary {
+  margin: 0 14px;
+  color: var(--ink-faint);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.claim-verify-empty {
+  margin: 0 14px 8px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .08em;
+}
+
+.claim-verify-notice {
+  display: grid;
+  gap: 3px;
+  margin: 0 14px 8px;
+  padding: 8px;
+  border: 1px dashed var(--line-strong);
+  color: var(--ink-faint);
+}
+
+.claim-verify-notice strong {
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .08em;
+}
+
+.claim-verify-notice span {
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.claim-verify-notice.is-failed {
+  color: var(--danger);
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line-strong));
+  background: color-mix(in srgb, var(--danger) 5%, transparent);
+}
+
+.claim-verify-banner {
+  display: grid;
+  gap: 4px;
+  margin: 0 14px;
+  padding: 8px;
+  border: 1px dashed var(--line-strong);
+}
+
+.claim-verify-banner strong {
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .06em;
+  color: var(--ink);
+}
+
+.claim-verify-banner span {
+  color: var(--ink-faint);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.claim-verify-gate-notice {
+  margin: 0 14px;
+  padding: 6px 8px;
+  border: 1px dashed var(--line-strong);
+  color: var(--ink-faint);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+/* -- the six-status legend, also the filter control -------------------------------------------------- */
+
+.claim-verify-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 14px;
+  padding: 0;
+  list-style: none;
+}
+
+.claim-verify-legend li {
+  display: contents;
+}
+
+.claim-verify-legend button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: var(--panel);
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .03em;
+}
+
+.claim-verify-legend button.is-active {
+  color: var(--ink);
+  background: var(--panel-raised);
+}
+
+.claim-verify-legend button b {
+  font-size: 7px;
+}
+
+.claim-verify-legend button em {
+  font-style: normal;
+  color: var(--ink-faint);
+}
+
+.claim-verify-reset button {
+  color: var(--ink-soft);
+  border-style: dashed;
+}
+
+.claim-verify-legend li.is-supported button.is-active { border-color: color-mix(in srgb, var(--signal-mint) 60%, var(--line-strong)); color: color-mix(in srgb, var(--signal-mint) 75%, var(--ink)); }
+.claim-verify-legend li.is-weakly_supported button.is-active { border-color: color-mix(in srgb, var(--signal-blue) 60%, var(--line-strong)); color: color-mix(in srgb, var(--signal-blue) 75%, var(--ink)); }
+.claim-verify-legend li.is-contradicted button.is-active { border-color: color-mix(in srgb, var(--danger) 60%, var(--line-strong)); color: var(--danger); }
+.claim-verify-legend li.is-unsupported_by_supplied_materials button.is-active { border-color: color-mix(in srgb, var(--signal-peach) 60%, var(--line-strong)); color: color-mix(in srgb, var(--signal-peach) 75%, var(--ink)); }
+.claim-verify-legend li.is-measurement_unavailable button.is-active { border-style: dashed; color: var(--ink-soft); }
+.claim-verify-legend li.is-unverifiable_from_available_evidence button.is-active { color: var(--ink-faint); font-style: italic; }
+
+/* -- inline marked answer text ------------------------------------------------------------------------ */
+
+.claim-verify-passage {
+  margin: 0 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink-soft);
+  font-size: 10px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.claim-mark {
+  padding: 0 1px;
+  border-bottom: 2px solid var(--line-strong);
+  cursor: pointer;
+}
+
+.claim-mark-glyph {
+  margin-left: 1px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  font-style: normal;
+  letter-spacing: .02em;
+  vertical-align: super;
+}
+
+.claim-mark.is-supported .claim-mark-glyph { color: color-mix(in srgb, var(--signal-mint) 75%, var(--ink)); }
+.claim-mark.is-weakly_supported .claim-mark-glyph { color: color-mix(in srgb, var(--signal-blue) 75%, var(--ink)); }
+.claim-mark.is-contradicted .claim-mark-glyph { color: var(--danger); }
+.claim-mark.is-unsupported_by_supplied_materials .claim-mark-glyph { color: color-mix(in srgb, var(--signal-peach) 75%, var(--ink)); }
+.claim-mark.is-measurement_unavailable .claim-mark-glyph { color: var(--ink-soft); }
+
+.claim-mark.is-supported { border-bottom-color: var(--signal-mint); background: color-mix(in srgb, var(--signal-mint) 10%, transparent); }
+.claim-mark.is-weakly_supported { border-bottom-color: var(--signal-blue); background: color-mix(in srgb, var(--signal-blue) 8%, transparent); }
+.claim-mark.is-contradicted { border-bottom-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.claim-mark.is-unsupported_by_supplied_materials { border-bottom-color: var(--signal-peach); background: color-mix(in srgb, var(--signal-peach) 9%, transparent); }
+.claim-mark.is-measurement_unavailable { border-bottom-style: dashed; border-bottom-color: var(--ink-faint); }
+.claim-mark.is-subdued { border-bottom-style: dotted; border-bottom-color: var(--line-strong); color: var(--ink-faint); font-style: italic; opacity: .82; }
+
+.claim-mark.is-linked { background: color-mix(in srgb, var(--signal-violet) 16%, transparent); }
+.claim-mark.is-selected { box-shadow: inset 0 -2px var(--signal-violet); }
+
+/* -- claim list, plain and virtualized ------------------------------------------------------------------ */
+
+.claim-verify-list {
+  margin: 0 14px;
+}
+
+.claim-verify-list > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .05em;
+}
+
+.claim-verify-list > header b {
+  color: var(--ink-soft);
+  font-weight: 500;
+}
+
+.claim-verify-list-empty {
+  margin: 0;
+  padding: 10px;
+  border: 1px dashed var(--line);
+  color: var(--ink-faint);
+  font-size: 9px;
+}
+
+.claim-verify-rows {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+.claim-verify-rows-virtual {
+  height: 420px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+}
+
+.claim-verify-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: baseline;
+  gap: 4px 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  background: var(--panel);
+  color: var(--ink-soft);
+  text-align: left;
+}
+
+.claim-verify-rows-virtual .claim-verify-row {
+  border-bottom: 1px solid var(--line);
+}
+
+.claim-verify-row:hover {
+  background: color-mix(in srgb, var(--panel-raised) 42%, transparent);
+}
+
+.claim-verify-row.is-selected {
+  box-shadow: inset 2px 0 var(--signal-violet);
+  background: color-mix(in srgb, var(--signal-violet) 8%, var(--panel-raised));
+}
+
+.claim-verify-row.is-linked {
+  background: color-mix(in srgb, var(--signal-violet) 5%, var(--panel));
+}
+
+.claim-verify-row-index {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+}
+
+.claim-verify-row-category {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .04em;
+}
+
+.claim-verify-row.is-subdued .claim-verify-row-category {
+  font-style: italic;
+}
+
+.claim-verify-row-status {
+  grid-column: 3;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .03em;
+}
+
+.claim-verify-row-status b {
+  font-size: 8px;
+}
+
+.claim-verify-row-status.is-supported { color: color-mix(in srgb, var(--signal-mint) 75%, var(--ink)); }
+.claim-verify-row-status.is-weakly_supported { color: color-mix(in srgb, var(--signal-blue) 75%, var(--ink)); }
+.claim-verify-row-status.is-contradicted { color: var(--danger); }
+.claim-verify-row-status.is-unsupported_by_supplied_materials { color: color-mix(in srgb, var(--signal-peach) 75%, var(--ink)); }
+.claim-verify-row-status.is-measurement_unavailable { color: var(--ink-soft); }
+.claim-verify-row-status.is-unverifiable_from_available_evidence { color: var(--ink-faint); font-style: italic; }
+
+.claim-verify-row-text {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 9px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claim-verify-row.is-subdued .claim-verify-row-text {
+  color: var(--ink-faint);
+  font-style: italic;
+}
+
+.claim-verify-row-method {
+  grid-column: 1 / -1;
+  color: var(--ink-faint);
+  font-size: 8px;
+}
+
+/* -- source drawer -------------------------------------------------------------------------------------- */
+
+.claim-verify-drawer {
+  display: grid;
+  gap: 8px;
+  margin: 0 14px;
+  padding: 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-raised);
+}
+
+.claim-verify-drawer > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .06em;
+}
+
+.claim-verify-drawer > header button {
+  padding: 4px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .05em;
+}
+
+.claim-verify-drawer-body {
+  display: grid;
+  gap: 6px;
+}
+
+.claim-verify-drawer-text,
+.claim-verify-drawer-source-id {
+  margin: 0;
+  color: var(--ink);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.claim-verify-drawer-source-id {
+  font-family: var(--font-machine);
+  font-size: 8px;
+  word-break: break-all;
+}
+
+.claim-verify-drawer-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+  font-family: var(--font-machine);
+  font-size: 8px;
+  letter-spacing: .03em;
+}
+
+.claim-verify-drawer-status small {
+  flex-basis: 100%;
+  color: var(--ink-faint);
+  font-family: inherit;
+  font-size: 8px;
+  letter-spacing: normal;
+}
+
+.claim-verify-drawer-status.is-supported { color: color-mix(in srgb, var(--signal-mint) 75%, var(--ink)); }
+.claim-verify-drawer-status.is-weakly_supported { color: color-mix(in srgb, var(--signal-blue) 75%, var(--ink)); }
+.claim-verify-drawer-status.is-contradicted { color: var(--danger); }
+.claim-verify-drawer-status.is-unsupported_by_supplied_materials { color: color-mix(in srgb, var(--signal-peach) 75%, var(--ink)); }
+.claim-verify-drawer-status.is-measurement_unavailable { color: var(--ink-soft); }
+.claim-verify-drawer-status.is-unverifiable_from_available_evidence { color: var(--ink-faint); font-style: italic; }
+
+.claim-verify-drawer-method {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 9px;
+}
+
+.claim-verify-drawer-contradiction {
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--line-strong));
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
+  color: var(--danger);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.claim-verify-drawer-sources {
+  display: grid;
+  gap: 4px;
+}
+
+.claim-verify-drawer-sources > span {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .05em;
+}
+
+.claim-verify-drawer-sources ul {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.claim-verify-drawer-sources li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.claim-verify-drawer-sources button {
+  padding: 3px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 7px;
+}
+
+.claim-verify-drawer-sources button.is-selected {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--signal-violet) 14%, transparent);
+  box-shadow: inset 0 0 0 1px var(--signal-violet);
+}
+
+.claim-verify-drawer-sources a {
+  color: var(--ink-faint);
+  font-size: 8px;
+}
+
+.claim-verify-drawer-no-sources {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 8px;
+}
+
+/* -- retry unsupported claims ---------------------------------------------------------------------------- */
+
+.claim-verify-retry {
+  margin: 0 14px 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-strong);
+}
+
+.claim-verify-retry-note {
+  margin: 6px 0 10px;
+  color: var(--ink-faint);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.claim-verify-retry > button {
+  padding: 8px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: var(--panel);
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 8px;
+  letter-spacing: .05em;
+}
+
+.claim-verify-retry > button:hover:not(:disabled) {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--signal-violet) 8%, var(--panel-raised));
+}
+
+.claim-verify-retry > button:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.claim-verify-retry-reason {
+  margin: 6px 0 0;
+  color: var(--ink-faint);
+  font-size: 8px;
+}
+
+.claim-verify-retry-error {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--danger) 55%, var(--line-strong));
+  background: color-mix(in srgb, var(--danger) 5%, transparent);
+  color: var(--danger);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.claim-verify-retry-preview,
+.claim-verify-retry-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-raised);
+  color: var(--ink-soft);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.claim-verify-retry-preview button {
+  padding: 6px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .05em;
+}
+
+.claim-verify-retry-preview button.is-primary {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--signal-violet) 18%, var(--panel));
+  border-color: var(--signal-violet);
+}
+
+.claim-verify-retry-preview button:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.claim-verify-retry-result b { font-size: 8px; }
+.claim-verify-retry-result.is-succeeded b { color: var(--signal-mint); }
+.claim-verify-retry-result.is-execution_error b { color: var(--danger); }
+.claim-verify-retry-result.is-cancelled b { color: var(--ink-faint); }
+
+.claim-verify-retry-result a {
+  padding: 4px 8px;
+  border: 1px solid var(--signal-violet);
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .04em;
+}
+
+.claim-verify-retry-result small {
+  flex-basis: 100%;
+  color: var(--ink-faint);
+  font-size: 8px;
+}
