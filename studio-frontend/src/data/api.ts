@@ -1304,12 +1304,39 @@ export interface ForkResult {
   child?: { id: string; parentId: string; note?: string };
 }
 
+/** Decode a fork response body -- shared by legacy `createFork` (POST /runs/<id>/fork) below and the
+ * Milestone F token-workbench fork action (POST /runs/<id>/tokens/<index>/fork, see
+ * data/tokenWorkbench.ts). Both endpoints ultimately return the SAME `compat_fork` shape (the outcome
+ * fields at the top level, or nested on a created child run record) -- this is the one place that shape
+ * is parsed, so neither caller can drift from the other. */
+export type ForkArtifact = ForkResult;
+
+export function parseForkArtifact(value: unknown): ForkArtifact {
+  const body = record(value);
+  const outcome = forkOutcome(body);
+  if (outcome.kind === "unavailable") return { outcome };
+  const id = String(body.id || "");
+  if (!id) throw new Error("Fork response has no child run id");
+  return {
+    outcome,
+    child: {
+      id,
+      parentId: String(body.parent_run_id || ""),
+      note: typeof body.note === "string" ? body.note : undefined,
+    },
+  };
+}
+
 /** POST /runs/<id>/fork -- FORK-02's compatibility wrapper. Tries the exact execution-fork path first
  * whenever `tokenId` names a recorded alternative's numeric id (the only thing the exact wire can force
  * directly); the gateway itself still degrades to the text splice, or reports `unavailable`, per
  * clozn.replay.fork.compat_fork -- this function never chooses a path itself, only decodes the one the
  * gateway ran. A 422 `unavailable` response is NOT a thrown error: it is a normal, typed outcome with no
- * child, distinguished from a genuine request failure (400/500/503/network) which still throws. */
+ * child, distinguished from a genuine request failure (400/500/503/network) which still throws.
+ *
+ * Kept for callers outside the token workbench (none remain in this Studio build -- the workbench's own
+ * action tray now calls the Milestone F route instead, see data/tokenWorkbench.ts's `postForkAction` --
+ * but the legacy route itself is still live server-side, so this wrapper stays available). */
 export async function createFork(
   runId: string,
   position: number,
@@ -1333,18 +1360,9 @@ export async function createFork(
   if (!response.ok && !isTypedUnavailable) {
     throw new Error(String(body.error || `Fork failed (${response.status})`));
   }
-  const outcome = forkOutcome(body);
-  if (outcome.kind === "unavailable") {
-    return { outcome };
+  const artifact = parseForkArtifact(body);
+  if (artifact.child) {
+    return { outcome: artifact.outcome, child: { ...artifact.child, parentId: String(body.parent_run_id || runId) } };
   }
-  const id = String(body.id || "");
-  if (!id) throw new Error("Fork response has no child run id");
-  return {
-    outcome,
-    child: {
-      id,
-      parentId: String(body.parent_run_id || runId),
-      note: typeof body.note === "string" ? body.note : undefined,
-    },
-  };
+  return artifact;
 }

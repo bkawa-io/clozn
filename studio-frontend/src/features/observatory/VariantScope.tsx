@@ -14,6 +14,12 @@ interface VariantScopeProps {
   selectedToken: number;
   onSelectToken: (index: number) => void;
   onSelectReference: (runId: string) => void;
+  /** The token workbench's own `comparison` section (clozn.analysis.run_diff.compare_runs, composed
+   * verbatim) -- a structural identity/generation/context/output diff against the SAME reference run
+   * selected above, shown alongside the client-side token alignment, never replacing it (that alignment
+   * needs full per-token data this coarser structural diff does not carry). */
+  comparisonEvidence?: { state: string; reason?: string };
+  comparisonDifferenceCount?: number;
 }
 
 type OriginFilter = "reference" | "variant" | null;
@@ -42,6 +48,8 @@ export function VariantScope({
   selectedToken,
   onSelectToken,
   onSelectReference,
+  comparisonEvidence,
+  comparisonDifferenceCount,
 }: VariantScopeProps) {
   const [filter, setFilter] = useState<OriginFilter>(null);
   const origins = useMemo(() => current.tokens.map((_, tokenIndex) => {
@@ -58,6 +66,13 @@ export function VariantScope({
     <div className={`variant-scope ${filter ? `has-${filter}-filter` : ""}`} aria-label="Run variant provenance">
       <div className="variant-toolbar">
         <span><b>EVIDENCE</b>STRUCTURAL ALIGNMENT</span>
+        {comparisonEvidence && (
+          <span title={comparisonEvidence.reason}>
+            <b>BACKEND COMPARISON</b>
+            {comparisonEvidence.state.replace(/_/g, " ").toUpperCase()}
+            {comparisonDifferenceCount != null ? ` · ${comparisonDifferenceCount} DIFFERENCES` : ""}
+          </span>
+        )}
         <label>
           <span>REFERENCE RUN</span>
           <select

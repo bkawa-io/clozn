@@ -219,16 +219,13 @@ export async function loadLayerEvidence(
   return { residual, jlens };
 }
 
-export async function loadCausalTrace(
-  runId: string,
-  position: number,
-  signal?: AbortSignal,
-): Promise<CausalTraceEvidence> {
-  const body = await postJSON(
-    `/runs/${encodeURIComponent(runId)}/causal-trace`,
-    { position },
-    signal,
-  );
+/** Decode a causal-trace result body into `CausalTraceEvidence` -- shared by the legacy direct call below
+ * (`loadCausalTrace`, POST /runs/<id>/causal-trace) and the Milestone F token-workbench causal-trace
+ * action (POST /runs/<id>/tokens/<index>/causal-trace, see data/tokenWorkbench.ts), which runs the exact
+ * SAME underlying `clozn.analysis.tracer.trace()` computation and returns the exact same result shape
+ * (wrapped, for the action, in a `clozn.token-workbench-action.v1` cache entry's `result` field). One
+ * parser, so neither caller can drift from the other. */
+export function parseCausalTraceEvidence(body: JsonRecord): CausalTraceEvidence {
   const accounting = record(body.accounting);
   const controls = record(body.controls);
   const target = record(body.target);
@@ -263,4 +260,17 @@ export async function loadCausalTrace(
     noiseFloor: finiteNumber(controls.noise_floor),
     medianAbsoluteDelta: finiteNumber(controls.median_abs),
   };
+}
+
+export async function loadCausalTrace(
+  runId: string,
+  position: number,
+  signal?: AbortSignal,
+): Promise<CausalTraceEvidence> {
+  const body = await postJSON(
+    `/runs/${encodeURIComponent(runId)}/causal-trace`,
+    { position },
+    signal,
+  );
+  return parseCausalTraceEvidence(body);
 }

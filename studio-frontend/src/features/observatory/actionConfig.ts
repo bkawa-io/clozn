@@ -1,0 +1,79 @@
+import type { ActionId } from "./useTokenWorkbench";
+
+/**
+ * Milestone F's "one generic operation model rather than a bespoke button per action" -- static,
+ * reviewable copy for what each of the four token-workbench actions costs, claims, and undoes. ActionTray
+ * reads this table for every action instead of writing four near-duplicate JSX blocks; the per-action
+ * RESULT rendering (the artifact itself) still stays type-specific in ActionTray.tsx, since the artifacts
+ * are four genuinely different evidence shapes that must never be cross-rendered (see
+ * data/tokenWorkbench.ts's own doc comment on why the four capabilities stay separate types).
+ */
+export interface ActionConfig {
+  id: ActionId;
+  label: string;
+  /** Whether running this action performs new engine computation (a forward pass, a checkpoint
+   * restore) as opposed to reading something already recorded. */
+  changesExecution: boolean;
+  /** What the action produces: an immutable new run, or an evidence artifact attached to THIS run. */
+  produces: "child_run" | "evidence_artifact";
+  cost: string;
+  claimBoundary: string;
+  undo: string;
+}
+
+export const ACTION_CONFIG: Record<ActionId, ActionConfig> = {
+  exact_fork: {
+    id: "exact_fork",
+    label: "FORK",
+    changesExecution: true,
+    produces: "child_run",
+    cost: "one checkpoint restore (or, when unavailable, a text-splice reconstruction) plus one "
+      + "generation step on the current worker",
+    claimBoundary: "creates a new immutable run continuing from this token with a different piece forced "
+      + "-- an exact execution fork restores exact KV state; a reconstructed replay re-tokenizes a text "
+      + "splice and is not guaranteed to run on the exact recorded token ids (see the outcome panel for "
+      + "which one happened)",
+    undo: "no undo -- the created run is a permanent record; cancelling before it finishes only stops "
+      + "this Studio from reporting on it (the request already sent may still complete and be saved as "
+      + "a child run you did not see appear)",
+  },
+  causal_trace: {
+    id: "causal_trace",
+    label: "CAUSAL TRACE",
+    changesExecution: true,
+    produces: "evidence_artifact",
+    cost: "multiple forward passes across candidate sites plus matched-random controls, on the current "
+      + "worker",
+    claimBoundary: "reports which layer/position sites survive a matched-random noise floor for this "
+      + "token -- controlled intervention evidence, not a full causal proof and not a claim about every "
+      + "possible site",
+    undo: "no undo needed -- a read-only evidence artifact, cached by run identity and token index; a "
+      + "repeat request with the same parameters reuses it rather than recomputing",
+  },
+  source_measurement: {
+    id: "source_measurement",
+    label: "SOURCE MEASURE",
+    changesExecution: true,
+    produces: "evidence_artifact",
+    cost: "one counterfactual forward pass per selected context span, on the current worker",
+    claimBoundary: "measures whether removing a context span changes this token's probability enough to "
+      + "clear the measurement floor -- a span that does not clear is an honest 'no effect detected', "
+      + "never proof the span was irrelevant",
+    undo: "no undo needed -- persists to this run as its own influence-map record; a repeat request "
+      + "with unchanged inputs is a cache hit",
+  },
+  mechanistic_diff: {
+    id: "mechanistic_diff",
+    label: "MECHANISTIC DIFF",
+    changesExecution: false,
+    produces: "evidence_artifact",
+    cost: "a pure pair-compatibility check only (no engine load) in this milestone -- execution against "
+      + "two loaded models is not yet wired to this action",
+    claimBoundary: "determines whether the current run and the selected reference run are structurally "
+      + "comparable across tokenizer and hidden size -- it does not itself produce a diff; run "
+      + "`clozn diff-model` at the CLI for actual cross-model execution",
+    undo: "not applicable -- no evidence is produced by this action yet",
+  },
+};
+
+export const ACTION_ORDER: ActionId[] = ["exact_fork", "causal_trace", "source_measurement", "mechanistic_diff"];

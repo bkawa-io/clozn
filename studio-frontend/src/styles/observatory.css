@@ -1527,14 +1527,26 @@
   grid-column: 1 / -1;
 }
 
-.causal-readout > header > button {
+.causal-readout-buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.causal-readout-buttons button {
   border: 1px solid color-mix(in srgb, var(--signal-violet) 55%, var(--line));
+  border-radius: 0;
   padding: 5px 8px;
   color: var(--ink);
   background: color-mix(in srgb, var(--signal-violet) 8%, var(--panel-raised));
   font-family: var(--font-machine);
   font-size: 5.5px;
   letter-spacing: .06em;
+}
+
+.causal-readout-buttons button:disabled {
+  cursor: default;
+  opacity: .45;
 }
 
 .causal-results {
@@ -2369,6 +2381,195 @@ input[type="range"]::-webkit-slider-thumb {
   font-family: var(--font-machine);
   font-size: 6.5px;
   line-height: 1.4;
+}
+
+.fork-outcome-banner {
+  border-top: 1px solid var(--line-strong);
+  padding-top: 12px;
+}
+
+.fork-outcome-banner .fork-result {
+  align-items: center;
+}
+
+.fork-outcome-banner .fork-result button {
+  margin-left: 6px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  padding: 4px 7px;
+  color: var(--ink-faint);
+  background: transparent;
+  font-family: var(--font-machine);
+  font-size: 6.5px;
+  letter-spacing: .06em;
+}
+
+.token-distribution-card {
+  border-top: 1px solid var(--line);
+  padding-top: 11px;
+}
+
+/* -------------------------------------------------------------------------------------- action tray */
+/* Milestone F: one generic operation model instead of a bespoke button per action -- see
+   features/observatory/ActionTray.tsx and actionConfig.ts. Every row shares this one set of rules; the
+   per-phase modifier classes (`is-idle`, `is-running`, ...) only ever change color, never remove the
+   text each row already carries (phase/status/reason are always rendered, never color-only). */
+.action-tray {
+  border-top: 1px solid var(--line);
+  padding-top: 11px;
+}
+
+.action-tray-list {
+  display: grid;
+  gap: 9px;
+}
+
+.action-row {
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  padding: 8px 9px;
+  background: color-mix(in srgb, var(--panel-raised) 30%, transparent);
+}
+
+.action-row.is-running,
+.action-row.is-cancelling {
+  border-color: color-mix(in srgb, var(--signal-blue) 46%, var(--line));
+}
+
+.action-row.is-cached,
+.action-row.is-completed {
+  border-color: color-mix(in srgb, var(--signal-mint) 46%, var(--line));
+}
+
+.action-row.is-error,
+.action-row.is-cancelled {
+  border-color: color-mix(in srgb, var(--danger) 46%, var(--line));
+}
+
+.action-row > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.action-row > header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.action-row strong {
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 8px;
+  font-weight: 550;
+  letter-spacing: .07em;
+}
+
+.action-native-status {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6.5px;
+  letter-spacing: .06em;
+}
+
+.action-row-buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.action-row-buttons button {
+  border: 1px solid color-mix(in srgb, var(--signal-violet) 48%, var(--line));
+  border-radius: 0;
+  padding: 5px 8px;
+  color: var(--ink);
+  background: var(--spectrum-tint);
+  font-family: var(--font-machine);
+  font-size: 6.5px;
+  letter-spacing: .06em;
+}
+
+.action-row-buttons button:disabled {
+  cursor: default;
+  opacity: .45;
+}
+
+.action-cost,
+.action-claim,
+.action-undo {
+  margin: 0;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6.5px;
+  line-height: 1.5;
+}
+
+.action-claim {
+  color: var(--ink-soft);
+}
+
+.action-fork-choice {
+  margin: 0;
+  display: flex;
+  gap: 6px;
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 7px;
+}
+
+.action-fork-choice b {
+  color: var(--ink-faint);
+  font-weight: 500;
+  letter-spacing: .07em;
+}
+
+.action-reason {
+  margin: 0;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 6.5px;
+  line-height: 1.4;
+}
+
+.action-reason.is-error {
+  color: var(--danger);
+}
+
+.action-result {
+  margin: 0;
+  color: color-mix(in srgb, var(--signal-mint) 60%, var(--ink));
+  font-family: var(--font-machine);
+  font-size: 6.5px;
+  line-height: 1.4;
+}
+
+.action-pair-compatibility {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.action-pair-compatibility > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 4px;
+  font-family: var(--font-machine);
+  font-size: 6px;
+}
+
+.action-pair-compatibility dt {
+  color: var(--ink-faint);
+}
+
+.action-pair-compatibility dd {
+  margin: 0;
+  color: var(--ink-soft);
+  text-align: right;
 }
 
 .token-detail > strong {

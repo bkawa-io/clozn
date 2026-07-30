@@ -459,14 +459,3 @@ export type ForkOutcome =
       unchangedControl?: ForkUnchangedControl;
       executionId?: string;
     };
-
-export type ForkState =
-  | { status: "idle" }
-  | { status: "loading"; parentId: string }
-  | { status: "error"; parentId: string; message: string }
-  /** A structurally typed `unavailable` outcome (HTTP 422) -- neither path was honestly eligible, or an
-   * exact attempt started and failed. Kept distinct from `error` (a request failure: bad input, no
-   * worker, or a generation/persistence crash) so the UI never renders a typed refusal as though it
-   * were an unexplained failure. */
-  | { status: "unavailable"; parentId: string; outcome: ForkOutcome }
-  | { status: "success"; parentId: string; childId: string; note?: string; outcome: ForkOutcome };
