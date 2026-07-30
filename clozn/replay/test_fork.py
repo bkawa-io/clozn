@@ -46,12 +46,20 @@ class FakeEngine:
 
 
 class FakeSub:
-    """The minimal fork seam: .engine only -- NO score_tokens, so retokenization is unverifiable."""
+    """The minimal fork seam: .engine only -- NO score_tokens, so retokenization is unverifiable.
+
+    runtime_identity()/worker_identity() resolve RUNTIME/WORKER (defined further below, in the route
+    section) at CALL time via normal module-global lookup -- by the time any test calls them the whole
+    module has already finished executing, so definition order here doesn't matter. The pure
+    fork()-unit tests above never call them; only the route section's `served` fixture relies on them
+    resolving to a real Mapping."""
 
     def __init__(self, engine=None):
         self.engine = engine if engine is not None else FakeEngine()
         self.steer = None
         self.memory = None
+        self.runtime_identity = lambda: dict(RUNTIME)
+        self.worker_identity = lambda: dict(WORKER)
 
 
 class ScoringSub(FakeSub):
@@ -292,10 +300,39 @@ def test_substrate_without_engine_returns_none(store):
 
 
 # ===================================================================================================
-# the route: POST /runs/<id>/fork -- exercised directly (deliberately NOT registered in app.py yet)
+# the route: POST /runs/<id>/fork -- FORK-02's compatibility wrapper (clozn.replay.fork.compat_fork),
+# registered in app.py's _POST_ROUTES. See tests/test_fork_wrapper.py for outcome-labeling coverage
+# (exact_execution_fork / reconstructed_replay / unavailable); these route tests below cover the
+# reconstructed_replay degrade path this wrapper always falls back to when a fake substrate can't
+# produce a matching-identity worker -- i.e. everything below this point HAS a matching runtime/worker
+# identity (RUNTIME/WORKER below), but no `meta.prompt_tokens`/decode-regime, so checkpoint capture is
+# always structurally "unavailable" (a realistic "historical run" shape) and every request here
+# legitimately degrades to the text splice.
 # ===================================================================================================
 import clozn.server.app as cs  # noqa: E402
 import clozn.server.routes.fork as fork_routes  # noqa: E402
+
+RUNTIME = {
+    "model_sha256": "a" * 64,
+    "template_fingerprint": "b" * 16,
+    "engine_build": "test-build",
+    "context_size": 4096,
+    "backend": "cpu",
+    "adapter": {"present": False, "identity_sha256": None, "artifact_sha256": None, "scale": None},
+    "white_box_flags": {},
+}
+WORKER = {
+    "worker_id": "generation-a",
+    "worker_generation_id": "generation-a",
+    "protocol_version": "1.1",
+}
+PARENT_IDENTITY = {
+    "model_sha256": RUNTIME["model_sha256"],
+    "template_fingerprint": RUNTIME["template_fingerprint"],
+    "engine_build": RUNTIME["engine_build"],
+    "white_box_flags": dict(RUNTIME["white_box_flags"]),
+}
+PARENT_META = {"n_ctx": RUNTIME["context_size"], "device": RUNTIME["backend"]}
 
 
 class FakeHandler:
@@ -311,12 +348,18 @@ class FakeHandler:
 @pytest.fixture
 def served(store, monkeypatch):
     """An isolated run store + a fake engine substrate installed as ctx.SUB; seeds a parent run
-    through the REAL runlog.record (so the stored trace shape is the normalized on-disk one)."""
+    through the REAL runlog.record (so the stored trace shape is the normalized on-disk one). The
+    parent's identity/meta matches FakeSub's runtime_identity()/worker_identity() (RUNTIME/WORKER
+    above) so the wrapper's reconstruction gate -- which now requires the SAME current-worker/parent
+    identity match the exact gate does -- is satisfied; it omits meta.prompt_tokens so checkpoint
+    capture itself stays structurally unavailable and every route test here exercises the
+    reconstructed_replay degrade honestly, not a shortcut."""
     sub = FakeSub()
     monkeypatch.setattr(cs, "SUB", sub)
     rid = runlog.record(source="openai_api", client="curl", model="clozn-qwen", substrate="engine",
                         messages=RUN["messages"], response=RUN["response"],
-                        trace=RUN["trace"], final_prompt=FINAL_PROMPT)
+                        trace=RUN["trace"], final_prompt=FINAL_PROMPT,
+                        identity=PARENT_IDENTITY, meta=PARENT_META)
     return sub, rid
 
 
@@ -339,6 +382,12 @@ def test_route_happy_path_returns_child(served):
                                                  "trace_provenance": None}
     assert h.body["retokenized"] is True                   # FakeSub has no score seam -> flagged
     assert sub.engine.calls[-1]["prompt"] == FINAL_PROMPT + "One" + " 2"
+    # FORK-02: labeled honestly as the splice -- no meta.prompt_tokens on this parent, so no exact
+    # checkpoint could ever be captured, and the wrapper says so rather than staying silent about it.
+    assert h.body["outcome"] == "reconstructed_replay"
+    assert h.body["reasons"][0]["code"] == "missing_prompt_boundary"
+    assert h.body["exactness"]["regime"] == "reconstructed_text"
+    assert "kv_state_not_restored" in h.body["unavoidable_differences"]
 
 
 def test_route_unknown_run_404(served):

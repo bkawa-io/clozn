@@ -38,9 +38,20 @@ Contract mirrors the siblings: validation errors raise ValueError (the route map
 everything after validation never raises into the handler -- generation/persistence failures return
 None. Stdlib-only; the substrate is passed in (the live SUB), never imported, so this module is
 unit-testable against a fake substrate with no model and no engine.
+
+FORK-02 -- compat_fork(), below: the compatibility wrapper POST /runs/<id>/fork now runs through.
+Exact execution forks (checkpoint capture -> plan -> execute, clozn.replay.checkpoint_capture /
+execution_fork / execution_fork_execute -- FORK-00/01/CKPT-01, proven bit-exact at the engine level)
+reach the gateway but nothing called them; this splice remained the only path a "fork" button could
+take. compat_fork() tries exact FIRST whenever a request could possibly be exact, degrades to this
+module's fork() (the text splice, unchanged above) only when no exact state is honestly available --
+per the SAME clozn.replay.execution_fork.plan_execution_fork classifier docs/EXECUTION_FORK_CONTRACT.md
+defines, never a second, softer vocabulary for the same facts -- and returns a typed `unavailable`
+rather than a silent empty result when neither path can run.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 import time
 
 import clozn.runs.store as runlog
@@ -385,3 +396,216 @@ def fork(run: dict, sub, position, token=None, token_id=None, max_new: int = MAX
         return child
     except Exception:
         return None
+
+
+# ============================================================================== FORK-02: compatibility wrapper
+COMPAT_OUTCOMES = ("exact_execution_fork", "reconstructed_replay", "unavailable")
+
+EXACT_NOTE = ("exact execution fork: the worker restored its exact recorded KV state and applied the "
+             "forced token there directly on its token id -- no text splice, nothing to retokenize")
+
+
+def _compat_reason(code, message) -> dict:
+    """The {code, message} shape clozn.execution-fork.v1 already uses for its own `reasons` -- reused
+    verbatim so this wrapper never invents a second vocabulary for the same facts."""
+    return {"code": str(code or "unknown"), "message": str(message or "")}
+
+
+def _exact_token_id(trace: dict, position: int, forced_piece: str, token_id_arg) -> int | None:
+    """The numeric token id the EXACT worker wire needs for `forced_piece` at `position`, or None when
+    only free text is available. `token_id_arg` (the caller's raw token_id, if supplied) wins and is
+    trusted as-is -- resolve_forced_token already proved it names `forced_piece` (a recorded alternative
+    or the committed pick's own id). Otherwise a `token` (piece text) is looked up against the recorded
+    alternatives; a free piece with no recorded id has no numeric id to force exactly, so exact is not
+    attempted for it -- reconstruction is the only honest path, never a guess at an id."""
+    if token_id_arg is not None:
+        try:
+            return int(token_id_arg)
+        except (TypeError, ValueError):
+            return None
+    for piece, tid in _alt_pairs(trace, position):
+        if piece == forced_piece and tid is not None:
+            return tid
+    return None
+
+
+def _try_exact(run: dict, engine, request: dict, runtime_identity: dict, worker_identity: dict) -> dict:
+    """Attempt the exact path for one already-token-id-resolvable request: capture an ephemeral
+    checkpoint of the immutable parent (clozn.replay.checkpoint_capture), plan against it
+    (clozn.replay.execution_fork), and -- only when that plan is exact -- execute it
+    (clozn.replay.execution_fork_execute). All three modules are composed read-only; this function adds
+    no new eligibility rule of its own.
+
+    Returns {"status": "success", "child": ..., "exactness": ..., "unchanged_control": ...,
+    "execution_id": ...} when the intervention completed; {"status": "failed", "reason": ..., ...} when
+    an exact plan existed and RAN but its execution genuinely diverged/errored/went stale (the
+    checkpoint DID exist -- never masked behind reconstruction); or {"status": "ineligible",
+    "reason": ...} when no exact state was honestly available at all (the caller falls through to the
+    reconstructed-replay gate for that case)."""
+    from clozn.replay.checkpoint_capture import CheckpointCaptureError, capture_parent_checkpoint
+    try:
+        capture = capture_parent_checkpoint(
+            run, engine, runtime_identity=runtime_identity, worker_identity=worker_identity)
+    except CheckpointCaptureError as exc:
+        return {"status": "ineligible",
+                "reason": _compat_reason("checkpoint_capture_request_invalid", str(exc))}
+    if capture["status"] != "available":
+        reason = (capture.get("reasons") or [{}])[0]
+        return {"status": "ineligible", "reason": _compat_reason(
+            reason.get("code", "checkpoint_unavailable"),
+            reason.get("message", "no exact checkpoint could be captured"))}
+
+    from clozn.replay.execution_fork import plan_execution_fork
+    plan = plan_execution_fork(
+        run, request, checkpoint=capture["checkpoint_reference"],
+        runtime_identity=runtime_identity, worker_identity=worker_identity)
+    if plan["classification"] != "exact_execution_fork":
+        reason = (plan.get("reasons") or [{}])[0]
+        return {"status": "ineligible", "reason": _compat_reason(
+            reason.get("code", "exact_plan_unavailable"),
+            reason.get("message", "the captured checkpoint did not plan as exact"))}
+
+    from clozn.replay.execution_fork_execute import execute_exact_fork
+    result = execute_exact_fork(
+        run, plan, engine,
+        runtime_identity=runtime_identity, worker_identity=worker_identity,
+        reload_parent=runlog.get_run)
+    receipt = result["receipt"]
+    if receipt["phase"] == "completed":
+        return {
+            "status": "success",
+            "child": result["child"],
+            "exactness": receipt["exactness"],
+            "unchanged_control": receipt["unchanged_control"],
+            "execution_id": receipt["execution_id"],
+        }
+    reason = (receipt.get("reasons") or [{}])[0]
+    return {
+        "status": "failed",
+        "reason": _compat_reason(
+            reason.get("code", "exact_execution_failed"),
+            reason.get("message", "the exact execution fork did not complete")),
+        "exactness": receipt.get("exactness"),
+        "unchanged_control": receipt.get("unchanged_control"),
+        "execution_id": receipt.get("execution_id"),
+    }
+
+
+def compat_fork(run: dict, sub, position, *, token=None, token_id=None,
+                runtime_identity: dict | None = None, worker_identity: dict | None = None,
+                max_new: int = MAX_NEW) -> dict | None:
+    """POST /runs/<id>/fork's FORK-02 compatibility wrapper: one honest outcome, never a silent empty
+    result.
+
+    Tries the exact execution-fork path FIRST whenever this request could possibly be exact (a
+    resolvable numeric token id, a live engine, and a current worker/runtime identity) via _try_exact,
+    above. Only when no exact state is honestly available does it degrade to the legacy text splice
+    (fork(), above) -- and the SAME classifier (clozn.replay.execution_fork.plan_execution_fork,
+    checkpoint=None) decides whether even that is eligible, so this module never invents a softer
+    reconstruction gate than the one docs/EXECUTION_FORK_CONTRACT.md already defines. "Never silently
+    prefer the splice because it is easier": exact is always attempted first when it could possibly
+    apply, and a genuinely FAILED exact attempt (a checkpoint that existed and ran, but diverged) is
+    reported as `unavailable`, never quietly swapped for a plausible-looking splice.
+
+    Returns a dict carrying `outcome` (one of COMPAT_OUTCOMES) and `reasons`
+    ({code, message} pairs, the same shape clozn.execution-fork.v1 uses):
+      * exact_execution_fork / reconstructed_replay -- the CHILD run record (the pre-FORK-02 200 shape,
+        prefix_kept/forked_from_piece/retokenized/note included exactly as fork() always produced them),
+        plus `outcome`/`reasons` and, when exact ran, `exactness` + `unchanged_control` lifted straight
+        from its execution-fork receipt (never re-derived or renamed).
+      * unavailable -- no child was created: {"outcome": "unavailable", "reasons": [...]}, plus whatever
+        exactness/execution_fork_execution_id facts an attempted-but-failed exact plan already produced.
+
+    Returns None ONLY for the one case that mirrors the pre-FORK-02 500: reconstruction was eligible but
+    its own generation/persistence step failed (fork() returned None) -- the same failure, the same
+    contract, so the route's existing 500 handling for `child is None` still applies unchanged.
+
+    Raises ValueError on invalid input (no trace / position out of range / unresolvable token) -- same
+    contract as fork(), the route maps those to 400. After validation it never raises."""
+    if not run or not isinstance(run, dict):
+        raise ValueError("run record is empty")
+    trace = run.get("trace") or {}
+    pieces = trace.get("tokens")
+    if not isinstance(pieces, list) or not pieces:
+        raise ValueError("run has no trace to fork from")
+    position = int(position)
+    if position < 0 or position >= len(pieces):
+        raise ValueError(f"fork position {position} out of range "
+                         f"(the reply has {len(pieces)} trace tokens)")
+    forced_piece, _was_recorded = resolve_forced_token(trace, position, token=token, token_id=token_id)
+    exact_token_id = _exact_token_id(trace, position, forced_piece, token_id)
+
+    change = {"type": "force_token", "token_piece": forced_piece}
+    if exact_token_id is not None:
+        change["token_id"] = exact_token_id
+    request = {"position": position, "change": change}
+
+    reasons: list[dict] = []
+    engine = getattr(sub, "engine", None)
+    can_attempt_exact = (
+        exact_token_id is not None and engine is not None
+        and isinstance(runtime_identity, dict) and isinstance(worker_identity, dict)
+    )
+
+    if can_attempt_exact:
+        outcome = _try_exact(run, engine, request, runtime_identity, worker_identity)
+        if outcome["status"] == "success":
+            child = outcome["child"]
+            pieces_str = [str(p) for p in pieces]
+            child["outcome"] = "exact_execution_fork"
+            child["reasons"] = [_compat_reason(
+                "exact_preconditions_met",
+                "an exact checkpoint was captured and its intervention completed")]
+            child["exactness"] = deepcopy(outcome["exactness"])
+            child["unchanged_control"] = deepcopy(outcome["unchanged_control"])
+            child["execution_fork_execution_id"] = outcome["execution_id"]
+            child["prefix_kept"] = "".join(pieces_str[:position])
+            child["forked_from_piece"] = pieces_str[position]
+            child["retokenized"] = False
+            child["note"] = EXACT_NOTE
+            return child
+        if outcome["status"] == "failed":
+            # An exact plan existed and ran, but its own execution genuinely diverged, errored, or went
+            # stale. The checkpoint DID exist -- this is not "no exact state", so it is never masked
+            # behind the splice; report it honestly (GET /execution-forks/<id> holds the full receipt).
+            return {
+                "outcome": "unavailable",
+                "reasons": [outcome["reason"]],
+                "execution_fork_execution_id": outcome.get("execution_id"),
+                "exactness": deepcopy(outcome.get("exactness")),
+                "unchanged_control": deepcopy(outcome.get("unchanged_control")),
+            }
+        reasons.append(outcome["reason"])                          # ineligible -- fall through below
+    elif exact_token_id is None:
+        reasons.append(_compat_reason(
+            "exact_requires_token_id",
+            "the forced token has no recorded numeric id, so only the reconstructed text path can "
+            "force it"))
+    elif engine is None:
+        reasons.append(_compat_reason(
+            "no_engine", "no engine is available to attempt an exact checkpoint"))
+    else:
+        reasons.append(_compat_reason(
+            "worker_identity_unavailable",
+            "the current worker's exact runtime/worker identity is unavailable"))
+
+    from clozn.replay.execution_fork import plan_execution_fork
+    recon_plan = plan_execution_fork(
+        run, request, checkpoint=None,
+        runtime_identity=runtime_identity, worker_identity=worker_identity)
+    if recon_plan["classification"] != "reconstructed_replay":
+        plan_reason = (recon_plan.get("reasons") or [{}])[0]
+        reasons.append(_compat_reason(
+            plan_reason.get("code", "reconstruction_unavailable"),
+            plan_reason.get("message", "the legacy text-splice path is also unavailable")))
+        return {"outcome": "unavailable", "reasons": reasons}
+
+    child = fork(run, sub, position, token=token, token_id=token_id, max_new=max_new)
+    if child is None:
+        return None
+    child["outcome"] = "reconstructed_replay"
+    child["reasons"] = reasons or [_compat_reason(
+        "checkpoint_not_supplied", "no exact checkpoint was supplied; reconstructing from text")]
+    child["exactness"] = deepcopy(recon_plan["exactness"])
+    child["unavoidable_differences"] = list(recon_plan["unavoidable_differences"])
+    return child
