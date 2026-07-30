@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Icon } from "../components/Icon";
 import { createFork, loadRunInspection, loadRuntimeState } from "../data/api";
 import { DEMO_OBSERVATORY } from "../data/demo";
@@ -30,6 +30,11 @@ export function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
   const [runStatus, setRunStatus] = useState<"idle" | "loading" | "error">("idle");
   const [forkState, setForkState] = useState<ForkState>({ status: "idle" });
   const [liveRuntime, setLiveRuntime] = useState(runtime);
+  // One monotonic counter shared by selectRun and forkRun: whichever call is issued LAST wins. A fork
+  // response for the run displayed when it was requested must never land after the panel has since
+  // navigated elsewhere -- each async function captures its own id and checks it against this ref
+  // before committing state, so a stale response for run A can never paint over run B.
+  const requestIdRef = useRef(0);
 
   useEffect(() => setLiveRuntime(runtime), [runtime]);
 
@@ -52,6 +57,7 @@ export function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
   }, [runId, fixture]);
 
   async function selectRun(nextRunId: string) {
+    const requestId = ++requestIdRef.current;
     setForkState({ status: "idle" });
     if (!nextRunId) {
       setData(DEMO_OBSERVATORY);
@@ -62,24 +68,36 @@ export function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
     setRunStatus("loading");
     try {
       const inspection = await loadRunInspection(nextRunId);
+      if (requestIdRef.current !== requestId) return;   // superseded by a later selection or fork
       setData(inspection);
       setRunStatus("idle");
       history.replaceState(null, "", `#/runs/${encodeURIComponent(nextRunId)}/scope`);
     } catch {
+      if (requestIdRef.current !== requestId) return;
       setRunStatus("error");
     }
   }
 
-  async function forkRun(position: number, token: string) {
+  async function forkRun(position: number, token: string, tokenId?: number) {
     if (data.mode !== "run") return;
     const parentId = data.id;
+    const requestId = ++requestIdRef.current;
     setForkState({ status: "loading", parentId });
     try {
-      const child = await createFork(parentId, position, token);
+      const result = await createFork(parentId, position, token, tokenId);
+      if (requestIdRef.current !== requestId) return;   // the panel has since moved to a different run
+      if (!result.child) {
+        // `unavailable` (422): a typed, non-actionable outcome, not a request failure -- no child was
+        // created, so there is nothing to load or navigate to.
+        setForkState({ status: "unavailable", parentId, outcome: result.outcome });
+        return;
+      }
+      const child = result.child;
       const [inspection, nextRuntime] = await Promise.all([
         loadRunInspection(child.id),
         loadRuntimeState(),
       ]);
+      if (requestIdRef.current !== requestId) return;   // superseded again while these were in flight
       setData(inspection);
       setLiveRuntime(nextRuntime);
       setRunStatus("idle");
@@ -88,9 +106,11 @@ export function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
         parentId: child.parentId,
         childId: child.id,
         note: child.note,
+        outcome: result.outcome,
       });
       history.replaceState(null, "", `#/runs/${encodeURIComponent(child.id)}/scope`);
     } catch (error) {
+      if (requestIdRef.current !== requestId) return;
       setForkState({
         status: "error",
         parentId,
@@ -116,7 +136,9 @@ export function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
             ? "LOADING"
             : runStatus === "error" || forkState.status === "error"
               ? "ERROR"
-              : data.mode.toUpperCase(),
+              : forkState.status === "unavailable"
+                ? "FORK UNAVAILABLE"
+                : data.mode.toUpperCase(),
     }),
     [modelLabel, data.id, data.mode, runStatus, forkState.status],
   );
@@ -138,7 +160,7 @@ export function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
       runStatus={runStatus}
       forkState={forkState}
       onSelectRun={(nextRunId) => void selectRun(nextRunId)}
-      onFork={(position, token) => void forkRun(position, token)}
+      onFork={(position, token, tokenId) => void forkRun(position, token, tokenId)}
       initialState={initialState ?? (tokenIndex == null ? undefined : { token: tokenIndex })}
       onStateChange={replaceScopeState}
     />
