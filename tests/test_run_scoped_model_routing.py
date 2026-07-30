@@ -47,6 +47,7 @@ from clozn.server.routes import (
     fork,
     influence_map,
     investigation,
+    investigation_experiment,
     provenance,
     receipts,
     replay,
@@ -212,6 +213,8 @@ _REFUSAL_CASES = [
     (receipts, "try_post", "/rederive", {}),
     (receipts, "try_post", "/narrate", {}),
     (receipts, "try_post", "/jlens", {}),
+    (investigation_experiment, "try_post", "/investigation-experiment",
+     {"intervention": {"kind": "sampler_change", "overrides": {"temperature": 0.5}}}),
 ]
 
 
@@ -413,6 +416,70 @@ def test_token_workbench_source_measure_action_uses_the_runs_own_model_worker(is
     assert token_workbench_actions.try_post(
         h, f"/runs/{run['id']}/tokens/0/source-measure", {})
     assert h.status == 202
+    assert captured["sub"] is beta.sub
+    assert captured["sub"] is not alpha.sub
+
+
+def test_investigation_experiment_uses_the_runs_own_model_worker(iso, managed, monkeypatch):
+    """POST /runs/<id>/investigation-experiment starts a job (like fork/causal-trace/source-measure
+    above) -- proves it resolves beta's worker for the actual run_experiment() call, never alpha's or
+    the legacy global SUB, and that the completed job carries the result through to a real poll."""
+    import time
+
+    router, alpha, beta = managed
+    run = _run(model="beta")
+    captured = {}
+
+    def fake_run_experiment(run_arg, intervention, sub):
+        captured["sub"] = sub
+        return {
+            "schema_version": "clozn.investigation-experiment.v1",
+            "experiment_id": "invexp_test",
+            "run_id": run_arg["id"],
+            "generated_at": "2026-07-29T00:00:00Z",
+            "phase": "completed",
+            "intervention": intervention,
+            "eligibility": {"state": "eligible"},
+            "plan": {
+                "arm_order": ["baseline", "no_op_replay", "treatment", "random_equal_effect_control"],
+                "resolved": {"kind": "sampler_change", "sampler_overrides": {"temperature": 0.5}},
+            },
+            "arms": {
+                "baseline": {"reply_sha256": "0" * 64, "matches_baseline": True},
+                "no_op_replay": {"reply_sha256": "0" * 64, "matches_baseline": True},
+                "treatment": {"reply_sha256": "1" * 64, "matches_baseline": False},
+            },
+            "analysis": {"instrument_sane": True, "reasons": ["no random control ran for this kind"]},
+            "observed": {
+                "treatment_reply_differs_from_baseline": True,
+                "note": "a factual diff, never a causal claim",
+            },
+            "causal_claim": {
+                "licensed": False,
+                "statement": "uncontrolled: no random equal-effect control could be run for this kind",
+            },
+        }
+
+    import clozn.receipts.investigation_experiment as domain
+    monkeypatch.setattr(domain, "run_experiment", fake_run_experiment)
+
+    h = Handler()
+    assert investigation_experiment.try_post(
+        h, f"/runs/{run['id']}/investigation-experiment",
+        {"intervention": {"kind": "sampler_change", "overrides": {"temperature": 0.5}}})
+    assert h.status == 202
+    job_id = h.body["job_id"]
+
+    from clozn.server.influence_jobs import JOBS
+    deadline = time.monotonic() + 2
+    state = None
+    while time.monotonic() < deadline:
+        snapshot = JOBS.get(run["id"], job_id)
+        state = snapshot["state"]
+        if state in {"completed", "failed", "cancelled"}:
+            break
+        time.sleep(0.01)
+    assert state == "completed"
     assert captured["sub"] is beta.sub
     assert captured["sub"] is not alpha.sub
 
