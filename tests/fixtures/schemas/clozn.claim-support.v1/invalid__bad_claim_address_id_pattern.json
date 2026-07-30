@@ -1,0 +1,71 @@
+{
+  "schema_version": "clozn.claim-support.v1",
+  "run_id": "run-fixture-1",
+  "privacy": "metadata_only",
+  "offset_contract": {
+    "unit": "unicode_code_points",
+    "interval": "half_open",
+    "hash_algorithm": "sha256",
+    "canonicalization": "exact_string_utf8_v1"
+  },
+  "source": {
+    "claims_schema_version": "clozn.answer-claims.v1",
+    "influence_map": {
+      "gate": "ok"
+    }
+  },
+  "results": [
+    {
+      "claim_index": 0,
+      "claim_address_id": "not-a-real-id",
+      "status": "supported",
+      "method": {
+        "name": "forced_score_intervention",
+        "max_abs_delta_nats": 3.1
+      },
+      "source_span_ids": [
+        "span_88b8090918e45fec591d0322"
+      ]
+    },
+    {
+      "claim_index": 1,
+      "claim_address_id": "span_44ad13598db0be4a7999208d",
+      "status": "weakly_supported",
+      "method": {
+        "name": "textual_overlap",
+        "overlap_fraction": 1.0
+      },
+      "source_span_ids": [
+        "span_8b627222cd9c65ed25e241a4"
+      ]
+    },
+    {
+      "claim_index": 2,
+      "claim_address_id": "span_a0c3d34856ebd24c3d3d4231",
+      "status": "unverifiable_from_available_evidence",
+      "method": {
+        "name": "category_rule"
+      }
+    },
+    {
+      "claim_index": 3,
+      "claim_address_id": "span_6cadc6860386c7cbef37c98a",
+      "status": "weakly_supported",
+      "method": {
+        "name": "textual_overlap",
+        "overlap_fraction": 1.0
+      },
+      "source_span_ids": [
+        "span_538689f100c12710744ef0f1"
+      ]
+    },
+    {
+      "claim_index": 4,
+      "claim_address_id": "span_5ea6f903d3af4c2b889ae076",
+      "status": "unverifiable_from_available_evidence",
+      "method": {
+        "name": "category_rule"
+      }
+    }
+  ]
+}

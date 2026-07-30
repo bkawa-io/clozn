@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.claim-support.v1",
+  "title": "Deterministic claim-to-supplied-source support mapping (E2)",
+  "description": "A derived, read-only projection over one run's clozn.answer-claims.v1 document and its persisted clozn.context_answer_influence.v1 measurement. Never a run migration. 'unsupported_by_supplied_materials' means exactly that the supplied materials do not support the claim -- it is not a claim about whether the claim is true or false, and must never be read that way. 'measurement_unavailable' means the influence measurement could not be consulted or reconciled with this run's recorded answer text at all -- it is a distinct, honest state from 'we measured and found nothing' (unsupported_by_supplied_materials); missing evidence is never promoted into a negative finding. 'contradicted' requires explicit evidence from a supplied source (a disjoint number/date or an unnegated-claim/negated-source pair) at a high textual-overlap bar -- not merely the absence of support. Every source_span_ids entry is a real clozn.text-span-addresses.v1 address_id.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "privacy",
+    "offset_contract",
+    "source",
+    "results"
+  ],
+  "properties": {
+    "schema_version": {"const": "clozn.claim-support.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "privacy": {"enum": ["full", "metadata_only"]},
+    "offset_contract": {
+      "type": "object",
+      "required": ["unit", "interval", "hash_algorithm", "canonicalization"],
+      "properties": {
+        "unit": {"const": "unicode_code_points"},
+        "interval": {"const": "half_open"},
+        "hash_algorithm": {"const": "sha256"},
+        "canonicalization": {"const": "exact_string_utf8_v1"}
+      },
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "required": ["claims_schema_version", "influence_map"],
+      "properties": {
+        "claims_schema_version": {"type": "string", "minLength": 1},
+        "influence_map": {
+          "type": "object",
+          "required": ["gate"],
+          "properties": {
+            "gate": {
+              "enum": [
+                "ok",
+                "no_influence_map",
+                "influence_measurement_unavailable",
+                "influence_measurement_error",
+                "answer_text_mismatch",
+                "no_resolvable_answer_spans"
+              ],
+              "description": "'ok' means the influence measurement was consulted and reconciled with this run's answer text -- individual claims below may still land on any status. Any other value means the measurement gate itself failed for the WHOLE run, before any per-claim comparison could run; every factual claim's status is then measurement_unavailable with this same reason."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "results": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/result"}
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "method": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "enum": [
+            "forced_score_intervention",
+            "textual_overlap",
+            "numeric_or_date_mismatch",
+            "direct_negation",
+            "measured_comparison_no_match",
+            "category_rule",
+            "no_influence_map",
+            "influence_measurement_unavailable",
+            "influence_measurement_error",
+            "answer_text_mismatch",
+            "no_resolvable_answer_spans"
+          ]
+        },
+        "max_abs_delta_nats": {
+          "type": "number",
+          "minimum": 0,
+          "description": "The strongest causally_supported link's magnitude backing a 'supported' status. Not a magnitude claim comparable across differently-sized spans -- see clozn.context_answer_influence.v1's own Link.abs_delta_nats caveat."
+        },
+        "overlap_fraction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Fraction of the claim's own content words echoed in the best-matching supplied source span, backing a 'weakly_supported' status."
+        }
+      },
+      "additionalProperties": false
+    },
+    "result": {
+      "type": "object",
+      "required": ["claim_index", "claim_address_id", "status", "method"],
+      "properties": {
+        "claim_index": {"type": "integer", "minimum": 0},
+        "claim_address_id": {
+          "type": "string",
+          "pattern": "^span_[0-9a-f]{24}$",
+          "description": "The exact text_span.address_id of the corresponding claim in the source clozn.answer-claims.v1 document."
+        },
+        "status": {
+          "enum": [
+            "supported",
+            "weakly_supported",
+            "contradicted",
+            "unsupported_by_supplied_materials",
+            "unverifiable_from_available_evidence",
+            "measurement_unavailable"
+          ]
+        },
+        "method": {"$ref": "#/$defs/method"},
+        "source_span_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^span_[0-9a-f]{24}$"
+          },
+          "description": "Real clozn.text-span-addresses.v1 address_id values for the supplied-source spans that produced this status. Present only for supported/weakly_supported/contradicted -- omitted, never an empty list, for every other status."
+        }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": ["source_span_ids"],
+          "properties": {
+            "status": {"const": "supported"},
+            "method": {"properties": {"name": {"const": "forced_score_intervention"}}}
+          }
+        },
+        {
+          "required": ["source_span_ids"],
+          "properties": {
+            "status": {"const": "weakly_supported"},
+            "method": {"properties": {"name": {"const": "textual_overlap"}}}
+          }
+        },
+        {
+          "required": ["source_span_ids"],
+          "properties": {
+            "status": {"const": "contradicted"},
+            "method": {"properties": {"name": {"enum": ["numeric_or_date_mismatch", "direct_negation"]}}}
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "unsupported_by_supplied_materials"},
+            "method": {"properties": {"name": {"const": "measured_comparison_no_match"}}},
+            "source_span_ids": false
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "unverifiable_from_available_evidence"},
+            "method": {"properties": {"name": {"const": "category_rule"}}},
+            "source_span_ids": false
+          }
+        },
+        {
+          "properties": {
+            "status": {"const": "measurement_unavailable"},
+            "method": {
+              "properties": {
+                "name": {
+                  "enum": [
+                    "no_influence_map",
+                    "influence_measurement_unavailable",
+                    "influence_measurement_error",
+                    "answer_text_mismatch",
+                    "no_resolvable_answer_spans"
+                  ]
+                }
+              }
+            },
+            "source_span_ids": false
+          }
+        }
+      ]
+    }
+  }
+}
