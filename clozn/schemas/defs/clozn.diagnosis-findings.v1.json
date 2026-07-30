@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.diagnosis-findings.v1",
+  "title": "Deterministic rule-engine findings over one run's persisted evidence (D1)",
+  "description": "clozn.runs.diagnosis_rules.evaluate()'s output: a fixed catalog of deterministic rules, each evaluated against ONE run's already-persisted evidence (context receipt, messages, influence map, finish/termination, and an optional comparison run) with no LLM involved anywhere in the evaluation. This is a DIFFERENT artifact from clozn.run_diagnosis.v1 (clozn/runs/diagnosis.py, an unregistered informal schema): that module explains WHY a single request was SLOW or CUT OFF from timing/journal fields (status vocabulary observed/not_observed/unavailable, one fixed handful of named findings). This schema instead runs a FIXED CATALOG of PROMPT/EXECUTION PROBLEM rules (conflicting instructions, omitted input, format mismatches, measurement-floor evidence, run-to-run drift, and more) and every evaluation ALWAYS reports one entry per known rule_id, never a variable-length list of only the rules that fired. Neither schema replaces the other; a future slice may compose both under one investigation view, but this schema does not read or embed clozn.run_diagnosis.v1 documents, and clozn.run_diagnosis.v1 is unchanged by this file's existence. Every rule that touches text cites a stable clozn.text-span-addresses.v1 address_id (clozn.runs.text_span_addresses, reused verbatim) rather than inventing a second addressing scheme; a rule whose evidence is a structured field (finish_reason, a token count, a differing setting) cites that field's dotted path and value instead. Every rule always produces exactly one entry in `findings`, discriminated by `status`: 'finding' (a detected issue, carrying severity/confidence/suggested_actions), 'not_observed' (the rule ran and found nothing), 'unavailable' (the rule could not evaluate -- a reason is always given, never a silent skip), 'pending' (the rule needs evidence that was never attempted for this run, e.g. no influence map, no comparison run -- distinct from 'unavailable', which means evidence exists but could not be read), and 'suppressed' (the caller explicitly suppressed this rule_id for this call). `suggested_actions[].kind` anticipates D3's clozn.corrective-flow.v1 action-kind vocabulary, which does not exist as a registered schema yet; this module OWNS the provisional kind names below until D3 defines its own, and callers must not assume D3 will keep them verbatim.",
+
+  "type": "object",
+  "required": ["schema_version", "generated_at", "run_id", "redacted", "rule_registry",
+               "suppressed_rule_ids", "findings", "summary"],
+
+  "$defs": {
+    "evidence_field": {
+      "type": "object",
+      "description": "A structured, non-text field this finding rests on -- a dotted path into the run record plus the exact value read.",
+      "required": ["kind", "path"],
+      "properties": {
+        "kind": {"const": "field"},
+        "path": {"type": "string", "minLength": 1},
+        "value": {},
+        "note": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "evidence_text_span": {
+      "type": "object",
+      "description": "A reference into an ALREADY-BUILT clozn.text-span-addresses.v1 document -- address_id is the one stable, reusable identity; local_start/local_end (when present) are a sentence-level sub-range WITHIN that same addressed text, for a human reader's benefit, never a second addressing authority.",
+      "required": ["kind", "address_id"],
+      "properties": {
+        "kind": {"const": "text_span"},
+        "address_id": {"type": "string", "pattern": "^span_[0-9a-f]{24}$"},
+        "message_index": {"type": "integer", "minimum": 0},
+        "local_start": {"type": "integer", "minimum": 0},
+        "local_end": {"type": "integer", "minimum": 0},
+        "note": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "evidence": {
+      "oneOf": [{"$ref": "#/$defs/evidence_field"}, {"$ref": "#/$defs/evidence_text_span"}]
+    },
+    "suggested_action": {
+      "type": "object",
+      "required": ["kind", "description"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "resend_context", "increase_context_budget", "reconcile_conflicting_instructions",
+            "deduplicate_instructions", "deduplicate_source_content", "clarify_output_format",
+            "move_instruction_near_request", "reinforce_low_effect_source",
+            "resupply_below_floor_source", "restate_conversation_instruction",
+            "increase_max_tokens", "reconfirm_run_configuration", "no_action_available"
+          ]
+        },
+        "description": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "finding_status_entry": {
+      "type": "object",
+      "description": "status == 'finding': a detected issue. The only status carrying severity/confidence/suggested_actions.",
+      "required": ["rule_id", "rule_name", "status", "severity", "confidence", "summary", "evidence",
+                   "suggested_actions", "limitations"],
+      "properties": {
+        "rule_id": {"type": "string", "pattern": "^R[0-9]{2}$"},
+        "rule_name": {"type": "string", "minLength": 1},
+        "status": {"const": "finding"},
+        "severity": {"enum": ["info", "low", "medium", "high"]},
+        "confidence": {
+          "enum": ["exact", "pattern_match", "derived"],
+          "description": "exact: read directly off an unambiguous structured field. pattern_match: a deterministic text-pattern rule with inherent semantic risk. derived: computed from a threshold/ratio over measured evidence."
+        },
+        "summary": {"type": "string", "minLength": 1},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}},
+        "suggested_actions": {"type": "array", "items": {"$ref": "#/$defs/suggested_action"}},
+        "limitations": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      },
+      "additionalProperties": false
+    },
+    "other_status_entry": {
+      "type": "object",
+      "description": "status in not_observed/unavailable/pending/suppressed -- never carries severity/confidence/suggested_actions (roadmap rule: omit, never null-pad a field that does not apply).",
+      "required": ["rule_id", "rule_name", "status", "summary", "evidence", "limitations"],
+      "properties": {
+        "rule_id": {"type": "string", "pattern": "^R[0-9]{2}$"},
+        "rule_name": {"type": "string", "minLength": 1},
+        "status": {"enum": ["not_observed", "unavailable", "pending", "suppressed"]},
+        "summary": {"type": "string", "minLength": 1},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}},
+        "limitations": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      },
+      "additionalProperties": false
+    },
+    "finding_entry": {
+      "oneOf": [{"$ref": "#/$defs/finding_status_entry"}, {"$ref": "#/$defs/other_status_entry"}]
+    },
+    "rule_registry_entry": {
+      "type": "object",
+      "required": ["rule_id", "rule_name"],
+      "properties": {
+        "rule_id": {"type": "string", "pattern": "^R[0-9]{2}$"},
+        "rule_name": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "object",
+      "required": ["status_counts"],
+      "properties": {
+        "status_counts": {
+          "type": "object",
+          "required": ["finding", "not_observed", "unavailable", "pending", "suppressed"],
+          "properties": {
+            "finding": {"type": "integer", "minimum": 0},
+            "not_observed": {"type": "integer", "minimum": 0},
+            "unavailable": {"type": "integer", "minimum": 0},
+            "pending": {"type": "integer", "minimum": 0},
+            "suppressed": {"type": "integer", "minimum": 0}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+
+  "properties": {
+    "schema_version": {"const": "clozn.diagnosis-findings.v1"},
+    "generated_at": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "comparison_run_id": {
+      "type": "string", "minLength": 1,
+      "description": "Present only when a comparison run was supplied to evaluate() -- omitted, never null, otherwise."
+    },
+    "redacted": {"type": "boolean", "description": "Whether this run's text was found redacted at evaluation time -- always computable, so always present."},
+    "rule_registry": {
+      "type": "array", "items": {"$ref": "#/$defs/rule_registry_entry"}, "minItems": 1,
+      "description": "The fixed catalog of rules this engine version knows, in evaluation order -- exactly the set of rule_ids that will appear in findings."
+    },
+    "suppressed_rule_ids": {
+      "type": "array", "items": {"type": "string", "pattern": "^R[0-9]{2}$"},
+      "description": "Echoed back from the caller's suppressed_rule_ids argument -- a parameter, not a config file (config wiring is a later slice)."
+    },
+    "findings": {
+      "type": "array", "items": {"$ref": "#/$defs/finding_entry"}, "minItems": 1,
+      "description": "Exactly one entry per rule_registry entry, in the same order -- a rule is never omitted from this array for any reason, including suppression (see status=='suppressed')."
+    },
+    "summary": {"$ref": "#/$defs/summary"}
+  },
+  "additionalProperties": false
+}
