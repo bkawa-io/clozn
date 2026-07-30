@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.correction-export.v1",
+  "title": "F5: a portable export of one correction and its complete append-only event ledger",
+  "description": "Built by clozn.runs.corrections.export_correction(). Carries the correction's current stored document (clozn.correction.v1 -- content omitted if it has been deleted, exactly as the live record reads) plus every event ever recorded against it, oldest first, never filtered or summarized: drafted/confirmed/disabled/enabled/deleted/undone lifecycle events, plus applied/conflict_lost events tying this correction to specific runs. Exporting never mutates the correction or its ledger.",
+  "type": "object",
+  "required": ["schema_version", "correction_id", "exported_ts", "correction", "events"],
+  "additionalProperties": false,
+
+  "$defs": {
+    "event": {
+      "type": "object",
+      "required": ["seq", "event_type", "event_ts"],
+      "additionalProperties": false,
+      "properties": {
+        "seq": {"type": "integer", "minimum": 1},
+        "event_type": {
+          "type": "string",
+          "enum": ["drafted", "confirmed", "disabled", "enabled", "deleted", "applied", "conflict_lost"]
+        },
+        "event_ts": {"type": "number", "minimum": 0},
+        "run_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Present only on 'applied' and 'conflict_lost' events -- the run this correction shaped, or was surfaced-but-outvoted for."
+        },
+        "detail": {
+          "type": "object",
+          "description": "Event-specific context, e.g. an 'undo_of' event sequence number, a conflict's winner_id/rule for a conflict_lost row, or a deleted_reason string for a deleted row."
+        }
+      }
+    }
+  },
+
+  "properties": {
+    "schema_version": {"const": "clozn.correction-export.v1"},
+    "correction_id": {"type": "string", "pattern": "^corr_[0-9a-f]{24}$"},
+    "exported_ts": {"type": "number", "minimum": 0},
+    "correction": {"type": "object", "description": "The clozn.correction.v1 document as currently stored."},
+    "events": {"type": "array", "items": {"$ref": "#/$defs/event"}}
+  }
+}

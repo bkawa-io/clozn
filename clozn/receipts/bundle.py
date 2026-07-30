@@ -207,6 +207,22 @@ def _context_receipt_markdown(run: dict) -> str:
                      "not omitted by oversight._")
     elif not content_present:
         lines.append("_full assembled/rendered text not captured for this run._")
+
+    # F5 (Teach Once): every applied correction is rendered here unconditionally when present -- this is
+    # the acceptance-criterion surface restated in the human-readable export, not a separate opt-in.
+    applied = receipt.get("applied_corrections")
+    if isinstance(applied, list) and applied:
+        lines.append(f"\napplied corrections: {len(applied)}")
+        for entry in applied:
+            scope = entry.get("scope") or {}
+            scope_text = scope.get("kind", "?") + (f"={scope['value']}" if scope.get("value") else "")
+            lines.append(f"  - {entry.get('correction_id')} ({entry.get('type')}, scope: {scope_text})")
+    conflicts = receipt.get("correction_conflicts")
+    if isinstance(conflicts, list) and conflicts:
+        lines.append(f"correction conflicts surfaced: {len(conflicts)}")
+        for c in conflicts:
+            lines.append(f"  - {c.get('type')}: {c.get('winner_id')} won over "
+                         f"{', '.join(c.get('losing_ids') or [])} (rule: {c.get('rule')})")
     return "\n".join(lines)
 
 

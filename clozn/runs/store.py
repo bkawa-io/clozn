@@ -373,7 +373,9 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
            project_key: str | None = None,
            output_contract: dict | None = None,
            sections: list | None = None,
-           execution_fork_receipt: dict | None = None) -> str | None:
+           execution_fork_receipt: dict | None = None,
+           applied_corrections: list | None = None,
+           correction_conflicts: list | None = None) -> str | None:
     """Persist a completed run and return its id. Logging failures remain non-fatal.
 
     `identity` (roadmap S4.3): the immutable reproduction-identity block from
@@ -389,7 +391,18 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
     product along with the rest of memory on 2026-07-27). Stored as the top-level `sections` field ONLY
     when non-empty; an old caller that never passes it (every replay/fork/timetravel call site today) gets
     exactly the schema it always got -- no `sections` key at all, not a null or empty list -- so this is
-    purely additive and nothing downstream needs to special-case its absence."""
+    purely additive and nothing downstream needs to special-case its absence.
+
+    `applied_corrections`/`correction_conflicts` (F5, "Teach Once" scoped correction store): the trimmed
+    output of `clozn.runs.corrections.resolve_corrections()`, attached ONCE, here, at run creation --
+    runs are immutable, so this is the only moment a run can ever carry which corrections shaped it.
+    Threaded straight through into `build_context_receipt()`, which folds the same lists into the run's
+    `context_receipt`, so the acceptance criterion "no correction applies without appearing in the
+    delivered-context receipt" is a property of this one code path, not something a caller has to
+    remember to duplicate. `clozn.runs.corrections.apply_and_record()` is the intended single entry point
+    that supplies both -- see that function's own docstring for the exact structural guarantee and its
+    honest limits. A caller that never passes either (every call site today) gets exactly the schema it
+    always got: no `applied_corrections` key at all."""
     try:
         _ensure()
         started = started if started is not None else time.time()
@@ -441,6 +454,8 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
             run_id=rid,
             identity=identity,
             error=error,
+            applied_corrections=applied_corrections,
+            correction_conflicts=correction_conflicts,
         )
         rec = {
             "id": rid,
@@ -482,6 +497,14 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
         }
         if sections:
             rec["sections"] = list(sections)
+        if applied_corrections is not None:
+            # F5: attached exactly once, here, at creation -- runs are immutable, so this is the only
+            # place an "applied_correction_ids" fact can ever land on a run. The same list already went
+            # into context_receipt above; this top-level copy is what clozn.runs.corrections and any
+            # future run-detail surface reads without unpacking the receipt.
+            rec["applied_corrections"] = list(applied_corrections)
+        if correction_conflicts is not None:
+            rec["correction_conflicts"] = list(correction_conflicts)
         if execution_fork_receipt is not None:
             # FORK-01: the generated run id is allocated inside this transaction boundary, so only the
             # store can put that exact id into the immutable receipt before its first (and only) write.

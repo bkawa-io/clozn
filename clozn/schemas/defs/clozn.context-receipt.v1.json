@@ -64,6 +64,37 @@
         "reason": {"$ref": "#/$defs/segment_reason"},
         "detail": {"type": "string"}
       }
+    },
+    "correction_scope_ref": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {"type": "string", "enum": ["session", "client", "model", "project", "global_local"]},
+        "value": {"type": "string", "minLength": 1}
+      }
+    },
+    "applied_correction": {
+      "type": "object",
+      "description": "F5: one clozn.correction.v1 that was in effect for this run, per clozn.runs.corrections.resolve_corrections. Metadata only -- content_hash, never the correction's `content` text -- matching this schema's own top-level convention of never duplicating full text into receipt segments; the correction's own store (clozn.runs.corrections) is the content authority. This entry is the acceptance-criterion surface: a correction that shaped this run's delivered context and is not listed here would be exactly the invisible-personalization failure mode the 2026-07-27 memory-card removal was meant to end.",
+      "required": ["correction_id", "type", "scope", "content_hash"],
+      "properties": {
+        "correction_id": {"type": "string", "pattern": "^corr_[0-9a-f]{24}$"},
+        "type": {"type": "string", "enum": ["output_format", "source_requirement", "style", "forbidden_behavior"]},
+        "scope": {"$ref": "#/$defs/correction_scope_ref"},
+        "content_hash": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+        "confirmed_ts": {"type": "number", "minimum": 0}
+      }
+    },
+    "correction_conflict": {
+      "type": "object",
+      "description": "F5: a same-type correction conflict that was surfaced while resolving this run's scope context, whether or not precedence produced a winner. Never omitted just because a winner was found -- see clozn.correction-resolution.v1's own description.",
+      "required": ["type", "winner_id", "losing_ids", "rule"],
+      "properties": {
+        "type": {"type": "string", "enum": ["output_format", "source_requirement", "style", "forbidden_behavior"]},
+        "winner_id": {"type": "string", "pattern": "^corr_[0-9a-f]{24}$"},
+        "losing_ids": {"type": "array", "items": {"type": "string", "pattern": "^corr_[0-9a-f]{24}$"}},
+        "rule": {"type": "string", "enum": ["precedence", "most_recently_confirmed", "correction_id"]}
+      }
     }
   },
 
@@ -152,6 +183,17 @@
       "type": "string",
       "enum": ["full", "metadata_only", "hashes_only", "off"],
       "description": "The receipt-privacy tier active when this document was built (clozn.runs.receipt_privacy). Governs how much of THIS artifact's own duplicated content was retained -- independent of the run-level redact/delete lifecycle that governs run['messages'] etc."
+    },
+
+    "applied_corrections": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/applied_correction"},
+      "description": "F5 (Teach Once): every scoped correction that was in effect when this run's context was assembled, per clozn.runs.corrections.resolve_corrections. Absent (never an empty-list guess) on any run recorded before this field existed, and on any run where no caller passed resolved corrections into clozn.runs.store.record -- an absent key means 'no correction evidence was computed for this run', not 'zero corrections applied'. An empty list means corrections WERE resolved and none matched this run's declared scope."
+    },
+    "correction_conflicts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/correction_conflict"},
+      "description": "F5: same-type correction conflicts surfaced while resolving this run's scope context, including ones precedence already resolved. Present only alongside applied_corrections; omitted (not emptied) when corrections were never resolved for this run."
     }
   }
 }

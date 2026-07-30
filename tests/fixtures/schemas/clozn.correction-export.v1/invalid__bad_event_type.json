@@ -1,0 +1,9 @@
+{
+  "schema_version": "clozn.correction-export.v1",
+  "correction_id": "corr_0123456789abcdef01234567",
+  "exported_ts": 200.0,
+  "correction": {"schema_version": "clozn.correction.v1", "id": "corr_0123456789abcdef01234567"},
+  "events": [
+    {"seq": 1, "event_type": "topic_matched", "event_ts": 100.0}
+  ]
+}

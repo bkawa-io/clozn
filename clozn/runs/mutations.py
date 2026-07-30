@@ -20,8 +20,8 @@ REDACTION_SCHEMA = "clozn.run_redaction.v1"
 LITERAL_REDACTION_SCHEMA = "clozn.run_literal_redaction.v1"
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _REMOVED_FIELDS = (
-    "assembled_messages", "behavior", "changes_applied", "client_key",
-    "client_key_source", "context_receipt", "error", "final_prompt", "memory",
+    "applied_corrections", "assembled_messages", "behavior", "changes_applied", "client_key",
+    "client_key_source", "context_receipt", "correction_conflicts", "error", "final_prompt", "memory",
     "influence_map", "messages", "meta", "output_contract", "project_key", "prompt_summary",
     "reasoning", "response", "response_summary", "session_key", "tiny_tests",
     "trace", "warnings",
