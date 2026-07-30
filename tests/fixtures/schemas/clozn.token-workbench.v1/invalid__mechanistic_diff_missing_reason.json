@@ -1,0 +1,18 @@
+{
+  "schema_version": "clozn.token-workbench.v1",
+  "run_id": "run_0019fb1479b18_96e8c5",
+  "index": 1,
+  "sections": {
+    "run": {"id": "run_0019fb1479b18_96e8c5"},
+    "token": {"index": 1, "piece": " two", "alternatives": []},
+    "context": {"state": "unavailable"},
+    "comparison": {"state": "unavailable"},
+    "readouts": {"state": "unavailable"}
+  },
+  "capabilities": {
+    "exact_fork": {"available": false, "snapshot_state": "worker_unreachable"},
+    "source_measurement": {"available": false, "status": "unavailable"},
+    "causal_trace": {"available": false, "status": "unavailable"},
+    "mechanistic_diff": {"available": false}
+  }
+}

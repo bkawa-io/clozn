@@ -1,0 +1,65 @@
+{
+  "schema_version": "clozn.token-workbench.v1",
+  "run_id": "run_0019fb1479b18_96e8c5",
+  "index": 1,
+  "sections": {
+    "run": {
+      "id": "run_0019fb1479b18_96e8c5",
+      "model": "fixture-model",
+      "substrate": "engine",
+      "source": "engine_chat",
+      "token_count": 3,
+      "href": "/runs/run_0019fb1479b18_96e8c5"
+    },
+    "token": {
+      "index": 1,
+      "piece": " two",
+      "prefix_kept": "one",
+      "alternatives": []
+    },
+    "context": {
+      "state": "unavailable",
+      "reason": "no context receipt was recorded for this run"
+    },
+    "comparison": {
+      "state": "unavailable",
+      "reason": "no unambiguous earlier compatible run was found automatically; pass ?reference_run_id= to choose one explicitly"
+    },
+    "readouts": {
+      "state": "unavailable",
+      "reason": "no per-token measurements were recorded at this position"
+    }
+  },
+  "capabilities": {
+    "exact_fork": {
+      "available": false,
+      "snapshot_state": "worker_unreachable",
+      "reason": "no live engine worker is currently reachable",
+      "action": {"method": "POST", "href": "/runs/run_0019fb1479b18_96e8c5/fork"}
+    },
+    "source_measurement": {
+      "available": false,
+      "status": "unavailable",
+      "reason": "neither context delivery nor prompt/source influence evidence is available",
+      "action": {
+        "method": "POST",
+        "href": "/runs/run_0019fb1479b18_96e8c5/influence-map/jobs",
+        "request_body": {}
+      }
+    },
+    "causal_trace": {
+      "available": false,
+      "status": "unavailable",
+      "reason": "no live engine worker is currently reachable",
+      "action": {
+        "method": "POST",
+        "href": "/runs/run_0019fb1479b18_96e8c5/causal-trace",
+        "request_body": {"position": 1}
+      }
+    },
+    "mechanistic_diff": {
+      "available": false,
+      "reason": "no reference run selected; pass ?reference_run_id= naming a run from a DIFFERENT model to compare against"
+    }
+  }
+}
