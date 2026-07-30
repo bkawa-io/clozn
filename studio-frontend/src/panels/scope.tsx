@@ -1,10 +1,17 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Icon } from "../components/Icon";
 import { createFork, loadRunInspection, loadRuntimeState } from "../data/api";
 import { DEMO_OBSERVATORY } from "../data/demo";
 import { stressFixture } from "../data/stress";
 import type { ForkState, ObservatoryData } from "../data/types";
 import { Observatory } from "../features/observatory/Observatory";
+import {
+  parseScopeUrl,
+  scopeRouteParams,
+  scopeStateFromParams,
+  serializeScopeUrl,
+  type ScopeSelectionState,
+} from "../features/observatory/urlState";
 import { useTopbar } from "./topbar";
 import type { PanelContext, StudioPanel } from "./types";
 
@@ -18,7 +25,7 @@ import type { PanelContext, StudioPanel } from "./types";
  * The logic below is moved verbatim, not rewritten. It reports its topbar content through `useTopbar`
  * because App cannot see inside a panel, and should not.
  */
-function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
+export function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
   const [data, setData] = useState<ObservatoryData>(DEMO_OBSERVATORY);
   const [runStatus, setRunStatus] = useState<"idle" | "loading" | "error">("idle");
   const [forkState, setForkState] = useState<ForkState>({ status: "idle" });
@@ -28,6 +35,7 @@ function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
 
   const runId = params.runId;
   const fixture = params.fixture;
+  const routeState = scopeStateFromParams(params);
 
   useEffect(() => {
     if (runId) void selectRun(runId);
@@ -114,6 +122,13 @@ function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
   );
 
   const tokenIndex = params.tokenIndex == null ? undefined : Number(params.tokenIndex);
+  const initialState = data.mode === "run" && data.id === runId
+    ? routeState
+    : undefined;
+  const replaceScopeState = useCallback((state: ScopeSelectionState) => {
+    if (data.mode !== "run" || runStatus !== "idle") return;
+    history.replaceState(null, "", serializeScopeUrl(data.id, state));
+  }, [data.id, data.mode, runStatus]);
 
   return (
     <Observatory
@@ -124,7 +139,8 @@ function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
       forkState={forkState}
       onSelectRun={(nextRunId) => void selectRun(nextRunId)}
       onFork={(position, token) => void forkRun(position, token)}
-      initialTokenIndex={tokenIndex}
+      initialState={initialState ?? (tokenIndex == null ? undefined : { token: tokenIndex })}
+      onStateChange={replaceScopeState}
     />
   );
 }
@@ -135,15 +151,11 @@ const panel: StudioPanel = {
   order: 30,
   icon: () => <Icon name="observatory" />,
   match: (hash) => {
-    // `#/runs/<id>/scope[?token=N]` -- must be tried before lens's bare `#/runs/<id>`, which nav order
+    // `#/runs/<id>/scope?...` -- must be tried before lens's bare `#/runs/<id>`, which nav order
     // (30 < 20 is false, so lens IS tried first) does NOT guarantee. Lens's pattern is anchored to end
     // of string and therefore cannot match a `/scope` suffix, which is what actually keeps them apart.
-    const deep = hash.match(/^#\/runs\/([^/]+)\/scope(?:\?token=(\d+))?$/);
-    if (deep) {
-      const params: Record<string, string> = { runId: decodeURIComponent(deep[1]) };
-      if (deep[2] != null) params.tokenIndex = deep[2];
-      return params;
-    }
+    const deep = parseScopeUrl(hash);
+    if (deep) return scopeRouteParams(deep);
     const withFixture = hash.match(/^#\/scope\/?\?fixture=([^&]+)$/);
     if (withFixture) return { fixture: decodeURIComponent(withFixture[1]) };
     return /^#\/scope\/?$/.test(hash) ? {} : null;

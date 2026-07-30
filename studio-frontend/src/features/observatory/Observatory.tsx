@@ -7,9 +7,10 @@ import { LayerScope } from "./LayerScope";
 import { TraceScope } from "./TraceScope";
 import { VariantDeltaPlot } from "./VariantDeltaPlot";
 import { VariantScope } from "./VariantScope";
+import type { ScopeSelectionState, ScopeUrlState, ScopeView } from "./urlState";
 import { describeVariant, dialDifferences } from "./variant";
 
-interface ObservatoryProps {
+export interface ObservatoryProps {
   data: ObservatoryData;
   runtime: RuntimeState;
   inspectorOpen: boolean;
@@ -17,10 +18,9 @@ interface ObservatoryProps {
   forkState: ForkState;
   onSelectRun: (runId: string) => void;
   onFork: (position: number, token: string) => void;
-  initialTokenIndex?: number;
+  initialState?: ScopeUrlState;
+  onStateChange?: (state: ScopeSelectionState) => void;
 }
-
-type ScopeView = "trace" | "variants" | "layers";
 
 function formatPercent(value: number) {
   return `${Math.round(value * 100)}%`;
@@ -44,7 +44,24 @@ function defaultReferenceId(data: ObservatoryData, runtime: RuntimeState) {
   return samePrompt?.id ?? "";
 }
 
-export function Observatory({
+function clampToken(data: ObservatoryData, requested?: number) {
+  if (!data.tokens.length) return 0;
+  return Math.max(0, Math.min(data.tokens.length - 1, requested ?? initialToken(data)));
+}
+
+function clampLayer(runtime: RuntimeState, requested?: number) {
+  const value = Math.max(0, requested ?? 0);
+  const count = runtime.engine?.layerCount;
+  return count == null || count <= 0 ? value : Math.min(count - 1, value);
+}
+
+function initialView(data: ObservatoryData, requested?: ScopeView): ScopeView {
+  if (requested === "layers" && (data.mode !== "run" || !data.response?.trim())) return "trace";
+  if (requested === "variants" && data.mode !== "run") return "trace";
+  return requested ?? "trace";
+}
+
+function ObservatoryWorkspace({
   data,
   runtime,
   inspectorOpen,
@@ -52,27 +69,20 @@ export function Observatory({
   forkState,
   onSelectRun,
   onFork,
-  initialTokenIndex,
+  initialState,
+  onStateChange,
 }: ObservatoryProps) {
-  const [selectedLayer, setSelectedLayer] = useState(0);
-  const [selectedToken, setSelectedToken] = useState(() => initialToken(data));
-  const [view, setView] = useState<ScopeView>("trace");
+  const [selectedLayer, setSelectedLayer] = useState(() => clampLayer(runtime, initialState?.layer));
+  const [selectedToken, setSelectedToken] = useState(() => clampToken(data, initialState?.token));
+  const [view, setView] = useState<ScopeView>(() => initialView(data, initialState?.view));
   const [forkToken, setForkToken] = useState("");
-  const [variantReferenceId, setVariantReferenceId] = useState(() => defaultReferenceId(data, runtime));
+  const [variantReferenceId, setVariantReferenceId] = useState(() => {
+    const requested = initialState?.reference;
+    if (requested === data.id) return "";
+    return requested ?? defaultReferenceId(data, runtime);
+  });
   const [variantReference, setVariantReference] = useState<ObservatoryData | null>(null);
   const [variantStatus, setVariantStatus] = useState<"idle" | "loading" | "error">("idle");
-
-  useEffect(() => {
-    setSelectedToken(
-      initialTokenIndex == null
-        ? initialToken(data)
-        : Math.max(0, Math.min(data.tokens.length - 1, initialTokenIndex)),
-    );
-    setSelectedLayer(0);
-    setView("trace");
-    setVariantReferenceId(defaultReferenceId(data, runtime));
-    setVariantReference(null);
-  }, [data, initialTokenIndex]);
 
   const layersAvailable = data.mode === "run" && Boolean(data.response?.trim());
   const activeView: ScopeView = view === "layers" && !layersAvailable
@@ -110,6 +120,15 @@ export function Observatory({
     : 0;
   const tapeEnd = Math.min(data.tokens.length, tapeStart + tapeLimit);
   const tapeTokens = data.tokens.slice(tapeStart, tapeEnd);
+
+  useEffect(() => {
+    onStateChange?.({
+      view: activeView,
+      token: selectedToken,
+      reference: variantReferenceId || undefined,
+      layer: selectedLayer,
+    });
+  }, [activeView, onStateChange, selectedLayer, selectedToken, variantReferenceId]);
 
   useEffect(() => {
     if (!variantReferenceId || variantReferenceId === data.id) {
@@ -520,4 +539,17 @@ export function Observatory({
       </section>
     </>
   );
+}
+
+export function Observatory(props: ObservatoryProps) {
+  const { data, initialState, runtime } = props;
+  const resetKey = [
+    data.id,
+    initialState?.view ?? "",
+    initialState?.token ?? "",
+    initialState?.reference ?? "",
+    initialState?.layer ?? "",
+    runtime.engine?.layerCount ?? "",
+  ].join("\u0000");
+  return <ObservatoryWorkspace key={resetKey} {...props} />;
 }
