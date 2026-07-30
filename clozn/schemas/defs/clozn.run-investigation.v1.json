@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.run-investigation.v1",
+  "title": "Read-only synthesis of the evidence and actions available for one recorded run",
+  "description": "A projection over existing immutable run artifacts. Outer states describe availability/outcome only; artifact-native schemas, statuses, methods, thresholds, and reasons remain present and are never collapsed into a cross-method numeric score. Building this document must not execute a model measurement or mutate a run.",
+  "type": "object",
+  "required": ["schema_version", "run_id", "sections", "actions", "unavailable_measurements"],
+  "$defs": {
+    "state": {
+      "enum": [
+        "supported",
+        "measured_effect",
+        "below_measurement_floor",
+        "delivered_not_measured",
+        "omitted",
+        "unavailable",
+        "failed",
+        "inconclusive"
+      ]
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["schema", "method"],
+      "properties": {
+        "schema": {"type": "string", "minLength": 1},
+        "method": {"type": "string", "minLength": 1},
+        "native_status": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "section": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {"$ref": "#/$defs/state"},
+        "artifact": {"$ref": "#/$defs/artifact"},
+        "reason": {"type": "string", "minLength": 1},
+        "action_id": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": true
+    },
+    "action": {
+      "type": "object",
+      "required": ["id", "label", "kind", "method", "href", "availability"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "kind": {"enum": ["measurement", "navigation", "corrective"]},
+        "method": {"enum": ["GET", "POST"]},
+        "href": {"type": "string", "minLength": 1},
+        "availability": {"enum": ["ready", "conditional", "unavailable"]},
+        "reason": {"type": "string", "minLength": 1},
+        "request_body": {"type": "object"},
+        "requires": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        }
+      },
+      "additionalProperties": false
+    },
+    "unavailable_measurement": {
+      "type": "object",
+      "required": ["id", "state", "reason"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "state": {
+          "enum": ["delivered_not_measured", "unavailable", "failed", "inconclusive"]
+        },
+        "reason": {"type": "string", "minLength": 1},
+        "action_id": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    }
+  },
+  "properties": {
+    "schema_version": {"const": "clozn.run-investigation.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "sections": {
+      "type": "object",
+      "required": [
+        "received_context",
+        "prompt_source_influence",
+        "answer_support",
+        "diagnosis",
+        "comparisons",
+        "corrective_actions"
+      ],
+      "properties": {
+        "received_context": {"$ref": "#/$defs/section"},
+        "prompt_source_influence": {"$ref": "#/$defs/section"},
+        "answer_support": {"$ref": "#/$defs/section"},
+        "text_span_addresses": {
+          "$ref": "#/$defs/section",
+          "description": "Optional additive link/summary for clozn.text-span-addresses.v1. Older v1 investigation documents and clients remain valid without it."
+        },
+        "diagnosis": {"$ref": "#/$defs/section"},
+        "comparisons": {"$ref": "#/$defs/section"},
+        "corrective_actions": {"$ref": "#/$defs/section"}
+      },
+      "additionalProperties": false
+    },
+    "actions": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/action"}
+    },
+    "unavailable_measurements": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/unavailable_measurement"}
+    }
+  },
+  "additionalProperties": false
+}

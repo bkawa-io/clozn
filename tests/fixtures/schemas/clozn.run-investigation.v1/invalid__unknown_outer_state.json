@@ -1,0 +1,14 @@
+{
+  "schema_version": "clozn.run-investigation.v1",
+  "run_id": "run_fixture",
+  "sections": {
+    "received_context": {"state": "probably_used"},
+    "prompt_source_influence": {"state": "unavailable"},
+    "answer_support": {"state": "unavailable"},
+    "diagnosis": {"state": "supported"},
+    "comparisons": {"state": "unavailable"},
+    "corrective_actions": {"state": "unavailable"}
+  },
+  "actions": [],
+  "unavailable_measurements": []
+}

@@ -1,0 +1,60 @@
+{
+  "schema_version": "clozn.text-span-addresses.v1",
+  "run_id": "run_child",
+  "privacy": "metadata_only",
+  "offset_contract": {
+    "unit": "unicode_code_points",
+    "interval": "half_open",
+    "hash_algorithm": "sha256",
+    "canonicalization": "exact_string_utf8_v1"
+  },
+  "source_artifacts": [
+    {
+      "schema": "clozn.context_answer_influence.v1",
+      "native_status": "ok",
+      "available": true,
+      "method": {
+        "name": "forced scoring",
+        "mode": "forced_score_intervention"
+      }
+    }
+  ],
+  "addresses": [
+    {
+      "address_id": "span_0123456789abcdef01234567",
+      "run_id": "run_child",
+      "kind": "answer_span",
+      "relation_key": "rel_0123456789abcdef01234567",
+      "native_ref": {
+        "artifact_schema": "clozn.context_answer_influence.v1",
+        "collection": "influence.answer_spans",
+        "id": "a.t0000"
+      },
+      "resolution": {
+        "state": "metadata_only",
+        "canonical": {
+          "basis": "scored_answer",
+          "unit": "unicode_code_points",
+          "interval": "half_open",
+          "start": 0,
+          "end": 5,
+          "basis_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "span_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "span_code_points": 5
+        }
+      }
+    }
+  ],
+  "lineage": {
+    "parent_run_id": "run_parent",
+    "mappings": [
+      {
+        "relation_key": "rel_0123456789abcdef01234567",
+        "parent_address_id": "span_aaaaaaaaaaaaaaaaaaaaaaaa",
+        "child_address_id": "span_0123456789abcdef01234567",
+        "state": "inherited",
+        "reason": "exact_text_and_hashes_unchanged"
+      }
+    ]
+  }
+}

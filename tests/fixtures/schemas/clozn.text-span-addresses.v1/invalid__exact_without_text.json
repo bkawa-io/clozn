@@ -1,0 +1,41 @@
+{
+  "schema_version": "clozn.text-span-addresses.v1",
+  "run_id": "run_missing_text",
+  "privacy": "full",
+  "offset_contract": {
+    "unit": "unicode_code_points",
+    "interval": "half_open",
+    "hash_algorithm": "sha256",
+    "canonicalization": "exact_string_utf8_v1"
+  },
+  "source_artifacts": [],
+  "addresses": [
+    {
+      "address_id": "span_0123456789abcdef01234567",
+      "run_id": "run_missing_text",
+      "kind": "answer_span",
+      "relation_key": "rel_0123456789abcdef01234567",
+      "native_ref": {
+        "artifact_schema": "clozn.context_answer_influence.v1",
+        "collection": "influence.answer_spans",
+        "id": "a.t0000"
+      },
+      "resolution": {
+        "state": "exact",
+        "canonical": {
+          "basis": "scored_answer",
+          "unit": "unicode_code_points",
+          "interval": "half_open",
+          "start": 0,
+          "end": 3,
+          "basis_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "span_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      }
+    }
+  ],
+  "lineage": {
+    "parent_run_id": null,
+    "mappings": []
+  }
+}

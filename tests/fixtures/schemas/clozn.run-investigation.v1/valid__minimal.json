@@ -1,0 +1,58 @@
+{
+  "schema_version": "clozn.run-investigation.v1",
+  "run_id": "run_fixture",
+  "sections": {
+    "received_context": {
+      "state": "delivered_not_measured",
+      "artifact": {
+        "schema": "clozn.context-receipt.v1",
+        "method": "gateway_context_receipt",
+        "native_status": "new"
+      }
+    },
+    "prompt_source_influence": {
+      "state": "delivered_not_measured",
+      "reason": "no measurement has run",
+      "action_id": "measure_prompt_source_influence"
+    },
+    "answer_support": {
+      "state": "unavailable",
+      "reason": "no verification artifact is stored",
+      "action_id": "check_recorded_influence_entailment"
+    },
+    "diagnosis": {
+      "state": "supported",
+      "artifact": {
+        "schema": "clozn.run_diagnosis.v1",
+        "method": "deterministic_recorded_evidence_rules"
+      }
+    },
+    "comparisons": {
+      "state": "unavailable",
+      "reason": "no comparison run was selected"
+    },
+    "corrective_actions": {
+      "state": "unavailable",
+      "reason": "no actions apply"
+    }
+  },
+  "actions": [
+    {
+      "id": "measure_prompt_source_influence",
+      "label": "Measure what mattered",
+      "kind": "measurement",
+      "method": "POST",
+      "href": "/runs/run_fixture/influence-map/jobs",
+      "availability": "unavailable",
+      "reason": "no worker scorer"
+    }
+  ],
+  "unavailable_measurements": [
+    {
+      "id": "prompt_source_influence",
+      "state": "delivered_not_measured",
+      "reason": "no measurement has run",
+      "action_id": "measure_prompt_source_influence"
+    }
+  ]
+}

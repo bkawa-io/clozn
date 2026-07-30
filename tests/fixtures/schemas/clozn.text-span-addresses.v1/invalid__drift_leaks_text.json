@@ -1,0 +1,43 @@
+{
+  "schema_version": "clozn.text-span-addresses.v1",
+  "run_id": "run_drift_leak",
+  "privacy": "full",
+  "offset_contract": {
+    "unit": "unicode_code_points",
+    "interval": "half_open",
+    "hash_algorithm": "sha256",
+    "canonicalization": "exact_string_utf8_v1"
+  },
+  "source_artifacts": [],
+  "addresses": [
+    {
+      "address_id": "span_0123456789abcdef01234567",
+      "run_id": "run_drift_leak",
+      "kind": "claim",
+      "relation_key": "rel_0123456789abcdef01234567",
+      "native_ref": {
+        "artifact_schema": "clozn.claims.v1",
+        "collection": "derived.claims",
+        "id": "claim-0"
+      },
+      "resolution": {
+        "state": "drifted",
+        "reason": "span_text_hash_mismatch",
+        "canonical": {
+          "basis": "recorded_answer",
+          "unit": "unicode_code_points",
+          "interval": "half_open",
+          "start": 0,
+          "end": 6,
+          "basis_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "span_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "text": "secret"
+        }
+      }
+    }
+  ],
+  "lineage": {
+    "parent_run_id": null,
+    "mappings": []
+  }
+}

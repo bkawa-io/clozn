@@ -1,0 +1,44 @@
+{
+  "schema_version": "clozn.text-span-addresses.v1",
+  "run_id": "run_redacted",
+  "privacy": "metadata_only",
+  "offset_contract": {
+    "unit": "unicode_code_points",
+    "interval": "half_open",
+    "hash_algorithm": "sha256",
+    "canonicalization": "exact_string_utf8_v1"
+  },
+  "source_artifacts": [
+    {
+      "schema": "clozn.context-receipt.v1",
+      "privacy": "hashes_only"
+    }
+  ],
+  "addresses": [
+    {
+      "address_id": "span_89abcdef0123456789abcdef",
+      "run_id": "run_redacted",
+      "kind": "delivered_message",
+      "relation_key": "rel_89abcdef0123456789abcdef",
+      "native_ref": {
+        "artifact_schema": "clozn.context-receipt.v1",
+        "collection": "context_receipt.delivered",
+        "id": "seg_0123456789abcdef",
+        "segment_id": "seg_0123456789abcdef",
+        "recorded_hash": {
+          "algorithm": "sha256_truncated_64bit",
+          "value": "0123456789abcdef",
+          "scope": "canonical_basis"
+        }
+      },
+      "resolution": {
+        "state": "redacted",
+        "reason": "source_text_redacted"
+      }
+    }
+  ],
+  "lineage": {
+    "parent_run_id": null,
+    "mappings": []
+  }
+}

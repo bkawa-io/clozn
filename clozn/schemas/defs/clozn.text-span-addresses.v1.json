@@ -1,0 +1,344 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.text-span-addresses.v1",
+  "title": "Stable run-scoped addresses for prompt, source, answer, and claim text spans",
+  "description": "A read-only projection over immutable run artifacts. Resolved addresses use Unicode-code-point half-open offsets into one exact canonical string and SHA-256 hashes for both that basis and the selected span. Metadata-only projections retain offsets and hashes but omit text. Redacted or legacy evidence that cannot prove those fields remains an unresolved reference; byte counts and truncated legacy hashes are never promoted into exact offsets or SHA-256. Source artifact methods and statuses remain native and no cross-method score is introduced.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "privacy",
+    "offset_contract",
+    "source_artifacts",
+    "addresses",
+    "lineage"
+  ],
+  "properties": {
+    "schema_version": {"const": "clozn.text-span-addresses.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "privacy": {"enum": ["full", "metadata_only"]},
+    "offset_contract": {
+      "type": "object",
+      "required": ["unit", "interval", "hash_algorithm", "canonicalization"],
+      "properties": {
+        "unit": {"const": "unicode_code_points"},
+        "interval": {"const": "half_open"},
+        "hash_algorithm": {"const": "sha256"},
+        "canonicalization": {"const": "exact_string_utf8_v1"}
+      },
+      "additionalProperties": false
+    },
+    "source_artifacts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/source_artifact"}
+    },
+    "addresses": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/address"}
+    },
+    "lineage": {"$ref": "#/$defs/lineage"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "source_artifact": {
+      "type": "object",
+      "required": ["schema"],
+      "properties": {
+        "schema": {"type": "string", "minLength": 1},
+        "native_status": {"type": "string", "minLength": 1},
+        "available": {"type": "boolean"},
+        "privacy": {"type": "string", "minLength": 1},
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Why an expected persisted source is not recorded, unavailable, or invalid. This is a storage/availability statement, not an evidence result."
+        },
+        "artifact_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "method": {
+          "type": "object",
+          "description": "An unchanged copy of the source artifact's method object. It is never normalized into a shared score or method."
+        }
+      },
+      "additionalProperties": false
+    },
+    "recorded_hash": {
+      "type": "object",
+      "required": ["algorithm", "value", "scope"],
+      "properties": {
+        "algorithm": {"enum": ["sha256", "sha256_truncated_64bit"]},
+        "value": {
+          "type": "string",
+          "pattern": "^[0-9a-f]+$"
+        },
+        "scope": {"enum": ["canonical_basis", "span"]}
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {
+            "algorithm": {"const": "sha256"},
+            "value": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          }
+        },
+        {
+          "properties": {
+            "algorithm": {"const": "sha256_truncated_64bit"},
+            "value": {"type": "string", "pattern": "^[0-9a-f]{16}$"}
+          }
+        }
+      ]
+    },
+    "native_ref": {
+      "type": "object",
+      "required": ["artifact_schema", "collection", "id"],
+      "properties": {
+        "artifact_schema": {"type": "string", "minLength": 1},
+        "collection": {
+          "enum": [
+            "context_receipt.delivered",
+            "context_receipt.rendered",
+            "run.messages",
+            "influence.prompt_sources",
+            "influence.prompt_spans",
+            "influence.answer_spans",
+            "derived.claims"
+          ]
+        },
+        "id": {"type": "string", "minLength": 1},
+        "parent_id": {"type": "string", "minLength": 1},
+        "segment_id": {"type": "string", "minLength": 1},
+        "client_source_id": {"type": "string", "minLength": 1},
+        "source_label": {"type": "string"},
+        "selected": {"type": "boolean"},
+        "recorded_hash": {"$ref": "#/$defs/recorded_hash"}
+      },
+      "additionalProperties": false
+    },
+    "canonical_span": {
+      "type": "object",
+      "required": [
+        "basis",
+        "unit",
+        "interval",
+        "start",
+        "end",
+        "basis_sha256",
+        "span_sha256"
+      ],
+      "properties": {
+        "basis": {
+          "enum": [
+            "delivered_message",
+            "rendered_prompt",
+            "attached_source",
+            "scored_answer",
+            "recorded_answer"
+          ]
+        },
+        "unit": {"const": "unicode_code_points"},
+        "interval": {"const": "half_open"},
+        "start": {"type": "integer", "minimum": 0},
+        "end": {"type": "integer", "minimum": 0},
+        "basis_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "span_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "basis_code_points": {"type": "integer", "minimum": 0},
+        "span_code_points": {"type": "integer", "minimum": 0},
+        "basis_utf8_bytes": {"type": "integer", "minimum": 0},
+        "span_utf8_bytes": {"type": "integer", "minimum": 0},
+        "text": {
+          "type": "string",
+          "description": "Present only for a full projection whose exact selected text remains available."
+        }
+      },
+      "additionalProperties": false
+    },
+    "canonical_span_metadata": {
+      "type": "object",
+      "description": "The metadata-only canonical shape deliberately has no text property. This separate closed shape makes a text leak schema-invalid even with the product's stdlib JSON Schema subset.",
+      "required": [
+        "basis",
+        "unit",
+        "interval",
+        "start",
+        "end",
+        "basis_sha256",
+        "span_sha256"
+      ],
+      "properties": {
+        "basis": {
+          "enum": [
+            "delivered_message",
+            "rendered_prompt",
+            "attached_source",
+            "scored_answer",
+            "recorded_answer"
+          ]
+        },
+        "unit": {"const": "unicode_code_points"},
+        "interval": {"const": "half_open"},
+        "start": {"type": "integer", "minimum": 0},
+        "end": {"type": "integer", "minimum": 0},
+        "basis_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "span_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "basis_code_points": {"type": "integer", "minimum": 0},
+        "span_code_points": {"type": "integer", "minimum": 0},
+        "basis_utf8_bytes": {"type": "integer", "minimum": 0},
+        "span_utf8_bytes": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "resolution": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {
+          "enum": ["exact", "metadata_only", "drifted", "redacted", "unavailable"]
+        },
+        "canonical": {"$ref": "#/$defs/canonical_span"},
+        "reason": {
+          "enum": [
+            "native_content_hash_mismatch",
+            "native_rendered_hash_mismatch",
+            "basis_hash_mismatch",
+            "span_text_hash_mismatch",
+            "offset_out_of_bounds",
+            "invalid_offsets",
+            "invalid_text_encoding",
+            "source_text_redacted",
+            "source_text_unavailable",
+            "canonical_basis_unavailable",
+            "offsets_unavailable"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": ["state", "canonical"],
+          "properties": {
+            "state": {"const": "exact"},
+            "canonical": {
+              "type": "object",
+              "required": ["text"]
+            }
+          }
+        },
+        {
+          "required": ["state", "canonical"],
+          "properties": {
+            "state": {"const": "metadata_only"},
+            "canonical": {"$ref": "#/$defs/canonical_span_metadata"}
+          }
+        },
+        {
+          "required": ["state", "canonical", "reason"],
+          "properties": {
+            "state": {"const": "drifted"},
+            "canonical": {"$ref": "#/$defs/canonical_span_metadata"}
+          }
+        },
+        {
+          "required": ["state", "reason"],
+          "properties": {
+            "state": {"enum": ["redacted", "unavailable"]}
+          }
+        }
+      ]
+    },
+    "address": {
+      "type": "object",
+      "required": [
+        "address_id",
+        "run_id",
+        "kind",
+        "relation_key",
+        "native_ref",
+        "resolution"
+      ],
+      "properties": {
+        "address_id": {
+          "type": "string",
+          "pattern": "^span_[0-9a-f]{24}$"
+        },
+        "run_id": {"type": "string", "minLength": 1},
+        "kind": {
+          "enum": [
+            "delivered_message",
+            "rendered_prompt_segment",
+            "attached_source_span",
+            "answer_span",
+            "claim"
+          ]
+        },
+        "relation_key": {
+          "type": "string",
+          "pattern": "^rel_[0-9a-f]{24}$",
+          "description": "A privacy-safe digest of the native logical anchor. It excludes text and hashes so parent/child drift can still be detected."
+        },
+        "native_ref": {"$ref": "#/$defs/native_ref"},
+        "resolution": {"$ref": "#/$defs/resolution"}
+      },
+      "additionalProperties": false
+    },
+    "lineage_mapping": {
+      "type": "object",
+      "required": ["relation_key", "parent_address_id", "state", "reason"],
+      "properties": {
+        "relation_key": {
+          "type": "string",
+          "pattern": "^rel_[0-9a-f]{24}$"
+        },
+        "parent_address_id": {
+          "type": "string",
+          "pattern": "^span_[0-9a-f]{24}$"
+        },
+        "child_address_id": {
+          "type": "string",
+          "pattern": "^span_[0-9a-f]{24}$"
+        },
+        "state": {"enum": ["inherited", "drifted", "unavailable"]},
+        "reason": {
+          "enum": [
+            "exact_text_and_hashes_unchanged",
+            "canonical_basis_hash_changed",
+            "span_text_hash_changed",
+            "offset_changed",
+            "kind_changed",
+            "parent_unresolved",
+            "child_unresolved",
+            "missing_in_child",
+            "ambiguous_relation"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "lineage": {
+      "type": "object",
+      "required": ["parent_run_id", "mappings"],
+      "properties": {
+        "parent_run_id": {"type": ["string", "null"]},
+        "mappings": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/lineage_mapping"}
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

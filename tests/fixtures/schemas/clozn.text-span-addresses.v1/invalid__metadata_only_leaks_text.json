@@ -1,0 +1,42 @@
+{
+  "schema_version": "clozn.text-span-addresses.v1",
+  "run_id": "run_leak",
+  "privacy": "metadata_only",
+  "offset_contract": {
+    "unit": "unicode_code_points",
+    "interval": "half_open",
+    "hash_algorithm": "sha256",
+    "canonicalization": "exact_string_utf8_v1"
+  },
+  "source_artifacts": [],
+  "addresses": [
+    {
+      "address_id": "span_0123456789abcdef01234567",
+      "run_id": "run_leak",
+      "kind": "answer_span",
+      "relation_key": "rel_0123456789abcdef01234567",
+      "native_ref": {
+        "artifact_schema": "clozn.context_answer_influence.v1",
+        "collection": "influence.answer_spans",
+        "id": "a.t0000"
+      },
+      "resolution": {
+        "state": "metadata_only",
+        "canonical": {
+          "basis": "scored_answer",
+          "unit": "unicode_code_points",
+          "interval": "half_open",
+          "start": 0,
+          "end": 6,
+          "basis_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "span_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "text": "secret"
+        }
+      }
+    }
+  ],
+  "lineage": {
+    "parent_run_id": null,
+    "mappings": []
+  }
+}
