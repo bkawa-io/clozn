@@ -177,6 +177,28 @@ and never presented as present before an actual adapter computes the readout.
 
 ## The wire (SSE + JSON)
 
+### Worker generations and checkpoint references
+
+Protocol 1.1 adds an opaque `worker_generation_id` created once when each private worker process
+starts. `/health` always returns it. A restart creates a different value even when the worker serves
+the same model on the same loopback port.
+
+Every newly issued checkpoint reference is the compound identity
+`{checkpoint_id, worker_generation_id}`:
+
+- `checkpoint_id` is an opaque, generation-scoped string. Clients must store and compare it, never
+  parse its current spelling.
+- `worker_generation_id` is returned separately by completion `checkpoint_on_finish`,
+  `/v1/checkpoint`, `/v1/restore`, `/v1/branch`, and `/v1/execution-fork`.
+- A checkpoint-consuming request may include `worker_generation_id` as a precondition. A mismatch is
+  a typed conflict and no model work runs. Omitting it remains valid for existing in-process clients
+  because new checkpoint ids already embed the generation.
+- Missing fields stay missing; a client must never invent a generation id for an older response.
+  Such a reference may be used only within the already-connected process and is unsafe to persist.
+
+Checkpoints remain bounded, in-memory worker state. The 16-entry store evicts in insertion-order FIFO;
+no durability or pinning is implied by the compound identity.
+
 ### Optional worker timing
 
 Workers advertising `capabilities.performance_timing: true` attach a versioned `timing` object to the

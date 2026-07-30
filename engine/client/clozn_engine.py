@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import math
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
@@ -157,6 +158,29 @@ def _require_response_type(response: Mapping[str, Any], field_name: str, expecte
         raise EngineError(
             f"POST {endpoint} returned invalid {field_name!r} (expected {expected.__name__})")
     return value
+
+
+def _validate_checkpoint_create_response(value: object) -> dict[str, Any]:
+    """Validate the fields a durable checkpoint reference must actually contain.
+
+    Unknown fields from a newer worker are retained. Missing fields are errors, never filled with
+    guessed defaults: in particular a checkpoint id without worker_generation_id is not safe to
+    persist because an older worker's process-local counter can collide after restart.
+    """
+    endpoint = "/v1/checkpoint"
+    response = _require_chat_io_response_object(value, endpoint)
+    checkpoint_id = _require_response_type(response, "checkpoint_id", str, endpoint)
+    generation_id = _require_response_type(response, "worker_generation_id", str, endpoint)
+    if not checkpoint_id:
+        raise EngineError(f"POST {endpoint} returned an empty 'checkpoint_id'")
+    if not generation_id:
+        raise EngineError(f"POST {endpoint} returned an empty 'worker_generation_id'")
+    for field_name in ("n_past", "n_tokens", "size_bytes"):
+        field_value = _require_response_type(response, field_name, int, endpoint)
+        if field_value < 0:
+            raise EngineError(
+                f"POST {endpoint} returned invalid {field_name!r} (expected non-negative int)")
+    return response
 
 
 def _validate_prepared_chat_response(value: object, *, require_metadata: bool = True) -> dict[str, Any]:
@@ -381,6 +405,120 @@ class EngineClient:
     def health(self) -> dict:
         """GET /health -> runtime/model capabilities including n_layer/n_embd/vocab_size."""
         return self._get("/health")
+
+    def create_checkpoint(
+        self,
+        tokens: Sequence[int],
+        *,
+        n_past: Optional[int] = None,
+        prefill_to: Optional[int] = None,
+        steer_vec: Optional[ArrayLike] = None,
+        steer_coef: float = 1.0,
+        steer_layer: int = 0,
+        sampler: Optional[Mapping[str, Any]] = None,
+        worker_generation_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """POST /v1/checkpoint and return a validated, restart-safe checkpoint reference.
+
+        ``tokens`` is the checkpoint's complete token history. ``prefill_to`` records the original
+        prompt/generated boundary: the worker rebuilds that prefix in one batch and the remaining
+        tokens as single-token decodes, preserving the execution shape needed by exact forks.
+        ``n_past`` defaults server-side to ``len(tokens)`` and may select an earlier live KV position.
+
+        ``worker_generation_id`` is optional for compatibility. When supplied from a preceding
+        :meth:`health` response it is a precondition: a worker restart between health and checkpoint
+        creation fails closed instead of silently creating a reference in another generation.
+
+        The response must contain ``checkpoint_id``, ``worker_generation_id``, ``n_past``,
+        ``n_tokens``, and ``size_bytes`` with valid types. Unknown additive fields are retained;
+        missing fields are not invented. A worker too old to return the generation identity raises
+        :class:`EngineError`, because its reference is unsafe to persist.
+        """
+        if isinstance(tokens, (str, bytes, bytearray)) or not isinstance(tokens, Sequence):
+            raise ValueError("tokens must be a non-empty sequence of non-negative integers")
+        token_ids = list(tokens)
+        if not token_ids:
+            raise ValueError("tokens must be a non-empty sequence of non-negative integers")
+        if any(not isinstance(token, int) or isinstance(token, bool) or token < 0
+               for token in token_ids):
+            raise ValueError("tokens must contain only non-negative integers")
+
+        effective_n_past = len(token_ids)
+        if n_past is not None:
+            if (not isinstance(n_past, int) or isinstance(n_past, bool)
+                    or n_past < 1 or n_past > len(token_ids)):
+                raise ValueError("n_past must be an integer in [1, len(tokens)]")
+            effective_n_past = n_past
+        if prefill_to is not None:
+            if (not isinstance(prefill_to, int) or isinstance(prefill_to, bool)
+                    or prefill_to < 1 or prefill_to > effective_n_past):
+                raise ValueError("prefill_to must be an integer in [1, n_past]")
+        if worker_generation_id is not None:
+            if not isinstance(worker_generation_id, str) or not worker_generation_id:
+                raise ValueError("worker_generation_id must be a non-empty string or None")
+
+        body: dict[str, Any] = {"tokens": token_ids}
+        if n_past is not None:
+            body["n_past"] = n_past
+        if prefill_to is not None:
+            body["prefill_to"] = prefill_to
+        if worker_generation_id is not None:
+            body["worker_generation_id"] = worker_generation_id
+
+        if steer_vec is not None:
+            vector = flatten_values(steer_vec)
+            if not vector or any(not math.isfinite(value) for value in vector):
+                raise ValueError("steer_vec must contain one or more finite numbers")
+            if (not isinstance(steer_coef, (int, float)) or isinstance(steer_coef, bool)
+                    or not math.isfinite(float(steer_coef))):
+                raise ValueError("steer_coef must be a finite number")
+            if (not isinstance(steer_layer, int) or isinstance(steer_layer, bool)
+                    or steer_layer < 0):
+                raise ValueError("steer_layer must be a non-negative integer")
+            body["steer_vec"] = vector
+            body["steer_coef"] = float(steer_coef)
+            body["steer_layer"] = steer_layer
+
+        if sampler is not None:
+            if not isinstance(sampler, Mapping) or not sampler:
+                raise ValueError("sampler must be a non-empty object or None")
+            sampler_body = dict(sampler)
+            allowed = {"seed", "rng_draws", "temperature", "top_k", "top_p", "rep_penalty"}
+            unknown = set(sampler_body) - allowed
+            if unknown:
+                raise ValueError(f"sampler contains unsupported field(s): {', '.join(sorted(unknown))}")
+            for name in ("seed", "rng_draws", "top_k"):
+                if name in sampler_body and (
+                    not isinstance(sampler_body[name], int)
+                    or isinstance(sampler_body[name], bool)
+                    or sampler_body[name] < 0
+                ):
+                    raise ValueError(f"sampler.{name} must be a non-negative integer")
+            for name in ("temperature", "top_p", "rep_penalty"):
+                if name in sampler_body and (
+                    not isinstance(sampler_body[name], (int, float))
+                    or isinstance(sampler_body[name], bool)
+                    or not math.isfinite(float(sampler_body[name]))
+                ):
+                    raise ValueError(f"sampler.{name} must be a finite number")
+            if "temperature" in sampler_body and sampler_body["temperature"] < 0:
+                raise ValueError("sampler.temperature must be non-negative")
+            if "top_p" in sampler_body and not 0 <= sampler_body["top_p"] <= 1:
+                raise ValueError("sampler.top_p must be in [0, 1]")
+            if "rep_penalty" in sampler_body and sampler_body["rep_penalty"] <= 0:
+                raise ValueError("sampler.rep_penalty must be positive")
+            body["sampler"] = sampler_body
+
+        response = _validate_checkpoint_create_response(self._post("/v1/checkpoint", body))
+        if (worker_generation_id is not None
+                and response["worker_generation_id"] != worker_generation_id):
+            raise EngineError(
+                "POST /v1/checkpoint returned a different worker_generation_id than requested")
+        if response["n_past"] != effective_n_past:
+            raise EngineError("POST /v1/checkpoint returned n_past inconsistent with the request")
+        if response["n_tokens"] != len(token_ids):
+            raise EngineError("POST /v1/checkpoint returned n_tokens inconsistent with the request")
+        return response
 
     def harvest(self, text: str, layer: Optional[int] = None) -> Harvest:
         """POST /harvest: read every token's residual at the tap layer in ONE causal forward.
@@ -744,7 +882,8 @@ class EngineClient:
 
     def execution_fork(self, *, checkpoint_id: str, truncate_to: int, max_tokens: int,
                        intervention: Optional[Mapping[str, Any]] = None,
-                       checkpoint_on_finish: bool = False) -> dict:
+                       checkpoint_on_finish: bool = False,
+                       worker_generation_id: Optional[str] = None) -> dict:
         """POST /v1/execution-fork: resume generation from a saved KV checkpoint, truncated back to a
         prior token position, optionally applying ONE `intervention` on the forked continuation -- the
         exact-execution-fork primitive the reproduce/prove stack branches a run from.
@@ -766,11 +905,15 @@ class EngineClient:
         shape (the engine does, and refuses cleanly). Omitted (None) leaves the `intervention` key out
         of the body entirely (the engine's own default), never sent as an explicit null.
 
-        Returns the raw engine reply: {text, tokens, prompt_len, n_past_restored, restore_mode,
-        exactness, sampler_source, steer_source, intervention_applied, checkpoint_id}. Per the repo's
-        "omit, never null-pad" wire rule, any of those keys may be ABSENT on a given reply -- this method
-        does not fill in defaults for missing keys, so callers must read the result with `.get(...)`,
-        never assume a key's presence or convert its absence into an invented value.
+        ``worker_generation_id`` may be supplied alongside ``checkpoint_id`` as a restart-safety
+        precondition; legacy in-process callers may omit it.
+
+        Returns the raw engine reply: {worker_generation_id, text, tokens, prompt_len,
+        n_past_restored, restore_mode, exactness, sampler_source, steer_source,
+        intervention_applied, checkpoint_id}. Per the repo's "omit, never null-pad" wire rule, any of
+        those keys may be ABSENT on a given reply -- this method does not fill in defaults for missing
+        keys, so callers must read the result with `.get(...)`, never assume a key's presence or
+        convert its absence into an invented value.
         """
         if not isinstance(checkpoint_id, str) or not checkpoint_id:
             raise ValueError(f"checkpoint_id must be a non-empty string, got {checkpoint_id!r}")
@@ -783,6 +926,12 @@ class EngineClient:
                              f"got {intervention!r}")
         if not isinstance(checkpoint_on_finish, bool):
             raise ValueError(f"checkpoint_on_finish must be a bool, got {checkpoint_on_finish!r}")
+        if worker_generation_id is not None and (
+            not isinstance(worker_generation_id, str) or not worker_generation_id
+        ):
+            raise ValueError(
+                f"worker_generation_id must be a non-empty string or None, "
+                f"got {worker_generation_id!r}")
 
         body: dict = {
             "checkpoint_id": checkpoint_id,
@@ -792,6 +941,8 @@ class EngineClient:
         }
         if intervention is not None:
             body["intervention"] = dict(intervention)
+        if worker_generation_id is not None:
+            body["worker_generation_id"] = worker_generation_id
         return self._post("/v1/execution-fork", body)
 
     def cancel(self, req_id: str) -> dict:

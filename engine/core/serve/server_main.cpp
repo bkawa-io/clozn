@@ -31,6 +31,7 @@
 #include "ggml-cpu.h"   // ggml_graph_compute_with_ctx
 #include "gguf.h"       // read the GGUF's own output_norm.weight + output.weight for the J-lens head
 
+#include "checkpoint_store.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -319,12 +320,38 @@ int main(int argc, char** argv) {
 
     httplib::Server svr;
 
-    // Checkpoint store: named snapshots of the KV cache + token sequence, keyed by a server-assigned
-    // id. Saved via POST /v1/checkpoint, restored via POST /v1/restore, forked via POST /v1/branch.
-    // In-memory only (no persistence across restarts); a cap prevents unbounded growth.
-    std::mutex ckpt_mtx;
-    std::map<std::string, EngineCheckpoint> checkpoints;
-    static constexpr int kMaxCheckpoints = 16;
+    // Checkpoint references name in-memory state owned by this exact worker process. A fresh opaque
+    // generation id on every worker start is embedded in every checkpoint id, so a persisted old ref
+    // can never collide with unrelated state after restart. The separate response field lets callers
+    // retain the compound identity without parsing the opaque checkpoint_id. Capacity is true
+    // insertion-order FIFO (not std::map lexical order).
+    static constexpr std::size_t kMaxCheckpoints = 16;
+    const std::string worker_generation_id = make_worker_generation_id();
+    CheckpointStore<EngineCheckpoint> checkpoints(worker_generation_id, kMaxCheckpoints);
+
+    // Existing in-process clients may continue sending only checkpoint_id because new ids already
+    // carry the worker generation. A caller that persisted the compound reference can additionally
+    // send worker_generation_id as a precondition; stale generations fail before any model work.
+    auto validate_checkpoint_generation = [&](const json& body, httplib::Response& res) {
+        if (!body.contains("worker_generation_id"))
+            return true;
+        if (!body["worker_generation_id"].is_string() ||
+            body["worker_generation_id"].get<std::string>().empty()) {
+            res.status = 400;
+            res.set_content(json{{"error", "worker_generation_id must be a non-empty string"},
+                                 {"worker_generation_id", worker_generation_id}}.dump(),
+                            "application/json");
+            return false;
+        }
+        if (body["worker_generation_id"].get<std::string>() != worker_generation_id) {
+            res.status = 409;
+            res.set_content(json{{"error", "checkpoint belongs to a different worker generation"},
+                                 {"worker_generation_id", worker_generation_id}}.dump(),
+                            "application/json");
+            return false;
+        }
+        return true;
+    };
 
     // Cooperative cancellation (see server_shared.hpp's CancelRegistry docstring): shared by every
     // SSE streaming route below so POST /cancel can reach a generation running on another worker
@@ -392,6 +419,7 @@ int main(int argc, char** argv) {
         };
         json h{{"status", "ok"},
                {"protocol_version", PROTOCOL_VERSION},        // worker <-> supervisor wire contract
+               {"worker_generation_id", worker_generation_id},  // opaque identity for this process
                {"capabilities", capabilities},
                {"model", model_path},
                {"mode", ar_mode ? "autoregressive" : "diffusion"},
@@ -846,13 +874,16 @@ int main(int argc, char** argv) {
         // is the run's numerics by construction (immune to the batch-shape and observer-regime
         // epsilons that make from-tokens rebuilds only near-exact under strong steering).
         // Sampler + steer provenance are auto-filled from THIS request's own config. The id
-        // comes back as "checkpoint_id" on the non-streaming response.
+        // comes back with this worker's generation identity on both streaming and non-streaming
+        // responses. An optional request worker_generation_id is a restart-safety precondition.
         const bool want_ckpt = ar_mode && body.value("checkpoint_on_finish", false);
+        if (want_ckpt && !validate_checkpoint_generation(body, res))
+            return;
         auto ckpt_id_out = std::make_shared<std::string>();
 
         // One call into the runtime on a POOLED context (acquire blocks until one is free, so N
         // workers run N requests concurrently; the Lease releases it on any exit).
-        auto run = [&pool, &concept_probes, &steer_probes, &sae_serve, prompt_ids, suffix_ids, gap, cfg, sample, is_infill, ar_mode, features, steer_concept, steer_coef, steer_layer, prefix_embd, prefix_rows, steer_vec, reference_tokens, lens_on, lens_layer, plane, readout_layers, write_reqs, chat_grammar, want_ckpt, ckpt_id_out, &ckpt_mtx, &checkpoints, request_timing_phases, &startup_timing_phases, &startup_timing_claimed, duration_ns](
+        auto run = [&pool, &concept_probes, &steer_probes, &sae_serve, prompt_ids, suffix_ids, gap, cfg, sample, is_infill, ar_mode, features, steer_concept, steer_coef, steer_layer, prefix_embd, prefix_rows, steer_vec, reference_tokens, lens_on, lens_layer, plane, readout_layers, write_reqs, chat_grammar, want_ckpt, ckpt_id_out, &checkpoints, request_timing_phases, &startup_timing_phases, &startup_timing_claimed, duration_ns](
                        const std::function<void(const Event&)>& on_event) {
             std::vector<PerformancePhase> phases = request_timing_phases;
             const PerfClock::time_point worker_start_started = PerfClock::now();
@@ -1007,14 +1038,7 @@ int main(int argc, char** argv) {
                         ckpt.steer_lo = lo;
                         ckpt.steer_hi = hi;
                     }
-                    const std::string cid = make_id("ckpt-");
-                    {
-                        std::lock_guard<std::mutex> lk(ckpt_mtx);
-                        if (static_cast<int>(checkpoints.size()) >= kMaxCheckpoints)
-                            checkpoints.erase(checkpoints.begin());
-                        checkpoints[cid] = std::move(ckpt);
-                    }
-                    *ckpt_id_out = cid;
+                    *ckpt_id_out = checkpoints.insert(std::move(ckpt));
                 }
                 cleanup();
                 return r;
@@ -1032,7 +1056,8 @@ int main(int argc, char** argv) {
             res.set_chunked_content_provider(
                 "text/event-stream",
                 [run, id, object, model, prompt_ids, suffix_ids, protocol, state_full, substrate, mask_token,
-                 &jlens, lens_on, lens_layer, lens_topk, lens_every, &cancel_registry, plane, ckpt_id_out]
+                 &jlens, lens_on, lens_layer, lens_topk, lens_every, &cancel_registry, plane, ckpt_id_out,
+                 worker_generation_id]
                 (size_t, httplib::DataSink& sink) {
                     auto write = [&](const std::string& s) { return sink.write(s.data(), s.size()); };
                     StreamEnvelope env{id, write};        // stamps req + monotonic seq on every frame
@@ -1065,7 +1090,10 @@ int main(int argc, char** argv) {
                         // an orphan checkpoint on every streamed generation that asked for one. Fixed by
                         // threading ckpt_id_out (a shared_ptr<string>; `run` writes through its own copy
                         // of the SAME pointee) into this frame too.
-                        if (!ckpt_id_out->empty()) final_frame["checkpoint_id"] = *ckpt_id_out;
+                        if (!ckpt_id_out->empty()) {
+                            final_frame["checkpoint_id"] = *ckpt_id_out;
+                            final_frame["worker_generation_id"] = worker_generation_id;
+                        }
                         env.frame(final_frame);
                         env.done();
                         sink.done();
@@ -1126,7 +1154,10 @@ int main(int argc, char** argv) {
                     }
                     // See the protocol-frame branch above: checkpoint_on_finish + stream:true must not
                     // orphan the checkpoint it saves.
-                    if (!ckpt_id_out->empty()) final_frame["checkpoint_id"] = *ckpt_id_out;
+                    if (!ckpt_id_out->empty()) {
+                        final_frame["checkpoint_id"] = *ckpt_id_out;
+                        final_frame["worker_generation_id"] = worker_generation_id;
+                    }
                     env.frame(final_frame);
                     env.done();
                     sink.done();
@@ -1174,8 +1205,10 @@ int main(int argc, char** argv) {
                 {"usage", {{"prompt_tokens", static_cast<int>(prompt_ids.size())},
                            {"completion_tokens", r.new_tokens}, {"steps_total", r.steps_total}}},
             };
-            if (want_ckpt && !ckpt_id_out->empty())
+            if (want_ckpt && !ckpt_id_out->empty()) {
                 resp["checkpoint_id"] = *ckpt_id_out;   // checkpoint_on_finish: the live-KV save
+                resp["worker_generation_id"] = worker_generation_id;
+            }
             if (atomic_prepared_chat) {
                 json trace = json::array();
                 for (const Event& event : r.events) {
@@ -1230,17 +1263,24 @@ int main(int argc, char** argv) {
 
     // --- Checkpointing + branching (Phase 2.1) -----------------------------------------------
     // POST /v1/checkpoint — save the current KV state for a running or completed generation.
-    // {tokens: [int], n_past: int} → {checkpoint_id, n_past, size_bytes}
+    // {tokens: [int], n_past: int, worker_generation_id?: string}
+    //   → {checkpoint_id, worker_generation_id, n_past, size_bytes}
     svr.Post("/v1/checkpoint", [&](const httplib::Request& req, httplib::Response& res) {
         json body = json::parse(req.body, nullptr, false);
         if (body.is_discarded() || !body.is_object()) {
             res.status = 400;
-            res.set_content(json{{"error", "invalid JSON body"}}.dump(), "application/json");
+            res.set_content(json{{"error", "invalid JSON body"},
+                                 {"worker_generation_id", worker_generation_id}}.dump(),
+                            "application/json");
             return;
         }
+        if (!validate_checkpoint_generation(body, res))
+            return;
         if (!body.contains("tokens") || !body["tokens"].is_array() || body["tokens"].empty()) {
             res.status = 400;
-            res.set_content(json{{"error", "'tokens' must be a non-empty array of token ids"}}.dump(), "application/json");
+            res.set_content(json{{"error", "'tokens' must be a non-empty array of token ids"},
+                                 {"worker_generation_id", worker_generation_id}}.dump(),
+                            "application/json");
             return;
         }
         std::vector<int> tokens = body["tokens"].get<std::vector<int>>();
@@ -1256,7 +1296,8 @@ int main(int argc, char** argv) {
         const int prefill_to = body.value("prefill_to", static_cast<int>(tokens.size()));
         if (prefill_to < 1 || prefill_to > static_cast<int>(tokens.size())) {
             res.status = 400;
-            res.set_content(json{{"error", "prefill_to out of range [1, tokens.size()]"}}.dump(),
+            res.set_content(json{{"error", "prefill_to out of range [1, tokens.size()]"},
+                                 {"worker_generation_id", worker_generation_id}}.dump(),
                             "application/json");
             return;
         }
@@ -1324,50 +1365,52 @@ int main(int argc, char** argv) {
                 ckpt.top_k = sb.value("top_k", 0);
                 ckpt.top_p = sb.value("top_p", 1.0);
             }
-            const std::string id = make_id("ckpt-");
             const size_t sz = ckpt.kv_data.size();
-            {
-                std::lock_guard<std::mutex> lk(ckpt_mtx);
-                if (static_cast<int>(checkpoints.size()) >= kMaxCheckpoints) {
-                    checkpoints.erase(checkpoints.begin());
-                }
-                checkpoints[id] = std::move(ckpt);
-            }
+            const std::string id = checkpoints.insert(std::move(ckpt));
             res.set_content(json{{"checkpoint_id", id}, {"n_past", n_past},
                                  {"n_tokens", static_cast<int>(tokens.size())},
-                                 {"size_bytes", sz}}.dump(), "application/json");
+                                 {"size_bytes", sz},
+                                 {"worker_generation_id", worker_generation_id}}.dump(),
+                            "application/json");
         } catch (const std::exception& e) {
             res.status = 400;
-            res.set_content(json{{"error", std::string("checkpoint failed: ") + e.what()}}.dump(), "application/json");
+            res.set_content(json{{"error", std::string("checkpoint failed: ") + e.what()},
+                                 {"worker_generation_id", worker_generation_id}}.dump(),
+                            "application/json");
         }
     });
 
     // POST /v1/restore — restore a saved checkpoint and optionally continue generation.
-    // {checkpoint_id, max_tokens?, temperature?, ...} → {text, tokens, finish_reason}
+    // {checkpoint_id, worker_generation_id?, max_tokens?, temperature?, ...}
+    //   → {checkpoint_id, worker_generation_id, text, tokens, finish_reason}
     svr.Post("/v1/restore", [&](const httplib::Request& req, httplib::Response& res) {
         json body = json::parse(req.body, nullptr, false);
         if (body.is_discarded() || !body.is_object()) {
             res.status = 400;
-            res.set_content(json{{"error", "invalid JSON body"}}.dump(), "application/json");
+            res.set_content(json{{"error", "invalid JSON body"},
+                                 {"worker_generation_id", worker_generation_id}}.dump(),
+                            "application/json");
             return;
         }
+        if (!validate_checkpoint_generation(body, res))
+            return;
         const std::string ckpt_id = body.value("checkpoint_id", std::string());
         if (ckpt_id.empty()) {
             res.status = 400;
-            res.set_content(json{{"error", "need checkpoint_id"}}.dump(), "application/json");
+            res.set_content(json{{"error", "need checkpoint_id"},
+                                 {"worker_generation_id", worker_generation_id}}.dump(),
+                            "application/json");
             return;
         }
-        EngineCheckpoint ckpt;
-        {
-            std::lock_guard<std::mutex> lk(ckpt_mtx);
-            auto it = checkpoints.find(ckpt_id);
-            if (it == checkpoints.end()) {
-                res.status = 404;
-                res.set_content(json{{"error", "unknown checkpoint_id"}}.dump(), "application/json");
-                return;
-            }
-            ckpt = it->second;
+        std::optional<EngineCheckpoint> found = checkpoints.find_copy(ckpt_id);
+        if (!found) {
+            res.status = 404;
+            res.set_content(json{{"error", "unknown checkpoint_id"},
+                                 {"worker_generation_id", worker_generation_id}}.dump(),
+                            "application/json");
+            return;
         }
+        EngineCheckpoint ckpt = std::move(*found);
         const int max_tokens = body.value("max_tokens", 64);
         const bool fast = body.value("fast", true);
         // Sampling for the resumed suffix: an explicit request wins; otherwise a checkpoint
@@ -1417,7 +1460,9 @@ int main(int argc, char** argv) {
                 throw;
             }
             if (steer_source == "checkpoint") (*lease).clear_steer();
-            json resp{{"checkpoint_id", ckpt_id}, {"text", r.text},
+            json resp{{"checkpoint_id", ckpt_id},
+                      {"worker_generation_id", worker_generation_id},
+                      {"text", r.text},
                       {"finish_reason", finish_reason(r.reason)},
                       {"generated_tokens", r.new_tokens},
                       {"total_tokens", static_cast<int>(r.board.size())},
@@ -1427,36 +1472,43 @@ int main(int argc, char** argv) {
             res.set_content(dump_json(resp), "application/json");
         } catch (const std::exception& e) {
             res.status = 400;
-            res.set_content(json{{"error", std::string("restore failed: ") + e.what()}}.dump(), "application/json");
+            res.set_content(json{{"error", std::string("restore failed: ") + e.what()},
+                                 {"worker_generation_id", worker_generation_id}}.dump(),
+                            "application/json");
         }
     });
 
     // POST /v1/branch — fork N independent continuations from a checkpoint.
-    // {checkpoint_id, n: int, max_tokens?, temperature?, seed?} → {branches: [{text, finish_reason}]}
+    // {checkpoint_id, worker_generation_id?, n: int, max_tokens?, temperature?, seed?}
+    //   → {checkpoint_id, worker_generation_id, branches: [{text, finish_reason}]}
     svr.Post("/v1/branch", [&](const httplib::Request& req, httplib::Response& res) {
         json body = json::parse(req.body, nullptr, false);
         if (body.is_discarded() || !body.is_object()) {
             res.status = 400;
-            res.set_content(json{{"error", "invalid JSON body"}}.dump(), "application/json");
+            res.set_content(json{{"error", "invalid JSON body"},
+                                 {"worker_generation_id", worker_generation_id}}.dump(),
+                            "application/json");
             return;
         }
+        if (!validate_checkpoint_generation(body, res))
+            return;
         const std::string ckpt_id = body.value("checkpoint_id", std::string());
         if (ckpt_id.empty()) {
             res.status = 400;
-            res.set_content(json{{"error", "need checkpoint_id"}}.dump(), "application/json");
+            res.set_content(json{{"error", "need checkpoint_id"},
+                                 {"worker_generation_id", worker_generation_id}}.dump(),
+                            "application/json");
             return;
         }
-        EngineCheckpoint ckpt;
-        {
-            std::lock_guard<std::mutex> lk(ckpt_mtx);
-            auto it = checkpoints.find(ckpt_id);
-            if (it == checkpoints.end()) {
-                res.status = 404;
-                res.set_content(json{{"error", "unknown checkpoint_id"}}.dump(), "application/json");
-                return;
-            }
-            ckpt = it->second;
+        std::optional<EngineCheckpoint> found = checkpoints.find_copy(ckpt_id);
+        if (!found) {
+            res.status = 404;
+            res.set_content(json{{"error", "unknown checkpoint_id"},
+                                 {"worker_generation_id", worker_generation_id}}.dump(),
+                            "application/json");
+            return;
         }
+        EngineCheckpoint ckpt = std::move(*found);
         const int n = std::min(body.value("n", 4), 16);
         const int max_tokens = body.value("max_tokens", 64);
         SampleConfig base_sample = sample_from(body);
@@ -1471,11 +1523,15 @@ int main(int argc, char** argv) {
                                     {"finish_reason", finish_reason(results[i].reason)},
                                     {"generated_tokens", results[i].new_tokens}});
             }
-            res.set_content(json{{"checkpoint_id", ckpt_id}, {"n", n},
+            res.set_content(json{{"checkpoint_id", ckpt_id},
+                                 {"worker_generation_id", worker_generation_id},
+                                 {"n", n},
                                  {"branches", branches}}.dump(), "application/json");
         } catch (const std::exception& e) {
             res.status = 400;
-            res.set_content(json{{"error", std::string("branch failed: ") + e.what()}}.dump(), "application/json");
+            res.set_content(json{{"error", std::string("branch failed: ") + e.what()},
+                                 {"worker_generation_id", worker_generation_id}}.dump(),
+                            "application/json");
         }
     });
 
@@ -1500,7 +1556,8 @@ int main(int argc, char** argv) {
     // is the boundary this split is computed from; a checkpoint that never had it populated (0 =
     // unknown) is refused rather than guessed at.
     //
-    // {checkpoint_id, truncate_to, max_tokens?, intervention?: {type, ...}, checkpoint_on_finish?}
+    // {checkpoint_id, worker_generation_id?, truncate_to, max_tokens?,
+    //  intervention?: {type, ...}, checkpoint_on_finish?}
     // intervention.type in {"none","force_token","sampling","steer","residual_write"} (deliberately
     // narrow); see the field-level comments below for each type's shape.
     svr.Post("/v1/execution-fork", [&](const httplib::Request& req, httplib::Response& res) {
@@ -1508,6 +1565,8 @@ int main(int argc, char** argv) {
             json body = json::parse(req.body, nullptr, false);
             if (body.is_discarded() || !body.is_object())
                 throw std::invalid_argument("invalid JSON body");
+            if (!validate_checkpoint_generation(body, res))
+                return;
 
             const std::string ckpt_id = body.value("checkpoint_id", std::string());
             if (ckpt_id.empty()) throw std::invalid_argument("need checkpoint_id");
@@ -1517,17 +1576,15 @@ int main(int argc, char** argv) {
             const int max_tokens_raw = body.value("max_tokens", 64);
             const bool want_ckpt = body.value("checkpoint_on_finish", false);
 
-            EngineCheckpoint ckpt;
-            {
-                std::lock_guard<std::mutex> lk(ckpt_mtx);
-                auto it = checkpoints.find(ckpt_id);
-                if (it == checkpoints.end()) {
-                    res.status = 404;
-                    res.set_content(json{{"error", "unknown checkpoint_id"}}.dump(), "application/json");
-                    return;
-                }
-                ckpt = it->second;
+            std::optional<EngineCheckpoint> found = checkpoints.find_copy(ckpt_id);
+            if (!found) {
+                res.status = 404;
+                res.set_content(json{{"error", "unknown checkpoint_id"},
+                                     {"worker_generation_id", worker_generation_id}}.dump(),
+                                "application/json");
+                return;
             }
+            EngineCheckpoint ckpt = std::move(*found);
             // Fail closed (no silent fallback): a checkpoint that never had prompt_tokens populated
             // cannot honestly support the regime split -- refuse rather than guess which side of the
             // batch-shape landmine truncate_to falls on.
@@ -1753,6 +1810,7 @@ int main(int argc, char** argv) {
                 }
 
                 json resp{
+                    {"worker_generation_id", worker_generation_id},
                     {"text", r.text},
                     {"tokens", r.generated},
                     {"prompt_len", ckpt.prompt_tokens},
@@ -1796,13 +1854,7 @@ int main(int argc, char** argv) {
                         out_ckpt.steer_lo = steer_lo;
                         out_ckpt.steer_hi = steer_hi;
                     }
-                    const std::string cid = make_id("ckpt-");
-                    {
-                        std::lock_guard<std::mutex> lk(ckpt_mtx);
-                        if (static_cast<int>(checkpoints.size()) >= kMaxCheckpoints)
-                            checkpoints.erase(checkpoints.begin());
-                        checkpoints[cid] = std::move(out_ckpt);
-                    }
+                    const std::string cid = checkpoints.insert(std::move(out_ckpt));
                     resp["checkpoint_id"] = cid;
                 }
 
@@ -1814,7 +1866,8 @@ int main(int argc, char** argv) {
             }
         } catch (const std::exception& e) {
             res.status = 400;
-            res.set_content(json{{"error", std::string("execution-fork failed: ") + e.what()}}.dump(),
+            res.set_content(json{{"error", std::string("execution-fork failed: ") + e.what()},
+                                 {"worker_generation_id", worker_generation_id}}.dump(),
                             "application/json");
         }
     });

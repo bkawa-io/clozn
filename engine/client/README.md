@@ -14,7 +14,9 @@ It drives the read -> edit -> write -> observe loop closed by GAP #1:
 | `edit_and_observe(text, transform, ...)` | both | the whole loop in one call: harvest, apply `transform(acts)->acts`, write the changed rows back at the same layer |
 | `intervene(prompt, concept=/vector=, coef, ...)` | `POST /intervene` | steer a generation with a named concept probe or a raw direction |
 | `complete(prompt, **params)` | `POST /v1/completions` | a plain generation (no white-box) |
-| `health()` | `GET /health` | `{status, model, mode}` |
+| `health()` | `GET /health` | `{status, model, mode, worker_generation_id}` |
+| `create_checkpoint(tokens, ...)` | `POST /v1/checkpoint` | create and strictly validate a restart-safe `{checkpoint_id, worker_generation_id}` reference |
+| `execution_fork(...)` | `POST /v1/execution-fork` | exact fork from a checkpoint, with an optional worker-generation precondition |
 
 Dependencies: the standard library (HTTP/JSON/base64) plus numpy. No `requests`.
 

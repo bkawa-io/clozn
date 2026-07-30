@@ -61,6 +61,12 @@ add_executable(test_state_write tests/test_state_write.cpp)
 target_link_libraries(test_state_write PRIVATE clozn_runtime)
 add_test(NAME state_write COMMAND test_state_write)
 
+# Worker checkpoint references are process-generation-scoped and the bounded store evicts by
+# insertion-order FIFO. This test is header-only/model-free: no GGUF, ggml, or network is required.
+add_executable(test_checkpoint_store tests/test_checkpoint_store.cpp)
+target_include_directories(test_checkpoint_store PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/serve)
+add_test(NAME checkpoint_store COMMAND test_checkpoint_store)
+
 # --- On-device SAE readout (ROADMAP 3.3 wired into the engine) ---
 # clozn_sae (src/sae_encoder.cu + clozn/sae.hpp): the JumpReLU SAE encoder GEMV + the vendored
 # sae_topk kernel, behind a CUDA-free pimpl header so clozn-server links it untouched by nvcc.

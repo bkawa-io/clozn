@@ -58,6 +58,31 @@ def test_cpp_health_capability_keys_match_fixture(fixture):
     assert keys == set(fixture["capabilities"])
 
 
+def test_cpp_health_required_fields_match_fixture(fixture):
+    """Every required handshake field is present in the C++ /health document, including the opaque
+    process generation needed to reject checkpoint references after a worker restart."""
+    src = CPP_HEALTH.read_text(encoding="utf-8")
+    block = re.search(r'json h\{\{"status", "ok"\},(.*?)\};', src, re.DOTALL)
+    assert block, "/health response literal not found in server_main.cpp"
+    keys = {"status", *re.findall(r'\{"(\w+)",', block.group(1))}
+    assert set(fixture["health_required_fields"]).issubset(keys)
+    assert "worker_generation_id" in fixture["health_required_fields"]
+
+
+def test_checkpoint_reference_contract_is_generation_scoped(fixture):
+    checkpoint_ref = fixture["checkpoint_reference"]
+    assert checkpoint_ref["fields"] == ["checkpoint_id", "worker_generation_id"]
+    assert checkpoint_ref["checkpoint_id_semantics"] == "opaque_generation_scoped"
+    assert checkpoint_ref["worker_generation_precondition"] == \
+        "optional_for_in_process_compatibility"
+
+    source = (ROOT / "engine" / "core" / "serve" / "checkpoint_store.hpp").read_text(
+        encoding="utf-8")
+    assert '"ckpt-" + worker_generation_id_' in source
+    assert "std::deque<std::string> insertion_order_" in source
+    assert "records_.erase(insertion_order_.front())" in source
+
+
 def test_cpp_model_free_build_info_contract_is_embedded():
     """Setup qualification must be possible before a GGUF is parsed or loaded."""
     src = CPP_HEALTH.read_text(encoding="utf-8")

@@ -1,10 +1,11 @@
 {
   "_comment": "The shared worker<->supervisor handshake contract. Pinned identically in C++ (engine/core/serve/server_shared.hpp PROTOCOL_VERSION + the /health handler capability keys) and Python (clozn/protocol.py). tests/test_protocol_handshake.py fails the moment any side drifts. Studio may also read this file to stay in lockstep. See protocol/SPEC.md for the stream vocabulary.",
-  "protocol_version": "1.0",
+  "protocol_version": "1.1",
   "supported_majors": [1],
   "health_required_fields": [
     "status",
     "protocol_version",
+    "worker_generation_id",
     "capabilities",
     "model",
     "mode"
@@ -30,5 +31,13 @@
   "stream_frame_envelope": [
     "req",
     "seq"
-  ]
+  ],
+  "checkpoint_reference": {
+    "fields": [
+      "checkpoint_id",
+      "worker_generation_id"
+    ],
+    "checkpoint_id_semantics": "opaque_generation_scoped",
+    "worker_generation_precondition": "optional_for_in_process_compatibility"
+  }
 }

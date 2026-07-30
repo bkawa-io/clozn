@@ -16,7 +16,7 @@ The exact same version string is pinned three ways and a golden-fixture test fai
   * ``protocol/fixtures/handshake.json`` (the shared contract Studio can also read).
 """
 
-PROTOCOL_VERSION = "1.0"
+PROTOCOL_VERSION = "1.1"
 
 # Majors this supervisor can drive. A worker announcing a major outside this set is refused at boot.
 SUPPORTED_MAJORS = frozenset({1})

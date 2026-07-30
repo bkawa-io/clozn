@@ -67,14 +67,21 @@ The viz switches to a left-to-right token stream; `clozn-ar <model.gguf>` is the
 | | |
 |---|---|
 | `GET  /`              | the real-time denoise visualization (a pure SSE consumer) |
-| `GET  /health`        | `{status, model}` |
+| `GET  /health`        | `{status, model, worker_generation_id, ...}` |
 | `POST /v1/completions`| `{prompt, max_tokens, steps, block_len, topk, temperature, stream, features, steer}` |
 | `POST /v1/infill`     | `{prefix, suffix, gap, ..., features, steer}` — fill the middle (native dLLM infilling) |
 | `POST /v1/revise`     | `{text, spans:[[start,end]], grow, ..., features, steer}` — re-mask + re-predict a span in place |
 | `POST /v1/board`      | `{board:[ids], steps, ..., features, steer}` — restore/branch a raw board (a `mask_token` id = a hole) |
+| `POST /v1/checkpoint` | Save bounded in-memory KV state; returns `{checkpoint_id, worker_generation_id, ...}` |
+| `POST /v1/restore` | Continue a checkpoint; accepts the generation id as an optional restart-safety precondition |
+| `POST /v1/branch` | Branch a checkpoint; returns the same compound reference identity |
+| `POST /v1/execution-fork` | Truncate and fork checkpoint execution; optionally checkpoints the child |
 
 Every non-stream response carries `board` + `layout` (per-position `{pos,id,masked,piece}`) — the
 white-box **snapshot**: save it, edit a slot (set it to the mask id to re-open), POST to `/v1/board`.
+
+Checkpoint ids are opaque and generation-scoped. The separate `worker_generation_id` identifies the
+exact process holding the state; neither field implies persistence across worker shutdown.
 
 ## White-box (set `"features": true` to turn the read taps on)
 
