@@ -13,6 +13,7 @@ from clozn.cli.worker_registry import (
     EvictionTimeoutError,
     RuntimeKey,
     UnknownWorkerModelError,
+    UnverifiableWorkerStateError,
     WorkerBusyError,
     WorkerDefinition,
     WorkerLifecycleState,
@@ -723,6 +724,11 @@ def test_idle_lru_eviction_picks_the_least_recently_used_idle_worker():
         preload_model_ids=["alpha", "beta"],
         max_loaded_workers=2,
         spawn=spawn,
+        # This test deliberately exercises the real idle-LRU ordering logic (not
+        # just the fail-closed refusal), so it must declare a trustworthy busy
+        # signal itself -- exactly the affirmative step production never takes.
+        # See UnverifiableWorkerStateError / ADR 006.
+        busy_tracking_wired=True,
     )
     registry.start_preloaded()
     time.sleep(0.01)
@@ -756,6 +762,9 @@ def test_eviction_never_picks_a_worker_with_active_generation_in_flight():
         preload_model_ids=["alpha", "beta"],
         max_loaded_workers=2,
         spawn=spawn,
+        # Real busy state is injected below via track_call(); tell the registry
+        # to trust it, matching how a real ADR-006 caller would.
+        busy_tracking_wired=True,
     )
     registry.start_preloaded()
     time.sleep(0.01)
@@ -788,6 +797,7 @@ def test_capacity_fails_closed_with_no_evictable_worker_when_everything_is_busy(
         preload_model_ids=["alpha", "beta"],
         max_loaded_workers=2,
         spawn=spawn,
+        busy_tracking_wired=True,
     )
     registry.start_preloaded()
 
@@ -818,6 +828,7 @@ def test_evict_refuses_a_busy_worker_and_can_wait_for_it_honestly():
         preload_model_ids=["alpha"],
         max_loaded_workers=1,
         spawn=spawn,
+        busy_tracking_wired=True,
     )
     registry.start_preloaded()
 
@@ -845,6 +856,111 @@ def test_evict_refuses_a_busy_worker_and_can_wait_for_it_honestly():
     registry.evict("alpha", wait_for_inflight=True, timeout=5)
     status = {worker["model_id"]: worker for worker in registry.status()["workers"]}
     assert status["alpha"]["state"] == "unloaded"
+
+
+def test_eviction_refuses_when_busy_state_cannot_be_verified():
+    """Reproduces the RT-04 vacuity directly, using production's actual default.
+
+    RT-04's idle-LRU eviction claims it never evicts a worker with in-flight work.
+    That guarantee was vacuous: eviction consulted ``handle.busy``, but nothing in
+    production ever entered :meth:`WorkerHandle.track_call` -- real generation
+    traffic flows gateway<->worker directly and never touches the supervisor
+    process at all (docs/design/006-cross-process-cold-load-protocol.md's Context
+    section). So ``handle.busy`` was always False in production, and every worker
+    always looked idle, whether or not it actually was.
+
+    This test's registry construction is deliberately the exact shape every real
+    caller uses -- ``clozn/cli/runtime_process.py`` and
+    ``clozn/cli/managed_models.py`` never pass ``busy_tracking_wired=True`` and
+    never call ``track_call()`` for real traffic, so neither does this test. On the
+    vacuous pre-fix code, that made ``_select_eviction_candidate`` treat alpha and
+    beta's permanently-False ``busy`` as "verified idle": loading a third model
+    over capacity silently evicted alpha (the least-recently-touched resident) and
+    reported ``outcome == "loaded"``, exactly as if idleness had been confirmed --
+    with zero evidence it actually was. Run against that code, every assertion
+    below fails: ``result.outcome`` is ``"loaded"`` (not ``"failed"``), alpha's
+    state is ``"unloaded"`` (not ``"ready"``), and gamma is ``"ready"`` (not
+    ``"failed"``).
+
+    After the fix, the same default, unmodified construction instead refuses with
+    the typed ``no_verifiable_idle_worker`` code and touches neither resident --
+    proving the fail-closed gate is live on the exact path production takes, not
+    just in tests that opt into ``busy_tracking_wired=True``.
+    """
+    definitions = [
+        definition("alpha", model_sha=SHA_A, port=9681),
+        definition("beta", model_sha=SHA_B, port=9682),
+        definition("gamma", model_sha=SHA_C, port=9683),
+    ]
+
+    def spawn(model, port, flags, **kwargs):
+        selected = next(item for item in definitions if item.model == model)
+        return FakeProcess(), handshake(selected, 1), False
+
+    # No busy_tracking_wired kwarg, and track_call() is never entered below for
+    # either resident -- this is production's real, unmodified construction shape.
+    registry = WorkerRegistry(
+        definitions,
+        default_model_id="alpha",
+        preload_model_ids=["alpha", "beta"],
+        max_loaded_workers=2,
+        spawn=spawn,
+    )
+    registry.start_preloaded()
+    time.sleep(0.01)
+    registry.touch("beta")  # alpha is the least-recently-used resident
+
+    result = registry.ensure_loaded("gamma")
+
+    assert result.outcome == "failed", (
+        "with no verified busy signal, eviction must refuse -- not silently pick "
+        "alpha as a victim just because handle.busy happens to read False"
+    )
+    assert result.failure_code == "no_verifiable_idle_worker"
+    assert result.state_after == WorkerLifecycleState.FAILED
+    status = {worker["model_id"]: worker for worker in registry.status()["workers"]}
+    assert status["alpha"]["state"] == "ready", "never evicted on an unverified assumption"
+    assert status["beta"]["state"] == "ready"
+    assert status["gamma"]["state"] == "failed"
+    assert sum(worker["state"] == "ready" for worker in status.values()) == 2
+
+
+def test_explicit_evict_refuses_when_busy_state_cannot_be_verified():
+    """The explicit evict() path fails closed the same way, not just the LRU path.
+
+    ``evict()`` used to consult ``handle.busy`` directly (worker_registry.py:887 in
+    the vacuous version) and proceed unconditionally whenever it read False --
+    exactly as unverifiable in production as the idle-LRU path above, since
+    nothing ever calls track_call() for real traffic. With no
+    ``busy_tracking_wired=True`` opt-in, evict() must refuse outright rather than
+    ever reaching (or silently skipping) the busy/wait_for_inflight logic.
+    """
+    definitions = [definition("alpha", model_sha=SHA_A, port=9691)]
+
+    def spawn(model, port, flags, **kwargs):
+        selected = next(item for item in definitions if item.model == model)
+        return FakeProcess(), handshake(selected, 1), False
+
+    registry = WorkerRegistry(
+        definitions,
+        default_model_id="alpha",
+        preload_model_ids=["alpha"],
+        max_loaded_workers=1,
+        spawn=spawn,
+    )
+    registry.start_preloaded()
+
+    with pytest.raises(UnverifiableWorkerStateError):
+        registry.evict("alpha")
+
+    # Even the "honestly wait for it" opt-in cannot rescue an unverifiable signal:
+    # wait_until_idle() would return True immediately (nothing was ever tracked),
+    # which is exactly the false confidence this refusal exists to prevent.
+    with pytest.raises(UnverifiableWorkerStateError):
+        registry.evict("alpha", wait_for_inflight=True, timeout=5)
+
+    status = {worker["model_id"]: worker for worker in registry.status()["workers"]}
+    assert status["alpha"]["state"] == "ready", "never evicted on an unverified assumption"
 
 
 def test_lifecycle_state_is_a_typed_enum_that_still_compares_as_a_string():

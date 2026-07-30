@@ -76,6 +76,26 @@ class WorkerBusyError(RuntimeError):
     """
 
 
+class UnverifiableWorkerStateError(RuntimeError):
+    """An explicit ``evict()`` was refused because busy/idle state is not verifiable.
+
+    ``WorkerHandle.busy`` is real, correctly implemented, and unit tested -- but in
+    production nothing ever enters :meth:`WorkerHandle.track_call`, because real
+    generation traffic flows gateway<->worker directly and never touches the
+    supervisor process at all (docs/design/006-cross-process-cold-load-protocol.md's
+    Context section). That makes ``busy`` permanently and silently ``False`` whether
+    or not a worker is actually mid-generation: correct machinery wired to nothing.
+    Treating that silence as "verified idle" would be exactly the assumption
+    docs/SEAMS.md forbids ("a value that cannot be honestly measured is absent, never
+    assumed"). ``WorkerRegistry`` only trusts ``busy`` when it was constructed with
+    ``busy_tracking_wired=True`` -- an explicit declaration, never a default -- and
+    this error is what a caller gets instead of a silent, unverified eviction when it
+    was not. See ADR 006 for the design of a real, live cross-process signal; until
+    something wires it and flips this flag for real, refusing is the only honest
+    outcome.
+    """
+
+
 class EvictionTimeoutError(RuntimeError):
     """An explicit wait-for-inflight eviction did not finish before its timeout."""
 
@@ -372,7 +392,16 @@ TemplateProbe = Callable[[int], str]
 
 
 class WorkerRegistry:
-    """Own independent preloaded workers keyed by exact runtime identity."""
+    """Own independent preloaded workers keyed by exact runtime identity.
+
+    Eviction (the idle-LRU capacity path inside ``ensure_loaded``, and the explicit
+    ``evict()`` method) never picks a victim on an unverified assumption of idleness.
+    Both consult ``busy_tracking_wired`` -- False by default, matching production,
+    where nothing calls ``WorkerHandle.track_call()`` -- and refuse with a typed
+    outcome rather than trusting a busy signal that was never actually wired. See
+    ``busy_tracking_wired``'s parameter doc, ``UnverifiableWorkerStateError``, and
+    ADR 006 (docs/design/006-cross-process-cold-load-protocol.md).
+    """
 
     def __init__(
         self,
@@ -385,7 +414,10 @@ class WorkerRegistry:
         health_probe: HealthProbe = _health,
         template_probe: TemplateProbe | None = None,
         port_factory: Callable[[], int] = _free_port,
+        busy_tracking_wired: bool = False,
     ) -> None:
+        if type(busy_tracking_wired) is not bool:
+            raise WorkerRegistryConfigError("busy_tracking_wired must be a boolean")
         definitions = tuple(definitions)
         preload_model_ids = tuple(preload_model_ids)
         if not definitions:
@@ -464,6 +496,17 @@ class WorkerRegistry:
         self._health_probe = health_probe
         self._template_probe = template_probe
         self._port_factory = port_factory
+        # Fail-closed gate for every eviction decision below (explicit evict() and
+        # the idle-LRU capacity path alike). Defaults to False -- untrusted -- because
+        # that is what production actually is today: nothing in clozn/cli/runtime_process.py
+        # or clozn/cli/managed_models.py's WorkerRegistry(...) construction sites passes
+        # busy_tracking_wired=True, and real generation traffic never calls track_call()
+        # (see UnverifiableWorkerStateError's docstring and ADR 006's Context section).
+        # Only test code that deliberately drives track_call() to simulate real in-flight
+        # work sets this True. When ADR 006 wires a real cross-process busy signal, the
+        # eviction code below does not need to change -- only this flag's value at the
+        # construction site does.
+        self._busy_tracking_wired = busy_tracking_wired
         # Guards the "count residents, maybe evict one" decision across
         # concurrent ensure_loaded() calls for *different* cold models so two
         # simultaneous cold loads can never both observe spare capacity and
@@ -876,6 +919,14 @@ class WorkerRegistry:
         -- protocol 1.1 carries no request ID for it -- so when asked to wait,
         this honestly blocks for the call to finish instead of pretending to
         cancel it; a timeout raises rather than silently proceeding.
+
+        Before any of that, refuses (``UnverifiableWorkerStateError``) outright if
+        this registry's busy signal is not ``busy_tracking_wired`` -- production's
+        actual state today. ``handle.busy`` reading False because nobody is watching
+        is not the same fact as ``handle.busy`` reading False because a real call
+        count was checked and is genuinely zero; only the latter is safe to act on,
+        and there is no way to tell them apart from the boolean alone. See
+        ``UnverifiableWorkerStateError`` and ADR 006.
         """
         entry = self._entry(model_id)
         with entry.condition:
@@ -884,45 +935,80 @@ class WorkerRegistry:
                     f"{model_id!r} is {entry.state.value}, not ready"
                 )
             handle = entry.handle
-        if handle is not None and handle.busy:
-            if not wait_for_inflight:
-                raise WorkerBusyError(
-                    f"{model_id!r} has active generation or mutation work "
-                    "in flight; pass wait_for_inflight=True to wait honestly"
+        if handle is not None:
+            if not self._busy_tracking_wired:
+                raise UnverifiableWorkerStateError(
+                    f"{model_id!r}'s busy/idle state cannot be verified -- this "
+                    "registry's busy signal is not wired (busy_tracking_wired=False); "
+                    "refusing rather than assuming idle -- see ADR 006"
                 )
-            if not handle.wait_until_idle(timeout):
-                raise EvictionTimeoutError(
-                    f"{model_id!r} still had in-flight work after "
-                    f"{timeout}s; it was not evicted"
-                )
+            if handle.busy:
+                if not wait_for_inflight:
+                    raise WorkerBusyError(
+                        f"{model_id!r} has active generation or mutation work "
+                        "in flight; pass wait_for_inflight=True to wait honestly"
+                    )
+                if not handle.wait_until_idle(timeout):
+                    raise EvictionTimeoutError(
+                        f"{model_id!r} still had in-flight work after "
+                        f"{timeout}s; it was not evicted"
+                    )
         self._evict_entry(entry)
 
-    def _select_eviction_candidate(self, *, exclude: _WorkerEntry) -> _WorkerEntry | None:
-        """The least-recently-used idle ready worker, or None if none qualify.
+    def _select_eviction_candidate(
+        self, *, exclude: _WorkerEntry
+    ) -> "tuple[_WorkerEntry | None, str | None]":
+        """The least-recently-used verified-idle ready worker, honestly typed.
 
-        "Idle" consults real in-flight state (``handle.busy``), never a
-        timestamp alone: a worker with active generation or mutation work is
-        never a candidate, no matter how long ago its load event started.
+        Returns ``(candidate, None)`` when one qualifies, or ``(None, failure_code)``
+        naming exactly why none did:
+
+        * ``"no_evictable_worker"`` -- there is no other resident worker to consider
+          at all, or every other resident's busy/idle state *was* verified and every
+          one of them is genuinely busy right now. "Idle" here means real in-flight
+          state (``handle.busy``), never a timestamp alone: a worker with active
+          generation or mutation work is never a candidate, no matter how long ago
+          its load event started.
+        * ``"no_verifiable_idle_worker"`` -- there is at least one other resident
+          worker whose busy/idle state cannot be trusted, because this registry was
+          not constructed with ``busy_tracking_wired=True``. That is production's
+          actual state today: real generation traffic flows gateway<->worker
+          directly, bypassing the supervisor entirely, so nothing ever calls
+          ``WorkerHandle.track_call()`` and ``busy`` would read False whether or not
+          the worker is mid-generation. Treating that silence as "verified idle"
+          would be exactly the silent-fallback docs/SEAMS.md forbids -- a value that
+          cannot be honestly measured must stay absent, never assumed. ADR 006
+          designs the real cross-process signal that would let this registry
+          honestly flip ``busy_tracking_wired`` to True; until something does, this
+          method must never pick a victim on an unverified assumption.
         """
-        idle = [
+        ready_siblings = [
             other for other in self._by_id.values()
-            if other is not exclude
-            and other.state == WorkerLifecycleState.READY
-            and (other.handle is None or not other.handle.busy)
+            if other is not exclude and other.state == WorkerLifecycleState.READY
+        ]
+        if not ready_siblings:
+            return None, "no_evictable_worker"
+        if not self._busy_tracking_wired:
+            return None, "no_verifiable_idle_worker"
+        idle = [
+            other for other in ready_siblings
+            if other.handle is None or not other.handle.busy
         ]
         if not idle:
-            return None
-        return min(idle, key=lambda other: other.last_used)
+            return None, "no_evictable_worker"
+        return min(idle, key=lambda other: other.last_used), None
 
     def _ensure_capacity(self, entry: _WorkerEntry) -> "bool | str":
         """Free one resident slot for ``entry`` if the registry is at its limit.
 
-        Returns True when a slot is already available or was freed by
-        evicting the least-recently-used idle worker, or the typed failure
-        code ``"no_evictable_worker"`` when every other resident worker has
-        active generation or mutation work in flight.  ``entry`` itself has
-        already transitioned to ``loading`` and so already occupies a slot;
-        only *other* residents are counted or considered for eviction.
+        Returns True when a slot is already available or was freed by evicting the
+        least-recently-used verified-idle worker, or one of two typed failure codes
+        when none qualified -- ``"no_evictable_worker"`` (every other resident is
+        genuinely busy, or there is none) or ``"no_verifiable_idle_worker"`` (at
+        least one other resident's busy/idle state cannot be trusted; see
+        ``_select_eviction_candidate``).  ``entry`` itself has already transitioned
+        to ``loading`` and so already occupies a slot; only *other* residents are
+        counted or considered for eviction.
         """
         with self._capacity_lock:
             occupied = sum(
@@ -934,9 +1020,9 @@ class WorkerRegistry:
             )
             if occupied < self.max_loaded_workers:
                 return True
-            candidate = self._select_eviction_candidate(exclude=entry)
+            candidate, failure_code = self._select_eviction_candidate(exclude=entry)
             if candidate is None:
-                return "no_evictable_worker"
+                return failure_code
             self._evict_entry(candidate)
             return True
 
@@ -1032,9 +1118,18 @@ class WorkerRegistry:
         if become_loader:
             capacity = self._ensure_capacity(entry)
             if capacity is not True:
-                self._failed(entry, capacity, RuntimeError(
-                    f"no idle worker available to evict for {model_id!r}"
-                ))
+                if capacity == "no_verifiable_idle_worker":
+                    capacity_error = RuntimeError(
+                        f"no resident worker's busy/idle state could be verified to "
+                        f"free capacity for {model_id!r}; this registry's busy "
+                        "signal is not wired (busy_tracking_wired=False) -- see "
+                        "docs/design/006-cross-process-cold-load-protocol.md"
+                    )
+                else:
+                    capacity_error = RuntimeError(
+                        f"no idle worker available to evict for {model_id!r}"
+                    )
+                self._failed(entry, capacity, capacity_error)
                 return LoadResult(
                     kind=kind,
                     outcome="failed",

@@ -256,6 +256,27 @@ Requesting a model that isn't preloaded, or one whose preload failed, returns
 worker is ever evicted for capacity while serving. `--max-loaded-models`'s help text reflects this:
 "clozn serve does not cold-load on demand yet."
 
+**Eviction fails closed pending ADR 006 — its "never evicts an in-flight worker" guarantee was
+vacuous until this was fixed.** `WorkerRegistry`'s idle-LRU eviction (used when a cold load needs to
+free a resident slot) and its explicit `evict()` method both exist to avoid stopping a worker with
+active generation or mutation work in flight, and both do so by consulting
+`WorkerHandle.busy`/`track_call()`. But nothing in production ever calls `track_call()` — real
+generation traffic flows gateway↔worker directly, bypassing the supervisor entirely (see ADR 006's
+Context section) — so `busy` read permanently `False` regardless of what a worker was actually doing,
+and eviction would have picked a victim on that unverified assumption the moment cold load became
+reachable. `WorkerRegistry` now refuses to trust an unwired signal: it only ever picks an eviction
+candidate, or lets an explicit `evict()` call proceed past its busy check, when constructed with
+`busy_tracking_wired=True` — an explicit declaration that today only test code (deliberately driving
+`track_call()` itself) sets. Without it, a capacity-triggered cold load fails closed with the typed
+`no_verifiable_idle_worker` code (distinct from `no_evictable_worker`, which means every candidate's
+busy state *was* verified and all were genuinely busy), and `evict()` raises
+`UnverifiableWorkerStateError` instead of proceeding. This does not change `clozn serve`'s behavior
+today, because cold load and eviction are already unreachable through it (above) — it closes the gap
+for the moment they become reachable. ADR 006 designs the real fix: a live cross-process query to the
+gateway's own `WorkerGateRegistry` at the moment of eviction. Until that ships and something wires
+`busy_tracking_wired` for real, eviction is safe by construction but permanently un-triggerable in
+production.
+
 **Same-worker calls are serialized; the parallelism is across different models.** This part *is*
 wired: `ProjectionFileRouter` defaults to building one `WorkerGateRegistry`
 (`clozn/server/request_gate.py`) keyed by the configured model IDs. Two requests naming different

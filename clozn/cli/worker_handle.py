@@ -112,6 +112,17 @@ class WorkerHandle:
         mid generation or mid mutation is never idle even if nothing *started*
         recently, and a worker that finished five minutes ago is idle even if
         it was hot a moment before that.
+
+        Caveat this property cannot express by itself: ``False`` means "zero calls
+        currently tracked," which is only the same fact as "genuinely idle" if
+        something actually calls :meth:`track_call` around every real call this
+        handle makes. In production today nothing does -- real generation traffic
+        flows gateway<->worker directly and never touches the supervisor process,
+        so this reads permanently False regardless of what the worker is actually
+        doing (see docs/design/006-cross-process-cold-load-protocol.md's Context
+        section). ``WorkerRegistry`` is responsible for not trusting this value
+        until it was constructed with ``busy_tracking_wired=True``; this property
+        itself has no way to know whether it is being fed real traffic.
         """
         with self._call_cond:
             return self.active_calls > 0

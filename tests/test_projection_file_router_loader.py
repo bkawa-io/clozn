@@ -460,6 +460,12 @@ def test_projection_file_router_eviction_respects_in_flight_work_and_resident_li
     registry = WorkerRegistry(
         [alpha_def, cold_def], default_model_id="alpha", preload_model_ids=["alpha"],
         max_loaded_workers=1, spawn=spawn,
+        # alpha's busy state below is injected for real via track_call(); tell the
+        # registry to trust it -- see UnverifiableWorkerStateError / ADR 006. Without
+        # this, eviction would fail closed with no_verifiable_idle_worker instead of
+        # no_evictable_worker, because nothing else in this test's construction
+        # declares a trustworthy busy signal.
+        busy_tracking_wired=True,
     )
     registry.start_preloaded()
     projection_path = _write_projection(tmp_path, registry)
