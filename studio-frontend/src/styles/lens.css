@@ -2878,3 +2878,690 @@
   color: var(--danger);
   font-size: 7px;
 }
+
+/* ================================================================= diagnosis-repair (D5) ============ */
+
+.diagnosis-repair {
+  display: grid;
+  gap: 14px;
+  padding-bottom: 4px;
+}
+
+.diagnosis-repair-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 14px;
+}
+
+.diagnosis-repair-headline {
+  color: var(--ink-soft);
+  font-size: 9px;
+  line-height: 1.5;
+  max-width: 60%;
+  text-align: right;
+}
+
+.diagnosis-repair-empty {
+  margin: 0 14px 8px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .08em;
+}
+
+.diagnosis-repair-notice {
+  display: grid;
+  gap: 3px;
+  margin: 0 14px 8px;
+  padding: 8px;
+  border: 1px dashed var(--line-strong);
+  color: var(--ink-faint);
+}
+
+.diagnosis-repair-notice strong {
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .08em;
+}
+
+.diagnosis-repair-notice span {
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.diagnosis-repair-notice.is-failed {
+  color: var(--danger);
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line-strong));
+  background: color-mix(in srgb, var(--danger) 5%, transparent);
+}
+
+.diagnosis-repair-redacted {
+  margin: 0 14px;
+  padding: 6px 8px;
+  border: 1px dashed var(--signal-peach);
+  color: color-mix(in srgb, var(--signal-peach) 70%, var(--ink-faint));
+  font-size: 9px;
+}
+
+/* -- three registers, deliberately three separately-bordered panels, never one shared list ---------- */
+
+.diagnosis-repair-registers {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0 14px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+.diagnosis-repair-register {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  background: var(--panel);
+}
+
+.diagnosis-repair-register > header {
+  display: grid;
+  gap: 3px;
+}
+
+.diagnosis-repair-register > header > span {
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  font-weight: 600;
+  letter-spacing: .05em;
+}
+
+.diagnosis-repair-register > header > b {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  font-weight: 500;
+  letter-spacing: .04em;
+}
+
+.diagnosis-repair-register.is-measured > header > span { color: var(--signal-blue); }
+.diagnosis-repair-register.is-observed > header > span { color: var(--ink-soft); }
+.diagnosis-repair-register.is-plausible > header > span { color: var(--signal-peach); }
+
+.diagnosis-repair-register ol,
+.diagnosis-repair-register ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.diagnosis-repair-register li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 5px;
+  color: var(--ink-soft);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.diagnosis-repair-register.is-plausible li {
+  display: grid;
+  gap: 3px;
+}
+
+.diagnosis-repair-register.is-plausible li small {
+  color: var(--ink-faint);
+  font-size: 7px;
+  line-height: 1.4;
+}
+
+.diagnosis-repair-rank {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+}
+
+.diagnosis-repair-register-empty {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 8px;
+}
+
+.diagnosis-repair-jump {
+  padding: 1px 5px;
+  border: 1px solid var(--line-strong);
+  color: var(--signal-violet);
+  background: transparent;
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .04em;
+}
+
+.diagnosis-repair-jump:hover {
+  color: var(--ink);
+  border-color: var(--signal-violet);
+}
+
+/* -- findings ------------------------------------------------------------------------------------- */
+
+.diagnosis-repair-findings {
+  display: grid;
+  gap: 1px;
+  margin: 0 14px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+.diagnosis-repair-finding {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  background: var(--panel);
+}
+
+.diagnosis-repair-finding > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.diagnosis-repair-finding > header > div {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.diagnosis-repair-finding > header b {
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 8px;
+}
+
+.diagnosis-repair-finding > header > div > span {
+  color: var(--ink-faint);
+  font-size: 8px;
+}
+
+.diagnosis-repair-status {
+  flex: none;
+  padding: 2px 6px;
+  border: 1px solid var(--line-strong);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+
+.diagnosis-repair-status.is-finding {
+  color: var(--ink);
+  border-color: var(--signal-blue);
+  background: color-mix(in srgb, var(--signal-blue) 12%, transparent);
+}
+
+.diagnosis-repair-status.is-not-observed {
+  color: var(--ink-faint);
+}
+
+.diagnosis-repair-status.is-unavailable {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line-strong));
+}
+
+.diagnosis-repair-status.is-pending {
+  color: color-mix(in srgb, var(--signal-peach) 70%, var(--ink-faint));
+  border-color: var(--signal-peach);
+  border-style: dashed;
+}
+
+.diagnosis-repair-status.is-suppressed {
+  color: var(--ink-faint);
+  border-style: dotted;
+}
+
+.diagnosis-repair-finding-severity {
+  margin: 0;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .05em;
+}
+
+.diagnosis-repair-finding-severity b {
+  color: var(--ink-soft);
+}
+
+.diagnosis-repair-finding-summary {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.diagnosis-repair-finding-limitations,
+.diagnosis-repair-finding-evidence {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--ink-faint);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.diagnosis-repair-finding-evidence a {
+  color: var(--signal-violet);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--signal-violet) 45%, transparent);
+  text-underline-offset: 2px;
+}
+
+.diagnosis-repair-suggested {
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  border: 1px dashed var(--line-strong);
+}
+
+.diagnosis-repair-suggested-caption {
+  margin: 0;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .04em;
+  line-height: 1.5;
+}
+
+.diagnosis-repair-suggested-actions {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.diagnosis-repair-suggested-actions li {
+  display: grid;
+  gap: 2px;
+}
+
+.diagnosis-repair-suggested-actions b {
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .04em;
+}
+
+.diagnosis-repair-suggested-actions span {
+  color: var(--ink-faint);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+/* -- corrective retries ----------------------------------------------------------------------------- */
+
+.diagnosis-repair-retries {
+  margin: 0 14px 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-strong);
+}
+
+.diagnosis-repair-retries-note {
+  margin: 6px 0 10px;
+  color: var(--ink-faint);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.diagnosis-repair-action-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+.diagnosis-repair-action-list > button {
+  display: grid;
+  min-height: 84px;
+  align-content: start;
+  gap: 7px;
+  padding: 11px;
+  color: var(--ink-soft);
+  background: var(--panel);
+  text-align: left;
+}
+
+.diagnosis-repair-action-list > button:hover:not(:disabled),
+.diagnosis-repair-action-list > button.is-selected {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--signal-violet) 8%, var(--panel-raised));
+}
+
+.diagnosis-repair-action-list > button.is-selected {
+  box-shadow: inset 0 2px var(--signal-violet);
+}
+
+.diagnosis-repair-action-list > button:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.diagnosis-repair-action-list strong {
+  font-family: var(--font-machine);
+  font-size: 8px;
+  letter-spacing: .03em;
+}
+
+.diagnosis-repair-action-list span {
+  color: var(--ink-faint);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.diagnosis-repair-flow-status {
+  margin: 10px 0 0;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .06em;
+}
+
+.diagnosis-repair-flow-error {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--danger) 55%, var(--line-strong));
+  background: color-mix(in srgb, var(--danger) 5%, transparent);
+  color: var(--danger);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.diagnosis-repair-preview,
+.diagnosis-repair-result {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--signal-violet) 5%, transparent);
+  border: 1px solid var(--line);
+}
+
+.diagnosis-repair-preview > header,
+.diagnosis-repair-result > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.diagnosis-repair-preview > header span,
+.diagnosis-repair-result > header > div > span {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .08em;
+}
+
+.diagnosis-repair-preview > header b {
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 6px;
+}
+
+.diagnosis-repair-preview dl,
+.diagnosis-repair-preview-contract {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  margin: 0;
+  border: 1px solid var(--line);
+}
+
+.diagnosis-repair-preview-contract {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.diagnosis-repair-preview dl div,
+.diagnosis-repair-preview-contract div {
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border-right: 1px solid var(--line);
+}
+
+.diagnosis-repair-preview dl div:last-child,
+.diagnosis-repair-preview-contract div:last-child {
+  border-right: 0;
+}
+
+.diagnosis-repair-preview dt,
+.diagnosis-repair-preview dd,
+.diagnosis-repair-preview-contract dt,
+.diagnosis-repair-preview-contract dd {
+  margin: 0;
+  font-family: var(--font-machine);
+  font-size: 6px;
+}
+
+.diagnosis-repair-preview dt,
+.diagnosis-repair-preview-contract dt {
+  color: var(--ink-faint);
+}
+
+.diagnosis-repair-preview dd,
+.diagnosis-repair-preview-contract dd {
+  color: var(--ink-soft);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.diagnosis-repair-preview-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.diagnosis-repair-preview-buttons button,
+.diagnosis-repair-keep-group button,
+.diagnosis-repair-discard,
+.diagnosis-repair-kept button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  color: var(--ink-faint);
+  background: transparent;
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .06em;
+}
+
+.diagnosis-repair-preview-buttons button:hover:not(:disabled),
+.diagnosis-repair-keep-group button:hover:not(:disabled),
+.diagnosis-repair-discard:hover,
+.diagnosis-repair-kept button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--signal-violet) 44%, var(--line));
+  color: var(--ink);
+}
+
+.diagnosis-repair-preview-buttons button:disabled,
+.diagnosis-repair-keep-group button:disabled,
+.diagnosis-repair-kept button:disabled {
+  color: var(--ink-faint);
+  opacity: .46;
+  cursor: default;
+}
+
+.diagnosis-repair-preview-buttons button.is-primary {
+  border-color: color-mix(in srgb, var(--signal-violet) 44%, var(--line));
+  color: color-mix(in srgb, var(--signal-violet) 70%, var(--ink));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--signal-violet) 12%, transparent), transparent),
+    color-mix(in srgb, var(--panel-raised) 52%, transparent);
+}
+
+.diagnosis-repair-result > header > b {
+  font-family: var(--font-machine);
+  font-size: 7px;
+  color: var(--ink-soft);
+}
+
+.diagnosis-repair-outcome.is-succeeded { color: var(--signal-mint); }
+.diagnosis-repair-outcome.is-execution_error { color: var(--danger); }
+.diagnosis-repair-outcome.is-cancelled { color: var(--ink-faint); }
+
+.diagnosis-repair-result-outputs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+.diagnosis-repair-result-outputs article {
+  min-width: 0;
+  padding: 10px;
+  background: var(--panel);
+}
+
+.diagnosis-repair-result-outputs article.is-corrected {
+  background: color-mix(in srgb, var(--signal-violet) 7%, var(--panel));
+  box-shadow: inset 0 2px var(--signal-violet);
+}
+
+.diagnosis-repair-result-outputs header span,
+.diagnosis-repair-result-outputs header b {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+}
+
+.diagnosis-repair-result-outputs p {
+  min-height: 54px;
+  margin: 8px 0 0;
+  color: var(--ink-soft);
+  font-size: 9px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.diagnosis-repair-result-note {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.diagnosis-repair-result-failed {
+  margin: 0;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--danger) 55%, var(--line-strong));
+  background: color-mix(in srgb, var(--danger) 5%, transparent);
+  color: var(--danger);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.diagnosis-repair-compare-link {
+  justify-self: start;
+  padding: 6px 10px;
+  border: 1px solid var(--signal-violet);
+  color: var(--signal-violet);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .05em;
+}
+
+.diagnosis-repair-compare-link:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--signal-violet) 10%, transparent);
+}
+
+/* -- keep: branching retry vs preference change, two visually separate groups, never merged --------- */
+
+.diagnosis-repair-keep {
+  display: grid;
+  gap: 10px;
+}
+
+.diagnosis-repair-keep-group {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--line);
+}
+
+.diagnosis-repair-keep-group.is-branch {
+  border-left: 3px solid var(--signal-blue);
+}
+
+.diagnosis-repair-keep-group.is-preference {
+  border-left: 3px solid var(--signal-peach);
+}
+
+.diagnosis-repair-keep-group > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.diagnosis-repair-keep-group > header span {
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .04em;
+}
+
+.diagnosis-repair-keep-group > header b {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  font-weight: 500;
+}
+
+.diagnosis-repair-keep-group button {
+  display: grid;
+  gap: 3px;
+  min-height: 0;
+  padding: 8px;
+  text-align: left;
+}
+
+.diagnosis-repair-keep-group button strong {
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .03em;
+  color: var(--ink-soft);
+}
+
+.diagnosis-repair-keep-group button span {
+  color: var(--ink-faint);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.diagnosis-repair-discard {
+  justify-self: start;
+  color: var(--danger);
+}
+
+.diagnosis-repair-kept {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .04em;
+}
