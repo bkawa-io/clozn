@@ -1,0 +1,39 @@
+{
+  "schema_version": "clozn.diagnosis-narrative.v1",
+  "generated_at": "2026-07-30T00:10:00Z",
+  "run_id": "run_fixture_e",
+  "comparison_available": false,
+  "findings_schema_version": "clozn.diagnosis-findings.v1",
+  "headline": "1 ranked finding(s).",
+  "registers": {
+    "observed_changes": [],
+    "measured_effects": [
+      {
+        "rank": 1,
+        "basis": "intervention",
+        "rule_id": "R08",
+        "severity": "low",
+        "confidence": "exact",
+        "text": "source_below_measurement_floor (R08): 1 source(s) were delivered and measured but never cleared the influence measurement floor for any answer span.",
+        "evidence": [
+          {
+            "kind": "finding",
+            "rule_id": "R08"
+          },
+          {
+            "kind": "text_span",
+            "address_id": "span_575b617d611b17c597cff412"
+          }
+        ]
+      }
+    ],
+    "plausible_but_unproven": []
+  },
+  "summary": {
+    "counts": {
+      "observed_changes": 0,
+      "measured_effects": 1,
+      "plausible_but_unproven": 0
+    }
+  }
+}

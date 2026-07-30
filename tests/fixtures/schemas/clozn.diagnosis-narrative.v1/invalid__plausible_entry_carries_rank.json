@@ -1,0 +1,21 @@
+{
+  "schema_version": "clozn.diagnosis-narrative.v1",
+  "generated_at": "2026-07-30T00:00:00Z",
+  "run_id": "run_x",
+  "comparison_available": true,
+  "findings_schema_version": "clozn.diagnosis-findings.v1",
+  "headline": "1 plausible-but-unproven note(s).",
+  "registers": {
+    "observed_changes": [],
+    "measured_effects": [],
+    "plausible_but_unproven": [
+      {
+        "rank": 1,
+        "text": "identity and generation settings matched the comparison run exactly, but the output still differs; this may be sampling-sensitive.",
+        "note": "not backed by a rule finding",
+        "evidence": [{"kind": "diff_field", "dimension": "output.text"}]
+      }
+    ]
+  },
+  "summary": {"counts": {"observed_changes": 0, "measured_effects": 0, "plausible_but_unproven": 1}}
+}
