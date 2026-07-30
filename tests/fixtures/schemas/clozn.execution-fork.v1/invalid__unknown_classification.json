@@ -1,0 +1,28 @@
+{
+  "schema_version": "clozn.execution-fork.v1",
+  "plan_id": "fork_plan_0123456789abcdef0123",
+  "phase": "planned",
+  "classification": "probably_exact",
+  "parent_run_id": "run_parent",
+  "request": {
+    "position": 0,
+    "change": {"type": "none"},
+    "execution_change": {"type": "none"},
+    "change_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "identity": {},
+  "exactness": {
+    "regime": "unavailable",
+    "source": "unavailable",
+    "proof_status": "not_applicable"
+  },
+  "unavoidable_differences": [],
+  "unchanged_control": {"required": true, "status": "unavailable"},
+  "child_lineage": {
+    "parent_run_id": "run_parent",
+    "source": "fork",
+    "change_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "receipt_status": "not_created"
+  },
+  "reasons": []
+}

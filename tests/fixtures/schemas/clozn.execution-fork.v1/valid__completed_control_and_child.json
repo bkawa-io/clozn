@@ -1,0 +1,122 @@
+{
+  "schema_version": "clozn.execution-fork.v1",
+  "plan_id": "fork_plan_fedcba98765432100123",
+  "execution_id": "fork_exec_fedcba98765432100123",
+  "phase": "completed",
+  "classification": "exact_execution_fork",
+  "parent_run_id": "run_parent",
+  "parent_fingerprint_sha256": "abababababababababababababababababababababababababababababababab",
+  "request": {
+    "position": 0,
+    "change": {"type": "force_token", "token_id": 44},
+    "execution_change": {"type": "force_token", "token_id": 44},
+    "change_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "checkpoint_reference": {
+    "checkpoint_id": "ckpt-generation-a-7",
+    "worker_generation_id": "generation-a",
+    "state": "available",
+    "parent_run_id": "run_parent",
+    "prompt_tokens": 10,
+    "n_past": 13
+  },
+  "identity": {
+    "parent_runtime": {
+      "runtime_key_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "model_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "template_fingerprint": "dddddddddddddddd",
+      "engine_build": "clozn-engine-1",
+      "context_size": 4096,
+      "backend": "cpu",
+      "adapter": {
+        "present": true,
+        "identity_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "artifact_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "scale": 0.75
+      },
+      "white_box_flags": {"residual_write": true}
+    },
+    "selected_runtime": {
+      "runtime_key_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "model_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "template_fingerprint": "dddddddddddddddd",
+      "engine_build": "clozn-engine-1",
+      "context_size": 4096,
+      "backend": "cpu",
+      "adapter": {
+        "present": true,
+        "identity_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "artifact_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "scale": 0.75
+      },
+      "white_box_flags": {"residual_write": true}
+    },
+    "selected_worker": {
+      "worker_id": "worker-a",
+      "worker_generation_id": "generation-a",
+      "protocol_version": "1.1"
+    }
+  },
+  "exactness": {
+    "regime": "prompt_boundary_reprefill",
+    "source": "reprefill",
+    "proof_status": "confirmed",
+    "truncate_to": 10,
+    "boundary_shape_true": true
+  },
+  "unavoidable_differences": [],
+  "unchanged_control": {
+    "required": true,
+    "status": "matched",
+    "result": {
+      "status": "matched",
+      "exact_match": true,
+      "control_run_id": "run_control",
+      "parent_suffix_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "control_suffix_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "note": "token ids and text matched"
+    }
+  },
+  "child_lineage": {
+    "parent_run_id": "run_parent",
+    "child_run_id": "run_child",
+    "source": "fork",
+    "change_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "receipt_status": "created"
+  },
+  "execution": {
+    "status": "succeeded",
+    "started_ts": 1000.0,
+    "ended_ts": 1001.0,
+    "control": {
+      "worker_generation_id": "generation-a",
+      "restore_mode": "reprefill",
+      "exactness_source": "reprefill",
+      "boundary_shape_true": true,
+      "n_past_restored": 10,
+      "token_count": 3,
+      "token_ids_sha256": "1212121212121212121212121212121212121212121212121212121212121212",
+      "text_sha256": "1313131313131313131313131313131313131313131313131313131313131313",
+      "intervention_type": "none",
+      "intervention_sha256": "1414141414141414141414141414141414141414141414141414141414141414"
+    },
+    "intervention": {
+      "worker_generation_id": "generation-a",
+      "restore_mode": "reprefill",
+      "exactness_source": "reprefill",
+      "boundary_shape_true": true,
+      "n_past_restored": 10,
+      "token_count": 3,
+      "token_ids_sha256": "1515151515151515151515151515151515151515151515151515151515151515",
+      "text_sha256": "1616161616161616161616161616161616161616161616161616161616161616",
+      "intervention_type": "force_token",
+      "intervention_sha256": "1717171717171717171717171717171717171717171717171717171717171717"
+    }
+  },
+  "reasons": [
+    {
+      "code": "exact_preconditions_met",
+      "message": "the exact path was executed and its control matched"
+    }
+  ]
+}

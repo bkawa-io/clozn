@@ -18,6 +18,7 @@ import sqlite3
 import secrets
 import time
 import uuid
+from copy import deepcopy
 
 from clozn._io import atomic_write_json
 
@@ -285,7 +286,8 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
            client_key: str | None = None, client_key_source: str | None = None,
            project_key: str | None = None,
            output_contract: dict | None = None,
-           sections: list | None = None) -> str | None:
+           sections: list | None = None,
+           execution_fork_receipt: dict | None = None) -> str | None:
     """Persist a completed run and return its id. Logging failures remain non-fatal.
 
     `identity` (roadmap S4.3): the immutable reproduction-identity block from
@@ -394,6 +396,20 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
         }
         if sections:
             rec["sections"] = list(sections)
+        if execution_fork_receipt is not None:
+            # FORK-01: the generated run id is allocated inside this transaction boundary, so only the
+            # store can put that exact id into the immutable receipt before its first (and only) write.
+            # Failed controls are not runs and use execution_fork_results instead; this seam is for a
+            # real, successfully-generated intervention child only.
+            receipt = deepcopy(execution_fork_receipt)
+            lineage = receipt.get("child_lineage")
+            if not isinstance(lineage, dict) or receipt.get("phase") != "completed":
+                raise ValueError("execution_fork_receipt must describe a completed child")
+            lineage["child_run_id"] = rid
+            lineage["receipt_status"] = "created"
+            from clozn import schemas
+            schemas.validate(receipt, "clozn.execution-fork.v1")
+            rec["execution_fork"] = receipt
         rec["flags"] = _flags(rec)
         if not _put(rec):
             return None
