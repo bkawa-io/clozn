@@ -1,0 +1,19 @@
+{
+  "schema_version": "clozn.answer-claims.v1",
+  "run_id": "run-fixture-4",
+  "privacy": "metadata_only",
+  "offset_contract": {
+    "unit": "unicode_code_points",
+    "interval": "half_open",
+    "hash_algorithm": "sha256",
+    "canonicalization": "exact_string_utf8_v1"
+  },
+  "segmentation": {
+    "state": "unavailable",
+    "reason": "no_answer_text"
+  },
+  "answer_source": {
+    "basis": "recorded_answer"
+  },
+  "claims": []
+}

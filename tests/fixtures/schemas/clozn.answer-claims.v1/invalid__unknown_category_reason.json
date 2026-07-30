@@ -1,0 +1,183 @@
+{
+  "schema_version": "clozn.answer-claims.v1",
+  "run_id": "run-fixture-1",
+  "privacy": "metadata_only",
+  "offset_contract": {
+    "unit": "unicode_code_points",
+    "interval": "half_open",
+    "hash_algorithm": "sha256",
+    "canonicalization": "exact_string_utf8_v1"
+  },
+  "segmentation": {
+    "state": "ok",
+    "claim_count": 5
+  },
+  "answer_source": {
+    "basis": "recorded_answer",
+    "basis_sha256": "9c772f701da077e81d11be99d9029bc13c1d68ee803d383d512142cac73f6a37",
+    "basis_code_points": 139,
+    "basis_utf8_bytes": 139
+  },
+  "claims": [
+    {
+      "index": 0,
+      "category": "factual_claim",
+      "category_reason": "vibes",
+      "text_span": {
+        "address_id": "span_4cb9302c99c982fda3acd79b",
+        "run_id": "run-fixture-1",
+        "kind": "claim",
+        "relation_key": "rel_f0b185d5410eaaadd84ae352",
+        "native_ref": {
+          "artifact_schema": "clozn.answer-claims.v1",
+          "collection": "derived.claims",
+          "id": "claim-0"
+        },
+        "resolution": {
+          "state": "metadata_only",
+          "canonical": {
+            "basis": "recorded_answer",
+            "unit": "unicode_code_points",
+            "interval": "half_open",
+            "start": 0,
+            "end": 39,
+            "basis_sha256": "9c772f701da077e81d11be99d9029bc13c1d68ee803d383d512142cac73f6a37",
+            "span_sha256": "82604b5ba87febf461c893913fabaffe6168e4208b80bfe11ce3221d665af08d",
+            "span_code_points": 39,
+            "basis_code_points": 139,
+            "basis_utf8_bytes": 139,
+            "span_utf8_bytes": 39
+          }
+        }
+      }
+    },
+    {
+      "index": 1,
+      "category": "recommendation",
+      "category_reason": "recommendation_marker",
+      "text_span": {
+        "address_id": "span_6523465c9f8d6b3a29667aca",
+        "run_id": "run-fixture-1",
+        "kind": "claim",
+        "relation_key": "rel_6727cf0f6b1492d6be427332",
+        "native_ref": {
+          "artifact_schema": "clozn.answer-claims.v1",
+          "collection": "derived.claims",
+          "id": "claim-1"
+        },
+        "resolution": {
+          "state": "metadata_only",
+          "canonical": {
+            "basis": "recorded_answer",
+            "unit": "unicode_code_points",
+            "interval": "half_open",
+            "start": 40,
+            "end": 67,
+            "basis_sha256": "9c772f701da077e81d11be99d9029bc13c1d68ee803d383d512142cac73f6a37",
+            "span_sha256": "38b3ead0d48a4eaefe9e3929277b1528a75a3cea0a023e587168d98438328c97",
+            "span_code_points": 27,
+            "basis_code_points": 139,
+            "basis_utf8_bytes": 139,
+            "span_utf8_bytes": 27
+          }
+        }
+      }
+    },
+    {
+      "index": 2,
+      "category": "uncertainty_statement",
+      "category_reason": "hedge_marker",
+      "text_span": {
+        "address_id": "span_c7136b9c23ba7339f3d10849",
+        "run_id": "run-fixture-1",
+        "kind": "claim",
+        "relation_key": "rel_5af1776a189c5fc302a684b9",
+        "native_ref": {
+          "artifact_schema": "clozn.answer-claims.v1",
+          "collection": "derived.claims",
+          "id": "claim-2"
+        },
+        "resolution": {
+          "state": "metadata_only",
+          "canonical": {
+            "basis": "recorded_answer",
+            "unit": "unicode_code_points",
+            "interval": "half_open",
+            "start": 68,
+            "end": 98,
+            "basis_sha256": "9c772f701da077e81d11be99d9029bc13c1d68ee803d383d512142cac73f6a37",
+            "span_sha256": "18fc926c2d400d8035deefc2a1ccf26f35b9fb88be0810dfa73f757126b48943",
+            "span_code_points": 30,
+            "basis_code_points": 139,
+            "basis_utf8_bytes": 139,
+            "span_utf8_bytes": 30
+          }
+        }
+      }
+    },
+    {
+      "index": 3,
+      "category": "non_verifiable_prose",
+      "category_reason": "no_deterministic_category_match",
+      "text_span": {
+        "address_id": "span_7fc7fca28bcf7d89536f2da9",
+        "run_id": "run-fixture-1",
+        "kind": "claim",
+        "relation_key": "rel_018c31fc8f7c05f08089569e",
+        "native_ref": {
+          "artifact_schema": "clozn.answer-claims.v1",
+          "collection": "derived.claims",
+          "id": "claim-3"
+        },
+        "resolution": {
+          "state": "metadata_only",
+          "canonical": {
+            "basis": "recorded_answer",
+            "unit": "unicode_code_points",
+            "interval": "half_open",
+            "start": 99,
+            "end": 122,
+            "basis_sha256": "9c772f701da077e81d11be99d9029bc13c1d68ee803d383d512142cac73f6a37",
+            "span_sha256": "ba0ae991285f3b46f93ec53314df1372d1e09fb83e3661b17009ca8093801e04",
+            "span_code_points": 23,
+            "basis_code_points": 139,
+            "basis_utf8_bytes": 139,
+            "span_utf8_bytes": 23
+          }
+        }
+      }
+    },
+    {
+      "index": 4,
+      "category": "non_verifiable_prose",
+      "category_reason": "no_deterministic_category_match",
+      "text_span": {
+        "address_id": "span_7796268567b5e43882a1197c",
+        "run_id": "run-fixture-1",
+        "kind": "claim",
+        "relation_key": "rel_5a7a63a75a4b1606a9b6df44",
+        "native_ref": {
+          "artifact_schema": "clozn.answer-claims.v1",
+          "collection": "derived.claims",
+          "id": "claim-4"
+        },
+        "resolution": {
+          "state": "metadata_only",
+          "canonical": {
+            "basis": "recorded_answer",
+            "unit": "unicode_code_points",
+            "interval": "half_open",
+            "start": 123,
+            "end": 139,
+            "basis_sha256": "9c772f701da077e81d11be99d9029bc13c1d68ee803d383d512142cac73f6a37",
+            "span_sha256": "b5fa21c416dddafca4d98ca607d0e6ac11487c5022a580b516356aba0ca10b97",
+            "span_code_points": 16,
+            "basis_code_points": 139,
+            "basis_utf8_bytes": 139,
+            "span_utf8_bytes": 16
+          }
+        }
+      }
+    }
+  ]
+}

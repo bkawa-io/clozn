@@ -1,0 +1,306 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.answer-claims.v1",
+  "title": "Deterministic claim segmentation over one run's recorded answer",
+  "description": "A derived, read-only projection over run.response. Never a run migration. Each claim's text_span is the exact clozn.text-span-addresses.v1 address shape (kind 'claim', native_ref.collection 'derived.claims'), duplicated locally in this schema's $defs because this validator only resolves local '#/$defs/NAME' refs -- the shape and the values it validates are identical to clozn.text-span-addresses.v1's own 'address' definition, not a second addressing scheme. Category assignment is deterministic and rule-based (see clozn/runs/claims.py's RULES table); category_reason names the exact rule that fired.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "privacy",
+    "offset_contract",
+    "segmentation",
+    "answer_source",
+    "claims"
+  ],
+  "properties": {
+    "schema_version": {"const": "clozn.answer-claims.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "privacy": {"enum": ["full", "metadata_only"]},
+    "offset_contract": {
+      "type": "object",
+      "required": ["unit", "interval", "hash_algorithm", "canonicalization"],
+      "properties": {
+        "unit": {"const": "unicode_code_points"},
+        "interval": {"const": "half_open"},
+        "hash_algorithm": {"const": "sha256"},
+        "canonicalization": {"const": "exact_string_utf8_v1"}
+      },
+      "additionalProperties": false
+    },
+    "segmentation": {"$ref": "#/$defs/segmentation"},
+    "answer_source": {
+      "type": "object",
+      "required": ["basis"],
+      "properties": {
+        "basis": {"const": "recorded_answer"},
+        "basis_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "basis_code_points": {"type": "integer", "minimum": 0},
+        "basis_utf8_bytes": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "claims": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/claim"}
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "segmentation": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {"enum": ["ok", "empty", "segmentation_limited", "unavailable"]},
+        "reason": {
+          "enum": [
+            "answer_text_empty",
+            "answer_text_redacted",
+            "no_answer_text",
+            "unsupported_script_density"
+          ]
+        },
+        "claim_count": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": ["state", "claim_count"],
+          "properties": {"state": {"const": "ok"}}
+        },
+        {
+          "required": ["state", "reason"],
+          "properties": {"state": {"enum": ["empty", "segmentation_limited", "unavailable"]}}
+        }
+      ]
+    },
+    "claim": {
+      "type": "object",
+      "required": ["index", "category", "category_reason", "text_span"],
+      "properties": {
+        "index": {"type": "integer", "minimum": 0},
+        "category": {
+          "enum": [
+            "factual_claim",
+            "recommendation",
+            "uncertainty_statement",
+            "instruction_procedure",
+            "non_verifiable_prose"
+          ]
+        },
+        "category_reason": {
+          "enum": [
+            "code_fence_block",
+            "interrogative_sentence",
+            "hedge_marker",
+            "recommendation_marker",
+            "list_item_imperative",
+            "imperative_lead",
+            "factual_declarative",
+            "no_deterministic_category_match"
+          ]
+        },
+        "text_span": {"$ref": "#/$defs/address"}
+      },
+      "additionalProperties": false
+    },
+    "recorded_hash": {
+      "type": "object",
+      "required": ["algorithm", "value", "scope"],
+      "properties": {
+        "algorithm": {"enum": ["sha256", "sha256_truncated_64bit"]},
+        "value": {
+          "type": "string",
+          "pattern": "^[0-9a-f]+$"
+        },
+        "scope": {"enum": ["canonical_basis", "span"]}
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {
+            "algorithm": {"const": "sha256"},
+            "value": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          }
+        },
+        {
+          "properties": {
+            "algorithm": {"const": "sha256_truncated_64bit"},
+            "value": {"type": "string", "pattern": "^[0-9a-f]{16}$"}
+          }
+        }
+      ]
+    },
+    "native_ref": {
+      "type": "object",
+      "required": ["artifact_schema", "collection", "id"],
+      "properties": {
+        "artifact_schema": {"const": "clozn.answer-claims.v1"},
+        "collection": {"const": "derived.claims"},
+        "id": {
+          "type": "string",
+          "pattern": "^claim-\\d+$"
+        },
+        "parent_id": {"type": "string", "minLength": 1},
+        "segment_id": {"type": "string", "minLength": 1},
+        "client_source_id": {"type": "string", "minLength": 1},
+        "source_label": {"type": "string"},
+        "selected": {"type": "boolean"},
+        "recorded_hash": {"$ref": "#/$defs/recorded_hash"}
+      },
+      "additionalProperties": false
+    },
+    "canonical_span": {
+      "type": "object",
+      "required": [
+        "basis",
+        "unit",
+        "interval",
+        "start",
+        "end",
+        "basis_sha256",
+        "span_sha256"
+      ],
+      "properties": {
+        "basis": {"const": "recorded_answer"},
+        "unit": {"const": "unicode_code_points"},
+        "interval": {"const": "half_open"},
+        "start": {"type": "integer", "minimum": 0},
+        "end": {"type": "integer", "minimum": 0},
+        "basis_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "span_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "basis_code_points": {"type": "integer", "minimum": 0},
+        "span_code_points": {"type": "integer", "minimum": 0},
+        "basis_utf8_bytes": {"type": "integer", "minimum": 0},
+        "span_utf8_bytes": {"type": "integer", "minimum": 0},
+        "text": {
+          "type": "string",
+          "description": "Present only for a full projection whose exact selected text remains available."
+        }
+      },
+      "additionalProperties": false
+    },
+    "canonical_span_metadata": {
+      "type": "object",
+      "description": "The metadata-only canonical shape deliberately has no text property, exactly matching clozn.text-span-addresses.v1's own closed metadata-only shape.",
+      "required": [
+        "basis",
+        "unit",
+        "interval",
+        "start",
+        "end",
+        "basis_sha256",
+        "span_sha256"
+      ],
+      "properties": {
+        "basis": {"const": "recorded_answer"},
+        "unit": {"const": "unicode_code_points"},
+        "interval": {"const": "half_open"},
+        "start": {"type": "integer", "minimum": 0},
+        "end": {"type": "integer", "minimum": 0},
+        "basis_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "span_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "basis_code_points": {"type": "integer", "minimum": 0},
+        "span_code_points": {"type": "integer", "minimum": 0},
+        "basis_utf8_bytes": {"type": "integer", "minimum": 0},
+        "span_utf8_bytes": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "resolution": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {
+          "enum": ["exact", "metadata_only", "drifted", "redacted", "unavailable"]
+        },
+        "canonical": {"$ref": "#/$defs/canonical_span"},
+        "reason": {
+          "enum": [
+            "basis_hash_mismatch",
+            "span_text_hash_mismatch",
+            "offset_out_of_bounds",
+            "invalid_offsets",
+            "invalid_text_encoding",
+            "source_text_redacted",
+            "canonical_basis_unavailable"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": ["state", "canonical"],
+          "properties": {
+            "state": {"const": "exact"},
+            "canonical": {
+              "type": "object",
+              "required": ["text"]
+            }
+          }
+        },
+        {
+          "required": ["state", "canonical"],
+          "properties": {
+            "state": {"const": "metadata_only"},
+            "canonical": {"$ref": "#/$defs/canonical_span_metadata"}
+          }
+        },
+        {
+          "required": ["state", "canonical", "reason"],
+          "properties": {
+            "state": {"const": "drifted"},
+            "canonical": {"$ref": "#/$defs/canonical_span_metadata"}
+          }
+        },
+        {
+          "required": ["state", "reason"],
+          "properties": {
+            "state": {"enum": ["redacted", "unavailable"]}
+          }
+        }
+      ]
+    },
+    "address": {
+      "type": "object",
+      "required": [
+        "address_id",
+        "run_id",
+        "kind",
+        "relation_key",
+        "native_ref",
+        "resolution"
+      ],
+      "properties": {
+        "address_id": {
+          "type": "string",
+          "pattern": "^span_[0-9a-f]{24}$"
+        },
+        "run_id": {"type": "string", "minLength": 1},
+        "kind": {"const": "claim"},
+        "relation_key": {
+          "type": "string",
+          "pattern": "^rel_[0-9a-f]{24}$"
+        },
+        "native_ref": {"$ref": "#/$defs/native_ref"},
+        "resolution": {"$ref": "#/$defs/resolution"}
+      },
+      "additionalProperties": false
+    }
+  }
+}
