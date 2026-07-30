@@ -501,7 +501,9 @@ export function DiagnosisRepair({ runId }: DiagnosisRepairProps) {
 
       <section className="diagnosis-repair-retries" aria-label="Corrective retries">
         <header className="section-title">
-          <h3>Corrective retries</h3>
+          {/* id is C4's own anchor target ("Retry with a correction" in AskAnotherQuestion.tsx) --
+              scrolled to, never a route, so this stays a plain id rather than an aria-labelledby wire. */}
+          <h3 id="diagnosis-repair-retries-title">Corrective retries</h3>
           <span>{registryDoc?.actions.length ?? 0}</span>
         </header>
         <p className="diagnosis-repair-retries-note">

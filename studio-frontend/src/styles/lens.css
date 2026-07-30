@@ -4151,3 +4151,276 @@
   color: var(--ink-faint);
   font-size: 8px;
 }
+
+/* ================================================================= ask-another-question (C4) ======= */
+
+.ask-another {
+  display: grid;
+  gap: 12px;
+  padding-bottom: 4px;
+  border-top: 1px solid var(--line);
+}
+
+.ask-another-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px 0;
+}
+
+.ask-another-head h3 {
+  margin: 2px 0 0;
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+
+.ask-another-runnable {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .06em;
+  white-space: nowrap;
+}
+
+.ask-another-boundary {
+  margin: 0;
+  padding: 0 14px;
+  color: var(--ink-faint);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+/* Deliberately NOT a chat idiom -- a grid of stateful buttons, matching diagnosis-repair-action-list's
+   own shape, not a message list. See AskAnotherQuestion.tsx's own doc comment. */
+.ask-another-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 1px;
+  margin: 0 14px;
+  padding: 0;
+  background: var(--line);
+  border: 1px solid var(--line);
+  list-style: none;
+}
+
+.ask-another-chip {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  padding: 10px 11px;
+  background: var(--panel);
+}
+
+.ask-another-chip > button {
+  display: grid;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--ink-soft);
+  text-align: left;
+}
+
+.ask-another-chip > button:hover:not(:disabled) {
+  color: var(--ink);
+}
+
+.ask-another-chip > button:disabled {
+  cursor: not-allowed;
+}
+
+.ask-another-chip strong {
+  font-family: var(--font-machine);
+  font-size: 8px;
+  letter-spacing: .03em;
+}
+
+.ask-another-chip-state {
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .07em;
+  color: var(--ink-faint);
+}
+
+.ask-another-chip-backing {
+  color: var(--ink-faint);
+  font-size: 7px;
+  line-height: 1.35;
+}
+
+.ask-another-chip.is-available .ask-another-chip-state {
+  color: var(--signal-mint);
+}
+
+.ask-another-chip.is-partial .ask-another-chip-state {
+  color: color-mix(in srgb, var(--signal-peach) 70%, var(--ink-faint));
+}
+
+.ask-another-chip.is-partial {
+  border-left: 2px dashed var(--signal-peach);
+}
+
+.ask-another-chip.is-unavailable {
+  opacity: .72;
+}
+
+.ask-another-chip.is-unavailable .ask-another-chip-state {
+  color: var(--danger);
+}
+
+.ask-another-chip.is-unavailable > button > strong {
+  color: var(--ink-faint);
+}
+
+.ask-another-chip-reason {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.ask-another-secondary {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .03em;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.ask-another-secondary:hover {
+  color: var(--ink);
+}
+
+.ask-another-freeform {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin: 0 14px;
+}
+
+.ask-another-freeform label {
+  display: grid;
+  gap: 4px;
+  flex: 1 1 auto;
+}
+
+.ask-another-freeform label > span {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .08em;
+}
+
+.ask-another-freeform input {
+  padding: 7px 9px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-raised);
+  color: var(--ink);
+  font-size: 9px;
+}
+
+.ask-another-freeform input::placeholder {
+  color: var(--ink-faint);
+}
+
+.ask-another-freeform button {
+  padding: 8px 14px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 8px;
+  letter-spacing: .05em;
+}
+
+.ask-another-freeform button:hover:not(:disabled) {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--signal-violet) 8%, var(--panel-raised));
+}
+
+.ask-another-freeform button:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.ask-another-notice {
+  margin: -4px 14px 0;
+  padding: 7px 9px;
+  border: 1px dashed var(--line-strong);
+  color: var(--ink-soft);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+/* A dated, structured log -- not a scrollback of turns. See AskAnotherQuestion.tsx's own
+   "visually distinct from a chat turn" doc comment. */
+.ask-another-history {
+  margin: 0 14px 4px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+
+.ask-another-history-empty {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 8px;
+}
+
+.ask-another-history-list {
+  display: grid;
+  gap: 1px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+.ask-another-history-list > li > button {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border: none;
+  background: var(--panel);
+  color: var(--ink-soft);
+  text-align: left;
+}
+
+.ask-another-history-list > li > button:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--signal-violet) 6%, var(--panel-raised));
+}
+
+.ask-another-history-list time {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .03em;
+  white-space: nowrap;
+}
+
+.ask-another-history-list strong {
+  font-family: var(--font-machine);
+  font-size: 8px;
+}
+
+.ask-another-history-query {
+  color: var(--ink-faint);
+  font-size: 8px;
+  font-style: italic;
+}
+
+.ask-another-history-list small {
+  flex-basis: 100%;
+  color: var(--ink-faint);
+  font-size: 7.5px;
+}
