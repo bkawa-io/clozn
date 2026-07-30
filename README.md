@@ -130,8 +130,42 @@ uncalibrated).
 
 `clozn run …` works once the repo root is on PATH; otherwise `python -m clozn run …`. Put GGUFs in
 `~/.clozn/models`, set `CLOZN_MODELS=<dir>`, or list dirs in `~/.clozn/config.json`. For this unreleased
-source snapshot, build the engine first: `cd engine/core && build_gpu.bat` (GPU, CUDA) or
-`build_serve.bat` (CPU).
+source snapshot, build the engine first. On Windows: `cd engine/core && build_gpu.bat` (GPU, CUDA) or
+`build_serve.bat` (CPU). On Linux/macOS: `./engine/core/build_gpu.sh` (GPU: CUDA on Linux, Metal on
+macOS) or `./engine/core/build_serve.sh` (CPU). See [Platform support](#platform-support) below for what
+is and is not independently verified on each.
+
+## Platform support
+
+The Python side (`clozn/`, stdlib-only) was never Windows-only: `clozn/setup/platform_detect.py`
+already detects Windows/Linux/macOS and x86_64/arm64 and treats every Apple Silicon Mac as Metal-capable
+by design, and both `clozn.sh` (POSIX) and `clozn.cmd` (Windows) are documented launchers.
+
+What genuinely had no POSIX path until this change: `engine/core/`'s build convenience scripts
+(`build_serve.bat`, `build_gpu.bat`, …) had no `.sh` equivalent, and `_env_with_dlls()` — the code that
+puts the engine's own build directory on a spawned worker's library search path — only ever wrote
+`PATH`, the Windows DLL mechanism. That made it inert rather than broken on Linux/macOS: a CMake-built
+binary normally also carries an rpath into its own build tree, which is almost certainly why a
+locally-built engine has run on a Mac before despite this. `engine/core/build_serve.sh` / `build_gpu.sh`
+now mirror the `.bat` scripts (`build_core.sh`, `build_cuda.sh`, `build_sae.sh` too — see
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)), and `_env_with_dlls()` now also sets `LD_LIBRARY_PATH`
+(Linux) / `DYLD_LIBRARY_PATH` (macOS) as an additional robustness path, not a fix for a prior failure.
+
+What is actually verified, per platform, as of this snapshot:
+
+| Platform | Python CLI/product | Engine build (CMake) | How that is known |
+|---|---|---|---|
+| Windows x64 | yes | CPU + CUDA GPU | The primary dev machine for this repo (RTX 5080); built and run directly, repeatedly. |
+| Linux x64, CPU | yes (stdlib-only) | yes | `.github/workflows/real-runtime-smoke.yml` builds `clozn-server`, downloads a real GGUF, and runs `clozn smoke --deep` against it on `ubuntu-24.04` every night — the strongest non-Windows evidence in this repo. |
+| Linux x64, CUDA GPU | yes | scripted (`build_gpu.sh` detects `nvcc` on `PATH`) | Not built or run anywhere; no GPU CI runner exists for this repo. |
+| macOS, Metal | yes | scripted (`build_gpu.sh` detects Darwin) | The repo owner reports having run clozn on a Mac. No CI run or build artifact for it exists in this repository: `.github/workflows/native-engine-release.yml` has a `macos-14`/Metal release-matrix cell, but that workflow has never been dispatched (0 recorded runs). Treat this row as owner-reported, not reproducible from this repo alone. |
+
+"Scripted" means the CMake invocation and platform-detection logic exist and are exercised by unit tests
+that simulate the target platform (`tests/test_env_with_dlls_platform.py`) — not that a build has
+actually run there. None of this is a claim that Linux CUDA or macOS are unsupported in principle; the
+codebase (standard CMake, `if(WIN32)`/`if(MSVC)`-gated C++, POSIX-aware Python process management) was
+already structurally cross-platform. It is a claim about which cells have and have not actually been
+exercised, so nobody trusts a row this document doesn't back up.
 
 ## Layout
 

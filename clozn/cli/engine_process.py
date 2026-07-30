@@ -18,6 +18,7 @@ import json
 import os
 import socket
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -29,10 +30,18 @@ ENGINE_CORE = os.path.join(REPO, "engine", "core")
 BUILDS = [("build-gpu", True), ("build-cuda", True),
           ("build-ggml-cpu", False), ("build-serve", False), ("build-cpu", False)]
 
-# clozn-server.exe's own shared libraries (llama.cpp's split build: ggml*.dll + llama*.dll). Used as
-# existence markers below -- a candidate directory only counts as a "DLL dir" if one of these is actually
-# in it, not merely because a plausibly-named subfolder happens to exist (see _dll_dirs_for).
-_ENGINE_DLL_MARKERS = ("llama.dll", "ggml.dll")
+# clozn-server's own shared libraries (llama.cpp's split build: ggml*.{dll,so,dylib} + llama*.{dll,so,dylib}).
+# Used as existence markers below -- a candidate directory only counts as a "DLL dir" if one of these is
+# actually in it, not merely because a plausibly-named subfolder happens to exist (see _dll_dirs_for).
+# Windows is the platform this repo builds and qualifies continuously (this dev box, RTX 5080); Linux CPU
+# also has a real, CI-proven build (.github/workflows/real-runtime-smoke.yml builds+runs clozn-server on
+# ubuntu-24.04 nightly). Neither of those emits a loadable `.so` plugin next to the exe today (the Linux
+# CPU build links statically), so `.dll` remains the only marker that has ever actually matched in
+# practice. The `.so`/`.dylib` names are here so a future build that DOES emit loadable backend plugins
+# (e.g. a dynamically-loaded ggml-cuda/ggml-metal backend -- see engine/core/build_gpu.sh) is found the
+# same way, instead of silently limiting dll_dirs to just the exe's own directory. Checking a few extra
+# never-matching names on Windows is a no-op there.
+_ENGINE_DLL_MARKERS = ("llama.dll", "ggml.dll", "libllama.so", "libggml.so", "libllama.dylib", "libggml.dylib")
 
 
 def _dll_dirs_for(exe: str) -> list[str]:
@@ -217,14 +226,50 @@ def _free_port() -> int:
 
 
 def _env_with_dlls(dll_dirs: list[str], gpu: bool) -> dict:
+    """Build the subprocess environment for the engine binary: put its own build directory (dll_dirs) --
+    and, for a GPU build, the CUDA runtime -- wherever THIS platform's dynamic linker actually looks.
+    Windows resolves DLLs via PATH, which is why this function existed at all (task #103: a spawned
+    clozn-server.exe hit STATUS_DLL_NOT_FOUND without it). Linux/macOS were previously inert here, not
+    broken by it: this only ever wrote PATH, which those platforms' dynamic linkers don't consult for
+    shared-library resolution -- but a CMake-built binary typically also carries an rpath pointing at its
+    own build tree, so it resolves its libs without any help from this function regardless. That is the
+    likely reason a locally-built engine has run on a Mac before despite this function never having
+    touched DYLD_LIBRARY_PATH. Setting LD_LIBRARY_PATH/DYLD_LIBRARY_PATH here is a genuine ADDITIONAL
+    robustness path for layouts where rpath isn't enough (a GPU backend loaded as a separate plugin at
+    runtime, e.g. a future dynamically-loaded ggml-cuda.so -- see engine/core/build_gpu.sh), not a fix
+    for something that was failing before.
+
+    Windows behavior is unchanged byte-for-byte from before this function became platform-aware: same
+    hardcoded CUDA v13.3 bin dirs, same existence checks, same PATH construction, same key. See
+    tests/test_env_with_dlls_platform.py for the pinning tests and tests/test_runtime_architecture.py's
+    test_env_with_dlls_prepends_the_dll_dir_without_mutating_os_environ for the pre-existing contract
+    this must keep holding on whichever platform actually runs it.
+    """
     env = dict(os.environ)
     extra = list(dll_dirs)
-    if gpu:
+    if gpu and sys.platform == "win32":
         for c in (r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3\bin\x64",
                   r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3\bin"):
             if os.path.isdir(c):
                 extra.append(c)
-    env["PATH"] = os.pathsep.join(extra + [env.get("PATH", "")])
+    elif gpu and sys.platform.startswith("linux"):
+        # No fixed install path to guess here (Windows ships one CUDA installer to one well-known
+        # location; Linux CUDA installs are apt/conda/manual and vary). CUDA_HOME is the toolkit's own
+        # documented env var; when set, its lib64 is the runtime's usual home. When unset, assume the
+        # CUDA runtime is already reachable via LD_LIBRARY_PATH (a system or conda CUDA install) --
+        # exactly the assumption engine/core/build_gpu.sh's nvcc-on-PATH detection already relies on.
+        cuda_home = os.environ.get("CUDA_HOME")
+        if cuda_home:
+            lib64 = os.path.join(cuda_home, "lib64")
+            if os.path.isdir(lib64):
+                extra.append(lib64)
+
+    if sys.platform == "win32":
+        env["PATH"] = os.pathsep.join(extra + [env.get("PATH", "")])
+    elif sys.platform == "darwin":
+        env["DYLD_LIBRARY_PATH"] = os.pathsep.join(extra + [env.get("DYLD_LIBRARY_PATH", "")])
+    else:
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(extra + [env.get("LD_LIBRARY_PATH", "")])
     return env
 
 

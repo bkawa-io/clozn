@@ -26,7 +26,8 @@ apply Clozn's tracked patch:
 python engine/core/third_party/bootstrap_llama.py
 ```
 
-On Linux or macOS, a portable CPU build is:
+On Linux or macOS, `engine/core/build_serve.sh` performs a portable CPU build — the same commands as
+below, just already scripted:
 
 ```bash
 cmake -S engine/core -B engine/core/build-serve \
@@ -38,10 +39,24 @@ cmake -S engine/core -B engine/core/build-serve \
 cmake --build engine/core/build-serve --target clozn-server -j
 ```
 
+For GPU acceleration on Linux/macOS, `engine/core/build_gpu.sh` picks the right backend by platform:
+CUDA on Linux when `nvcc` is on `PATH` (falling back to CPU with a warning otherwise), Metal on macOS.
+See [Platform support](../README.md#platform-support) for exactly what is and is not independently
+verified on each platform — in short: Windows CPU/CUDA and Linux CPU are proven (this repo's own dev
+box, and `real-runtime-smoke.yml`'s nightly Linux CI build, respectively); Linux CUDA and macOS/Metal
+are scripted and unit-tested (`tests/test_env_with_dlls_platform.py`) but not build-verified from this
+repository.
+
 On Windows, `engine/core/build_serve.bat` performs the equivalent build. For CUDA, use
 `engine/core/build_gpu.bat` or configure the same CMake target with `GGML_CUDA=ON` in a CUDA-capable
 toolchain. `clozn` discovers `build-serve`, `build-gpu`, and the other supported build directories
-automatically.
+automatically, on every platform — `find_engine()` in `clozn/cli/engine_process.py` only looks for a
+`clozn-server`/`clozn-server.exe` binary under those names, not a platform-specific one.
+
+`engine/core/build_core.sh` (CPU-only backend-free runtime + its unit tests, no CUDA/ggml/llama.cpp) and
+`engine/core/build_cuda.sh` / `build_sae.sh` (CUDA kernel/SAE parity tests; require `nvcc`, no macOS
+equivalent) mirror the remaining `.bat` scripts for completeness — see each script's own header comment
+for what, if anything, diverges from its `.bat` counterpart.
 
 Confirm the model-free embedded identity before loading a GGUF:
 
