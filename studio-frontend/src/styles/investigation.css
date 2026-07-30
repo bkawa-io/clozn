@@ -1,0 +1,690 @@
+/* F3 -- conversation investigation view. Deliberately NOT chat-shaped: no bubbles, no avatars, no
+   scrollback idiom -- a dense evidence ledger in the same "instrument" visual language as Runs/Lens (see
+   ConversationInvestigation.tsx's own doc comment for the honesty reasoning behind that choice). */
+
+.workspace.is-investigation.inspector-closed .investigation-timeline {
+  grid-column: 1 / -1;
+}
+
+.investigation-timeline,
+.investigation-inspector,
+.investigation-branch-overview,
+.investigation-compare-tray,
+.investigation-picker {
+  display: flex;
+  flex-direction: column;
+}
+
+/* -- shared: boundary banners, empty/error states ------------------------------------------------- */
+
+.investigation-boundary {
+  margin: 10px 14px 0;
+  color: var(--ink-soft);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.investigation-partial-banner {
+  margin: 8px 14px 0;
+  padding: 6px 9px;
+  border: 1px dashed var(--signal-peach);
+  color: color-mix(in srgb, var(--signal-peach) 75%, var(--ink-faint));
+  font-family: var(--font-machine);
+  font-size: 8px;
+  letter-spacing: .03em;
+}
+
+.investigation-empty {
+  margin: 14px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 9px;
+  letter-spacing: .04em;
+}
+
+.investigation-load-error {
+  margin: 10px 14px;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--danger) 55%, var(--line-strong));
+  color: var(--danger);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+/* -- session picker --------------------------------------------------------------------------------- */
+
+.investigation-jump {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin: 12px 14px 0;
+}
+
+.investigation-jump label {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  max-width: 420px;
+}
+
+.investigation-jump label > span {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .09em;
+}
+
+.investigation-jump input {
+  height: 28px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel-raised) 72%, transparent);
+  font-family: var(--font-machine);
+  font-size: 8px;
+}
+
+.investigation-jump button {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel-raised) 60%, transparent);
+  font-family: var(--font-machine);
+  font-size: 8px;
+  letter-spacing: .05em;
+}
+
+.investigation-jump button:disabled {
+  color: var(--ink-faint);
+  cursor: not-allowed;
+}
+
+.investigation-session-list {
+  display: grid;
+  gap: 1px;
+  margin: 12px 14px 14px;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.investigation-session-list a {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  color: inherit;
+  background: color-mix(in srgb, var(--panel-raised) 30%, transparent);
+  text-decoration: none;
+}
+
+.investigation-session-list a:hover {
+  background: color-mix(in srgb, var(--panel-raised) 48%, transparent);
+}
+
+.investigation-session-list strong {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.investigation-session-list span,
+.investigation-session-list time {
+  flex: none;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+
+/* -- candidates ("first suspicious turn") ------------------------------------------------------------ */
+
+.investigation-candidates-note {
+  margin: 8px 14px 0;
+  color: var(--ink-faint);
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.investigation-candidate-list {
+  display: grid;
+  gap: 8px;
+  margin: 10px 14px 14px;
+  padding: 0;
+  list-style: none;
+}
+
+.investigation-candidate {
+  padding: 8px 9px;
+  border: 1px solid var(--line-strong);
+}
+
+.investigation-candidate.has-candidate {
+  border-color: var(--signal-blue);
+  background: color-mix(in srgb, var(--signal-blue) 8%, transparent);
+}
+
+.investigation-candidate > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.investigation-candidate-kind {
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .05em;
+}
+
+.investigation-candidate-when {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  white-space: nowrap;
+}
+
+.investigation-candidate p {
+  margin: 0 0 6px;
+  color: var(--ink-soft);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.investigation-candidate button {
+  padding: 3px 8px;
+  border: 1px solid var(--signal-blue);
+  color: var(--ink);
+  background: transparent;
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .04em;
+}
+
+.investigation-candidate button:disabled {
+  border-color: var(--line-strong);
+  color: var(--ink-faint);
+  cursor: wait;
+}
+
+/* -- cumulative usage --------------------------------------------------------------------------------- */
+
+.investigation-cumulative-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 10px 14px 14px;
+}
+
+.investigation-cumulative-facts div {
+  display: grid;
+  gap: 2px;
+}
+
+.investigation-cumulative-facts dt {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .08em;
+}
+
+.investigation-cumulative-facts dd {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 11px;
+}
+
+/* -- turn timeline -------------------------------------------------------------------------------------- */
+
+.investigation-turn-list {
+  flex: 1;
+  min-height: 0;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.investigation-turn {
+  position: relative;
+  border-bottom: 1px solid var(--line);
+}
+
+.investigation-turn.is-redacted {
+  background: color-mix(in srgb, var(--ink-faint) 6%, transparent);
+}
+
+.investigation-turn-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  width: 100%;
+  gap: 10px;
+  padding: 9px 14px;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+}
+
+.investigation-turn-summary:hover {
+  background: color-mix(in srgb, var(--panel-raised) 40%, transparent);
+}
+
+.investigation-turn-summary time {
+  flex: none;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  white-space: nowrap;
+}
+
+.investigation-turn-id,
+.investigation-turn-source,
+.investigation-turn-model {
+  flex: none;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .03em;
+  white-space: nowrap;
+}
+
+.investigation-turn-copy {
+  display: grid;
+  flex: 1;
+  min-width: 160px;
+  gap: 2px;
+}
+
+.investigation-turn-copy strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 9px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.investigation-turn-copy small {
+  overflow: hidden;
+  color: var(--ink-faint);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.investigation-turn-flags {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.investigation-flag {
+  padding: 1px 5px;
+  border: 1px solid var(--line-strong);
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+
+.investigation-flag.is-error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.investigation-flag.is-truncated {
+  border-color: var(--signal-peach);
+  color: var(--signal-peach);
+}
+
+.investigation-flag.is-redacted {
+  border-style: dashed;
+}
+
+.investigation-flag.is-branch {
+  border-color: var(--signal-violet);
+  color: var(--signal-violet);
+}
+
+.investigation-turn-caret {
+  flex: none;
+  color: var(--ink-faint);
+  font-size: 9px;
+}
+
+.investigation-turn-detail {
+  display: grid;
+  gap: 12px;
+  padding: 4px 14px 16px 38px;
+  border-top: 1px dashed var(--line);
+  background: color-mix(in srgb, var(--panel-raised) 22%, transparent);
+}
+
+.investigation-turn-detail > section > b,
+.investigation-turn-detail > div > b {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .07em;
+}
+
+.investigation-status-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.investigation-finding {
+  padding: 7px 8px;
+  margin-bottom: 6px;
+  border: 1px solid var(--signal-blue);
+  background: color-mix(in srgb, var(--signal-blue) 7%, transparent);
+}
+
+.investigation-finding > header {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 3px;
+}
+
+.investigation-finding > header b {
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 8px;
+}
+
+.investigation-finding > header span {
+  color: var(--ink-faint);
+  font-size: 8px;
+}
+
+.investigation-finding-severity {
+  margin: 0 0 3px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .04em;
+}
+
+.investigation-finding p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.investigation-finding-evidence {
+  display: grid;
+  gap: 2px;
+  margin: 5px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--ink-faint);
+  font-size: 8px;
+}
+
+.investigation-finding-evidence a {
+  color: var(--signal-violet);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--signal-violet) 45%, transparent);
+}
+
+.investigation-comparison-note {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.investigation-comparison {
+  display: grid;
+  gap: 8px;
+}
+
+.investigation-comparison > div {
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+}
+
+.investigation-comparison > div > b {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .07em;
+}
+
+.investigation-comparison ul {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--ink-soft);
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.investigation-comparison p {
+  margin: 3px 0;
+  color: var(--ink-soft);
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.investigation-branches-inline ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.investigation-branches-inline li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  border: 1px dashed var(--signal-violet);
+  font-size: 8px;
+}
+
+.investigation-branches-inline li span:first-child {
+  color: var(--ink);
+  font-family: var(--font-machine);
+}
+
+.investigation-branches-inline li span {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+}
+
+.investigation-branches-inline li a {
+  margin-left: auto;
+  color: var(--signal-violet);
+  font-family: var(--font-machine);
+  font-size: 7px;
+}
+
+.investigation-branches-inline li button {
+  border: 1px solid var(--line-strong);
+  padding: 2px 6px;
+  background: transparent;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 7px;
+}
+
+.investigation-turn-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 6px 12px;
+}
+
+.investigation-turn-facts div {
+  display: grid;
+  gap: 1px;
+}
+
+.investigation-turn-facts dt {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .06em;
+}
+
+.investigation-turn-facts dd {
+  margin: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.investigation-turn-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.investigation-turn-actions a,
+.investigation-turn-actions button {
+  padding: 3px 9px;
+  border: 1px solid var(--line-strong);
+  color: var(--ink-soft);
+  background: transparent;
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .04em;
+  text-decoration: none;
+}
+
+.investigation-turn-actions button.is-a.is-active {
+  border-color: var(--signal-cyan);
+  color: var(--signal-cyan);
+}
+
+.investigation-turn-actions button.is-b.is-active {
+  border-color: var(--signal-magenta);
+  color: var(--signal-magenta);
+}
+
+.investigation-timeline-end {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--line);
+}
+
+.investigation-timeline-end p {
+  margin: 0;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .03em;
+}
+
+.investigation-timeline-end button {
+  padding: 5px 10px;
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel-raised) 60%, transparent);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .04em;
+}
+
+.investigation-timeline-end button:disabled {
+  color: var(--ink-faint);
+  cursor: wait;
+}
+
+/* -- branch overview + compare tray ----------------------------------------------------------------- */
+
+.investigation-branch-tree {
+  display: grid;
+  gap: 8px;
+  margin: 10px 14px 14px;
+  overflow-y: auto;
+}
+
+.investigation-branch-group {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+}
+
+.investigation-branch-group > button {
+  flex: none;
+  padding: 3px 7px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 7px;
+}
+
+.investigation-branch-group ul {
+  display: grid;
+  flex: 1;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.investigation-branch-group li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+}
+
+.investigation-branch-group li a {
+  margin-left: auto;
+  color: var(--signal-violet);
+}
+
+.mode-chip.is-complete {
+  border-color: color-mix(in srgb, var(--signal-mint) 52%, var(--line));
+  color: color-mix(in srgb, var(--signal-mint) 70%, var(--ink));
+  background: color-mix(in srgb, var(--signal-mint) 9%, transparent);
+}
+
+.investigation-compare-note {
+  margin: 8px 14px 0;
+  color: var(--ink-faint);
+  font-size: 8px;
+  line-height: 1.5;
+}

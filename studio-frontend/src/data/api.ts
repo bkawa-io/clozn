@@ -100,6 +100,7 @@ function runSummary(run: JsonRecord): RunSummary {
     durationMs: duration.milliseconds,
     finishReason: typeof run.finish_reason === "string" ? run.finish_reason : undefined,
     parentRunId: typeof run.parent_run_id === "string" ? run.parent_run_id : undefined,
+    sessionKey: typeof run.session_key === "string" && run.session_key ? run.session_key : undefined,
     flags: Array.isArray(run.flags) ? run.flags.map(String) : [],
     warningCount: Array.isArray(run.warnings) ? run.warnings.length : 0,
     activeDialCount: Object.keys(activeDials).length,

@@ -283,6 +283,9 @@ export function Runs({ runtime, inspectorOpen }: RunsProps) {
               <div className="runs-actions">
                 <a href={`#/runs/${encodeURIComponent(selected.id)}`}>READ</a>
                 <a href={`#/runs/${encodeURIComponent(selected.id)}/scope`}>SCOPE</a>
+                {selected.sessionKey && (
+                  <a href={`#/sessions/${encodeURIComponent(selected.sessionKey)}/investigate`}>INVESTIGATE SESSION</a>
+                )}
                 <button type="button" onClick={() => stage(selected.id, compareA ? "b" : "a")}>
                   {compareA ? "STAGE B" : "STAGE A"}
                 </button>
