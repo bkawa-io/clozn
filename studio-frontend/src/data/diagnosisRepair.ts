@@ -241,7 +241,13 @@ function parseSuggestedAction(raw: unknown): RepairSuggestedAction {
   return { kind: suggestedActionKind(item.kind), description: str(item.description) ?? "" };
 }
 
-function parseFinding(raw: unknown): RepairFinding {
+/** Exported for `data/sessionTrace.ts` (F3): `clozn.session-trace.v1`'s `Turn.diagnostic_highlights.
+ * findings[]` entries are the SAME wire shape as this module's own findings -- `clozn.runs.session_trace.
+ * _highlights()` copies each `status=="finding"` entry out of `diagnosis_rules.evaluate()`'s own output
+ * verbatim, never a stripped-down projection (see that Python module's docstring). Reusing this parser
+ * there is composition, not duplication -- exactly the same choice this codebase already makes for
+ * `run_diff.compare_runs()` on the Python side. */
+export function parseFinding(raw: unknown): RepairFinding {
   const item = record(raw);
   const common: RepairFindingCommon = {
     ruleId: str(item.rule_id) ?? "",

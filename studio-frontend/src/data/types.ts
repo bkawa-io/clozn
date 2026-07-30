@@ -217,6 +217,11 @@ export interface RunSummary {
   durationMs?: number;
   finishReason?: string;
   parentRunId?: string;
+  /** `runs.session_key` (F1) -- omitted for a run with no session, exactly as
+   * `clozn.runs.sessions`'s own "sessionless runs" contract treats that as an ordinary state, never an
+   * error. Present so `features/runs/Runs.tsx` can link a selected run into F3's conversation
+   * investigation view without a second request. */
+  sessionKey?: string;
   flags: string[];
   warningCount: number;
   activeDialCount: number;

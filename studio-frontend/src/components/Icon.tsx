@@ -8,7 +8,8 @@ type IconName =
   | "behavior"
   | "model"
   | "theme"
-  | "inspector";
+  | "inspector"
+  | "investigation";
 
 export function Icon({ name, ...props }: SVGProps<SVGSVGElement> & { name: IconName }) {
   const common = { fill: "none", stroke: "currentColor", strokeWidth: 1.5, strokeLinecap: "round" as const };
@@ -22,6 +23,7 @@ export function Icon({ name, ...props }: SVGProps<SVGSVGElement> & { name: IconN
       {name === "model" && <g {...common}><path d="m12 3 8 4.5-8 4.5-8-4.5L12 3Z" /><path d="m4 12 8 4.5 8-4.5M4 16.5 12 21l8-4.5" /></g>}
       {name === "theme" && <g {...common}><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 0 0 0 16V4Z" /></g>}
       {name === "inspector" && <g {...common}><path d="M4 5h16v14H4zM15 5v14M7.5 9h4M7.5 13h4" /></g>}
+      {name === "investigation" && <g {...common}><path d="M5 5v14M5 8h4M5 13h3M12 5v6" /><circle cx="12" cy="14" r="1.4" /><path d="M12 15.4V19" /><path d="m15 8 4-2.5M19 5.5V8" /></g>}
     </svg>
   );
 }
