@@ -49,10 +49,14 @@ def try_get(h, p):
 
     # Every source below is a journal read or deterministic projection. In particular, checking whether
     # the worker exposes score_tokens/an engine does not call either -- expensive measurements remain
-    # capability descriptors pointing at their own separate POST action.
+    # capability descriptors pointing at their own separate POST action. The run's OWN model resolves
+    # whose capabilities are being reported (see investigation.py's identical use of
+    # peek_control_model_for_run for why this must not fail closed under a managed gateway, nor turn
+    # "worker unavailable" into a hard refusal on a route that starts no measurement either way).
     related = list(runlog.iter_runs(limit=200))
     from clozn.server import app as ctx
-    sub = ctx.active_sub(h)
+    from clozn.server.model_routing import peek_control_model_for_run
+    sub = peek_control_model_for_run(h, run.get("model"), route="/runs/<id>/tokens/<index>/workbench")
     scoring_available = bool(sub and callable(getattr(sub, "score_tokens", None)))
     worker_ready = bool(sub and getattr(sub, "engine", None))
 

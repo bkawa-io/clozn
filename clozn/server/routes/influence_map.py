@@ -1,5 +1,4 @@
 """Compute/attach (POST) and export (GET) the fast context<->answer influence map for a recorded run."""
-from clozn.server import app as ctx
 
 
 _MAX_CONTEXT_SPANS = 8
@@ -200,7 +199,12 @@ def _start_job(h, rid: str, body: dict) -> bool:
             job = JOBS.start(rid, cached=True)
             h._json(202, job, extra_headers={"X-Clozn-Influence-Cache": "hit"})
             return True
-        sub = ctx.active_sub(h)
+        from clozn.server.model_routing import select_control_model_for_run
+        selection = select_control_model_for_run(
+            h, run.get("model"), route="/runs/<id>/influence-map/jobs")
+        if selection is None:
+            return True   # typed clozn.model-routing.v1 refusal already written
+        sub = selection.sub
         if not (sub and callable(getattr(sub, "score_tokens", None))):
             h._json(503, {"error": "influence-map requires worker token scoring"})
             return True
@@ -252,7 +256,11 @@ def try_post(h, p, body):
         h._json(200, cached, extra_headers={"X-Clozn-Influence-Cache": "hit"})
         return True
 
-    sub = ctx.active_sub(h)
+    from clozn.server.model_routing import select_control_model_for_run
+    selection = select_control_model_for_run(h, run.get("model"), route="/runs/<id>/influence-map")
+    if selection is None:
+        return True   # typed clozn.model-routing.v1 refusal already written
+    sub = selection.sub
     if not (sub and callable(getattr(sub, "score_tokens", None))):
         h._json(503, {"error": "influence-map requires worker token scoring"})
         return True

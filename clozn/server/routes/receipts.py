@@ -81,9 +81,17 @@ def try_post(h, p, body):
         if coalitions_batch not in ("auto", "off", "approximate"):
             h._json(400, {"error": "coalitions_batch must be one of auto|off|approximate"})
             return True
+        # The run's OWN model selects the worker -- never a client-supplied one -- so a managed
+        # gateway that cannot resolve a ready worker for it refuses with a typed
+        # clozn.model-routing.v1 error rather than silently scoring against no substrate at all.
+        from clozn.server.model_routing import select_control_model_for_run
+        selection = select_control_model_for_run(h, run.get("model"), route="/runs/<id>/receipts")
+        if selection is None:
+            return True   # typed clozn.model-routing.v1 refusal already written
+        sub = selection.sub
         # regen/both regenerate both arms through the product model; forced-only never generates
         # (S3: teacher-forced /score on the worker) -- no chat needed.
-        if mode in ("regen", "both") and not (ctx.active_sub(h) and getattr(ctx.active_sub(h), "chat", None)):
+        if mode in ("regen", "both") and not (sub and getattr(sub, "chat", None)):
             h._json(503, {"error": "receipts require a ready product model worker"})
             return True
         from clozn import receipts
@@ -91,7 +99,7 @@ def try_post(h, p, body):
             # `coalitions` (opt-in, default False -- see docs/PRODUCT_ROADMAP.md §8 tail): pairwise
             # coalition deltas + a Shapley approximation + the interaction gap, alongside the default
             # leave-one-out receipts above. Never changes the default response shape when omitted.
-            h._json(200, receipts.prove_all(run, ctx.active_sub(h), mode=mode,
+            h._json(200, receipts.prove_all(run, sub, mode=mode,
                                             coalitions=bool(body.get("coalitions", False)),
                                             coalitions_batch=coalitions_batch))
         except Exception as e:
@@ -108,7 +116,12 @@ def try_post(h, p, body):
         if mode not in ("regen", "forced", "both"):
             h._json(400, {"error": "mode must be one of regen|forced|both"})
             return True
-        if mode in ("regen", "both") and not (ctx.active_sub(h) and getattr(ctx.active_sub(h), "chat", None)):
+        from clozn.server.model_routing import select_control_model_for_run
+        selection = select_control_model_for_run(h, run.get("model"), route="/runs/<id>/receipt")
+        if selection is None:
+            return True   # typed clozn.model-routing.v1 refusal already written
+        sub = selection.sub
+        if mode in ("regen", "both") and not (sub and getattr(sub, "chat", None)):
             h._json(503, {"error": "receipt requires a ready product model worker"})
             return True
         influence = body.get("influence")
@@ -118,7 +131,7 @@ def try_post(h, p, body):
             return True
         from clozn import receipts
         try:
-            out = receipts.receipt(run, influence, ctx.active_sub(h), mode=mode)
+            out = receipts.receipt(run, influence, sub, mode=mode)
         except Exception as e:
             h._json(500, {"error": f"receipt failed: {type(e).__name__}: {e}"})
             return True
@@ -127,7 +140,7 @@ def try_post(h, p, body):
             # raise, swallowing a dead-engine URLError into this same ambiguous None a bad influence spec
             # also produces. Probe the engine directly (only on this already-failed path, never on the
             # happy path) so the two don't read as the same problem to a caller debugging blind.
-            if not ctx._engine_reachable(ctx.active_sub(h)):
+            if not ctx._engine_reachable(sub):
                 h._json(502, {"error": ctx._engine_unreachable_message()})
             else:
                 h._json(500, {"error": "receipt failed (bad influence spec, or the replay "
@@ -142,7 +155,12 @@ def try_post(h, p, body):
         if run is None:
             h._json(404, {"error": "run not found"})
             return True
-        if not (ctx.active_sub(h) and getattr(ctx.active_sub(h), "engine", None) and getattr(ctx.active_sub(h), "jlens", None)):
+        from clozn.server.model_routing import select_control_model_for_run
+        selection = select_control_model_for_run(h, run.get("model"), route="/runs/<id>/swap_receipt")
+        if selection is None:
+            return True   # typed clozn.model-routing.v1 refusal already written
+        sub = selection.sub
+        if not (sub and getattr(sub, "engine", None) and getattr(sub, "jlens", None)):
             h._json(503, {"error": "swap_receipt requires the product worker with J-lens enabled"})
             return True
         to_concept = str(body.get("to_concept", "")).strip()
@@ -151,7 +169,7 @@ def try_post(h, p, body):
             return True
         from clozn.receipts.swap_receipt import swap_receipt
         try:
-            out = swap_receipt(run, body.get("from_hint"), to_concept, ctx.active_sub(h))
+            out = swap_receipt(run, body.get("from_hint"), to_concept, sub)
         except Exception as e:
             h._json(500, {"error": f"swap_receipt failed: {type(e).__name__}: {e}"})
             return True
@@ -162,7 +180,7 @@ def try_post(h, p, body):
             # failure as a success (unlike the sibling /receipt and /rederive routes, both non-2xx on the
             # equivalent condition). Body is left intact -- unlike those siblings, swap_receipt's own
             # blocked/note already self-describe the failure; only the status code was wrong.
-            status = 502 if not ctx._engine_reachable(ctx.active_sub(h)) else 500
+            status = 502 if not ctx._engine_reachable(sub) else 500
             h._json(status, out)
             return True
         h._json(200, out)
@@ -174,12 +192,17 @@ def try_post(h, p, body):
         if run is None:
             h._json(404, {"error": "run not found"})
             return True
-        if not (ctx.active_sub(h) and getattr(ctx.active_sub(h), "score_tokens", None)):
+        from clozn.server.model_routing import select_control_model_for_run
+        selection = select_control_model_for_run(h, run.get("model"), route="/runs/<id>/rederive")
+        if selection is None:
+            return True   # typed clozn.model-routing.v1 refusal already written
+        sub = selection.sub
+        if not (sub and getattr(sub, "score_tokens", None)):
             h._json(503, {"error": "rederive requires worker token scoring"})
             return True
         import clozn.receipts.rederive as rederive
         try:
-            out = rederive.rederive(run, ctx.active_sub(h))
+            out = rederive.rederive(run, sub)
         except Exception as e:
             h._json(500, {"error": f"rederive failed: {type(e).__name__}: {e}"})
             return True
@@ -188,7 +211,7 @@ def try_post(h, p, body):
             # URLError from score_tokens() collapses into this same ambiguous None a genuinely-missing
             # continuation also produces. Probe directly (only here, on the already-failed path) so the
             # two don't read as the same problem to a caller debugging blind.
-            if not ctx._engine_reachable(ctx.active_sub(h)):
+            if not ctx._engine_reachable(sub):
                 h._json(502, {"error": ctx._engine_unreachable_message()})
             else:
                 h._json(500, {"error": "rederive failed (no continuation to score, or the "
@@ -223,7 +246,12 @@ def try_post(h, p, body):
         if run is None:
             h._json(404, {"error": "run not found"})
             return True
-        if not (ctx.active_sub(h) and getattr(ctx.active_sub(h), "jlens", None)):
+        from clozn.server.model_routing import select_control_model_for_run
+        selection = select_control_model_for_run(h, run.get("model"), route="/runs/<id>/jlens")
+        if selection is None:
+            return True   # typed clozn.model-routing.v1 refusal already written
+        sub = selection.sub
+        if not (sub and getattr(sub, "jlens", None)):
             h._json(200, {"available": False, "run_id": rid,
                          "reason": "the product model worker has no J-lens"})
             return True
@@ -240,7 +268,7 @@ def try_post(h, p, body):
         if topk is None:
             return True
         want_protocol = bool(body.get("protocol", False))
-        res = ctx.active_sub(h).jlens(text, layer=layer, topk=topk)
+        res = sub.jlens(text, layer=layer, topk=topk)
         h._json(200, ctx._jlens_envelope(res, run_id=rid, text_source=text_source, want_protocol=want_protocol))
         return True
     if p.startswith("/runs/") and p.endswith("/narrate"):   # M4: accountable-self narration + confabulation-diff
@@ -250,7 +278,12 @@ def try_post(h, p, body):
         if run is None:
             h._json(404, {"error": "run not found"})
             return True
-        if not (ctx.active_sub(h) and getattr(ctx.active_sub(h), "chat", None)):   # constrained + unconstrained both generate
+        from clozn.server.model_routing import select_control_model_for_run
+        selection = select_control_model_for_run(h, run.get("model"), route="/runs/<id>/narrate")
+        if selection is None:
+            return True   # typed clozn.model-routing.v1 refusal already written
+        sub = selection.sub
+        if not (sub and getattr(sub, "chat", None)):   # constrained + unconstrained both generate
             h._json(503, {"error": "narration requires a ready product model worker"})
             return True
         import clozn.receipts.narrate as narrate
@@ -265,7 +298,7 @@ def try_post(h, p, body):
             # returns the receipt-constrained narration + confabulation flags; the raw unconstrained
             # "why" is NEVER a field in the result (narrate.py's structural trap guard). narrate()'s
             # own `note` states which matcher ran, so the response is self-describing about its honesty.
-            out = narrate.narrate(run, ctx.active_sub(h), support_matcher=matcher)
+            out = narrate.narrate(run, sub, support_matcher=matcher)
         except Exception as e:
             h._json(500, {"error": f"narrate failed: {type(e).__name__}: {e}"})
             return True
@@ -289,7 +322,12 @@ def try_post(h, p, body):
             h._json(400, {"error": f"unknown change.type: {ctype!r} (know: "
                          f"{sorted(clozn_experiment.REGISTRY)})"})
             return True
-        if not clozn_experiment.substrate_ok(ctype, ctx.active_sub(h)):
+        from clozn.server.model_routing import select_control_model_for_run
+        selection = select_control_model_for_run(h, run.get("model"), route="/runs/<id>/experiment")
+        if selection is None:
+            return True   # typed clozn.model-routing.v1 refusal already written
+        sub = selection.sub
+        if not clozn_experiment.substrate_ok(ctype, sub):
             needs = clozn_experiment.REGISTRY[ctype]["substrate"]
             msg = ("experiment requires a ready product model worker" if needs == "chat" else
                    "experiment requires the product worker with J-lens enabled")
@@ -297,7 +335,7 @@ def try_post(h, p, body):
             return True
         method = body.get("method")
         try:
-            out = clozn_experiment.run_experiment(run, change, method, ctx.active_sub(h))
+            out = clozn_experiment.run_experiment(run, change, method, sub)
         except ValueError as e:
             h._json(400, {"error": str(e)})
             return True

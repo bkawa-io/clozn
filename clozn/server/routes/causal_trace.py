@@ -20,14 +20,21 @@ span_receipts.py). CAPABILITY-UNAVAILABLE: tracer.trace() returns a typed {"ok":
 "blocked": ...} dict rather than raising, and this route ships it as a 200 body (ok: false) -- the
 same reasoning provenance.py documents (a completed analysis that reports "couldn't" is a
 successful outcome, not a failed request).
+
+Which worker: the run's OWN `model` field resolves the worker, through
+clozn.server.model_routing.select_control_model_for_run -- never a client-supplied model, and never
+the bare module-level ctx.ENGINE fallback this route used before (a real bug under a managed
+multi-model gateway: ctx.ENGINE there is the ROUTER'S CONTROL-PAIR engine, i.e. some OTHER model's
+worker, not this run's -- silently tracing the wrong model's weights while returning a normal-looking
+200. See ctx.active_engine's own docstring for why it, too, refuses rather than falls back to
+ctx.ENGINE under a managed router). An unknown/not-ready parent model now refuses with a typed
+`clozn.model-routing.v1` error instead. Legacy one-worker serving is unaffected: `engine_url` stays
+None (tracer.trace's own DEFAULT_ENGINE applies), exactly as before.
 """
-from clozn.server import app as ctx
 
 
-def _engine_base(h):
-    sub = ctx.active_sub(h)
-    eng = getattr(sub, "engine", None) or ctx.ENGINE
-    return getattr(eng, "base", None)
+def _engine_base(engine):
+    return getattr(engine, "base", None)
 
 
 def try_post(h, p, body):
@@ -77,10 +84,15 @@ def try_post(h, p, body):
         h._json(400, {"error": "'contrast' must be a string, an integer token id, null, or omitted"})
         return True
 
+    from clozn.server.model_routing import select_control_model_for_run
+    selection = select_control_model_for_run(h, run.get("model"), route="/runs/<id>/causal-trace")
+    if selection is None:
+        return True   # typed clozn.model-routing.v1 refusal already written
+
     from clozn.analysis import tracer
 
     kwargs = {"seed": seed, "screen_mode": screen_mode, "contrast": contrast}
-    engine_url = _engine_base(h)
+    engine_url = _engine_base(selection.engine)
     if engine_url:
         kwargs["engine_url"] = engine_url
 

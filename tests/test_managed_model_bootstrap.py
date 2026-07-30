@@ -25,6 +25,8 @@ from clozn.cli.worker_registry import (
 from clozn.server import app
 from clozn.server.model_routing import (
     ModelRoutingError,
+    PreloadedModelBinding,
+    PreloadedModelRouter,
     ProjectionFileRouter,
 )
 from clozn.server.routes import health
@@ -620,6 +622,18 @@ def test_stop_falls_back_to_every_nested_managed_worker_pid(
 def test_unselected_run_engine_routes_never_use_default_worker(
     monkeypatch
 ):
+    """RT-BOOT-01's original point: `alpha` is the router's default/control-pair worker, but the
+    run under test belongs to "beta" -- a DIFFERENT, unconfigured model. These routes must resolve
+    "beta" through the router (clozn.server.model_routing.select_control_model_for_run), not
+    silently fall through to alpha/SUB/ENGINE.
+
+    Before RT-MRSR-01 (this fix) that resolution didn't exist: every one of these routes called the
+    bare `ctx.active_sub(h)`, which fails closed to None whenever a router is configured at all (see
+    ctx.active_sub's own docstring) -- so they 503'd for EVERY run under a managed gateway, not just
+    ones genuinely pointed at an unconfigured model. Now they ask the router for "beta" specifically,
+    "beta" is genuinely unknown to it, and the typed `clozn.model-routing.v1` refusal is what a
+    caller actually sees -- never a bare 503, and never alpha/SUB/ENGINE touched either way.
+    """
     from clozn.server.routes import fork, influence_map, receipts, replay
     import clozn.runs.store as runlog
 
@@ -637,10 +651,34 @@ def test_unselected_run_engine_routes_never_use_default_worker(
     alpha = Alpha()
     run = {"id": "run_beta", "model": "beta"}
     monkeypatch.setattr(runlog, "get_run", lambda _rid: run)
-    previous = app.MODEL_ROUTER, app.SUB, app.ENGINE
-    app.MODEL_ROUTER = SimpleNamespace(
-        control_pair=lambda: (alpha, alpha.engine)
+
+    # A REAL router, deliberately configured with ONLY "alpha" -- "beta" is genuinely unknown to
+    # it, exactly like a run whose model was never preloaded on this gateway.
+    key = RuntimeKey(
+        gguf_artifact_sha256="a" * 64, context_size=4096, backend="cpu",
+        adapter=AdapterRuntimeIdentity.absent(), template_fingerprint=TEMPLATE,
+        engine_build="build-alpha", white_box_flags=WHITE_BOX,
+    ).as_dict()
+    alpha_binding = PreloadedModelBinding(
+        model_id="alpha",
+        resolved_artifact={"model_id": "alpha", "format": "gguf", "artifact_sha256": "a" * 64},
+        runtime_key=key,
+        adapter=AdapterRuntimeIdentity.absent().as_dict(),
+        state="ready",
+        worker_identity={
+            "worker_id": "gen-alpha", "worker_generation_id": "gen-alpha",
+            "worker_generation": 1, "runtime_key_sha256": key["key_sha256"],
+            "protocol_version": "1.1", "engine_build": "build-alpha", "backend": "cpu",
+        },
+        sub=alpha, engine=alpha.engine,
     )
+    router = PreloadedModelRouter(
+        [alpha_binding], default_model_id="alpha",
+        preload_model_ids=["alpha"], max_loaded_workers=1,
+    )
+
+    previous = app.MODEL_ROUTER, app.SUB, app.ENGINE
+    app.MODEL_ROUTER = router
     app.SUB = alpha
     app.ENGINE = alpha.engine
     try:
@@ -665,7 +703,13 @@ def test_unselected_run_engine_routes_never_use_default_worker(
         for function, path, body in cases:
             handler = CaptureHandler()
             assert function(handler, path, body)
-            assert handler.code == 503
+            # A typed clozn.model-routing.v1 refusal (unknown_model -> 404), never a bare 503 and
+            # never a silently-succeeded 200 against alpha's worker.
+            assert handler.code == 404, (function, handler.code, handler.json)
+            artifact = handler.json.get("clozn_model_routing")
+            assert isinstance(artifact, dict)
+            assert artifact["schema_version"] == "clozn.model-routing.v1"
+            assert handler.json["error"]["code"] == "unknown_model"
         assert calls == []
 
         # Metadata-only reads remain usable without any selected worker.
