@@ -151,7 +151,15 @@ would have been unknowable without re-running with independent seeds.
   computation to alter or wash out the intervention) than an early-layer one, independent of where
   quantization damage actually originates. This design cannot cleanly separate "damage lives late" from
   "late interventions have more raw power to flip a decision" — both predict the same monotonic
-  gradient measured above.
+  gradient measured above. **Update (2026-07-30, analysis only, no new run):**
+  [`DEPTH_VS_LEVERAGE.md`](DEPTH_VS_LEVERAGE.md) re-mines `quant_mixed_precision_bands.json`'s
+  record-level (not just characterization-block) fields and finds three lines of evidence shifting the
+  weight toward content-specificity — the random-equal-norm control's own effect magnitude does not
+  scale monotonically with depth (robust across both candidates), the late band's random failures are
+  total rather than merely larger, and a destination-depth-held-constant comparison (late-captured
+  content relocated to early write sites) favors late-sourced content over same-site native content.
+  None of this amounts to a controlled, amplitude-matched experiment — that design (also specified in
+  that document) has not been run, and the caveat above still stands as written.
 * Verdicts are per (disagreement, hook); no correction for multiple comparisons was applied.
 * Positions bisected are each prompt's FIRST disagreement only (one flip per prompt, matching the
   original transplant-localization method) — later disagreements in the same continuation, when a
@@ -197,7 +205,9 @@ not the load-bearing. Both hold simultaneously.
 raw leverage on logits, so "late layers quantize worst" and "late writes move output most" predict
 the same pattern. The same-depth random control shows it is not pure leverage (the reference
 direction beats equal-norm noise 53% of the time in the late band), but the two are not cleanly
-separated here. At n=30 (4-5 per category) task-independence is a strong hint, not a proof.
+separated here. At n=30 (4-5 per category) task-independence is a strong hint, not a proof. **See
+[`DEPTH_VS_LEVERAGE.md`](DEPTH_VS_LEVERAGE.md) (2026-07-30) for a follow-on analysis, over the mixed-
+precision-bands artifact, that pushes further on this specific caveat without fully removing it.**
 
 **What would flip this back toward circuits:** task-SPECIFIC recurrence — a layer restoring
 arithmetic but not multilingual. Not observed here, but per-category n is too small to exclude. That

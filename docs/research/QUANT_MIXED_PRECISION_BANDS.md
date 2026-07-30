@@ -261,6 +261,19 @@ way, per this experiment's own instruction to say so when an external claim cann
   move logits more per unit of correctly-aimed intervention," because a correctly-aimed intervention
   late in the network mechanically has more leverage regardless of whether quantization damage is
   actually worse there. See falsification note (3) below for a design that could separate them.
+  **Update (2026-07-30, analysis only, no new run):** [`DEPTH_VS_LEVERAGE.md`](DEPTH_VS_LEVERAGE.md)
+  re-mines this report's own `records[*].band_results[*].movement_metrics` (continuous, pre-computed,
+  not re-scored) and finds the random-equal-norm arm's own effect magnitude does **not** scale
+  monotonically with depth (robust across both candidates individually — mid is the trough in both),
+  while the reference arm's normalized `gap_closed_fraction` jumps specifically at late (≈0.13–0.18 at
+  early/mid → ≈0.71–0.80 at late, also robust across both candidates). It also surfaces an accidental
+  destination-depth-controlled comparison inside the existing `shuffled_window` arm (late-captured
+  content relocated to early write sites restores 40.0% [23.4%, 59.3%] vs. 20.0% [8.9%, 39.1%] for
+  early's own native reference transplant at its own site) — suggestive at this n, not decisive, and
+  carrying its own unverified vector-norm confound (raw vectors were not retained,
+  `store_tensors=False`). This shifts the weight of evidence toward content-specificity without
+  resolving the confound — the amplitude-matched design in falsification note (2) below remains the
+  one experiment that would.
 - **n=25 live disagreements** (30 sampled, 5 excluded as already-correct-at-recheck — see Result).
   Category-stratified from the SAME mine-report pool the population study used, not independently
   drawn; per-category counts are too small (3-5 each) to power a category-level claim.
