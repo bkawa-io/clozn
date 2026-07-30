@@ -1,0 +1,253 @@
+{
+  "schema_version": "clozn.diagnosis-findings.v1",
+  "generated_at": "2026-07-29T12:00:00Z",
+  "run_id": "run_fixture_mixed_0001",
+  "redacted": false,
+  "rule_registry": [
+    {
+      "rule_id": "R01",
+      "rule_name": "input_omitted_or_rejected"
+    },
+    {
+      "rule_id": "R02",
+      "rule_name": "context_budget_pressure"
+    },
+    {
+      "rule_id": "R03",
+      "rule_name": "conflicting_instructions"
+    },
+    {
+      "rule_id": "R04",
+      "rule_name": "duplicate_instructions"
+    },
+    {
+      "rule_id": "R05",
+      "rule_name": "repeated_source_content"
+    },
+    {
+      "rule_id": "R06",
+      "rule_name": "requested_format_absent"
+    },
+    {
+      "rule_id": "R07",
+      "rule_name": "instruction_far_from_request"
+    },
+    {
+      "rule_id": "R08",
+      "rule_name": "source_below_measurement_floor"
+    },
+    {
+      "rule_id": "R09",
+      "rule_name": "source_little_effect"
+    },
+    {
+      "rule_id": "R10",
+      "rule_name": "request_conflicts_with_earlier_instructions"
+    },
+    {
+      "rule_id": "R11",
+      "rule_name": "output_stopped_length"
+    },
+    {
+      "rule_id": "R12",
+      "rule_name": "run_to_run_drift"
+    }
+  ],
+  "suppressed_rule_ids": [],
+  "findings": [
+    {
+      "rule_id": "R01",
+      "rule_name": "input_omitted_or_rejected",
+      "status": "not_observed",
+      "summary": "no delivered input segment was recorded as omitted or excluded",
+      "evidence": [],
+      "limitations": []
+    },
+    {
+      "rule_id": "R02",
+      "rule_name": "context_budget_pressure",
+      "status": "finding",
+      "summary": "the prompt used 3800 of 4096 context tokens (92.8%), at or above the 90% pressure heuristic.",
+      "evidence": [
+        {
+          "kind": "field",
+          "path": "context_receipt.limits.prompt_tokens",
+          "value": 3800
+        },
+        {
+          "kind": "field",
+          "path": "context_receipt.limits.context_window_tokens",
+          "value": 4096
+        }
+      ],
+      "limitations": [
+        "a fixed 90% ratio heuristic, not a measured allocation failure -- this measures capacity used, never latency or truncation"
+      ],
+      "severity": "medium",
+      "confidence": "derived",
+      "suggested_actions": [
+        {
+          "kind": "increase_context_budget",
+          "description": "reduce prompt size or use a model/config with a larger context window"
+        }
+      ]
+    },
+    {
+      "rule_id": "R03",
+      "rule_name": "conflicting_instructions",
+      "status": "finding",
+      "summary": "1 instruction subject(s) received both a positive and a negative directive: answer in english.",
+      "evidence": [
+        {
+          "kind": "field",
+          "path": "messages[0]",
+          "value": {
+            "start": 0,
+            "end": 25,
+            "text": "Always answer in English."
+          }
+        },
+        {
+          "kind": "field",
+          "path": "messages[1]",
+          "value": {
+            "start": 0,
+            "end": 24,
+            "text": "Never answer in English."
+          }
+        }
+      ],
+      "limitations": [
+        "matches only sentences with an explicit leading marker (always/never/must/do not/don't) and an exact normalized-subject match after the marker is stripped -- paraphrased or implicit conflicts are not detected"
+      ],
+      "severity": "medium",
+      "confidence": "pattern_match",
+      "suggested_actions": [
+        {
+          "kind": "reconcile_conflicting_instructions",
+          "description": "remove or restate one of the conflicting directives"
+        }
+      ]
+    },
+    {
+      "rule_id": "R04",
+      "rule_name": "duplicate_instructions",
+      "status": "not_observed",
+      "summary": "no duplicate or near-duplicate instructions were found among 2 detected directive(s).",
+      "evidence": [],
+      "limitations": []
+    },
+    {
+      "rule_id": "R05",
+      "rule_name": "repeated_source_content",
+      "status": "unavailable",
+      "summary": "no attached source carried both a client_source_id and a content_hash, so repeated source content cannot be examined",
+      "evidence": [],
+      "limitations": []
+    },
+    {
+      "rule_id": "R06",
+      "rule_name": "requested_format_absent",
+      "status": "finding",
+      "summary": "the reply does not satisfy the requested output format: single_word.",
+      "evidence": [
+        {
+          "kind": "field",
+          "path": "messages[2].content",
+          "value": {
+            "format": "single_word",
+            "start": 25,
+            "end": 40
+          }
+        }
+      ],
+      "limitations": [
+        "format detection covers a small, explicit set of requests (JSON, bulleted/numbered list, markdown table, single-word, yes/no) -- an unrecognized phrasing is silently not checked, never guessed at"
+      ],
+      "severity": "medium",
+      "confidence": "pattern_match",
+      "suggested_actions": [
+        {
+          "kind": "clarify_output_format",
+          "description": "restate the desired output format explicitly, close to the final request"
+        }
+      ]
+    },
+    {
+      "rule_id": "R07",
+      "rule_name": "instruction_far_from_request",
+      "status": "not_observed",
+      "summary": "the nearest preceding directive is within 3 message(s) of the final user message.",
+      "evidence": [],
+      "limitations": []
+    },
+    {
+      "rule_id": "R08",
+      "rule_name": "source_below_measurement_floor",
+      "status": "pending",
+      "summary": "this run never recorded an influence map",
+      "evidence": [],
+      "limitations": []
+    },
+    {
+      "rule_id": "R09",
+      "rule_name": "source_little_effect",
+      "status": "pending",
+      "summary": "this run never recorded an influence map",
+      "evidence": [],
+      "limitations": []
+    },
+    {
+      "rule_id": "R10",
+      "rule_name": "request_conflicts_with_earlier_instructions",
+      "status": "not_observed",
+      "summary": "the final user message contains no detected directive to compare",
+      "evidence": [],
+      "limitations": []
+    },
+    {
+      "rule_id": "R11",
+      "rule_name": "output_stopped_length",
+      "status": "finding",
+      "summary": "generation stopped because the requested output-token limit was reached.",
+      "evidence": [
+        {
+          "kind": "field",
+          "path": "context_receipt.termination.reason",
+          "value": "max_tokens"
+        },
+        {
+          "kind": "field",
+          "path": "context_receipt.termination.generated_tokens",
+          "value": 128
+        }
+      ],
+      "limitations": [],
+      "severity": "high",
+      "confidence": "exact",
+      "suggested_actions": [
+        {
+          "kind": "increase_max_tokens",
+          "description": "raise the output token budget"
+        }
+      ]
+    },
+    {
+      "rule_id": "R12",
+      "rule_name": "run_to_run_drift",
+      "status": "pending",
+      "summary": "no comparison run was supplied for this evaluation",
+      "evidence": [],
+      "limitations": []
+    }
+  ],
+  "summary": {
+    "status_counts": {
+      "finding": 4,
+      "not_observed": 4,
+      "unavailable": 1,
+      "pending": 3,
+      "suppressed": 0
+    }
+  }
+}

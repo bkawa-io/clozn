@@ -1,0 +1,17 @@
+{
+  "schema_version": "clozn.diagnosis-findings.v1",
+  "generated_at": "2026-07-29T00:00:00Z",
+  "run_id": "run_x",
+  "redacted": false,
+  "rule_registry": [{"rule_id": "R11", "rule_name": "output_stopped_length"}],
+  "suppressed_rule_ids": [],
+  "findings": [
+    {
+      "rule_id": "R11", "rule_name": "output_stopped_length", "status": "not_observed",
+      "summary": "generation recorded a normal stop.",
+      "evidence": [{"path": "finish_reason", "value": "stop"}],
+      "limitations": []
+    }
+  ],
+  "summary": {"status_counts": {"finding": 0, "not_observed": 1, "unavailable": 0, "pending": 0, "suppressed": 0}}
+}

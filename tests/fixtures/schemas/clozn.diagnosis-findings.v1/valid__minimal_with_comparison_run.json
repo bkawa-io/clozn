@@ -1,0 +1,187 @@
+{
+  "schema_version": "clozn.diagnosis-findings.v1",
+  "generated_at": "2026-07-29T12:05:00Z",
+  "run_id": "run_fixture_minimal_0002",
+  "redacted": false,
+  "rule_registry": [
+    {
+      "rule_id": "R01",
+      "rule_name": "input_omitted_or_rejected"
+    },
+    {
+      "rule_id": "R02",
+      "rule_name": "context_budget_pressure"
+    },
+    {
+      "rule_id": "R03",
+      "rule_name": "conflicting_instructions"
+    },
+    {
+      "rule_id": "R04",
+      "rule_name": "duplicate_instructions"
+    },
+    {
+      "rule_id": "R05",
+      "rule_name": "repeated_source_content"
+    },
+    {
+      "rule_id": "R06",
+      "rule_name": "requested_format_absent"
+    },
+    {
+      "rule_id": "R07",
+      "rule_name": "instruction_far_from_request"
+    },
+    {
+      "rule_id": "R08",
+      "rule_name": "source_below_measurement_floor"
+    },
+    {
+      "rule_id": "R09",
+      "rule_name": "source_little_effect"
+    },
+    {
+      "rule_id": "R10",
+      "rule_name": "request_conflicts_with_earlier_instructions"
+    },
+    {
+      "rule_id": "R11",
+      "rule_name": "output_stopped_length"
+    },
+    {
+      "rule_id": "R12",
+      "rule_name": "run_to_run_drift"
+    }
+  ],
+  "suppressed_rule_ids": [
+    "R04"
+  ],
+  "findings": [
+    {
+      "rule_id": "R01",
+      "rule_name": "input_omitted_or_rejected",
+      "status": "unavailable",
+      "summary": "no context receipt was recorded for this run",
+      "evidence": [],
+      "limitations": []
+    },
+    {
+      "rule_id": "R02",
+      "rule_name": "context_budget_pressure",
+      "status": "unavailable",
+      "summary": "prompt_tokens and context_window_tokens were not both recorded, so context-budget pressure is unavailable",
+      "evidence": [],
+      "limitations": []
+    },
+    {
+      "rule_id": "R03",
+      "rule_name": "conflicting_instructions",
+      "status": "not_observed",
+      "summary": "no opposite-polarity instruction pairs were found among 0 detected directive(s).",
+      "evidence": [],
+      "limitations": []
+    },
+    {
+      "rule_id": "R04",
+      "rule_name": "duplicate_instructions",
+      "status": "suppressed",
+      "summary": "R04 was suppressed for this evaluation by caller request.",
+      "evidence": [],
+      "limitations": []
+    },
+    {
+      "rule_id": "R05",
+      "rule_name": "repeated_source_content",
+      "status": "unavailable",
+      "summary": "no delivered segment list was recorded for this run",
+      "evidence": [],
+      "limitations": []
+    },
+    {
+      "rule_id": "R06",
+      "rule_name": "requested_format_absent",
+      "status": "not_observed",
+      "summary": "no recognized output-format request was found in the final user message",
+      "evidence": [],
+      "limitations": []
+    },
+    {
+      "rule_id": "R07",
+      "rule_name": "instruction_far_from_request",
+      "status": "not_observed",
+      "summary": "no directive-bearing message precedes the final user message",
+      "evidence": [],
+      "limitations": []
+    },
+    {
+      "rule_id": "R08",
+      "rule_name": "source_below_measurement_floor",
+      "status": "pending",
+      "summary": "this run never recorded an influence map",
+      "evidence": [],
+      "limitations": []
+    },
+    {
+      "rule_id": "R09",
+      "rule_name": "source_little_effect",
+      "status": "pending",
+      "summary": "this run never recorded an influence map",
+      "evidence": [],
+      "limitations": []
+    },
+    {
+      "rule_id": "R10",
+      "rule_name": "request_conflicts_with_earlier_instructions",
+      "status": "not_observed",
+      "summary": "the final user message contains no detected directive to compare",
+      "evidence": [],
+      "limitations": []
+    },
+    {
+      "rule_id": "R11",
+      "rule_name": "output_stopped_length",
+      "status": "unavailable",
+      "summary": "no finish_reason or context_receipt.termination evidence was recorded for this run",
+      "evidence": [],
+      "limitations": []
+    },
+    {
+      "rule_id": "R12",
+      "rule_name": "run_to_run_drift",
+      "status": "finding",
+      "summary": "1 identity/setting dimension(s) differ from the supplied comparison run: generation.temperature.",
+      "evidence": [
+        {
+          "kind": "field",
+          "path": "generation.temperature",
+          "value": {
+            "value_a": 0.9,
+            "value_b": null,
+            "kind": "removed"
+          }
+        }
+      ],
+      "limitations": [
+        "reuses clozn.analysis.run_diff.compare_runs() verbatim -- see that module for the exact dimension set and ranking; a difference is a structural fact, never a claim about which run's behavior is 'correct'"
+      ],
+      "severity": "medium",
+      "confidence": "exact",
+      "suggested_actions": [
+        {
+          "kind": "reconfirm_run_configuration",
+          "description": "confirm whether the setting/identity change was intended"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "status_counts": {
+      "finding": 1,
+      "not_observed": 4,
+      "unavailable": 4,
+      "pending": 2,
+      "suppressed": 1
+    }
+  },
+  "comparison_run_id": "run_fixture_minimal_0001"
+}
