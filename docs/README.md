@@ -17,6 +17,9 @@ The design docs, indexed. Read top-down: the synthesis first, then the per-layer
 - **[TECHNICAL.md](TECHNICAL.md)** — archived diffusion research measurements and engineering notes.
 - **[STUDIO.md](STUDIO.md)** — the studio UI: pages, panels, and what each surface shows.
 - **[MODEL_SUPPORT.md](MODEL_SUPPORT.md)** — which model families run, and on which paths.
+- **[MANAGED_MODELS.md](MANAGED_MODELS.md)** — the managed multi-model runtime: a copyable
+  `clozn.managed-models.v1` manifest, qualification/identity rules, `clozn serve --models-config`, and
+  its current preloaded-only limitations.
 - **[WORKSPACE_LENS.md](WORKSPACE_LENS.md)** — the J-lens: how it's fitted, what it can and
   cannot claim, and the trace fixture format.
 - **[EXPLAIN_THIS_ANSWER_SPEC.md](EXPLAIN_THIS_ANSWER_SPEC.md)** — the explain/receipts spec
