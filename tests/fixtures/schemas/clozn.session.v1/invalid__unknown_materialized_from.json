@@ -1,0 +1,8 @@
+{
+  "schema_version": "clozn.session.v1",
+  "id": "session_0123456789abcdef01234567",
+  "created_ts": 1785312000.5,
+  "created_at": "2026-07-29T12:00:00",
+  "privacy": {"visibility": "visible"},
+  "materialized_from": "guessed"
+}

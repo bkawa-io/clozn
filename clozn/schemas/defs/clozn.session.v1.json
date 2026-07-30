@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.session.v1",
+  "title": "Persisted conversation session identity",
+  "description": "F1: the stored `sessions` row (clozn/runs/migrations.py migration 4, clozn/runs/sessions.py) -- an opaque conversation entity that REFERENCES run rows by clozn.runs.association.session_key() equality (runs.session_key = sessions.id); it never embeds run content or a run-id list, so run documents stay immutable and this row never needs rewriting when a run is added. Deliberately narrow: only session-level IDENTITY/metadata is a stored, schema-validated field here. `first_activity_ts`/`last_activity_ts`/`run_count` are NOT part of this schema -- they are computed live from the `runs` table on every read (see clozn/runs/sessions.py) and appear only in the runtime read view, never in what gets persisted or validated here.",
+  "type": "object",
+  "required": ["schema_version", "id", "created_ts", "created_at", "privacy", "materialized_from"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.session.v1"},
+    "id": {
+      "type": "string",
+      "pattern": "^session_[0-9a-f]{24}$",
+      "description": "The SAME opaque key clozn.runs.association.session_key() already writes into runs.session_key -- either an HMAC-SHA256 digest (truncated to 24 hex chars) of a caller-supplied raw token, or an already-opaque key a caller reused as-is. Two callers supplying the identical raw token land on the identical id by construction: this is the documented, INTENTIONAL cross-client reuse/merge point (see clozn/runs/sessions.py module docstring), not a collision bug."
+    },
+    "created_ts": {"type": "number", "minimum": 0},
+    "created_at": {"type": "string", "minLength": 1},
+    "client_key": {
+      "type": "string",
+      "pattern": "^client_[0-9a-f]{24}$",
+      "description": "The creating client's opaque identity facet (clozn.runs.association.client_key()). Omitted, never null, when the session was created without a resolvable client identity, or when a lazily-backfilled legacy session's member runs carry more than one distinct client_key (ambiguous provenance is never guessed at)."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "Optional caller-set label. Omitted, never an empty string, when unset."
+    },
+    "privacy": {
+      "type": "object",
+      "description": "Session-level metadata visibility only. Content-level redaction of individual runs remains clozn.runs.mutations.redact_run's job and is out of this entity's scope entirely.",
+      "required": ["visibility"],
+      "additionalProperties": false,
+      "properties": {
+        "visibility": {
+          "type": "string",
+          "enum": ["visible", "hidden"],
+          "description": "'hidden' excludes the session from default listings (clozn.runs.sessions.list_sessions); it never affects whether member runs are readable, deletable, or redactable."
+        }
+      }
+    },
+    "materialized_from": {
+      "type": "string",
+      "enum": ["explicit", "lazy_backfill"],
+      "description": "'explicit': created via clozn.runs.sessions.create_session (created_ts is the true creation time). 'lazy_backfill': persisted later by clozn.runs.sessions.materialize_session for a legacy session_key that already had member runs but no session row yet -- created_ts is then an HONEST approximation (the earliest member run's recorded_ts), not the session's true first-use time, which pre-dates this table and was never captured."
+    }
+  }
+}
