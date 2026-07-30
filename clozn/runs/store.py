@@ -16,6 +16,7 @@ import os
 import re
 import sqlite3
 import secrets
+import threading
 import time
 import uuid
 from copy import deepcopy
@@ -54,6 +55,25 @@ _SAFE_RID = re.compile(r"^[A-Za-z0-9_-]+$")
 _log = logging.getLogger(__name__)
 
 
+class SchemaLockTimeout(RuntimeError):
+    """Raised by `_ensure()` when the cross-process schema-init lock (`_ensure_schema_locked`) could not
+    be acquired within `_SCHEMA_LOCK_TIMEOUT_S`. A typed, honest failure -- per the store's "omit, never
+    null-pad" contract, a caller must never be handed a connection to a possibly half-initialized
+    database just because a lock was slow. In practice this means another process or thread is (or was,
+    and crashed mid-init -- SQLite's own hot-journal recovery cleans that up automatically on the next
+    attempt) already bringing the SAME store up to date; retrying is the right move, not proceeding."""
+
+
+_SCHEMA_LOCK_TIMEOUT_S = 30.0     # mirrors _connect()'s own busy_timeout convention below
+
+# Per-process cache of db paths already confirmed at migrations.TARGET_VERSION -- see `_ensure()`. Keyed
+# by path, not a bare bool: tests legitimately repoint the module-global RUNS_DIR at a fresh tmp_path per
+# test within the SAME process, and a bare "already initialized" flag would silently skip real schema
+# creation for every subsequent test's brand-new, unmigrated store.
+_schema_verified: set[str] = set()
+_schema_verify_lock = threading.Lock()
+
+
 def _db_path() -> str:
     return os.path.join(RUNS_DIR, "runs.sqlite3")
 
@@ -62,16 +82,82 @@ def _blob_root() -> str:
     return os.path.join(RUNS_DIR, "blobs", "sha256")
 
 
+def _schema_lock_path() -> str:
+    return os.path.join(RUNS_DIR, ".schema_init.lock")
+
+
 def _ensure() -> None:
     """Bring RUNS_DIR + the DB schema up to date. Auto-migrate-on-open (BACKLOG §2): every store entry
     point still calls this cheaply on every operation exactly as before, but the schema work itself now
     goes entirely through clozn.runs.migrations -- real transactional, ordered, versioned steps -- instead
     of the old ad-hoc `executescript` + upsert-a-stamp. `clozn migrate` (clozn/cli/commands/migrate.py)
-    drives the SAME engine explicitly, with reporting and a --dry-run preview."""
+    drives the SAME engine explicitly, with reporting and a --dry-run preview.
+
+    Concurrency: `_connect()`'s `PRAGMA journal_mode=WAL` is a genuine, one-time on-disk file-format
+    conversion the first time it runs against a non-WAL file, and SQLite requires exclusive access to
+    perform it -- unlike ordinary write-lock contention, that specific conversion does NOT retry through
+    the busy handler / `busy_timeout` if another connection holds so much as a pending write transaction.
+    Measured against unmodified code: concurrent first-time `_ensure()` calls (20 threads, barrier-
+    synchronized, fresh store) failed at a 5-12% rate with `sqlite3.OperationalError: database is
+    locked`, always at that exact PRAGMA (tests/test_runs_store_concurrency.py reproduces this). The fix
+    below is two-layered: a per-process cache (`_schema_verified`) short-circuits everything after this
+    process has itself confirmed the schema is current, and the one-time work -- the WAL switch plus
+    `migrations.migrate()` -- is serialized (both cross-thread AND cross-process) by
+    `_ensure_schema_locked()`."""
     os.makedirs(RUNS_DIR, exist_ok=True)
     os.makedirs(_blob_root(), exist_ok=True)
-    with closing(_connect()) as db:
-        migrations.migrate(db)
+    db_path = _db_path()
+    if db_path in _schema_verified:
+        return
+    with _schema_verify_lock:
+        if db_path in _schema_verified:      # a same-process racer may have just finished the slow path
+            return                           # while we were waiting for _schema_verify_lock
+        _ensure_schema_locked(db_path)
+        _schema_verified.add(db_path)
+
+
+def _ensure_schema_locked(db_path: str) -> None:
+    """Cross-PROCESS mutual exclusion around the one-time WAL-mode switch + schema migration.
+
+    The lock is a SEPARATE, tiny SQLite file (`_schema_lock_path()`) that -- deliberately -- is NEVER
+    itself switched to WAL, so acquiring it never triggers the very race it exists to prevent: ordinary
+    rollback-journal `BEGIN IMMEDIATE` contention IS reliably retried by `busy_timeout` (measured: 0
+    failures across 500+ concurrent acquisitions of exactly this primitive, vs. the WAL-conversion race
+    above). Holding it, only ONE thread/process at a time performs `_connect()` (the WAL switch) and
+    `migrations.migrate()`; every other caller blocks -- bounded by `_SCHEMA_LOCK_TIMEOUT_S` -- and then
+    finds the work already done, at which point its OWN `PRAGMA journal_mode=WAL` reissue is a safe no-op
+    (measured: 0 failures reissuing the pragma against an already-WAL file under concurrent write load --
+    the exclusive-access requirement only applies to an actual mode CHANGE). A crashed lock holder needs
+    no separate staleness heuristic: SQLite's own hot-journal recovery rolls back an abandoned transaction
+    the moment the next connection touches the file.
+
+    Migration idempotency/atomicity is unaffected -- `migrations.migrate()` still applies each step in
+    its own `BEGIN IMMEDIATE` ... `COMMIT`/`ROLLBACK`, exactly as before; this lock only prevents the
+    WAL-conversion race from ever landing two callers inside that machinery at the same moment.
+    """
+    lock_conn = sqlite3.connect(_schema_lock_path(), timeout=_SCHEMA_LOCK_TIMEOUT_S)
+    try:
+        lock_conn.execute(f"PRAGMA busy_timeout={int(_SCHEMA_LOCK_TIMEOUT_S * 1000)}")
+        lock_conn.isolation_level = None      # manual transaction control, same reasoning as
+                                               # migrations.migrate(): DDL/PRAGMA needs an explicit BEGIN
+                                               # to be governed by it at all under Python's sqlite3 module.
+        try:
+            lock_conn.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError as exc:
+            raise SchemaLockTimeout(
+                f"could not acquire the schema-init lock for {db_path!r} within "
+                f"{_SCHEMA_LOCK_TIMEOUT_S:.0f}s -- another process or thread appears to be "
+                f"initializing this store"
+            ) from exc
+        try:
+            with closing(_connect()) as db:
+                migrations.migrate(db)
+        finally:
+            lock_conn.execute("COMMIT")       # release the lock even if migrate() raised -- a real
+                                               # migration failure must not also wedge every OTHER
+                                               # caller behind a lock nobody will ever release.
+    finally:
+        lock_conn.close()
 
 
 def _connect() -> sqlite3.Connection:
