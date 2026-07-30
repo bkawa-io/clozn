@@ -31,7 +31,11 @@ def try_get(h, p):
         if run is None:
             h._json(404, {"error": "run not found"})
             return True
-        sub = ctx.active_sub(h)
+        # Describes what's available for this run; it never executes anything, so an unresolvable
+        # worker degrades to steer=None (fewer eligible actions) rather than a hard refusal -- the
+        # same "compose, don't block" contract investigation.py uses for the identical reason.
+        from clozn.server.model_routing import peek_control_model_for_run
+        sub = peek_control_model_for_run(h, run.get("model"), route="/runs/<id>/corrective-actions")
         h._json(200, corrective_flow.registry_for_run(
             run,
             steer=getattr(sub, "steer", None),
@@ -64,12 +68,18 @@ def try_post(h, p, body):
         if run is None:
             h._json(404, {"error": "run not found"})
             return True
+        # Same "compose, don't block" reasoning as GET .../corrective-actions above: a preview
+        # never executes anything, so an unresolvable worker degrades to steer=None instead of
+        # refusing.
+        from clozn.server.model_routing import peek_control_model_for_run
+        sub = peek_control_model_for_run(
+            h, run.get("model"), route="/runs/<id>/corrective-actions/preview")
         try:
             preview = corrective_flow.create_preview(
                 run,
                 str(body.get("action_id") or ""),
                 str(body.get("requested_backend") or "prompt_policy"),
-                steer=getattr(ctx.active_sub(h), "steer", None),
+                steer=getattr(sub, "steer", None),
                 active_profile=ctx._active_profile_name(),
             )
         except corrective_flow.CorrectiveFlowError as exc:
@@ -88,7 +98,15 @@ def try_post(h, p, body):
         if run is None:
             h._json(409, {"error": "parent run is missing; refusing confirmation"})
             return True
-        sub = ctx.active_sub(h)
+        # Confirmation actually regenerates through the product model -- unlike the preview above,
+        # this must fail closed (typed refusal, never SUB) when the run's own model has no ready
+        # worker under a managed gateway.
+        from clozn.server.model_routing import select_control_model_for_run
+        selection = select_control_model_for_run(
+            h, run.get("model"), route="/corrective-previews/<id>/confirm")
+        if selection is None:
+            return True   # typed clozn.model-routing.v1 refusal already written
+        sub = selection.sub
         if not (sub and callable(getattr(sub, "chat", None))):
             h._json(503, {"error": "corrective action requires a ready product model worker"})
             return True

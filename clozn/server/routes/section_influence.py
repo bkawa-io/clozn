@@ -52,7 +52,6 @@ from __future__ import annotations
 import clozn.runs.store as runlog
 from clozn.receipts import rederive
 from clozn.receipts.forced import _FORCED_MEAN_THRESHOLD, forced_receipt
-from clozn.server import app as ctx
 
 CLOZN_ROUTE_AUTOLOAD = True
 
@@ -157,7 +156,11 @@ def try_post(h, p, body):
         h._json(200, {"run_id": rid, "sections": [], "any_meaningful": False, "note": _NO_MANIFEST_NOTE})
         return True
 
-    sub = ctx.active_sub(h)
+    from clozn.server.model_routing import select_control_model_for_run
+    selection = select_control_model_for_run(h, run.get("model"), route="/runs/<id>/section-influence")
+    if selection is None:
+        return True   # typed clozn.model-routing.v1 refusal already written
+    sub = selection.sub
     if not (sub and getattr(sub, "score_tokens", None)):
         h._json(503, {"error": "section-influence requires worker token scoring"})
         return True

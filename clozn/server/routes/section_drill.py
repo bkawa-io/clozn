@@ -44,7 +44,6 @@ from __future__ import annotations
 import clozn.runs.store as runlog
 from clozn.receipts import rederive
 from clozn.runs import sections as clozn_sections
-from clozn.server import app as ctx
 from clozn.server.routes import section_influence as si
 
 CLOZN_ROUTE_AUTOLOAD = True
@@ -163,7 +162,11 @@ def try_post(h, p, body):
 
     spans = clozn_sections.drill_split(text)
 
-    sub = ctx.active_sub(h)
+    from clozn.server.model_routing import select_control_model_for_run
+    selection = select_control_model_for_run(h, run.get("model"), route="/runs/<id>/section-drill")
+    if selection is None:
+        return True   # typed clozn.model-routing.v1 refusal already written
+    sub = selection.sub
     if not (sub and getattr(sub, "score_tokens", None)):
         h._json(503, {"error": "section-drill requires worker token scoring"})
         return True

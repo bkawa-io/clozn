@@ -78,6 +78,21 @@ def _sub_facts(sub) -> tuple[dict | None, dict | None, object | None]:
     ), engine
 
 
+def _identity_facts(selection) -> tuple[dict | None, dict | None, object | None]:
+    """One resolved ``ModelSelection`` -> ``(runtime_identity, worker_identity, engine)``.
+
+    Managed path: the router's own binding already carries exact runtime/worker identity (no
+    extra probe). Legacy no-router path: ``select_control_model_for_run`` leaves those two ``None``
+    (it is a zero-cost shim for callers that only need ``.sub``) -- derive them here, via
+    ``_sub_facts``'s one ``engine.health()`` probe, for the heavier consumers that do: this
+    function, ``clozn.server.routes.fork`` (the legacy fork wrapper), and
+    ``clozn.server.routes.token_workbench_actions`` (the per-token fork/causal-trace actions).
+    """
+    if selection.runtime_key is not None:
+        return dict(selection.runtime_key), dict(selection.worker_identity), selection.engine
+    return _sub_facts(selection.sub)
+
+
 def _parent_sub_facts(h, parent: Mapping, route_path: str):
     """Select the immutable parent's canonical model before reading worker facts.
 
@@ -86,13 +101,14 @@ def _parent_sub_facts(h, parent: Mapping, route_path: str):
     (and, per FORK-PIN-01, ``POST /runs/<id>/snapshot/pin`` -- see clozn/server/routes/snapshot.py,
     which reuses this exact function rather than re-deriving worker/runtime identity itself) resolves
     ``run.model`` through the same exact router as generation. Legacy one-worker serving has no router
-    and retains its historical ``active_sub`` behavior.
+    and retains its historical ``active_sub`` behavior. Thin wrapper over
+    ``clozn.server.model_routing.select_control_model_for_run`` -- the shared resolver every other
+    run-scoped route now goes through too -- plus ``_identity_facts`` to unpack the exact
+    runtime/worker/engine triple this fork-shaped consumer needs (most other consumers only need
+    ``.sub``).
     """
-    from clozn.server import app as ctx
+    from clozn.server.model_routing import select_control_model_for_run
 
-    router = getattr(ctx, "MODEL_ROUTER", None)
-    if router is None:
-        return _sub_facts(ctx.active_sub(h))
     normalized_route = (
         "/runs/<id>/execution-fork/checkpoint"
         if route_path.endswith(_CHECKPOINT_SUFFIX)
@@ -102,20 +118,10 @@ def _parent_sub_facts(h, parent: Mapping, route_path: str):
         if route_path.endswith("/snapshot/pin")
         else "/runs/<id>/execution-fork"
     )
-    try:
-        from clozn.server.model_routing import ModelRoutingError, _emit_error
-        selection = router.select_control_model(
-            parent.get("model"),
-            route=normalized_route,
-        )
-    except ModelRoutingError as error:
-        _emit_error(h, error, "native")
+    selection = select_control_model_for_run(h, parent.get("model"), route=normalized_route)
+    if selection is None:
         return None
-    return (
-        dict(selection.runtime_key),
-        dict(selection.worker_identity),
-        selection.engine,
-    )
+    return _identity_facts(selection)
 
 
 def try_get(h, p):

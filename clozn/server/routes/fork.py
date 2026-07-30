@@ -18,19 +18,23 @@ exact or reconstructed), 422 (structurally `unavailable` -- neither path is hone
 run/request), 500 (the eligible path's own generation/persistence step failed, mirroring the
 pre-FORK-02 contract for that exact failure mode).
 
-Which worker: the substrate resolution (`ctx.active_sub(h)`, and its "no engine at all" -> 503 gate) is
-UNCHANGED from before FORK-02, so the multi-model-router 503 contract already tested elsewhere
-(test_unselected_run_engine_routes_never_use_default_worker) still holds. The current worker's exact
-runtime/worker identity is then looked up opportunistically (clozn.server.routes.execution_fork's
-_sub_facts, the same derivation the dedicated execution-fork gateway uses) purely to decide whether the
-exact path can be attempted; when it can't be derived, compat_fork simply degrades the outcome -- it
-never widens who counts as "no worker ready" at the route level.
+Which worker: the model comes from the immutable parent RUN's own `model` field -- never a
+client-supplied parameter -- resolved through the same shared, router-aware helper every other
+run-scoped control route now uses (clozn.server.model_routing.select_control_model_for_run; see
+clozn.server.routes.execution_fork's own use of it for the FORK-02-successor exact path). Under a
+managed multi-model gateway an unknown/not-ready parent model refuses with a typed
+`clozn.model-routing.v1` error (never a silent 503 or a wrong-worker 200); legacy one-worker serving
+keeps its original `ctx.active_sub`-equivalent behavior and its existing 503 gate, unchanged (see
+test_unselected_run_engine_routes_never_use_default_worker). The resolved worker's exact runtime/
+worker identity is then looked up opportunistically (execution_fork's `_identity_facts`, the same
+derivation the dedicated execution-fork gateway uses) purely to decide whether the exact path can be
+attempted; when it can't be derived, compat_fork simply degrades the outcome -- it never widens who
+counts as "no worker ready" at the route level.
 
 Registered in clozn/server/app.py: imported as `_fork_routes` and placed in `_POST_ROUTES`. Live
 surface: the Observatory's fork-a-ghost flow (studio-frontend/src/data/api.ts -> Observatory.tsx). The
 studio-frontend cutover to read the new `outcome` field is a separate wave (FORK-02's UI half).
 """
-from clozn.server import app as ctx
 
 
 def try_post(h, p, body):
@@ -41,8 +45,13 @@ def try_post(h, p, body):
         if run is None:
             h._json(404, {"error": "run not found"})
             return True
-        # A fork teacher-forces a raw prompt prefix through the private worker seam.
-        sub = ctx.active_sub(h)
+        # A fork teacher-forces a raw prompt prefix through the private worker seam. The parent
+        # run's OWN model selects the worker -- never a client-supplied one (see module docstring).
+        from clozn.server.model_routing import select_control_model_for_run
+        selection = select_control_model_for_run(h, run.get("model"), route="/runs/<id>/fork")
+        if selection is None:
+            return True   # typed clozn.model-routing.v1 refusal already written
+        sub = selection.sub
         if not (sub and getattr(sub, "engine", None)):
             h._json(503, {"error": "fork requires a ready product model worker"})
             return True
@@ -55,8 +64,8 @@ def try_post(h, p, body):
             h._json(400, {"error": "position must be an integer"})
             return True
 
-        from clozn.server.routes.execution_fork import _sub_facts
-        runtime_identity, worker_identity, _engine = _sub_facts(sub)
+        from clozn.server.routes.execution_fork import _identity_facts
+        runtime_identity, worker_identity, _engine = _identity_facts(selection)
 
         import clozn.replay.fork as fork_mod
         try:

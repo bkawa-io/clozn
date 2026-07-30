@@ -26,7 +26,11 @@ def try_post(h, p, body):
         if run is None:
             h._json(404, {"error": "run not found"})
             return True
-        sub = ctx.active_sub(h)
+        from clozn.server.model_routing import select_control_model_for_run
+        selection = select_control_model_for_run(h, run.get("model"), route="/runs/<id>/retry")
+        if selection is None:
+            return True   # typed clozn.model-routing.v1 refusal already written
+        sub = selection.sub
         if not (sub and callable(getattr(sub, "chat", None))):
             h._json(503, {"error": "corrective retry requires a ready product model worker"})
             return True

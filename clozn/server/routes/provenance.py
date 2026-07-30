@@ -26,18 +26,30 @@ honestly correct here -- it also preserves trace_provenance's own explicit desig
 product-facing call never raises -- it returns a labeled dict"), and folds three heterogeneous blocked
 reasons (missing engine capability, a degenerate/empty focus region, any other runtime exception) under
 one status without having to guess which of several non-200 codes best fits all three.
+
+Which worker: the run's OWN `model` field resolves the worker, through
+clozn.server.model_routing.select_control_model_for_run -- never a client-supplied model, and never the
+bare module-level ctx.ENGINE fallback this route used before (a real bug under a managed multi-model
+gateway: ctx.ENGINE there is the ROUTER'S CONTROL-PAIR engine, i.e. some OTHER model's worker, not this
+run's -- silently tracing provenance against the wrong model's weights while returning a normal-looking
+200. See clozn.server.routes.causal_trace's identical fix and ctx.active_engine's own docstring for why
+it, too, refuses rather than falls back to ctx.ENGINE under a managed router). An unknown/not-ready
+parent model now refuses with a typed `clozn.model-routing.v1` error instead -- this is the ONE non-200
+outcome this route can produce, and only when a worker cannot be resolved at all, never when the
+resolved engine merely lacks a capability (that stays 200/ok:false, per the reasoning above). Legacy
+one-worker serving is unaffected: `engine_url` stays None (trace_provenance's own DEFAULT_ENGINE
+applies), exactly as before.
 """
-from clozn.server import app as ctx
 
 
-def _engine_base(h):
-    """The live engine client's base URL ('http://host:port'), preferring the request's active
-    substrate's own `.engine` and falling back to the module-level ENGINE -- the same fallback
-    `_engine_reachable` uses elsewhere in app.py. None (trace_provenance's own DEFAULT_ENGINE applies)
-    when neither is configured."""
-    sub = ctx.active_sub(h)
-    eng = getattr(sub, "engine", None) or ctx.ENGINE
-    return getattr(eng, "base", None)
+def _engine_base(engine):
+    """The live engine client's base URL ('http://host:port') off the resolved run-scoped
+    ModelSelection's own `.engine` -- in legacy (no-router) mode this is
+    `ctx.active_engine(h)`, which already falls back to the module-level `ctx.ENGINE` when the
+    substrate itself has none (there is only one engine either way, so that fallback is safe);
+    under a managed router it is the run's OWN resolved worker engine, never any other model's.
+    None (trace_provenance's own DEFAULT_ENGINE applies) when there truly is none."""
+    return getattr(engine, "base", None)
 
 
 def try_post(h, p, body):
@@ -79,10 +91,15 @@ def try_post(h, p, body):
         h._json(400, {"error": "'seed' must be an integer"})
         return True
 
+    from clozn.server.model_routing import select_control_model_for_run
+    selection = select_control_model_for_run(h, run.get("model"), route="/runs/<id>/provenance")
+    if selection is None:
+        return True   # typed clozn.model-routing.v1 refusal already written
+
     from clozn.analysis.provenance import trace_provenance
 
     kwargs = {"focus": focus, "seed": seed}
-    engine_url = _engine_base(h)
+    engine_url = _engine_base(selection.engine)
     if engine_url:
         kwargs["engine_url"] = engine_url
 

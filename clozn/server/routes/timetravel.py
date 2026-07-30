@@ -56,7 +56,12 @@ def try_post(h, p, body):
         if run is None:
             h._json(404, {"error": "run not found"})
             return True
-        if not (ctx.active_sub(h) and getattr(ctx.active_sub(h), "chat", None)):   # a branch regenerates through the product model
+        from clozn.server.model_routing import select_control_model_for_run
+        selection = select_control_model_for_run(h, run.get("model"), route="/runs/<id>/branch")
+        if selection is None:
+            return True   # typed clozn.model-routing.v1 refusal already written
+        sub = selection.sub
+        if not (sub and getattr(sub, "chat", None)):   # a branch regenerates through the product model
             h._json(503, {"error": "branch requires a ready product model worker"})
             return True
         if "turn" not in body:
@@ -72,7 +77,7 @@ def try_post(h, p, body):
         sample = bool(body.get("sample", False))
         try:
             import clozn.replay.timetravel as timetravel
-            child = timetravel.branch(run, turn, ctx.active_sub(h), alt_user=alt, sample=sample,
+            child = timetravel.branch(run, turn, sub, alt_user=alt, sample=sample,
                                       store=ctx._snap_store())
         except Exception as e:
             h._json(500, {"error": f"branch failed: {type(e).__name__}: {e}"})

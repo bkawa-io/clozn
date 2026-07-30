@@ -9,6 +9,12 @@ validation in clozn.receipts.intervention_manifest -- this route never imports c
 executes it against the active substrate's engine. A structurally invalid manifest is a 400; a
 well-formed manifest the CURRENT engine cannot satisfy (missing capability, e.g. attn_knockout with
 flash-attn on) is a typed 409 listing exactly what's missing, never a silent no-op and never a 500.
+
+NOT converted to per-run model selection: this route takes no run_id at all -- the manifest carries
+no reference to any stored run, so there is no immutable run record to read a `model` from. It
+operates against "the active substrate" generically, the same shape as a generation/ambient route,
+not a run-scoped control route (see clozn.server.model_routing.select_control_model_for_run's
+docstring on what that requires). Left as ctx.active_sub(h), unchanged.
 """
 from clozn.server import app as ctx
 

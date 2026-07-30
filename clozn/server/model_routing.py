@@ -1294,3 +1294,89 @@ def select_for_handler(
         )
     selection.apply(handler)
     return selection
+
+
+def select_control_model_for_run(
+    handler,
+    model,
+    *,
+    route: str,
+) -> "ModelSelection | None":
+    """Resolve the exact preloaded worker for a RUN-SCOPED control-plane operation -- receipts,
+    replay, influence, investigation, causal-trace, corrective actions/retries, legacy fork, and
+    their kin -- generalizing what began as ``clozn.server.routes.execution_fork``'s own
+    ``_parent_sub_facts`` (execution-fork planning/execution, snapshot pin) into one place every
+    run-scoped route can share, instead of copy-pasting the router/no-router branch into each one.
+
+    ``model`` MUST be read from the run's own immutable stored record (``run.get("model")``),
+    NEVER a client-supplied parameter: the entire point of per-run selection is that a caller
+    cannot point run A's analysis at model B's worker just by asking for it. ``route`` is the
+    truthful normalized route template for the calling endpoint (e.g. ``"/runs/<id>/replay"``),
+    never a borrowed or approximated one -- see :meth:`PreloadedModelRouter.select_control_model`'s
+    own docstring for why that matters.
+
+    Returns a ``ModelSelection`` on success. Its ``.sub`` is a drop-in replacement for
+    ``ctx.active_sub(handler)`` -- every existing capability check (``getattr(sub, "chat", None)``,
+    the ``if not (sub and ...): 503`` guards, etc.) and its 503 stays exactly as it was; only
+    WHERE ``sub`` comes from changes. ``.engine``/``.runtime_key``/``.worker_identity`` are also
+    present for the minority of callers that need exact runtime/worker identity (execution-fork,
+    snapshot pin, the per-token fork/causal-trace actions) -- on the legacy no-router path those
+    two are left ``None`` here, matching ``select_for_handler``'s own legacy shim, rather than pay
+    a live ``engine.health()`` probe on every run-scoped READ that never asked for one (e.g.
+    investigation/workbench composition, which is documented to touch no engine at all). A caller
+    that needs them even in legacy mode derives them itself -- see
+    ``clozn.server.routes.execution_fork._identity_facts``, which wraps this exact function.
+
+    Returns ``None`` when no worker could be resolved: a typed ``clozn.model-routing.v1`` refusal
+    has already been written to ``handler`` via ``_emit_error``. Callers must return immediately
+    in that case and must NEVER fall back to ``ctx.SUB`` -- that is precisely the ambient-default
+    failure mode ``ctx.active_sub``'s own docstring (clozn/server/app.py) forbids.
+
+    When no managed router is configured this is a strict, zero-cost compatibility shim over the
+    process's original single substrate (mirrors ``select_for_handler``'s own no-router path):
+    legacy one-worker serving keeps its exact historical ``active_sub``/``active_engine`` behavior,
+    unchanged and unregressed.
+    """
+    from clozn.server import app as ctx
+
+    router = getattr(ctx, "MODEL_ROUTER", None)
+    if router is None:
+        return ModelSelection(
+            model_id=model if isinstance(model, str) else None,
+            sub=ctx.active_sub(handler),
+            engine=ctx.active_engine(handler),
+            artifact=None,
+        )
+    try:
+        return router.select_control_model(model, route=route)
+    except ModelRoutingError as error:
+        _emit_error(handler, error, "native")
+        return None
+
+
+def peek_control_model_for_run(handler, model, *, route: str):
+    """Like :func:`select_control_model_for_run`, but for READ-ONLY composition routes that
+    DESCRIBE availability rather than perform an operation (``GET /runs/<id>/investigation``,
+    ``GET /runs/<id>/tokens/<index>/workbench``): these never start a measurement, so an
+    unresolvable worker is not a request failure for them, it is simply a fact to report.
+
+    Never writes a refusal to ``handler`` and never raises ``ModelRoutingError`` -- an unknown/
+    not-ready model (or no managed router and no legacy substrate) degrades to a plain ``None``,
+    exactly mirroring these routes' own pre-existing "worker unavailable -> capability unavailable,
+    still 200" contract (the same thing legacy mode has always done when the one engine is simply
+    down). Returns the resolved ``sub`` directly (not a ``ModelSelection``), since these callers
+    only ever consult capability attributes on it (``score_tokens``, ``steer``, ``engine``, ...).
+
+    Do NOT reach for this in a route that actually performs a generation/scoring/fork/capture
+    operation -- those must fail closed via ``select_control_model_for_run`` instead, per
+    ``ctx.active_sub``'s own docstring on why managed workers are never an ambient default.
+    """
+    from clozn.server import app as ctx
+
+    router = getattr(ctx, "MODEL_ROUTER", None)
+    if router is None:
+        return ctx.active_sub(handler)
+    try:
+        return router.select_control_model(model, route=route).sub
+    except ModelRoutingError:
+        return None

@@ -108,6 +108,14 @@ def try_post(h, p, body):
                 match_criterion=match_criterion,
             )
         else:
+            # NOT converted to per-run model selection (clozn.server.model_routing.
+            # select_control_model_for_run): this route compares TWO runs (a and b), which under a
+            # managed multi-model gateway may legitimately belong to two DIFFERENT models -- there is
+            # no single "the run's model" to read a worker from the way execution-fork/receipts/etc.
+            # do for a single immutable run. Picking one of the two (or requiring they match) would be
+            # a real product decision this task's brief did not ask for; left as ctx.active_sub(h) --
+            # i.e. it keeps today's exact (already fail-closed-under-a-router) behavior -- rather than
+            # guess. Reported as genuinely ambiguous.
             from clozn.server import app as ctx
             substrate = ctx.active_sub(h)
             if not (substrate and callable(getattr(substrate, "chat", None))):

@@ -20,8 +20,16 @@ def try_get(h, p):
     # Every source is a journal read or deterministic projection.  In particular, checking whether the
     # worker exposes score_tokens does not call it; expensive measurements remain action descriptors.
     related = list(runlog.iter_runs(limit=200))
+    # The run's OWN model resolves whose capabilities are being reported -- a bare ctx.active_sub(h)
+    # fails closed under a managed gateway (see clozn.server.app.active_sub's docstring) and would
+    # silently under-report scoring_available as False for every run, not just ones whose worker is
+    # genuinely unavailable. peek_control_model_for_run never turns that unavailability into a hard
+    # refusal here -- this route composes existing evidence and starts no measurement either way, so
+    # an unresolvable worker degrades to scoring_available:false (still 200), exactly like legacy mode
+    # already does when the one engine is down.
     from clozn.server import app as ctx
-    sub = ctx.active_sub(h)
+    from clozn.server.model_routing import peek_control_model_for_run
+    sub = peek_control_model_for_run(h, run.get("model"), route="/runs/<id>/investigation")
     scoring_available = bool(sub and callable(getattr(sub, "score_tokens", None)))
 
     from clozn.behavior import corrective_flow

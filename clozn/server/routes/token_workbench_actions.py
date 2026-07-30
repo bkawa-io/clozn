@@ -123,9 +123,14 @@ def try_post(h, p, body):
 
 # ================================================================================================ fork
 def _fork_action(h, run, index, body):
-    from clozn.server import app as ctx
-
-    sub = ctx.active_sub(h)
+    # The parent run's OWN model selects the worker -- never a client-supplied one -- through the
+    # same shared, router-aware helper POST /runs/<id>/fork uses (clozn.server.routes.fork).
+    from clozn.server.model_routing import select_control_model_for_run
+    selection = select_control_model_for_run(
+        h, run.get("model"), route="/runs/<id>/tokens/<index>/fork")
+    if selection is None:
+        return True   # typed clozn.model-routing.v1 refusal already written
+    sub = selection.sub
     if not (sub and getattr(sub, "engine", None)):
         h._json(503, {"error": "fork requires a ready product model worker"})
         return True
@@ -157,9 +162,9 @@ def _fork_action(h, run, index, body):
         h._json(200, {"outcome": "cached", "artifact": cached})
         return True
 
-    from clozn.server.routes.execution_fork import _sub_facts
+    from clozn.server.routes.execution_fork import _identity_facts
 
-    runtime_identity, worker_identity, _engine = _sub_facts(sub)
+    runtime_identity, worker_identity, _engine = _identity_facts(selection)
     worker = fork_worker(
         run, sub, index, token=body.get("token"), token_id=body.get("token_id"),
         runtime_identity=runtime_identity, worker_identity=worker_identity)
@@ -210,19 +215,24 @@ def _causal_trace_action(h, run, index, body):
         h._json(400, {"error": "'contrast' must be a string, an integer token id, null, or omitted"})
         return True
 
-    from clozn.server import app as ctx
-
-    sub = ctx.active_sub(h)
+    # The run's OWN model selects the worker -- never a client-supplied one -- through the same
+    # shared, router-aware helper POST /runs/<id>/causal-trace uses (clozn.server.routes.causal_trace).
+    from clozn.server.model_routing import select_control_model_for_run
+    selection = select_control_model_for_run(
+        h, run.get("model"), route="/runs/<id>/tokens/<index>/causal-trace")
+    if selection is None:
+        return True   # typed clozn.model-routing.v1 refusal already written
+    sub = selection.sub
     if not (sub and getattr(sub, "engine", None)):
         h._json(503, {"error": "causal-trace requires a ready product model worker"})
         return True
 
     from clozn.server.routes.causal_trace import _engine_base
-    from clozn.server.routes.execution_fork import _sub_facts
+    from clozn.server.routes.execution_fork import _identity_facts
     from clozn.runs.token_workbench_actions import (
         CAUSAL_TRACE_METHOD_VERSION, action_cache_key, causal_trace_worker, find_cached_action)
 
-    runtime_identity, _worker_identity, _engine = _sub_facts(sub)
+    runtime_identity, _worker_identity, _engine = _identity_facts(selection)
     params = {"seed": seed, "screen_mode": screen_mode, "contrast": contrast}
     cache_key = action_cache_key(
         run, index, "causal_trace", CAUSAL_TRACE_METHOD_VERSION, params,
@@ -233,7 +243,7 @@ def _causal_trace_action(h, run, index, body):
             h._json(200, {"outcome": "cached", "artifact": cached})
             return True
 
-    engine_url = _engine_base(h)
+    engine_url = _engine_base(selection.engine)
     worker = causal_trace_worker(
         run, index, seed=seed, screen_mode=screen_mode, contrast=contrast, engine_url=engine_url,
         cache_key=cache_key)
@@ -265,9 +275,14 @@ def _source_measure_action(h, run, index, body):
         h._json(200, {"outcome": "cached", "artifact": cached})
         return True
 
-    from clozn.server import app as ctx
-
-    sub = ctx.active_sub(h)
+    # The run's OWN model selects the worker -- never a client-supplied one -- through the same
+    # shared, router-aware helper POST /runs/<id>/influence-map uses (clozn.server.routes.influence_map).
+    from clozn.server.model_routing import select_control_model_for_run
+    selection = select_control_model_for_run(
+        h, run.get("model"), route="/runs/<id>/tokens/<index>/source-measure")
+    if selection is None:
+        return True   # typed clozn.model-routing.v1 refusal already written
+    sub = selection.sub
     if not (sub and callable(getattr(sub, "score_tokens", None))):
         h._json(503, {"error": "source-measure requires worker token scoring"})
         return True
