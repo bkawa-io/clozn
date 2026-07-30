@@ -1,0 +1,15 @@
+{
+  "schema_version": "clozn.mechanistic-target.v1",
+  "target_id": "mechtarget_0000000000000003",
+  "generated_at": "2026-07-29T00:00:00Z",
+  "origin": {
+    "kind": "diff_model_position",
+    "run_id": "run-abc123",
+    "anchor": "reference",
+    "position_index": 7
+  },
+  "behavioral_delta": {"summary": "a top-choice disagreement at position 7."},
+  "answer_position": {"kind": "token_index", "index": 7},
+  "reference_model": {"sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+  "candidate_model": {"sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}
+}

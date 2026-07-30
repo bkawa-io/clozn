@@ -1,0 +1,49 @@
+{
+  "schema_version": "clozn.mechanistic-target.v1",
+  "target_id": "mechtarget_0000000000000002",
+  "generated_at": "2026-07-29T00:00:00Z",
+  "origin": {
+    "kind": "diff_model_position",
+    "run_id": "run-abc123",
+    "anchor": "reference",
+    "position_index": 7,
+    "label_a": "reference",
+    "label_b": "candidate"
+  },
+  "behavioral_delta": {
+    "summary": "at teacher-forced position 7 (forced token 'the', id=42), reference's own top choice was 'the' (id=42) and candidate's own top choice was 'a' (id=99) -- the two models' argmax disagreed at this position.",
+    "position_evidence": {
+      "index": 7, "token_id": 42, "piece": "the", "logprob_a": -0.1, "logprob_b": -1.2,
+      "delta_nats": -1.1, "argmax_a_id": 42, "argmax_a_piece": "the", "argmax_b_id": 99,
+      "argmax_b_piece": "a", "argmax_flip": true, "status": "flipped"
+    }
+  },
+  "answer_position": {"kind": "token_index", "index": 7},
+  "reference_token": {"id": 42, "piece": "the"},
+  "candidate_token": {"id": 99, "piece": "a"},
+  "reference_model": {"sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                      "filename": "ref.gguf"},
+  "candidate_model": {"sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                      "filename": "cand.gguf"},
+  "pair_compatibility": {
+    "schema_version": "clozn.pair-compatibility.v1",
+    "generated_at": "2026-07-29T00:00:00Z",
+    "model_a": {"sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+    "model_b": {"sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+    "tokenizer": {"state": "exact", "method": "probe"},
+    "template": {"state": "same", "method": "probe"},
+    "architecture": {"state": "same"},
+    "layer_count": {"state": "same"},
+    "hidden_size": {"state": "same"},
+    "vocab_size": {"state": "same"},
+    "writable_layers": {},
+    "verdict": {
+      "overall": "compatible",
+      "reasons": [],
+      "operations": {
+        "per_token_comparison": {"permitted": true, "reason": "tokenizers match exactly"},
+        "residual_transplant": {"permitted": true, "reason": "hidden_size matches exactly"}
+      }
+    }
+  }
+}

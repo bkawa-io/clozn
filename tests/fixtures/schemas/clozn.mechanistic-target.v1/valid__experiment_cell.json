@@ -1,0 +1,52 @@
+{
+  "schema_version": "clozn.mechanistic-target.v1",
+  "target_id": "mechtarget_0000000000000001",
+  "generated_at": "2026-07-29T00:00:00Z",
+  "origin": {
+    "kind": "experiment_cell",
+    "experiment_id": "exp_fixture",
+    "suite": "target",
+    "case": "c1",
+    "seed": 0,
+    "reference_variant": "base",
+    "candidate_variant": "candidate",
+    "reference_run_id": "run-base-target",
+    "candidate_run_id": "run-candidate-target"
+  },
+  "behavioral_delta": {
+    "summary": "1 assertion(s) did not pass on target/c1 (variant='candidate', seed=0), evaluated against the 'base' reference variant: equals. Responses first diverge at token 2: 'base' said 'c', 'candidate' said 'x'.",
+    "failed_assertions": [
+      {"name": "t", "check": "equals", "target": "text", "expected": "abc", "actual": "abx",
+       "status": "fail", "note": null}
+    ],
+    "response_diff": {"mode": "model_diff", "ok": true, "first_divergence": {"index": 2}}
+  },
+  "answer_position": {"kind": "token_index", "index": 2},
+  "reference_token": {"id": 2, "piece": "c"},
+  "candidate_token": {"id": 2, "piece": "x"},
+  "reference_model": {"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                      "filename": "a.gguf"},
+  "candidate_model": {"sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                      "filename": "b.gguf"},
+  "pair_compatibility": {
+    "schema_version": "clozn.pair-compatibility.v1",
+    "generated_at": "2026-07-29T00:00:00Z",
+    "model_a": {"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    "model_b": {"sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+    "tokenizer": {"state": "exact", "method": "hash"},
+    "template": {"state": "same", "method": "hash"},
+    "architecture": {"state": "same"},
+    "layer_count": {"state": "same"},
+    "hidden_size": {"state": "same"},
+    "vocab_size": {"state": "same"},
+    "writable_layers": {},
+    "verdict": {
+      "overall": "compatible",
+      "reasons": [],
+      "operations": {
+        "per_token_comparison": {"permitted": true, "reason": "tokenizers match exactly"},
+        "residual_transplant": {"permitted": true, "reason": "hidden_size matches exactly"}
+      }
+    }
+  }
+}

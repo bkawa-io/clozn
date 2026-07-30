@@ -11,6 +11,7 @@ import tempfile
 import uuid
 
 from clozn._io import atomic_write_json
+from clozn.cli.commands import mechanistic
 from clozn.cli.main import CloznError
 from clozn.experiments import stats, suite
 
@@ -77,6 +78,24 @@ def add_subparser(sub):
     export.add_argument("--force", action="store_true", help="replace the exact existing output path")
     export.add_argument("--json", action="store_true", help="print the machine-readable export receipt")
     export.set_defaults(fn=cmd_export)
+
+    # MECH-CLI-01: resolve a clozn.mechanistic-target.v1 artifact for one failed cell against its own
+    # reference (baseline) variant's cell -- see clozn/analysis/mech_target.py (MECH-CASE-00) and
+    # clozn/cli/commands/mechanistic.py (this command's actual implementation; kept out of this file so
+    # the resolver/CLI logic lives entirely in the files that own it).
+    explain = commands.add_parser("explain-cell", help="resolve a clozn.mechanistic-target.v1 artifact "
+                                  "for one failed cell against its own reference variant's cell")
+    explain.add_argument("result", help="clozn.experiment.result.v0 JSON artifact")
+    explain.add_argument("--suite", choices=["target", "guard"], default="target")
+    explain.add_argument("--case", required=True, help="the failing case name to explain")
+    explain.add_argument("--variant", required=True, help="the candidate variant under test")
+    explain.add_argument("--reference-variant", default=None, help="override the reference variant "
+                         "(default: the manifest's own baseline_variant)")
+    explain.add_argument("--seed", type=int, default=0)
+    explain.add_argument("--out", default=None, help="explicit output path for the target artifact "
+                         "(default: ~/.clozn/mechanistic-targets/<target_id>.json)")
+    explain.add_argument("--json", action="store_true")
+    explain.set_defaults(fn=mechanistic.cmd_explain_cell)
     return parser
 
 
