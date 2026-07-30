@@ -273,12 +273,30 @@ def _logits_with_max_probs(target_probs: list[float], vocab: int = VOCAB) -> np.
 # (f) PARITY tests against clozn_lab (TEST-ONLY imports)
 # --------------------------------------------------------------------------- #
 
-from clozn_lab.generate import sample_candidates  # noqa: E402
-from clozn_lab.scheduler.policies import (  # noqa: E402
-    Candidate,
-    ConfidenceTopK,
-    StepContext,
-    Threshold,
+# `clozn_lab` was deliberately deleted by 95168c2 ("remove the diffusion program (Python + Studio
+# half)"). These six parity tests compare the CPU reference against that lab implementation, so they
+# have had nothing to compare against since. The import was unconditional at module scope, which
+# turned the whole file into a COLLECTION error -- taking the 19 self-contained numpy tests below it
+# down as well -- and ci.yml runs this file as a required step. It has been red since the removal;
+# nobody noticed because a separate missing-pytest bug meant the primary gate never ran at all.
+#
+# Guarded rather than deleted: removing tests is the owner's call, not this fix's. The skip is
+# explicit and states the cause, so the gap is visible in CI output instead of silently absent.
+try:
+    from clozn_lab.generate import sample_candidates  # noqa: E402
+    from clozn_lab.scheduler.policies import (  # noqa: E402
+        Candidate,
+        ConfidenceTopK,
+        StepContext,
+        Threshold,
+    )
+    _LAB_AVAILABLE = True
+except ImportError:
+    _LAB_AVAILABLE = False
+
+_requires_lab = pytest.mark.skipif(
+    not _LAB_AVAILABLE,
+    reason="clozn_lab was removed with the diffusion program (95168c2); nothing to check parity against",
 )
 
 
@@ -290,6 +308,7 @@ def _candidates_from(res: ConfidenceSelectResult) -> list[Candidate]:
     ]
 
 
+@_requires_lab
 def test_parity_greedy_tokens_and_confidences() -> None:
     logits = _random_logits(seed=11)
     positions = list(range(logits.shape[0]))
@@ -303,6 +322,7 @@ def test_parity_greedy_tokens_and_confidences() -> None:
     np.testing.assert_array_equal(ref.confidences, lab_conf)  # EXACT, same float64 path
 
 
+@_requires_lab
 def test_parity_sampled_tokens_and_confidences() -> None:
     logits = _random_logits(seed=12)
     positions = list(range(logits.shape[0]))
@@ -323,6 +343,7 @@ def test_parity_sampled_tokens_and_confidences() -> None:
     np.testing.assert_array_equal(ref.confidences, lab_conf)
 
 
+@_requires_lab
 def test_parity_topk_selection_fixed_k() -> None:
     logits = _random_logits(seed=13)
     K = 5
@@ -334,6 +355,7 @@ def test_parity_topk_selection_fixed_k() -> None:
     assert ref.selected == lab_positions
 
 
+@_requires_lab
 def test_parity_topk_quota_mode_matches_precomputed_k() -> None:
     # The quota-ramp k=None case computes k from step context OUTSIDE the kernel.
     # Compute the same k the policy would (ceil(n / steps_remaining)) and pass it.
@@ -351,6 +373,7 @@ def test_parity_topk_quota_mode_matches_precomputed_k() -> None:
     assert ref.selected == lab_positions
 
 
+@_requires_lab
 def test_parity_threshold_selection() -> None:
     logits = _random_logits(seed=15)
     tau, min_commit = 0.15, 1
@@ -362,6 +385,7 @@ def test_parity_threshold_selection() -> None:
     assert ref.selected == lab_positions
 
 
+@_requires_lab
 def test_parity_threshold_rail_path() -> None:
     # Pick a tau no position can clear so the min_commit rail decides — must still
     # match the lab's rail (top min_commit by confidence, ties toward lower pos).
