@@ -126,7 +126,8 @@ def build_parser():
     )
     ps.add_argument(
         "--max-loaded-models", type=_positive_context, default=None, metavar="N",
-        help="resident-worker limit for the qualified config (no cold loading yet)",
+        help="resident-worker limit for the qualified config "
+             "(clozn serve does not cold-load on demand yet; see docs/MANAGED_MODELS.md)",
     )
     ps.add_argument("--ctx", type=_positive_context, default=None,
                     help="worker context window in tokens (default 4096; reduce on tight unified memory)")

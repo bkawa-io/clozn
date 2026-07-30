@@ -1307,6 +1307,22 @@ def main():
             ap.error("the private worker client is unavailable")
         from clozn.server.model_routing import ProjectionFileRouter
         print("clozn gateway: connecting to private model workers ...", flush=True)
+        # ProjectionFileRouter accepts a `loader=` (RT-04's cold-load/coalesce/evict
+        # capability, see model_routing.py) but none is constructed here. Doing so would
+        # need a real WorkerRegistry.ensure_loaded reachable from THIS process -- and this
+        # process is the gateway subprocess (`python -m clozn.server.app`), a separate OS
+        # process from the `clozn serve` supervisor that owns the real WorkerRegistry and
+        # the model file paths/flags needed to spawn a worker (see
+        # clozn/cli/runtime_process.py's _spawn_managed_runtime and substrates.py's
+        # _ENGINE_DISCOVERY_ENV_KEYS comment for the same process-boundary fact). Building a
+        # loader here would mean either importing clozn.cli into clozn.server (forbidden --
+        # see ColdLoadOutcome's docstring) or constructing a second, disconnected
+        # WorkerRegistry in this process with no access to those paths and no shared state
+        # with the supervisor's real one -- spawning duplicate, desynchronized workers
+        # instead of coalescing onto the supervisor's. Wiring a real loader across that
+        # process boundary needs its own IPC integration (the supervisor exposing
+        # ensure_loaded to the gateway); until that exists, a not-preloaded model keeps
+        # RT-03's original fail-fast behavior here, unchanged.
         MODEL_ROUTER = ProjectionFileRouter(
             routing_file,
             engine_factory=lambda port: EngineClient(port=port),

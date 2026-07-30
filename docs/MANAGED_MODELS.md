@@ -221,16 +221,36 @@ Once serving:
 
 ## Limitations (read this before you rely on any of the above)
 
-**Preloaded only.** `clozn.cli.worker_registry.WorkerRegistry.ensure_loaded()` implements single-flight
-cold-load coalescing and idle-LRU eviction, and `clozn.server.model_routing.PreloadedModelRouter`
-accepts an optional `loader` callback to drive exactly that. Neither is reachable from
-`clozn serve --models-config` today: `clozn/server/app.py`'s `main()` constructs
-`ProjectionFileRouter(routing_file, engine_factory=..., substrate_factory=...)` with no `loader`
-argument, and `ProjectionFileRouter.__init__` doesn't accept one at all. So, concretely: only the
-workers named in your (possibly overridden) preload set ever exist. Requesting a model that isn't
-preloaded, or one whose preload failed, returns `model_not_ready`/`model_load_failed` immediately —
-it does not queue, load on demand, or wait. No worker is ever evicted for capacity while serving.
-`--max-loaded-models`'s help text says this plainly: "no cold loading yet."
+**Preloaded only — still true for `clozn serve`, for a narrower reason than before.**
+`clozn.cli.worker_registry.WorkerRegistry.ensure_loaded()` implements single-flight cold-load
+coalescing and idle-LRU eviction, and both router classes in `clozn.server.model_routing` now accept
+an optional `loader` callback to drive exactly that: `PreloadedModelRouter` already did, and
+`ProjectionFileRouter` — the class `clozn/server/app.py`'s `main()` actually constructs for
+`clozn serve --models-config` — now does too (`ProjectionFileRouter.__init__(..., loader=...)`,
+threaded through every `refresh()` rebuild, not just the first). This is proven end to end,
+including under real concurrent HTTP dispatch with a real `WorkerRegistry` behind it (single-flight
+coalescing, typed load-failure state, and eviction/resident-limit safety), by
+`tests/test_projection_file_router_loader.py`.
+
+What is **not** done: `clozn/server/app.py`'s `main()` still constructs `ProjectionFileRouter` with no
+`loader` argument, so `clozn serve --models-config` itself does not cold-load on demand. The reason
+changed from "the parameter doesn't exist" to a real process-topology fact: the gateway
+(`python -m clozn.server.app`) is a separate OS process from the `clozn serve` supervisor that owns
+the real `WorkerRegistry` and the model file paths/flags needed to spawn a worker (the routing
+projection file is supervisor→gateway one-way state, never a command channel). Building a loader
+inside the gateway process would mean either importing `clozn.cli` into `clozn.server` (forbidden —
+see `ColdLoadOutcome`'s docstring in `clozn/server/model_routing.py`) or constructing a second,
+disconnected `WorkerRegistry` there with no access to those paths and no shared state with the
+supervisor's real one — spawning duplicate, desynchronized workers instead of coalescing onto the
+supervisor's single-flight guarantee. Wiring a real loader across that process boundary needs its own
+supervisor↔gateway IPC integration, which does not exist yet and is separately owned; see the comment
+at `MODEL_ROUTER`'s construction in `clozn/server/app.py::main()`.
+
+So, concretely, today: only the workers named in your (possibly overridden) preload set ever exist.
+Requesting a model that isn't preloaded, or one whose preload failed, returns
+`model_not_ready`/`model_load_failed` immediately — it does not queue, load on demand, or wait. No
+worker is ever evicted for capacity while serving. `--max-loaded-models`'s help text reflects this:
+"clozn serve does not cold-load on demand yet."
 
 **Same-worker calls are serialized; the parallelism is across different models.** This part *is*
 wired: `ProjectionFileRouter` defaults to building one `WorkerGateRegistry`
@@ -271,9 +291,9 @@ with a SAE- or J-lens-enabled worker in v1; every managed worker's flags for tho
 specific fitted readout, at what checksum) — hashing a bare boolean would let two different fitted
 artifacts silently collide onto the same routing identity.
 
-**VRAM is real, and the resident limit is not advisory.** Because cold loading doesn't exist yet
-(above), everything in your preload set is resident for the runtime's entire life — there is no lazy
-loading to defer memory use and no eviction to free it under pressure. Configuring
+**VRAM is real, and the resident limit is not advisory.** Because `clozn serve` doesn't cold-load on
+demand yet (above), everything in your preload set is resident for the runtime's entire life — there
+is no lazy loading to defer memory use and no eviction to free it under pressure. Configuring
 `preload_model_ids` beyond `max_loaded_models` is a hard config error at boot, not a soft cap. Size
 your preload set to what actually fits, concurrently, on your hardware: two 7B-class GGUFs will not
 both fit resident on a 16 GB GPU at once, and a worker that doesn't fit simply fails to boot — it does
