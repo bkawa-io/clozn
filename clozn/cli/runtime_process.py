@@ -19,6 +19,7 @@ import urllib.request
 from types import MappingProxyType
 from typing import Mapping
 
+from clozn.cli import process_guard
 from clozn.cli.engine_process import REPO, _free_port, _log_tail, find_engine_ex, spawn_engine
 from clozn.cli.worker_handle import (
     WorkerHandle,
@@ -509,7 +510,11 @@ def _spawn_managed_runtime(
             env=env,
             stdout=gateway_log or subprocess.DEVNULL,
             stderr=subprocess.STDOUT,
+            **process_guard.subprocess_kwargs(),
         )
+        # Parent-death guard (ADR 008 Stage 0): see engine_process.spawn_engine's identical call for
+        # the full rationale. Best-effort, never raises.
+        process_guard.guard(gateway)
 
         started = time.monotonic()
         while time.monotonic() - started < config.gateway_boot_timeout:
@@ -654,7 +659,11 @@ def spawn_runtime(config: RuntimeConfig, *, worker_log=None, gateway_log=None) -
             env=env,
             stdout=gateway_log or subprocess.DEVNULL,
             stderr=subprocess.STDOUT,
+            **process_guard.subprocess_kwargs(),
         )
+        # Parent-death guard (ADR 008 Stage 0): see engine_process.spawn_engine's identical call for
+        # the full rationale. Best-effort, never raises.
+        process_guard.guard(gateway)
 
         started = time.monotonic()
         while time.monotonic() - started < config.gateway_boot_timeout:
