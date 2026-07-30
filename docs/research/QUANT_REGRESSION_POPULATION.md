@@ -207,3 +207,16 @@ needs more bisects per category, i.e. a new GPU run.
 MLP layers independent of task. That is a directly testable mixed-precision hypothesis (protect
 late-MLP precision) and is externally checkable against activation-aware quantization / outlier-
 feature literature.
+
+## Follow-on: the mixed-precision counterfactual (2026-07-30)
+
+The engineering read above was tested directly: band-level broad transplant (early/mid/late,
+matched site counts) on the SAME 30-disagreement stratified sample this document used, plus an
+external check against the actual llama.cpp GGUF quantization scheme that produced these candidate
+models. **Result: late beats both early and mid, and beats its own random equal-norm control (0/25
+random successes at late vs. 3/25 early, 7/25 mid); the paired evidence (10 disagreements where late
+restored and early did not, 0 the other way; 12 vs. 1 for mid) carries the claim more than the
+marginal rates, which are noisier at this sample size.** Full method, the denominator-correction
+audit, the random-control specificity discussion, the llama.cpp `use_more_bits()` external
+verification, and the falsification note are in
+[QUANT_MIXED_PRECISION_BANDS.md](QUANT_MIXED_PRECISION_BANDS.md) — not duplicated here.
