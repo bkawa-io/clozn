@@ -1,0 +1,81 @@
+{
+  "schema_version": "clozn.model-routing.v1",
+  "protocol": {
+    "surface": "openai",
+    "route": "/v1/chat/completions"
+  },
+  "request": {
+    "request_id": "req_default",
+    "requested_model": null,
+    "selection_source": "default",
+    "load_policy": "wait"
+  },
+  "policy": {
+    "default_model_id": "qwen-default",
+    "max_loaded_workers": 1,
+    "preload_model_ids": ["qwen-default"],
+    "load_queue_limit": 32,
+    "generation_queue_limit": 32,
+    "load_timeout_ms": 180000,
+    "queue_timeout_ms": 600000,
+    "eviction_policy": "lru_idle",
+    "active_worker_eviction": "forbidden",
+    "cold_load_coalescing": true,
+    "cancellation": "request_scoped_release_permits",
+    "omitted_model_policy": "configured_default",
+    "unknown_model_policy": "error_no_fallback",
+    "alias_policy": "mutable_config_immutable_receipt"
+  },
+  "result": {
+    "status": "routed",
+    "lifecycle_state": "ready",
+    "receipt": {
+      "requested_model": null,
+      "selection_source": "default",
+      "resolved_model_id": "qwen-default",
+      "resolved_artifact": {
+        "model_id": "qwen-default",
+        "format": "gguf",
+        "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "runtime_key": {
+        "key_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "gguf_artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_size": 32768,
+        "backend": "cpu",
+        "adapter": {
+          "present": false,
+          "identity_sha256": null,
+          "artifact_sha256": null,
+          "scale": null
+        },
+        "template_fingerprint": "eeeeeeeeeeeeeeee",
+        "engine_build": "clozn-engine-1.0+cpu",
+        "white_box_flags": {}
+      },
+      "worker_identity": {
+        "worker_id": "worker_bbbbbbbb_g1",
+        "worker_generation": 1,
+        "runtime_key_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "protocol_version": "1.0",
+        "engine_build": "clozn-engine-1.0+cpu",
+        "backend": "cpu"
+      },
+      "adapter": {
+        "present": false,
+        "identity_sha256": null,
+        "artifact_sha256": null,
+        "scale": null
+      },
+      "load_event": {
+        "event_id": null,
+        "kind": "not_required",
+        "outcome": "already_ready",
+        "state_before": "ready",
+        "state_after": "ready",
+        "coalesced": false,
+        "wait_ms": 0
+      }
+    }
+  }
+}

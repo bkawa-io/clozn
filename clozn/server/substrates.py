@@ -236,11 +236,20 @@ class EngineSubstrate(Substrate):
     # engine never adds latency to ordinary calls.
     _IDENTITY_RETRY_COOLDOWN_S = 30.0
 
-    def __init__(self):
-        if ctx.ENGINE is None:
+    def __init__(self, engine=None, steer=None):
+        engine = engine if engine is not None else ctx.ENGINE
+        if engine is None:
             raise RuntimeError("engine substrate needs the supervised GGUF worker (set CLOZN_ENGINE_PORT)")
-        self.engine = ctx.ENGINE
-        self.steer = ctx._engine_steer()            # an EngineSteer on the GGUF (tone dials via steer_vec)
+        self.engine = engine
+        if steer is not None:
+            self.steer = steer
+        elif engine is ctx.ENGINE:
+            self.steer = ctx._engine_steer()
+        else:
+            # A routed worker cannot share the process-global EngineSteer that
+            # belongs to the legacy default worker.
+            from clozn.behavior.steering.engine_adapter import EngineSteer
+            self.steer = EngineSteer(engine)
         if self.steer is not None:               # metadata-only: the shipped library's names/poles/max, so
             try:                                  # they show up in /steer/axes immediately (their direction
                 self.steer.load_library(ctx._pers("studio_library.json"))   # vectors are computed lazily by compute())
@@ -838,6 +847,15 @@ class EngineSubstrate(Substrate):
                     v = (h or {}).get(k)
                     if v is not None:
                         health_meta[k] = v
+                capabilities = (h or {}).get("capabilities")
+                if isinstance(capabilities, dict):
+                    white_box_flags = {
+                        name: capabilities[name]
+                        for name in ("sae", "jlens", "attn_knockout")
+                        if type(capabilities.get(name)) is bool
+                    }
+                    if len(white_box_flags) == 3:
+                        health_meta["white_box_flags"] = white_box_flags
             except Exception:
                 pass
             # roadmap S4.3: immutable reproduction identity, assembled from the SAME /health fetch above --

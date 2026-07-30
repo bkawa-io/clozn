@@ -493,16 +493,18 @@ def selective_generation_action(raw_reply: str, trace_steps, model: str | None, 
     }
 
 
-def _request(body: dict):
-    if ctx.ENGINE is None:
+def _request(body: dict, handler=None):
+    engine = ctx.active_engine(handler) if handler is not None else ctx.ENGINE
+    if engine is None:
         raise RuntimeError("model worker unavailable")
-    data = json.dumps(body).encode("utf-8")
+    worker_body = {key: value for key, value in body.items() if key != "model"}
+    data = json.dumps(worker_body).encode("utf-8")
     request = urllib.request.Request(
-        ctx.ENGINE.base + "/v1/completions",
+        engine.base + "/v1/completions",
         data=data,
         headers={"Content-Type": "application/json"},
     )
-    return urllib.request.urlopen(request, timeout=getattr(ctx.ENGINE, "timeout", 600))
+    return urllib.request.urlopen(request, timeout=getattr(engine, "timeout", 600))
 
 
 def _error(handler, exc: Exception) -> None:
@@ -520,7 +522,17 @@ def _error(handler, exc: Exception) -> None:
 def native_completion(handler, body: dict) -> None:
     """Transparent Clozn event stream used by the CLI and Studio instrumentation."""
     try:
-        response = _request(body)
+        # Keep the historical one-argument `_request` test/extension seam while
+        # the built-in implementation accepts the request handler needed for
+        # exact private-worker dispatch.
+        import inspect
+        request_params = inspect.signature(_request).parameters.values()
+        handler_aware = (
+            len(request_params) >= 2
+            or any(param.kind == inspect.Parameter.VAR_POSITIONAL
+                   for param in request_params)
+        )
+        response = _request(body, handler) if handler_aware else _request(body)
     except Exception as exc:
         _error(handler, exc)
         return
@@ -532,6 +544,16 @@ def native_completion(handler, body: dict) -> None:
             send_cors_headers(handler)
             handler.end_headers()
             try:
+                routing = getattr(handler, "_model_routing_artifact", None)
+                if routing is not None:
+                    frame = {
+                        "type": "model_routing",
+                        "clozn_model_routing": routing,
+                    }
+                    handler.wfile.write(
+                        ("data: " + json.dumps(frame) + "\n\n").encode("utf-8")
+                    )
+                    handler.wfile.flush()
                 for line in response:
                     handler.wfile.write(line)
                     handler.wfile.flush()
@@ -545,6 +567,11 @@ def native_completion(handler, body: dict) -> None:
                     pass
             return
         raw = response.read()
+        routing = getattr(handler, "_model_routing_artifact", None)
+        if routing is not None:
+            payload = json.loads(raw.decode("utf-8"))
+            payload["clozn_model_routing"] = routing
+            raw = json.dumps(payload).encode("utf-8")
         handler._send(getattr(response, "status", 200), raw, "application/json")
     finally:
         response.close()
@@ -759,7 +786,13 @@ def openai_completion(handler, body: dict) -> None:
         handler._json(400, {"error": {"message": str(exc), "type": "invalid_request_error",
                                       "param": exc.param, "code": exc.code}})
         return
-    model = str(body.get("model") or model_id())
+    from clozn.server.model_routing import select_for_handler
+    selection = select_for_handler(
+        handler, body, surface="openai", route="/v1/completions"
+    )
+    if selection is None:
+        return
+    model = selection.model_id
     journal_messages = _completion_messages(body["prompt"])
     messages, corrective_evidence = apply_corrective_policy(handler, journal_messages)
     max_tokens = int(body.get("max_tokens", 256))

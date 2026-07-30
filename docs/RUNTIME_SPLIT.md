@@ -22,7 +22,7 @@ OpenAI/Ollama client · CLI · Studio
                     ▼
 public loopback Python gateway (`clozn serve`, stdlib-only)
 API compatibility · run journal · context receipts · comparisons · actions
-                    │ protocol 1.0
+                    │ protocol 1.1
                     ▼
 private loopback C++ worker
 template · generate · sample · tap · score · steer · optional J-lens

@@ -1,0 +1,412 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.model-routing.v1",
+  "title": "Immutable routing decision for one model-bound request",
+  "description": "Contract artifact for the future multi-model gateway. It records the request's literal model selection, the service policy applied, and either the exact resolved worker identity or a deterministic typed error. It does not make the current runtime multi-model. Successful generation runs retain result.receipt; load and eviction events are runtime events, never fabricated generation runs. v1 documents are immutable and are never reinterpreted after an alias changes.",
+  "type": "object",
+  "required": ["schema_version", "protocol", "request", "policy", "result"],
+  "properties": {
+    "schema_version": {"const": "clozn.model-routing.v1"},
+    "protocol": {"$ref": "#/$defs/Protocol"},
+    "request": {"$ref": "#/$defs/Request"},
+    "policy": {"$ref": "#/$defs/Policy"},
+    "result": {
+      "oneOf": [
+        {"$ref": "#/$defs/RoutedResult"},
+        {"$ref": "#/$defs/ErrorResult"}
+      ]
+    }
+  },
+  "$defs": {
+    "Protocol": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["surface", "route"],
+          "properties": {
+            "surface": {"const": "native"},
+            "route": {
+              "enum": [
+                "/api/clozn/generate",
+                "/runs/<id>/execution-fork/checkpoint",
+                "/runs/<id>/execution-fork/plan",
+                "/runs/<id>/execution-fork"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["surface", "route"],
+          "properties": {
+            "surface": {"const": "openai"},
+            "route": {"enum": ["/v1/chat/completions", "/v1/completions"]}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["surface", "route"],
+          "properties": {
+            "surface": {"const": "ollama"},
+            "route": {"enum": ["/api/chat", "/api/generate"]}
+          }
+        }
+      ]
+    },
+    "Request": {
+      "type": "object",
+      "required": ["request_id", "requested_model", "selection_source", "load_policy"],
+      "properties": {
+        "request_id": {"type": "string", "minLength": 1},
+        "requested_model": {
+          "type": ["string", "null"],
+          "description": "The literal client model label. null means the field was omitted; it is never replaced by the resolved default in this field."
+        },
+        "selection_source": {"enum": ["explicit", "default"]},
+        "load_policy": {
+          "enum": ["wait", "fail_fast"],
+          "description": "wait may coalesce behind one cold load; fail_fast neither starts nor waits for a load."
+        }
+      }
+    },
+    "Policy": {
+      "type": "object",
+      "required": [
+        "default_model_id", "max_loaded_workers", "preload_model_ids",
+        "load_queue_limit", "generation_queue_limit", "load_timeout_ms",
+        "queue_timeout_ms", "eviction_policy", "active_worker_eviction",
+        "cold_load_coalescing", "cancellation", "omitted_model_policy",
+        "unknown_model_policy", "alias_policy"
+      ],
+      "properties": {
+        "default_model_id": {"type": "string", "minLength": 1},
+        "max_loaded_workers": {"type": "integer", "minimum": 1},
+        "preload_model_ids": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "load_queue_limit": {"type": "integer", "minimum": 1},
+        "generation_queue_limit": {"type": "integer", "minimum": 1},
+        "load_timeout_ms": {"type": "integer", "minimum": 1},
+        "queue_timeout_ms": {"type": "integer", "minimum": 1},
+        "eviction_policy": {"const": "lru_idle"},
+        "active_worker_eviction": {"const": "forbidden"},
+        "cold_load_coalescing": {"const": true},
+        "cancellation": {"const": "request_scoped_release_permits"},
+        "omitted_model_policy": {"const": "configured_default"},
+        "unknown_model_policy": {"const": "error_no_fallback"},
+        "alias_policy": {"const": "mutable_config_immutable_receipt"}
+      }
+    },
+    "LifecycleState": {
+      "enum": ["unloaded", "loading", "ready", "evicting", "failed"]
+    },
+    "AdapterAbsent": {
+      "type": "object",
+      "required": ["present", "identity_sha256", "artifact_sha256", "scale"],
+      "additionalProperties": false,
+      "properties": {
+        "present": {"const": false},
+        "identity_sha256": {"type": "null"},
+        "artifact_sha256": {"type": "null"},
+        "scale": {"type": "null"}
+      }
+    },
+    "AdapterPresent": {
+      "type": "object",
+      "required": ["present", "identity_sha256", "artifact_sha256", "scale"],
+      "additionalProperties": false,
+      "properties": {
+        "present": {"const": true},
+        "identity_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "artifact_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "scale": {"type": "number"}
+      }
+    },
+    "Adapter": {
+      "oneOf": [
+        {"$ref": "#/$defs/AdapterAbsent"},
+        {"$ref": "#/$defs/AdapterPresent"}
+      ]
+    },
+    "RuntimeKey": {
+      "type": "object",
+      "required": [
+        "key_sha256", "gguf_artifact_sha256", "context_size", "backend",
+        "adapter", "template_fingerprint", "engine_build", "white_box_flags"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "key_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "gguf_artifact_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "context_size": {"type": "integer", "minimum": 1},
+        "backend": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact managed backend when known; otherwise the discovery tier's verbatim cpu/gpu token. It participates in the key exactly as recorded."
+        },
+        "adapter": {"$ref": "#/$defs/Adapter"},
+        "template_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{16,64}$"},
+        "engine_build": {"type": "string", "minLength": 1},
+        "white_box_flags": {
+          "type": "object",
+          "additionalProperties": {"type": "boolean"}
+        }
+      }
+    },
+    "ResolvedArtifact": {
+      "type": "object",
+      "required": ["model_id", "format", "artifact_sha256"],
+      "properties": {
+        "model_id": {"type": "string", "minLength": 1},
+        "format": {"const": "gguf"},
+        "artifact_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "path": {"type": "string", "minLength": 1}
+      }
+    },
+    "WorkerIdentity": {
+      "type": "object",
+      "required": [
+        "worker_id", "worker_generation", "runtime_key_sha256",
+        "protocol_version", "engine_build", "backend"
+      ],
+      "properties": {
+        "worker_id": {"type": "string", "minLength": 1},
+        "worker_generation": {"type": "integer", "minimum": 1},
+        "runtime_key_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "protocol_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$"},
+        "engine_build": {"type": "string", "minLength": 1},
+        "backend": {"type": "string", "minLength": 1}
+      }
+    },
+    "LoadEvent": {
+      "type": "object",
+      "required": [
+        "event_id", "kind", "outcome", "state_before", "state_after",
+        "coalesced", "wait_ms"
+      ],
+      "properties": {
+        "event_id": {"type": ["string", "null"]},
+        "kind": {"enum": ["not_started", "not_required", "preload", "cold_load", "reload"]},
+        "outcome": {
+          "enum": [
+            "not_started", "already_ready", "coalesced", "loaded",
+            "failed", "timed_out", "cancelled"
+          ]
+        },
+        "state_before": {"$ref": "#/$defs/LifecycleState"},
+        "state_after": {"$ref": "#/$defs/LifecycleState"},
+        "coalesced": {"type": "boolean"},
+        "wait_ms": {"type": "integer", "minimum": 0}
+      }
+    },
+    "AttemptReceipt": {
+      "type": "object",
+      "required": ["requested_model", "selection_source", "load_event"],
+      "properties": {
+        "requested_model": {"type": ["string", "null"]},
+        "selection_source": {"enum": ["explicit", "default"]},
+        "resolved_model_id": {"type": "string", "minLength": 1},
+        "resolved_artifact": {"$ref": "#/$defs/ResolvedArtifact"},
+        "runtime_key": {"$ref": "#/$defs/RuntimeKey"},
+        "worker_identity": {"$ref": "#/$defs/WorkerIdentity"},
+        "adapter": {"$ref": "#/$defs/Adapter"},
+        "load_event": {"$ref": "#/$defs/LoadEvent"}
+      }
+    },
+    "RoutedReceipt": {
+      "type": "object",
+      "required": [
+        "requested_model", "selection_source", "resolved_model_id",
+        "resolved_artifact", "runtime_key", "worker_identity", "adapter", "load_event"
+      ],
+      "properties": {
+        "requested_model": {"type": ["string", "null"]},
+        "selection_source": {"enum": ["explicit", "default"]},
+        "resolved_model_id": {"type": "string", "minLength": 1},
+        "resolved_artifact": {"$ref": "#/$defs/ResolvedArtifact"},
+        "runtime_key": {"$ref": "#/$defs/RuntimeKey"},
+        "worker_identity": {"$ref": "#/$defs/WorkerIdentity"},
+        "adapter": {"$ref": "#/$defs/Adapter"},
+        "load_event": {"$ref": "#/$defs/LoadEvent"}
+      }
+    },
+    "RoutedResult": {
+      "type": "object",
+      "required": ["status", "lifecycle_state", "receipt"],
+      "properties": {
+        "status": {"const": "routed"},
+        "lifecycle_state": {"const": "ready"},
+        "receipt": {"$ref": "#/$defs/RoutedReceipt"}
+      }
+    },
+    "ErrorResult": {
+      "type": "object",
+      "required": ["status", "lifecycle_state", "receipt", "error"],
+      "properties": {
+        "status": {"const": "error"},
+        "lifecycle_state": {"$ref": "#/$defs/LifecycleState"},
+        "receipt": {"$ref": "#/$defs/AttemptReceipt"},
+        "error": {"$ref": "#/$defs/Error"}
+      }
+    },
+    "Error": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["code", "http_status", "retryable", "phase", "message"],
+          "properties": {
+            "code": {"const": "invalid_model_selection"},
+            "http_status": {"const": 400},
+            "retryable": {"const": false},
+            "phase": {"const": "selection"},
+            "message": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["code", "http_status", "retryable", "phase", "message"],
+          "properties": {
+            "code": {"const": "unknown_model"},
+            "http_status": {"const": 404},
+            "retryable": {"const": false},
+            "phase": {"const": "resolution"},
+            "message": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["code", "http_status", "retryable", "phase", "message"],
+          "properties": {
+            "code": {"const": "model_not_ready"},
+            "http_status": {"const": 409},
+            "retryable": {"const": true},
+            "phase": {"const": "resolution"},
+            "message": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["code", "http_status", "retryable", "phase", "message"],
+          "properties": {
+            "code": {"const": "adapter_unavailable"},
+            "http_status": {"const": 409},
+            "retryable": {"const": false},
+            "phase": {"const": "resolution"},
+            "message": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["code", "http_status", "retryable", "phase", "message"],
+          "properties": {
+            "code": {"const": "load_queue_full"},
+            "http_status": {"const": 429},
+            "retryable": {"const": true},
+            "phase": {"const": "load_queue"},
+            "message": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["code", "http_status", "retryable", "phase", "message"],
+          "properties": {
+            "code": {"const": "generation_queue_full"},
+            "http_status": {"const": 429},
+            "retryable": {"const": true},
+            "phase": {"const": "generation_queue"},
+            "message": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["code", "http_status", "retryable", "phase", "message"],
+          "properties": {
+            "code": {"const": "queue_timeout"},
+            "http_status": {"const": 504},
+            "retryable": {"const": true},
+            "phase": {"enum": ["load_queue", "generation_queue"]},
+            "message": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["code", "http_status", "retryable", "phase", "message"],
+          "properties": {
+            "code": {"const": "model_load_timeout"},
+            "http_status": {"const": 504},
+            "retryable": {"const": true},
+            "phase": {"const": "load"},
+            "message": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["code", "http_status", "retryable", "phase", "message"],
+          "properties": {
+            "code": {"const": "model_load_failed"},
+            "http_status": {"const": 503},
+            "retryable": {"const": true},
+            "phase": {"const": "load"},
+            "message": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["code", "http_status", "retryable", "phase", "message"],
+          "properties": {
+            "code": {"const": "no_evictable_worker"},
+            "http_status": {"const": 503},
+            "retryable": {"const": true},
+            "phase": {"const": "eviction"},
+            "message": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["code", "http_status", "retryable", "phase", "message"],
+          "properties": {
+            "code": {"const": "request_cancelled"},
+            "http_status": {"const": 499},
+            "retryable": {"const": false},
+            "phase": {"const": "request"},
+            "message": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["code", "http_status", "retryable", "phase", "message"],
+          "properties": {
+            "code": {"const": "worker_failed"},
+            "http_status": {"const": 502},
+            "retryable": {"const": true},
+            "phase": {"const": "generation"},
+            "message": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["code", "http_status", "retryable", "phase", "message"],
+          "properties": {
+            "code": {"const": "worker_identity_mismatch"},
+            "http_status": {"const": 502},
+            "retryable": {"const": false},
+            "phase": {"const": "handshake"},
+            "message": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["code", "http_status", "retryable", "phase", "message"],
+          "properties": {
+            "code": {"const": "capability_unavailable"},
+            "http_status": {"const": 422},
+            "retryable": {"const": false},
+            "phase": {"const": "capability"},
+            "message": {"type": "string", "minLength": 1}
+          }
+        }
+      ]
+    }
+  }
+}

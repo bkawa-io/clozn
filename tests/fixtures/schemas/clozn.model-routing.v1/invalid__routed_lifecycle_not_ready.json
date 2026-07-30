@@ -1,0 +1,31 @@
+{
+  "schema_version": "clozn.model-routing.v1",
+  "protocol": {"surface": "openai", "route": "/v1/completions"},
+  "request": {
+    "request_id": "req_bad_state",
+    "requested_model": null,
+    "selection_source": "default",
+    "load_policy": "wait"
+  },
+  "policy": {
+    "default_model_id": "default",
+    "max_loaded_workers": 1,
+    "preload_model_ids": [],
+    "load_queue_limit": 1,
+    "generation_queue_limit": 1,
+    "load_timeout_ms": 1,
+    "queue_timeout_ms": 1,
+    "eviction_policy": "lru_idle",
+    "active_worker_eviction": "forbidden",
+    "cold_load_coalescing": true,
+    "cancellation": "request_scoped_release_permits",
+    "omitted_model_policy": "configured_default",
+    "unknown_model_policy": "error_no_fallback",
+    "alias_policy": "mutable_config_immutable_receipt"
+  },
+  "result": {
+    "status": "routed",
+    "lifecycle_state": "loading",
+    "receipt": {}
+  }
+}

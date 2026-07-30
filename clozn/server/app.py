@@ -66,6 +66,11 @@ except Exception:
     class EngineError(RuntimeError):   # fallback so `except EngineError` resolves even if the SDK import failed
         pass
 
+# RT-03: absent keeps the historical single-worker process exactly as it was.
+# A configured PreloadedModelRouter applies a request-scoped substrate/engine
+# override before any generation path runs.
+MODEL_ROUTER = None
+
 
 class EngineUnavailable(RuntimeError):
     """Raised when the engine is completely UNREACHABLE (connection refused / host down -- a raw
@@ -80,6 +85,8 @@ def _engine_unreachable_message() -> str:
     """The one canonical "the engine isn't there" message, shared by every caller that needs to tell a
     dead engine apart from some other failure (Substrate._ensure_steer, the receipt/rederive/swap_receipt
     routes, EngineSubstrate.jlens) -- so the wording is identical everywhere, not re-typed per call site."""
+    if MODEL_ROUTER is not None:
+        return "selected model worker is not reachable"
     base = getattr(ENGINE, "base", None) or "the engine"
     return f"engine not reachable at {base} -- is it running?"
 
@@ -682,13 +689,41 @@ def active_sub(h):
     """The substrate for this request: the handler's injected substrate if it has one, else the module
     global SUB (product default; what tests monkeypatch as cs.SUB). getattr-based so a plain/mock handler
     with no injection resolves to the global -- routes never touch the raw global directly."""
+    routed = getattr(h, "_route_sub", None)
+    if routed is not None:
+        return routed
     inj = getattr(h, "_inj_sub", None)
-    return inj if inj is not None else SUB
+    if inj is not None:
+        return inj
+    router = MODEL_ROUTER
+    if router is not None:
+        # Managed workers are never an ambient default for engine-touching
+        # operations. Generation routes install an exact request selection;
+        # run-scoped control routes must explicitly select the immutable run's
+        # model. Falling through to SUB/control_pair here would silently
+        # analyze a non-default run on the default worker.
+        return None
+    return SUB
 
 
 def active_subname(h):
+    routed = getattr(h, "_route_subname", None)
+    if routed is not None:
+        return routed
     inj = getattr(h, "_inj_subname", None)
     return inj if inj is not None else SUBNAME
+
+
+def active_engine(h):
+    routed = getattr(h, "_route_engine", None)
+    if routed is not None:
+        return routed
+    router = MODEL_ROUTER
+    if router is not None:
+        return None
+    sub = active_sub(h)
+    engine = getattr(sub, "engine", None) if sub is not None else None
+    return engine if engine is not None else ENGINE
 
 
 def active_kind(h):
@@ -818,7 +853,11 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
             Fallback path: loaded Python Qwen activations -> SAE/probe concepts (`sae/probe`).
             No mock data is attached to real runs from here.
             """
-            if error or not response or not (_sub() and getattr(_sub(), "brain", None)):
+            request_sub = active_sub(self)
+            request_engine = active_engine(self)
+            if error or not response or not (
+                request_sub and getattr(request_sub, "brain", None)
+            ):
                 return None
             text = str(response or _last_user(messages) or "").strip()[:300]
             if not text:
@@ -828,15 +867,17 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 from clozn.readouts import workspace_lens
                 if not norm_trace or not norm_trace.get("tokens"):
                     return []
-                if ENGINE is not None:
+                if request_engine is not None:
                     try:
-                        data = _sub().brain.concepts_from_engine(text, ENGINE, 15)
+                        data = request_sub.brain.concepts_from_engine(
+                            text, request_engine, 15
+                        )
                         return workspace_lens.readouts_from_concepts(
                             rid, norm_trace, data, provider="engine_concepts", layer=data.get("layer"))
                     except Exception:
                         pass
                 try:
-                    data = _sub().brain.concepts_only(text)
+                    data = request_sub.brain.concepts_only(text)
                     return workspace_lens.readouts_from_concepts(
                         rid, norm_trace, data, provider="sae/probe", layer=15)
                 except Exception:
@@ -869,6 +910,24 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
             try:
                 import clozn.runs.store as runlog
                 extra_meta = dict(extra_meta or {})
+                routing_artifact = getattr(self, "_model_routing_artifact", None)
+                if isinstance(routing_artifact, dict):
+                    # One request-scoped immutable routing decision, recorded on
+                    # every success/failure journal path below.  Routes cannot
+                    # accidentally reuse another model's evidence because the
+                    # same handler override also supplies request_sub.
+                    extra_meta["model_routing"] = json.loads(
+                        json.dumps(routing_artifact)
+                    )
+                    resolved = (
+                        routing_artifact.get("result", {})
+                        .get("receipt", {})
+                        .get("resolved_model_id")
+                    )
+                    if isinstance(resolved, str) and resolved:
+                        model = resolved
+                request_sub = active_sub(self)
+                request_subname = active_subname(self)
                 from clozn.runs.association import request_client, request_project, request_session
                 session_key = request_session(self.headers)
                 client_key, client_key_source = request_client(self.headers)
@@ -890,12 +949,15 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                     # setting from being journaled as applied when that surface could not materialize it.
                     dials = dict(mo.get("active_dials") or {})
                 else:
-                    dials = _sub().steer.active() if (_sub() and hasattr(_sub(), "steer")) else {}
+                    dials = (
+                        request_sub.steer.active()
+                        if request_sub and hasattr(request_sub, "steer") else {}
+                    )
                 dials = {k: v for k, v in dials.items() if abs(float(v)) >= 0.05}
                 meta = None
                 try:                                          # engine: {model_file, quant, mode, sampling}
-                    if _sub() is not None and hasattr(_sub(), "run_meta"):
-                        meta = _sub().run_meta() or None
+                    if request_sub is not None and hasattr(request_sub, "run_meta"):
+                        meta = request_sub.run_meta() or None
                 except Exception:
                     meta = None
                 meta = dict(meta or {})
@@ -903,8 +965,11 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 if active_profile:
                     meta.setdefault("active_profile", active_profile)
                 try:
-                    prompt_tokens = (_sub().last_prompt_tokens()
-                                     if _sub() is not None and hasattr(_sub(), "last_prompt_tokens") else None)
+                    prompt_tokens = (
+                        request_sub.last_prompt_tokens()
+                        if request_sub is not None
+                        and hasattr(request_sub, "last_prompt_tokens") else None
+                    )
                     if isinstance(prompt_tokens, int):
                         meta.setdefault("prompt_tokens", prompt_tokens)
                 except Exception:
@@ -956,8 +1021,8 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 # don't implement identity_meta() (the Torch lab adapters) simply log no identity block.
                 identity = None
                 try:
-                    if _sub() is not None and hasattr(_sub(), "identity_meta"):
-                        identity = _sub().identity_meta() or None
+                    if request_sub is not None and hasattr(request_sub, "identity_meta"):
+                        identity = request_sub.identity_meta() or None
                 except Exception:
                     identity = None
                 request_started = getattr(self, "_request_wall_started", None)
@@ -967,7 +1032,7 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 # runlog.record below, exactly as the caller passed it in -- see this method's own
                 # docstring for why nothing here derives or augments it anymore.
                 rid = runlog.record(source=source, client=self._client(self.headers.get("User-Agent", "")),
-                                    model=str(model), substrate=_subname(), messages=messages, response=response,
+                                    model=str(model), substrate=request_subname, messages=messages, response=response,
                                     behavior={"active_dials": dials}, started=started, error=error,
                                     trace=trace, finish_reason=finish_reason, meta=meta,
                                     assembled_messages=assembled_messages, final_prompt=final_prompt,
@@ -1034,6 +1099,8 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
             self._json(404, {"error": "GET " + p})
 
         def do_POST(self):
+            from clozn.server.model_routing import clear_handler_selection
+            clear_handler_selection(self)
             self._last_logged_run_id = None
             self._request_wall_started = time.time()
             self._gateway_timing_phases = []
@@ -1084,7 +1151,10 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 # See _GATE_EXEMPT_POSTS' module-level comment: these two paths are audited to touch
                 # nothing the gate protects, so they run uncontended -- notably, they never sit in the
                 # bounded queue behind a slow generation request either.
-                self._dispatch_post(p, body)
+                try:
+                    self._dispatch_post(p, body)
+                finally:
+                    clear_handler_selection(self)
                 return
             queue_started_ns = time.monotonic_ns()
             rejected = POST_GATE.acquire(cancel_check=lambda: client_gone(self))
@@ -1109,6 +1179,7 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 self._dispatch_post(p, body)
             finally:
                 POST_GATE.release()
+                clear_handler_selection(self)
 
         def _dispatch_post(self, p, body):
             for mod in _POST_ROUTES:
@@ -1133,10 +1204,18 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
             # (/memory/*, /steer/* -- Substrate._memory/_steer above, substrate-polymorphic domain
             # dispatch, not per-path HTTP routing, so it stays here rather than in a route module).
             try:
-                r = _sub().handle(p, body) if _sub() else None
+                fallback_sub = active_sub(self)
+                fallback_name = active_subname(self)
+                r = fallback_sub.handle(p, body) if fallback_sub else None
                 if r is None:
-                    return self._json(409, {"error": f"'{p}' isn't served by the '{_subname()}' substrate",
-                                            "need": "dream" if p == "/denoise" else "qwen", "active": _subname()})
+                    return self._json(409, {
+                        "error": (
+                            f"'{p}' isn't served by the "
+                            f"'{fallback_name}' substrate"
+                        ),
+                        "need": "dream" if p == "/denoise" else "qwen",
+                        "active": fallback_name,
+                    })
                 self._json(200, r)
             except EngineUnavailable as e:
                 # the engine is down (see Substrate._ensure_steer) -- the same clean 502 shape every
@@ -1149,7 +1228,7 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
 
 
 def main():
-    global ARGS, SUB, SUBNAME, RUNTIME_KIND
+    global ARGS, SUB, SUBNAME, RUNTIME_KIND, ENGINE, MODEL_ROUTER
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--host", default="127.0.0.1")
@@ -1159,8 +1238,23 @@ def main():
     os.environ["CLOZN_RUNTIME_KIND"] = "product"
     RUNTIME_KIND = "product"
     SUBNAME = "engine"
-    print("clozn gateway: connecting to private model worker ...", flush=True)
-    SUB = EngineSubstrate()
+    routing_file = os.environ.get("CLOZN_MODEL_ROUTING_FILE")
+    if routing_file:
+        if "EngineClient" not in globals():
+            ap.error("the private worker client is unavailable")
+        from clozn.server.model_routing import ProjectionFileRouter
+        print("clozn gateway: connecting to private model workers ...", flush=True)
+        MODEL_ROUTER = ProjectionFileRouter(
+            routing_file,
+            engine_factory=lambda port: EngineClient(port=port),
+            substrate_factory=lambda engine: EngineSubstrate(engine=engine),
+        )
+        SUB, managed_engine = MODEL_ROUTER.control_pair()
+        if managed_engine is not None:
+            ENGINE = managed_engine
+    else:
+        print("clozn gateway: connecting to private model worker ...", flush=True)
+        SUB = EngineSubstrate()
     srv = ThreadingHTTPServer((ARGS.host, ARGS.port), make_handler())
     print(f"\n  Clozn -> http://{ARGS.host}:{ARGS.port}/\n", flush=True)
     srv.serve_forever()

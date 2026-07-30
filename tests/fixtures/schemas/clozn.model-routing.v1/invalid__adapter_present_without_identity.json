@@ -1,0 +1,56 @@
+{
+  "schema_version": "clozn.model-routing.v1",
+  "protocol": {"surface": "native", "route": "/api/clozn/generate"},
+  "request": {
+    "request_id": "req_bad_adapter",
+    "requested_model": "model",
+    "selection_source": "explicit",
+    "load_policy": "wait"
+  },
+  "policy": {
+    "default_model_id": "model",
+    "max_loaded_workers": 1,
+    "preload_model_ids": [],
+    "load_queue_limit": 1,
+    "generation_queue_limit": 1,
+    "load_timeout_ms": 1,
+    "queue_timeout_ms": 1,
+    "eviction_policy": "lru_idle",
+    "active_worker_eviction": "forbidden",
+    "cold_load_coalescing": true,
+    "cancellation": "request_scoped_release_permits",
+    "omitted_model_policy": "configured_default",
+    "unknown_model_policy": "error_no_fallback",
+    "alias_policy": "mutable_config_immutable_receipt"
+  },
+  "result": {
+    "status": "error",
+    "lifecycle_state": "failed",
+    "receipt": {
+      "requested_model": "model",
+      "selection_source": "explicit",
+      "adapter": {
+        "present": true,
+        "identity_sha256": null,
+        "artifact_sha256": null,
+        "scale": 1.0
+      },
+      "load_event": {
+        "event_id": null,
+        "kind": "not_started",
+        "outcome": "not_started",
+        "state_before": "unloaded",
+        "state_after": "failed",
+        "coalesced": false,
+        "wait_ms": 0
+      }
+    },
+    "error": {
+      "code": "adapter_unavailable",
+      "http_status": 409,
+      "retryable": false,
+      "phase": "resolution",
+      "message": "adapter identity missing"
+    }
+  }
+}

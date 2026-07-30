@@ -130,6 +130,12 @@ def stream_ar(port: int, prompt: str, max_tokens: int, heat: bool = False):
     prompt_tokens = next((obj.get("prompt_tokens") for obj in frames
                           if obj.get("type") == "gen_started"
                           and isinstance(obj.get("prompt_tokens"), int)), None)
+    routing = next((obj.get("clozn_model_routing") for obj in frames
+                    if obj.get("type") == "model_routing"
+                    and isinstance(obj.get("clozn_model_routing"), dict)), None)
+    if routing is not None:
+        generation_timing = dict(generation_timing or {})
+        generation_timing["model_routing"] = routing
     return n, steps, finish, prompt_tokens, think_result.public_text, generation_timing
 
 
@@ -156,6 +162,7 @@ def _run_turn(port, mode, text, max_tokens, gpu, model_name, prompt_for_trace, h
     finish = None
     prompt_tokens = None
     generation_timing = {}
+    native_routing = None
     if mode == "autoregressive":
         streamed = stream_ar(port, text, max_tokens, heat=heat)
         # Keep the helper seam friendly to older/custom stream implementations that return the original
@@ -181,6 +188,7 @@ def _run_turn(port, mode, text, max_tokens, gpu, model_name, prompt_for_trace, h
         resp = sanitize_reply(raw_resp, implicit_open=prompt_opens_think(text)).public_text.strip()
         finish = (r.get("choices") or [{}])[0].get("finish_reason")
         prompt_tokens = (r.get("usage") or {}).get("prompt_tokens")
+        native_routing = r.get("clozn_model_routing")
         print(resp); n = len(resp.split())
     dt = time.time() - g0
     rate = f", ~{n/dt:.0f} tok/s" if dt > 0 and mode == "autoregressive" else ""
@@ -197,6 +205,8 @@ def _run_turn(port, mode, text, max_tokens, gpu, model_name, prompt_for_trace, h
     # run view worse, so runlog's purpose-built final_prompt field carries the exact wire input instead.
     run_meta = {"max_tokens": int(max_tokens), "prompt_tokens": prompt_tokens}
     run_meta.update(dict(generation_timing or {}))
+    if isinstance(native_routing, dict):
+        run_meta["model_routing"] = native_routing
     _log_run_cli(model_name, prompt_for_trace, raw_resp, steps, g0, finish_reason=finish, port=port,
                  final_prompt=text, meta=run_meta)
     return resp

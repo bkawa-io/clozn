@@ -165,6 +165,20 @@ def _thinking_text(result) -> str | None:
 def try_get(h, p):
     if p == "/api/tags":
         import clozn.server.app as ctx
+        if ctx.MODEL_ROUTER is not None:
+            models = []
+            for item in ctx.MODEL_ROUTER.catalog():
+                entry = {
+                    "name": item["model_id"],
+                    "model": item["model_id"],
+                    "size": 0,
+                    "modified_at": _iso_now(),
+                    "digest": f"sha256:{item['artifact_sha256']}",
+                    "clozn_state": item["state"],
+                }
+                models.append(entry)
+            h._json(200, {"models": models})
+            return True
         models = []
         if ctx.ENGINE is not None:
             try:
@@ -203,18 +217,23 @@ def _stream_wanted(body: dict) -> bool:
 def try_post(h, p, body):
     if p == "/api/generate":
         import clozn.server.app as ctx
-        sub = ctx.active_sub(h)
-        if not (sub and getattr(sub, "chat", None)):
-            h._json(502, {"error": "no engine configured"})
-            return True
         try:
             _validate_request(body)
             max_tokens, sample = _generation_options(body.get("options"))
         except OllamaCompatibilityError as exc:
             h._json(400, {"error": str(exc)})
             return True
-        from clozn.server.generation_gateway import model_id
-        model = str(body.get("model") or model_id())
+        from clozn.server.model_routing import select_for_handler
+        selection = select_for_handler(
+            h, body, surface="ollama", route="/api/generate"
+        )
+        if selection is None:
+            return True
+        sub = ctx.active_sub(h)
+        if not (sub and getattr(sub, "chat", None)):
+            h._json(502, {"error": "no engine configured"})
+            return True
+        model = selection.model_id
         prompt = str(body.get("prompt", ""))
         messages = []
         if body.get("system") is not None:
@@ -250,18 +269,23 @@ def try_post(h, p, body):
         return True
     if p == "/api/chat":
         import clozn.server.app as ctx
-        sub = ctx.active_sub(h)
-        if not (sub and getattr(sub, "chat", None)):
-            h._json(502, {"error": "no engine configured"})
-            return True
         try:
             _validate_request(body)
             max_tokens, sample = _generation_options(body.get("options"))
         except OllamaCompatibilityError as exc:
             h._json(400, {"error": str(exc)})
             return True
-        from clozn.server.generation_gateway import model_id
-        model = str(body.get("model") or model_id())
+        from clozn.server.model_routing import select_for_handler
+        selection = select_for_handler(
+            h, body, surface="ollama", route="/api/chat"
+        )
+        if selection is None:
+            return True
+        sub = ctx.active_sub(h)
+        if not (sub and getattr(sub, "chat", None)):
+            h._json(502, {"error": "no engine configured"})
+            return True
+        model = selection.model_id
         messages = body.get("messages") or []
         from clozn.runs.receipt_footer import strip_footers
         messages = strip_footers(messages)

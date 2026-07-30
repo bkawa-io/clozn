@@ -287,28 +287,51 @@ def _terminate_process(proc, timeout: float = 5.0) -> None:
             pass
 
 
-def spawn_engine(model: str, port: int, flags: dict, *, prefer_gpu=True, logf=None, boot_timeout=180):
+def spawn_engine(
+    model: str,
+    port: int,
+    flags: dict,
+    *,
+    prefer_gpu=True,
+    logf=None,
+    boot_timeout=180,
+    engine_discovery=None,
+):
     """Start an engine on `port`, wait until /health is ok. Returns (proc, health, is_gpu)."""
     from clozn.cli import main as ctx
-    exe, dll_dirs, gpu = find_engine(prefer_gpu)
+    if engine_discovery is None:
+        exe, dll_dirs, gpu = find_engine(prefer_gpu)
+    else:
+        exe = engine_discovery.exe
+        dll_dirs = list(engine_discovery.dll_dirs)
+        gpu = bool(engine_discovery.gpu)
     launch_flags = dict(flags)
+    disable_auto_jlens = (
+        launch_flags.pop("_disable_auto_jlens", False) is True
+    )
     if os.path.isfile(model):
         from clozn.artifacts.contracts import (ArtifactContractError, find_compatible_artifact,
                                                gguf_identity)
         identity = gguf_identity(model)
         launch_flags["_model_sha256"] = identity["sha256"]
-        try:
-            artifact_root = os.environ.get("CLOZN_ARTIFACTS_DIR") or os.path.join(ctx.HOME, "artifacts")
-            jlens_dir = find_compatible_artifact(
-                "jlens", identity, artifact_root,
-                explicit_dir=os.environ.get("CLOZN_JLENS_DIR") or launch_flags.get("jlens"),
-            )
-        except ArtifactContractError as error:
-            raise ctx.CloznError(f"J-lens artifact refused: {error}") from None
-        if jlens_dir:
-            launch_flags["jlens"] = jlens_dir
-        else:
+        if disable_auto_jlens:
+            # Managed routing v1 cannot key a value-bearing J-lens artifact.
+            # Suppress legacy auto-discovery explicitly rather than launching
+            # evidence behavior absent from the immutable runtime key.
             launch_flags.pop("jlens", None)
+        else:
+            try:
+                artifact_root = os.environ.get("CLOZN_ARTIFACTS_DIR") or os.path.join(ctx.HOME, "artifacts")
+                jlens_dir = find_compatible_artifact(
+                    "jlens", identity, artifact_root,
+                    explicit_dir=os.environ.get("CLOZN_JLENS_DIR") or launch_flags.get("jlens"),
+                )
+            except ArtifactContractError as error:
+                raise ctx.CloznError(f"J-lens artifact refused: {error}") from None
+            if jlens_dir:
+                launch_flags["jlens"] = jlens_dir
+            else:
+                launch_flags.pop("jlens", None)
     args = _launch_args(exe, model, port, launch_flags, gpu)
     proc = subprocess.Popen(args, env=_env_with_dlls(dll_dirs, gpu),
                             stdout=logf or subprocess.DEVNULL, stderr=subprocess.STDOUT)

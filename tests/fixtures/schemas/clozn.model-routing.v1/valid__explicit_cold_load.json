@@ -1,0 +1,85 @@
+{
+  "schema_version": "clozn.model-routing.v1",
+  "protocol": {
+    "surface": "native",
+    "route": "/api/clozn/generate"
+  },
+  "request": {
+    "request_id": "req_explicit",
+    "requested_model": "qwen-work",
+    "selection_source": "explicit",
+    "load_policy": "wait"
+  },
+  "policy": {
+    "default_model_id": "qwen-default",
+    "max_loaded_workers": 2,
+    "preload_model_ids": ["qwen-default"],
+    "load_queue_limit": 8,
+    "generation_queue_limit": 16,
+    "load_timeout_ms": 180000,
+    "queue_timeout_ms": 600000,
+    "eviction_policy": "lru_idle",
+    "active_worker_eviction": "forbidden",
+    "cold_load_coalescing": true,
+    "cancellation": "request_scoped_release_permits",
+    "omitted_model_policy": "configured_default",
+    "unknown_model_policy": "error_no_fallback",
+    "alias_policy": "mutable_config_immutable_receipt"
+  },
+  "result": {
+    "status": "routed",
+    "lifecycle_state": "ready",
+    "receipt": {
+      "requested_model": "qwen-work",
+      "selection_source": "explicit",
+      "resolved_model_id": "qwen-2.5-7b-q5",
+      "resolved_artifact": {
+        "model_id": "qwen-2.5-7b-q5",
+        "format": "gguf",
+        "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "path": "C:/models/qwen-2.5-7b-q5.gguf"
+      },
+      "runtime_key": {
+        "key_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "gguf_artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_size": 32768,
+        "backend": "cuda",
+        "adapter": {
+          "present": true,
+          "identity_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "artifact_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "scale": 0.75
+        },
+        "template_fingerprint": "eeeeeeeeeeeeeeee",
+        "engine_build": "clozn-engine-1.0+cuda",
+        "white_box_flags": {
+          "capture_activations": true,
+          "jlens": false
+        }
+      },
+      "worker_identity": {
+        "worker_id": "worker_bbbbbbbb_g3",
+        "worker_generation": 3,
+        "runtime_key_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "protocol_version": "1.0",
+        "engine_build": "clozn-engine-1.0+cuda",
+        "backend": "cuda"
+      },
+      "adapter": {
+        "present": true,
+        "identity_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "artifact_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "scale": 0.75
+      },
+      "load_event": {
+        "event_id": "load_bbbbbbbb_3",
+        "kind": "cold_load",
+        "outcome": "loaded",
+        "state_before": "unloaded",
+        "state_after": "ready",
+        "coalesced": true,
+        "wait_ms": 4120
+      }
+    }
+  }
+}

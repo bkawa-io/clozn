@@ -107,7 +107,27 @@ def build_parser():
     pr.set_defaults(fn=cmd_run)
 
     ps = sub.add_parser("serve", help="bring up the OpenAI-compatible endpoint")
-    ps.add_argument("model"); ps.add_argument("--port", type=int, default=0)
+    ps.add_argument(
+        "model", nargs="?",
+        help="single GGUF name/path (omit only with --models-config)",
+    )
+    ps.add_argument("--port", type=int, default=0)
+    ps.add_argument(
+        "--models-config", default=None, metavar="PATH",
+        help="qualified clozn.managed-models.v1 JSON for preloaded multi-model serving",
+    )
+    ps.add_argument(
+        "--default-model", default=None, metavar="ID",
+        help="override the qualified config's canonical default model ID",
+    )
+    ps.add_argument(
+        "--preload", action="append", default=None, metavar="ID",
+        help="override the qualified preload set (repeat once per canonical model ID)",
+    )
+    ps.add_argument(
+        "--max-loaded-models", type=_positive_context, default=None, metavar="N",
+        help="resident-worker limit for the qualified config (no cold loading yet)",
+    )
     ps.add_argument("--ctx", type=_positive_context, default=None,
                     help="worker context window in tokens (default 4096; reduce on tight unified memory)")
     ps.add_argument("--cpu", action="store_true"); ps.add_argument("--mask", type=int, default=None)

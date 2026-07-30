@@ -1,0 +1,31 @@
+{
+  "schema_version": "clozn.managed-models.v1",
+  "default_model_id": "alpha",
+  "preload_model_ids": ["alpha"],
+  "max_loaded_models": 1,
+  "models": [
+    {
+      "model_id": "alpha",
+      "model": "alpha.gguf",
+      "runtime_key": {
+        "key_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "gguf_artifact_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "context_size": 2048,
+        "backend": "cpu",
+        "adapter": {
+          "present": false,
+          "identity_sha256": null,
+          "artifact_sha256": null,
+          "scale": null
+        },
+        "template_fingerprint": "1111111111111111",
+        "engine_build": "friendly-build-name",
+        "white_box_flags": {
+          "sae": false,
+          "jlens": false,
+          "attn_knockout": false
+        }
+      }
+    }
+  ]
+}

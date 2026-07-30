@@ -328,6 +328,12 @@ def _buffered_structured_sse(h, parsed: dict, *, model: str, run_id: str | None)
 
 def try_get(h, p):
     if p == "/v1/models":            # OpenAI-compatible model list (so OAI clients connect)
+        if ctx.MODEL_ROUTER is not None:
+            h._json(200, {"object": "list", "data": [
+                {"id": model_id, "object": "model", "owned_by": "clozn"}
+                for model_id in ctx.MODEL_ROUTER.model_ids()
+            ]})
+            return True
         from clozn.server.generation_gateway import model_id
         h._json(200, {"object": "list", "data": [
             {"id": model_id(), "object": "model", "owned_by": "clozn"}]})
@@ -337,6 +343,12 @@ def try_get(h, p):
 
 def try_post(h, p, body):
     if p == "/api/clozn/generate":
+        from clozn.server.model_routing import select_for_handler
+        selection = select_for_handler(
+            h, body, surface="native", route="/api/clozn/generate"
+        )
+        if selection is None:
+            return True
         from clozn.server.generation_gateway import native_completion
         native_completion(h, body)
         return True
@@ -358,12 +370,17 @@ def try_post(h, p, body):
         return True
     structured = body.pop("_structured_contract", None)
     source_metadata = body.pop("_clozn_sources", [])
+    from clozn.server.model_routing import select_for_handler
+    selection = select_for_handler(
+        h, body, surface="openai", route="/v1/chat/completions"
+    )
+    if selection is None:
+        return True
     sub = ctx.active_sub(h)
     if not (sub and getattr(sub, "chat", None)):
         h._json(503, {"error": {"message": "model worker unavailable", "type": "service_unavailable"}})
         return True
-    from clozn.server.generation_gateway import model_id
-    selected_model = str(body.get("model") or model_id())
+    selected_model = selection.model_id
     msgs = body["messages"]
     mx = int(body.get("max_tokens", 256))
     temperature = float(body.get("temperature", 0.8))

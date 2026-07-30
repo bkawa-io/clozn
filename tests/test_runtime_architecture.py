@@ -12,7 +12,7 @@ import types
 import unittest
 from unittest import mock
 
-from clozn.cli import engine_process, runtime_process
+from clozn.cli import engine_process, runtime_process, worker_handle
 import clozn.settings as clozn_settings
 
 from clozn.runs import store
@@ -385,6 +385,80 @@ class RuntimeBoundaryTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIs(stack.worker, replacement)
         self.assertEqual(restarts, [replacement.pid])
+
+    def test_worker_handle_owns_start_restart_registry_and_stop(self):
+        processes = [FakeProcess(), FakeProcess()]
+        calls = []
+
+        def spawn(model, port, flags, **kwargs):
+            calls.append((model, port, dict(flags), kwargs))
+            return processes[len(calls) - 1], {
+                "status": "ok", "mode": "autoregressive", "generation": len(calls),
+            }, len(calls) == 2
+
+        handle = worker_handle.WorkerHandle.start(
+            model="m.gguf",
+            port=9000,
+            flags={"ctx": 4096},
+            prefer_gpu=True,
+            boot_timeout=17,
+            restart_limit=3,
+            restart_window=60,
+            spawn=spawn,
+        )
+        self.assertIs(handle.process, processes[0])
+        self.assertEqual(handle.registry_fields(), {
+            "worker_pid": processes[0].pid, "worker_port": 9000,
+        })
+
+        handle.restart()
+        self.assertIs(handle.process, processes[1])
+        self.assertEqual(handle.health["generation"], 2)
+        self.assertTrue(handle.gpu)
+        self.assertEqual(handle.registry_fields()["worker_pid"], processes[1].pid)
+        self.assertEqual(
+            [call[:3] for call in calls],
+            [("m.gguf", 9000, {"ctx": 4096}), ("m.gguf", 9000, {"ctx": 4096})],
+        )
+        self.assertTrue(all(call[3]["boot_timeout"] == 17 for call in calls))
+
+        handle.stop()
+        self.assertTrue(handle.stopping)
+        self.assertTrue(processes[1].terminated)
+
+    def test_worker_handle_restart_limit_uses_the_existing_sliding_window(self):
+        processes = [FakeProcess(), FakeProcess(), FakeProcess()]
+        calls = []
+
+        def spawn(*_args, **_kwargs):
+            process = processes[len(calls)]
+            calls.append(process)
+            return process, {"status": "ok"}, False
+
+        handle = worker_handle.WorkerHandle.start(
+            model="m.gguf",
+            port=9000,
+            flags={},
+            prefer_gpu=False,
+            boot_timeout=10,
+            restart_limit=1,
+            restart_window=10,
+            spawn=spawn,
+        )
+        now = [100.0]
+        handle.clock = lambda: now[0]
+        handle.restart()
+        with self.assertRaisesRegex(
+            worker_handle.WorkerRestartLimitError,
+            "model worker exited 1 times within 10s",
+        ):
+            handle.restart()
+        self.assertEqual(len(calls), 2)
+
+        now[0] = 111.0
+        handle.restart()
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(handle.restart_times, [111.0])
 
     def test_product_substrate_switch_is_gone(self):
         handler = CaptureHandler()
