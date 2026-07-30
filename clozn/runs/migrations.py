@@ -194,6 +194,74 @@ def _verify_0003(db: sqlite3.Connection) -> bool:
     )
 
 
+def _migration_0004_sessions(db: sqlite3.Connection) -> None:
+    """F1: first-class session records -- promotes `X-Clozn-Session-Id` from a lookup column
+    (`runs.session_key`, migration 2) into a persisted conversation ENTITY: the substrate for session
+    traces (F2) and the conversation investigation view (F3).
+
+    One row per session id (`id` = the SAME opaque `session_<24hex>` key already written into
+    `runs.session_key` -- clozn.runs.association.session_key()'s normalization is reused as-is, not
+    reinvented, so a session created through this table and a run recorded elsewhere with the identical
+    caller-supplied token always resolve to the SAME id with zero extra plumbing). Deliberately narrow:
+    only session-level IDENTITY/metadata lives here (id, creation stamp, the creating client's opaque
+    identity facet, an optional title, and privacy settings) -- `first/last activity` and `run_count` are
+    NOT stored columns. They are computed on every read as MIN/MAX(recorded_ts)/COUNT(*) over
+    `runs WHERE session_key = ?` (clozn/runs/sessions.py), which migration 2's own
+    `runs_session_latest_idx` already indexes. Two reasons this is a stored-vs-derived split, not an
+    oversight:
+      1. RUN IMMUTABILITY: a materialized `last_activity_ts` column would need updating on every single
+         `record()` call for a session's runs, and clozn/runs/store.py's `record()` is a hot path wrapped
+         in a blanket try/except that treats ANY failure as "the whole run silently vanished" -- adding a
+         second table write to that path is exactly the kind of coupling BACKLOG's "additive only" rule
+         on store.py warns against.
+      2. STALENESS UNDER MUTATION: clozn/runs/mutations.py's `redact_run` clears a run's `session_key`
+         and `delete_run`/cascade removes rows outright, entirely independently of this table. A
+         materialized aggregate would drift out of sync with no synchronization hook between the two
+         modules; a derived-on-read aggregate is definitionally always correct, because it re-reads
+         `runs` fresh every time -- there is nothing to keep in sync.
+
+    NO existing-run backfill runs here, by design (the "your call; justify it" backfill decision landed
+    on LAZY, not migration-time): a legacy session_key already fully round-trips through
+    clozn.runs.sessions.get_session()'s derived-aggregate path with zero rows in THIS table -- the only
+    thing a migration-time backfill could add is the identity/title/privacy row, and for old data there is
+    no honest client_key to backfill (a legacy session_key may span runs from several DIFFERENT client_key
+    values recorded before this concept existed -- picking one would fabricate provenance) and no title
+    ever existed to backfill (the field is new). A migration that scanned the full `runs` table to
+    synthesize approximate rows would also hold `_ensure_schema_locked`'s cross-process lock
+    (store.py's module docstring) for however long that scan takes, on every install's very next store
+    open -- unacceptable for a step whose payoff is "the exact same read result, sooner." See
+    clozn.runs.sessions.materialize_session() for the actual lazy, idempotent, race-safe backfill path,
+    triggered opportunistically (e.g. GET /sessions/<id>) rather than unconditionally here.
+    """
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sessions (
+            id TEXT PRIMARY KEY,
+            created_ts REAL NOT NULL,
+            created_at TEXT NOT NULL,
+            client_key TEXT,
+            title TEXT,
+            privacy_json TEXT NOT NULL,
+            materialized_from TEXT NOT NULL
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS sessions_created_idx ON sessions(created_ts DESC, id DESC)")
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS sessions_client_idx "
+        "ON sessions(client_key, created_ts DESC) WHERE client_key IS NOT NULL"
+    )
+
+
+def _verify_0004(db: sqlite3.Connection) -> bool:
+    columns = {row[1] for row in db.execute("PRAGMA table_info(sessions)")}
+    indexes = {row[1] for row in db.execute("PRAGMA index_list(sessions)")}
+    return (
+        {"id", "created_ts", "client_key", "title", "privacy_json", "materialized_from"}.issubset(columns)
+        and {"sessions_created_idx", "sessions_client_idx"}.issubset(indexes)
+    )
+
+
 # The shipped, ordered migration set. Append-only: once released, a migration's `apply` must never be
 # edited (a DB that already applied it would silently diverge from one that applies the edited version) --
 # ship a NEW migration with a higher version instead.
@@ -204,6 +272,8 @@ MIGRATIONS: tuple[Migration, ...] = (
               _migration_0002_run_association, verify=_verify_0002),
     Migration(3, "FORK-PIN-01: durable checkpoint pin metadata (pinned_checkpoints table)",
               _migration_0003_pinned_checkpoints, verify=_verify_0003),
+    Migration(4, "F1: first-class session records (sessions table)",
+              _migration_0004_sessions, verify=_verify_0004),
 )
 
 TARGET_VERSION = max(m.version for m in MIGRATIONS)
