@@ -1,0 +1,29 @@
+{
+  "schema_version": "clozn.correction-resolution.v1",
+  "created_ts": 100.0,
+  "scope_context": {
+    "session_key": "session_0123456789abcdef01234567",
+    "client_key": "client_0123456789abcdef01234567",
+    "include_global_local": true
+  },
+  "applied": [
+    {
+      "correction_id": "corr_0123456789abcdef01234567",
+      "type": "style",
+      "scope": {"kind": "session", "value": "session_0123456789abcdef01234567"},
+      "content_hash": "0123456789abcdef"
+    }
+  ],
+  "conflicts": [
+    {
+      "type": "style",
+      "candidates": [
+        {"correction_id": "corr_0123456789abcdef01234567", "scope": {"kind": "session", "value": "session_0123456789abcdef01234567"}, "confirmed_ts": 95.0},
+        {"correction_id": "corr_fedcba9876543210fedcba98", "scope": {"kind": "client", "value": "client_0123456789abcdef01234567"}, "confirmed_ts": 90.0}
+      ],
+      "winner_id": "corr_0123456789abcdef01234567",
+      "losing_ids": ["corr_fedcba9876543210fedcba98"],
+      "rule": "precedence"
+    }
+  ]
+}

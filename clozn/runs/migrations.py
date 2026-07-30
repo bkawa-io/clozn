@@ -262,6 +262,87 @@ def _verify_0004(db: sqlite3.Connection) -> bool:
     )
 
 
+def _migration_0005_corrections(db: sqlite3.Connection) -> None:
+    """F5: the scoped correction store ("Teach Once") -- `corrections` (one row per correction, exactly
+    the fields clozn.correction.v1 requires plus the mutable lifecycle timestamps) and `correction_events`
+    (an APPEND-ONLY ledger: drafted/confirmed/disabled/enabled/deleted lifecycle rows plus applied/
+    conflict_lost rows tying a correction to a specific run -- see clozn/runs/corrections.py's module
+    docstring for why this is one ledger table rather than a separate "history" table per concern).
+
+    No FOREIGN KEY from correction_events to corrections, deliberately -- the same reasoning migration 3
+    (`pinned_checkpoints`) already gives for skipping a FK to `runs`: `delete_correction()` scrubs the
+    `corrections` row's `content` but the module never deletes the row outright, and correction_events
+    rows must keep referencing a correction_id that is still resolvable (just content-scrubbed) forever,
+    so a run's `applied_corrections` receipt entry stays checkable even after the correction it names has
+    been deleted. Coupling the two tables' failure modes together was judged the bigger risk, exactly as
+    migration 3 judged it for checkpoints.
+
+    `correction_events.run_id` has no FOREIGN KEY to `runs.id` either: an applied/conflict_lost event must
+    survive `clozn.runs.mutations.delete_run` on the run it names (disable/delete-run are independent
+    lifecycles; the run's own deletion policy must never quietly rewrite a correction's audit trail), so
+    the reference is an inert string, not a referential-integrity constraint.
+    """
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS corrections (
+            id TEXT PRIMARY KEY,
+            scope_kind TEXT NOT NULL,
+            scope_value TEXT,
+            type TEXT NOT NULL,
+            content TEXT,
+            content_hash TEXT NOT NULL,
+            enabled INTEGER NOT NULL,
+            created_ts REAL NOT NULL,
+            created_at TEXT NOT NULL,
+            confirmed_ts REAL,
+            disabled_ts REAL,
+            deleted_ts REAL,
+            deleted_reason TEXT
+        )
+        """
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS corrections_resolve_idx "
+        "ON corrections(type, scope_kind, scope_value) WHERE confirmed_ts IS NOT NULL AND enabled = 1"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS corrections_scope_idx ON corrections(scope_kind, scope_value)"
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS correction_events (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            correction_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            event_ts REAL NOT NULL,
+            run_id TEXT,
+            detail_json TEXT
+        )
+        """
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS correction_events_correction_idx "
+        "ON correction_events(correction_id, seq ASC)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS correction_events_run_idx "
+        "ON correction_events(run_id) WHERE run_id IS NOT NULL"
+    )
+
+
+def _verify_0005(db: sqlite3.Connection) -> bool:
+    tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if not {"corrections", "correction_events"}.issubset(tables):
+        return False
+    columns = {row[1] for row in db.execute("PRAGMA table_info(corrections)")}
+    event_columns = {row[1] for row in db.execute("PRAGMA table_info(correction_events)")}
+    return (
+        {"id", "scope_kind", "scope_value", "type", "content", "content_hash", "enabled",
+         "confirmed_ts", "disabled_ts", "deleted_ts"}.issubset(columns)
+        and {"seq", "correction_id", "event_type", "event_ts", "run_id"}.issubset(event_columns)
+    )
+
+
 # The shipped, ordered migration set. Append-only: once released, a migration's `apply` must never be
 # edited (a DB that already applied it would silently diverge from one that applies the edited version) --
 # ship a NEW migration with a higher version instead.
@@ -274,6 +355,8 @@ MIGRATIONS: tuple[Migration, ...] = (
               _migration_0003_pinned_checkpoints, verify=_verify_0003),
     Migration(4, "F1: first-class session records (sessions table)",
               _migration_0004_sessions, verify=_verify_0004),
+    Migration(5, "F5: scoped correction store (corrections + correction_events tables)",
+              _migration_0005_corrections, verify=_verify_0005),
 )
 
 TARGET_VERSION = max(m.version for m in MIGRATIONS)

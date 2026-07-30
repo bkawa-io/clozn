@@ -1,0 +1,10 @@
+{
+  "schema_version": "clozn.correction.v1",
+  "id": "corr_0123456789abcdef01234567",
+  "scope": {"kind": "session", "value": "session_0123456789abcdef01234567"},
+  "type": "style",
+  "content": "Answer in bullet points.",
+  "enabled": false,
+  "created_ts": 100.0,
+  "created_at": "2026-07-30T00:00:00"
+}

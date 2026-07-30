@@ -1,0 +1,23 @@
+{
+  "schema_version": "clozn.correction-export.v1",
+  "correction_id": "corr_0123456789abcdef01234567",
+  "exported_ts": 200.0,
+  "correction": {
+    "schema_version": "clozn.correction.v1",
+    "id": "corr_0123456789abcdef01234567",
+    "scope": {"kind": "session", "value": "session_0123456789abcdef01234567"},
+    "type": "style",
+    "content": "Answer in bullet points.",
+    "content_hash": "0123456789abcdef",
+    "enabled": true,
+    "created_ts": 100.0,
+    "created_at": "2026-07-30T00:00:00",
+    "confirmed_ts": 101.0
+  },
+  "events": [
+    {"seq": 1, "event_type": "drafted", "event_ts": 100.0},
+    {"seq": 2, "event_type": "confirmed", "event_ts": 101.0},
+    {"seq": 3, "event_type": "applied", "event_ts": 150.0, "run_id": "run_0019f7a3b1c2d_abcdef",
+     "detail": {"type": "style", "scope": {"kind": "session", "value": "session_0123456789abcdef01234567"}}}
+  ]
+}
