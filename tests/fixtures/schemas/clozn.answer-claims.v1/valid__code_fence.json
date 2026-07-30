@@ -1,0 +1,87 @@
+{
+  "schema_version": "clozn.answer-claims.v1",
+  "run_id": "run-fixture-7",
+  "privacy": "metadata_only",
+  "offset_contract": {
+    "unit": "unicode_code_points",
+    "interval": "half_open",
+    "hash_algorithm": "sha256",
+    "canonicalization": "exact_string_utf8_v1"
+  },
+  "segmentation": {
+    "state": "ok",
+    "claim_count": 2
+  },
+  "answer_source": {
+    "basis": "recorded_answer",
+    "basis_sha256": "781036e84af1df520b0e24001293570b1fc9f002a00d1e13b761abb41452195f",
+    "basis_code_points": 32,
+    "basis_utf8_bytes": 32
+  },
+  "claims": [
+    {
+      "index": 0,
+      "category": "non_verifiable_prose",
+      "category_reason": "no_deterministic_category_match",
+      "text_span": {
+        "address_id": "span_2b33a2ef21359a2d5f00e243",
+        "run_id": "run-fixture-7",
+        "kind": "claim",
+        "relation_key": "rel_f0b185d5410eaaadd84ae352",
+        "native_ref": {
+          "artifact_schema": "clozn.answer-claims.v1",
+          "collection": "derived.claims",
+          "id": "claim-0"
+        },
+        "resolution": {
+          "state": "metadata_only",
+          "canonical": {
+            "basis": "recorded_answer",
+            "unit": "unicode_code_points",
+            "interval": "half_open",
+            "start": 0,
+            "end": 8,
+            "basis_sha256": "781036e84af1df520b0e24001293570b1fc9f002a00d1e13b761abb41452195f",
+            "span_sha256": "872887e563e75957ffc20b021332504f2ddd0a8f3964cb93070863bfaf13cdad",
+            "span_code_points": 8,
+            "basis_code_points": 32,
+            "basis_utf8_bytes": 32,
+            "span_utf8_bytes": 8
+          }
+        }
+      }
+    },
+    {
+      "index": 1,
+      "category": "non_verifiable_prose",
+      "category_reason": "code_fence_block",
+      "text_span": {
+        "address_id": "span_7ac9d7e04576c55b1c4f4bb3",
+        "run_id": "run-fixture-7",
+        "kind": "claim",
+        "relation_key": "rel_6727cf0f6b1492d6be427332",
+        "native_ref": {
+          "artifact_schema": "clozn.answer-claims.v1",
+          "collection": "derived.claims",
+          "id": "claim-1"
+        },
+        "resolution": {
+          "state": "metadata_only",
+          "canonical": {
+            "basis": "recorded_answer",
+            "unit": "unicode_code_points",
+            "interval": "half_open",
+            "start": 9,
+            "end": 31,
+            "basis_sha256": "781036e84af1df520b0e24001293570b1fc9f002a00d1e13b761abb41452195f",
+            "span_sha256": "2be556ee7a4a4fb75741f0e90d4d27b9ec50a23eaeba97b99dd44086ff37ce0b",
+            "span_code_points": 22,
+            "basis_code_points": 32,
+            "basis_utf8_bytes": 32,
+            "span_utf8_bytes": 22
+          }
+        }
+      }
+    }
+  ]
+}

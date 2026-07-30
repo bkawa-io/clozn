@@ -1,0 +1,56 @@
+{
+  "schema_version": "clozn.answer-claims.v1",
+  "run_id": "run-fixture-2",
+  "privacy": "full",
+  "offset_contract": {
+    "unit": "unicode_code_points",
+    "interval": "half_open",
+    "hash_algorithm": "sha256",
+    "canonicalization": "exact_string_utf8_v1"
+  },
+  "segmentation": {
+    "state": "ok",
+    "claim_count": 1
+  },
+  "answer_source": {
+    "basis": "recorded_answer",
+    "basis_sha256": "e46a15407b0f18a78e4ab01c5107b6bd5647fe2334db127ecd043d007d6f1345",
+    "basis_code_points": 27,
+    "basis_utf8_bytes": 27
+  },
+  "claims": [
+    {
+      "index": 0,
+      "category": "non_verifiable_prose",
+      "category_reason": "no_deterministic_category_match",
+      "text_span": {
+        "address_id": "span_434b1f002f2b13e45fb9ef52",
+        "run_id": "run-fixture-2",
+        "kind": "claim",
+        "relation_key": "rel_f0b185d5410eaaadd84ae352",
+        "native_ref": {
+          "artifact_schema": "clozn.answer-claims.v1",
+          "collection": "derived.claims",
+          "id": "claim-0"
+        },
+        "resolution": {
+          "state": "exact",
+          "canonical": {
+            "basis": "recorded_answer",
+            "unit": "unicode_code_points",
+            "interval": "half_open",
+            "start": 0,
+            "end": 27,
+            "basis_sha256": "e46a15407b0f18a78e4ab01c5107b6bd5647fe2334db127ecd043d007d6f1345",
+            "span_sha256": "e46a15407b0f18a78e4ab01c5107b6bd5647fe2334db127ecd043d007d6f1345",
+            "span_code_points": 27,
+            "basis_code_points": 27,
+            "basis_utf8_bytes": 27,
+            "span_utf8_bytes": 27,
+            "text": "Water boils at 100 degrees."
+          }
+        }
+      }
+    }
+  ]
+}

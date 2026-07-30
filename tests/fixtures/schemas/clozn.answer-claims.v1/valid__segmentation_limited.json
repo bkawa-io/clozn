@@ -1,0 +1,22 @@
+{
+  "schema_version": "clozn.answer-claims.v1",
+  "run_id": "run-fixture-6",
+  "privacy": "metadata_only",
+  "offset_contract": {
+    "unit": "unicode_code_points",
+    "interval": "half_open",
+    "hash_algorithm": "sha256",
+    "canonicalization": "exact_string_utf8_v1"
+  },
+  "segmentation": {
+    "state": "segmentation_limited",
+    "reason": "unsupported_script_density"
+  },
+  "answer_source": {
+    "basis": "recorded_answer",
+    "basis_sha256": "cf062e79ddef17a036866cb6d54bbf1d745751f142c340b68766f95f46053c8e",
+    "basis_code_points": 20,
+    "basis_utf8_bytes": 60
+  },
+  "claims": []
+}
