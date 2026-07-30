@@ -1,0 +1,31 @@
+{
+  "schema_version": "clozn.model-second-opinion.v1",
+  "generated_at": "2026-07-30T12:00:00Z",
+  "run_id": "run_abc123",
+  "delivered_input": {
+    "message_count": 1,
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "identical_across_arms": true
+  },
+  "arm_a": {
+    "role": "anchor",
+    "run_id": "run_abc123",
+    "status": "ok",
+    "response_text": "hello"
+  },
+  "arm_b": {
+    "role": "second_opinion",
+    "requested_model_id": "beta",
+    "model_id": "beta",
+    "status": "ok",
+    "response_text": "hi there",
+    "latency_ms": 100.0,
+    "token_logprobs": [-0.1, -0.4, -1.2]
+  },
+  "compatibility": {
+    "chat_template": {"state": "unknown", "method": "template_fingerprint_compare"},
+    "context_limit": {"state": "unknown", "method": "arm_a_recorded_prompt_tokens_vs_arm_b_context_window"},
+    "tools_or_schema": {"state": "none_used"},
+    "qualified_evidence": {"state": "anchor_only", "note": "n/a"}
+  }
+}

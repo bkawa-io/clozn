@@ -1,0 +1,74 @@
+{
+  "schema_version": "clozn.model-second-opinion.v1",
+  "generated_at": "2026-07-30T12:00:00Z",
+  "run_id": "run_abc123",
+  "delivered_input": {
+    "message_count": 1,
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "identical_across_arms": true
+  },
+  "arm_a": {
+    "role": "anchor",
+    "run_id": "run_abc123",
+    "model_id": "alpha",
+    "worker_identity": {
+      "model_sha256": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "template_fingerprint": "tmpl-alpha-1"
+    },
+    "status": "ok",
+    "response_text": "The bridge was built in 1920.",
+    "finish_reason": "stop",
+    "latency_ms": 812.4,
+    "prompt_tokens": 42,
+    "generated_tokens": 9
+  },
+  "arm_b": {
+    "role": "second_opinion",
+    "requested_model_id": "beta",
+    "model_id": "beta",
+    "worker_identity": {
+      "model_sha256": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "template_fingerprint": "tmpl-beta-1",
+      "context_size": 8192
+    },
+    "status": "ok",
+    "response_text": "Construction on the bridge finished in 1920.",
+    "finish_reason": "stop",
+    "latency_ms": 1023.9,
+    "generated_tokens": 11
+  },
+  "compatibility": {
+    "chat_template": {
+      "state": "differs",
+      "method": "template_fingerprint_compare",
+      "arm_a_template_fingerprint": "tmpl-alpha-1",
+      "arm_b_template_fingerprint": "tmpl-beta-1",
+      "caveat": "the second model renders chat messages under a different template fingerprint than the original run recorded."
+    },
+    "context_limit": {
+      "state": "within_estimate",
+      "method": "arm_a_recorded_prompt_tokens_vs_arm_b_context_window",
+      "arm_a_prompt_tokens_estimate": 42,
+      "arm_b_context_window_tokens": 8192
+    },
+    "tools_or_schema": {
+      "state": "none_used"
+    },
+    "qualified_evidence": {
+      "state": "anchor_only",
+      "note": "claim-level support comparison (E2) is available for the anchor run alone."
+    }
+  },
+  "comparison": {
+    "agreement": {
+      "method": "lexical_overlap_heuristic",
+      "lexical_difference_percent": 62,
+      "caveat": "word-type Jaccard DISTANCE between the two answers -- not a semantic judgment."
+    },
+    "format_changed": false,
+    "length": {
+      "arm_a_words": 6,
+      "arm_b_words": 7
+    }
+  }
+}

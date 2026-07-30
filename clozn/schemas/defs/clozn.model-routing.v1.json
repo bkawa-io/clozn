@@ -58,7 +58,9 @@
                 "/runs/<id>/jlens",
                 "/runs/<id>/tokens/<index>/fork",
                 "/runs/<id>/tokens/<index>/causal-trace",
-                "/runs/<id>/tokens/<index>/source-measure"
+                "/runs/<id>/tokens/<index>/source-measure",
+                "/runs/<id>/second-opinion",
+                "/runs/<id>/second-opinion/candidates"
               ]
             }
           }
