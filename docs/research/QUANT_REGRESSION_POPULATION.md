@@ -93,6 +93,14 @@ unrestored.
 
 ## The seed confound (found, retracted, corrected)
 
+**Implementation follow-up (2026-07-29): the remaining within-disagreement confound described below is
+now closed in `clozn.analysis.causal_bisect`.** `run_bisect(seed=N)` retains `N` as its reproducible base
+seed, while every single-site confirmation derives an independent uint64 seed from SHA-256 over canonical
+JSON keyed by `{base_seed, source, hook, layer, head?}`. The derivation strategy is recorded in every new
+`clozn.causal-bisect.v1` artifact and the embedded `clozn.transplant.v1.random_seed` remains the actual
+seed used at that leaf. The population figures in this document are historical measurements made before
+that module-level correction; they are not silently recomputed here.
+
 The first Phase-2 run (n=30, archived locally as
 `_quant_regression_population_report_SEED_CONFOUND_v1.json`, gitignored) was **retracted**.
 `transplant.run_site()` builds its RNG as `random.Random(seed)` fresh per call, and
@@ -124,12 +132,12 @@ would have been unknowable without re-running with independent seeds.
 
 ## Limits — these bound the claim
 
-* **The second-order confound is NOT closed.** 17 of the 60 (disagreement, hook) documents (13 of the
-  30 disagreements) had multi-leaf searches sharing one seed draw across leaves WITHIN that single
-  disagreement (rescaled per leaf's own reference norm, not independently redrawn) — over 40% of the
-  sample. `run_bisect()` threads one `seed` to every leaf unconditionally; closing it means changing
-  that seeding contract in `clozn/analysis/`, which this experiment was scoped not to touch. Reported,
-  not patched around.
+* **Historical second-order confound, now closed in code.** 17 of the 60 (disagreement, hook) documents
+  (13 of the 30 disagreements) had multi-leaf searches sharing one seed draw across leaves WITHIN that
+  single disagreement (rescaled per leaf's own reference norm, not independently redrawn) — over 40%
+  of the sample. Those stored results retain that limitation. New `run_bisect()` artifacts use the
+  site-derived seed contract described above; this report's historical measurements would need a new
+  live run before their numeric results could be relabeled as free of the old confound.
 * **The head search reached the LATE layer band almost exclusively** (`max_head_sites=16`, ranked by
   observational reference-vs-candidate divergence — which, empirically, concentrated there: all 524
   tested head sites across all 30 disagreements fell in the late third of the network). "Attention

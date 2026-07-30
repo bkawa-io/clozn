@@ -195,6 +195,40 @@ def test_random_equal_norm_vector_matches_reference_norm():
     assert cb._norm(rnd) == pytest.approx(5.0, abs=1e-6)
 
 
+def test_single_site_seed_derivation_is_stable_uint64_and_site_specific():
+    key = {"source": "bisection_leaf", "hook": "ffn", "layer": 2}
+    first = cb._derive_single_site_seed(41, **key)
+    assert first == 7594455544418283617
+    assert first == cb._derive_single_site_seed(41, **key)
+    assert 0 <= first < 2 ** 64
+    assert first != cb._derive_single_site_seed(
+        41, source="bisection_leaf", hook="ffn", layer=3)
+    assert first != cb._derive_single_site_seed(
+        41, source="explicit_residual", hook="ffn", layer=2)
+    assert cb._derive_single_site_seed(
+        41, source="bisection_leaf", hook="head", layer=2, head=0
+    ) != cb._derive_single_site_seed(
+        41, source="bisection_leaf", hook="head", layer=2, head=1)
+
+
+def test_single_site_seed_derivation_is_independent_of_traversal_order():
+    sites = [
+        {"source": "bisection_leaf", "hook": "ffn", "layer": 2},
+        {"source": "bisection_leaf", "hook": "ffn", "layer": 3},
+        {"source": "explicit_residual", "hook": "residual", "layer": 1},
+        {"source": "explicit_head", "hook": "head", "layer": 3, "head": 1},
+    ]
+
+    def derive(rows):
+        return {
+            tuple(sorted(site.items())): cb._derive_single_site_seed(99, **site)
+            for site in rows
+        }
+
+    assert derive(sites) == derive(reversed(sites))
+    assert len(set(derive(sites).values())) == len(sites)
+
+
 def test_flipped_to_target_true_when_baseline_missed_and_arm_hits():
     assert cb._flipped_to_target({"top1_is_target": False}, {"top1_is_target": True}) is True
 
@@ -659,9 +693,11 @@ def _happy_ffn_scenario():
 def test_happy_path_localized_site_end_to_end(monkeypatch):
     events = []
     ref_engine, cand_engine = _happy_ffn_scenario()
+    seeds_by_layer = {}
 
-    def fake_run_site(*, site, **kwargs):
+    def fake_run_site(*, site, seed, **kwargs):
         assert site["hook"] == "ffn"
+        seeds_by_layer[site["layer"]] = seed
         if site["layer"] == 2:
             analysis = {"instrument_sane": True, "reference_moved_toward_reference": True,
                        "reference_specific": True, "reasons": ["localizes"]}
@@ -669,7 +705,7 @@ def test_happy_path_localized_site_end_to_end(monkeypatch):
             analysis = {"instrument_sane": True, "reference_moved_toward_reference": False,
                        "reasons": ["does not localize"]}
         return {"ok": True, "document": {"schema_version": "clozn.transplant.v1", "analysis": analysis,
-                                         "site": dict(site)}}
+                                         "site": dict(site), "random_seed": seed}}
 
     monkeypatch.setattr(cb.transplant, "run_site", fake_run_site)
 
@@ -688,6 +724,22 @@ def test_happy_path_localized_site_end_to_end(monkeypatch):
     assert len(doc["window_tests"]) == 2                     # both coarse windows tested
     assert {tuple(w["layers"]) for w in doc["window_tests"]} == {(0, 1), (2, 3)}
     assert len(doc["single_site_tests"]) == 2                # leaves 2 and 3 confirmed
+    assert seeds_by_layer == {
+        layer: cb._derive_single_site_seed(
+            0, source="bisection_leaf", hook="ffn", layer=layer)
+        for layer in (2, 3)
+    }
+    assert seeds_by_layer[2] != seeds_by_layer[3]
+    assert {
+        site["layer"]: site["transplant"]["random_seed"]
+        for site in doc["single_site_tests"]
+    } == seeds_by_layer
+    assert doc["seed"] == 0
+    assert doc["single_site_seed_derivation"] == {
+        "strategy": "sha256_canonical_json_uint64_be_v1",
+        "base_seed_field": "seed",
+        "site_key_fields": ["source", "hook", "layer", "head_if_present"],
+    }
     assert events == ["enter:ref", "exit:ref", "enter:cand", "exit:cand"]
 
 
@@ -755,9 +807,11 @@ def test_residual_only_search_never_windows_and_verdict_is_never_distributed(mon
     events = []
     ref_engine = FakeEngine([])   # ffn not requested -> reference is never even entered for ffn capture
     cand_engine = FakeEngine([])
+    seeds_by_layer = {}
 
-    def fake_run_site(*, site, **kwargs):
+    def fake_run_site(*, site, seed, **kwargs):
         assert site["hook"] == "residual"
+        seeds_by_layer[site["layer"]] = seed
         return {"ok": True,
                "document": {"analysis": {"instrument_sane": True, "reference_moved_toward_reference": True,
                                         "reference_specific": True}}}
@@ -775,6 +829,12 @@ def test_residual_only_search_never_windows_and_verdict_is_never_distributed(mon
     assert doc["search"]["composable_kinds_searched"] == []
     assert doc["verdict"]["label"] != "distributed_restoration"
     assert doc["verdict"]["label"] == "localized_site"
+    assert seeds_by_layer == {
+        layer: cb._derive_single_site_seed(
+            0, source="explicit_residual", hook="residual", layer=layer)
+        for layer in (1, 2, 3)
+    }
+    assert len(set(seeds_by_layer.values())) == 3
 
 
 def test_head_missing_indices_is_recorded_as_unavailable_not_a_crash():
@@ -976,9 +1036,11 @@ def test_head_trivial_single_site_uses_explicit_head_source_and_no_window_search
     events = []
     ref_engine = FakeEngine([])
     cand_engine = FakeEngine([])
+    seen_seed = []
 
-    def fake_run_site(*, site, **kwargs):
+    def fake_run_site(*, site, seed, **kwargs):
         assert site == {"hook": "head", "layer": 3, "head": 1}
+        seen_seed.append(seed)
         return {"ok": True, "document": {"schema_version": "clozn.transplant.v1",
                                          "analysis": {"instrument_sane": True,
                                                      "reference_moved_toward_reference": True,
@@ -1005,6 +1067,8 @@ def test_head_trivial_single_site_uses_explicit_head_source_and_no_window_search
                                               "reference_specific": True}}}
     assert doc["verdict"]["label"] == "localized_site"
     assert doc["verdict"]["evidence"]["sites"] == [{"hook": "head", "layer": 3, "head": 1}]
+    assert seen_seed == [cb._derive_single_site_seed(
+        0, source="explicit_head", hook="head", layer=3, head=1)]
     # a trivial 1x1 head request never enters the shared candidate residency at all (no window search
     # ran); transplant.run_site() manages its own loaders, which this test stubs out entirely.
     assert events == []
@@ -1083,11 +1147,13 @@ def test_head_window_bisects_down_to_a_confirmed_leaf_site(monkeypatch):
                               a_ref, a_self, a_rand, a_shuf, b_ref, b_self, b_rand, b_shuf])
 
     confirmed_sites = []
+    seeds_by_site = {}
 
-    def fake_run_site(*, site, shuffled_layer, **kwargs):
+    def fake_run_site(*, site, shuffled_layer, seed, **kwargs):
         assert site["hook"] == "head"
         assert "head" in site and isinstance(site["head"], int)   # the exact field the old code omitted
         confirmed_sites.append((site["layer"], site["head"]))
+        seeds_by_site[(site["layer"], site["head"])] = seed
         localizes = site == {"hook": "head", "layer": 0, "head": 0}
         analysis = {"instrument_sane": True, "reference_moved_toward_reference": localizes,
                    "reference_specific": localizes, "reasons": ["stub"]}
@@ -1108,6 +1174,12 @@ def test_head_window_bisects_down_to_a_confirmed_leaf_site(monkeypatch):
     leaf_tests = [s for s in doc["single_site_tests"] if s["hook"] == "head"]
     assert {s["source"] for s in leaf_tests} == {"bisection_leaf"}
     assert {(s["layer"], s["head"]) for s in leaf_tests} == {(0, 0), (0, 1)}
+    assert seeds_by_site == {
+        (layer, head): cb._derive_single_site_seed(
+            0, source="bisection_leaf", hook="head", layer=layer, head=head)
+        for layer, head in ((0, 0), (0, 1))
+    }
+    assert seeds_by_site[(0, 0)] != seeds_by_site[(0, 1)]
     assert doc["verdict"]["label"] == "localized_site"
     assert doc["verdict"]["evidence"]["sites"] == [{"hook": "head", "layer": 0, "head": 0}]
 

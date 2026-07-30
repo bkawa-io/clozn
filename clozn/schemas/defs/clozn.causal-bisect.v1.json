@@ -164,6 +164,19 @@
       "description": "Optional: the reference model's own logprob for target_token_id at readout_position, when the caller supplied one. Enables gap_closed_fraction in movement_metrics; omitted results simply report movement without a reference anchor."
     },
     "seed": {"type": "integer"},
+    "single_site_seed_derivation": {
+      "type": "object",
+      "description": "How run_bisect's caller-supplied top-level seed is deterministically expanded into independent random-control seeds for each transplant.run_site confirmation. The embedded clozn.transplant.v1.random_seed is the actual derived seed used for that site.",
+      "required": ["strategy", "base_seed_field", "site_key_fields"],
+      "properties": {
+        "strategy": {"const": "sha256_canonical_json_uint64_be_v1"},
+        "base_seed_field": {"const": "seed"},
+        "site_key_fields": {
+          "const": ["source", "hook", "layer", "head_if_present"]
+        }
+      },
+      "additionalProperties": false
+    },
     "search": {"$ref": "#/$defs/search"},
     "coverage": {"$ref": "#/$defs/coverage"},
     "window_tests": {"type": "array", "items": {"$ref": "#/$defs/window_test"}},

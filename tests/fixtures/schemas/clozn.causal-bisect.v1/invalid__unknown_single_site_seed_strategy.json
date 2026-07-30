@@ -16,7 +16,7 @@
   "primary_metric": "reference_token_logprob_recovery",
   "seed": 0,
   "single_site_seed_derivation": {
-    "strategy": "sha256_canonical_json_uint64_be_v1",
+    "strategy": "python_hash_v0",
     "base_seed_field": "seed",
     "site_key_fields": ["source", "hook", "layer", "head_if_present"]
   },

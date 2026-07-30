@@ -94,6 +94,20 @@ THE SEARCH
    but a random perturbation moved it just as well) or `no_restoration` (nothing moved), never a
    localization claim -- see `_derive_verdict`.
 
+INDEPENDENT, REPRODUCIBLE RANDOM CONTROLS AT SINGLE-SITE CONFIRMATION
+------------------------------------------------------------------------
+`run_bisect(seed=N)` treats N as a BASE seed, not the literal seed passed unchanged to every confirmed
+site. Every `transplant.run_site()` confirmation derives its own uint64 seed from SHA-256 over canonical
+JSON containing `{base_seed, source, hook, layer, head?}` (sorted keys, compact separators, UTF-8; `head`
+is omitted for non-head sites; the first eight digest bytes are read unsigned big-endian). This makes
+the control direction deterministic for one named site yet independent of traversal order and distinct
+across different leaves/sources. Passing one seed to every leaf would make `transplant.run_site()` create
+the same fresh `random.Random(seed)` at every equal-width site, reusing one frozen raw random direction
+merely rescaled to each site's norm -- the second-order confound documented in
+docs/research/QUANT_REGRESSION_POPULATION.md. The artifact records the derivation strategy, keeps `seed`
+as the caller's base seed, and embeds each `clozn.transplant.v1` document unchanged, including its actual
+derived `random_seed`.
+
 WHY THE VERDICT NEVER CONFUSES "WINDOW REQUIRED" WITH "NOTHING WORKED"
 --------------------------------------------------------------------------
 `distributed_restoration` means a BROAD intervention restores while no narrower subset does -- the search
@@ -157,6 +171,8 @@ over throughput).
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import random
 from datetime import datetime, timezone
@@ -175,6 +191,12 @@ _WINDOW_WRITE_FIELD = {"ffn": "ffn_write", "head": "head_write"}
 _WINDOW_APPLIED_FIELD = {"ffn": "ffn_write_applied", "head": "head_write_applied"}
 
 _ZERO_TOL = 1e-12
+_SINGLE_SITE_SEED_STRATEGY = "sha256_canonical_json_uint64_be_v1"
+_SINGLE_SITE_SEED_DERIVATION = {
+    "strategy": _SINGLE_SITE_SEED_STRATEGY,
+    "base_seed_field": "seed",
+    "site_key_fields": ["source", "hook", "layer", "head_if_present"],
+}
 
 
 # =========================================================================================== tiny math
@@ -220,6 +242,26 @@ def _site_divergence(reference_flat: Sequence[float], candidate_flat: Sequence[f
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _derive_single_site_seed(base_seed: int, *, source: str, hook: str, layer: int,
+                             head: "int | None" = None) -> int:
+    """Derive one order-independent uint64 random-control seed for a named confirmation site.
+
+    Do not use Python's process-randomized ``hash()`` here. The exact canonicalization and digest
+    truncation are part of ``_SINGLE_SITE_SEED_STRATEGY``'s persisted contract; changing either requires
+    a new strategy name so an old artifact remains reproducible.
+    """
+    key = {
+        "base_seed": base_seed,
+        "hook": hook,
+        "layer": int(layer),
+        "source": source,
+    }
+    if head is not None:
+        key["head"] = int(head)
+    canonical = json.dumps(key, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return int.from_bytes(hashlib.sha256(canonical).digest()[:8], byteorder="big", signed=False)
 
 
 def _writable_range(hook: str, layer_count: int) -> tuple:
@@ -1060,45 +1102,52 @@ def run_bisect(*, pair_compat: Mapping[str, Any], reference_loader: Callable[[],
             f"could actually capture was searched -- {len(usable_ffn_layers)} layers usable")
 
     for layer in sorted(set(leaf_layers)):
+        source = "bisection_leaf"
         shuffled = _pick_any_other_layer(layer, lo_ffn, hi_ffn)
         if shuffled is None:
-            single_site_tests.append({"hook": "ffn", "layer": layer, "source": "bisection_leaf",
+            single_site_tests.append({"hook": "ffn", "layer": layer, "source": source,
                                       "ok": False,
                                       "error": "the writable ffn range is too small to construct a "
                                               "shuffled_layer control"})
             continue
+        leaf_seed = _derive_single_site_seed(
+            seed, source=source, hook="ffn", layer=layer)
         site_result = transplant.run_site(
             pair_compat=pair_compat, reference_loader=reference_loader, candidate_loader=candidate_loader,
             prompt_ids=prompt_id_list, continuation_ids=continuation_id_list, site={"hook": "ffn", "layer": layer},
             shuffled_layer=shuffled, write_positions=positions, readout_position=readout_position,
-            target_token_id=target_token_id, topk=topk, seed=seed, store_tensors=store_tensors,
+            target_token_id=target_token_id, topk=topk, seed=leaf_seed, store_tensors=store_tensors,
             generated_at=generated_at, validate=False)
         if site_result["ok"]:
-            single_site_tests.append({"hook": "ffn", "layer": layer, "source": "bisection_leaf", "ok": True,
+            single_site_tests.append({"hook": "ffn", "layer": layer, "source": source, "ok": True,
                                       "transplant": site_result["document"]})
         else:
-            single_site_tests.append({"hook": "ffn", "layer": layer, "source": "bisection_leaf", "ok": False,
+            single_site_tests.append({"hook": "ffn", "layer": layer, "source": source, "ok": False,
                                       "error": site_result["error"]})
 
     for layer, head in sorted(set(leaf_head_sites)):
+        source = "bisection_leaf"
         shuffled = _pick_any_other_layer(layer, lo_head, hi_head)
         if shuffled is None:
-            single_site_tests.append({"hook": "head", "layer": layer, "head": head, "source": "bisection_leaf",
+            single_site_tests.append({"hook": "head", "layer": layer, "head": head, "source": source,
                                       "ok": False,
                                       "error": "the writable head layer range is too small to construct "
                                               "a shuffled_layer control"})
             continue
+        leaf_seed = _derive_single_site_seed(
+            seed, source=source, hook="head", layer=layer, head=head)
         site_result = transplant.run_site(
             pair_compat=pair_compat, reference_loader=reference_loader, candidate_loader=candidate_loader,
             prompt_ids=prompt_id_list, continuation_ids=continuation_id_list,
             site={"hook": "head", "layer": layer, "head": head}, shuffled_layer=shuffled,
             write_positions=positions, readout_position=readout_position, target_token_id=target_token_id,
-            topk=topk, seed=seed, store_tensors=store_tensors, generated_at=generated_at, validate=False)
+            topk=topk, seed=leaf_seed, store_tensors=store_tensors, generated_at=generated_at,
+            validate=False)
         if site_result["ok"]:
-            single_site_tests.append({"hook": "head", "layer": layer, "head": head, "source": "bisection_leaf",
+            single_site_tests.append({"hook": "head", "layer": layer, "head": head, "source": source,
                                       "ok": True, "transplant": site_result["document"]})
         else:
-            single_site_tests.append({"hook": "head", "layer": layer, "head": head, "source": "bisection_leaf",
+            single_site_tests.append({"hook": "head", "layer": layer, "head": head, "source": source,
                                       "ok": False, "error": site_result["error"]})
 
     if "residual" in search_kinds:
@@ -1109,48 +1158,55 @@ def run_bisect(*, pair_compat: Mapping[str, Any], reference_loader: Callable[[],
             f"{len(residual_layers)} caller-supplied residual_layers were tested out of the writable "
             f"range [{lo_res}, {hi_res}), not an implicit full-range sweep")
         for layer in residual_layers:
+            source = "explicit_residual"
             shuffled = _pick_any_other_layer(layer, lo_res, hi_res)
             if shuffled is None:
-                single_site_tests.append({"hook": "residual", "layer": layer, "source": "explicit_residual",
+                single_site_tests.append({"hook": "residual", "layer": layer, "source": source,
                                           "ok": False,
                                           "error": "the writable residual range is too small to construct "
                                                   "a shuffled_layer control"})
                 continue
+            leaf_seed = _derive_single_site_seed(
+                seed, source=source, hook="residual", layer=layer)
             site_result = transplant.run_site(
                 pair_compat=pair_compat, reference_loader=reference_loader, candidate_loader=candidate_loader,
                 prompt_ids=prompt_id_list, continuation_ids=continuation_id_list,
                 site={"hook": "residual", "layer": layer}, shuffled_layer=shuffled, write_positions=positions,
-                readout_position=readout_position, target_token_id=target_token_id, topk=topk, seed=seed,
+                readout_position=readout_position, target_token_id=target_token_id, topk=topk, seed=leaf_seed,
                 store_tensors=store_tensors, generated_at=generated_at, validate=False)
             if site_result["ok"]:
-                single_site_tests.append({"hook": "residual", "layer": layer, "source": "explicit_residual",
+                single_site_tests.append({"hook": "residual", "layer": layer, "source": source,
                                           "ok": True, "transplant": site_result["document"]})
             else:
-                single_site_tests.append({"hook": "residual", "layer": layer, "source": "explicit_residual",
+                single_site_tests.append({"hook": "residual", "layer": layer, "source": source,
                                           "ok": False, "error": site_result["error"]})
 
     if explicit_head_site is not None:
         layer, head = explicit_head_site
+        source = "explicit_head"
         shuffled = _pick_any_other_layer(layer, lo_head, hi_head)
         if shuffled is None:
-            single_site_tests.append({"hook": "head", "layer": layer, "head": head, "source": "explicit_head",
+            single_site_tests.append({"hook": "head", "layer": layer, "head": head, "source": source,
                                       "ok": False,
                                       "error": "the writable head layer range is too small to construct "
                                               "a shuffled_layer control"})
         else:
+            leaf_seed = _derive_single_site_seed(
+                seed, source=source, hook="head", layer=layer, head=head)
             site_result = transplant.run_site(
                 pair_compat=pair_compat, reference_loader=reference_loader, candidate_loader=candidate_loader,
                 prompt_ids=prompt_id_list, continuation_ids=continuation_id_list,
                 site={"hook": "head", "layer": layer, "head": head}, shuffled_layer=shuffled,
                 write_positions=positions, readout_position=readout_position, target_token_id=target_token_id,
-                topk=topk, seed=seed, store_tensors=store_tensors, generated_at=generated_at, validate=False)
+                topk=topk, seed=leaf_seed, store_tensors=store_tensors, generated_at=generated_at,
+                validate=False)
             if site_result["ok"]:
                 single_site_tests.append({"hook": "head", "layer": layer, "head": head,
-                                          "source": "explicit_head", "ok": True,
+                                          "source": source, "ok": True,
                                           "transplant": site_result["document"]})
             else:
                 single_site_tests.append({"hook": "head", "layer": layer, "head": head,
-                                          "source": "explicit_head", "ok": False,
+                                          "source": source, "ok": False,
                                           "error": site_result["error"]})
 
     if "head" in search_kinds:
@@ -1215,6 +1271,7 @@ def run_bisect(*, pair_compat: Mapping[str, Any], reference_loader: Callable[[],
         "continuation": {"n_prompt": n_prompt, "n_cont": n_cont},
         "primary_metric": primary_metric,
         "seed": seed,
+        "single_site_seed_derivation": dict(_SINGLE_SITE_SEED_DERIVATION),
         "search": {
             "kinds_requested": list(search_kinds),
             "composable_kinds_searched": sorted(composable_kinds_searched),
