@@ -1,18 +1,27 @@
-"""Model-free end-to-end coverage for RT-03 preloaded multi-model routing."""
+"""Model-free end-to-end coverage for RT-03/RT-04 preloaded multi-model routing."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import io
 import json
+import threading
+import time
 
 import pytest
 
 import clozn.runs.store as runlog
 import clozn.settings as clozn_settings
 from clozn import schemas
-from clozn.cli.worker_registry import AdapterRuntimeIdentity, RuntimeKey
+from clozn.cli.worker_registry import (
+    AdapterRuntimeIdentity,
+    RuntimeKey,
+    WorkerDefinition,
+    WorkerRegistry,
+)
 from clozn.server import app as cs
 from clozn.server import generation_gateway
 from clozn.server.model_routing import (
+    ColdLoadOutcome,
     PreloadedModelBinding,
     PreloadedModelRouter,
 )
@@ -271,6 +280,16 @@ def _assert_clean(handler):
         "_model_routing_artifact",
     ):
         assert not hasattr(handler, field)
+
+
+def _wire_router(monkeypatch, tmp_path, router):
+    monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setattr(
+        clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json")
+    )
+    monkeypatch.setattr(cs, "MODEL_ROUTER", router)
+    monkeypatch.setattr(cs, "SUB", None)
+    monkeypatch.setattr(cs, "ENGINE", None)
 
 
 def test_openai_explicit_model_dispatches_only_that_worker_and_journals_identity(
@@ -571,3 +590,402 @@ def test_live_identity_drift_fails_only_selected_binding(routed):
     status, payload, _headers = _response(raw)
     assert status == 200
     assert payload["model"] == "alpha"
+
+
+# --- RT-04: routing through a configured cold-load loader --------------------
+#
+# Without a loader, a not-ready model still fails immediately (unchanged --
+# see test_unknown_and_not_ready_models_never_fall_back above).  These tests
+# cover the opt-in path: a router constructed with `loader=` performs a real
+# cold load through it and returns a routed receipt carrying the real
+# LoadEvent, or the matching typed error when the load fails/times out.
+
+
+def test_select_cold_loads_through_a_configured_loader_and_journals_real_load_event(
+    tmp_path, monkeypatch
+):
+    alpha, _alpha_engine, _alpha_sub = _ready_binding("alpha", SHA_ALPHA, "1" * 32)
+    cold_binding = _inactive_binding("cold", SHA_COLD, "unloaded")
+    cold_key_sha = cold_binding.runtime_key["key_sha256"]
+    cold_engine = FakeEngine("cold", SHA_COLD, "3" * 32, "engine-cold")
+    cold_sub = FakeSub(cold_engine)
+    loader_calls = []
+
+    def loader(model_id, timeout):
+        loader_calls.append((model_id, timeout))
+        return ColdLoadOutcome(
+            state="ready",
+            kind="cold_load",
+            outcome="loaded",
+            coalesced=False,
+            wait_ms=42,
+            worker_port=9999,
+            worker_identity={
+                "worker_id": "cold-worker-1",
+                "worker_generation": 1,
+                "runtime_key_sha256": cold_key_sha,
+                "protocol_version": "1.1",
+                "engine_build": "engine-cold",
+                "backend": "cpu",
+            },
+            event_id="load_deadbeef_1",
+        )
+
+    router = PreloadedModelRouter(
+        [alpha, cold_binding],
+        default_model_id="alpha",
+        preload_model_ids=["alpha"],
+        max_loaded_workers=2,
+        loader=loader,
+        engine_factory=lambda port: cold_engine,
+        substrate_factory=lambda engine: cold_sub,
+    )
+    _wire_router(monkeypatch, tmp_path, router)
+
+    raw, handler = _dispatch("POST", "/v1/chat/completions", {
+        "model": "cold",
+        "messages": [{"role": "user", "content": "wake up"}],
+    })
+    status, payload, _headers = _response(raw)
+    assert status == 200
+    assert payload["model"] == "cold"
+    assert payload["choices"][0]["message"]["content"] == "cold reply"
+    assert loader_calls == [("cold", 180.0)]
+
+    logged = runlog.get_run(payload["clozn_run_id"])
+    receipt = logged["meta"]["model_routing"]["result"]["receipt"]
+    schemas.validate(logged["meta"]["model_routing"])
+    load_event = receipt["load_event"]
+    assert load_event == {
+        "event_id": "load_deadbeef_1",
+        "kind": "cold_load",
+        "outcome": "loaded",
+        "state_before": "unloaded",
+        "state_after": "ready",
+        "coalesced": False,
+        "wait_ms": 42,
+    }
+    assert receipt["worker_identity"]["worker_id"] == "cold-worker-1"
+    _assert_clean(handler)
+
+    # The binding is now materialized ready in place; a second request must
+    # reuse it -- not call the loader again.
+    second = router.select(
+        "cold", field_present=True, surface="openai", route="/v1/chat/completions"
+    )
+    assert loader_calls == [("cold", 180.0)]
+    assert second.artifact["result"]["receipt"]["load_event"]["outcome"] == (
+        "already_ready"
+    )
+
+
+def test_select_cold_load_timeout_produces_typed_error_with_real_load_event(
+    tmp_path, monkeypatch
+):
+    alpha, _alpha_engine, _alpha_sub = _ready_binding("alpha", SHA_ALPHA, "1" * 32)
+    cold_binding = _inactive_binding("cold", SHA_COLD, "unloaded")
+
+    def loader(model_id, timeout):
+        return ColdLoadOutcome(
+            state="loading",
+            kind="cold_load",
+            outcome="timed_out",
+            coalesced=True,
+            wait_ms=5000,
+            failure_code="model_load_timeout",
+            message="timed out waiting for a coalesced load",
+            event_id="load_deadbeef_2",
+        )
+
+    router = PreloadedModelRouter(
+        [alpha, cold_binding],
+        default_model_id="alpha",
+        preload_model_ids=["alpha"],
+        max_loaded_workers=2,
+        loader=loader,
+        engine_factory=lambda port: None,
+        substrate_factory=lambda engine: None,
+    )
+    _wire_router(monkeypatch, tmp_path, router)
+
+    raw, handler = _dispatch("POST", "/api/generate", {
+        "model": "cold",
+        "prompt": "must time out",
+        "stream": False,
+    })
+    status, payload, _headers = _response(raw)
+    assert status == 504
+    assert payload["code"] == "model_load_timeout"
+    assert payload["retryable"] is True
+    artifact = payload["clozn_model_routing"]
+    schemas.validate(artifact)
+    load_event = artifact["result"]["receipt"]["load_event"]
+    assert load_event["outcome"] == "timed_out"
+    assert load_event["coalesced"] is True
+    assert load_event["wait_ms"] == 5000
+    assert artifact["result"]["lifecycle_state"] == "loading"
+    assert runlog.list_runs() == []
+    _assert_clean(handler)
+
+
+def test_select_no_evictable_worker_is_a_typed_retryable_error(tmp_path, monkeypatch):
+    alpha, _alpha_engine, _alpha_sub = _ready_binding("alpha", SHA_ALPHA, "1" * 32)
+    cold_binding = _inactive_binding("cold", SHA_COLD, "unloaded")
+
+    def loader(model_id, timeout):
+        return ColdLoadOutcome(
+            state="failed",
+            kind="cold_load",
+            outcome="failed",
+            coalesced=False,
+            wait_ms=3,
+            failure_code="no_evictable_worker",
+            message="no idle worker available to evict",
+        )
+
+    router = PreloadedModelRouter(
+        [alpha, cold_binding],
+        default_model_id="alpha",
+        preload_model_ids=["alpha"],
+        max_loaded_workers=1,
+        loader=loader,
+        engine_factory=lambda port: None,
+        substrate_factory=lambda engine: None,
+    )
+    _wire_router(monkeypatch, tmp_path, router)
+
+    raw, handler = _dispatch("POST", "/api/chat", {
+        "model": "cold",
+        "messages": [{"role": "user", "content": "no room"}],
+        "stream": False,
+    })
+    status, payload, _headers = _response(raw)
+    assert status == 503
+    assert payload["code"] == "no_evictable_worker"
+    assert payload["retryable"] is True
+    schemas.validate(payload["clozn_model_routing"])
+    _assert_clean(handler)
+
+
+def test_router_without_a_loader_keeps_the_original_rt03_fail_fast_behavior(routed):
+    """No loader configured -- must behave exactly as before RT-04."""
+    assert routed["router"]._loader is None
+    raw, handler = _dispatch("POST", "/api/generate", {
+        "model": "cold",
+        "prompt": "must not load",
+        "stream": False,
+    })
+    status, payload, _headers = _response(raw)
+    assert status == 409
+    assert payload["code"] == "model_not_ready"
+    assert routed["alpha_sub"].calls == routed["beta_sub"].calls == []
+    _assert_clean(handler)
+
+
+# --- Full-stack coalescing proof: a real WorkerRegistry behind the router ----
+
+
+class _FakeSupervisorProcess:
+    """Minimal Popen-shaped stand-in for WorkerHandle's process field."""
+
+    _next_pid = 8000
+
+    def __init__(self):
+        type(self)._next_pid += 1
+        self.pid = type(self)._next_pid
+        self.code = None
+
+    def poll(self):
+        return self.code
+
+    def terminate(self):
+        self.code = -15
+
+    def kill(self):
+        self.code = -9
+
+    def wait(self, timeout=None):
+        return self.code
+
+
+def _registry_worker_definition(model_id: str, digest: str, template: str, *, port: int):
+    return WorkerDefinition(
+        model_id=model_id,
+        model=f"{model_id}.gguf",
+        runtime_key=RuntimeKey(
+            gguf_artifact_sha256=digest,
+            context_size=2048,
+            backend="cpu",
+            adapter=AdapterRuntimeIdentity.absent(),
+            template_fingerprint=template,
+            engine_build=f"engine-{model_id}",
+            white_box_flags=WHITE_BOX,
+        ),
+        flags={"ctx": 2048},
+        port=port,
+    )
+
+
+def _registry_handshake(definition, generation: int) -> dict:
+    key = definition.runtime_key
+    return {
+        "status": "ok",
+        "protocol_version": "1.1",
+        "worker_generation_id": f"{definition.model_id}-worker-{generation}",
+        "model": definition.model,
+        "model_sha256": key.gguf_artifact_sha256,
+        "n_ctx": key.context_size,
+        "device": "cpu",
+        "engine_build": key.engine_build,
+        "template_fingerprint": key.template_fingerprint,
+        "capabilities": dict(key.white_box_flags),
+    }
+
+
+def _loader_from_registry(registry: WorkerRegistry):
+    """Adapt a real WorkerRegistry.ensure_loaded to the router's loader contract.
+
+    This adapter is test-only glue.  Production wiring of a live supervisor's
+    WorkerRegistry to the gateway's PreloadedModelRouter belongs to the
+    (separately owned) process/IPC integration -- clozn/server must never
+    import clozn/cli directly (see clozn/server/routes/models.py and
+    ColdLoadOutcome's docstring).  This test proves the two owned contracts
+    (WorkerRegistry.ensure_loaded and PreloadedModelRouter's loader hook)
+    compose correctly end to end.
+    """
+    def loader(model_id: str, timeout: float) -> ColdLoadOutcome:
+        result = registry.ensure_loaded(model_id, timeout=timeout)
+        handle = registry.worker_handle(model_id)
+        status = {worker["model_id"]: worker for worker in registry.status()["workers"]}
+        return ColdLoadOutcome(
+            state=result.state_after.value,
+            kind=result.kind,
+            outcome=result.outcome,
+            coalesced=result.coalesced,
+            wait_ms=result.wait_ms,
+            worker_port=handle.port if handle is not None else None,
+            worker_identity=status[model_id]["worker_identity"],
+            failure_code=result.failure_code,
+            message=result.error,
+            event_id=result.event_id,
+        )
+    return loader
+
+
+def test_ten_concurrent_router_selects_for_one_cold_model_cause_exactly_one_load():
+    """The RT-04 guarantee proven through the router's real loader wiring, too.
+
+    tests/test_worker_registry.py proves the single-flight guarantee against
+    WorkerRegistry.ensure_loaded directly.  This test proves the *router's*
+    loader hook doesn't undermine it: ten real threads calling
+    PreloadedModelRouter.select() for the same never-loaded model, backed by
+    a real WorkerRegistry with a counting fake spawn, must still cause
+    exactly one process spawn -- not once per router.select() call.
+
+    (Calling through the live HTTP surface instead would only prove the
+    pre-existing global POST_GATE in clozn/server/app.py serializes requests
+    -- a real, separately-owned RT-05 concern, not the coalescing invariant
+    this ticket owns.  Driving the router directly isolates the guarantee
+    this ticket is actually responsible for.)
+    """
+    alpha, _alpha_engine, _alpha_sub = _ready_binding("alpha", SHA_ALPHA, "1" * 32)
+    cold_binding = _inactive_binding("cold", SHA_COLD, "unloaded")
+    cold_key_sha = cold_binding.runtime_key["key_sha256"]
+    assert cold_binding.resolved_artifact["artifact_sha256"] == SHA_COLD
+
+    registry_alpha_def = _registry_worker_definition(
+        "alpha", SHA_ALPHA, "1" * 32, port=9801
+    )
+    registry_cold_def = _registry_worker_definition(
+        "cold", SHA_COLD, "3" * 32, port=9802
+    )
+    assert registry_cold_def.runtime_key.key_sha256 == cold_key_sha, (
+        "registry and router must agree on the cold model's exact runtime key"
+    )
+
+    call_count = 0
+    call_lock = threading.Lock()
+    spawn_entered = threading.Event()
+    release = threading.Event()
+    blocking = False
+
+    def spawn(model, port, flags, **kwargs):
+        nonlocal call_count
+        with call_lock:
+            call_count += 1
+        definition = (
+            registry_cold_def if model == registry_cold_def.model
+            else registry_alpha_def
+        )
+        if blocking:
+            spawn_entered.set()
+            assert release.wait(timeout=5), "test setup: release was never set"
+        return (
+            _FakeSupervisorProcess(),
+            _registry_handshake(definition, 1),
+            False,
+        )
+
+    registry = WorkerRegistry(
+        [registry_alpha_def, registry_cold_def],
+        default_model_id="alpha",
+        preload_model_ids=["alpha"],
+        max_loaded_workers=2,
+        spawn=spawn,
+    )
+    registry.start_preloaded()  # spawns alpha; irrelevant to the "cold" count below
+    call_count = 0
+    blocking = True
+
+    def engine_factory(port):
+        return FakeEngine("cold", SHA_COLD, "3" * 32, "engine-cold")
+
+    router = PreloadedModelRouter(
+        [alpha, cold_binding],
+        default_model_id="alpha",
+        preload_model_ids=["alpha"],
+        max_loaded_workers=2,
+        loader=_loader_from_registry(registry),
+        engine_factory=engine_factory,
+        substrate_factory=lambda engine: FakeSub(engine),
+    )
+
+    start_barrier = threading.Barrier(10)
+
+    def select_one(_index):
+        start_barrier.wait(timeout=5)
+        selection = router.select(
+            "cold", field_present=True, surface="openai",
+            route="/v1/chat/completions",
+        )
+        return selection.artifact
+
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futures = [pool.submit(select_one, index) for index in range(10)]
+        assert spawn_entered.wait(timeout=5), "loader never reached spawn"
+        # Give the other nine select() calls time to reach the registry's
+        # coalescing wait, so this proves real overlap rather than a race
+        # that happened not to bite.
+        time.sleep(0.1)
+        release.set()
+        artifacts = [future.result(timeout=10) for future in futures]
+
+    assert call_count == 1, (
+        "exactly one process must be spawned for ten concurrent router selects"
+    )
+    for artifact in artifacts:
+        schemas.validate(artifact)
+    worker_ids = {
+        artifact["result"]["receipt"]["worker_identity"]["worker_id"]
+        for artifact in artifacts
+    }
+    assert worker_ids == {"cold-worker-1"}
+    coalesced_flags = [
+        artifact["result"]["receipt"]["load_event"]["coalesced"]
+        for artifact in artifacts
+    ]
+    assert coalesced_flags.count(False) == 1
+    assert coalesced_flags.count(True) == 9
+
+    status = {worker["model_id"]: worker for worker in registry.status()["workers"]}
+    assert status["cold"]["state"] == "ready"
