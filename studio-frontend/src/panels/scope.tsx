@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Icon } from "../components/Icon";
-import { createFork, loadRunInspection, loadRuntimeState } from "../data/api";
+import { loadRunInspection, loadRuntimeState } from "../data/api";
 import { DEMO_OBSERVATORY } from "../data/demo";
 import { stressFixture } from "../data/stress";
-import type { ForkState, ObservatoryData } from "../data/types";
+import type { ObservatoryData } from "../data/types";
 import { Observatory } from "../features/observatory/Observatory";
 import {
   parseScopeUrl,
@@ -16,24 +16,29 @@ import { useTopbar } from "./topbar";
 import type { PanelContext, StudioPanel } from "./types";
 
 /**
- * The one panel that owns real state. `data`, `runStatus`, `forkState`, `selectRun` and `forkRun` all
- * lived in `App.tsx` before this seam, alongside a topbar that reached into them through a chain of
- * `route.kind === "scope" && ...` conditionals. That is precisely the coupling the seam removes: App
- * would otherwise have had to keep owning one surface's state forever, and every future surface would
- * have been tempted to add its own branch beside it.
+ * The one panel that owns real state. `data`, `runStatus`, `selectRun` all lived in `App.tsx` before this
+ * seam, alongside a topbar that reached into them through a chain of `route.kind === "scope" && ...`
+ * conditionals. That is precisely the coupling the seam removes: App would otherwise have had to keep
+ * owning one surface's state forever, and every future surface would have been tempted to add its own
+ * branch beside it.
  *
- * The logic below is moved verbatim, not rewritten. It reports its topbar content through `useTopbar`
- * because App cannot see inside a panel, and should not.
+ * Milestone F folded fork into the token workbench's own action tray (see
+ * features/observatory/useTokenWorkbench.ts) -- this panel no longer owns `forkState`/`forkRun` at all;
+ * a completed fork just calls `selectRun` with its new child run's id, exactly like picking a different
+ * run from the dropdown would. `selectRun` also refreshes the live runtime snapshot on every call now
+ * (not only after a fork) so the run list and engine facts never silently go stale after ANY navigation.
+ *
+ * The rest of the logic below is moved verbatim, not rewritten. It reports its topbar content through
+ * `useTopbar` because App cannot see inside a panel, and should not.
  */
 export function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
   const [data, setData] = useState<ObservatoryData>(DEMO_OBSERVATORY);
   const [runStatus, setRunStatus] = useState<"idle" | "loading" | "error">("idle");
-  const [forkState, setForkState] = useState<ForkState>({ status: "idle" });
   const [liveRuntime, setLiveRuntime] = useState(runtime);
-  // One monotonic counter shared by selectRun and forkRun: whichever call is issued LAST wins. A fork
-  // response for the run displayed when it was requested must never land after the panel has since
-  // navigated elsewhere -- each async function captures its own id and checks it against this ref
-  // before committing state, so a stale response for run A can never paint over run B.
+  // One monotonic counter for selectRun: whichever call is issued LAST wins. A response for the run
+  // displayed when it was requested must never land after the panel has since navigated elsewhere --
+  // each async call captures its own id and checks it against this ref before committing state, so a
+  // stale response for run A can never paint over run B.
   const requestIdRef = useRef(0);
 
   useEffect(() => setLiveRuntime(runtime), [runtime]);
@@ -47,18 +52,15 @@ export function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
     else if (fixture) {
       setData(stressFixture(fixture) ?? DEMO_OBSERVATORY);
       setRunStatus("idle");
-      setForkState({ status: "idle" });
     } else {
       setData(DEMO_OBSERVATORY);
       setRunStatus("idle");
-      setForkState({ status: "idle" });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- matches App.tsx's original dep list
   }, [runId, fixture]);
 
   async function selectRun(nextRunId: string) {
     const requestId = ++requestIdRef.current;
-    setForkState({ status: "idle" });
     if (!nextRunId) {
       setData(DEMO_OBSERVATORY);
       setRunStatus("idle");
@@ -67,55 +69,18 @@ export function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
     }
     setRunStatus("loading");
     try {
-      const inspection = await loadRunInspection(nextRunId);
-      if (requestIdRef.current !== requestId) return;   // superseded by a later selection or fork
+      const [inspection, nextRuntime] = await Promise.all([
+        loadRunInspection(nextRunId),
+        loadRuntimeState(),
+      ]);
+      if (requestIdRef.current !== requestId) return;   // superseded by a later selection
       setData(inspection);
+      setLiveRuntime(nextRuntime);
       setRunStatus("idle");
       history.replaceState(null, "", `#/runs/${encodeURIComponent(nextRunId)}/scope`);
     } catch {
       if (requestIdRef.current !== requestId) return;
       setRunStatus("error");
-    }
-  }
-
-  async function forkRun(position: number, token: string, tokenId?: number) {
-    if (data.mode !== "run") return;
-    const parentId = data.id;
-    const requestId = ++requestIdRef.current;
-    setForkState({ status: "loading", parentId });
-    try {
-      const result = await createFork(parentId, position, token, tokenId);
-      if (requestIdRef.current !== requestId) return;   // the panel has since moved to a different run
-      if (!result.child) {
-        // `unavailable` (422): a typed, non-actionable outcome, not a request failure -- no child was
-        // created, so there is nothing to load or navigate to.
-        setForkState({ status: "unavailable", parentId, outcome: result.outcome });
-        return;
-      }
-      const child = result.child;
-      const [inspection, nextRuntime] = await Promise.all([
-        loadRunInspection(child.id),
-        loadRuntimeState(),
-      ]);
-      if (requestIdRef.current !== requestId) return;   // superseded again while these were in flight
-      setData(inspection);
-      setLiveRuntime(nextRuntime);
-      setRunStatus("idle");
-      setForkState({
-        status: "success",
-        parentId: child.parentId,
-        childId: child.id,
-        note: child.note,
-        outcome: result.outcome,
-      });
-      history.replaceState(null, "", `#/runs/${encodeURIComponent(child.id)}/scope`);
-    } catch (error) {
-      if (requestIdRef.current !== requestId) return;
-      setForkState({
-        status: "error",
-        parentId,
-        message: error instanceof Error ? error.message : "Fork failed",
-      });
     }
   }
 
@@ -130,17 +95,13 @@ export function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
         </>
       ),
       modeChip:
-        forkState.status === "loading"
-          ? "FORKING"
-          : runStatus === "loading"
-            ? "LOADING"
-            : runStatus === "error" || forkState.status === "error"
-              ? "ERROR"
-              : forkState.status === "unavailable"
-                ? "FORK UNAVAILABLE"
-                : data.mode.toUpperCase(),
+        runStatus === "loading"
+          ? "LOADING"
+          : runStatus === "error"
+            ? "ERROR"
+            : data.mode.toUpperCase(),
     }),
-    [modelLabel, data.id, data.mode, runStatus, forkState.status],
+    [modelLabel, data.id, data.mode, runStatus],
   );
 
   const tokenIndex = params.tokenIndex == null ? undefined : Number(params.tokenIndex);
@@ -158,9 +119,7 @@ export function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
       runtime={liveRuntime}
       inspectorOpen={inspectorOpen}
       runStatus={runStatus}
-      forkState={forkState}
       onSelectRun={(nextRunId) => void selectRun(nextRunId)}
-      onFork={(position, token, tokenId) => void forkRun(position, token, tokenId)}
       initialState={initialState ?? (tokenIndex == null ? undefined : { token: tokenIndex })}
       onStateChange={replaceScopeState}
     />

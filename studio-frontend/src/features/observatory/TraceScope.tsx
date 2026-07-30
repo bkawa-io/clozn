@@ -20,6 +20,11 @@ interface TraceScopeProps {
   tokens: TokenReading[];
   selectedToken: number;
   onSelectToken: (index: number) => void;
+  /** The token workbench's own `context` section (clozn.run-investigation.v1's `received_context`,
+   * composed verbatim) -- shown alongside the richer client-side source pipeline above, never replacing
+   * it: this is a pure read-only projection honesty chip (its own state/reason), not a second source
+   * list. */
+  contextEvidence?: { state: string; reason?: string };
 }
 
 interface OutputChunk {
@@ -260,6 +265,7 @@ export function TraceScope({
   tokens,
   selectedToken,
   onSelectToken,
+  contextEvidence,
 }: TraceScopeProps) {
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("quick");
@@ -429,6 +435,11 @@ export function TraceScope({
       <strong className={context.complete ? "is-complete" : "is-partial"}>
         {context.complete ? "COMPLETE" : context.measuredSources ? "PARTIAL" : "UNMEASURED"}
       </strong>
+      {contextEvidence && (
+        <span className="trace-context-evidence" title={contextEvidence.reason}>
+          <b>CONTEXT EVIDENCE</b>{contextEvidence.state.replace(/_/g, " ").toUpperCase()}
+        </span>
+      )}
     </div>
   );
 

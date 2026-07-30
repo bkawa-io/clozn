@@ -1,31 +1,32 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import type { RuntimeState, WorkspaceReadout } from "../../data/types";
-import {
-  loadCausalTrace,
-  loadLayerEvidence,
-  type CausalTraceEvidence,
-  type LayerEvidence,
-} from "./layerApi";
+import type { WorkbenchReadoutMeasurements } from "../../data/tokenWorkbench";
+import { loadLayerEvidence, type CausalTraceEvidence, type LayerEvidence } from "./layerApi";
+import type { ActionState } from "./useTokenWorkbench";
 
 interface LayerScopeProps {
   runId: string;
   text: string;
   engine?: RuntimeState["engine"];
   workspaceReadouts: WorkspaceReadout[];
+  /** The workbench `readouts` section's recorded per-token measurements, when evidence has loaded --
+   * genuinely new facts (logprob) this Studio did not previously surface anywhere. */
+  measurements?: WorkbenchReadoutMeasurements;
   selectedToken: number;
   selectedLayer: number;
   onSelectLayer: (layer: number) => void;
+  /** Causal trace is now one of the token workbench's four generic actions (Milestone F) -- this
+   * component only RENDERS its result; `useTokenWorkbench`/ActionTray own running, polling, and
+   * cancelling it, so a token selected here and one selected in the action tray can never disagree
+   * about whether a trace is in flight. */
+  causalAction: ActionState;
+  onRunCausalTrace: () => void;
+  onCancelCausalTrace: () => void;
 }
 
 type EvidenceState =
   | { status: "loading" }
   | { status: "done"; evidence: LayerEvidence }
-  | { status: "error"; message: string };
-
-type CausalState =
-  | { status: "idle" }
-  | { status: "loading" }
-  | { status: "done"; evidence: CausalTraceEvidence }
   | { status: "error"; message: string };
 
 function percentile(values: number[], fraction: number): number {
@@ -54,13 +55,15 @@ export function LayerScope({
   text,
   engine,
   workspaceReadouts,
+  measurements,
   selectedToken,
   selectedLayer,
   onSelectLayer,
+  causalAction,
+  onRunCausalTrace,
+  onCancelCausalTrace,
 }: LayerScopeProps) {
   const [evidenceState, setEvidenceState] = useState<EvidenceState>({ status: "loading" });
-  const [causalState, setCausalState] = useState<CausalState>({ status: "idle" });
-  const causalController = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -78,12 +81,6 @@ export function LayerScope({
       });
     return () => controller.abort();
   }, [runId, text]);
-
-  useEffect(() => {
-    causalController.current?.abort();
-    setCausalState({ status: "idle" });
-    return () => causalController.current?.abort();
-  }, [runId, selectedToken]);
 
   const evidence = evidenceState.status === "done" ? evidenceState.evidence : undefined;
   const residual = evidence?.residual;
@@ -118,22 +115,11 @@ export function LayerScope({
     return index > 0 && layer.candidates[0]?.piece !== lensAtPosition[index - 1].candidates[0]?.piece;
   })?.layer;
 
-  async function runCausalTrace() {
-    causalController.current?.abort();
-    const controller = new AbortController();
-    causalController.current = controller;
-    setCausalState({ status: "loading" });
-    try {
-      const result = await loadCausalTrace(runId, selectedToken, controller.signal);
-      if (!controller.signal.aborted) setCausalState({ status: "done", evidence: result });
-    } catch (error) {
-      if (controller.signal.aborted) return;
-      setCausalState({
-        status: "error",
-        message: error instanceof Error ? error.message : "Causal trace unavailable",
-      });
-    }
-  }
+  const causalBusy = causalAction.phase === "running" || causalAction.phase === "cancelling";
+  // useTokenWorkbench's `ActionState.artifact` is a plain union across all four actions (see that
+  // module's own doc comment on why) -- this is the one place that knows THIS prop only ever carries a
+  // causal-trace artifact, so it casts once here rather than at every read site below.
+  const causalArtifact = causalAction.artifact as CausalTraceEvidence | undefined;
 
   if (evidenceState.status === "loading") {
     return (
@@ -171,6 +157,10 @@ export function LayerScope({
               : "NOT LOADED"}
         </span>
         <span><b>CAUSAL</b>ON DEMAND</span>
+        <span className={measurements?.logprob != null ? "is-available" : "is-unavailable"}>
+          <b>RECORDED LOGPROB</b>
+          {measurements?.logprob != null ? measurements.logprob.toFixed(4) : "UNRECORDED"}
+        </span>
       </div>
 
       <div className="layer-analysis-grid">
@@ -330,44 +320,59 @@ export function LayerScope({
               <span className="eyebrow">CONTROLLED INTERVENTION</span>
               <h3 id="causal-title">Causal sites</h3>
             </div>
-            <button
-              type="button"
-              disabled={causalState.status === "loading"}
-              onClick={runCausalTrace}
-            >
-              {causalState.status === "loading" ? "TRACING" : `TRACE TOKEN ${selectedToken + 1}`}
-            </button>
+            <div className="causal-readout-buttons">
+              {causalBusy && causalAction.job?.cancellable && (
+                <button type="button" onClick={onCancelCausalTrace}>CANCEL</button>
+              )}
+              <button
+                type="button"
+                disabled={causalAction.phase === "unavailable" || causalBusy}
+                onClick={onRunCausalTrace}
+              >
+                {causalBusy ? "TRACING" : `TRACE TOKEN ${selectedToken + 1}`}
+              </button>
+            </div>
           </header>
-          {causalState.status === "idle" && (
+          {/* Causal trace is a shared action-tray action now (Milestone F) -- this section only renders
+              whatever `causalAction` (owned by useTokenWorkbench) currently reports; the button above is
+              a convenience shortcut into the SAME `runAction("causal_trace")` call the action tray uses,
+              never a second orchestration path. */}
+          {causalAction.phase === "unavailable" && (
+            <p className="readout-empty">{causalAction.reason ?? "Causal trace unavailable"}</p>
+          )}
+          {causalAction.phase === "idle" && (
             <p className="readout-empty">Not run for this token</p>
           )}
-          {causalState.status === "loading" && (
-            <p className="readout-empty">Running matched-random controls</p>
-          )}
-          {causalState.status === "error" && (
-            <p className="readout-empty is-error">{causalState.message}</p>
-          )}
-          {causalState.status === "done" && !causalState.evidence.ok && (
-            <p className="readout-empty is-error">
-              {causalState.evidence.blocked || causalState.evidence.error || "Causal trace unavailable"}
+          {(causalAction.phase === "running" || causalAction.phase === "cancelling") && (
+            <p className="readout-empty">
+              Running matched-random controls
+              {causalAction.job ? ` · ${causalAction.job.progress.phase} ${causalAction.job.progress.percent}%` : ""}
             </p>
           )}
-          {causalState.status === "done" && causalState.evidence.ok && (
+          {(causalAction.phase === "cancelled" || causalAction.phase === "error") && (
+            <p className="readout-empty is-error">{causalAction.reason ?? "Causal trace did not complete"}</p>
+          )}
+          {(causalAction.phase === "cached" || causalAction.phase === "completed") && causalArtifact && !causalArtifact.ok && (
+            <p className="readout-empty is-error">
+              {causalArtifact.blocked || causalArtifact.error || "Causal trace unavailable"}
+            </p>
+          )}
+          {(causalAction.phase === "cached" || causalAction.phase === "completed") && causalArtifact?.ok && (
             <div className="causal-results">
               <dl>
-                <div><dt>Target</dt><dd>{causalState.evidence.target?.piece || "∅"} · {causalState.evidence.target?.pos ?? selectedToken}</dd></div>
-                <div><dt>Survivors</dt><dd>{causalState.evidence.survivorCount ?? causalState.evidence.nodes.length} / {causalState.evidence.candidateCount}</dd></div>
-                <div><dt>Control</dt><dd>{causalState.evidence.verdict ?? "—"}</dd></div>
-                <div><dt>Noise floor</dt><dd>{causalState.evidence.noiseFloor == null ? "—" : formatScore(causalState.evidence.noiseFloor)}</dd></div>
+                <div><dt>Target</dt><dd>{causalArtifact.target?.piece || "∅"} · {causalArtifact.target?.pos ?? selectedToken}</dd></div>
+                <div><dt>Survivors</dt><dd>{causalArtifact.survivorCount ?? causalArtifact.nodes.length} / {causalArtifact.candidateCount}</dd></div>
+                <div><dt>Control</dt><dd>{causalArtifact.verdict ?? "—"}</dd></div>
+                <div><dt>Noise floor</dt><dd>{causalArtifact.noiseFloor == null ? "—" : formatScore(causalArtifact.noiseFloor)}</dd></div>
               </dl>
               <div className="causal-node-list">
-                {causalState.evidence.nodes.slice(0, 8).map((node) => (
+                {causalArtifact.nodes.slice(0, 8).map((node) => (
                   <p key={`${node.layer}-${node.pos}`}>
                     <span>L{node.layer} · P{node.pos + 1}</span>
                     <output>{node.deltaFull >= 0 ? "+" : ""}{formatScore(node.deltaFull)} Δlogp</output>
                   </p>
                 ))}
-                {!causalState.evidence.nodes.length && <span>NO SITES ABOVE CONTROL</span>}
+                {!causalArtifact.nodes.length && <span>NO SITES ABOVE CONTROL</span>}
               </div>
             </div>
           )}

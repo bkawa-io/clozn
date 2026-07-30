@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { loadRunInspection } from "../../data/api";
-import type { ForkState, ObservatoryData, RuntimeState } from "../../data/types";
+import type { ObservatoryData, RuntimeState } from "../../data/types";
+import { workbenchComparisonDifferenceCount, workbenchComparisonFindings, workbenchReadoutMeasurements } from "../../data/tokenWorkbench";
 import { alignTokens } from "../compare/alignment";
+import { ActionTray } from "./ActionTray";
 import { ConfidencePlot } from "./ConfidencePlot";
 import { ForkOutcomePanel } from "./ForkOutcomePanel";
 import { LayerScope } from "./LayerScope";
+import { TokenDistributionCard } from "./TokenDistributionCard";
 import { TraceScope } from "./TraceScope";
+import { useTokenWorkbench, type ForkOutcomeBanner } from "./useTokenWorkbench";
 import { VariantDeltaPlot } from "./VariantDeltaPlot";
 import { VariantScope } from "./VariantScope";
 import type { ScopeSelectionState, ScopeUrlState, ScopeView } from "./urlState";
@@ -16,13 +20,10 @@ export interface ObservatoryProps {
   runtime: RuntimeState;
   inspectorOpen: boolean;
   runStatus: "idle" | "loading" | "error";
-  forkState: ForkState;
+  /** Fork's own navigation IS run selection now (Milestone F folded the fork control into the action
+   * tray -- see useTokenWorkbench.ts) -- a completed fork calls this with the new child run's id exactly
+   * as picking a different run from the dropdown would. */
   onSelectRun: (runId: string) => void;
-  /** `tokenId` is the recorded alternative's numeric id, when known -- passing it lets the gateway
-   * attempt the exact execution-fork path directly instead of falling back to matching the piece text
-   * against its own recorded alternatives (see docs/EXECUTION_FORK_CONTRACT.md). Omitted only when the
-   * chosen candidate carried no recorded id, in which case reconstruction is the only honest path. */
-  onFork: (position: number, token: string, tokenId?: number) => void;
   initialState?: ScopeUrlState;
   onStateChange?: (state: ScopeSelectionState) => void;
 }
@@ -31,39 +32,10 @@ function formatPercent(value: number) {
   return `${Math.round(value * 100)}%`;
 }
 
-function initialToken(data: ObservatoryData) {
-  if (!data.tokens.length) return 0;
-  let weakest = 0;
-  for (let index = 1; index < data.tokens.length; index += 1) {
-    if ((data.tokens[index].confidence ?? 1) < (data.tokens[weakest].confidence ?? 1)) weakest = index;
-  }
-  return data.mode === "run" ? weakest : Math.min(7, data.tokens.length - 1);
-}
-
-function defaultReferenceId(data: ObservatoryData, runtime: RuntimeState) {
-  if (data.parentRunId && data.parentRunId !== data.id) return data.parentRunId;
-  const samePrompt = runtime.runs.find((run) =>
-    run.id !== data.id
-    && Boolean(data.prompt)
-    && run.prompt.trim() === data.prompt?.trim());
-  return samePrompt?.id ?? "";
-}
-
-function clampToken(data: ObservatoryData, requested?: number) {
-  if (!data.tokens.length) return 0;
-  return Math.max(0, Math.min(data.tokens.length - 1, requested ?? initialToken(data)));
-}
-
-function clampLayer(runtime: RuntimeState, requested?: number) {
-  const value = Math.max(0, requested ?? 0);
-  const count = runtime.engine?.layerCount;
-  return count == null || count <= 0 ? value : Math.min(count - 1, value);
-}
-
-function initialView(data: ObservatoryData, requested?: ScopeView): ScopeView {
-  if (requested === "layers" && (data.mode !== "run" || !data.response?.trim())) return "trace";
-  if (requested === "variants" && data.mode !== "run") return "trace";
-  return requested ?? "trace";
+interface ObservatoryWorkspaceProps extends ObservatoryProps {
+  lastForkOutcome: ForkOutcomeBanner | null;
+  onForkOutcome: (banner: ForkOutcomeBanner) => void;
+  onDismissForkOutcome: () => void;
 }
 
 function ObservatoryWorkspace({
@@ -71,31 +43,35 @@ function ObservatoryWorkspace({
   runtime,
   inspectorOpen,
   runStatus,
-  forkState,
   onSelectRun,
-  onFork,
   initialState,
   onStateChange,
-}: ObservatoryProps) {
-  const [selectedLayer, setSelectedLayer] = useState(() => clampLayer(runtime, initialState?.layer));
-  const [selectedToken, setSelectedToken] = useState(() => clampToken(data, initialState?.token));
-  const [view, setView] = useState<ScopeView>(() => initialView(data, initialState?.view));
-  const [forkToken, setForkToken] = useState("");
-  const [forkTokenId, setForkTokenId] = useState<number | undefined>(undefined);
-  const [variantReferenceId, setVariantReferenceId] = useState(() => {
-    const requested = initialState?.reference;
-    if (requested === data.id) return "";
-    return requested ?? defaultReferenceId(data, runtime);
-  });
+  lastForkOutcome,
+  onForkOutcome,
+  onDismissForkOutcome,
+}: ObservatoryWorkspaceProps) {
+  const {
+    selection,
+    setView,
+    setSelectedToken,
+    setSelectedLayer,
+    setVariantReferenceId,
+    doc,
+    actions,
+    runAction,
+    cancelAction,
+    forkChoice,
+    setForkChoice,
+  } = useTokenWorkbench({ data, runtime, initialState, onStateChange, onSelectRun, onForkOutcome });
+  const activeView: ScopeView = selection.view;
+  const selectedToken = selection.token;
+  const selectedLayer = selection.layer;
+  const variantReferenceId = selection.reference;
+
   const [variantReference, setVariantReference] = useState<ObservatoryData | null>(null);
   const [variantStatus, setVariantStatus] = useState<"idle" | "loading" | "error">("idle");
 
   const layersAvailable = data.mode === "run" && Boolean(data.response?.trim());
-  const activeView: ScopeView = view === "layers" && !layersAvailable
-    ? "trace"
-    : view === "variants" && data.mode !== "run"
-      ? "trace"
-      : view;
   const token = data.tokens[selectedToken] ?? data.tokens[0];
   const candidates = token?.alternatives?.length ? token.alternatives : data.candidates;
   const variantOptions = runtime.runs.filter((run) => run.id !== data.id);
@@ -127,14 +103,26 @@ function ObservatoryWorkspace({
   const tapeEnd = Math.min(data.tokens.length, tapeStart + tapeLimit);
   const tapeTokens = data.tokens.slice(tapeStart, tapeEnd);
 
-  useEffect(() => {
-    onStateChange?.({
-      view: activeView,
-      token: selectedToken,
-      reference: variantReferenceId || undefined,
-      layer: selectedLayer,
-    });
-  }, [activeView, onStateChange, selectedLayer, selectedToken, variantReferenceId]);
+  // The evidence this Studio previously derived entirely client-side (from the full run's own
+  // ObservatoryData) now also carries the workbench's OWN composed read for the currently selected
+  // token -- shown alongside, not instead of, the richer client visualizations (see this feature's
+  // Milestone E notes: TraceScope/VariantScope keep their existing rich per-token pipelines; the
+  // workbench doc contributes what it uniquely knows: capabilities, and each section's own honest
+  // state/reason).
+  const contextEvidence = doc?.context;
+  const comparisonEvidence = doc?.comparison;
+  const comparisonFindings = doc ? workbenchComparisonFindings(doc.comparison) : [];
+  const comparisonDifferenceCount = doc ? workbenchComparisonDifferenceCount(doc.comparison) : undefined;
+  const measurements = doc ? workbenchReadoutMeasurements(doc.readouts) : undefined;
+
+  const defaultForkAlternative = doc
+    ? doc.token.alternatives.find((alt) => alt.piece !== doc.token.piece) ?? doc.token.alternatives[0]
+    : undefined;
+  const effectiveForkChoice = forkChoice
+    ?? (defaultForkAlternative ? { piece: defaultForkAlternative.piece, tokenId: defaultForkAlternative.tokenId } : null);
+  const forkChoiceLabel = effectiveForkChoice
+    ? `${token?.text || "∅"} → ${effectiveForkChoice.piece || "∅"}`
+    : undefined;
 
   useEffect(() => {
     if (!variantReferenceId || variantReferenceId === data.id) {
@@ -155,13 +143,6 @@ function ObservatoryWorkspace({
     });
     return () => controller.abort();
   }, [data.id, variantReferenceId]);
-
-  useEffect(() => {
-    const initial = candidates.find((candidate) => candidate.token !== token?.text);
-    setForkToken(initial?.token ?? "");
-    setForkTokenId(initial?.tokenId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- candidates is derived from selectedToken/data.id
-  }, [selectedToken, data.id]);
 
   function handleTokenKeys(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     let next = index;
@@ -247,9 +228,13 @@ function ObservatoryWorkspace({
               text={data.response ?? ""}
               engine={runtime.engine}
               workspaceReadouts={data.workspaceReadouts ?? []}
+              measurements={measurements}
               selectedToken={selectedToken}
               selectedLayer={selectedLayer}
               onSelectLayer={setSelectedLayer}
+              causalAction={actions.causal_trace}
+              onRunCausalTrace={() => runAction("causal_trace")}
+              onCancelCausalTrace={() => cancelAction("causal_trace")}
             />
           ) : activeView === "variants" ? (
             <VariantScope
@@ -263,6 +248,8 @@ function ObservatoryWorkspace({
               selectedToken={selectedToken}
               onSelectToken={setSelectedToken}
               onSelectReference={setVariantReferenceId}
+              comparisonEvidence={comparisonEvidence}
+              comparisonDifferenceCount={comparisonDifferenceCount}
             />
           ) : (
             <TraceScope
@@ -271,6 +258,7 @@ function ObservatoryWorkspace({
               tokens={data.tokens}
               selectedToken={selectedToken}
               onSelectToken={setSelectedToken}
+              contextEvidence={contextEvidence}
             />
           )}
         </div>
@@ -367,63 +355,33 @@ function ObservatoryWorkspace({
             </section>
           ) : null}
 
-          <section className="inspector-section">
-            <div className="section-title">
-              <h3>{activeView === "layers" ? "Recorded token distribution" : "Token distribution"}</h3>
-              <span>TOP-K</span>
-            </div>
-            <div className="candidate-list">
-              {candidates.map((candidate, index) => (
-                <button
-                  type="button"
-                  className={`${index === 0 ? "candidate is-leading" : "candidate"} ${forkToken === candidate.token ? "is-fork-choice" : ""}`}
-                  disabled={index === 0 || data.mode !== "run"}
-                  aria-pressed={index === 0 ? undefined : forkToken === candidate.token}
-                  onClick={() => {
-                    setForkToken(candidate.token);
-                    setForkTokenId(candidate.tokenId);
-                  }}
-                  key={`${candidate.token}-${index}`}
-                >
-                  <span>{candidate.token || "∅"}</span>
-                  <i><b style={{ width: formatPercent(Math.max(0, candidate.score)) }} /></i>
-                  <output>{candidate.score.toFixed(4)}</output>
-                </button>
-              ))}
-            </div>
-            {activeView === "trace" && data.mode === "run" && (
-              <div className="fork-control">
-                <div>
-                  <span>FORK TOKEN {selectedToken + 1}</span>
-                  <strong>{token?.text || "∅"} <i>→</i> {forkToken || "—"}</strong>
-                </div>
-                <button
-                  type="button"
-                  disabled={!forkToken || forkState.status === "loading"}
-                  onClick={() => onFork(selectedToken, forkToken, forkTokenId)}
-                >
-                  {forkState.status === "loading" ? "FORKING" : "FORK RUN"}
-                </button>
+          <TokenDistributionCard
+            token={doc?.token}
+            fallbackCandidates={candidates}
+            canChoose={data.mode === "run"}
+            choice={effectiveForkChoice}
+            onChoose={setForkChoice}
+          />
+
+          <ActionTray
+            actions={actions}
+            onRun={runAction}
+            onCancel={cancelAction}
+            forkChoiceLabel={forkChoiceLabel}
+          />
+
+          {lastForkOutcome && data.id === lastForkOutcome.childId && (
+            <section className="inspector-section fork-outcome-banner">
+              <ForkOutcomePanel outcome={lastForkOutcome.artifact.outcome} note={lastForkOutcome.note} />
+              <div className="fork-result" role="status">
+                <span>CHILD {lastForkOutcome.childId}</span>
+                <a href={`#/compare/${encodeURIComponent(lastForkOutcome.parentId)}/${encodeURIComponent(lastForkOutcome.childId)}`}>
+                  COMPARE PARENT / CHILD
+                </a>
+                <button type="button" onClick={onDismissForkOutcome}>DISMISS</button>
               </div>
-            )}
-            {forkState.status === "error" && (
-              <p className="fork-result is-error" role="status">{forkState.message}</p>
-            )}
-            {forkState.status === "unavailable" && (
-              <ForkOutcomePanel outcome={forkState.outcome} />
-            )}
-            {forkState.status === "success" && (
-              <>
-                <ForkOutcomePanel outcome={forkState.outcome} note={forkState.note} />
-                <div className="fork-result" role="status">
-                  <span>CHILD {forkState.childId}</span>
-                  <a href={`#/compare/${encodeURIComponent(forkState.parentId)}/${encodeURIComponent(forkState.childId)}`}>
-                    COMPARE PARENT / CHILD
-                  </a>
-                </div>
-              </>
-            )}
-          </section>
+            </section>
+          )}
 
           {activeView === "trace" && (
             <section className="inspector-section">
@@ -458,6 +416,14 @@ function ObservatoryWorkspace({
                       <span>{dial.name}</span>
                       <output>{dial.reference >= 0 ? "+" : ""}{dial.reference.toFixed(2)} → {dial.current >= 0 ? "+" : ""}{dial.current.toFixed(2)}</output>
                     </div>
+                  ))}
+                </div>
+              )}
+              {comparisonFindings.length > 0 && (
+                <div className="variant-dial-deltas">
+                  <header><span>BACKEND COMPARISON FINDINGS</span><b>{comparisonFindings.length}</b></header>
+                  {comparisonFindings.map((finding) => (
+                    <div key={finding}><span>{finding}</span></div>
                   ))}
                 </div>
               )}
@@ -561,6 +527,14 @@ function ObservatoryWorkspace({
 
 export function Observatory(props: ObservatoryProps) {
   const { data, initialState, runtime } = props;
+  const [lastForkOutcome, setLastForkOutcome] = useState<ForkOutcomeBanner | null>(null);
+
+  // The banner survives the run-change remount below (a completed fork navigates onto its own child
+  // run), but must not keep showing once the user has moved on to some OTHER run entirely.
+  useEffect(() => {
+    setLastForkOutcome((current) => (current && current.childId !== data.id ? null : current));
+  }, [data.id]);
+
   const resetKey = [
     data.id,
     initialState?.view ?? "",
@@ -568,6 +542,14 @@ export function Observatory(props: ObservatoryProps) {
     initialState?.reference ?? "",
     initialState?.layer ?? "",
     runtime.engine?.layerCount ?? "",
-  ].join("\u0000");
-  return <ObservatoryWorkspace key={resetKey} {...props} />;
+  ].join(" ");
+  return (
+    <ObservatoryWorkspace
+      key={resetKey}
+      {...props}
+      lastForkOutcome={lastForkOutcome}
+      onForkOutcome={setLastForkOutcome}
+      onDismissForkOutcome={() => setLastForkOutcome(null)}
+    />
+  );
 }

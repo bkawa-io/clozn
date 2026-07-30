@@ -1,12 +1,13 @@
 import userEvent from "@testing-library/user-event";
 import { act } from "react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { loadRunInspection } from "../../data/api";
+import { loadRunInspection, loadRuntimeState } from "../../data/api";
 import type {
   ObservatoryData,
   RunSummary,
   RuntimeState,
 } from "../../data/types";
+import type { WorkbenchDocument } from "../../data/tokenWorkbench";
 import { deferred } from "../../test/fetch";
 import { render, screen, waitFor, within } from "../../test/render";
 import { ScopePanel } from "../../panels/scope";
@@ -44,8 +45,21 @@ vi.mock("./layerApi", () => ({
       truncated: false,
     },
   })),
-  loadCausalTrace: vi.fn(),
 }));
+
+vi.mock("../../data/tokenWorkbench", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../data/tokenWorkbench")>();
+  return {
+    ...actual,
+    loadTokenWorkbench: vi.fn(),
+    postForkAction: vi.fn(),
+    postCausalTraceAction: vi.fn(),
+    postSourceMeasureAction: vi.fn(),
+    postMechanisticDiffAction: vi.fn(),
+    loadWorkbenchJob: vi.fn(),
+    cancelWorkbenchJob: vi.fn(),
+  };
+});
 
 function reading(
   id: string,
@@ -104,9 +118,10 @@ function summary(data: ObservatoryData): RunSummary {
 const current = reading("run-current", "Current run", "c");
 const referenceA = reading("run-reference-a", "Reference A", "a", "model-a");
 const referenceB = reading("run-reference-b", "Reference B", "b", "model-b");
+const child = reading("run-child", "Forked child", "d");
 const runtime: RuntimeState = {
   status: "connected",
-  runs: [summary(current), summary(referenceA), summary(referenceB)],
+  runs: [summary(current), summary(referenceA), summary(referenceB), summary(child)],
   engine: {
     model: "model-current",
     layerCount: 6,
@@ -114,8 +129,41 @@ const runtime: RuntimeState = {
     sae: false,
   },
 };
-const idleFork = { status: "idle" } as const;
 const loadInspection = vi.mocked(loadRunInspection);
+const loadRuntime = vi.mocked(loadRuntimeState);
+
+async function importWorkbenchMocks() {
+  return await import("../../data/tokenWorkbench");
+}
+
+/** A fully valid workbench document -- every capability defaults to unavailable so a test only has to
+ * override the one it cares about. */
+function workbenchDoc(runId: string, index: number, overrides: Partial<WorkbenchDocument> = {}): WorkbenchDocument {
+  return {
+    schemaVersion: "clozn.token-workbench.v1",
+    runId,
+    index,
+    run: { id: runId },
+    token: {
+      index,
+      piece: `${runId}-${index}`,
+      alternatives: [
+        { piece: `${runId}-${index}`, prob: 0.8 },
+        { piece: "alternate", tokenId: 4242, prob: 0.15 },
+      ],
+    },
+    context: { state: "unavailable", raw: {} },
+    comparison: { state: "unavailable", raw: {} },
+    readouts: { state: "unavailable", raw: {} },
+    capabilities: {
+      exactFork: { available: false, snapshotState: "worker_unreachable", reason: "no worker reachable" },
+      sourceMeasurement: { available: false, status: "unavailable", reason: "no worker" },
+      causalTrace: { available: false, status: "unavailable", reason: "no worker" },
+      mechanisticDiff: { available: false, reason: "no reference run selected" },
+    },
+    ...overrides,
+  };
+}
 
 function observatory(
   overrides: Partial<React.ComponentProps<typeof Observatory>> = {},
@@ -126,23 +174,33 @@ function observatory(
       runtime={runtime}
       inspectorOpen
       runStatus="idle"
-      forkState={idleFork}
       onSelectRun={() => {}}
-      onFork={() => {}}
       {...overrides}
     />
   );
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   location.hash = "#/scope";
   loadInspection.mockReset();
   loadInspection.mockImplementation(async (runId) => {
     if (runId === current.id) return current;
     if (runId === referenceA.id) return referenceA;
     if (runId === referenceB.id) return referenceB;
+    if (runId === child.id) return child;
     throw new Error(`unknown test run ${runId}`);
   });
+  loadRuntime.mockReset();
+  loadRuntime.mockResolvedValue(runtime);
+  const wb = await importWorkbenchMocks();
+  vi.mocked(wb.loadTokenWorkbench).mockReset();
+  vi.mocked(wb.loadTokenWorkbench).mockImplementation(async (runId, index) => workbenchDoc(runId, index));
+  vi.mocked(wb.postForkAction).mockReset();
+  vi.mocked(wb.postCausalTraceAction).mockReset();
+  vi.mocked(wb.postSourceMeasureAction).mockReset();
+  vi.mocked(wb.postMechanisticDiffAction).mockReset();
+  vi.mocked(wb.loadWorkbenchJob).mockReset();
+  vi.mocked(wb.cancelWorkbenchJob).mockReset();
 });
 
 describe("Scope URL integration", () => {
@@ -186,6 +244,13 @@ describe("Scope URL integration", () => {
   });
 
   test("clamps token and layer after run bounds are known", async () => {
+    // Simulate the backend's OWN auto-selected comparison reference (clozn.runs.token_workbench's
+    // `_comparison_section`, composed via useTokenWorkbench's one-time auto-pick) -- this Studio no
+    // longer runs a parallel client-side "same prompt" heuristic for the default reference.
+    const wb = await importWorkbenchMocks();
+    vi.mocked(wb.loadTokenWorkbench).mockImplementation(async (runId, index) => workbenchDoc(runId, index, {
+      comparison: { state: "supported", raw: { selection: { mode: "previous_compatible", reference_run_id: referenceA.id } } },
+    }));
     const changed = vi.fn();
     render(observatory({
       initialState: { view: "layers", token: 999, layer: 999 },
@@ -269,148 +334,70 @@ describe("Observatory async and action boundaries", () => {
     expect(screen.getByText("b0")).toBeInTheDocument();
   });
 
-  test("selection only changes state; the explicit fork button alone executes", async () => {
-    const onFork = vi.fn();
+  test("selecting a token never runs an action -- only the FORK button does", async () => {
+    const wb = await importWorkbenchMocks();
+    const user = userEvent.setup();
     const onStateChange = vi.fn((state: ScopeSelectionState) => {
       history.replaceState(null, "", serializeScopeUrl(current.id, state));
     });
-    const user = userEvent.setup();
+    render(observatory({ initialState: { view: "trace", token: 0, layer: 0 }, onStateChange }));
 
-    render(observatory({
-      initialState: { view: "trace", token: 0, layer: 0 },
-      onFork,
-      onStateChange,
-    }));
-
+    await waitFor(() => expect(vi.mocked(wb.loadTokenWorkbench)).toHaveBeenCalledTimes(1));
     const tape = screen.getByRole("listbox", { name: "Output tokens" });
     await user.click(within(tape).getAllByRole("option")[2]);
-    expect(onFork).not.toHaveBeenCalled();
-    expect(parseScopeUrl(location.hash)?.state.token).toBe(2);
-
-    await user.click(screen.getByRole("button", { name: /alternate/i }));
-    expect(onFork).not.toHaveBeenCalled();
-
-    await user.click(screen.getByRole("button", { name: "FORK RUN" }));
-    expect(onFork).toHaveBeenCalledTimes(1);
-    // The candidate's recorded numeric token id rides along so the gateway can attempt the exact
-    // execution-fork path directly instead of falling back to a piece-text match -- see
-    // ObservatoryProps.onFork's doc comment and docs/EXECUTION_FORK_CONTRACT.md.
-    expect(onFork).toHaveBeenCalledWith(2, "alternate", 4242);
+    await waitFor(() => expect(vi.mocked(wb.loadTokenWorkbench)).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(wb.postForkAction)).not.toHaveBeenCalled();
+    expect(vi.mocked(wb.postCausalTraceAction)).not.toHaveBeenCalled();
+    expect(vi.mocked(wb.postSourceMeasureAction)).not.toHaveBeenCalled();
+    await waitFor(() => expect(parseScopeUrl(location.hash)?.state.token).toBe(2));
   });
-});
 
-describe("Fork outcome panel", () => {
-  test("exact_execution_fork reads as the strong result and shows its exactness facts", () => {
-    render(observatory({
-      forkState: {
-        status: "success",
-        parentId: current.id,
-        childId: "child-1",
-        note: "exact execution fork: the worker restored its exact recorded KV state and applied the "
-          + "forced token there directly on its token id -- no text splice, nothing to retokenize",
+  test("a cached fork outcome navigates via onSelectRun and the banner survives the run change", async () => {
+    const wb = await importWorkbenchMocks();
+    vi.mocked(wb.loadTokenWorkbench).mockImplementation(async (runId, index) => {
+      if (runId === current.id) {
+        return workbenchDoc(runId, index, {
+          capabilities: {
+            exactFork: { available: true, snapshotState: "not_attempted" },
+            sourceMeasurement: { available: false, status: "unavailable", reason: "no worker" },
+            causalTrace: { available: false, status: "unavailable", reason: "no worker" },
+            mechanisticDiff: { available: false, reason: "no reference run selected" },
+          },
+        });
+      }
+      return workbenchDoc(runId, index);
+    });
+    vi.mocked(wb.postForkAction).mockResolvedValue({
+      outcome: "cached",
+      artifact: {
         outcome: {
           kind: "exact_execution_fork",
-          reasons: [{
-            code: "exact_preconditions_met",
-            message: "an exact checkpoint was captured and its intervention completed",
-          }],
-          exactness: {
-            regime: "generated_token_live_kv",
-            source: "live_kv",
-            proofStatus: "confirmed",
-            truncateTo: 42,
-          },
-          unchangedControl: {
-            required: true,
-            status: "matched",
-            result: {
-              status: "matched",
-              exactMatch: true,
-              note: "parent suffix token ids and text matched exactly",
-            },
-          },
-          intervention: {
-            type: "force_token",
-            tokenId: 4242,
-            tokenPiece: "alternate",
-            restoreMode: "live_kv_truncated",
-          },
-          executionId: "fork_exec_abc123",
+          reasons: [{ code: "exact_preconditions_met", message: "ok" }],
+          exactness: { regime: "generated_token_live_kv", proofStatus: "confirmed" },
         },
+        child: { id: child.id, parentId: current.id, note: "reused an existing fork" },
       },
-    }));
+    });
+    const onSelectRun = vi.fn();
+    const user = userEvent.setup();
+    const view = render(observatory({ onSelectRun }));
 
-    expect(screen.getByText("EXACT EXECUTION FORK")).toBeInTheDocument();
-    expect(screen.getByText(/no text splice, nothing to retokenize/i, {
-      selector: ".fork-outcome-summary",
-    })).toBeInTheDocument();
-    expect(screen.getByText("GENERATED TOKEN LIVE KV")).toBeInTheDocument();
-    expect(screen.getByText("LIVE KV TRUNCATED")).toBeInTheDocument();
-    expect(screen.getByText('FORCE TOKEN → "alternate" (id 4242)')).toBeInTheDocument();
-    expect(screen.getByText("MATCHED · EXACT MATCH")).toBeInTheDocument();
-    expect(screen.getByText("CONFIRMED")).toBeInTheDocument();
-    expect(screen.getByText("CHILD child-1")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("article", { name: "FORK" })).toBeInTheDocument());
+    const forkRow = screen.getByRole("article", { name: "FORK" });
+    await waitFor(() => expect(within(forkRow).getByRole("button", { name: "RUN" })).toBeEnabled());
+    await user.click(within(forkRow).getByRole("button", { name: "RUN" }));
+
+    await waitFor(() => expect(onSelectRun).toHaveBeenCalledWith(child.id));
+
+    view.rerender(observatory({ data: child, onSelectRun }));
+    expect(await screen.findByText("EXACT EXECUTION FORK")).toBeInTheDocument();
+    expect(screen.getByText(`CHILD ${child.id}`)).toBeInTheDocument();
   });
 
-  test("reconstructed_replay reads as visibly weaker and names the retokenization risk", () => {
-    render(observatory({
-      forkState: {
-        status: "success",
-        parentId: current.id,
-        childId: "child-2",
-        note: "greedy continuation (sample=false): a deterministic what-if",
-        outcome: {
-          kind: "reconstructed_replay",
-          reasons: [{
-            code: "checkpoint_not_supplied",
-            message: "no exact checkpoint was supplied; the eligible path explicitly reconstructs text",
-          }],
-          exactness: {
-            regime: "reconstructed_text",
-            source: "text_retokenization",
-            proofStatus: "not_applicable",
-          },
-          unavoidableDifferences: [
-            "kv_state_not_restored",
-            "sampler_state_reinitialized",
-            "prompt_prefix_retokenized",
-            "batch_shape_not_preserved",
-          ],
-          retokenized: true,
-        },
-      },
-    }));
-
-    expect(screen.getByText("RECONSTRUCTED REPLAY")).toBeInTheDocument();
-    expect(screen.getByText("RETOKENIZED")).toBeInTheDocument();
-    expect(screen.getByText(/BPE token boundaries can shift/i)).toBeInTheDocument();
-    expect(screen.getByText(/NOT guaranteed to run on the exact recorded token ids/)).toBeInTheDocument();
-    expect(screen.getByText("KV STATE NOT RESTORED")).toBeInTheDocument();
-    expect(screen.getByText("SAMPLER STATE REINITIALIZED")).toBeInTheDocument();
-    // Never styled as though it were the strong outcome: no exactness metric list, no exact badge text.
-    expect(screen.queryByText("EXACT EXECUTION FORK")).not.toBeInTheDocument();
-  });
-
-  test("unavailable shows the gateway's typed reason instead of a generic failure", () => {
-    render(observatory({
-      forkState: {
-        status: "unavailable",
-        parentId: current.id,
-        outcome: {
-          kind: "unavailable",
-          reasons: [{
-            code: "checkpoint_expired",
-            message: "the referenced checkpoint has expired or been evicted",
-          }],
-        },
-      },
-    }));
-
-    expect(screen.getByText("FORK UNAVAILABLE")).toBeInTheDocument();
-    expect(screen.getByText("CHECKPOINT EXPIRED")).toBeInTheDocument();
-    expect(screen.getByText("the referenced checkpoint has expired or been evicted")).toBeInTheDocument();
-    // No child was created: nothing to compare, no generic "fork failed" copy.
-    expect(screen.queryByText(/^CHILD /)).not.toBeInTheDocument();
-    expect(screen.queryByText(/fork failed/i)).not.toBeInTheDocument();
+  test("an unavailable action shows its typed reason as visible text, never color alone", async () => {
+    render(observatory());
+    const traceRow = await screen.findByRole("article", { name: "CAUSAL TRACE" });
+    expect(within(traceRow).getByText("no worker")).toBeInTheDocument();
+    expect(within(traceRow).getByRole("button", { name: "UNAVAILABLE" })).toBeDisabled();
   });
 });
