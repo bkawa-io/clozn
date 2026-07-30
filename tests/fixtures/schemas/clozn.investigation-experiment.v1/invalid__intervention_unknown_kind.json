@@ -1,0 +1,9 @@
+{
+  "schema_version": "clozn.investigation-experiment.v1",
+  "experiment_id": "invexp_00000000000000000f04",
+  "run_id": "run_1",
+  "generated_at": "2026-07-29T00:00:00Z",
+  "phase": "refused",
+  "intervention": {"kind": "teleport"},
+  "eligibility": {"state": "refused", "reason": {"code": "unsupported_intervention_kind", "message": "no"}}
+}

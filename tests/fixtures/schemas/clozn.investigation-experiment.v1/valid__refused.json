@@ -1,0 +1,15 @@
+{
+  "schema_version": "clozn.investigation-experiment.v1",
+  "experiment_id": "invexp_0000000000000000000a",
+  "run_id": "run_1",
+  "generated_at": "2026-07-29T00:00:00Z",
+  "phase": "refused",
+  "intervention": {"kind": "adapter_scale", "scale": 0},
+  "eligibility": {
+    "state": "refused",
+    "reason": {
+      "code": "adapter_rescale_unavailable_in_planner",
+      "message": "adapter rescale requires booting a second engine process; refused in this slice"
+    }
+  }
+}

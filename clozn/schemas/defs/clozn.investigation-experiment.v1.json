@@ -1,0 +1,259 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.investigation-experiment.v1",
+  "title": "An on-demand 'did this matter' controlled experiment over one recorded run (C3)",
+  "description": "A caller points at a passage (a clozn.text-span-addresses.v1 address), an attached source, a sampler setting, or an adapter scale, and asks whether it mattered. This document is BOTH the eligibility verdict (phase=refused) and, once eligible, the plan (phase=planned) or the executed controlled experiment (phase=completed/failed). It never collapses to one score: `observed` records what measurably changed and `causal_claim` records what that difference licenses a caller to SAY, and `causal_claim.licensed` may only be true when `analysis.effect_specific` is true -- an uncontrolled or instrument-insane result must say so, never omit it, never phrase it as a finding. This schema only checks shape; the one Python builder (clozn.receipts.investigation_experiment) is the sole place `causal_claim`/`analysis` are computed together, mirroring clozn.transplant.v1's own 'one place, never settable another way' discipline for reference_specific.",
+  "type": "object",
+  "required": ["schema_version", "experiment_id", "run_id", "generated_at", "phase", "intervention", "eligibility"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.investigation-experiment.v1"},
+    "experiment_id": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "generated_at": {
+      "type": "string",
+      "description": "UTC timestamp, e.g. 2026-07-29T00:00:00Z (time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())).",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"
+    },
+    "phase": {"enum": ["refused", "planned", "completed", "failed"]},
+    "intervention": {"$ref": "#/$defs/Intervention"},
+    "eligibility": {"$ref": "#/$defs/Eligibility"},
+    "plan": {"$ref": "#/$defs/Plan"},
+    "arms": {"$ref": "#/$defs/Arms"},
+    "analysis": {"$ref": "#/$defs/Analysis"},
+    "observed": {"$ref": "#/$defs/Observed"},
+    "causal_claim": {"$ref": "#/$defs/CausalClaim"},
+    "error": {"$ref": "#/$defs/Error"}
+  },
+  "oneOf": [
+    {
+      "required": ["phase", "eligibility"],
+      "properties": {"phase": {"const": "refused"}, "eligibility": {"$ref": "#/$defs/RefusedEligibility"}}
+    },
+    {
+      "required": ["phase", "eligibility", "plan"],
+      "properties": {"phase": {"const": "planned"}, "eligibility": {"$ref": "#/$defs/EligibleEligibility"}}
+    },
+    {
+      "required": ["phase", "eligibility", "plan", "arms", "analysis", "observed", "causal_claim"],
+      "properties": {"phase": {"const": "completed"}, "eligibility": {"$ref": "#/$defs/EligibleEligibility"}}
+    },
+    {
+      "required": ["phase", "eligibility", "plan", "error"],
+      "properties": {"phase": {"const": "failed"}, "eligibility": {"$ref": "#/$defs/EligibleEligibility"}}
+    }
+  ],
+  "$defs": {
+    "Intervention": {
+      "description": "The literal requested change, in the caller's own words -- always retained verbatim on the document, even a refused one, so a refusal is legible without re-deriving what was asked.",
+      "oneOf": [
+        {
+          "type": "object", "required": ["kind", "span_address_id"], "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "remove_span"},
+            "span_address_id": {
+              "type": "string", "minLength": 1,
+              "description": "An address_id from a clozn.text-span-addresses.v1 document built for this same run_id."
+            }
+          }
+        },
+        {
+          "type": "object", "required": ["kind", "span_address_id"], "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "replace_span_neutral"},
+            "span_address_id": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object", "required": ["kind", "source_id"], "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "omit_source"},
+            "source_id": {
+              "type": "string", "minLength": 1,
+              "description": "A client_source_id as recorded on the run's attached-source messages."
+            }
+          }
+        },
+        {
+          "type": "object", "required": ["kind", "overrides"], "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "sampler_change"},
+            "overrides": {"$ref": "#/$defs/SamplerOverrides"}
+          }
+        },
+        {
+          "type": "object", "required": ["kind", "scale"], "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "adapter_scale"},
+            "scale": {"type": "number", "minimum": 0}
+          }
+        }
+      ]
+    },
+    "SamplerOverrides": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "At least one field is required; the JSON Schema subset this codebase validates against has no minProperties keyword, so an empty-overrides request is rejected by the planner (a typed 'sampler_overrides_empty' refusal), not by this shape check.",
+      "properties": {
+        "temperature": {"type": "number", "minimum": 0},
+        "top_k": {"type": "integer", "minimum": 0},
+        "top_p": {"type": "number", "minimum": 0, "maximum": 1},
+        "seed": {"type": "integer", "minimum": 0},
+        "rep_penalty": {"type": "number", "minimum": 0}
+      }
+    },
+    "Reason": {
+      "type": "object",
+      "required": ["code", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "enum": [
+            "run_has_no_messages",
+            "span_address_not_found_or_drifted",
+            "span_basis_unsupported",
+            "span_unavailable",
+            "span_message_index_unresolvable",
+            "source_not_found",
+            "source_has_no_resolvable_spans",
+            "sampler_overrides_empty",
+            "adapter_rescale_unavailable_in_planner",
+            "unsupported_intervention_kind",
+            "instrument_not_sane",
+            "generation_failed"
+          ]
+        },
+        "message": {"type": "string", "minLength": 1}
+      }
+    },
+    "RefusedEligibility": {
+      "type": "object", "required": ["state", "reason"], "additionalProperties": false,
+      "properties": {"state": {"const": "refused"}, "reason": {"$ref": "#/$defs/Reason"}}
+    },
+    "EligibleEligibility": {
+      "type": "object", "required": ["state"], "additionalProperties": false,
+      "properties": {"state": {"const": "eligible"}}
+    },
+    "Eligibility": {
+      "oneOf": [{"$ref": "#/$defs/RefusedEligibility"}, {"$ref": "#/$defs/EligibleEligibility"}]
+    },
+    "ResolvedSpan": {
+      "type": "object",
+      "required": ["message_index", "start", "end", "basis_sha256_verified"],
+      "additionalProperties": false,
+      "properties": {
+        "message_index": {"type": "integer", "minimum": 0},
+        "start": {"type": "integer", "minimum": 0},
+        "end": {"type": "integer", "minimum": 0},
+        "basis_sha256_verified": {
+          "type": "boolean",
+          "description": "Always true when present: an unverifiable or drifted basis is a planner refusal, never a resolved span with this false."
+        },
+        "span_address_id": {"type": "string", "minLength": 1}
+      }
+    },
+    "ResolvedIntervention": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"enum": ["remove_span", "replace_span_neutral", "omit_source", "sampler_change"]},
+        "spans": {"type": "array", "items": {"$ref": "#/$defs/ResolvedSpan"}},
+        "sampler_overrides": {"$ref": "#/$defs/SamplerOverrides"},
+        "random_control_spans": {"type": "array", "items": {"$ref": "#/$defs/ResolvedSpan"}},
+        "random_control_note": {
+          "type": "string", "minLength": 1,
+          "description": "Present exactly when random_control_spans/random_control_seed is omitted: an honest reason no matched-magnitude control could be constructed for this request in this slice."
+        },
+        "random_control_seed": {"type": "integer", "minimum": 0}
+      }
+    },
+    "Plan": {
+      "type": "object",
+      "required": ["arm_order", "resolved"],
+      "additionalProperties": false,
+      "properties": {
+        "arm_order": {
+          "type": "array",
+          "items": {"enum": ["baseline", "no_op_replay", "treatment", "random_equal_effect_control"]}
+        },
+        "resolved": {"$ref": "#/$defs/ResolvedIntervention"}
+      }
+    },
+    "Arm": {
+      "type": "object",
+      "required": ["reply_sha256", "matches_baseline"],
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {"type": "string", "minLength": 1},
+        "reply_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "matches_baseline": {"type": "boolean"}
+      }
+    },
+    "UnavailableArm": {
+      "type": "object",
+      "required": ["available", "reason"],
+      "additionalProperties": false,
+      "properties": {"available": {"const": false}, "reason": {"type": "string", "minLength": 1}}
+    },
+    "Arms": {
+      "type": "object",
+      "required": ["baseline", "no_op_replay", "treatment"],
+      "additionalProperties": false,
+      "properties": {
+        "baseline": {"$ref": "#/$defs/Arm"},
+        "no_op_replay": {"$ref": "#/$defs/Arm"},
+        "treatment": {"$ref": "#/$defs/Arm"},
+        "random_equal_effect_control": {
+          "oneOf": [{"$ref": "#/$defs/Arm"}, {"$ref": "#/$defs/UnavailableArm"}]
+        }
+      }
+    },
+    "Analysis": {
+      "type": "object",
+      "required": ["instrument_sane", "reasons"],
+      "additionalProperties": false,
+      "properties": {
+        "instrument_sane": {
+          "type": "boolean",
+          "description": "no_op_replay.matches_baseline -- the SAME structural gate clozn.analysis.transplant.py's candidate_self_transplant check establishes, generalized to the replay/generation layer: when false, effect_specific is never computed."
+        },
+        "effect_specific": {
+          "type": "boolean",
+          "description": "Only present when instrument_sane is true AND a random_equal_effect_control arm actually ran. true iff treatment differs from baseline AND the random control does NOT -- transplant.py's own reference_specific rule, generalized. Omitted (never defaulted) when it cannot be honestly computed."
+        },
+        "reasons": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "Observed": {
+      "description": "What measurably changed -- factual, never a causal verb.",
+      "type": "object",
+      "required": ["treatment_reply_differs_from_baseline"],
+      "additionalProperties": false,
+      "properties": {
+        "treatment_reply_differs_from_baseline": {"type": "boolean"},
+        "random_control_reply_differs_from_baseline": {"type": "boolean"},
+        "note": {"type": "string", "minLength": 1}
+      }
+    },
+    "CausalClaim": {
+      "description": "What the observed difference licenses a caller to SAY. licensed=true only when analysis.effect_specific is true; every other case (no difference, instrument insane, uncontrolled) is licensed=false with a statement that says so explicitly -- never silently omitted, never phrased as a finding.",
+      "type": "object",
+      "required": ["licensed", "statement"],
+      "additionalProperties": false,
+      "properties": {
+        "licensed": {"type": "boolean"},
+        "statement": {"type": "string", "minLength": 1}
+      }
+    },
+    "Error": {
+      "type": "object",
+      "required": ["message"],
+      "additionalProperties": false,
+      "properties": {
+        "stage": {"type": "string", "minLength": 1},
+        "message": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}
