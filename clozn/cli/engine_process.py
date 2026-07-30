@@ -23,6 +23,8 @@ import time
 import urllib.error
 import urllib.request
 
+from clozn.cli import process_guard
+
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # repo root (parent of clozn/)
 ENGINE_CORE = os.path.join(REPO, "engine", "core")
 
@@ -379,7 +381,13 @@ def spawn_engine(
                 launch_flags.pop("jlens", None)
     args = _launch_args(exe, model, port, launch_flags, gpu)
     proc = subprocess.Popen(args, env=_env_with_dlls(dll_dirs, gpu),
-                            stdout=logf or subprocess.DEVNULL, stderr=subprocess.STDOUT)
+                            stdout=logf or subprocess.DEVNULL, stderr=subprocess.STDOUT,
+                            **process_guard.subprocess_kwargs())
+    # Parent-death guard (ADR 008 Stage 0): best-effort, never raises, degrades to an unguarded child
+    # on any failure or on a platform (macOS) with no kernel primitive for this. Covers every worker
+    # spawn -- initial launch, a managed-registry preload, and every WorkerHandle.restart() -- because
+    # this is the one call site all of them funnel through.
+    process_guard.guard(proc)
     started = time.monotonic()
     try:
         while time.monotonic() - started < boot_timeout:
