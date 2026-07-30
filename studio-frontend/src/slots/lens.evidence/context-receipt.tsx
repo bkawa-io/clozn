@@ -1,8 +1,8 @@
 import type { SlotPanel } from "../../components/SlotHost";
-import { ContextReceipt } from "../../features/lens/ContextReceipt";
+import { ReceivedContext } from "../../features/lens/ReceivedContext";
 
-/** Feature 06's Studio surface: the compact + detailed context-receipt view, inside Lens's "context"
- * card. See docs/SURFACES.md's "Registered slots" table for the `lens.evidence` contract. */
+/** The primary delivery investigation panel. Exact prompt text remains in the existing ContextReceipt
+ * disclosure, mounted by ReceivedContext only after an explicit user action. */
 export interface LensEvidenceData {
   runId: string;
 }
@@ -10,9 +10,9 @@ export interface LensEvidenceData {
 const panel: SlotPanel<LensEvidenceData> = {
   id: "context-receipt",
   slot: "lens.evidence",
-  title: "Context receipt",
+  title: "What did the model receive?",
   order: 10,
-  Component: ({ data }) => <ContextReceipt runId={data.runId} />,
+  Component: ({ data }) => <ReceivedContext runId={data.runId} />,
 };
 
 export default panel;

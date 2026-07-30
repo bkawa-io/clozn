@@ -189,7 +189,7 @@ in the table below. `SlotHost` owns the mechanism, never the vocabulary.
 
 | slot | host | `data` | notes |
 |---|---|---|---|
-| `lens.evidence` | `src/features/lens/Lens.tsx`, inside the `lens-context` card (below the source list) | `{ runId: string }` | Feature 06's context-receipt panel (`src/slots/lens.evidence/context-receipt.tsx`) is the only current occupant. `data.runId` is the currently-selected run in Lens; a slot panel here is responsible for its own fetch (see `src/data/context-receipt.ts` for the pattern: a dedicated data module per slot feature rather than growing the shared `data/api.ts`). Rendered only once `runId` is non-empty. |
+| `lens.evidence` | `src/features/lens/Lens.tsx`, inside the `lens-context` card (below the source list) | `{ runId: string }` | The "What did the model receive?" panel (`src/slots/lens.evidence/context-receipt.tsx`) is the only current occupant. Its primary view loads metadata-only investigation/span contracts through `src/data/received-context.ts`. The exact rendered prompt remains in the older authorized context-receipt disclosure, mounted only after explicit user action. `data.runId` is the currently-selected run in Lens; a slot panel here owns and aborts its fetches when that id changes. Rendered only once `runId` is non-empty. |
 
 ## Verification
 
