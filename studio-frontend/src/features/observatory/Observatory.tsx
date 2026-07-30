@@ -3,6 +3,7 @@ import { loadRunInspection } from "../../data/api";
 import type { ForkState, ObservatoryData, RuntimeState } from "../../data/types";
 import { alignTokens } from "../compare/alignment";
 import { ConfidencePlot } from "./ConfidencePlot";
+import { ForkOutcomePanel } from "./ForkOutcomePanel";
 import { LayerScope } from "./LayerScope";
 import { TraceScope } from "./TraceScope";
 import { VariantDeltaPlot } from "./VariantDeltaPlot";
@@ -17,7 +18,11 @@ export interface ObservatoryProps {
   runStatus: "idle" | "loading" | "error";
   forkState: ForkState;
   onSelectRun: (runId: string) => void;
-  onFork: (position: number, token: string) => void;
+  /** `tokenId` is the recorded alternative's numeric id, when known -- passing it lets the gateway
+   * attempt the exact execution-fork path directly instead of falling back to matching the piece text
+   * against its own recorded alternatives (see docs/EXECUTION_FORK_CONTRACT.md). Omitted only when the
+   * chosen candidate carried no recorded id, in which case reconstruction is the only honest path. */
+  onFork: (position: number, token: string, tokenId?: number) => void;
   initialState?: ScopeUrlState;
   onStateChange?: (state: ScopeSelectionState) => void;
 }
@@ -76,6 +81,7 @@ function ObservatoryWorkspace({
   const [selectedToken, setSelectedToken] = useState(() => clampToken(data, initialState?.token));
   const [view, setView] = useState<ScopeView>(() => initialView(data, initialState?.view));
   const [forkToken, setForkToken] = useState("");
+  const [forkTokenId, setForkTokenId] = useState<number | undefined>(undefined);
   const [variantReferenceId, setVariantReferenceId] = useState(() => {
     const requested = initialState?.reference;
     if (requested === data.id) return "";
@@ -151,7 +157,10 @@ function ObservatoryWorkspace({
   }, [data.id, variantReferenceId]);
 
   useEffect(() => {
-    setForkToken(candidates.find((candidate) => candidate.token !== token?.text)?.token ?? "");
+    const initial = candidates.find((candidate) => candidate.token !== token?.text);
+    setForkToken(initial?.token ?? "");
+    setForkTokenId(initial?.tokenId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- candidates is derived from selectedToken/data.id
   }, [selectedToken, data.id]);
 
   function handleTokenKeys(event: KeyboardEvent<HTMLButtonElement>, index: number) {
@@ -370,7 +379,10 @@ function ObservatoryWorkspace({
                   className={`${index === 0 ? "candidate is-leading" : "candidate"} ${forkToken === candidate.token ? "is-fork-choice" : ""}`}
                   disabled={index === 0 || data.mode !== "run"}
                   aria-pressed={index === 0 ? undefined : forkToken === candidate.token}
-                  onClick={() => setForkToken(candidate.token)}
+                  onClick={() => {
+                    setForkToken(candidate.token);
+                    setForkTokenId(candidate.tokenId);
+                  }}
                   key={`${candidate.token}-${index}`}
                 >
                   <span>{candidate.token || "∅"}</span>
@@ -388,7 +400,7 @@ function ObservatoryWorkspace({
                 <button
                   type="button"
                   disabled={!forkToken || forkState.status === "loading"}
-                  onClick={() => onFork(selectedToken, forkToken)}
+                  onClick={() => onFork(selectedToken, forkToken, forkTokenId)}
                 >
                   {forkState.status === "loading" ? "FORKING" : "FORK RUN"}
                 </button>
@@ -397,13 +409,19 @@ function ObservatoryWorkspace({
             {forkState.status === "error" && (
               <p className="fork-result is-error" role="status">{forkState.message}</p>
             )}
+            {forkState.status === "unavailable" && (
+              <ForkOutcomePanel outcome={forkState.outcome} />
+            )}
             {forkState.status === "success" && (
-              <div className="fork-result" role="status">
-                <span>CHILD {forkState.childId}</span>
-                <a href={`#/compare/${encodeURIComponent(forkState.parentId)}/${encodeURIComponent(forkState.childId)}`}>
-                  COMPARE PARENT / CHILD
-                </a>
-              </div>
+              <>
+                <ForkOutcomePanel outcome={forkState.outcome} note={forkState.note} />
+                <div className="fork-result" role="status">
+                  <span>CHILD {forkState.childId}</span>
+                  <a href={`#/compare/${encodeURIComponent(forkState.parentId)}/${encodeURIComponent(forkState.childId)}`}>
+                    COMPARE PARENT / CHILD
+                  </a>
+                </div>
+              </>
             )}
           </section>
 

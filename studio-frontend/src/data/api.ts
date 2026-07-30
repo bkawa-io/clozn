@@ -2,6 +2,12 @@ import type {
   CandidateReading,
   ConceptCandidate,
   ContextCoverage,
+  ForkExactness,
+  ForkIntervention,
+  ForkOutcome,
+  ForkOutcomeKind,
+  ForkReason,
+  ForkUnchangedControl,
   InfluenceAbsence,
   InfluenceErrorCode,
   InfluenceEvidenceState,
@@ -1009,10 +1015,12 @@ function candidateReadings(piece: string, confidence: number, rawAlternatives: u
   const seen = new Set([chosen.token]);
   const alternatives = records(rawAlternatives).map((alternative) => {
     const score = Number(alternative.prob);
+    const tokenId = Number(alternative.token_id ?? alternative.id);
     return {
       token: String(alternative.piece ?? alternative.text ?? "∅"),
       score: Number.isFinite(score) ? score : 0,
       delta: (Number.isFinite(score) ? score : 0) - confidence,
+      tokenId: Number.isFinite(tokenId) ? tokenId : undefined,
     };
   }).filter((alternative) => {
     if (!alternative.token || seen.has(alternative.token)) return false;
@@ -1181,15 +1189,139 @@ export async function loadRunInspection(runId: string, signal?: AbortSignal): Pr
   };
 }
 
+const FORK_OUTCOME_KINDS: readonly ForkOutcomeKind[] =
+  ["exact_execution_fork", "reconstructed_replay", "unavailable"];
+
+function forkReasons(value: unknown): ForkReason[] {
+  return records(value).flatMap((entry) => {
+    if (typeof entry.code !== "string" || !entry.code) return [];
+    return [{ code: entry.code, message: typeof entry.message === "string" ? entry.message : "" }];
+  });
+}
+
+function forkExactness(value: unknown): ForkExactness | undefined {
+  const item = record(value);
+  if (!Object.keys(item).length) return undefined;
+  const truncateTo = Number(item.truncate_to);
+  return {
+    regime: typeof item.regime === "string" ? item.regime : undefined,
+    source: typeof item.source === "string" ? item.source : undefined,
+    proofStatus: typeof item.proof_status === "string" ? item.proof_status : undefined,
+    truncateTo: Number.isFinite(truncateTo) ? truncateTo : undefined,
+  };
+}
+
+function forkUnchangedControl(value: unknown): ForkUnchangedControl | undefined {
+  const item = record(value);
+  if (typeof item.status !== "string" || !item.status) return undefined;
+  const result = record(item.result);
+  return {
+    required: typeof item.required === "boolean" ? item.required : undefined,
+    status: item.status,
+    result: Object.keys(result).length ? {
+      status: typeof result.status === "string" ? result.status : undefined,
+      exactMatch: typeof result.exact_match === "boolean" ? result.exact_match : undefined,
+      note: typeof result.note === "string" ? result.note : undefined,
+    } : undefined,
+  };
+}
+
+/** The intervention the worker actually confirmed, read from the child's own immutable
+ * `execution_fork` receipt (never re-derived from the request the UI sent -- see ForkIntervention's
+ * doc comment in data/types.ts). Only present on a completed exact fork. */
+function forkIntervention(body: JsonRecord): ForkIntervention | undefined {
+  const receipt = record(body.execution_fork);
+  const executionChange = record(record(receipt.request).execution_change);
+  const interventionReceipt = record(record(receipt.execution).intervention);
+  const type = executionChange.type;
+  if (typeof type !== "string" || !type) return undefined;
+  const tokenId = Number(executionChange.token_id);
+  return {
+    type,
+    tokenId: Number.isFinite(tokenId) ? tokenId : undefined,
+    tokenPiece: typeof executionChange.token_piece === "string" ? executionChange.token_piece : undefined,
+    restoreMode: typeof interventionReceipt.restore_mode === "string"
+      ? interventionReceipt.restore_mode
+      : undefined,
+  };
+}
+
+/** Turn the compat_fork response body into ForkOutcome's closed union -- the ONLY place this parsing
+ * happens, so every caller sees the same three shapes instead of re-deriving them from raw JSON. A
+ * missing/unrecognized `outcome` value degrades to `unavailable` with a synthetic reason rather than
+ * fabricating exactness the response never claimed. */
+function forkOutcome(body: JsonRecord): ForkOutcome {
+  const kind = FORK_OUTCOME_KINDS.includes(body.outcome as ForkOutcomeKind)
+    ? (body.outcome as ForkOutcomeKind)
+    : "unavailable";
+  const reasons = forkReasons(body.reasons);
+  switch (kind) {
+    case "exact_execution_fork":
+      return {
+        kind,
+        reasons,
+        exactness: forkExactness(body.exactness) ?? {},
+        unchangedControl: forkUnchangedControl(body.unchanged_control),
+        intervention: forkIntervention(body),
+        executionId: typeof body.execution_fork_execution_id === "string"
+          ? body.execution_fork_execution_id
+          : undefined,
+      };
+    case "reconstructed_replay":
+      return {
+        kind,
+        reasons,
+        exactness: forkExactness(body.exactness) ?? {},
+        unavoidableDifferences: Array.isArray(body.unavoidable_differences)
+          ? body.unavoidable_differences.map(String)
+          : [],
+        retokenized: body.retokenized !== false,
+      };
+    case "unavailable":
+      return {
+        kind,
+        reasons: reasons.length ? reasons : [{
+          code: "outcome_missing",
+          message: "the server response did not include a recognized fork outcome",
+        }],
+        exactness: forkExactness(body.exactness),
+        unchangedControl: forkUnchangedControl(body.unchanged_control),
+        executionId: typeof body.execution_fork_execution_id === "string"
+          ? body.execution_fork_execution_id
+          : undefined,
+      };
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
+}
+
+export interface ForkResult {
+  outcome: ForkOutcome;
+  /** Present exactly when a child run was created -- exact_execution_fork or reconstructed_replay.
+   * Absent for `unavailable`: no child, nothing to navigate to or compare against. */
+  child?: { id: string; parentId: string; note?: string };
+}
+
+/** POST /runs/<id>/fork -- FORK-02's compatibility wrapper. Tries the exact execution-fork path first
+ * whenever `tokenId` names a recorded alternative's numeric id (the only thing the exact wire can force
+ * directly); the gateway itself still degrades to the text splice, or reports `unavailable`, per
+ * clozn.replay.fork.compat_fork -- this function never chooses a path itself, only decodes the one the
+ * gateway ran. A 422 `unavailable` response is NOT a thrown error: it is a normal, typed outcome with no
+ * child, distinguished from a genuine request failure (400/500/503/network) which still throws. */
 export async function createFork(
   runId: string,
   position: number,
   token: string,
-): Promise<{ id: string; parentId: string; note?: string }> {
+  tokenId?: number,
+): Promise<ForkResult> {
   const response = await fetch(`/runs/${encodeURIComponent(runId)}/fork`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ position, token }),
+    body: JSON.stringify(
+      tokenId == null ? { position, token } : { position, token, token_id: tokenId },
+    ),
   });
   let body: JsonRecord = {};
   try {
@@ -1197,14 +1329,22 @@ export async function createFork(
   } catch {
     // The status below remains the authoritative failure signal.
   }
-  if (!response.ok || body.error) {
+  const isTypedUnavailable = response.status === 422 && body.outcome === "unavailable";
+  if (!response.ok && !isTypedUnavailable) {
     throw new Error(String(body.error || `Fork failed (${response.status})`));
+  }
+  const outcome = forkOutcome(body);
+  if (outcome.kind === "unavailable") {
+    return { outcome };
   }
   const id = String(body.id || "");
   if (!id) throw new Error("Fork response has no child run id");
   return {
-    id,
-    parentId: String(body.parent_run_id || runId),
-    note: typeof body.note === "string" ? body.note : undefined,
+    outcome,
+    child: {
+      id,
+      parentId: String(body.parent_run_id || runId),
+      note: typeof body.note === "string" ? body.note : undefined,
+    },
   };
 }

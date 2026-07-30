@@ -113,5 +113,12 @@ export function resolveRoute(
   return panels.length ? { panel: panels[0], params: {} } : null;
 }
 
-const modules = import.meta.glob("./*.tsx", { eager: true });
+// `eager: true` means Vite statically imports every match INTO the production bundle at build time --
+// unlike the runtime `validate()` above, a negative glob is the only thing that can stop a co-located
+// `*.test.tsx` file (e.g. scope.test.tsx next to scope.tsx) from being bundled and executed alongside
+// its panel: by the time `validate()` would reject it as "not shaped like a panel", vitest/testing-
+// library have already been pulled into the shipped app. Discovered by FORK-02's ScopePanel test:
+// without this exclusion, `vite build` silently doubled the bundle and emitted a stray test-tooling
+// chunk (magic-string) that no product code ever imports.
+const modules = import.meta.glob(["./*.tsx", "!./*.test.tsx"], { eager: true });
 export const panelRegistry: PanelRegistry = buildRegistry(modules);

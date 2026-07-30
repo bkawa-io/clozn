@@ -2254,6 +2254,123 @@ input[type="range"]::-webkit-slider-thumb {
   color: var(--danger);
 }
 
+.fork-outcome {
+  display: grid;
+  gap: 8px;
+  margin-top: 9px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-raised) 34%, transparent);
+}
+
+.fork-outcome header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.fork-outcome-badge {
+  font-family: var(--font-machine);
+  font-size: 8px;
+  font-weight: 550;
+  letter-spacing: .08em;
+}
+
+.fork-outcome.is-fork-exact .fork-outcome-badge {
+  color: color-mix(in srgb, var(--signal-mint) 62%, var(--ink));
+}
+
+.fork-outcome.is-fork-reconstructed .fork-outcome-badge {
+  color: color-mix(in srgb, var(--signal-peach) 68%, var(--ink));
+}
+
+.fork-outcome.is-fork-unavailable .fork-outcome-badge {
+  color: var(--danger);
+}
+
+.fork-outcome-flag {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6.5px;
+  letter-spacing: .07em;
+}
+
+.fork-outcome-summary {
+  margin: 0;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  line-height: 1.5;
+}
+
+.fork-outcome-note {
+  margin: 0;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6.5px;
+  line-height: 1.5;
+}
+
+.fork-outcome-facts {
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.fork-outcome-differences {
+  display: grid;
+  gap: 5px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.fork-outcome-differences > span {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+.fork-outcome-differences ul {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding-left: 12px;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 6.5px;
+}
+
+.fork-outcome-reasons {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--line);
+  list-style: none;
+}
+
+.fork-outcome-reasons li {
+  display: grid;
+  gap: 2px;
+}
+
+.fork-outcome-reasons b {
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 6.5px;
+  font-weight: 550;
+  letter-spacing: .06em;
+}
+
+.fork-outcome-reasons span {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6.5px;
+  line-height: 1.4;
+}
+
 .token-detail > strong {
   display: block;
   margin-bottom: 12px;
