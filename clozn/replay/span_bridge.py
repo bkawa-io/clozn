@@ -20,10 +20,23 @@ at this same logical spot moved" would need the relation_key reversed, which is 
 reversible from the id alone. Both cases are equally disqualifying, so a caller a re-run
 `clozn text-span-addresses RUN_ID` (or the investigation surface) gets a fresh id either way.
 
-Only spans anchored to an ordinary chat message (`native_ref.collection` in `{"run.messages",
-"context_receipt.delivered"}`, WITHOUT an opaque `segment_id`, i.e. the manifest's own `f"message-{index}"`
-id fallback) resolve to a `message_index` this module can hand to `excise_spans()`. Two kinds are refused
-by construction, honestly, never guessed:
+Spans anchored to an ordinary chat message (`native_ref.collection` in `{"run.messages",
+"context_receipt.delivered"}`) resolve to a `message_index` this module can hand to `excise_spans()`,
+via either of the manifest's two native-id shapes: the positional `f"message-{index}"` fallback (parsed
+directly out of the id, no lookup needed -- pre-schema/legacy runs, which never stamp a `segment_id`), or
+an opaque `segment_id` -- looked up against a `segment_id -> (message_index, content_hash)` index this
+module builds by READING the run's OWN context receipt (`_segment_id_index()`, via
+`clozn.runs.context_receipt.read_receipt`; the index reuses the receipt's own `original_order` field,
+which is a message-list position recorded once at delivery time -- see that module's "segment identity"
+section). A `segment_id` lookup is a lookup, not a proof: before trusting it, `_resolved_span_from_address()`
+re-hashes the message CURRENTLY sitting at the resolved index (`clozn.runs.context_receipt._content_hash`,
+reused rather than reimplemented -- two content-hash implementations that could drift apart would defeat
+the purpose) and compares it against that segment's own recorded `content_hash`, refusing rather than
+silently mis-mapping when the two disagree, or when the receipt records no usable hash to check against in
+the first place. This makes the segment_id path self-verifying: a stale or corrupted `original_order`
+almost always points at content with a different hash, and gets caught here rather than producing a
+confident, wrong ablation. Two kinds are refused by construction, honestly, never guessed, regardless of
+native-id shape:
   * `rendered_prompt_segment` (basis `rendered_prompt`, i.e. `final_prompt`) -- `replay()`'s only surface
     is a MESSAGE list (`chat(messages, ...)`), never a raw-prompt override; that is fork.py's territory,
     per replay.py's own module docstring. Splicing here would require inventing a capability replay does
@@ -31,10 +44,6 @@ by construction, honestly, never guessed:
   * `answer_span` (basis `scored_answer`) -- a piece of the model's OWN reply, not prompt content. There
     is nothing to ablate out of a PROMPT here; that is a different kind of question this slice does not
     answer.
-  * A `segment_id`-anchored `delivered_message`/`attached_source_span` (a context receipt that recorded an
-    opaque per-segment id rather than falling back to the positional `message-{index}` form) -- resolvable
-    in principle, but this slice's bridge does not carry a segment_id -> message_index index. Refused as
-    `span_message_index_unresolvable`, not silently mis-mapped to the wrong message.
 
 `excise_spans()` is the OTHER half: given one or more resolved spans, build a NEW messages list with each
 span's [start, end) removed or replaced, right-to-left within a message so an earlier span's offsets in
@@ -71,12 +80,58 @@ def _reason(code: str, message: str) -> dict:
 _ID_MESSAGE_RE_PREFIX = "message-"
 
 
-def _parse_message_index(native_ref: dict) -> "int | None":
-    """`native_ref["id"]` -> a message-list index, ONLY for the manifest's own positional fallback shape
-    (`f"message-{index}"`, never present alongside a `segment_id` -- see this module's docstring). None
-    for anything else, including a malformed "message-" id (never guessed)."""
-    if "segment_id" in native_ref:
-        return None
+def _segment_id_index(run: dict) -> dict:
+    """`segment_id -> (message_index, content_hash)` for every delivered segment on a NEW-shape context
+    receipt (`clozn.runs.context_receipt.read_receipt` shape == "new"; legacy/absent/unrecognized shapes
+    return `{}` -- those never stamp a `segment_id` in the first place, see
+    `clozn.runs.text_span_addresses._context_projection`).
+
+    `message_index` reuses the receipt's own `original_order` (falling back to the segment's position
+    within `delivered` when `original_order` is missing/invalid), MIRRORING
+    `clozn.runs.text_span_addresses._context_projection`'s own identical fallback -- so this index agrees
+    with the message_index already baked into each address's canonical offsets, rather than computing a
+    second, independently-derived mapping that could silently drift from it.
+
+    `content_hash` is the segment's own recorded hash (`clozn.runs.context_receipt._content_hash`) -- kept
+    alongside so `_resolved_span_from_address` can verify the message actually sitting at that index still
+    matches before trusting this lookup. A lookup alone is not a proof (see this module's docstring)."""
+    from clozn.runs.context_receipt import read_receipt
+    view = read_receipt(run)
+    if view["shape"] != "new":
+        return {}
+    delivered = view["receipt"].get("delivered")
+    if not isinstance(delivered, list):
+        return {}
+    index: dict = {}
+    for fallback_index, segment in enumerate(delivered):
+        if not isinstance(segment, dict):
+            continue
+        segment_id = segment.get("segment_id")
+        if not isinstance(segment_id, str) or not segment_id:
+            continue
+        message_index = segment.get("original_order")
+        if not isinstance(message_index, int) or isinstance(message_index, bool) or message_index < 0:
+            message_index = fallback_index
+        content_hash = segment.get("content_hash")
+        index[segment_id] = (
+            message_index,
+            content_hash if isinstance(content_hash, str) and content_hash else None,
+        )
+    return index
+
+
+def _parse_message_index(native_ref: dict, segment_index: dict) -> "int | None":
+    """`native_ref["id"]` -> a message-list index. Two native-id shapes: the manifest's own positional
+    fallback (`f"message-{index}"`, parsed directly, never present alongside a `segment_id`), or an opaque
+    `segment_id`, looked up in `segment_index` (built by `_segment_id_index()` from the run's OWN context
+    receipt -- see that function's and this module's docstrings). None when neither resolves, including a
+    malformed "message-" id or a `segment_id` this run's receipt does not (or no longer) recognize --
+    never guessed. Note this only resolves the INDEX; `_resolved_span_from_address` still verifies the
+    segment_id path's content_hash before trusting it -- this function alone is not the safety property."""
+    segment_id = native_ref.get("segment_id")
+    if isinstance(segment_id, str) and segment_id:
+        entry = segment_index.get(segment_id)
+        return entry[0] if entry is not None else None
     raw_id = native_ref.get("id")
     if not isinstance(raw_id, str) or not raw_id.startswith(_ID_MESSAGE_RE_PREFIX):
         return None
@@ -86,9 +141,11 @@ def _parse_message_index(native_ref: dict) -> "int | None":
     return int(tail)
 
 
-def _resolved_span_from_address(run: dict, address: dict) -> dict:
+def _resolved_span_from_address(run: dict, address: dict, segment_index: dict) -> dict:
     """One already-matched, already-content-fresh address -> `{"ok": True, "span": ResolvedSpan}` or
-    `{"ok": False, "reason": Reason}`. Never raises; every failure mode is a typed reason."""
+    `{"ok": False, "reason": Reason}`. Never raises; every failure mode is a typed reason. `segment_index`
+    is `_segment_id_index(run)`, built once by the caller and threaded through rather than rebuilt per
+    address."""
     kind = address.get("kind")
     if kind not in ("delivered_message", "attached_source_span"):
         return {"ok": False, "reason": _reason(
@@ -103,7 +160,7 @@ def _resolved_span_from_address(run: dict, address: dict) -> dict:
             "span_basis_unsupported",
             f"native_ref.collection {native_ref.get('collection')!r} is not an ordinary chat message")}
 
-    message_index = _parse_message_index(native_ref)
+    message_index = _parse_message_index(native_ref, segment_index)
     if message_index is None:
         return {"ok": False, "reason": _reason(
             "span_message_index_unresolvable",
@@ -134,6 +191,30 @@ def _resolved_span_from_address(run: dict, address: dict) -> dict:
     if end > len(content):
         return {"ok": False, "reason": _reason(
             "span_unavailable", "the resolved span's offsets fall outside the current message content")}
+
+    # segment_id self-verification: the segment_id -> message_index mapping above is a LOOKUP against the
+    # run's own receipt, not a proof -- see _segment_id_index's docstring. Before trusting it, re-hash the
+    # message CURRENTLY at message_index (clozn.runs.context_receipt._content_hash, reused rather than
+    # reimplemented) and require it to match the segment's own recorded content_hash. A missing hash to
+    # check against is treated the same as "unresolvable" (never silently trusted); an observed mismatch
+    # is treated as drift, same vocabulary the full-hash check just below uses for the same failure mode.
+    # This is what makes a stale/corrupted original_order fail loud instead of splicing the wrong message.
+    segment_id = native_ref.get("segment_id")
+    if isinstance(segment_id, str) and segment_id:
+        from clozn.runs.context_receipt import _content_hash
+        entry = segment_index.get(segment_id)
+        recorded_content_hash = entry[1] if entry is not None else None
+        if not recorded_content_hash:
+            return {"ok": False, "reason": _reason(
+                "span_message_index_unresolvable",
+                "this segment's receipt entry carries no recorded content_hash this bridge can verify "
+                "the segment_id -> message_index lookup against, so it cannot be trusted")}
+        if _content_hash(content) != recorded_content_hash:
+            return {"ok": False, "reason": _reason(
+                "span_address_not_found_or_drifted",
+                "the message content now sitting at this segment's recorded message-list position no "
+                "longer matches the segment_id's recorded content_hash -- refusing rather than risk "
+                "ablating the wrong message")}
 
     # Belt-and-suspenders re-verification: the freshly-rebuilt document already recomputed this hash from
     # CURRENT content (see module docstring), so this should always agree -- but this module never trusts
@@ -171,9 +252,10 @@ def resolve_span_address(run: dict, address_id: str) -> dict:
     except Exception as exc:  # noqa: BLE001 -- a malformed run must refuse, never crash the caller
         return {"ok": False, "reason": _reason(
             "span_unavailable", f"could not rebuild this run's span addresses: {type(exc).__name__}: {exc}")}
+    segment_index = _segment_id_index(run)
     for address in addresses:
         if isinstance(address, dict) and address.get("address_id") == address_id:
-            return _resolved_span_from_address(run, address)
+            return _resolved_span_from_address(run, address, segment_index)
     return {"ok": False, "reason": _reason(
         "span_address_not_found_or_drifted",
         f"no address {address_id!r} exists in this run's current span-address projection -- either it "
@@ -184,9 +266,11 @@ def resolve_source_spans(run: dict, source_id: str) -> dict:
     """Every resolvable span attached to `source_id` (a `client_source_id`) -> `{"ok": True, "spans":
     [ResolvedSpan, ...]}`, or `{"ok": False, "reason": Reason}` when the source has no addresses at all
     (`source_not_found`) or none of its addresses could be resolved to a message-anchored span
-    (`source_has_no_resolvable_spans`, e.g. every occurrence is segment-id-anchored). A source with SOME
-    resolvable and some unresolvable occurrences still succeeds with the resolvable subset -- "omit this
-    source" ablates what this bridge CAN reach, never silently claims to have removed what it could not."""
+    (`source_has_no_resolvable_spans`, e.g. every occurrence is rendered_prompt/answer_span-anchored, or a
+    segment_id occurrence whose content_hash no longer matches -- see `_resolved_span_from_address`). A
+    source with SOME resolvable and some unresolvable occurrences still succeeds with the resolvable
+    subset -- "omit this source" ablates what this bridge CAN reach, never silently claims to have removed
+    what it could not."""
     try:
         addresses = _fresh_addresses(run)
     except Exception as exc:  # noqa: BLE001
@@ -200,9 +284,10 @@ def resolve_source_spans(run: dict, source_id: str) -> dict:
     if not matching:
         return {"ok": False, "reason": _reason(
             "source_not_found", f"no attached source with client_source_id {source_id!r} was found on this run")}
+    segment_index = _segment_id_index(run)
     spans = []
     for address in matching:
-        resolved = _resolved_span_from_address(run, address)
+        resolved = _resolved_span_from_address(run, address, segment_index)
         if resolved.get("ok"):
             spans.append(resolved["span"])
     if not spans:
