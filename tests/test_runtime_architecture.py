@@ -5,6 +5,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -232,12 +233,17 @@ class RuntimeBoundaryTests(unittest.TestCase):
         self.assertEqual(dirs, [build_root])   # only the exe's own dir -- the empty `bin` never qualifies
 
     def test_env_with_dlls_prepends_the_dll_dir_without_mutating_os_environ(self):
+        """Whichever platform actually runs this (Windows here; Linux on ci.yml's ubuntu-latest `python`
+        job), _env_with_dlls must prepend the dll dir onto THAT platform's real shared-library search
+        var and never touch the parent process's os.environ. The var itself is platform-specific --
+        see test_env_with_dlls_platform.py for the full win32/linux/darwin branch matrix, simulated."""
         before = dict(os.environ)
         fake_dir = os.path.join("Z:", "not-a-real-path", "build-gpu", "bin")
 
         env = engine_process._env_with_dlls([fake_dir], gpu=False)
 
-        self.assertTrue(env["PATH"].startswith(fake_dir + os.pathsep))
+        search_var = {"win32": "PATH", "darwin": "DYLD_LIBRARY_PATH"}.get(sys.platform, "LD_LIBRARY_PATH")
+        self.assertTrue(env[search_var].startswith(fake_dir + os.pathsep))
         self.assertEqual(dict(os.environ), before, "must build a child env dict, never mutate os.environ")
 
     @unittest.skipUnless(os.name == "nt", "STATUS_DLL_NOT_FOUND / PATH-based DLL search is Windows-specific")

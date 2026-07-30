@@ -1,0 +1,6 @@
+# Shell scripts must always check out with LF line endings. A CRLF shebang line
+# (`#!/usr/bin/env bash` followed by `\r\n`) fails to execute on Linux/macOS -- the kernel looks up an
+# interpreter literally named `bash\r` and reports "No such file or directory" or "bad interpreter".
+# Windows dev boxes commonly run with core.autocrlf=true, which would otherwise convert these to CRLF on
+# checkout; this forces LF regardless of that per-user setting, for every clone.
+*.sh text eol=lf
