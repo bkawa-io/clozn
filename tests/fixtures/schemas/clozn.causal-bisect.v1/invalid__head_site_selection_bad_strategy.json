@@ -1,0 +1,21 @@
+{
+  "schema_version": "clozn.causal-bisect.v1",
+  "generated_at": "2026-07-28T00:00:00Z",
+  "reference_model": {"label": "reference"},
+  "candidate_model": {"label": "candidate"},
+  "pair_compatibility": {"schema_version": "clozn.pair-compatibility.v1", "verdict": {}},
+  "target_token_id": 5,
+  "readout_position": 2,
+  "write_positions": [2],
+  "continuation": {"n_prompt": 2, "n_cont": 1},
+  "primary_metric": "reference_token_logprob_recovery",
+  "head_site_selection": {"strategy": "bogus", "cap_field": "max_head_sites",
+                          "depth_bands": ["early", "mid", "late"]},
+  "search": {"kinds_requested": ["head"], "composable_kinds_searched": ["head"],
+             "window_capable_kinds": ["ffn", "head"], "hooks_unavailable": [],
+             "screening": {"requested": false, "used": false}},
+  "coverage": {"window_size": 4, "layer_range_searched": {}, "bounds_applied": ["x"]},
+  "window_tests": [],
+  "single_site_tests": [],
+  "verdict": {"label": "no_restoration", "reasons": ["x"]}
+}

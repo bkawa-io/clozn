@@ -38,17 +38,33 @@ heads at the SAME layer in one forward is mechanically the same kind of non-coll
 applied write as writing several DIFFERENT layers -- so a head window may legitimately span multiple
 layers, multiple heads within a layer, or both. `_WINDOW_CAPABLE_HOOKS` now names `("ffn", "head")`.
 
-WHAT THIS SLICE DELIBERATELY DOES NOT DO: MIX `ffn` AND `head` SITES IN ONE JOINT WINDOW WRITE. The engine
-mechanically supports it (hook_vocabulary, measured: an `ffn_write(L1) + head_write(L2)` combination in
-ONE forward produced a logprob distinct from both single-surface arms, with both `*_applied` flags true),
-so a mixed window is not mechanically wrong. It is left out here because `window_test.hook` (this schema)
-is a single string naming ONE kind for the whole window -- representing a genuinely mixed window would
-mean replacing `layers`/`heads` with a `sites: [{hook, layer, head?}, ...]` list and widening `hook` to
-something like `"mixed"`, a bigger schema commitment (this schema's fields are additive-only once
-released) better made deliberately in its own slice than as a side effect of this one. `ffn` and `head`
-each get their OWN independent tile-and-bisect search in this slice, both populating the SAME
-`window_tests` array (discriminated by `hook`) -- which already closes the stated gap ("distributed
-across attention" is now measurable) without that added representational cost. Disclosed, not hidden.
+MIXED `ffn`+`head` JOINT WINDOWS (GAP 2, closed)
+---------------------------------------------------
+The engine mechanically supports writing `ffn_write` and `head_write` TOGETHER in one forward (hook_
+vocabulary, measured: an `ffn_write(L1) + head_write(L2)` combination produced a logprob distinct from
+both single-surface arms, with both `*_applied` flags true) -- a mixed window was never mechanically
+wrong, only unrepresentable: `window_test.hook` named ONE kind for the whole window, so a window spanning
+both had nowhere honest to report itself. That is fixed additively (this schema's fields are additive-only
+once released): `window_test.hook` now also accepts `"mixed"`, and a NEW optional `window_test.sites`
+field (`[{hook, layer, head?}, ...]`) is the authoritative per-site record for a mixed window -- `layers`
+still names every layer touched (deduplicated, sorted) for cheap filtering, but `heads` (positionally
+parallel to `layers` in a PURE head window) is never populated on a mixed entry, since that pairing would
+misrepresent which sites are ffn (no head) vs head.
+
+Mixed windows are EXPLICIT-ONLY, mirroring `residual`/`head`'s own no-implicit-sweep discipline: `run_bisect`'s
+new `mixed_windows` parameter is a caller-supplied list of windows (each a list of >=2 sites, at least one
+`ffn` and at least one `head`) tested EXACTLY as given -- never an automatic combination of whatever the
+independent `ffn`/`head` searches happened to find. `ffn` and `head` still each get their OWN independent
+tile-and-bisect search first (unchanged); `mixed_windows` runs afterward, in the SAME candidate residency,
+reusing the vectors already captured for those two searches (zero extra capture calls) -- so it is only
+available when `search_kinds` includes BOTH `ffn` and `head` AND both produced usable captured vectors;
+otherwise every requested mixed window is recorded `hooks_unavailable` with the specific reason, never
+silently dropped. A mixed window is bisected exactly like a pure one (`_bisect_mixed_window`, generalizing
+`_bisect_window` to a heterogeneous `[(hook, site), ...]` unit list): a bisection leaf that happens to
+reduce to a single `ffn` or `head` site flows into the SAME existing single-site confirmation lists
+(`leaf_layers`/`leaf_head_sites`) -- no new confirmation path was needed. Residual is UNCHANGED and
+UNREACHABLE from this parameter (`mixed_windows` site validation refuses `hook="residual"` outright): the
+central design fact above (residual overwrites, never composes) applies exactly as before.
 
 COMBINATORICS: `head_layers x head_indices` IS BOUNDED, NEVER AN IMPLICIT SWEEP
 ------------------------------------------------------------------------------------
@@ -63,13 +79,33 @@ it is EXACTLY one site (`len(head_layers) == len(head_indices) == 1`), no window
 it is tested directly via `transplant.run_site()`, `source="explicit_head"`, mirroring `residual`'s own
 always-single-site path.
 
-An OPTIONAL `max_head_sites` caps the grid further: when the usable grid exceeds it, this module keeps the
-top `max_head_sites` sites by OBSERVATIONAL divergence -- the L2 distance between the reference's and the
-candidate's OWN captured vectors at that site, computed from the two capture forwards already made (zero
-extra engine calls) -- and drops the rest. The exact grid size, the cap (if any), and how many sites
-survived are ALWAYS recorded in `coverage.bounds_applied` (and `coverage.max_head_sites` when the cap was
-given) -- a truncated search that reads as exhaustive is exactly the failure mode this module exists to
-avoid (see the "no silent caps" discipline already established for `max_windows`, generalized here).
+An OPTIONAL `max_head_sites` caps the grid further. `head_site_selection` (GAP 1, closed) names WHICH
+narrowing strategy is used, is ALWAYS recorded in the returned document (like `single_site_seed_derivation`
+-- present whenever `head` was requested, regardless of whether the cap actually triggered this run), and
+is itself selectable:
+
+  * `"stratified_divergence"` (the DEFAULT). The n=30 population study (docs/research/
+    QUANT_REGRESSION_POPULATION.md's Limits section) measured that a GLOBAL top-N-by-divergence selection
+    concentrated ALL 524 tested head sites in the late third of the network, across all 30 disagreements --
+    not because early/mid attention carries no signal, but because observational divergence empirically
+    ranks late sites first, so a flat top-N never reached earlier layers even when the caller's own
+    `head_layers` covered them. This strategy partitions the writable range into three DEPTH BANDS (early/
+    mid/late thirds -- `_depth_band`, the SAME banding convention that research doc's own depth-gradient
+    table uses) and allocates the cap ACROSS every band the candidate grid actually populates (a fair-share
+    round robin -- `_stratified_head_selection`), keeping the top sites BY divergence WITHIN each band. A
+    band the caller's own `head_layers` never reaches still cannot be manufactured (this fixes a coverage
+    ARTIFACT of the selection rule, not a genuine absence in the input), but a band that IS present in the
+    grid can no longer be silently starved by another band's stronger divergence.
+  * `"divergence"` -- the ORIGINAL, un-stratified, global top-N-by-observational-divergence selection (the
+    L2 distance between the reference's and the candidate's OWN captured vectors at each site, computed
+    from the two capture forwards already made -- zero extra engine calls either way). Kept selectable,
+    never removed, so a caller can reproduce a historical run's exact selection.
+
+Whichever strategy ran, the exact grid size, the cap (if any), the strategy name, and (for
+`stratified_divergence`) the per-band candidate/kept counts are ALWAYS recorded in `coverage.bounds_applied`
+(and `coverage.max_head_sites` when the cap was given) -- a truncated search that reads as exhaustive is
+exactly the failure mode this module exists to avoid (see the "no silent caps" discipline already
+established for `max_windows`, generalized here).
 
 THE SEARCH
 ------------
@@ -198,6 +234,14 @@ _SINGLE_SITE_SEED_DERIVATION = {
     "site_key_fields": ["source", "hook", "layer", "head_if_present"],
 }
 
+# GAP 1 (docs/research/QUANT_REGRESSION_POPULATION.md's Limits section): the depth-banding convention that
+# research doc's own depth-gradient table uses (early/mid/late thirds of the writable range), reused here
+# so `max_head_sites` narrowing can no longer silently concentrate every kept site in whichever band
+# observational divergence happens to favor.
+_DEPTH_BANDS = ("early", "mid", "late")
+_HEAD_SITE_SELECTION_STRATEGIES = frozenset({"divergence", "stratified_divergence"})
+_DEFAULT_HEAD_SITE_SELECTION = "stratified_divergence"
+
 
 # =========================================================================================== tiny math
 # Deliberately duplicated from clozn.analysis.transplant rather than importing its underscore-prefixed
@@ -238,6 +282,75 @@ def _site_divergence(reference_flat: Sequence[float], candidate_flat: Sequence[f
     if len(reference_flat) != len(candidate_flat):
         return None
     return math.sqrt(sum((a - b) ** 2 for a, b in zip(reference_flat, candidate_flat)))
+
+
+def _depth_band(layer: int, lo: int, hi: int) -> str:
+    """early/mid/late third of the writable range `[lo, hi)` -- the SAME banding convention
+    docs/research/QUANT_REGRESSION_POPULATION.md's own depth-gradient table uses. Degenerate ranges
+    (`hi <= lo`, unreachable given this module's own upstream layer_count guard) fall back to "late"
+    rather than raising -- there is no meaningful band to compute, and this function is never the last
+    word on whether a site is usable."""
+    span = hi - lo
+    if span <= 0:
+        return "late"
+    offset = layer - lo
+    third = span / 3.0
+    if offset < third:
+        return "early"
+    if offset < 2 * third:
+        return "mid"
+    return "late"
+
+
+def _stratified_head_selection(sites: Sequence, *, lo: int, hi: int, cap: int, rank_key) -> tuple:
+    """GAP 1's fix: partition `sites` (head `(layer, head)` tuples) into early/mid/late depth bands and
+    allocate `cap` slots ACROSS only the bands `sites` actually populates, keeping the top slots-for-that-
+    band sites (by `rank_key`, ascending -- pass a "smaller is better" key, e.g. negative divergence)
+    WITHIN each band. A single global top-`cap` (the old behavior, still available as the "divergence"
+    strategy) can silently starve a band whose sites simply diverge less on average than another band's,
+    even when the band is genuinely populated in the input grid -- see module docstring's GAP 1 section.
+
+    Allocation is a deterministic fair-share round robin over the bands actually present (fixed order
+    early -> mid -> late): each cycle gives the next active band's own next-best site one slot, dropping a
+    band from rotation once its own pool is exhausted, until `cap` sites are kept or every pool is empty.
+    This guarantees no band is left at zero merely because another band's candidates rank higher globally,
+    while still never fabricating a site in a band the input never populated.
+
+    Returns `(kept_sites, band_report)`: `kept_sites` is a set (membership is all downstream code needs --
+    the caller re-derives display order from its own original site list); `band_report` is
+    `{band: {"candidates": N, "kept": N}}` for every band with >=1 candidate, the exact numbers
+    `coverage.bounds_applied` reports so this narrowing is never silent."""
+    bands: dict = {}
+    for site in sites:
+        band = _depth_band(site[0], lo, hi)
+        bands.setdefault(band, []).append(site)
+    for band in bands:
+        bands[band] = sorted(bands[band], key=rank_key)
+
+    pools = {band: list(ranked) for band, ranked in bands.items()}
+    allocation = {band: 0 for band in bands}
+    order = [band for band in _DEPTH_BANDS if band in bands]
+    active = set(order)
+    remaining = cap
+    idx = 0
+    while remaining > 0 and active:
+        band = order[idx % len(order)]
+        idx += 1
+        if band not in active:
+            continue
+        allocation[band] += 1
+        pools[band].pop(0)
+        remaining -= 1
+        if not pools[band]:
+            active.discard(band)
+
+    kept: set = set()
+    report: dict = {}
+    for band, ranked in bands.items():
+        n_keep = allocation[band]
+        kept.update(ranked[:n_keep])
+        report[band] = {"candidates": len(ranked), "kept": n_keep}
+    return kept, report
 
 
 def _now_iso() -> str:
@@ -660,6 +773,220 @@ def _bisect_window(*, candidate_engine, hook: str, sites: Sequence, depth: int,
                        leaf_sites_out=leaf_sites_out)
 
 
+# ========================================================================== the mixed ffn+head window harness
+# GAP 2 (closed): a UNIT here is `(hook, site)` -- `("ffn", layer)` or `("head", (layer, head))` -- so a
+# window can genuinely mix both composable kinds. `_run_mixed_window`/`_bisect_mixed_window` generalize
+# `_run_window`/`_bisect_window` to a heterogeneous unit list WITHOUT touching those two functions (or
+# their vectors_by_site/sites contract) at all -- every existing pure-ffn/pure-head call path is
+# byte-for-byte unchanged. Only `run_bisect`'s NEW, explicit, caller-supplied `mixed_windows` parameter
+# reaches this code; the independent per-kind searches never do.
+
+def _site_dict(hook: str, site) -> dict:
+    if hook == "head":
+        layer, head = site
+        return {"hook": "head", "layer": layer, "head": head}
+    return {"hook": hook, "layer": site}
+
+
+def _pick_shuffled_units(units: Sequence[tuple], usable_units: Sequence[tuple]) -> "list | None":
+    """The `_pick_shuffled_sites` analogue for heterogeneous units: `len(units)` DIFFERENT units, disjoint
+    from `units`, one per original unit, drawn ONLY from usable units of THAT SAME unit's hook -- a
+    shuffled control must stay dimensionally compatible (an ffn-shaped reference vector written into a
+    head slot, or vice versa, is not a meaningful "same vector, different site" control). None when any
+    single unit's hook has no available disjoint replacement (mirrors `_pick_shuffled_sites`'s own None
+    contract). For a unit list that happens to be single-hook, this produces the IDENTICAL sequence
+    `_pick_shuffled_sites` would -- both peel off the same hook-filtered pool in the same order -- so this
+    function is a strict generalization, not a behavior change, of the pure-window control."""
+    chosen: set = set()
+    out: list = []
+    for unit in units:
+        hook = unit[0]
+        pool = [u for u in usable_units if u[0] == hook and u not in units and u not in chosen]
+        if not pool:
+            return None
+        pick = pool[0]
+        chosen.add(pick)
+        out.append(pick)
+    return out
+
+
+def _run_mixed_window(*, candidate_engine, units: Sequence[tuple], depth: int,
+                      ref_vectors_by_unit: Mapping, self_vectors_by_unit: Mapping,
+                      usable_units: Sequence[tuple], baseline_metrics: dict, positions: Sequence[int],
+                      prompt_ids: Sequence[int], continuation_ids: Sequence[int], n_prompt: int, n_cont: int,
+                      readout_position: int, target_token_id: int, topk: int, rng: "random.Random",
+                      reference_target_logprob: "float | None", primary_metric: str) -> dict:
+    """The `mixed_windows` analogue of `_run_window`: builds `ffn_write` AND `head_write` TOGETHER in ONE
+    `/score` call per arm whenever `units` names sites of both kinds (mechanically supported -- see module
+    docstring's GAP 2 section) instead of assuming one hook for the whole window. Reuses `baseline_metrics`
+    captured once for the ffn window search (never a fresh baseline call here either -- the SAME disclosed
+    efficiency choice `_run_window` already makes: the candidate's own top-1/target metrics for one
+    prompt+continuation+topk request do not depend on which capture kwargs happened to accompany that
+    earlier call, so ffn's own baseline call already measured the SAME thing a head-only or mixed call
+    would).
+
+    `hook` in the returned record is the sole hook if every unit shares one (a caller-supplied
+    `mixed_windows` entry is required to include both kinds, so this is defense-in-depth, not a real case),
+    else `"mixed"`. `sites` is always the authoritative per-site `[{hook, layer, head?}, ...]` list;
+    `heads` is never populated here (see the schema's `window_test.sites` field docstring)."""
+    hooks_present = sorted({hook for hook, _site in units})
+    reported_hook = hooks_present[0] if len(hooks_present) == 1 else "mixed"
+    layers = sorted({_site_layer(hook, site) for hook, site in units})
+    sites_field = [_site_dict(hook, site) for hook, site in units]
+
+    def _specs_by_hook(vectors_by_unit: Mapping, use_units: Sequence[tuple]) -> dict:
+        grouped: dict = {}
+        for hook, site in use_units:
+            spec = _write_spec_for_site(hook, site, {site: vectors_by_unit[(hook, site)]}, positions)
+            grouped.setdefault(hook, []).append(spec)
+        return grouped
+
+    random_vectors_by_unit = {
+        u: {p: _random_equal_norm_vector(ref_vectors_by_unit[u][p], rng) for p in positions}
+        for u in units
+    }
+    shuffled_units = _pick_shuffled_units(units, usable_units)
+
+    arm_plan = [
+        ("reference_transplant", units, ref_vectors_by_unit),
+        ("candidate_self_transplant", units, self_vectors_by_unit),
+        ("random_equal_norm", units, random_vectors_by_unit),
+    ]
+    if shuffled_units is not None:
+        shuffled_vectors_by_unit = {dst: ref_vectors_by_unit[src] for src, dst in zip(units, shuffled_units)}
+        arm_plan.append(("shuffled_window", shuffled_units, shuffled_vectors_by_unit))
+
+    arms: dict = {}
+    for name, use_units, vectors_by_unit in arm_plan:
+        grouped = _specs_by_hook(vectors_by_unit, use_units)
+        write_kwargs = {_WINDOW_WRITE_FIELD[hook]: specs for hook, specs in grouped.items()}
+        call = _call_score(candidate_engine, f"{name} mixed window arm", prompt_ids=list(prompt_ids),
+                           continuation_ids=list(continuation_ids), topk=topk, **write_kwargs)
+        if not call["ok"]:
+            return {"hook": reported_hook, "layers": layers, "sites": sites_field, "depth": depth,
+                   "instrument_sane": False, "retained": False,
+                   "reasons": [f"{name} window arm failed: {call['error']}"]}
+        read = _read_arm_metrics(call["response"], n_prompt=n_prompt, n_cont=n_cont,
+                                 readout_position=readout_position, target_token_id=target_token_id)
+        metrics = dict(read["metrics"])
+        applied_by_hook = {hook: call["response"].get(_WINDOW_APPLIED_FIELD[hook]) for hook in grouped}
+        metrics["write_applied_by_hook"] = applied_by_hook
+        metrics["write_applied"] = all(v is True for v in applied_by_hook.values())
+        arms[name] = metrics
+
+    reasons: list = []
+    self_metrics = arms["candidate_self_transplant"]
+    self_applied = self_metrics.get("write_applied")
+    self_top1 = self_metrics.get("top1_token_id")
+    baseline_top1 = baseline_metrics.get("top1_token_id")
+
+    if self_applied is not True:
+        instrument_sane = False
+        reasons.append("candidate_self_transplant's write_applied was not confirmed true on every hook in "
+                       f"this mixed window -- {self_metrics.get('write_applied_by_hook')}")
+    elif self_top1 is None or baseline_top1 is None:
+        instrument_sane = False
+        reasons.append("instrument sanity could not be evaluated for this mixed window (top-1 token "
+                       "missing from the baseline or self-transplant response).")
+    elif self_top1 != baseline_top1:
+        instrument_sane = False
+        reasons.append("candidate_self_transplant changed the top-1 token for this mixed window -- the "
+                       "write mechanism itself is not a no-op here, so no other arm's result is "
+                       "interpretable.")
+    else:
+        instrument_sane = True
+
+    result: dict = {"hook": reported_hook, "layers": layers, "sites": sites_field, "depth": depth,
+                    "instrument_sane": instrument_sane, "arms": arms}
+
+    if not instrument_sane:
+        result["retained"] = False
+        result["reasons"] = reasons
+        return result
+
+    if baseline_top1 is not None and baseline_metrics.get("top1_is_target") is True:
+        result["retained"] = False
+        result["reasons"] = ["the candidate's own baseline top-1 already equals target_token_id -- there "
+                             "is no disagreement for this mixed window's transplant to correct."]
+        return result
+
+    reference_moved = _flipped_to_target(baseline_metrics, arms["reference_transplant"])
+    random_moved = _flipped_to_target(baseline_metrics, arms["random_equal_norm"])
+    if reference_moved is not None:
+        result["moved"] = reference_moved
+
+    if reference_moved is not None and random_moved is not None:
+        beat_control = bool(reference_moved and not random_moved)
+        result["beat_control"] = beat_control
+        result["retained"] = beat_control
+        if reference_moved and random_moved:
+            reasons.append("the random equal-norm control ALSO flipped the top-1 token to target_token_id "
+                           "for this mixed window -- not reference-specific (perturbation-sensitive, not "
+                           "localizing evidence).")
+        elif not reference_moved:
+            reasons.append("the reference transplant did not flip the top-1 token to target_token_id for "
+                           "this mixed window.")
+        else:
+            reasons.append("the reference transplant flipped the top-1 token to target_token_id and the "
+                           "random equal-norm control did not.")
+    else:
+        result["retained"] = False
+        reasons.append("movement could not be evaluated for this mixed window (top-1/target-hit missing "
+                       "on the reference or random arm).")
+
+    result["reasons"] = reasons
+
+    ref_results = _movement_results(baseline_metrics=baseline_metrics, arm_metrics=arms["reference_transplant"],
+                                    reference_target_logprob=reference_target_logprob)
+    rand_results = _movement_results(baseline_metrics=baseline_metrics, arm_metrics=arms["random_equal_norm"],
+                                     reference_target_logprob=reference_target_logprob)
+    ref_primary = restoration_metrics.select_primary(ref_results, primary_metric=primary_metric)
+    rand_primary = restoration_metrics.select_primary(rand_results, primary_metric=primary_metric)
+    movement_metrics: dict = {"reference_transplant": ref_primary, "random_equal_norm": rand_primary}
+    if ref_primary.get("state") == "selected" and rand_primary.get("state") == "selected":
+        movement_metrics["beat_control"] = restoration_metrics.beat_control(ref_primary["result"],
+                                                                             rand_primary["result"])
+    result["movement_metrics"] = movement_metrics
+    return result
+
+
+def _bisect_mixed_window(*, candidate_engine, units: Sequence[tuple], depth: int,
+                         ref_vectors_by_unit, self_vectors_by_unit, usable_units, baseline_metrics,
+                         positions, prompt_ids, continuation_ids, n_prompt, n_cont, readout_position,
+                         target_token_id, topk, rng, reference_target_logprob, primary_metric,
+                         window_tests_out: list, leaf_layers_out: list, leaf_head_sites_out: list) -> None:
+    """`_bisect_window`'s mixed analogue: a unit list of size 1 goes straight to the SAME single-site
+    confirmation lists the independent ffn/head searches already feed (`leaf_layers_out`/
+    `leaf_head_sites_out`, keyed by which hook that ONE surviving unit happens to be) -- no new
+    confirmation path exists or is needed for a mixed bisection leaf, since a leaf is always exactly one
+    hook by construction (bisecting a heterogeneous list eventually separates the kinds)."""
+    if len(units) == 1:
+        hook, site = units[0]
+        (leaf_layers_out if hook == "ffn" else leaf_head_sites_out).append(site)
+        return
+    result = _run_mixed_window(candidate_engine=candidate_engine, units=units, depth=depth,
+                               ref_vectors_by_unit=ref_vectors_by_unit, self_vectors_by_unit=self_vectors_by_unit,
+                               usable_units=usable_units, baseline_metrics=baseline_metrics, positions=positions,
+                               prompt_ids=prompt_ids, continuation_ids=continuation_ids, n_prompt=n_prompt,
+                               n_cont=n_cont, readout_position=readout_position, target_token_id=target_token_id,
+                               topk=topk, rng=rng, reference_target_logprob=reference_target_logprob,
+                               primary_metric=primary_metric)
+    window_tests_out.append(result)
+    if not result.get("retained"):
+        return
+    mid = len(units) // 2
+    left, right = list(units[:mid]), list(units[mid:])
+    for half in (left, right):
+        _bisect_mixed_window(candidate_engine=candidate_engine, units=half, depth=depth + 1,
+                             ref_vectors_by_unit=ref_vectors_by_unit, self_vectors_by_unit=self_vectors_by_unit,
+                             usable_units=usable_units, baseline_metrics=baseline_metrics, positions=positions,
+                             prompt_ids=prompt_ids, continuation_ids=continuation_ids, n_prompt=n_prompt,
+                             n_cont=n_cont, readout_position=readout_position, target_token_id=target_token_id,
+                             topk=topk, rng=rng, reference_target_logprob=reference_target_logprob,
+                             primary_metric=primary_metric, window_tests_out=window_tests_out,
+                             leaf_layers_out=leaf_layers_out, leaf_head_sites_out=leaf_head_sites_out)
+
+
 # =================================================================================== the verdict rule
 
 def _derive_verdict(*, window_tests: Sequence[dict], single_site_tests: Sequence[dict],
@@ -677,6 +1004,8 @@ def _derive_verdict(*, window_tests: Sequence[dict], single_site_tests: Sequence
               "beat_control": w.get("beat_control")}
         if w.get("heads") is not None:
             obs["heads"] = w["heads"]
+        if w.get("sites") is not None:
+            obs["sites"] = w["sites"]
         observations.append(obs)
     for s in single_site_tests:
         if not s.get("ok"):
@@ -729,7 +1058,8 @@ def _derive_verdict(*, window_tests: Sequence[dict], single_site_tests: Sequence
                               "equal-norm control; no single site within it independently did"],
                    "evidence": {"windows": [
                        {"hook": o["hook"], "layers": o["layers"],
-                        **({"heads": o["heads"]} if o.get("heads") is not None else {})}
+                        **({"heads": o["heads"]} if o.get("heads") is not None else {}),
+                        **({"sites": o["sites"]} if o.get("sites") is not None else {})}
                        for o in deeper]}}
 
         assert composable_kinds_searched, (
@@ -740,7 +1070,8 @@ def _derive_verdict(*, window_tests: Sequence[dict], single_site_tests: Sequence
                           "control, and every narrower window or individual site tested inside it did not"],
                "evidence": {"windows": [
                    {"hook": o["hook"], "layers": o["layers"],
-                    **({"heads": o["heads"]} if o.get("heads") is not None else {})}
+                    **({"heads": o["heads"]} if o.get("heads") is not None else {}),
+                    **({"sites": o["sites"]} if o.get("sites") is not None else {})}
                    for o in beaten]}}
 
     moved_only = [o for o in sane if o["moved"] is True]
@@ -768,6 +1099,8 @@ def run_bisect(*, pair_compat: Mapping[str, Any], reference_loader: Callable[[],
               window_size: int = 4, max_windows: "int | None" = None,
               residual_layers: "Sequence[int] | None" = None, head_layers: "Sequence[int] | None" = None,
               head_indices: "Sequence[int] | None" = None, max_head_sites: "int | None" = None,
+              head_site_selection: str = _DEFAULT_HEAD_SITE_SELECTION,
+              mixed_windows: "Sequence[Sequence[Mapping]] | None" = None,
               reference_target_logprob: "float | None" = None, topk: int = 5, seed: int = 0,
               store_tensors: bool = True, use_batched_screen: bool = False,
               generated_at: "str | None" = None, validate: bool = True) -> dict:
@@ -783,12 +1116,24 @@ def run_bisect(*, pair_compat: Mapping[str, Any], reference_loader: Callable[[],
     full-range sweep -- see the module docstring's coverage discipline). `head_layers`/`head_indices`
     together are the ONLY candidate (layer, head) sites ever tested for `head` -- BOTH must be supplied
     (non-empty) or `head` is reported unavailable; their Cartesian product forms the candidate grid,
-    optionally narrowed by `max_head_sites` (top-N by observational divergence) before being tiled and
-    bisected exactly like `ffn`'s layer windows, UNLESS the grid is exactly one site, in which case it is
-    tested directly with no window search. `ffn`'s candidate layers are always the hook's whole writable
-    range, tiled per `window_size` and (optionally) capped by `max_windows` -- every bound applied to
-    either kind is recorded in the returned document's `coverage`, never silent. `primary_metric` must
-    name one of `clozn.analysis.restoration_metrics.METRIC_KINDS`.
+    optionally narrowed by `max_head_sites` (top-N sites selected per `head_site_selection` -- GAP 1;
+    default `"stratified_divergence"`, allocated across early/mid/late depth bands so a cap cannot
+    silently concentrate every kept site in one band; `"divergence"` reproduces the original, un-
+    stratified, global top-N-by-observational-divergence selection) before being tiled and bisected
+    exactly like `ffn`'s layer windows, UNLESS the grid is exactly one site, in which case it is tested
+    directly with no window search. `ffn`'s candidate layers are always the hook's whole writable range,
+    tiled per `window_size` and (optionally) capped by `max_windows` -- every bound applied to either kind
+    is recorded in the returned document's `coverage`, never silent. `primary_metric` must name one of
+    `clozn.analysis.restoration_metrics.METRIC_KINDS`.
+
+    `mixed_windows` (GAP 2, closed): an OPTIONAL, EXPLICIT list of joint ffn+head windows, each a list of
+    >=2 site dicts (`{"hook": "ffn", "layer": L}` or `{"hook": "head", "layer": L, "head": H}`) including
+    at least one of each kind -- tested EXACTLY as given, never an implicit combination of whatever the
+    independent `ffn`/`head` searches happen to find. Only available when `search_kinds` includes BOTH
+    `ffn` and `head` and both produced usable captured vectors (reused from those two searches -- zero
+    extra capture calls); otherwise every requested mixed window is recorded `hooks_unavailable` with the
+    specific reason, never silently dropped. `residual` is never a valid site kind here (residual is
+    single-site only, always -- see the module docstring's central design fact).
     """
     if not isinstance(pair_compat, dict):
         return {"ok": False, "error": "pair_compat must be a clozn.pair-compatibility.v1 document (dict)"}
@@ -823,9 +1168,55 @@ def run_bisect(*, pair_compat: Mapping[str, Any], reference_loader: Callable[[],
     if max_head_sites is not None and (not isinstance(max_head_sites, int) or isinstance(max_head_sites, bool)
                                        or max_head_sites < 1):
         return {"ok": False, "error": "max_head_sites must be a positive integer when given"}
+    if head_site_selection not in _HEAD_SITE_SELECTION_STRATEGIES:
+        return {"ok": False, "error": f"head_site_selection must be one of "
+                                      f"{sorted(_HEAD_SITE_SELECTION_STRATEGIES)}, got {head_site_selection!r}"}
     if not isinstance(primary_metric, str) or not primary_metric:
         return {"ok": False, "error": "primary_metric must be a non-empty string (see "
                                       "clozn.analysis.restoration_metrics.METRIC_KINDS)"}
+
+    normalized_mixed_windows: "list | None" = None
+    if mixed_windows is not None:
+        if not isinstance(mixed_windows, (list, tuple)) or not mixed_windows:
+            return {"ok": False, "error": "mixed_windows must be a non-empty list of window site-lists "
+                                          "when given"}
+        normalized_mixed_windows = []
+        for w_index, window in enumerate(mixed_windows):
+            if not isinstance(window, (list, tuple)) or len(window) < 2:
+                return {"ok": False, "error": f"mixed_windows[{w_index}] must be a list of at least 2 sites"}
+            units: list = []
+            seen: set = set()
+            hooks_seen: set = set()
+            for site in window:
+                if not isinstance(site, Mapping):
+                    return {"ok": False, "error": f"mixed_windows[{w_index}] site must be an object"}
+                hook = site.get("hook")
+                if hook not in COMPOSABLE_HOOKS:
+                    return {"ok": False, "error": f"mixed_windows[{w_index}] site.hook must be one of "
+                                                  f"{COMPOSABLE_HOOKS} (residual is single-site only, "
+                                                  f"never windowed), got {hook!r}"}
+                layer = site.get("layer")
+                if not isinstance(layer, int) or isinstance(layer, bool):
+                    return {"ok": False, "error": f"mixed_windows[{w_index}] site.layer must be an integer"}
+                if hook == "head":
+                    head = site.get("head")
+                    if not isinstance(head, int) or isinstance(head, bool):
+                        return {"ok": False, "error": f"mixed_windows[{w_index}] a site with hook='head' "
+                                                      f"needs an integer site.head"}
+                    unit = ("head", (int(layer), int(head)))
+                else:
+                    unit = ("ffn", int(layer))
+                if unit in seen:
+                    return {"ok": False, "error": f"mixed_windows[{w_index}] has a duplicate site: {unit}"}
+                seen.add(unit)
+                hooks_seen.add(hook)
+                units.append(unit)
+            if len(hooks_seen) < 2:
+                return {"ok": False, "error": f"mixed_windows[{w_index}] must include at least one 'ffn' "
+                                              f"site and at least one 'head' site -- a single-hook window "
+                                              f"belongs in search_kinds's own ffn/head search, not "
+                                              f"mixed_windows"}
+            normalized_mixed_windows.append(units)
 
     prompt_id_list = [int(x) for x in prompt_ids]
     continuation_id_list = [int(x) for x in continuation_ids]
@@ -865,6 +1256,7 @@ def run_bisect(*, pair_compat: Mapping[str, Any], reference_loader: Callable[[],
     ref_vectors_by_layer: dict = {}
     self_vectors_by_layer: dict = {}
     baseline_metrics: dict = {}
+    mixed_attempted = False
 
     if "ffn" in search_kinds:
         candidate_ffn_layers = list(range(lo_ffn, hi_ffn))
@@ -1062,13 +1454,37 @@ def run_bisect(*, pair_compat: Mapping[str, Any], reference_loader: Callable[[],
                                 d = divergence if divergence is not None else -1.0
                                 return (-d, site[0], site[1])
 
-                            ranked = sorted(search_head_sites, key=_rank_key)
-                            kept = set(ranked[:max_head_sites])
-                            bounds_applied.append(
-                                f"max_head_sites={max_head_sites}: kept the top {max_head_sites} of "
-                                f"{len(search_head_sites)} usable head sites by observational "
-                                f"reference-vs-candidate L2 divergence; the remaining "
-                                f"{len(search_head_sites) - max_head_sites} were never tested")
+                            # GAP 1: a global top-N by divergence empirically concentrates in whichever
+                            # depth band diverges most (measured: docs/research/
+                            # QUANT_REGRESSION_POPULATION.md's Limits section -- all 524 tested head sites
+                            # across a 30-disagreement population study fell in the late band). See module
+                            # docstring's "An OPTIONAL max_head_sites caps the grid further" section.
+                            if head_site_selection == "stratified_divergence":
+                                kept, band_report = _stratified_head_selection(
+                                    search_head_sites, lo=lo_head, hi=hi_head, cap=max_head_sites,
+                                    rank_key=_rank_key)
+                                band_text = ", ".join(
+                                    f"{band}: kept {info['kept']}/{info['candidates']}"
+                                    for band, info in sorted(band_report.items(),
+                                                             key=lambda kv: _DEPTH_BANDS.index(kv[0])))
+                                bounds_applied.append(
+                                    f"max_head_sites={max_head_sites} via "
+                                    f"head_site_selection='stratified_divergence': kept {len(kept)} of "
+                                    f"{len(search_head_sites)} usable head sites, allocated across the "
+                                    f"early/mid/late depth bands this candidate grid actually populates "
+                                    f"({band_text}) so the cap can no longer silently concentrate every "
+                                    f"kept site in whichever band diverges most; the remaining "
+                                    f"{len(search_head_sites) - len(kept)} were never tested")
+                            else:
+                                ranked = sorted(search_head_sites, key=_rank_key)
+                                kept = set(ranked[:max_head_sites])
+                                bounds_applied.append(
+                                    f"max_head_sites={max_head_sites} via head_site_selection='divergence': "
+                                    f"kept the top {max_head_sites} of {len(search_head_sites)} usable head "
+                                    f"sites by observational reference-vs-candidate L2 divergence (never "
+                                    f"depth-stratified -- see 'stratified_divergence' for a coverage-safe "
+                                    f"alternative); the remaining "
+                                    f"{len(search_head_sites) - max_head_sites} were never tested")
                             search_head_sites = [s for s in cand_usable_sites if s in kept]
 
                         tiles = _tile(search_head_sites, window_size)
@@ -1095,6 +1511,66 @@ def run_bisect(*, pair_compat: Mapping[str, Any], reference_loader: Callable[[],
                                            reference_target_logprob=reference_target_logprob,
                                            primary_metric=primary_metric, window_tests_out=window_tests,
                                            leaf_sites_out=leaf_head_sites)
+
+            # GAP 2 (closed): explicit, caller-supplied joint ffn+head windows -- reuses the vectors
+            # already captured above (zero extra capture calls), still inside the SAME candidate
+            # residency. Only usable once BOTH the ffn and head blocks above actually produced captured
+            # vectors on both models; see module docstring's mixed-windows section.
+            if normalized_mixed_windows is not None:
+                mixed_ready = (bool(ref_vectors_by_layer) and bool(self_vectors_by_layer)
+                               and bool(ref_vectors_by_head_site) and bool(self_vectors_by_head_site))
+                if mixed_ready:
+                    mixed_attempted = True
+                    ref_vectors_by_unit = {("ffn", l): v for l, v in ref_vectors_by_layer.items()}
+                    ref_vectors_by_unit.update({("head", s): v for s, v in ref_vectors_by_head_site.items()})
+                    self_vectors_by_unit = {("ffn", l): v for l, v in self_vectors_by_layer.items()}
+                    self_vectors_by_unit.update({("head", s): v for s, v in self_vectors_by_head_site.items()})
+                    usable_units = list(ref_vectors_by_unit.keys())
+                    mixed_rng = random.Random(seed)
+                    tested_count = 0
+                    skipped_count = 0
+                    for window_units in normalized_mixed_windows:
+                        missing = [u for u in window_units
+                                  if u not in ref_vectors_by_unit or u not in self_vectors_by_unit]
+                        if missing:
+                            skipped_count += 1
+                            missing_text = ", ".join(str(_site_dict(h, s)) for h, s in missing)
+                            window_tests.append({
+                                "hook": "mixed",
+                                "layers": sorted({_site_layer(h, s) for h, s in window_units}),
+                                "sites": [_site_dict(h, s) for h, s in window_units], "depth": 0,
+                                "instrument_sane": False, "retained": False,
+                                "reasons": [f"mixed window site(s) not captured/usable on both models: "
+                                           f"{missing_text}"],
+                            })
+                            continue
+                        tested_count += 1
+                        _bisect_mixed_window(
+                            candidate_engine=candidate_engine, units=window_units, depth=0,
+                            ref_vectors_by_unit=ref_vectors_by_unit, self_vectors_by_unit=self_vectors_by_unit,
+                            usable_units=usable_units, baseline_metrics=baseline_metrics, positions=positions,
+                            prompt_ids=prompt_id_list, continuation_ids=continuation_id_list,
+                            n_prompt=n_prompt, n_cont=n_cont, readout_position=readout_position,
+                            target_token_id=target_token_id, topk=topk, rng=mixed_rng,
+                            reference_target_logprob=reference_target_logprob, primary_metric=primary_metric,
+                            window_tests_out=window_tests, leaf_layers_out=leaf_layers,
+                            leaf_head_sites_out=leaf_head_sites)
+                    bounds_applied.append(
+                        f"mixed: {len(normalized_mixed_windows)} caller-supplied joint ffn+head window(s) "
+                        f"were tested exactly as given (never an implicit combination of ffn/head sites) "
+                        f"-- {tested_count} fully captured and tested, {skipped_count} skipped for missing "
+                        f"site coverage")
+
+    if normalized_mixed_windows is not None and not mixed_attempted:
+        mixed_reason = (
+            "mixed_windows requires BOTH 'ffn' and 'head' to be in search_kinds with usable captured "
+            "vectors on both models (mirrors residual/head's own no-implicit-availability discipline) -- "
+            f"ffn usable={bool(ref_vectors_by_layer) and bool(self_vectors_by_layer)}, "
+            f"head grid usable={bool(ref_vectors_by_head_site) and bool(self_vectors_by_head_site)}")
+        hooks_unavailable.append({"hook": "mixed", "reason": mixed_reason})
+        bounds_applied.append(
+            f"mixed: {len(normalized_mixed_windows)} requested joint ffn+head window(s) were never "
+            f"tested -- {mixed_reason}")
 
     if "ffn" in search_kinds:
         bounds_applied.append(
@@ -1286,6 +1762,15 @@ def run_bisect(*, pair_compat: Mapping[str, Any], reference_loader: Callable[[],
     }
     if reference_target_logprob is not None:
         document["reference_target_logprob"] = float(reference_target_logprob)
+    if "head" in search_kinds:
+        # GAP 1: recorded unconditionally whenever head was even requested -- like
+        # single_site_seed_derivation, present regardless of whether max_head_sites capping actually
+        # triggered this run (a caller predeclares the strategy the same way the seed contract is
+        # predeclared even when no leaf ever needed it).
+        document["head_site_selection"] = {
+            "strategy": head_site_selection, "cap_field": "max_head_sites",
+            "depth_bands": list(_DEPTH_BANDS),
+        }
     if validate:
         schemas.validate(document)
     return {"ok": True, "document": document}
