@@ -108,16 +108,21 @@ class ProcessGuardUnitTests(unittest.TestCase):
         class _FakeProc:
             pid = 999999
 
-        original = process_guard._create_job_object
+        original_create = process_guard._create_job_object
+        original_handle = process_guard._JOB_HANDLE
+        original_failed = process_guard._JOB_INIT_FAILED
         process_guard._create_job_object = lambda: (_ for _ in ()).throw(OSError("simulated"))
+        # Force a re-attempt for THIS test only -- an earlier test in this file may already have
+        # created a real job and cached it. Restored to the exact prior values below, not hardcoded
+        # back to None, so a real handle another test is relying on isn't dropped uncontrolled.
         process_guard._JOB_HANDLE = None
         process_guard._JOB_INIT_FAILED = False
         try:
             result = process_guard.guard(_FakeProc())
         finally:
-            process_guard._create_job_object = original
-            process_guard._JOB_HANDLE = None
-            process_guard._JOB_INIT_FAILED = False
+            process_guard._create_job_object = original_create
+            process_guard._JOB_HANDLE = original_handle
+            process_guard._JOB_INIT_FAILED = original_failed
         self.assertFalse(result, "a Job Object creation failure must degrade to unguarded, never raise")
 
     def test_windows_guard_handles_missing_popen_handle_attribute(self):
