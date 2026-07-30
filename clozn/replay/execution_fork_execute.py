@@ -184,6 +184,39 @@ def _failed_control_result(code: str, message: str, *, status: str = "failed") -
     }
 
 
+def _boundary_stop_token_exempt(parent_run: Mapping, reply: Mapping,
+                                expected_tokens: list, expected_text: str,
+                                actual_tokens: list, actual_text: str) -> bool:
+    """True iff the ONLY difference between the parent's recorded suffix and the worker's replayed
+    suffix is that the parent's own trace carries one extra trailing entry -- the chat turn's
+    stop/EOS-class token -- that the raw engine's generation loop structurally never returns as part
+    of `tokens` (see generate_ar / finish_reason(): sampling that token TERMINATES the loop; it is a
+    stop signal there, never committed output). clozn.runs.store records the FULL native-chat-io
+    transcript, which DOES include it. Two different, independently correct conventions for "what
+    counts as generated" collide exactly at the one position where they can ever disagree: the very
+    last token of an EOS-terminated response. Both conventions predate this function; this reconciles
+    them rather than favoring one silently.
+
+    Narrow by construction -- ALL of the following must hold, not just finish_reason:
+      - the parent's own recorded finish_reason is "stop" (it terminated via EOS/stop-sequence, not
+        length) AND the worker's reconstructed reply ALSO reports finish_reason "stop" -- i.e., both
+        the original run and the replay independently agree generation ended by hitting a stop
+        condition, not that one ran out of budget while the other didn't;
+      - the parent's suffix is EXACTLY one token longer than the worker's;
+      - every token before that final one matches EXACTLY (a real earlier divergence still fails);
+      - the decoded TEXT matches exactly (the exemption never overrides a text mismatch -- a
+        stop-class token that decoded to visible text, on a model where that's true, would fail this
+        and correctly report diverged).
+    """
+    if parent_run.get("finish_reason") != "stop" or reply.get("finish_reason") != "stop":
+        return False
+    if len(expected_tokens) != len(actual_tokens) + 1:
+        return False
+    if expected_tokens[:-1] != actual_tokens:
+        return False
+    return expected_text == actual_text
+
+
 def prove_unchanged_control(parent_run: Mapping, plan: Mapping, engine) -> dict:
     """Run only the exact fork's mandatory unchanged control.
 
@@ -226,6 +259,23 @@ def prove_unchanged_control(parent_run: Mapping, plan: Mapping, engine) -> dict:
     parent_text_hash = _text_sha(expected_text)
     control_text_hash = _text_sha(actual_text)
     matched = actual_tokens == expected_tokens and actual_text == expected_text
+    boundary_exempt = False
+    if not matched and _boundary_stop_token_exempt(
+        parent_run, reply, expected_tokens, expected_text, actual_tokens, actual_text
+    ):
+        matched = True
+        boundary_exempt = True
+    if matched:
+        note = (
+            "parent suffix token ids and text matched exactly" if not boundary_exempt else
+            "parent suffix matched exactly except the parent's recorded trailing chat-turn stop "
+            "token, which the raw engine's own generation loop never returns as generated output "
+            "(both the parent and the replay independently finished via finish_reason='stop' at the "
+            "same content boundary; exempted, not silently dropped -- see prove_unchanged_control's "
+            "_boundary_stop_token_exempt)"
+        )
+    else:
+        note = "unchanged control differed in token ids or decoded text"
     return {
         "status": "matched" if matched else "diverged",
         "worker_receipt": worker_receipt,
@@ -236,11 +286,7 @@ def prove_unchanged_control(parent_run: Mapping, plan: Mapping, engine) -> dict:
                 "token_ids_sha256": parent_token_hash, "text_sha256": parent_text_hash}),
             "control_suffix_sha256": _sha({
                 "token_ids_sha256": control_token_hash, "text_sha256": control_text_hash}),
-            "note": (
-                "parent suffix token ids and text matched exactly"
-                if matched
-                else "unchanged control differed in token ids or decoded text"
-            ),
+            "note": note,
         },
     }
 

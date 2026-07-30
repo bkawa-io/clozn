@@ -202,11 +202,12 @@ def _parent(*, sampled=True, active_dials=None, steering=None, **overrides):
 
 class CaptureEngine:
     def __init__(self, *, prompt_ids=None, control_tokens=None,
-                 control_text=None, checkpoint_error=None):
+                 control_text=None, checkpoint_error=None, finish_reason="stop"):
         self.prompt_ids = list(prompt_ids or [1, 2])
         self.control_tokens = list(control_tokens or [11, 22, 33])
         self.control_text = control_text if control_text is not None else "one two three"
         self.checkpoint_error = checkpoint_error
+        self.finish_reason = finish_reason
         self.calls = []
 
     def score(self, **kwargs):
@@ -253,7 +254,7 @@ class CaptureEngine:
             "sampler_source": "checkpoint",
             "steer_source": "none",
             "intervention_applied": {"type": "none"},
-            "finish_reason": "stop",
+            "finish_reason": self.finish_reason,
         }
 
     def health(self):
@@ -447,6 +448,132 @@ def test_diverged_control_leaves_real_checkpoint_visible_but_unusable(store):
     assert artifact["checkpoint_reference"]["size_bytes"] == 987654
     assert artifact["lifecycle"]["observed_state"] == "unusable"
     assert artifact["lifecycle"]["pinned"] is False
+
+
+# ============================================================================================
+# Boundary stop-token exemption (gateway/prove_unchanged_control divergence characterized live
+# against qwen2.5-0.5b-instruct-q4_k_m.gguf: scripts/smoke/gateway_eos_boundary_battery.py).
+#
+# The recorded parent trace (native chat-io's transcript) includes the chat turn's terminal
+# stop/EOS-class token as an explicit trailing entry whenever the run finished via
+# finish_reason == "stop". The raw engine's own generation loop (generate_ar, what
+# EngineClient.execution_fork replays) NEVER returns that token as part of `tokens` -- sampling it
+# TERMINATES the loop; it is a stop signal there, not committed output (see finish_reason()'s
+# "eos"/"stop" -> "stop" mapping in engine/core/serve/server_shared.hpp). Every EOS-terminated chat
+# run therefore has a parent trace exactly ONE token longer than anything a raw replay can ever
+# produce -- a representational mismatch between two independently-correct conventions, not a real
+# generation divergence. prove_unchanged_control's _boundary_stop_token_exempt narrowly exempts
+# EXACTLY this shape (see that function's own docstring for the four required conditions); every
+# test below proves one edge of that boundary, so a fix that becomes even slightly more permissive
+# than intended fails one of them.
+# ============================================================================================
+
+def _parent_eos_terminated(*, extra_piece=""):
+    """A parent whose recorded trace carries ONE trailing token beyond `[11, 22, 33]` -- decoding
+    to `extra_piece` (empty by default, matching a real EOS/chat-end control token) -- and whose
+    own finish_reason is "stop", mirroring an ordinary EOS-terminated chat completion exactly."""
+    return _parent(
+        trace={"tokens": ["one", " two", " three", extra_piece], "token_ids": [11, 22, 33, 999]},
+        finish_reason="stop",
+    )
+
+
+def test_boundary_stop_token_is_exempted_when_both_sides_agree_finish_reason_stop(store):
+    parent = _parent_eos_terminated()
+    engine = CaptureEngine(control_tokens=[11, 22, 33], control_text="one two three",
+                           finish_reason="stop")
+
+    artifact = capture_parent_checkpoint(
+        parent, engine, runtime_identity=RUNTIME, worker_identity=WORKER)
+
+    assert artifact["status"] == "available"
+    assert artifact["proof"]["status"] == "matched"
+    assert artifact["proof"]["control_result"]["exact_match"] is True
+    note = artifact["proof"]["control_result"]["note"]
+    assert "stop token" in note and "exempted" in note
+    # The exemption is disclosed, not hidden: the two suffix hashes genuinely differ (the parent's
+    # recorded suffix really is one token longer) even though exact_match is True.
+    assert (artifact["proof"]["control_result"]["parent_suffix_sha256"]
+            != artifact["proof"]["control_result"]["control_suffix_sha256"])
+
+
+def test_boundary_exemption_does_not_cover_an_earlier_real_divergence(store):
+    """Same off-by-one LENGTH shape (parent 4 tokens, control 3) -- but the middle token is wrong
+    too. The exemption must never mask an actual content divergence sitting behind it."""
+    parent = _parent_eos_terminated()
+    engine = CaptureEngine(control_tokens=[11, 999, 33], control_text="one wrong three",
+                           finish_reason="stop")
+
+    artifact = capture_parent_checkpoint(
+        parent, engine, runtime_identity=RUNTIME, worker_identity=WORKER)
+
+    assert artifact["status"] == "failed"
+    assert artifact["reasons"][0]["code"] == "unchanged_control_diverged"
+    assert artifact["proof"]["control_result"]["exact_match"] is False
+
+
+def test_boundary_exemption_requires_parent_finish_reason_stop(store):
+    """If the parent itself did NOT record finish_reason=='stop' (e.g. it was truncated at
+    max_tokens), a length-off-by-one control reply is a genuine divergence, not a boundary quirk --
+    there is no reason a max_tokens-truncated parent's trace would carry an extra token at all."""
+    parent = _parent(
+        trace={"tokens": ["one", " two", " three", ""], "token_ids": [11, 22, 33, 999]},
+        finish_reason="length",
+    )
+    engine = CaptureEngine(control_tokens=[11, 22, 33], control_text="one two three",
+                           finish_reason="stop")
+
+    artifact = capture_parent_checkpoint(
+        parent, engine, runtime_identity=RUNTIME, worker_identity=WORKER)
+
+    assert artifact["status"] == "failed"
+    assert artifact["reasons"][0]["code"] == "unchanged_control_diverged"
+    assert artifact["proof"]["control_result"]["exact_match"] is False
+
+
+def test_boundary_exemption_requires_worker_finish_reason_stop(store):
+    """If the REPLAY did not itself report finish_reason=='stop' (e.g. it hit its own max_tokens
+    cap instead of naturally stopping), the two runs have not independently agreed on WHY they
+    each ended one token apart -- fail closed rather than assume."""
+    parent = _parent_eos_terminated()
+    engine = CaptureEngine(control_tokens=[11, 22, 33], control_text="one two three",
+                           finish_reason="length")
+
+    artifact = capture_parent_checkpoint(
+        parent, engine, runtime_identity=RUNTIME, worker_identity=WORKER)
+
+    assert artifact["status"] == "failed"
+    assert artifact["reasons"][0]["code"] == "unchanged_control_diverged"
+    assert artifact["proof"]["control_result"]["exact_match"] is False
+
+
+def test_boundary_exemption_requires_exact_text_match(store):
+    """The exemption never overrides a TEXT mismatch -- only ever forgives the one known-missing
+    trailing token id when the decoded text is already identical (as it always is for a control
+    token whose piece truly is empty)."""
+    parent = _parent_eos_terminated()
+    engine = CaptureEngine(control_tokens=[11, 22, 33], control_text="one two threeX",
+                           finish_reason="stop")
+
+    artifact = capture_parent_checkpoint(
+        parent, engine, runtime_identity=RUNTIME, worker_identity=WORKER)
+
+    assert artifact["status"] == "failed"
+    assert artifact["reasons"][0]["code"] == "unchanged_control_diverged"
+    assert artifact["proof"]["control_result"]["exact_match"] is False
+
+
+def test_boundary_exemption_requires_exactly_one_missing_token(store):
+    """Two (or zero) missing tokens is not the known EOS-bookkeeping shape -- still a divergence."""
+    parent = _parent_eos_terminated()
+    engine = CaptureEngine(control_tokens=[11], control_text="one", finish_reason="stop")
+
+    artifact = capture_parent_checkpoint(
+        parent, engine, runtime_identity=RUNTIME, worker_identity=WORKER)
+
+    assert artifact["status"] == "failed"
+    assert artifact["reasons"][0]["code"] == "unchanged_control_diverged"
+    assert artifact["proof"]["control_result"]["exact_match"] is False
 
 
 def test_capture_failure_never_fabricates_checkpoint_size_or_reference(store):
