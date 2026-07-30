@@ -129,6 +129,71 @@ def _verify_0002(db: sqlite3.Connection) -> bool:
     )
 
 
+def _migration_0003_pinned_checkpoints(db: sqlite3.Connection) -> None:
+    """FORK-PIN-01: durable checkpoint pin metadata. One row per pinned run (``run_id`` is the
+    primary key -- ``clozn snapshot pin/unpin`` address a pin by the run it was captured from, not a
+    separate opaque id). The KV bytes themselves never touch this table or this database file: they
+    live content-addressed under ``RUNS_DIR/blobs/checkpoints/sha256`` (clozn.replay.checkpoint_pin_store,
+    mirroring clozn.analysis.tensor_store's binary-blob-plus-JSON-sidecar convention) -- this row is
+    purely metadata + the sha256 reference, so a pin's presence/absence is answerable from SQLite
+    alone without ever touching the (potentially large) blob file. No FOREIGN KEY to runs(id): a pin
+    outliving the row it was captured from is a valid, inspectable state (the run's own deletion
+    policy is store.py/mutations.py's concern, not this table's), and coupling deletion failure modes
+    across two independently-evolving tables was judged a bigger risk than a dangling run_id string.
+    """
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pinned_checkpoints (
+            run_id TEXT PRIMARY KEY,
+            pin_id TEXT NOT NULL,
+            pinned_ts REAL NOT NULL,
+            pinned_at TEXT NOT NULL,
+            note TEXT,
+            checkpoint_id TEXT NOT NULL,
+            source_worker_generation_id TEXT NOT NULL,
+            model_sha256 TEXT NOT NULL,
+            architecture TEXT NOT NULL,
+            n_embd INTEGER NOT NULL,
+            n_layer INTEGER NOT NULL,
+            vocab_size INTEGER NOT NULL,
+            n_ctx INTEGER NOT NULL,
+            protocol_version TEXT NOT NULL,
+            engine_version TEXT NOT NULL,
+            build_id TEXT NOT NULL,
+            llama_cpp_commit TEXT NOT NULL,
+            n_tokens INTEGER NOT NULL,
+            n_past INTEGER NOT NULL,
+            prompt_tokens INTEGER NOT NULL,
+            causal INTEGER NOT NULL,
+            has_sampler INTEGER NOT NULL,
+            has_steer INTEGER NOT NULL,
+            blob_sha256 TEXT NOT NULL,
+            kv_bytes INTEGER NOT NULL,
+            envelope_bytes INTEGER NOT NULL,
+            payload_sha256 TEXT NOT NULL,
+            manifest_json TEXT NOT NULL
+        )
+        """
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS pinned_checkpoints_pinned_idx "
+        "ON pinned_checkpoints(pinned_ts DESC, run_id DESC)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS pinned_checkpoints_blob_idx "
+        "ON pinned_checkpoints(blob_sha256)"
+    )
+
+
+def _verify_0003(db: sqlite3.Connection) -> bool:
+    columns = {row[1] for row in db.execute("PRAGMA table_info(pinned_checkpoints)")}
+    indexes = {row[1] for row in db.execute("PRAGMA index_list(pinned_checkpoints)")}
+    return (
+        {"run_id", "blob_sha256", "manifest_json"}.issubset(columns)
+        and {"pinned_checkpoints_pinned_idx", "pinned_checkpoints_blob_idx"}.issubset(indexes)
+    )
+
+
 # The shipped, ordered migration set. Append-only: once released, a migration's `apply` must never be
 # edited (a DB that already applied it would silently diverge from one that applies the edited version) --
 # ship a NEW migration with a higher version instead.
@@ -137,6 +202,8 @@ MIGRATIONS: tuple[Migration, ...] = (
               verify=_verify_0001),
     Migration(2, "run association: insertion cursor + opaque client/session keys",
               _migration_0002_run_association, verify=_verify_0002),
+    Migration(3, "FORK-PIN-01: durable checkpoint pin metadata (pinned_checkpoints table)",
+              _migration_0003_pinned_checkpoints, verify=_verify_0003),
 )
 
 TARGET_VERSION = max(m.version for m in MIGRATIONS)

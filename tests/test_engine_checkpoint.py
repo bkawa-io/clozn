@@ -149,9 +149,14 @@ def test_worker_source_uses_one_store_for_every_checkpoint_issuance():
         encoding="utf-8",
     ).read()
     assert source.count("make_worker_generation_id()") == 1
-    assert source.count("checkpoints.insert(std::move(") == 3
+    # Checkpoint-producing call sites: completion checkpointing, /v1/checkpoint, /v1/execution-fork's
+    # checkpoint_on_finish, and (FORK-PIN-01) /v1/checkpoint/import + /v1/checkpoint/truncate.
+    assert source.count("checkpoints.insert(std::move(") == 5
     assert 'make_id("ckpt-")' not in source
     assert "checkpoints.erase(checkpoints.begin())" not in source
-    # Completion checkpointing plus checkpoint/restore/branch/execution-fork all accept the optional
-    # process-generation precondition.
-    assert source.count("validate_checkpoint_generation(body, res)") == 5
+    # Completion checkpointing plus checkpoint/restore/branch/execution-fork/export/truncate all accept
+    # the optional process-generation precondition (FORK-PIN-01's /v1/checkpoint/import deliberately
+    # does NOT -- see its own docstring: it is importing possibly-foreign state, not referencing an
+    # existing checkpoint_id already living in THIS worker's store, so there is no prior generation to
+    # precondition against).
+    assert source.count("validate_checkpoint_generation(body, res)") == 7

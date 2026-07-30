@@ -950,6 +950,78 @@ class EngineClient:
         already-finished id returns {cancelled: false}. Returns {cancelled: bool, req: str}."""
         return self._post("/cancel", {"req": req_id})
 
+    # -- FORK-PIN-01: durable checkpoint lifecycle ----------------------------
+
+    def export_checkpoint(self, checkpoint_id: str, *,
+                          worker_generation_id: Optional[str] = None) -> dict:
+        """POST /v1/checkpoint/export: serialize a LIVE, in-memory checkpoint into a self-describing,
+        hashed envelope a caller can persist durably (see clozn.replay.checkpoint_pin_store) and later
+        hand back to :meth:`import_checkpoint` -- possibly against a different worker process, after
+        this one's ``worker_generation_id`` no longer exists.
+
+        Returns the raw engine reply: {checkpoint_id, worker_generation_id, envelope, size_bytes,
+        envelope_bytes}. ``envelope`` is opaque -- persist it verbatim (it is exactly the argument
+        :meth:`import_checkpoint` expects). ``size_bytes`` is the raw KV blob size; ``envelope_bytes``
+        is the REAL byte cost of what would be persisted (base64 + JSON overhead included) -- show
+        THIS to a user before asking them to confirm a pin, never ``size_bytes``.
+        """
+        if not isinstance(checkpoint_id, str) or not checkpoint_id:
+            raise ValueError(f"checkpoint_id must be a non-empty string, got {checkpoint_id!r}")
+        if worker_generation_id is not None and (
+            not isinstance(worker_generation_id, str) or not worker_generation_id
+        ):
+            raise ValueError(
+                f"worker_generation_id must be a non-empty string or None, got {worker_generation_id!r}")
+        body: dict = {"checkpoint_id": checkpoint_id}
+        if worker_generation_id is not None:
+            body["worker_generation_id"] = worker_generation_id
+        response = self._post("/v1/checkpoint/export", body)
+        envelope = response.get("envelope")
+        if not isinstance(envelope, Mapping):
+            raise EngineError("POST /v1/checkpoint/export returned no 'envelope' object")
+        return response
+
+    def import_checkpoint(self, envelope: Mapping[str, Any]) -> dict:
+        """POST /v1/checkpoint/import: rehydrate a previously-exported envelope into a LIVE checkpoint
+        on THIS worker, under its CURRENT ``worker_generation_id``. Fails closed (raises
+        :class:`EngineError`, HTTP 400/409) on any identity/format mismatch -- model identity,
+        architecture/dimensions, engine build, protocol version, KV-format version, token count/n_past,
+        sampler-state shape, steering-vector dimensions, or a payload hash mismatch. Never silently
+        resumes against an incompatible worker.
+
+        Returns the raw engine reply: {checkpoint_id, worker_generation_id, n_past, size_bytes,
+        source_worker_generation_id}. The returned ``checkpoint_id``/``worker_generation_id`` name a
+        FRESH, live, in-process checkpoint on this worker -- resolving a durable pin is exactly this
+        call, never a reuse of the exported envelope's own (now possibly stale) identity.
+        """
+        if not isinstance(envelope, Mapping):
+            raise ValueError(f"envelope must be an object, got {envelope!r}")
+        return self._post("/v1/checkpoint/import", {"envelope": dict(envelope)})
+
+    def truncate_checkpoint(self, checkpoint_id: str, truncate_to: int, *,
+                            worker_generation_id: Optional[str] = None) -> dict:
+        """POST /v1/checkpoint/truncate: produce a NEW live checkpoint at an EARLIER ``n_past`` than an
+        existing one's, generating nothing -- the primitive that lets a caller pin a fork point that is
+        not the tip of a run (capture the tip once, then truncate+export as many earlier points as
+        wanted). Same reprefill/live-KV regime split as :meth:`execution_fork`'s own `restore_mode`.
+
+        Returns the raw engine reply: {checkpoint_id, worker_generation_id, n_past, prompt_tokens,
+        size_bytes, restore_mode}.
+        """
+        if not isinstance(checkpoint_id, str) or not checkpoint_id:
+            raise ValueError(f"checkpoint_id must be a non-empty string, got {checkpoint_id!r}")
+        if not isinstance(truncate_to, int) or isinstance(truncate_to, bool) or truncate_to < 1:
+            raise ValueError(f"truncate_to must be a positive integer, got {truncate_to!r}")
+        if worker_generation_id is not None and (
+            not isinstance(worker_generation_id, str) or not worker_generation_id
+        ):
+            raise ValueError(
+                f"worker_generation_id must be a non-empty string or None, got {worker_generation_id!r}")
+        body: dict = {"checkpoint_id": checkpoint_id, "truncate_to": truncate_to}
+        if worker_generation_id is not None:
+            body["worker_generation_id"] = worker_generation_id
+        return self._post("/v1/checkpoint/truncate", body)
+
     def jlens(self, text: str, layer: Optional[int] = None, topk: int = 5) -> dict:
         """POST /jlens: the J-lens (Jacobian-lens) readout -- per position, the top-k tokens that
         position is 'disposed to say later' (Anthropic 2026, transferred to this GGUF).

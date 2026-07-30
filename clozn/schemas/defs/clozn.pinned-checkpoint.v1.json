@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.pinned-checkpoint.v1",
+  "title": "Durable pinned checkpoint manifest",
+  "description": "FORK-PIN-01: a durable, content-addressed copy of an execution-fork checkpoint (see clozn.checkpoint-reference.v1, whose lifecycle is deliberately ephemeral/worker-memory-only). A pinned-checkpoint manifest survives worker restart and FIFO eviction: the KV bytes live in the content-addressed blob store (blob.sha256), keyed independently of any worker's process generation. `identity` is the fail-closed compatibility fingerprint every /v1/checkpoint/import call re-checks before resolving this pin against a (possibly different) worker -- see engine/core/serve/checkpoint_codec.hpp.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "pin_id",
+    "run_id",
+    "pinned_ts",
+    "pinned_at",
+    "source",
+    "identity",
+    "state",
+    "blob"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.pinned-checkpoint.v1"},
+    "pin_id": {"type": "string", "pattern": "^pin_[0-9a-f]{20}$"},
+    "run_id": {"type": "string", "minLength": 1},
+    "pinned_ts": {"type": "number", "minimum": 0},
+    "pinned_at": {"type": "string", "minLength": 1},
+    "note": {"type": "string"},
+    "source": {"$ref": "#/$defs/Source"},
+    "identity": {"$ref": "#/$defs/Identity"},
+    "state": {"$ref": "#/$defs/State"},
+    "blob": {"$ref": "#/$defs/Blob"}
+  },
+  "$defs": {
+    "Source": {
+      "type": "object",
+      "description": "Provenance of the ephemeral in-memory checkpoint this pin was exported from. worker_generation_id is recorded for audit only -- a pin is NEVER resolved by comparing it, only `identity` below is (see checkpoint_codec.hpp's checkpoint_identity_json comment: comparing worker_generation_id at import would defeat the entire point of a durable pin).",
+      "required": ["checkpoint_id", "worker_generation_id"],
+      "additionalProperties": false,
+      "properties": {
+        "checkpoint_id": {"type": "string", "minLength": 1},
+        "worker_generation_id": {"type": "string", "minLength": 1}
+      }
+    },
+    "Identity": {
+      "type": "object",
+      "description": "The engine/model identity fingerprint every /v1/checkpoint/import call fail-closes on. Mirrors engine/core/serve/server_main.cpp's checkpoint_identity_json() exactly.",
+      "required": [
+        "model_sha256",
+        "architecture",
+        "n_embd",
+        "n_layer",
+        "vocab_size",
+        "n_ctx",
+        "protocol_version",
+        "engine_version",
+        "build_id",
+        "llama_cpp_commit"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "model_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "architecture": {"type": "string", "minLength": 1},
+        "n_embd": {"type": "integer", "minimum": 1},
+        "n_layer": {"type": "integer", "minimum": 1},
+        "vocab_size": {"type": "integer", "minimum": 1},
+        "n_ctx": {"type": "integer", "minimum": 1},
+        "protocol_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$"},
+        "engine_version": {"type": "string", "minLength": 1},
+        "build_id": {"type": "string", "minLength": 1},
+        "llama_cpp_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "backend": {"type": "string", "minLength": 1}
+      }
+    },
+    "State": {
+      "type": "object",
+      "required": ["n_tokens", "n_past", "prompt_tokens", "causal", "has_sampler", "has_steer"],
+      "additionalProperties": false,
+      "properties": {
+        "n_tokens": {"type": "integer", "minimum": 1},
+        "n_past": {"type": "integer", "minimum": 1},
+        "prompt_tokens": {"type": "integer", "minimum": 0},
+        "causal": {"type": "boolean"},
+        "has_sampler": {"type": "boolean"},
+        "has_steer": {"type": "boolean"}
+      }
+    },
+    "Blob": {
+      "type": "object",
+      "description": "sha256 is the content address of the raw KV bytes ONLY (the tensor_store.py binary-blob convention: .bin blob + .json sidecar, keyed by the same digest). payload_sha256 is the engine's OWN inner hash (kv + tokens + n_past + sampler + steer, see hash_checkpoint_payload) re-verified by /v1/checkpoint/import on resolution -- a different value from sha256 by design (different inputs, different job).",
+      "required": ["sha256", "kv_bytes", "envelope_bytes", "payload_sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "kv_bytes": {"type": "integer", "minimum": 1},
+        "envelope_bytes": {"type": "integer", "minimum": 1},
+        "payload_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    }
+  }
+}

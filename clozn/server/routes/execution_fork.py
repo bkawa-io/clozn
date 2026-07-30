@@ -83,8 +83,10 @@ def _parent_sub_facts(h, parent: Mapping, route_path: str):
 
     The process control/default worker is not a request-routing decision. In a multi-model gateway a
     historical run may belong to any configured worker, so every fork plan/capture/execute operation
-    resolves ``run.model`` through the same exact router as generation. Legacy one-worker serving has
-    no router and retains its historical ``active_sub`` behavior.
+    (and, per FORK-PIN-01, ``POST /runs/<id>/snapshot/pin`` -- see clozn/server/routes/snapshot.py,
+    which reuses this exact function rather than re-deriving worker/runtime identity itself) resolves
+    ``run.model`` through the same exact router as generation. Legacy one-worker serving has no router
+    and retains its historical ``active_sub`` behavior.
     """
     from clozn.server import app as ctx
 
@@ -96,6 +98,8 @@ def _parent_sub_facts(h, parent: Mapping, route_path: str):
         if route_path.endswith(_CHECKPOINT_SUFFIX)
         else "/runs/<id>/execution-fork/plan"
         if route_path.endswith(_PLAN_SUFFIX)
+        else "/runs/<id>/snapshot/pin"
+        if route_path.endswith("/snapshot/pin")
         else "/runs/<id>/execution-fork"
     )
     try:
