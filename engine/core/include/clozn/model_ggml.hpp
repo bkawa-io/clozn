@@ -443,6 +443,22 @@ public:
     // resumes generation bit-exactly (greedy). Throws on size mismatch or restore failure.
     void load_checkpoint(const EngineCheckpoint& ckpt);
 
+    // FORK-PIN-01: produce a NEW checkpoint representing an EARLIER n_past than `ckpt`'s own,
+    // without generating any new tokens -- the "pin an earlier fork point" primitive (a durable pin
+    // does not have to be the tip of a run). Reuses the exact same regime split
+    // POST /v1/execution-fork documents: truncate_to > ckpt.prompt_tokens is a live-KV evict (the
+    // boundary token was ORIGINALLY a single-token decode, so slicing the already-loaded blob at
+    // that position reproduces it bit-exactly -- no bridge decode needed here since, unlike
+    // execution-fork, nothing continues generating from a fresh logits row); truncate_to <=
+    // ckpt.prompt_tokens must instead re-prefill tokens[0, truncate_to) as ONE fresh batch,
+    // because those positions were originally computed inside ckpt's own single big prefill batch
+    // and llama.cpp's batched attention kernel is not guaranteed bit-identical across batch shapes
+    // (the documented batch-shape landmine -- see save_checkpoint's prefill_to doc comment).
+    // Throws if ckpt.prompt_tokens is unpopulated (0 = unknown; refuses to guess the regime) or
+    // truncate_to is out of [1, ckpt.n_past]. Must be called under the SAME lease discipline as
+    // every other checkpoint route (acquire, call, done -- no state survives across HTTP calls).
+    EngineCheckpoint truncate_checkpoint(const EngineCheckpoint& ckpt, int truncate_to);
+
     // --- Batched multi-sequence decode (Phase 2.2) -------------------------------------------
     // Copy seq 0's KV to seq 1..n-1 (shared-prefix branching). Requires the KV to be populated
     // for seq 0 first (via ar_forward). After this, each seq_id has an independent copy of the

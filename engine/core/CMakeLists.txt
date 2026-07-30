@@ -51,6 +51,18 @@ add_library(clozn_runtime STATIC
 )
 target_include_directories(clozn_runtime PUBLIC include)
 
+# clozn_sha256: vendored, public-domain, dependency-free SHA-256 (third_party/sha256 -- copied
+# straight out of llama.cpp's examples/gguf-hash/deps/sha256 so it does not depend on that
+# examples/ tree surviving future bootstrap_llama.py re-vendors; examples/ isn't built by
+# CLOZN_BUILD_GGML at all). FORK-PIN-01's checkpoint export/import envelope hash (see
+# serve/checkpoint_codec.hpp) is the only consumer today. Plain, C++-clean C89; this project
+# (`project(clozn_core LANGUAGES CXX)` above) never enables a C toolchain, so the source is compiled
+# as C++ (set_source_files_properties below) rather than pulling in a whole second language's worth
+# of CMake compiler detection for one small file.
+add_library(clozn_sha256 STATIC third_party/sha256/sha256.c)
+set_source_files_properties(third_party/sha256/sha256.c PROPERTIES LANGUAGE CXX)
+target_include_directories(clozn_sha256 PUBLIC third_party/sha256)
+
 enable_testing()
 
 # GAP #1 (task #43): the white-box state WRITE seam (ModelAdapter::write_state) — the
@@ -186,6 +198,29 @@ if(CLOZN_BUILD_GGML)
         add_test(NAME ffn_hook COMMAND test_ffn_hook)
     endif()
 
+    # FORK-PIN-01: the checkpoint export/import envelope codec (serve/checkpoint_codec.hpp) --
+    # structural round-trip, payload-hash determinism/sensitivity, and fail-closed decode of every
+    # declared-vs-actual mismatch (n_tokens, kv_bytes, steer_dims). Model-free in the sense that no
+    # GGUF/context is needed (every EngineCheckpoint here is hand-built), but the header itself
+    # needs EngineCheckpoint's definition (model_ggml.hpp -> llama.h), so this links clozn_ggml the
+    # same way test_ggml_state_write/test_ffn_hook do, and needs nlohmann/json.hpp's vendor include
+    # dir (normally only added for CLOZN_BUILD_SERVE) since checkpoint_codec.hpp uses json directly.
+    add_executable(test_checkpoint_codec tests/test_checkpoint_codec.cpp)
+    target_include_directories(test_checkpoint_codec PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/serve
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp/vendor)
+    target_link_libraries(test_checkpoint_codec PRIVATE clozn_ggml clozn_sha256)
+    if(WIN32)
+        add_test(
+            NAME checkpoint_codec
+            COMMAND ${CMAKE_COMMAND} -E env
+                "PATH=$<TARGET_FILE_DIR:llama>;$ENV{PATH}"
+                $<TARGET_FILE:test_checkpoint_codec>
+        )
+    else()
+        add_test(NAME checkpoint_codec COMMAND test_checkpoint_codec)
+    endif()
+
     # clozn-bench — the §9 quant-calibration sweep: quantize f16 -> Q8/Q5/Q4 in-process and
     # report size + token-agreement-vs-f16 + tok/s (the honest quality column for the quant axis).
     add_executable(clozn-bench tools/clozn_bench.cpp)
@@ -240,7 +275,8 @@ if(CLOZN_BUILD_SERVE AND CLOZN_BUILD_GGML)
         CLOZN_ENGINE_BACKEND="${_clozn_engine_backend}"
         CLOZN_LLAMA_CPP_COMMIT="${CLOZN_LLAMA_CPP_COMMIT}")
     target_include_directories(clozn-server PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/serve ${_vendor}/cpp-httplib ${_vendor})
-    target_link_libraries(clozn-server PRIVATE clozn_ggml llama-common)
+    # clozn_sha256: FORK-PIN-01's checkpoint export/import envelope hash (serve/checkpoint_codec.hpp).
+    target_link_libraries(clozn-server PRIVATE clozn_ggml llama-common clozn_sha256)
     if(CLOZN_BUILD_SAE)
         # --sae <dir>: the on-device SAE feature readout rides the server (clozn/sae.hpp is a
         # CUDA-free pimpl header, so this stays a plain-CXX target; clozn_sae brings cudart).

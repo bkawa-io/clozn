@@ -109,8 +109,8 @@ def test_fresh_migration_matches_upgraded_legacy_schema(tmp_path):
     applied = migrations.migrate(fresh_db)
 
     try:
-        assert legacy_applied == [1, 2]
-        assert applied == [1, 2]
+        assert legacy_applied == [1, 2, 3]
+        assert applied == [1, 2, 3]
         assert _schema_dump(fresh_db) == _schema_dump(legacy_db)
     finally:
         legacy_db.close()
@@ -134,7 +134,7 @@ def test_migrate_is_idempotent_on_an_up_to_date_db(tmp_path):
     try:
         first = migrations.migrate(db)
         second = migrations.migrate(db)
-        assert first == [1, 2]
+        assert first == [1, 2, 3]
         assert second == []                          # nothing pending -> no-op, not a re-apply
     finally:
         db.close()
@@ -174,7 +174,7 @@ def test_legacy_db_upgrades_in_place_losslessly(tmp_path):
 
         applied = migrations.migrate(db)
 
-        assert applied == [1, 2]
+        assert applied == [1, 2, 3]
         assert migrations.current_version(db) == migrations.TARGET_VERSION
         assert migrations.pending(db) == []
         assert _row_ids(db) == before                  # lossless: same rows, same ids, nothing dropped

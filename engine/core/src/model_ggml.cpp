@@ -1138,6 +1138,83 @@ void GgmlAdapter::load_checkpoint(const EngineCheckpoint& ckpt) {
         throw std::runtime_error("load_checkpoint: llama_state_seq_set_data returned 0");
 }
 
+EngineCheckpoint GgmlAdapter::truncate_checkpoint(const EngineCheckpoint& ckpt, int truncate_to) {
+    // Fail closed (no silent fallback): mirrors /v1/execution-fork's own refusal -- a checkpoint
+    // that never had prompt_tokens populated cannot honestly support the regime split.
+    if (ckpt.prompt_tokens <= 0)
+        throw std::invalid_argument(
+            "checkpoint has no recorded prompt_tokens; truncate cannot determine the "
+            "reprefill/live_kv regime for it");
+    if (truncate_to < 1 || truncate_to > ckpt.n_past)
+        throw std::invalid_argument("truncate_to out of range [1, checkpoint n_past=" +
+                                    std::to_string(ckpt.n_past) + "]");
+
+    const std::vector<int> new_tokens(ckpt.tokens.begin(), ckpt.tokens.begin() + truncate_to);
+    const bool live_kv = truncate_to > ckpt.prompt_tokens;
+
+    // The checkpoint's declared steer (if any) was active for the ENTIRE run it came from, so a
+    // reprefill of its earlier tokens must run under the same cvec (the same shape-true principle
+    // /v1/checkpoint's own prefill applies). For the live-KV branch this is a harmless no-op: no
+    // forward pass runs there, evict_from only drops already-computed KV entries.
+    bool steer_applied = false;
+    if (ckpt.has_steer && !ckpt.steer_cvec.empty()) {
+        set_steer(ckpt.steer_cvec, ckpt.steer_lo, ckpt.steer_hi);
+        steer_applied = true;
+    }
+    try {
+        if (live_kv) {
+            // load_checkpoint installs the full saved KV + resets bookkeeping; evict_from then
+            // drops everything at/after truncate_to. What remains for [0, truncate_to) is BYTE-
+            // IDENTICAL to what the original run's own KV held at that n_past -- those positions
+            // were appended one at a time (generate_ar's steady-state loop) and are never rewritten
+            // by later decodes, so slicing the blob is exact; no bridge decode is needed because,
+            // unlike execution-fork, nothing here continues generating from a fresh logits row.
+            load_checkpoint(ckpt);
+            evict_from(truncate_to);
+        } else {
+            // Reprefill tokens[0, truncate_to) as ONE fresh batch -- reproducing the shape the
+            // original prefill itself used for a prompt of exactly this length (never the live-KV
+            // slice: those positions were computed inside ckpt's OWN, differently-shaped batch, and
+            // llama.cpp's batched attention kernel is not guaranteed bit-identical across batch
+            // sizes). Mirrors generate_ar.cpp's own non-resume prefill exactly (no explicit KV clear
+            // beforehand either): ar_forward's writes at positions [0, truncate_to) fully overwrite
+            // whatever this pooled context held before, and causal decode never reads a position
+            // beyond its own n_past, so nothing at or past truncate_to can leak in.
+            set_causal(true);
+            ar_forward(new_tokens, 0);
+        }
+    } catch (...) {
+        if (steer_applied) clear_steer();
+        throw;
+    }
+
+    EngineCheckpoint out = save_checkpoint(new_tokens, truncate_to);
+    if (steer_applied) clear_steer();
+
+    out.prompt_tokens = std::min(ckpt.prompt_tokens, truncate_to);
+    if (ckpt.has_sampler) {
+        out.has_sampler = true;
+        out.seed = ckpt.seed;
+        out.temperature = ckpt.temperature;
+        out.rep_penalty = ckpt.rep_penalty;
+        out.top_k = ckpt.top_k;
+        out.top_p = ckpt.top_p;
+        // Draws a bit-exact continuous run would have consumed to reach THIS earlier point (mirrors
+        // /v1/execution-fork's own rng_discard formula): one draw per sampled committed token past
+        // the prompt boundary, zero for a position still inside the prompt or under greedy decode.
+        out.rng_draws = (ckpt.temperature > 0.0 && truncate_to > out.prompt_tokens)
+                             ? static_cast<uint64_t>(truncate_to - out.prompt_tokens)
+                             : 0;
+    }
+    if (ckpt.has_steer) {
+        out.has_steer = true;
+        out.steer_cvec = ckpt.steer_cvec;
+        out.steer_lo = ckpt.steer_lo;
+        out.steer_hi = ckpt.steer_hi;
+    }
+    return out;
+}
+
 // --- Batched multi-sequence decode (Phase 2.2) -------------------------------------------
 
 void GgmlAdapter::branch_kv(int n_branches) {

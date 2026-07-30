@@ -26,7 +26,8 @@
     "checkpoint",
     "execution_fork",
     "execution_fork_regimes",
-    "performance_timing"
+    "performance_timing",
+    "checkpoint_pin"
   ],
   "stream_frame_envelope": [
     "req",

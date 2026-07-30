@@ -32,6 +32,7 @@
 #include "gguf.h"       // read the GGUF's own output_norm.weight + output.weight for the J-lens head
 
 #include "checkpoint_store.hpp"
+#include "checkpoint_codec.hpp"  // FORK-PIN-01: /v1/checkpoint/export + /import + /truncate
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -373,6 +374,25 @@ int main(int argc, char** argv) {
             model_architecture = value;
     }
 
+    // FORK-PIN-01: this worker's own identity, as a caller-independent snapshot -- the SAME fields
+    // /v1/checkpoint/export stamps onto every exported envelope AND /v1/checkpoint/import compares
+    // an incoming envelope against, fail-closed on any mismatch. worker_generation_id rides along
+    // for PROVENANCE only (recorded, never compared): a durable pin must survive exactly the
+    // restart that changes it, so equality here would defeat the entire point of exporting.
+    auto checkpoint_identity_json = [&]() -> json {
+        json j = engine_build_info();  // engine_version, build_id, protocol_version, backend,
+                                        // llama_cpp_commit (the KV format/version proxy), feature_flags
+        j.erase("feature_flags");      // build-capability trivia, not identity a checkpoint depends on
+        j["model_sha256"] = model_sha256;
+        j["architecture"] = model_architecture;
+        j["n_embd"] = model_n_embd;
+        j["n_layer"] = model_n_layer;
+        j["vocab_size"] = model->config().vocab_size;
+        j["n_ctx"] = n_ctx;
+        j["worker_generation_id"] = worker_generation_id;
+        return j;
+    };
+
     svr.Get("/health", [&](const httplib::Request&, httplib::Response& res) {
         // capabilities: the stable feature flags a client/supervisor negotiates on. Model-shape fields
         // (n_embd/n_layer/...) stay top-level as repro metadata; the sae/jlens detail blocks below carry
@@ -416,6 +436,11 @@ int main(int argc, char** argv) {
                                           // labeled with the regime that made it exact
             {"execution_fork_regimes", execution_fork_regimes},
             {"performance_timing", true}, // versioned optional timing object on gen_finished
+            {"checkpoint_pin", true},     // FORK-PIN-01: POST /v1/checkpoint/export + /import +
+                                          // /truncate -- durable checkpoint bytes a caller can
+                                          // persist outside this worker's bounded FIFO memory and
+                                          // later hand back (to THIS worker or a fresh one), fail-
+                                          // closed on any identity/format mismatch at import
         };
         json h{{"status", "ok"},
                {"protocol_version", PROTOCOL_VERSION},        // worker <-> supervisor wire contract
@@ -1867,6 +1892,242 @@ int main(int argc, char** argv) {
         } catch (const std::exception& e) {
             res.status = 400;
             res.set_content(json{{"error", std::string("execution-fork failed: ") + e.what()},
+                                 {"worker_generation_id", worker_generation_id}}.dump(),
+                            "application/json");
+        }
+    });
+
+    // --- FORK-PIN-01: durable checkpoint lifecycle (export / import / truncate) --------------
+    // Checkpoints above are bounded, insertion-order-FIFO, process-generation-scoped worker memory
+    // (checkpoint_store.hpp's own docstring): nothing survives a worker restart, and there is no way
+    // for a caller to keep one past FIFO eviction. These three routes are the missing durability
+    // primitive -- export turns a live checkpoint into self-describing, hashed bytes a caller can
+    // persist OUTSIDE this process; import rehydrates those bytes back into a live checkpoint,
+    // fail-closed on any identity/format mismatch (never a silent reprefill that still calls itself
+    // exact); truncate produces a NEW checkpoint at an arbitrary EARLIER n_past than an existing
+    // one's, without generating -- so a caller can pin an earlier fork point, not only the tip.
+
+    // POST /v1/checkpoint/export -- {checkpoint_id, worker_generation_id?}
+    //   -> {checkpoint_id, worker_generation_id, envelope, size_bytes, envelope_bytes}
+    // `envelope` is the full clozn.checkpoint-export.v1 object (identity + state + payload_sha256):
+    // opaque to the caller, meant to be persisted verbatim and handed back to /v1/checkpoint/import
+    // unchanged. size_bytes is the raw KV blob size; envelope_bytes is the REAL byte cost of what
+    // gets persisted (base64 + JSON overhead included) -- a caller should show THIS, not size_bytes,
+    // before asking a user to confirm a pin.
+    svr.Post("/v1/checkpoint/export", [&](const httplib::Request& req, httplib::Response& res) {
+        try {
+            json body = json::parse(req.body, nullptr, false);
+            if (body.is_discarded() || !body.is_object())
+                throw std::invalid_argument("invalid JSON body");
+            if (!validate_checkpoint_generation(body, res))
+                return;
+            const std::string ckpt_id = body.value("checkpoint_id", std::string());
+            if (ckpt_id.empty()) throw std::invalid_argument("need checkpoint_id");
+
+            std::optional<EngineCheckpoint> found = checkpoints.find_copy(ckpt_id);
+            if (!found) {
+                res.status = 404;
+                res.set_content(json{{"error", "unknown checkpoint_id"},
+                                     {"worker_generation_id", worker_generation_id}}.dump(),
+                                "application/json");
+                return;
+            }
+            const size_t kv_bytes = found->kv_data.size();
+            const json envelope = checkpoint_export_envelope(*found, checkpoint_identity_json());
+            const std::string dumped = dump_json(envelope);
+            res.set_content(json{
+                {"checkpoint_id", ckpt_id},
+                {"worker_generation_id", worker_generation_id},
+                {"envelope", envelope},
+                {"size_bytes", kv_bytes},
+                {"envelope_bytes", dumped.size()},
+            }.dump(), "application/json");
+        } catch (const std::exception& e) {
+            res.status = 400;
+            res.set_content(json{{"error", std::string("checkpoint export failed: ") + e.what()},
+                                 {"worker_generation_id", worker_generation_id}}.dump(),
+                            "application/json");
+        }
+    });
+
+    // POST /v1/checkpoint/import -- {envelope: {...as returned by /v1/checkpoint/export...}}
+    //   -> {checkpoint_id, worker_generation_id, n_past, size_bytes, source_worker_generation_id}
+    // Fail-closed on: envelope_version, model_sha256 (both sides must have one -- an unset hash on
+    // either side means identity is UNVERIFIABLE, refused rather than treated as a free pass),
+    // architecture, n_embd, n_layer, vocab_size, protocol_version, engine_version, build_id,
+    // llama_cpp_commit (the KV format/version proxy), n_past vs this worker's n_ctx, steer_cvec
+    // dimensions vs this worker's LIVE n_embd*n_layer, and the payload_sha256 (recomputed and
+    // compared BEFORE any of the bytes are trusted). worker_generation_id is the one identity field
+    // deliberately NOT compared: it is provenance only (see checkpoint_identity_json's comment) --
+    // an import surviving exactly the restart that changed it is the entire point of exporting.
+    // On success the checkpoint is inserted under THIS worker's CURRENT generation and prove-loaded
+    // into a real context first (see the lease block below) -- so an import that passes every check
+    // above still cannot silently succeed on a blob llama.cpp itself refuses to deserialize.
+    svr.Post("/v1/checkpoint/import", [&](const httplib::Request& req, httplib::Response& res) {
+        try {
+            json body = json::parse(req.body, nullptr, false);
+            if (body.is_discarded() || !body.is_object() || !body.contains("envelope") ||
+                !body["envelope"].is_object())
+                throw std::invalid_argument("need {\"envelope\": {...}} (see POST /v1/checkpoint/export)");
+            const json& env = body["envelope"];
+            if (env.value("envelope_version", std::string()) !=
+                std::string(CHECKPOINT_EXPORT_ENVELOPE_VERSION))
+                throw std::invalid_argument("unsupported envelope_version (this build understands " +
+                                            std::string(CHECKPOINT_EXPORT_ENVELOPE_VERSION) + " only)");
+            if (!env.contains("identity") || !env["identity"].is_object())
+                throw std::invalid_argument("envelope missing 'identity'");
+            if (!env.contains("state") || !env["state"].is_object())
+                throw std::invalid_argument("envelope missing 'state'");
+            if (!env.contains("payload_sha256") || !env["payload_sha256"].is_string())
+                throw std::invalid_argument("envelope missing 'payload_sha256'");
+
+            const json& id = env["identity"];
+            const json here = checkpoint_identity_json();
+
+            auto refuse_mismatch = [&](const char* field) {
+                res.status = 409;
+                res.set_content(json{
+                    {"error", std::string("import refused: ") + field + " does not match this worker"},
+                    {"field", field},
+                    {"expected", here.value(field, json())},
+                    {"actual", id.value(field, json())},
+                    {"worker_generation_id", worker_generation_id},
+                }.dump(), "application/json");
+            };
+            const std::string id_model_sha256 = id.value("model_sha256", std::string());
+            const std::string here_model_sha256 = here.value("model_sha256", std::string());
+            if (here_model_sha256.empty() || id_model_sha256.empty()) {
+                res.status = 409;
+                res.set_content(json{
+                    {"error", "import refused: model identity unverifiable (model_sha256 was not "
+                              "recorded on this worker and/or the exporting one)"},
+                    {"worker_generation_id", worker_generation_id}}.dump(), "application/json");
+                return;
+            }
+            if (id_model_sha256 != here_model_sha256) { refuse_mismatch("model_sha256"); return; }
+            if (id.value("architecture", std::string()) != here.value("architecture", std::string())) {
+                refuse_mismatch("architecture"); return;
+            }
+            if (id.value("n_embd", -1) != here.value("n_embd", -2)) { refuse_mismatch("n_embd"); return; }
+            if (id.value("n_layer", -1) != here.value("n_layer", -2)) { refuse_mismatch("n_layer"); return; }
+            if (id.value("vocab_size", -1) != here.value("vocab_size", -2)) {
+                refuse_mismatch("vocab_size"); return;
+            }
+            if (id.value("protocol_version", std::string()) != here.value("protocol_version", std::string())) {
+                refuse_mismatch("protocol_version"); return;
+            }
+            if (id.value("engine_version", std::string()) != here.value("engine_version", std::string())) {
+                refuse_mismatch("engine_version"); return;
+            }
+            if (id.value("build_id", std::string()) != here.value("build_id", std::string())) {
+                refuse_mismatch("build_id"); return;
+            }
+            if (id.value("llama_cpp_commit", std::string()) != here.value("llama_cpp_commit", std::string())) {
+                refuse_mismatch("llama_cpp_commit"); return;
+            }
+
+            // Structural decode: throws on any declared-vs-actual shape/count inconsistency
+            // (token count, kv byte count, sampler-field completeness, steer dimension count).
+            EngineCheckpoint ckpt = checkpoint_state_from_json(env["state"]);
+
+            if (ckpt.n_past > n_ctx)
+                throw std::invalid_argument(
+                    "checkpoint n_past (" + std::to_string(ckpt.n_past) +
+                    ") exceeds this worker's context window (n_ctx=" + std::to_string(n_ctx) + ")");
+            if (ckpt.has_steer) {
+                const size_t want = static_cast<size_t>(model_n_embd) * static_cast<size_t>(model_n_layer);
+                if (ckpt.steer_cvec.size() != want)
+                    throw std::invalid_argument(
+                        "steer_cvec dimensions (" + std::to_string(ckpt.steer_cvec.size()) +
+                        ") do not match this worker's model (n_embd*n_layer=" + std::to_string(want) + ")");
+            }
+
+            // Blob hash: recompute over the decoded payload and compare to what the exporter
+            // declared, BEFORE any of these bytes are handed to llama.cpp.
+            const std::string declared_hash = env["payload_sha256"].get<std::string>();
+            const std::string actual_hash = hash_checkpoint_payload(ckpt);
+            if (actual_hash != declared_hash) {
+                res.status = 400;
+                res.set_content(json{
+                    {"error", "import refused: payload hash mismatch (the checkpoint bytes do not "
+                              "match their declared digest)"},
+                    {"declared_sha256", declared_hash}, {"actual_sha256", actual_hash},
+                    {"worker_generation_id", worker_generation_id}}.dump(), "application/json");
+                return;
+            }
+
+            // Prove-load: acquire a real context and actually deserialize the KV blob now, not on
+            // first use later. llama_state_seq_set_data (via load_checkpoint) has its own internal
+            // format/version check and throws on anything this route's own checks didn't anticipate.
+            {
+                ContextPool::Lease lease = pool.acquire();
+                (*lease).load_checkpoint(ckpt);
+            }
+
+            const size_t sz = ckpt.kv_data.size();
+            const int n_past = ckpt.n_past;
+            const json source_generation = id.value("worker_generation_id", json());
+            const std::string new_id = checkpoints.insert(std::move(ckpt));
+            res.set_content(json{
+                {"checkpoint_id", new_id},
+                {"worker_generation_id", worker_generation_id},
+                {"n_past", n_past},
+                {"size_bytes", sz},
+                {"source_worker_generation_id", source_generation},
+            }.dump(), "application/json");
+        } catch (const std::exception& e) {
+            res.status = 400;
+            res.set_content(json{{"error", std::string("checkpoint import failed: ") + e.what()},
+                                 {"worker_generation_id", worker_generation_id}}.dump(),
+                            "application/json");
+        }
+    });
+
+    // POST /v1/checkpoint/truncate -- {checkpoint_id, worker_generation_id?, truncate_to}
+    //   -> {checkpoint_id, worker_generation_id, n_past, prompt_tokens, size_bytes, restore_mode}
+    // Produces a NEW checkpoint at an EARLIER n_past than an existing one's, generating nothing --
+    // see GgmlAdapter::truncate_checkpoint for the regime split (the same reprefill/live-KV split
+    // POST /v1/execution-fork documents). This is what lets a caller pin a fork point that is not
+    // the tip of a run: capture the tip once, then truncate+export as many earlier points as wanted.
+    svr.Post("/v1/checkpoint/truncate", [&](const httplib::Request& req, httplib::Response& res) {
+        try {
+            json body = json::parse(req.body, nullptr, false);
+            if (body.is_discarded() || !body.is_object())
+                throw std::invalid_argument("invalid JSON body");
+            if (!validate_checkpoint_generation(body, res))
+                return;
+            const std::string ckpt_id = body.value("checkpoint_id", std::string());
+            if (ckpt_id.empty()) throw std::invalid_argument("need checkpoint_id");
+            if (!body.contains("truncate_to") || !body["truncate_to"].is_number_integer())
+                throw std::invalid_argument("need integer truncate_to");
+            const int truncate_to = body["truncate_to"].get<int>();
+
+            std::optional<EngineCheckpoint> found = checkpoints.find_copy(ckpt_id);
+            if (!found) {
+                res.status = 404;
+                res.set_content(json{{"error", "unknown checkpoint_id"},
+                                     {"worker_generation_id", worker_generation_id}}.dump(),
+                                "application/json");
+                return;
+            }
+            const bool live_kv = truncate_to > found->prompt_tokens;
+            ContextPool::Lease lease = pool.acquire();
+            EngineCheckpoint out = (*lease).truncate_checkpoint(*found, truncate_to);
+            const size_t sz = out.kv_data.size();
+            const int n_past = out.n_past;
+            const int prompt_tokens = out.prompt_tokens;
+            const std::string new_id = checkpoints.insert(std::move(out));
+            res.set_content(json{
+                {"checkpoint_id", new_id},
+                {"worker_generation_id", worker_generation_id},
+                {"n_past", n_past},
+                {"prompt_tokens", prompt_tokens},
+                {"size_bytes", sz},
+                {"restore_mode", live_kv ? "live_kv_truncated" : "reprefill"},
+            }.dump(), "application/json");
+        } catch (const std::exception& e) {
+            res.status = 400;
+            res.set_content(json{{"error", std::string("checkpoint truncate failed: ") + e.what()},
                                  {"worker_generation_id", worker_generation_id}}.dump(),
                             "application/json");
         }

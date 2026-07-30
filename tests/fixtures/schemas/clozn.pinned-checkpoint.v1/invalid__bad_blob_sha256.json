@@ -1,0 +1,39 @@
+{
+  "schema_version": "clozn.pinned-checkpoint.v1",
+  "pin_id": "pin_e1a7fda9e6a454db61fc",
+  "run_id": "run_abc123",
+  "pinned_ts": 1753800000.0,
+  "pinned_at": "2026-07-29T12:00:00Z",
+  "note": "before the risky rewrite",
+  "source": {
+    "checkpoint_id": "ckpt-5ee4e1f377a36f1489546d826bd3fc87ffe4461d3b2d5c17557701f1def2a342-42",
+    "worker_generation_id": "5ee4e1f377a36f1489546d826bd3fc87ffe4461d3b2d5c17557701f1def2a342"
+  },
+  "identity": {
+    "model_sha256": "4f93e5df395c7b831bbd760bdc8b7b74ad21079f5dd5e844b06432255fcef16f",
+    "architecture": "qwen2",
+    "n_embd": 896,
+    "n_layer": 24,
+    "vocab_size": 151936,
+    "n_ctx": 4096,
+    "protocol_version": "1.1",
+    "engine_version": "0.1.0",
+    "build_id": "development",
+    "llama_cpp_commit": "991fe59bb316cdc482920911e0936d20dbe5f48d",
+    "backend": "cuda"
+  },
+  "state": {
+    "n_tokens": 128,
+    "n_past": 128,
+    "prompt_tokens": 96,
+    "causal": true,
+    "has_sampler": true,
+    "has_steer": false
+  },
+  "blob": {
+    "sha256": "not-a-hash",
+    "kv_bytes": 4194304,
+    "envelope_bytes": 5592405,
+    "payload_sha256": "2e6709af8dbfe7cd5abb2f716924848e527b4486c30c4509b0e4aa8171987335"
+  }
+}

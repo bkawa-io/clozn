@@ -1,0 +1,37 @@
+{
+  "schema_version": "clozn.pinned-checkpoint.v1",
+  "pin_id": "pin_cb243a5ba247c042c13c",
+  "run_id": "run_xyz789",
+  "pinned_ts": 1753800500.5,
+  "pinned_at": "2026-07-29T12:08:20Z",
+  "source": {
+    "checkpoint_id": "ckpt-bb9e84edfdb6684df92d99f6448cb97a4c3072ab9b5da6c8a4ad84816c4da667-3",
+    "worker_generation_id": "bb9e84edfdb6684df92d99f6448cb97a4c3072ab9b5da6c8a4ad84816c4da667"
+  },
+  "identity": {
+    "model_sha256": "02378fc99d318e920733a6cb5551a252410bf1bc403c321f64e6f5a44f9f62b1",
+    "architecture": "qwen2",
+    "n_embd": 896,
+    "n_layer": 24,
+    "vocab_size": 151936,
+    "n_ctx": 4096,
+    "protocol_version": "1.1",
+    "engine_version": "0.1.0",
+    "build_id": "development",
+    "llama_cpp_commit": "e6f87e08676804f108eecda08ef87d605d9bee00"
+  },
+  "state": {
+    "n_tokens": 40,
+    "n_past": 40,
+    "prompt_tokens": 40,
+    "causal": true,
+    "has_sampler": false,
+    "has_steer": false
+  },
+  "blob": {
+    "sha256": "90113fcf1fc0ef0a7211e08de474d6df04048d61f0a1dfc2c6d3869ffd9297f1",
+    "kv_bytes": 1310720,
+    "envelope_bytes": 1748966,
+    "payload_sha256": "bddd3a6e5dab59fa05fa8fb0d789a3c2ad3c9982dcc4a368f3d5719f421ffda8"
+  }
+}
