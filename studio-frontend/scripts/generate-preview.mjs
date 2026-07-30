@@ -15,7 +15,7 @@
  *
  * Usage: `node scripts/generate-preview.mjs` from `studio-frontend/`.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,17 +32,30 @@ function hasCompiledCss() {
   return fs.existsSync(cssAssetsDir) && fs.readdirSync(cssAssetsDir).some((f) => f.endsWith(".css"));
 }
 
+/**
+ * On Windows the local binaries are `.cmd` shims, which `execFileSync` cannot spawn directly (EINVAL)
+ * without a shell. `execSync` with a pre-quoted string is the documented way to do that without Node's
+ * "args are not escaped" deprecation warning that `execFileSync(..., {shell:true})` triggers. Every
+ * argument passed through here is a hardcoded constant (never user input), so simple JSON-string quoting
+ * is sufficient.
+ */
+function run(binName, args) {
+  if (isWin) {
+    const cmd = [bin(binName), ...args].map((part) => JSON.stringify(part)).join(" ");
+    execSync(cmd, { cwd: studioFrontendRoot, stdio: "inherit" });
+  } else {
+    execFileSync(bin(binName), args, { cwd: studioFrontendRoot, stdio: "inherit" });
+  }
+}
+
 if (!hasCompiledCss()) {
   console.log("[generate-preview] no compiled CSS under studio/next/assets/ -- running `vite build` first...");
-  execFileSync(bin("vite"), ["build"], { cwd: studioFrontendRoot, stdio: "inherit" });
+  run("vite", ["build"]);
 } else {
   console.log("[generate-preview] using existing studio/next/assets/*.css -- run `npm run build` first if it is stale.");
 }
 
 console.log("[generate-preview] capturing surface states (vitest + jsdom, real fetch stubbing, real effects)...");
-execFileSync(bin("vitest"), ["run", "--config", "vitest.preview.config.ts"], {
-  cwd: studioFrontendRoot,
-  stdio: "inherit",
-});
+run("vitest", ["run", "--config", "vitest.preview.config.ts"]);
 
 console.log("[generate-preview] done -- open studio-frontend/.preview/surfaces.html directly (file:// is fine).");
