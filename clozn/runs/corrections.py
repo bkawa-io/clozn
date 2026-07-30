@@ -318,6 +318,20 @@ def _overlapping_candidates(db, *, correction_type: str, scope_kind: str, scope_
     return out
 
 
+def _confirm_row(db, correction_id: str, *, now: float, detail: "dict | None" = None) -> None:
+    """The exact confirm mutation (confirmed_ts/enabled) plus its 'confirmed' event -- factored out of
+    confirm_correction() so a caller that must commit an ADDITIONAL row in the SAME transaction (F6,
+    clozn.runs.teaching_loop.verify_and_promote(), which appends a verification event immediately before
+    promoting) can do so atomically, through this one mutation, rather than re-deriving the UPDATE
+    statement a second time. Callers must have already validated state (not deleted, not already
+    confirmed) and must be inside an open `db` transaction -- this helper does not itself validate or
+    commit. `detail` is optional and defaults to None (the ordinary hand-confirm path via
+    confirm_correction() below never sets it); a non-None detail is how a caller records WHY this
+    particular confirmation happened without inventing a second event type."""
+    db.execute("UPDATE corrections SET confirmed_ts = ?, enabled = 1 WHERE id = ?", (now, correction_id))
+    _append_event(db, correction_id, "confirmed", ts=now, detail=detail)
+
+
 def confirm_correction(correction_id: str) -> dict:
     """THE explicit-confirmation gate: a drafted correction becomes selectable by resolve_corrections()
     only after this call. Idempotent if already confirmed (returns the current document, no duplicate
@@ -337,9 +351,7 @@ def confirm_correction(correction_id: str) -> dict:
                         db, correction_type=row["type"], scope_kind=row["scope_kind"],
                         scope_value=row["scope_value"], exclude_id=correction_id)}
         now = time.time()
-        db.execute(
-            "UPDATE corrections SET confirmed_ts = ?, enabled = 1 WHERE id = ?", (now, correction_id))
-        _append_event(db, correction_id, "confirmed", ts=now)
+        _confirm_row(db, correction_id, now=now)
         conflicts = _overlapping_candidates(
             db, correction_type=row["type"], scope_kind=row["scope_kind"],
             scope_value=row["scope_value"], exclude_id=correction_id)

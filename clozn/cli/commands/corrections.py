@@ -1,10 +1,11 @@
-"""`clozn corrections ...` -- F5's CLI exposure for the scoped correction store ("Teach Once").
+"""`clozn corrections ...` -- F5's CLI exposure for the scoped correction store ("Teach Once"), plus F6's
+`verify` subcommand for the verify-before-save teaching loop (`clozn/runs/teaching_loop.py`).
 
-No HTTP route exists for F5 yet (another slice's job -- see clozn/runs/corrections.py's own module
-docstring); this command is the only way to exercise the store today, mirroring the precedent
-`clozn investigate-experiment` set for C3 (plan-only CLI ahead of a later HTTP surface). Every subcommand
-is a thin argument-parsing wrapper over clozn.runs.corrections -- no selection/precedence/conflict logic
-lives here.
+No HTTP route exists for F5/F6 yet (another slice's job -- see clozn/runs/corrections.py's and
+clozn/runs/teaching_loop.py's own module docstrings); this command is the only way to exercise either
+store today, mirroring the precedent `clozn investigate-experiment` set for C3 (plan-only CLI ahead of a
+later HTTP surface). Every subcommand is a thin argument-parsing wrapper over clozn.runs.corrections (or,
+for `verify`, clozn.runs.teaching_loop) -- no selection/precedence/conflict/verification logic lives here.
 """
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ def add_subparser(sub) -> None:
     parser = sub.add_parser(
         "corrections",
         help="F5: scoped correction store (\"Teach Once\") -- draft/confirm/disable/enable/delete/"
-             "undo/export/resolve")
+             "undo/export/resolve; F6: verify (verify-before-save teaching loop)")
     actions = parser.add_subparsers(dest="corrections_command", required=True)
 
     draft = actions.add_parser("draft", help="create an inert, unconfirmed correction")
@@ -99,6 +100,22 @@ def add_subparser(sub) -> None:
                          help="exclude global_local-scoped corrections from this resolution")
     resolve.add_argument("--json", action="store_true")
     resolve.set_defaults(fn=cmd_resolve)
+
+    verify = actions.add_parser(
+        "verify",
+        help="F6: verify a drafted correction against a target-failure/child-retry run pair "
+             "(clozn.replay.controlled's exact comparison) and promote it ONLY if the child run did not "
+             "reproduce the failure; a failed verification stays a draft and is recorded as evidence")
+    verify.add_argument("correction_id")
+    verify.add_argument("--target", required=True, dest="target_run_id",
+                        help="the recorded failure run id this attempt tried to fix")
+    verify.add_argument("--child", required=True, dest="child_run_id",
+                        help="the already-persisted retry run id to compare against --target")
+    verify.add_argument("--match", default="exact_output", dest="match_criterion",
+                        choices=["exact_output", "tool_parse", "finish_reason", "token_budget"],
+                        help="exact outcome criterion; no semantic similarity (default exact_output)")
+    verify.add_argument("--json", action="store_true")
+    verify.set_defaults(fn=cmd_verify)
 
 
 def _fail(exc: Exception):
@@ -223,4 +240,18 @@ def cmd_resolve(args) -> int:
     except corrections.CorrectionError as exc:
         _fail(exc)
     _print(resolution, as_json=args.json)
+    return 0
+
+
+def cmd_verify(args) -> int:
+    from clozn.runs import corrections, teaching_loop
+    try:
+        result = teaching_loop.verify_and_promote(
+            args.correction_id, target_run_id=args.target_run_id, child_run_id=args.child_run_id,
+            match_criterion=args.match_criterion)
+    except (teaching_loop.TeachingLoopError, corrections.CorrectionError) as exc:
+        _fail(exc)
+    _print(result, as_json=args.json)
+    if not args.json:
+        print(f"\n{result['verification']}: {result['reason']}")
     return 0
