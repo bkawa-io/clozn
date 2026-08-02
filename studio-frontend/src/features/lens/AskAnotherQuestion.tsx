@@ -73,16 +73,6 @@ function QuestionChip({
         <small className="ask-another-chip-backing">{question.backedBy}</small>
       </button>
       {question.capability !== "available" && <p className="ask-another-chip-reason">{question.reason}</p>}
-      {/* The only question with a second real surface worth naming -- see this question's own doc
-          comment in data/askAnotherQuestion.ts for why arbitrary-span ablation stays PARTIAL rather
-          than fully available. A per-token fork/causal-trace in Scope answers a narrower, adjacent
-          question ("what if this one token were different") -- named here so it is not confused with
-          the passage-level measurement the chip itself opens. */}
-      {question.id === "without_passage" && (
-        <a className="ask-another-secondary" href={`#/runs/${encodeURIComponent(runId)}/scope`}>
-          OR: single-token fork / causal-trace in Scope
-        </a>
-      )}
     </li>
   );
 }
@@ -161,8 +151,8 @@ export function AskAnotherQuestion({ runId }: AskAnotherQuestionProps) {
 
       <p className="ask-another-boundary">
         A directory of the investigations clozn can actually run for this run -- not a chat. Every
-        question below either opens real, already-measured evidence or says plainly why it can&apos;t
-        yet; nothing on this panel generates an explanation of its own.
+        question below either opens real evidence, opens an explicit action, or says plainly why it
+        can&apos;t yet; nothing on this panel generates an explanation of its own.
       </p>
 
       <ul className="ask-another-grid" aria-label="Investigation questions">
@@ -184,6 +174,14 @@ export function AskAnotherQuestion({ runId }: AskAnotherQuestionProps) {
             type="text"
             value={query}
             onChange={(event) => { setQuery(event.target.value); setNotice(null); }}
+            onKeyDown={(event) => {
+              // Keep keyboard submission explicit. Some embedded browser surfaces do not synthesize
+              // the implicit submit for a controlled text input inside this labelled form.
+              if (event.key === "Enter") {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
             placeholder="Routes to one of the questions above -- never answers directly"
           />
         </label>

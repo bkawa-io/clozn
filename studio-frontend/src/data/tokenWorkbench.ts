@@ -38,6 +38,56 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value ? value : undefined;
 }
 
+// -------------------------------------------------------------------------------- mechanistic diff
+/** The observational clozn.mechanistic-diff.v1 artifact. Its nested metric objects intentionally stay
+ * JSON-shaped: the backend omits measurements it could not honestly compute, so the UI must not turn
+ * an absent metric into a zero or a generic confidence score. */
+export interface MechanisticDiffArtifact {
+  schemaVersion: string;
+  generatedAt: string;
+  referenceModel: JsonRecord;
+  candidateModel: JsonRecord;
+  pairCompatibility: JsonRecord;
+  continuation: { nPrompt: number; nCont: number };
+  layersRequested: number[];
+  positionsRequested: number[];
+  layerCapture: JsonRecord[];
+  positionMetrics: JsonRecord[];
+  residualPoints: JsonRecord[];
+  layerChange?: JsonRecord[];
+}
+
+export function parseMechanisticDiffArtifact(value: unknown): MechanisticDiffArtifact {
+  const item = record(value);
+  if (item.schema_version !== "clozn.mechanistic-diff.v1") {
+    throw new Error("mechanistic diff result was not a clozn.mechanistic-diff.v1 artifact");
+  }
+  const continuation = record(item.continuation);
+  const nPrompt = finiteNumber(continuation.n_prompt);
+  const nCont = finiteNumber(continuation.n_cont);
+  if (nPrompt == null || nCont == null) throw new Error("mechanistic diff omitted continuation counts");
+  const integerArray = (raw: unknown): number[] => Array.isArray(raw)
+    ? raw.flatMap((entry) => {
+      const number = finiteNumber(entry);
+      return number == null ? [] : [Math.trunc(number)];
+    })
+    : [];
+  return {
+    schemaVersion: String(item.schema_version),
+    generatedAt: nonEmptyString(item.generated_at) ?? "",
+    referenceModel: record(item.reference_model),
+    candidateModel: record(item.candidate_model),
+    pairCompatibility: record(item.pair_compatibility),
+    continuation: { nPrompt: Math.trunc(nPrompt), nCont: Math.trunc(nCont) },
+    layersRequested: integerArray(item.layers_requested),
+    positionsRequested: integerArray(item.positions_requested),
+    layerCapture: records(item.layer_capture),
+    positionMetrics: records(item.position_metrics),
+    residualPoints: records(item.residual_points),
+    layerChange: item.layer_change === undefined ? undefined : records(item.layer_change),
+  };
+}
+
 // ------------------------------------------------------------------------------------- workbench document
 export interface WorkbenchRunSection {
   id: string;
@@ -488,18 +538,21 @@ export function postSourceMeasureAction(
   return postAction(runId, index, "source-measure", body, signal).then((raw) => parseEnvelope(raw, record));
 }
 
-/** mechanistic-diff never reaches "cached" or "job" this milestone (execution is not yet wired -- see
- * clozn/runs/token_workbench_actions.py's module docstring); it always resolves `unavailable`, carrying
- * either a pair-compatibility refusal or an honest "not yet wired" reason. The typed artifact parameter
- * is `never` on purpose: a caller pattern-matching this result can never reach a `cached`/`job` branch. */
+/** The mechanistic action returns the observational diff artifact after a bounded managed job. Cached
+ * responses carry the token-workbench cache entry around that artifact, just like causal-trace. */
 export function postMechanisticDiffAction(
   runId: string,
   index: number,
   referenceRunId: string,
   signal?: AbortSignal,
-): Promise<WorkbenchActionResult<never>> {
+): Promise<WorkbenchActionResult<MechanisticDiffArtifact>> {
   return postAction(runId, index, "mechanistic-diff", { reference_run_id: referenceRunId }, signal)
-    .then((raw) => parseEnvelope(raw, () => { throw new Error("mechanistic-diff has no cached artifact shape"); }));
+    .then((raw) => parseEnvelope(raw, (value) => {
+      const entry = record(value);
+      return parseMechanisticDiffArtifact(
+        entry.action === "mechanistic_diff" && entry.result ? entry.result : value,
+      );
+    }));
 }
 
 export async function loadWorkbenchJob(

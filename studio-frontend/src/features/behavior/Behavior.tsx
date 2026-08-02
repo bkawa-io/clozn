@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import type { RuntimeState } from "../../data/types";
+import { TeachOnce } from "./TeachOnce";
 import {
   applyAxis,
   applyConcept,
@@ -37,7 +38,7 @@ interface BehaviorProps {
   inspectorOpen: boolean;
 }
 
-type BehaviorView = "fixes" | "dials" | "concepts" | "runtime" | "profiles";
+type BehaviorView = "fixes" | "dials" | "concepts" | "runtime" | "profiles" | "teach";
 type LoadStatus = "loading" | "ready" | "error";
 type OperationStatus = "idle" | "draft" | "pending" | "applied" | "failed" | "reverted";
 
@@ -53,6 +54,7 @@ const modules: Array<{ id: BehaviorView; label: string }> = [
   { id: "concepts", label: "CONCEPT STEERING" },
   { id: "runtime", label: "RUNTIME DEFAULTS" },
   { id: "profiles", label: "PROFILES" },
+  { id: "teach", label: "TEACH ONCE" },
 ];
 
 const PREVIEW_PROMPT = "Tell me about your day.";
@@ -647,7 +649,7 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
                   ? activeAxes.length
                   : module.id === "concepts"
                     ? Object.keys(activeConcepts).length
-                    : module.id === "profiles" ? profiles.length : sampling ? 1 : 0}
+                    : module.id === "profiles" ? profiles.length : module.id === "teach" ? "·" : sampling ? 1 : 0}
               </b>
             </button>
           ))}
@@ -1116,6 +1118,8 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
               </section>
             </div>
           </>
+        ) : view === "teach" ? (
+          <TeachOnce />
         ) : (
           <>
             <header className="instrument-head behavior-console-head">

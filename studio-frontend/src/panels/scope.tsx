@@ -84,14 +84,17 @@ export function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
     }
   }
 
-  const modelLabel = data.model === "local" ? liveRuntime.engine?.model ?? data.model : data.model;
+  const modelLabel = runStatus === "error"
+    ? "UNAVAILABLE"
+    : data.model === "local" ? liveRuntime.engine?.model ?? data.model : data.model;
+  const runLabel = runStatus === "error" ? runId ?? "—" : data.id;
 
   useTopbar(
     () => ({
       stats: (
         <>
           <span className="top-stat"><b>MODEL</b>{modelLabel}</span>
-          <span className="top-stat"><b>RUN</b>{data.id}</span>
+          <span className="top-stat"><b>RUN</b>{runLabel}</span>
         </>
       ),
       modeChip:
@@ -112,6 +115,26 @@ export function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
     if (data.mode !== "run" || runStatus !== "idle") return;
     history.replaceState(null, "", serializeScopeUrl(data.id, state));
   }, [data.id, data.mode, runStatus]);
+
+  if (runStatus === "error" && runId) {
+    return (
+      <section className="instrument scope-load-error" aria-labelledby="scope-load-error-title">
+        <header className="instrument-head">
+          <div>
+            <span className="eyebrow">MODEL SCOPE</span>
+            <h1 id="scope-load-error-title">Run not opened</h1>
+          </div>
+          <span className="mode-chip">ERROR</span>
+        </header>
+        <p className="scope-load-error-message" role="alert">
+          Run &quot;{runId}&quot; could not be loaded. No evidence is available for this deep link.
+        </p>
+        <p className="scope-load-error-boundary">
+          <a href="#/runs">Back to runs</a>
+        </p>
+      </section>
+    );
+  }
 
   return (
     <Observatory

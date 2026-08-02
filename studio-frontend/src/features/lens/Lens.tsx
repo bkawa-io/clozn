@@ -36,6 +36,7 @@ import {
 } from "./analysis";
 import { describeAbsence, EvidenceCaveat, evidenceStateBadge } from "./EvidenceCaveat";
 import { RunPerformance } from "./RunPerformance";
+import { TimeMachine } from "./TimeMachine";
 
 interface LensProps {
   runtime: RuntimeState;
@@ -582,6 +583,8 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
           {runId && <SlotHost slot="lens.evidence" data={{ runId }} />}
         </div>
       </section>
+
+      {runId && <TimeMachine runId={runId} />}
 
       <section className={`instrument lens-reader mode-${mode}`} aria-labelledby="lens-title">
         <header className="instrument-head lens-head">

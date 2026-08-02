@@ -250,7 +250,10 @@ describe("action outcomes", () => {
     }));
     diffAction.mockResolvedValue({
       outcome: "unavailable",
-      reason: { code: "cross_model_execution_not_wired", message: "not yet wired" },
+      reason: {
+        code: "cross_model_execution_not_wired",
+        message: "managed multi-model registry is unavailable for this gateway",
+      },
       pairCompatibility: { verdict: { operations: { per_token_comparison: { permitted: true } } } },
     });
     const { result } = renderHook(() => useTokenWorkbench({
@@ -260,8 +263,51 @@ describe("action outcomes", () => {
 
     act(() => result.current.runAction("mechanistic_diff"));
     await waitFor(() => expect(result.current.actions.mechanistic_diff.phase).toBe("unavailable"));
-    expect(result.current.actions.mechanistic_diff.reason).toBe("not yet wired");
+    expect(result.current.actions.mechanistic_diff.reason).toBe(
+      "managed multi-model registry is unavailable for this gateway",
+    );
     expect(result.current.actions.mechanistic_diff.pairCompatibility).toBeDefined();
+  });
+
+  test("mechanistic_diff reaching a completed managed job exposes the observational artifact", async () => {
+    const data = run("run-a");
+    loadDoc.mockResolvedValue(doc(0, {
+      referenceRunId: "run-b",
+      capabilities: {
+        exactFork: { available: false, snapshotState: "x", reason: "x" },
+        sourceMeasurement: { available: false, status: "unavailable", reason: "x" },
+        causalTrace: { available: false, status: "unavailable", reason: "x" },
+        mechanisticDiff: { available: true, reason: "eligible" },
+      },
+    }));
+    diffAction.mockResolvedValue({ outcome: "job", job: job({ kind: "mechanistic_diff" }) });
+    jobStatus.mockResolvedValue(job({
+      kind: "mechanistic_diff",
+      state: "completed",
+      progress: { phase: "done", completedUnits: 1, totalUnits: 1, percent: 100 },
+      result: {
+        schema_version: "clozn.token-workbench-action.v1",
+        action: "mechanistic_diff",
+        outcome: "ok",
+        result: {
+          schema_version: "clozn.mechanistic-diff.v1",
+          generated_at: "2026-08-01T00:00:00Z",
+          reference_model: {}, candidate_model: {}, pair_compatibility: {},
+          continuation: { n_prompt: 2, n_cont: 3 },
+          layers_requested: [1], positions_requested: [2],
+          layer_capture: [], position_metrics: [], residual_points: [],
+        },
+      },
+    }));
+    const { result } = renderHook(() => useTokenWorkbench({
+      data, runtime, onSelectRun: vi.fn(), initialState: { reference: "run-b" },
+    }));
+    await waitFor(() => expect(result.current.actions.mechanistic_diff.phase).toBe("idle"));
+
+    act(() => result.current.runAction("mechanistic_diff"));
+    await waitFor(() => expect(result.current.actions.mechanistic_diff.phase).toBe("completed"), { timeout: 3000 });
+    expect((result.current.actions.mechanistic_diff.artifact as { schemaVersion: string }).schemaVersion)
+      .toBe("clozn.mechanistic-diff.v1");
   });
 
   test("a capability the workbench reports unavailable never becomes runnable", async () => {

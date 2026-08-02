@@ -1,3 +1,28 @@
+.scope-load-error {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+}
+
+.scope-load-error-message {
+  margin: 10px 14px;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--danger) 55%, var(--line-strong));
+  color: var(--danger);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.scope-load-error-boundary {
+  margin: 0 14px 14px;
+  color: var(--ink-soft);
+  font-size: 10px;
+}
+
+.scope-load-error-boundary a {
+  color: var(--signal-violet);
+}
+
 .scope-instrument {
   display: flex;
   flex-direction: column;

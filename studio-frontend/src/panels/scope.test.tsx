@@ -163,6 +163,20 @@ beforeEach(async () => {
   vi.mocked(wb.cancelWorkbenchJob).mockReset();
 });
 
+describe("ScopePanel load boundaries", () => {
+  test("does not render demo evidence for an unknown deep-linked run", async () => {
+    render(<ScopePanel runtime={runtime} inspectorOpen params={{ runId: "missing-run" }} />);
+
+    expect(await screen.findByRole("heading", { name: "Run not opened" })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      'Run "missing-run" could not be loaded. No evidence is available for this deep link.',
+    );
+    expect(screen.getByRole("link", { name: "Back to runs" })).toHaveAttribute("href", "#/runs");
+    expect(screen.queryByRole("listbox", { name: "Output tokens" })).not.toBeInTheDocument();
+    expect(screen.queryByText("demo_0142")).not.toBeInTheDocument();
+  });
+});
+
 describe("ScopePanel fork race safety", () => {
   test("a slow fork response for run A never paints over a run selected meanwhile", async () => {
     const wb = await import("../data/tokenWorkbench");

@@ -26,6 +26,8 @@ function Destinations() {
       <h3 id="what-mattered-title">What mattered?</h3>
       <h3 id="received-context-title">What did the model receive?</h3>
       <h3 id="claim-verify-title">Are the claims supported?</h3>
+      <h3 id="second-opinion-title">Would another model disagree?</h3>
+      <h3 id="investigation-experiment-title">Did this matter?</h3>
     </>
   );
 }
@@ -72,34 +74,36 @@ describe("Ask another question", () => {
       expect(within(grid).getByRole("button", { name: startsWith(label) })).toBeInTheDocument();
     }
 
-    // Six are runnable now, one is not -- the header states this as a number, never rounds it away.
-    expect(screen.getByText("6 / 7 RUNNABLE")).toBeInTheDocument();
+    // All seven have a real destination now; E4's destination itself may still report that this run's
+    // gateway has no resident comparison model.
+    expect(screen.getByText("7 / 7 RUNNABLE")).toBeInTheDocument();
   });
 
-  test("the not-built question is disabled with its own specific, visible reason -- never hidden, never a generic label", async () => {
+  test("the second-opinion question opens its real destination without making a request", async () => {
     vi.stubGlobal("fetch", throwingFetch());
+    const user = userEvent.setup();
     renderPanel("run-one");
 
     const button = screen.getByRole("button", { name: startsWith("Would another model disagree?") });
-    expect(button).toBeDisabled();
-    expect(within(button).getByText(/cross-model answer comparison/)).toBeInTheDocument();
-    expect(screen.getByText(/model second opinion is not implemented yet/)).toBeInTheDocument();
-    // The reason names the real boundary, not a vague placeholder.
-    expect(screen.getByText(/clozn diff-model/)).toBeInTheDocument();
+    expect(button).toBeEnabled();
+    const target = document.getElementById("second-opinion-title")!;
+    const scrollSpy = vi.spyOn(target, "scrollIntoView").mockImplementation(() => {});
+    await user.click(button);
+    await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
+    expect(screen.getByRole("heading", { name: "Would another model disagree?" })).toBeInTheDocument();
   });
 
-  test("the partial question is visually distinct from a fully available one and states its own limit", async () => {
+  test("the passage question opens the explicit C3 experiment surface", async () => {
     vi.stubGlobal("fetch", throwingFetch());
     renderPanel("run-one");
 
     const button = screen.getByRole("button", { name: startsWith("What happens without this passage?") });
     expect(button).toBeEnabled();
-    expect(within(button).getByText("PARTIAL COVERAGE")).toBeInTheDocument();
-    expect(screen.getByText(/arbitrary-span ablation is not built yet/)).toBeInTheDocument();
-    // Names a second real surface rather than pretending the one link covers everything.
-    expect(screen.getByRole("link", { name: /single-token fork \/ causal-trace in Scope/ })).toHaveAttribute(
-      "href", "#/runs/run-one/scope",
-    );
+    expect(within(button).getByText("OPENS REAL EVIDENCE")).toBeInTheDocument();
+    const target = document.getElementById("investigation-experiment-title")!;
+    const scrollSpy = vi.spyOn(target, "scrollIntoView").mockImplementation(() => {});
+    await userEvent.setup().click(button);
+    await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
   });
 
   test("clicking an available question scrolls to its real target and records exactly one history entry", async () => {
@@ -119,16 +123,6 @@ describe("Ask another question", () => {
     expect(historyRegion.querySelector(".section-title span")).toHaveTextContent("1");
   });
 
-  test("the not-built question never navigates and never records -- clicking a disabled button is a no-op", async () => {
-    vi.stubGlobal("fetch", throwingFetch());
-    const user = userEvent.setup();
-    renderPanel("run-one");
-
-    const button = screen.getByRole("button", { name: startsWith("Would another model disagree?") });
-    await user.click(button); // userEvent respects `disabled` -- no click handler fires
-    expect(screen.getByText("No investigations recorded yet for this run.")).toBeInTheDocument();
-  });
-
   test("free text that matches a runnable question routes to it and echoes the typed text into history, verbatim", async () => {
     vi.stubGlobal("fetch", throwingFetch());
     const user = userEvent.setup();
@@ -146,16 +140,33 @@ describe("Ask another question", () => {
     expect(within(historyRegion).getByText("What mattered?")).toBeInTheDocument();
   });
 
-  test("free text that matches the not-built question is refused with its exact reason -- never silently run, never a fabricated explanation", async () => {
+  test("pressing Enter in the router submits the matched question", async () => {
     vi.stubGlobal("fetch", throwingFetch());
     const user = userEvent.setup();
     renderPanel("run-one");
 
+    const target = document.getElementById("diagnosis-repair-title")!;
+    const scrollSpy = vi.spyOn(target, "scrollIntoView").mockImplementation(() => {});
+    await user.type(screen.getByLabelText("ROUTE A QUESTION"), "why did this happen{Enter}");
+
+    await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
+    const historyRegion = screen.getByRole("region", { name: "Past investigations for this run" });
+    expect(await within(historyRegion).findByText('"why did this happen"')).toBeInTheDocument();
+    expect(within(historyRegion).getByText("Why?")).toBeInTheDocument();
+  });
+
+  test("free text that matches the second-opinion question routes to its real destination", async () => {
+    vi.stubGlobal("fetch", throwingFetch());
+    const user = userEvent.setup();
+    renderPanel("run-one");
+
+    const target = document.getElementById("second-opinion-title")!;
+    const scrollSpy = vi.spyOn(target, "scrollIntoView").mockImplementation(() => {});
     await user.type(screen.getByLabelText("ROUTE A QUESTION"), "would a different model disagree with this");
     await user.click(screen.getByRole("button", { name: "ROUTE" }));
 
-    expect(await screen.findByRole("status")).toHaveTextContent("model second opinion is not implemented yet");
-    expect(screen.getByText("No investigations recorded yet for this run.")).toBeInTheDocument();
+    await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
+    expect(screen.getByRole("heading", { name: "Would another model disagree?" })).toBeInTheDocument();
   });
 
   test("free text that matches nothing states plainly that it cannot run -- never guesses, never records", async () => {

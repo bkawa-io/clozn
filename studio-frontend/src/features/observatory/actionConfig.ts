@@ -65,14 +65,13 @@ export const ACTION_CONFIG: Record<ActionId, ActionConfig> = {
   mechanistic_diff: {
     id: "mechanistic_diff",
     label: "MECHANISTIC DIFF",
-    changesExecution: false,
+    changesExecution: true,
     produces: "evidence_artifact",
-    cost: "a pure pair-compatibility check only (no engine load) in this milestone -- execution against "
-      + "two loaded models is not yet wired to this action",
-    claimBoundary: "determines whether the current run and the selected reference run are structurally "
-      + "comparable across tokenizer and hidden size -- it does not itself produce a diff; run "
-      + "`clozn diff-model` at the CLI for actual cross-model execution",
-    undo: "not applicable -- no evidence is produced by this action yet",
+    cost: "one bounded teacher-forced capture per model; models are loaded sequentially through the "
+      + "managed registry and identical requests are cached",
+    claimBoundary: "reports observational residual and token-ranking differences for a compatible pair; "
+      + "it does not establish a causal explanation or calibrated confidence",
+    undo: "not applicable -- the comparison is immutable evidence attached to the anchor run",
   },
 };
 

@@ -1,0 +1,78 @@
+.lens-time-machine {
+  margin: 0 0 12px;
+}
+
+.lens-time-machine-note {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.lens-time-machine-note.is-error {
+  color: var(--danger);
+}
+
+.lens-time-machine-controls {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.7fr) minmax(220px, 1.4fr) auto;
+  gap: 8px;
+  align-items: end;
+  margin-top: 12px;
+}
+
+.lens-time-machine-controls label {
+  display: grid;
+  gap: 4px;
+  color: var(--ink-faint);
+  font-size: 8px;
+  letter-spacing: .08em;
+}
+
+.lens-time-machine-controls select,
+.lens-time-machine-controls input {
+  min-width: 0;
+  border: 1px solid var(--line);
+  background: var(--surface-raised);
+  color: var(--ink);
+  padding: 7px 8px;
+  font: inherit;
+}
+
+.lens-time-machine-controls button {
+  border: 1px solid var(--signal-cyan);
+  background: transparent;
+  color: var(--signal-cyan);
+  padding: 8px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.lens-time-machine-controls button:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+.lens-time-machine-success {
+  margin: 10px 0 0;
+  color: var(--signal-cyan);
+  font-size: 10px;
+}
+
+.lens-time-machine-provenance {
+  margin: 10px 0 0;
+  color: var(--ink-faint);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.lens-time-machine-provenance code {
+  color: var(--signal-cyan);
+  font-size: 9px;
+}
+
+@media (max-width: 760px) {
+  .lens-time-machine-controls {
+    grid-template-columns: 1fr;
+  }
+}

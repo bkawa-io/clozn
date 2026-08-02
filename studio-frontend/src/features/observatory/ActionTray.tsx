@@ -1,4 +1,5 @@
 import type { ForkArtifact } from "../../data/api";
+import type { MechanisticDiffArtifact } from "../../data/tokenWorkbench";
 import { ACTION_CONFIG, ACTION_ORDER } from "./actionConfig";
 import type { CausalTraceEvidence } from "./layerApi";
 import type { ActionId, ActionState } from "./useTokenWorkbench";
@@ -67,6 +68,21 @@ function ActionResult({ id, state }: { id: ActionId; state: ActionState }) {
   }
   if (id === "source_measurement" && (state.phase === "cached" || state.phase === "completed")) {
     return <p className="action-result">context sources were (re)measured -- Sources reloaded</p>;
+  }
+  if (id === "mechanistic_diff" && (state.phase === "cached" || state.phase === "completed") && state.artifact) {
+    const artifact = state.artifact as MechanisticDiffArtifact;
+    const points = artifact.residualPoints.length;
+    const measured = artifact.residualPoints.filter((point) => {
+      const metrics = point.metrics;
+      return Boolean(metrics && typeof metrics === "object" && Object.keys(metrics as object).length);
+    }).length;
+    return (
+      <p className="action-result">
+        {measured} / {points} residual points measured across {artifact.layersRequested.length} layers
+        {artifact.positionsRequested.length ? ` at ${artifact.positionsRequested.length} position${artifact.positionsRequested.length === 1 ? "" : "s"}` : ""}
+        {" -- observational only; see Layers for the metric details"}
+      </p>
+    );
   }
   if (id === "mechanistic_diff" && state.pairCompatibility) {
     const operations = pairCompatibilityOperations(state.pairCompatibility);

@@ -10,6 +10,8 @@ import {
   postForkAction,
   postMechanisticDiffAction,
   postSourceMeasureAction,
+  parseMechanisticDiffArtifact,
+  type MechanisticDiffArtifact,
   WorkbenchActionError,
   WorkbenchLoadError,
   type WorkbenchCapabilities,
@@ -116,7 +118,7 @@ export interface ActionArtifactMap {
   exact_fork: ForkArtifact;
   causal_trace: CausalTraceEvidence;
   source_measurement: Record<string, unknown>;
-  mechanistic_diff: never;
+  mechanistic_diff: MechanisticDiffArtifact;
 }
 
 /** `artifact` is deliberately typed as the PLAIN union of the four artifact shapes here (not a
@@ -135,7 +137,7 @@ export interface ActionState {
   nativeStatus?: string;
   reason?: string;
   job?: WorkbenchJob;
-  artifact?: ForkArtifact | CausalTraceEvidence | Record<string, unknown>;
+  artifact?: ForkArtifact | CausalTraceEvidence | MechanisticDiffArtifact | Record<string, unknown>;
   pairCompatibility?: Record<string, unknown>;
 }
 
@@ -232,6 +234,18 @@ function decodeCausalTraceJobResult(result: unknown): CausalTraceEvidence | unde
   if (!entry) return undefined;
   const inner = entry.result && typeof entry.result === "object" ? entry.result as Record<string, unknown> : {};
   return parseCausalTraceEvidence(inner);
+}
+
+/** The mechanistic job attaches the same cache entry used by its cached response; unwrap the producer's
+ * own clozn.mechanistic-diff.v1 document and leave all omitted metrics absent. */
+function decodeMechanisticDiffJobResult(result: unknown): MechanisticDiffArtifact | undefined {
+  try {
+    const entry = result && typeof result === "object" ? result as Record<string, unknown> : {};
+    const inner = entry.result && typeof entry.result === "object" ? entry.result : result;
+    return parseMechanisticDiffArtifact(inner);
+  } catch {
+    return undefined;
+  }
 }
 
 export interface UseTokenWorkbenchOptions {
@@ -506,21 +520,27 @@ export function useTokenWorkbench({
 
     // mechanistic_diff: needs a reference run of a DIFFERENT model, which is exactly what the
     // capability already required to report `available: true` -- the reference already in scope is
-    // reused rather than asking the user to pick it twice. Never reaches cached/job this milestone
-    // (see data/tokenWorkbench.ts's own doc comment on postMechanisticDiffAction).
+    // reused rather than asking the user to pick it twice.
     if (!selection.reference) {
       setActionState(id, { phase: "error", reason: "no reference run is selected" });
       return;
     }
     void postMechanisticDiffAction(runId, index, selection.reference).then((envelope) => {
       if (selectionRequestId.current !== requestId) return;
+      if (envelope.outcome === "cached") {
+        setActionState(id, { phase: "cached", artifact: envelope.artifact });
+        return;
+      }
       if (envelope.outcome === "unavailable") {
         setActionState(id, {
           phase: "unavailable",
           reason: envelope.reason.message,
           pairCompatibility: envelope.pairCompatibility,
         });
+        return;
       }
+      setActionState(id, { phase: "running", job: envelope.job });
+      void pollJob(id, requestId, runId, index, envelope.job, decodeMechanisticDiffJobResult, () => {});
     }).catch((error) => setActionState(id, { phase: "error", reason: describeActionError(error) }));
   }, [actions, doc, forkChoice, onForkOutcome, onSelectRun, pollJob, selection.reference, selection.token, setActionState, data.id]);
 

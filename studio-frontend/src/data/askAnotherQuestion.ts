@@ -15,18 +15,10 @@
  *   - what_received      -> GET /runs/<id>/investigation (B2/C1)              EXISTS
  *   - claims_supported   -> GET /runs/<id>/claim-support (E1/E2/E3)           EXISTS
  *   - retry_correction   -> corrective-flow preview/confirm (D3/D5)           EXISTS
- *   - second_opinion     -> a live second model's own answer, run to compare against   NOT BUILT --
- *                           clozn/runs/token_workbench_actions.py's mechanistic-diff action always
- *                           returns 422 "cross_model_execution_not_wired" over HTTP (see
- *                           clozn/server/routes/token_workbench_actions.py's `_mechanistic_diff_action`);
- *                           only `clozn diff-model` at the CLI can load two GGUFs today.
- *   - without_passage    -> arbitrary-span ablation (C3)                      PARTIAL --
- *                           clozn/server/routes/section_influence.py ablates NAMED prompt sections (a
- *                           run's own `sections` manifest) with no regeneration; there is no
- *                           arbitrary-span counterpart. notes/EPIC_ROADMAP_A-F_Q_M.md's own C3 audit,
- *                           verbatim: "you can ablate 'the RAG context section'; you cannot ablate
- *                           'these two sentences I highlighted'." The coverage that DOES exist already
- *                           renders in the "What mattered?" panel this question routes to.
+ *   - second_opinion     -> GET /runs/<id>/second-opinion/candidates followed by an explicit POST to
+ *                           /runs/<id>/second-opinion (E4)                         EXISTS
+ *   - without_passage    -> POST /runs/<id>/investigation-experiment/plan followed by the explicit
+ *                           execute/poll job flow (C3)                              EXISTS
  *
  * Per-run absence (a run with nothing measured yet) is deliberately NOT this registry's job to detect --
  * every destination panel (WhatMattered.tsx, DiagnosisRepair.tsx, ReceivedContext.tsx,
@@ -126,23 +118,22 @@ export const INVESTIGATION_QUESTIONS: InvestigationQuestion[] = [
   {
     id: "second_opinion",
     label: "Would another model disagree?",
-    capability: "unavailable",
-    backedBy: "cross-model answer comparison (E4)",
-    reason: "model second opinion is not implemented yet -- clozn can compare two models' internals "
-      + "once both are loaded (`clozn diff-model` at the CLI), but Studio has no route yet to "
-      + "run a second model's own answer for comparison.",
+    capability: "available",
+    backedBy: "GET candidates + explicit POST /runs/<id>/second-opinion (E4)",
+    target: {
+      anchorId: "second-opinion-title",
+      description: "the explicit second-model comparison below",
+    },
     keywords: ["another model", "other model", "different model", "second opinion", "disagree", "second model"],
   },
   {
     id: "without_passage",
     label: "What happens without this passage?",
-    capability: "partial",
-    backedBy: "named-section ablation, no regeneration (C3, partial)",
-    reason: "covers context sources already identified for this run, not a span you pick freely -- "
-      + "arbitrary-span ablation is not built yet.",
+    capability: "available",
+    backedBy: "C3 plan → execute → poll controlled experiment",
     target: {
-      anchorId: "what-mattered-title",
-      description: "the measured per-source effect below (named sources only, not an arbitrary span)",
+      anchorId: "investigation-experiment-title",
+      description: "the explicit passage/source experiment below",
     },
     keywords: ["without", "remove", "removed", "delete", "omit", "passage", "if i removed", "what if"],
   },

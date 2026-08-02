@@ -4424,3 +4424,436 @@
   color: var(--ink-faint);
   font-size: 7.5px;
 }
+
+/* ================================================================= second-opinion (E4) ============ */
+
+.second-opinion {
+  display: grid;
+  gap: 10px;
+  padding-bottom: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.second-opinion-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px 0;
+}
+
+.second-opinion-head h3 {
+  margin: 2px 0 0;
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.second-opinion-badge,
+.second-opinion-identity,
+.second-opinion-arm footer,
+.second-opinion-receipt {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6.5px;
+  letter-spacing: .05em;
+}
+
+.second-opinion-boundary {
+  margin: 0;
+  padding: 0 14px;
+  color: var(--ink-faint);
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.second-opinion-notice {
+  margin: 0 14px;
+  padding: 8px 10px;
+  border: 1px dashed var(--line-strong);
+  color: var(--ink-soft);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.second-opinion-notice.is-failed {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line-strong));
+  color: var(--danger);
+}
+
+.second-opinion-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+  margin: 0 14px;
+}
+
+.second-opinion-picker label {
+  display: grid;
+  min-width: min(100%, 260px);
+  gap: 4px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .06em;
+}
+
+.second-opinion-picker select,
+.second-opinion-picker button {
+  min-height: 28px;
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  padding: 5px 8px;
+  color: var(--ink-soft);
+  background: var(--panel);
+  font-family: var(--font-machine);
+  font-size: 7px;
+}
+
+.second-opinion-picker button:hover:not(:disabled) {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--signal-violet) 12%, var(--panel));
+}
+
+.second-opinion-picker button.is-primary {
+  border-color: var(--signal-violet);
+  color: var(--ink);
+}
+
+.second-opinion-picker button:disabled,
+.second-opinion-picker select:disabled {
+  cursor: not-allowed;
+  opacity: .5;
+}
+
+.second-opinion-result {
+  display: grid;
+  gap: 8px;
+  margin: 0 14px;
+}
+
+.second-opinion-arms {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+.second-opinion-arm {
+  min-width: 0;
+  background: var(--panel);
+}
+
+.second-opinion-arm > header {
+  display: grid;
+  gap: 6px;
+  padding: 8px 9px;
+  border-bottom: 1px solid var(--line);
+}
+
+.second-opinion-arm > header > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .05em;
+}
+
+.second-opinion-arm.is-ok > header > div:first-child b { color: var(--signal-mint); }
+.second-opinion-arm.is-refused > header > div:first-child b,
+.second-opinion-arm.is-generation_error > header > div:first-child b { color: var(--signal-peach); }
+
+.second-opinion-identity {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: 0;
+}
+
+.second-opinion-identity div {
+  display: flex;
+  min-width: 0;
+  gap: 4px;
+}
+
+.second-opinion-identity dt { color: var(--ink-faint); }
+.second-opinion-identity dd { margin: 0; overflow: hidden; color: var(--ink-soft); text-overflow: ellipsis; }
+
+.second-opinion-response,
+.second-opinion-refusal {
+  min-height: 90px;
+  margin: 0;
+  padding: 10px;
+  color: var(--ink);
+  font-size: 9px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.second-opinion-refusal {
+  color: var(--ink-soft);
+}
+
+.second-opinion-refusal b {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--signal-peach);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .05em;
+}
+
+.second-opinion-arm footer {
+  display: flex;
+  gap: 8px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--line);
+}
+
+.second-opinion-comparison {
+  padding: 9px 10px;
+  border: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--panel-raised) 72%, transparent);
+}
+
+.second-opinion-comparison header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .06em;
+}
+
+.second-opinion-comparison header b { color: var(--signal-violet); }
+.second-opinion-comparison p { margin: 7px 0; color: var(--ink-faint); font-size: 8px; line-height: 1.45; }
+.second-opinion-comparison dl { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 0; }
+.second-opinion-comparison dl div { display: flex; gap: 5px; font-family: var(--font-machine); font-size: 7px; }
+.second-opinion-comparison dt { color: var(--ink-faint); }
+.second-opinion-comparison dd { margin: 0; color: var(--ink-soft); }
+
+.second-opinion-compatibility {
+  border-top: 1px solid var(--line);
+  padding-top: 7px;
+}
+
+.second-opinion-compatibility summary {
+  cursor: pointer;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .06em;
+}
+
+.second-opinion-compatibility ul { display: grid; gap: 5px; margin: 8px 0 0; padding: 0; list-style: none; }
+.second-opinion-compatibility li { display: grid; grid-template-columns: 100px 110px minmax(0, 1fr); gap: 7px; color: var(--ink-soft); font-size: 8px; }
+.second-opinion-compatibility li > b,
+.second-opinion-compatibility li > span { font-family: var(--font-machine); font-size: 6px; letter-spacing: .04em; }
+.second-opinion-compatibility li > b { color: var(--ink-faint); }
+.second-opinion-compatibility li small { color: var(--ink-faint); line-height: 1.4; }
+
+.second-opinion-receipt {
+  margin: 0;
+  line-height: 1.45;
+}
+
+@media (max-width: 680px) {
+  .second-opinion-arms { grid-template-columns: 1fr; }
+  .second-opinion-compatibility li { grid-template-columns: 1fr; gap: 2px; }
+}
+
+/* ================================================================= investigation-experiment (C3) == */
+
+.investigation-experiment {
+  display: grid;
+  gap: 10px;
+  padding-bottom: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.investigation-experiment-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px 0;
+}
+
+.investigation-experiment-head h3 {
+  margin: 2px 0 0;
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.investigation-experiment-badge,
+.investigation-experiment-job header,
+.investigation-experiment-plan header,
+.investigation-experiment-claim header,
+.investigation-experiment-observed header {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .06em;
+}
+
+.investigation-experiment-boundary {
+  margin: 0;
+  padding: 0 14px;
+  color: var(--ink-faint);
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.investigation-experiment-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+  margin: 0 14px;
+}
+
+.investigation-experiment-picker label {
+  display: grid;
+  min-width: min(100%, 230px);
+  gap: 4px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .06em;
+}
+
+.investigation-experiment-picker select,
+.investigation-experiment-picker button,
+.investigation-experiment-plan button,
+.investigation-experiment-job button {
+  min-height: 28px;
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  padding: 5px 8px;
+  color: var(--ink-soft);
+  background: var(--panel);
+  font-family: var(--font-machine);
+  font-size: 7px;
+}
+
+.investigation-experiment-picker button.is-primary,
+.investigation-experiment-plan button.is-primary {
+  border-color: var(--signal-violet);
+  color: var(--ink);
+}
+
+.investigation-experiment-picker button:hover:not(:disabled),
+.investigation-experiment-plan button:hover:not(:disabled),
+.investigation-experiment-job button:hover:not(:disabled) {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--signal-violet) 12%, var(--panel));
+}
+
+.investigation-experiment-picker button:disabled,
+.investigation-experiment-plan button:disabled,
+.investigation-experiment-job button:disabled {
+  cursor: not-allowed;
+  opacity: .5;
+}
+
+.investigation-experiment-notice {
+  display: grid;
+  gap: 4px;
+  margin: 0 14px;
+  padding: 8px 10px;
+  border: 1px dashed var(--line-strong);
+  color: var(--ink-soft);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.investigation-experiment-notice.is-failed,
+.investigation-experiment-notice.is-refused {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line-strong));
+  color: var(--danger);
+}
+
+.investigation-experiment-notice.is-refused b { font-family: var(--font-machine); font-size: 7px; letter-spacing: .05em; }
+
+.investigation-experiment-plan,
+.investigation-experiment-job {
+  display: grid;
+  gap: 8px;
+  margin: 0 14px;
+  padding: 9px 10px;
+  border: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--panel-raised) 72%, transparent);
+}
+
+.investigation-experiment-plan header,
+.investigation-experiment-job header,
+.investigation-experiment-claim header,
+.investigation-experiment-observed header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.investigation-experiment-plan header span,
+.investigation-experiment-job header span,
+.investigation-experiment-claim header span,
+.investigation-experiment-observed header span { color: var(--ink-faint); }
+
+.investigation-experiment-plan header b,
+.investigation-experiment-job header b { color: var(--signal-mint); }
+.investigation-experiment-plan p,
+.investigation-experiment-job p { margin: 0; color: var(--ink-faint); font-size: 8px; line-height: 1.45; }
+
+.investigation-experiment-result { display: grid; gap: 8px; }
+
+.investigation-experiment-claim,
+.investigation-experiment-observed { padding: 8px 9px; border: 1px solid var(--line); }
+.investigation-experiment-claim.is-licensed { border-color: color-mix(in srgb, var(--signal-mint) 55%, var(--line-strong)); }
+.investigation-experiment-claim.is-unlicensed { border-color: color-mix(in srgb, var(--signal-peach) 55%, var(--line-strong)); }
+.investigation-experiment-claim header b { color: var(--signal-peach); }
+.investigation-experiment-claim.is-licensed header b { color: var(--signal-mint); }
+.investigation-experiment-claim p,
+.investigation-experiment-observed p { margin: 7px 0 0; color: var(--ink-soft); font-size: 8px; line-height: 1.5; }
+
+.investigation-experiment-arms {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  background: var(--line);
+  border: 1px solid var(--line);
+  list-style: none;
+}
+
+.investigation-experiment-arms li {
+  display: grid;
+  grid-template-columns: 130px 140px minmax(0, 1fr);
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--panel);
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 6.5px;
+  letter-spacing: .04em;
+}
+
+.investigation-experiment-arms li b { color: var(--ink-faint); font-weight: 500; }
+.investigation-experiment-arms li a { color: var(--signal-violet); text-align: right; }
+.investigation-experiment-error { margin: 0; color: var(--danger) !important; }
+
+@media (max-width: 680px) {
+  .investigation-experiment-arms li { grid-template-columns: 1fr; gap: 3px; }
+  .investigation-experiment-arms li a { text-align: left; }
+}

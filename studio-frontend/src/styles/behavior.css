@@ -1315,3 +1315,178 @@
     max-width: none;
   }
 }
+.behavior-teach-stage {
+  display: grid;
+  gap: 18px;
+  padding: 24px;
+}
+
+.behavior-teach-note {
+  max-width: 760px;
+  margin: 0;
+  color: var(--ink-soft);
+  line-height: 1.55;
+}
+
+.behavior-teach-draft,
+.behavior-teach-list article {
+  border: 1px solid var(--line);
+  background: var(--paper);
+  padding: 16px;
+}
+
+.behavior-teach-draft > header,
+.behavior-teach-list article > header,
+.behavior-teach-list article > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.behavior-teach-draft > header span,
+.behavior-teach-draft > header b,
+.behavior-teach-list article > header span,
+.behavior-teach-list article > header b,
+.behavior-teach-fields span,
+.behavior-teach-content span {
+  font-size: 10px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.behavior-teach-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.behavior-teach-fields label,
+.behavior-teach-content {
+  display: grid;
+  gap: 6px;
+}
+
+.behavior-teach-fields select,
+.behavior-teach-fields input,
+.behavior-teach-content textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+  padding: 8px;
+  font: inherit;
+}
+
+.behavior-teach-content textarea {
+  min-height: 78px;
+  resize: vertical;
+}
+
+.behavior-teach-draft > button {
+  margin-top: 12px;
+}
+
+.behavior-teach-list {
+  display: grid;
+  gap: 10px;
+}
+
+.behavior-teach-list article.is-enabled {
+  border-color: var(--signal-mint);
+}
+
+.behavior-teach-list article > header > div {
+  display: grid;
+  gap: 4px;
+}
+
+.behavior-teach-list article > header strong {
+  text-transform: uppercase;
+}
+
+.behavior-teach-list article > p {
+  margin: 14px 0;
+  color: var(--ink-soft);
+  white-space: pre-wrap;
+}
+
+.behavior-teach-verify {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px dashed var(--line);
+  background: color-mix(in srgb, var(--paper) 78%, var(--signal-cyan));
+}
+
+.behavior-teach-verify > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.behavior-teach-verify > header span,
+.behavior-teach-verify > header b,
+.behavior-teach-verify-fields span {
+  color: var(--ink-faint);
+  font-size: 9px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.behavior-teach-verify-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.behavior-teach-verify-fields label {
+  display: grid;
+  gap: 5px;
+}
+
+.behavior-teach-verify-fields input,
+.behavior-teach-verify-fields select {
+  min-width: 0;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+  padding: 7px;
+  font: inherit;
+}
+
+.behavior-teach-verify > button {
+  justify-self: start;
+  border: 1px solid var(--signal-cyan);
+  background: transparent;
+  color: var(--signal-cyan);
+  padding: 7px 10px;
+  font-size: 10px;
+  letter-spacing: .06em;
+}
+
+.behavior-teach-verify > button:disabled {
+  opacity: .45;
+}
+
+.behavior-teach-list article > footer {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.behavior-teach-list article > footer button {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-soft);
+  padding: 7px 10px;
+  font-size: 10px;
+  letter-spacing: .06em;
+}
+
+@media (max-width: 760px) {
+  .behavior-teach-fields { grid-template-columns: 1fr; }
+  .behavior-teach-verify-fields { grid-template-columns: 1fr; }
+}

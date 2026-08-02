@@ -5,9 +5,9 @@ import "../styles/investigation.css";
 import type { PanelContext, StudioPanel } from "./types";
 
 /**
- * F3 -- the conversation investigation view. `#/sessions` (bare) is the session picker (F1's own
- * `GET /sessions` list plus an "open by id" router); `#/sessions/<id>/investigate` is the investigation
- * view itself. Deliberately its own top-level nav entry, not a tab bolted onto Runs or Lens -- the F3
+ * F3 -- the conversation investigation view. `#/investigation` and `#/sessions` (bare) are the session
+ * picker (F1's own `GET /sessions` list plus an "open by id" router); `#/sessions/<id>/investigate` is the
+ * investigation view itself. Deliberately its own top-level nav entry, not a tab bolted onto Runs or Lens -- the F3
  * brief's own acceptance criterion ("investigation vs chat visually separate") reads as a surface-level
  * requirement, and C4's `AskAnotherQuestion.tsx` already established the precedent of a dedicated,
  * non-chat-shaped panel for evidence review rather than folding it into an existing one.
@@ -20,7 +20,10 @@ const panel: StudioPanel = {
   match: (hash): Record<string, string> | null => {
     const deep = hash.match(/^#\/sessions\/([^/]+)\/investigate\/?$/);
     if (deep) return { sessionId: decodeURIComponent(deep[1]) };
-    return /^#\/sessions\/?$/.test(hash) ? {} : null;
+    // `#/investigation` is the canonical rail destination (the panel id is part of the public shell
+    // contract). Keep the older `#/sessions` form as a stable deep-link alias because existing session
+    // links and bookmarks use it.
+    return /^#\/(?:investigation|sessions)\/?$/.test(hash) ? {} : null;
   },
   routeName: (params) => (params.sessionId ? "SESSION INVESTIGATION" : "SESSIONS"),
   Component: ({ params }: PanelContext) => (
