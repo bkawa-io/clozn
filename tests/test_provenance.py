@@ -8,7 +8,7 @@ import math
 
 import pytest
 
-from clozn.analysis.provenance import context_dependence, verdict
+from clozn.analysis.provenance import context_dependence, verdict, verdict_label
 
 
 # ------------------------------------------------------------------ context_dependence
@@ -56,6 +56,14 @@ def test_verdict_tiers():
     assert verdict(0.50, best_ratio=10.0) == "MIXED"
     assert verdict(0.30, best_ratio=10.0) == "MIXED"             # boundary is inclusive
     assert verdict(0.10, best_ratio=10.0) == "PARAMETRIC"
+
+
+def test_verdict_labels_are_conservative_and_fail_closed():
+    assert verdict_label("CONTEXT_CARRIED") == "high measured context dependence"
+    assert verdict_label("MIXED") == "mixed measured context dependence"
+    assert verdict_label("PARAMETRIC") == "low measured context dependence"
+    assert verdict_label("INCONCLUSIVE") == "inconclusive context-dependence measurement"
+    assert verdict_label("future_enum") == "unknown provenance measurement"
 
 
 def test_verdict_matches_the_measured_dissociation():

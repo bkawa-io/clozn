@@ -17,7 +17,11 @@ Wire shape:
 
   POST /runs/compare/test
       -> a bounded clozn.run-change-test.v1 artifact. `plan`/`dry_run` is model-free; live execution
-         requires the gateway's active substrate and persists each control/treatment arm as a child run.
+         resolves the candidate run's own model through managed routing and persists each
+         control/treatment arm as a child run. Mixed-model pairs are reported unavailable before an arm
+         starts because a context/template/sampling swap must hold model identity constant.
+         The CLI's `compare-runs --replay --execute` uses this route with only the planner's available
+         context/template/sampling swaps.
 """
 from __future__ import annotations
 
@@ -108,16 +112,15 @@ def try_post(h, p, body):
                 match_criterion=match_criterion,
             )
         else:
-            # NOT converted to per-run model selection (clozn.server.model_routing.
-            # select_control_model_for_run): this route compares TWO runs (a and b), which under a
-            # managed multi-model gateway may legitimately belong to two DIFFERENT models -- there is
-            # no single "the run's model" to read a worker from the way execution-fork/receipts/etc.
-            # do for a single immutable run. Picking one of the two (or requiring they match) would be
-            # a real product decision this task's brief did not ask for; left as ctx.active_sub(h) --
-            # i.e. it keeps today's exact (already fail-closed-under-a-router) behavior -- rather than
-            # guess. Reported as genuinely ambiguous.
-            from clozn.server import app as ctx
-            substrate = ctx.active_sub(h)
+            # Controlled swaps keep the candidate model fixed.  Resolve that worker through the same
+            # run-scoped selector as replay/fork/etc.; the executor itself refuses mixed model pairs
+            # before it starts an arm, so a managed gateway never silently uses its default worker.
+            from clozn.server.model_routing import select_control_model_for_run
+            selection = select_control_model_for_run(
+                h, run_b.get("model"), route="/runs/compare/test")
+            if selection is None:
+                return True
+            substrate = selection.sub
             if not (substrate and callable(getattr(substrate, "chat", None))):
                 h._json(503, {"error": "controlled tests require a ready product model worker"})
                 return True

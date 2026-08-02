@@ -1,11 +1,9 @@
 """`clozn corrections ...` -- F5's CLI exposure for the scoped correction store ("Teach Once"), plus F6's
 `verify` subcommand for the verify-before-save teaching loop (`clozn/runs/teaching_loop.py`).
 
-No HTTP route exists for F5/F6 yet (another slice's job -- see clozn/runs/corrections.py's and
-clozn/runs/teaching_loop.py's own module docstrings); this command is the only way to exercise either
-store today, mirroring the precedent `clozn investigate-experiment` set for C3 (plan-only CLI ahead of a
-later HTTP surface). Every subcommand is a thin argument-parsing wrapper over clozn.runs.corrections (or,
-for `verify`, clozn.runs.teaching_loop) -- no selection/precedence/conflict/verification logic lives here.
+The HTTP adapter lives at `/corrections` and the CLI remains a useful local/scriptable surface. Every
+subcommand is a thin argument-parsing wrapper over clozn.runs.corrections (or, for `verify`,
+clozn.runs.teaching_loop) -- no selection/precedence/conflict/verification logic lives here.
 """
 from __future__ import annotations
 

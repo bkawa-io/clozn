@@ -472,3 +472,25 @@ def test_validate_false_skips_schema_check(monkeypatch):
                      store_tensors=False, validate=False)
     assert out["ok"] is True
     assert calls == []
+
+
+def test_raw_prompt_and_continuation_index_resolve_absolute_position(monkeypatch):
+    """Gateway runs retain the rendered prompt text rather than Python-side prompt token IDs. The
+    analysis API therefore accepts a raw prompt and maps an output-relative index using the reference
+    engine's exact n_prompt count before asking either arm for residual capture."""
+    responses = {"n_prompt": 3, "n_cont": 2, "tokens": [], "captured": {"1": {"3": [1.0, 0.0, 0.0, 0.0]}}}
+    ref = FakeEngine(_ok(responses))
+    cand = FakeEngine(_ok(responses))
+    out = md.compare(
+        pair_compat=_COMPATIBLE,
+        reference_loader=_loader(ref, "ref", []),
+        candidate_loader=_loader(cand, "cand", []),
+        prompt="<rendered>", continuation_ids=[11, 12], continuation_indices=[0], layers=[1],
+        store_tensors=False, validate=False,
+    )
+    assert out["ok"] is True
+    assert out["document"]["continuation"] == {"n_prompt": 3, "n_cont": 2}
+    assert out["document"]["positions_requested"] == [3]
+    assert ref.calls[0]["prompt_ids"] is None
+    assert ref.calls[-1]["capture_positions"] == [3]
+    assert cand.calls[-1]["capture_positions"] == [3]

@@ -56,7 +56,23 @@ SCOPE_NOTE = ("attention-knockout provenance -- requires a clozn-server started 
              "two-family (Qwen2.5-7B + Llama-3.1-8B, 41/41 UNDER THE CURRENT GRADING; the stored "
              "provenance_battery_*.json summary blocks predate a grading change and read 23/23 + 21/26 "
              "-- re-grade the per-case data, do not quote the stale summaries); read a verdict as "
-             "evidence, not proof")
+             "evidence, not proof; human-facing labels say measured context dependence and do not "
+             "claim that an answer literally came from a document")
+
+# Keep the short enum values stable for wire and stored-artifact compatibility. Human-facing copy is
+# deliberately narrower: attention knockout measures dependence under this method and control; it does
+# not establish that a source literally caused or supplied the answer in the broad sense.
+VERDICT_LABELS = {
+    "CONTEXT_CARRIED": "high measured context dependence",
+    "MIXED": "mixed measured context dependence",
+    "PARAMETRIC": "low measured context dependence",
+    "INCONCLUSIVE": "inconclusive context-dependence measurement",
+}
+
+
+def verdict_label(value: str | None) -> str:
+    """Return conservative human-facing copy for a stable provenance verdict enum."""
+    return VERDICT_LABELS.get(str(value or ""), "unknown provenance measurement")
 
 
 @dataclass

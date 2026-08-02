@@ -95,19 +95,17 @@ def cmd_branch(args):
           f"  ->  branch on {fmt.BOLD}{alt_piece.strip()!r}{fmt.RST} ({fmt._num(alt.get('prob')):.2f})")
     original = fmt._oneline("".join(s.get("piece", s.get("text", "")) for s in steps).strip())
     print(f"  {fmt.DIM}original:{fmt.RST} {original[:130]}")
-    warm = _find_warm(model); stack = worker_log = gateway_log = None
+    warm = _find_warm(model); stack = worker_log = None
     if warm:
         port = warm[0]
     else:
         os.makedirs(ctx.HOME, exist_ok=True)
         worker_log = open(os.path.join(ctx.HOME, "worker-run.log"), "w", encoding="utf-8")
-        gateway_log = open(os.path.join(ctx.HOME, "gateway-run.log"), "w", encoding="utf-8")
         port = _free_port()
         print(f"{fmt.DIM}  - loading {_friendly(model)} …{fmt.RST}", file=sys.stderr, flush=True)
         stack = spawn_runtime(
             RuntimeConfig(model=model, public_port=port, flags=flags, prefer_gpu=not args.cpu),
             worker_log=worker_log,
-            gateway_log=gateway_log,
         )
     try:
         # rstrip only: a leading space here is the separator between the alt piece and the continuation
@@ -119,8 +117,6 @@ def cmd_branch(args):
             stack.stop()
         if worker_log:
             worker_log.close()
-        if gateway_log:
-            gateway_log.close()
     branch_text = fmt._oneline((kept + alt_piece + cont).strip())
     print(f"  {fmt.BOLD}branch:{fmt.RST}   {branch_text[:160]}")
 

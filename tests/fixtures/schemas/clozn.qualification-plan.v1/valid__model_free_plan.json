@@ -1,0 +1,37 @@
+{
+  "schema_version": "clozn.qualification-plan.v1",
+  "generated_at": "2026-08-01T00:00:00Z",
+  "model": {
+    "input": "demo.gguf",
+    "source": "local",
+    "path": "/models/demo.gguf",
+    "summary": {"architecture": "llama", "quantization": "Q4_K_M", "layer_count": 32},
+    "file_size_bytes": 1000000000,
+    "header_bytes_read": 4096
+  },
+  "resources": {
+    "disk_bytes": 1000000000,
+    "disk_gb": 1.0,
+    "vram_budget_gb": 16.0,
+    "estimated_vram_gb": 1.5,
+    "estimated_ram_gb": 1.2,
+    "vram_fits_estimate": true,
+    "context_tokens": 8192,
+    "method": "header math",
+    "note": "approximate",
+    "offload_hint": null
+  },
+  "lab_dependencies": [
+    {"module": "torch", "label": "PyTorch", "present": false, "purpose": "calibration"}
+  ],
+  "steps": [
+    {"id": "core.identity", "label": "Verify model identity", "boundary": "product", "status": "ready", "estimated": false},
+    {"id": "dials", "label": "Calibrate dials", "boundary": "lab", "status": "blocked", "estimated": false, "requires": ["torch"], "reason": "missing PyTorch"}
+  ],
+  "claims": {
+    "qualification_status": "not_qualified",
+    "generation_performed": false,
+    "artifacts_installed": false,
+    "note": "Readiness report only."
+  }
+}

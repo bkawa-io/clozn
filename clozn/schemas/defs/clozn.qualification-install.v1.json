@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.qualification-install.v1",
+  "title": "Qualification artifact install transaction",
+  "description": "Identity-guarded install/rollback receipt for a validated artifact.",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "status", "artifact_type", "model_sha256", "path"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.qualification-install.v1"},
+    "generated_at": {"type": "string", "minLength": 1},
+    "status": {"enum": ["installed", "already_present", "rolled_back"]},
+    "artifact_type": {"type": "string", "minLength": 1},
+    "model_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "path": {"type": "string", "minLength": 1}
+  }
+}

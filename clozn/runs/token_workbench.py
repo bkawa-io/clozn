@@ -393,10 +393,10 @@ def _mechanistic_diff_capability(
             "reference run has a different recorded model identity, eligible for a cross-model "
             "mechanistic diff"
         ),
-        # Milestone F: POST here first -- it runs the SAME pair-compatibility gate this preview just
-        # ran, authoritatively, and is honest about whether cross-model EXECUTION is wired yet (as of
-        # this milestone, it is not; see clozn.runs.token_workbench_actions's module docstring). The
-        # CLI (`clozn diff-model`) remains the only way to actually execute one today.
+        # POST here runs the same pair-compatibility gate authoritatively and, when the gateway has a
+        # managed model registry, queues the comparison through the sequential model-loader path. A
+        # legacy single-worker gateway returns a typed unavailable response; the CLI remains a useful
+        # fallback for environments without managed model routing.
         "action": _workbench_action(
             "POST", f"/runs/{run.get('id')}/tokens/{index}/mechanistic-diff",
             request_body={"reference_run_id": reference_run_id}),

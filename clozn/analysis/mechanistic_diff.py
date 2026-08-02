@@ -146,15 +146,20 @@ def _now_iso() -> str:
 
 # =================================================================================== single-model capture
 
-def _score_with_capture(engine, *, prompt_ids: list, continuation_ids: list, layers: list,
-                        positions: list, topk: int) -> dict:
+def _score_with_capture(engine, *, prompt_ids: list | None = None, prompt: str | None = None,
+                        continuation_ids: list, layers: list, positions: list, topk: int) -> dict:
     """One POST /score call carrying both `topk` and `capture`. Never raises: any exception from the
     engine (a real EngineError, or a test double's own failure) is caught and reported as
     `{"ok": False, "error": ...}` so a capture failure on one side can be attributed cleanly rather than
     crashing the whole comparison."""
     try:
-        response = engine.score(prompt_ids=prompt_ids, continuation_ids=continuation_ids, topk=int(topk),
-                                 capture_layers=list(layers), capture_positions=list(positions))
+        request = {"continuation_ids": continuation_ids, "topk": int(topk),
+                   "capture_layers": list(layers), "capture_positions": list(positions)}
+        if prompt is not None:
+            request["prompt"] = prompt
+        else:
+            request["prompt_ids"] = prompt_ids or []
+        response = engine.score(**request)
     except Exception as exc:      # noqa: BLE001 -- reported, never propagated (see docstring)
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     if not isinstance(response, dict):
@@ -402,8 +407,8 @@ def _layer_change_entries(layers: list, positions: list, ref_resp: dict, cand_re
 
 def _build_document(*, pair_compat: Mapping[str, Any], prompt_ids: list, continuation_ids: list,
                     layers: list, positions: list, topk: int, ref_resp: dict, cand_resp: dict,
-                    store_tensors: bool, generated_at) -> dict:
-    n_prompt = len(prompt_ids)
+                    store_tensors: bool, generated_at, prompt_token_count: int | None = None) -> dict:
+    n_prompt = len(prompt_ids) if prompt_token_count is None else int(prompt_token_count)
     n_cont = len(continuation_ids)
 
     residual_points = []
@@ -436,12 +441,16 @@ def _build_document(*, pair_compat: Mapping[str, Any], prompt_ids: list, continu
 # =========================================================================================== public API
 
 def compare(*, pair_compat: Mapping[str, Any], reference_loader: Callable[[], Any],
-           candidate_loader: Callable[[], Any], prompt_ids: Sequence[int],
-           continuation_ids: Sequence[int], layers: Sequence[int], positions: Sequence[int],
+           candidate_loader: Callable[[], Any], prompt_ids: Sequence[int] | None = None,
+           prompt: str | None = None, continuation_ids: Sequence[int], layers: Sequence[int],
+           positions: Sequence[int] | None = None,
+           continuation_indices: Sequence[int] | None = None,
            topk: int = 10, store_tensors: bool = True, generated_at: "str | None" = None,
            validate: bool = True) -> dict:
     """Capture the reference, then the candidate (never both resident at once -- see module docstring),
-    and build a `clozn.mechanistic-diff.v1` document. Pure orchestration otherwise: `reference_loader`/
+    and build a `clozn.mechanistic-diff.v1` document. ``prompt`` may be the exact rendered prompt when
+    token IDs are not available; ``continuation_indices`` addresses output tokens relative to that
+    prompt and is resolved to absolute capture positions. Pure orchestration otherwise: `reference_loader`/
     `candidate_loader` own how a model is actually loaded/unloaded (a real engine spawn, or a test
     double), and this function never touches the filesystem or a subprocess directly.
 
@@ -468,25 +477,64 @@ def compare(*, pair_compat: Mapping[str, Any], reference_loader: Callable[[], An
             f"pair_compatibility does not model)")}
 
     layer_list = sorted({int(x) for x in layers})
-    position_list = sorted({int(x) for x in positions})
-    if not layer_list or not position_list:
+    if positions is not None and continuation_indices is not None:
+        return {"ok": False, "error": "compare() accepts positions or continuation_indices, not both"}
+    if positions is None and continuation_indices is None:
+        return {"ok": False, "error": "compare() needs positions or continuation_indices"}
+    position_list = sorted({int(x) for x in positions}) if positions is not None else []
+    continuation_index_list = (
+        sorted({int(x) for x in continuation_indices})
+        if continuation_indices is not None else []
+    )
+    if not layer_list or (positions is not None and not position_list) or (
+            continuation_indices is not None and not continuation_index_list):
         return {"ok": False, "error": "compare() needs at least one layer and one position"}
-    prompt_id_list = [int(x) for x in prompt_ids]
+    if prompt_ids is not None and prompt is not None:
+        return {"ok": False, "error": "compare() accepts prompt or prompt_ids, not both"}
+    if prompt_ids is None and prompt is None:
+        return {"ok": False, "error": "compare() needs prompt or prompt_ids"}
+    prompt_id_list = [int(x) for x in prompt_ids] if prompt_ids is not None else []
     continuation_id_list = [int(x) for x in continuation_ids]
     if not continuation_id_list:
         return {"ok": False, "error": "compare() needs a non-empty continuation"}
 
+    if continuation_index_list:
+        if any(index < 0 or index >= len(continuation_id_list) for index in continuation_index_list):
+            return {"ok": False, "error": "continuation_indices contains an out-of-range token index"}
+        if prompt_id_list:
+            position_list = sorted({len(prompt_id_list) + index for index in continuation_index_list})
+        else:
+            # A raw prompt has no Python-side tokenizer. Ask the reference engine for its exact
+            # prompt-token count before the capture pass, then use that count for both arms.
+            try:
+                with reference_loader() as reference_engine:
+                    probe = reference_engine.score(
+                        **({"prompt": prompt} if prompt is not None else {"prompt_ids": prompt_id_list}),
+                        continuation_ids=continuation_id_list, topk=0)
+                prompt_count = probe.get("n_prompt") if isinstance(probe, dict) else None
+            except Exception as exc:  # noqa: BLE001 -- ordinary engine refusal, never a crash
+                return {"ok": False, "error": f"could not determine prompt token count: {type(exc).__name__}: {exc}"}
+            if not isinstance(prompt_count, int) or prompt_count < 0:
+                return {"ok": False, "error": "reference probe did not report a valid prompt token count"}
+            position_list = sorted({prompt_count + index for index in continuation_index_list})
+
     with reference_loader() as reference_engine:
         reference_capture = _score_with_capture(
-            reference_engine, prompt_ids=prompt_id_list, continuation_ids=continuation_id_list,
-            layers=layer_list, positions=position_list, topk=topk)
+            reference_engine,
+            **({"prompt": prompt} if prompt is not None else {"prompt_ids": prompt_id_list}),
+            continuation_ids=continuation_id_list, layers=layer_list,
+            positions=position_list if position_list else continuation_index_list,
+            topk=topk)
     if not reference_capture["ok"]:
         return {"ok": False, "error": f"reference capture failed: {reference_capture['error']}"}
 
     with candidate_loader() as candidate_engine:
         candidate_capture = _score_with_capture(
-            candidate_engine, prompt_ids=prompt_id_list, continuation_ids=continuation_id_list,
-            layers=layer_list, positions=position_list, topk=topk)
+            candidate_engine,
+            **({"prompt": prompt} if prompt is not None else {"prompt_ids": prompt_id_list}),
+            continuation_ids=continuation_id_list, layers=layer_list,
+            positions=position_list if position_list else continuation_index_list,
+            topk=topk)
     if not candidate_capture["ok"]:
         return {"ok": False, "error": f"candidate capture failed: {candidate_capture['error']}"}
 
@@ -494,7 +542,9 @@ def compare(*, pair_compat: Mapping[str, Any], reference_loader: Callable[[], An
         pair_compat=pair_compat, prompt_ids=prompt_id_list, continuation_ids=continuation_id_list,
         layers=layer_list, positions=position_list, topk=topk,
         ref_resp=reference_capture["response"], cand_resp=candidate_capture["response"],
-        store_tensors=store_tensors, generated_at=generated_at)
+        store_tensors=store_tensors, generated_at=generated_at,
+        prompt_token_count=(reference_capture["response"].get("n_prompt")
+                            if prompt is not None else None))
     if validate:
         schemas.validate(document)
     return {"ok": True, "document": document}

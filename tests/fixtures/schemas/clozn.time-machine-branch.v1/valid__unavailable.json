@@ -1,0 +1,11 @@
+{
+  "schema_version": "clozn.time-machine-branch.v1",
+  "requested_run_id": "run_time_machine",
+  "source_turn": 0,
+  "status": "unavailable",
+  "exact_replay": false,
+  "fidelity": "unavailable",
+  "reasons": [{"code": "historical_source_unavailable", "message": "no exact source run matched"}],
+  "capture": {},
+  "execution_fork": {}
+}

@@ -1,27 +1,4 @@
-"""RT-04's loader closes onto ProjectionFileRouter -- the class clozn/server/app.py's main()
-actually constructs for `clozn serve --models-config`.
-
-Before this change, ``ProjectionFileRouter.__init__`` accepted ``gate=`` but had no ``loader=``
-parameter at all: RT-04's cold-load coalescing/eviction (``WorkerRegistry.ensure_loaded``, proven
-directly in tests/test_worker_registry.py) and its ``PreloadedModelRouter``-level wiring (proven in
-tests/test_model_routing_gateway.py, and -- through real concurrent HTTP dispatch -- in
-tests/test_worker_concurrency_gate.py) were reachable everywhere EXCEPT the one router class the
-real gateway process actually builds. This file proves the file-backed router closes that specific
-gap: it accepts a loader, threads it through every ``refresh()`` rebuild, and drives a real
-``WorkerRegistry``'s single-flight coalescing correctly under real concurrent HTTP dispatch -- with
-real threads and real synchronization, never a sleep standing in for a lock.
-
-What this file deliberately does NOT claim: production wiring of a live supervisor
-``WorkerRegistry`` into clozn/server/app.py's own ``ProjectionFileRouter`` construction remains out
-of scope. ``clozn serve``'s gateway process (``python -m clozn.server.app``) is a separate OS
-process from the ``clozn serve`` supervisor that owns the real ``WorkerRegistry`` and the model file
-paths/flags needed to spawn a worker (see app.py's comment at ``MODEL_ROUTER``'s construction, and
-substrates.py's ``_ENGINE_DISCOVERY_ENV_KEYS`` comment for the same process-boundary fact), and
-``clozn/server`` must never import ``clozn/cli`` (``ColdLoadOutcome``'s docstring). That cross-process
-integration is separately owned -- exactly as tests/test_model_routing_gateway.py's own
-``_loader_from_registry`` docstring already says for ``PreloadedModelRouter``. This file only proves
-the ``ProjectionFileRouter`` seam itself is real, threaded correctly, and safe under concurrency.
-"""
+"""Model-free concurrent acceptance tests for the merged in-process router."""
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
@@ -41,7 +18,11 @@ from clozn.cli.worker_registry import (
     WorkerRegistry,
 )
 from clozn.server import app as cs
-from clozn.server.model_routing import ColdLoadOutcome, ProjectionFileRouter
+from clozn.server.model_routing import (
+    ColdLoadOutcome,
+    InMemoryProjectionRouter,
+    ModelRoutingError,
+)
 from clozn.server.request_gate import WorkerGateRegistry
 
 
@@ -189,12 +170,6 @@ def _registry_handshake(definition: WorkerDefinition, generation: int) -> dict:
     }
 
 
-def _write_projection(directory: Path, registry: WorkerRegistry) -> Path:
-    path = directory / "projection.json"
-    path.write_text(json.dumps(registry.routing_projection()), encoding="utf-8")
-    return path
-
-
 def _loader_from_registry(registry: WorkerRegistry):
     """Adapt a real WorkerRegistry.ensure_loaded to the router's ColdLoader contract.
 
@@ -258,7 +233,8 @@ def _wire(monkeypatch, directory: Path, router) -> None:
 # --- 1. the new seam itself: parameter exists, defaults safely, survives refresh() -----------------
 
 
-def test_projection_file_router_accepts_and_exposes_a_loader(tmp_path, monkeypatch):
+def test_in_memory_router_reaches_a_real_registry_cold_loader(tmp_path, monkeypatch):
+    """ADR 008 Stage 2's direct supervisor-to-router seam loads a cold model."""
     alpha_def, cold_def = _definitions()
 
     def spawn(model, port, flags, **kwargs):
@@ -267,356 +243,193 @@ def test_projection_file_router_accepts_and_exposes_a_loader(tmp_path, monkeypat
 
     registry = WorkerRegistry(
         [alpha_def, cold_def], default_model_id="alpha", preload_model_ids=["alpha"],
-        max_loaded_workers=2, spawn=spawn,
+        max_loaded_workers=2, spawn=spawn, busy_tracking_wired=True,
     )
     registry.start_preloaded()
-    projection_path = _write_projection(tmp_path, registry)
-    try:
-        no_loader_router = ProjectionFileRouter(
-            str(projection_path),
-            engine_factory=lambda port: FakeEngine("alpha", "a" * 64, "1" * 32, "engine-alpha"),
-            substrate_factory=lambda engine: FakeSub(engine),
-        )
-        assert no_loader_router.loader is None
-
-        loader = _loader_from_registry(registry)
-        loaded_router = ProjectionFileRouter(
-            str(projection_path),
-            engine_factory=lambda port: FakeEngine("cold", "c" * 64, "3" * 32, "engine-cold"),
-            substrate_factory=lambda engine: FakeSub(engine),
-            loader=loader,
-        )
-        assert loaded_router.loader is loader
-    finally:
-        registry.stop_all()
-
-
-def test_projection_file_router_reuses_the_configured_loader_across_refresh_rebuilds(
-    tmp_path, monkeypatch
-):
-    """refresh() rebuilds the underlying PreloadedModelRouter on every fingerprint change (see
-    gate's identical `_built_gate` reuse). The loader must be threaded into EVERY such rebuild, not
-    only the constructor's first one -- otherwise a live gateway would silently lose cold-loading
-    the moment a sibling worker's routine restart republished the projection file."""
-    alpha_def, cold_def = _definitions()
-    loader_calls = []
-
-    def spawn(model, port, flags, **kwargs):
-        definition = alpha_def if model == alpha_def.model else cold_def
-        return _FakeSupervisorProcess(), _registry_handshake(definition, 1), False
-
-    registry = WorkerRegistry(
-        [alpha_def, cold_def], default_model_id="alpha", preload_model_ids=["alpha"],
-        max_loaded_workers=2, spawn=spawn,
-    )
-    registry.start_preloaded()
-    projection_path = _write_projection(tmp_path, registry)
-
-    def loader(model_id, timeout):
-        loader_calls.append(model_id)
-        real = _loader_from_registry(registry)
-        return real(model_id, timeout)
-
-    router = ProjectionFileRouter(
-        str(projection_path),
-        engine_factory=lambda port: FakeEngine("cold", "c" * 64, "3" * 32, "engine-cold"),
-        substrate_factory=lambda engine: FakeSub(engine),
-        loader=loader,
-    )
-    try:
-        # Force a rebuild via the public API -- the same thing a routine projection republish
-        # (e.g. a sibling worker's restart) triggers in production.
-        assert router.refresh(force=True) is True
-        assert router.loader is loader
-
-        selection = router.select(
-            "cold", field_present=True, surface="native", route="/api/clozn/generate"
-        )
-        assert selection.model_id == "cold"
-        assert loader_calls == ["cold"]
-    finally:
-        registry.stop_all()
-
-
-def test_projection_file_router_without_a_loader_keeps_rt03_fail_fast_byte_identical(
-    tmp_path, monkeypatch
-):
-    """No loader configured (the default) -- ProjectionFileRouter must behave exactly like RT-03:
-    a not-ready configured model fails immediately with model_not_ready, never attempting a load."""
-    alpha_def, cold_def = _definitions()
-
-    def spawn(model, port, flags, **kwargs):
-        if model == cold_def.model:
-            raise AssertionError("no loader is configured; cold must never be spawned")
-        return _FakeSupervisorProcess(), _registry_handshake(alpha_def, 1), False
-
-    registry = WorkerRegistry(
-        [alpha_def, cold_def], default_model_id="alpha", preload_model_ids=["alpha"],
-        max_loaded_workers=2, spawn=spawn,
-    )
-    registry.start_preloaded()
-    projection_path = _write_projection(tmp_path, registry)
-    router = ProjectionFileRouter(
-        str(projection_path),
-        engine_factory=lambda port: FakeEngine("alpha", "a" * 64, "1" * 32, "engine-alpha"),
-        substrate_factory=lambda engine: FakeSub(engine),
-    )
-    assert router.loader is None
-    _wire(monkeypatch, tmp_path, router)
-
-    try:
-        raw = _dispatch("POST", "/api/generate", {
-            "model": "cold", "prompt": "must not load", "stream": False,
-        })
-        status, payload = _response(raw)
-        assert status == 409
-        assert payload["code"] == "model_not_ready"
-        assert payload["retryable"] is True
-        schemas.validate(payload["clozn_model_routing"])
-        assert payload["clozn_model_routing"]["result"]["receipt"]["load_event"] == {
-            "event_id": None,
-            "kind": "not_started",
-            "outcome": "not_started",
-            "state_before": "unloaded",
-            "state_after": "unloaded",
-            "coalesced": False,
-            "wait_ms": 0,
-        }
-        assert runlog.list_runs() == []
-    finally:
-        registry.stop_all()
-
-
-# --- 2. typed failure state, never a generic exception ---------------------------------------------
-
-
-def test_projection_file_router_load_failure_is_a_typed_state_not_a_generic_exception(
-    tmp_path, monkeypatch
-):
-    alpha_def, cold_def = _definitions()
-
-    def spawn(model, port, flags, **kwargs):
-        if model == cold_def.model:
-            raise RuntimeError("boom: engine refused to start")
-        return _FakeSupervisorProcess(), _registry_handshake(alpha_def, 1), False
-
-    registry = WorkerRegistry(
-        [alpha_def, cold_def], default_model_id="alpha", preload_model_ids=["alpha"],
-        max_loaded_workers=2, spawn=spawn,
-    )
-    registry.start_preloaded()
-    projection_path = _write_projection(tmp_path, registry)
-    router = ProjectionFileRouter(
-        str(projection_path),
-        engine_factory=lambda port: FakeEngine("cold", "c" * 64, "3" * 32, "engine-cold"),
+    router = InMemoryProjectionRouter(
+        registry.routing_projection,
+        engine_factory=lambda port: FakeEngine(
+            "cold", "c" * 64, "3" * 32, "engine-cold"
+        ),
         substrate_factory=lambda engine: FakeSub(engine),
         loader=_loader_from_registry(registry),
+        worker_call_tracker=registry.track_call,
+        gate=WorkerGateRegistry(["alpha", "cold"]),
     )
     _wire(monkeypatch, tmp_path, router)
-
     try:
-        raw = _dispatch("POST", "/api/chat", {
+        raw = _dispatch("POST", "/v1/chat/completions", {
             "model": "cold",
             "messages": [{"role": "user", "content": "wake up"}],
-            "stream": False,
         })
         status, payload = _response(raw)
-        assert status == 503
-        assert payload["code"] == "model_load_failed"
-        assert payload["retryable"] is True
-        schemas.validate(payload["clozn_model_routing"])
-        load_event = payload["clozn_model_routing"]["result"]["receipt"]["load_event"]
-        assert load_event["outcome"] == "failed"
-        assert load_event["state_after"] == "failed"
-        assert load_event["coalesced"] is False
-        assert runlog.list_runs() == []
-
-        status_after = {w["model_id"]: w for w in registry.status()["workers"]}
-        assert status_after["cold"]["state"] == "failed"
-        assert status_after["cold"]["failure_code"] == "model_load_failed"
+        assert status == 200
+        logged = runlog.get_run(payload["clozn_run_id"])
+        event = logged["meta"]["model_routing"]["result"]["receipt"]["load_event"]
+        assert event["kind"] == "cold_load"
+        assert event["outcome"] == "loaded"
+        assert event["coalesced"] is False
+        assert registry.status()["workers"][1]["state"] == "ready"
+        assert registry.worker_handle("cold").busy is False
     finally:
         registry.stop_all()
 
 
-# --- 3. eviction never touches in-flight work; resident limit is never exceeded --------------------
-
-
-def test_projection_file_router_eviction_respects_in_flight_work_and_resident_limit(
+def test_ten_concurrent_http_posts_through_in_memory_router_coalesce_one_load(
     tmp_path, monkeypatch
 ):
-    """max_loaded_workers=1: alpha is resident and has REAL in-flight work (tracked via
-    WorkerRegistry.track_call). Cold-loading a second model must fail closed with
-    no_evictable_worker through the exact ProjectionFileRouter+HTTP path -- alpha must never be
-    evicted out from under its in-flight call, and the resident count must never exceed the
-    configured limit."""
+    """The same single-flight proof against ADR 008's in-process construction seam."""
+    alpha_def, cold_def = _definitions()
+    call_count = 0
+    call_lock = threading.Lock()
+    spawn_entered = threading.Event()
+    release_spawn = threading.Event()
+
+    def spawn(model, port, flags, **kwargs):
+        nonlocal call_count
+        with call_lock:
+            call_count += 1
+        definition = alpha_def if model == alpha_def.model else cold_def
+        if definition is cold_def:
+            spawn_entered.set()
+            assert release_spawn.wait(timeout=5)
+        return _FakeSupervisorProcess(), _registry_handshake(definition, 1), False
+
+    registry = WorkerRegistry(
+        [alpha_def, cold_def], default_model_id="alpha", preload_model_ids=["alpha"],
+        max_loaded_workers=2, spawn=spawn, busy_tracking_wired=True,
+    )
+    registry.start_preloaded()
+    call_count = 0
+    router = InMemoryProjectionRouter(
+        registry.routing_projection,
+        engine_factory=lambda port: FakeEngine(
+            "cold", "c" * 64, "3" * 32, "engine-cold"
+        ),
+        substrate_factory=lambda engine: FakeSub(engine),
+        loader=_loader_from_registry(registry),
+        worker_call_tracker=registry.track_call,
+        gate=WorkerGateRegistry(["alpha", "cold"]),
+    )
+    _wire(monkeypatch, tmp_path, router)
+    try:
+        barrier = threading.Barrier(10)
+
+        def send_one(_index):
+            barrier.wait(timeout=5)
+            return _response(_dispatch("POST", "/v1/chat/completions", {
+                "model": "cold",
+                "messages": [{"role": "user", "content": "wake up"}],
+            }))
+
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            futures = [pool.submit(send_one, index) for index in range(10)]
+            assert spawn_entered.wait(timeout=5)
+            time.sleep(0.05)
+            release_spawn.set()
+            responses = [future.result(timeout=10) for future in futures]
+
+        assert call_count == 1
+        assert all(status == 200 for status, _payload in responses)
+        events = []
+        for _status, payload in responses:
+            logged = runlog.get_run(payload["clozn_run_id"])
+            events.append(
+                logged["meta"]["model_routing"]["result"]["receipt"]["load_event"]
+            )
+        assert sum(event["coalesced"] is False for event in events) == 1
+        assert sum(event["coalesced"] is True for event in events) == 9
+        assert registry.worker_handle("cold").busy is False
+    finally:
+        registry.stop_all()
+
+
+def test_in_memory_runtime_lifecycle_soak_alternates_eviction_and_restart(
+    tmp_path, monkeypatch
+):
+    """Bounded Stage 3 gate: repeated cold loads never exceed residency or lose busy safety."""
     alpha_def, cold_def = _definitions()
     spawn_calls = []
 
     def spawn(model, port, flags, **kwargs):
         spawn_calls.append(model)
         definition = alpha_def if model == alpha_def.model else cold_def
-        return _FakeSupervisorProcess(), _registry_handshake(definition, 1), False
+        return _FakeSupervisorProcess(), _registry_handshake(definition, len(spawn_calls)), False
 
     registry = WorkerRegistry(
-        [alpha_def, cold_def], default_model_id="alpha", preload_model_ids=["alpha"],
-        max_loaded_workers=1, spawn=spawn,
-        # alpha's busy state below is injected for real via track_call(); tell the
-        # registry to trust it -- see UnverifiableWorkerStateError / ADR 006. Without
-        # this, eviction would fail closed with no_verifiable_idle_worker instead of
-        # no_evictable_worker, because nothing else in this test's construction
-        # declares a trustworthy busy signal.
+        [alpha_def, cold_def],
+        default_model_id="alpha",
+        preload_model_ids=["alpha"],
+        max_loaded_workers=1,
+        spawn=spawn,
         busy_tracking_wired=True,
     )
     registry.start_preloaded()
-    projection_path = _write_projection(tmp_path, registry)
-    router = ProjectionFileRouter(
-        str(projection_path),
-        engine_factory=lambda port: FakeEngine("cold", "c" * 64, "3" * 32, "engine-cold"),
+
+    def engine_for_port(port):
+        if port == alpha_def.port:
+            return FakeEngine("alpha", "a" * 64, "1" * 32, "engine-alpha")
+        return FakeEngine("cold", "c" * 64, "3" * 32, "engine-cold")
+
+    router = InMemoryProjectionRouter(
+        registry.routing_projection,
+        engine_factory=engine_for_port,
         substrate_factory=lambda engine: FakeSub(engine),
         loader=_loader_from_registry(registry),
+        worker_call_tracker=registry.track_call,
+        gate=WorkerGateRegistry(["alpha", "cold"]),
     )
-    _wire(monkeypatch, tmp_path, router)
+
+    def select_and_release(model_id):
+        selection = router.select(
+            model_id,
+            field_present=True,
+            surface="native",
+            route="/api/clozn/generate",
+        )
+        identity = selection.worker_identity["worker_generation_id"]
+        if selection.gate_release is not None:
+            selection.gate_release()
+        return identity
 
     try:
-        with registry.track_call("alpha"):  # alpha has real, tracked in-flight work
-            raw = _dispatch("POST", "/api/chat", {
-                "model": "cold",
-                "messages": [{"role": "user", "content": "no room"}],
-                "stream": False,
-            })
-        status, payload = _response(raw)
-        assert status == 503
-        assert payload["code"] == "no_evictable_worker"
-        assert payload["retryable"] is True
-        schemas.validate(payload["clozn_model_routing"])
+        for cycle in range(40):
+            model_id = "alpha" if cycle % 2 == 0 else "cold"
+            selected_identity = select_and_release(model_id)
+            status = {item["model_id"]: item for item in registry.status()["workers"]}
+            assert status[model_id]["state"] == "ready"
+            assert sum(item["state"] == "ready" for item in status.values()) <= 1
+            assert registry.worker_handle(model_id).busy is False
+            assert selected_identity.startswith(model_id + "-worker-")
 
-        status_after = {w["model_id"]: w for w in registry.status()["workers"]}
-        assert status_after["alpha"]["state"] == "ready"  # never evicted
-        assert status_after["cold"]["state"] == "failed"  # cold load failed closed instead
-        resident = sum(1 for w in status_after.values() if w["state"] == "ready")
-        assert resident == 1 == registry.max_loaded_workers
-        assert spawn_calls == [alpha_def.model]  # cold's spawn never even ran
+            if cycle in {13, 29}:
+                handle = registry.worker_handle(model_id)
+                handle.process.code = 1
+                registry.maintain()
+                restarted = {
+                    item["model_id"]: item
+                    for item in registry.status()["workers"]
+                }
+                assert restarted[model_id]["state"] == "ready"
+
+        active = "alpha" if registry.worker_handle("alpha") is not None else "cold"
+        other = "cold" if active == "alpha" else "alpha"
+        with registry.track_call(active):
+            try:
+                router.select(
+                    other,
+                    field_present=True,
+                    surface="native",
+                    route="/api/clozn/generate",
+                )
+            except ModelRoutingError as error:
+                assert error.code == "no_evictable_worker"
+            else:
+                raise AssertionError("busy resident worker was evicted during soak")
+        select_and_release(other)
+        assert sum(
+            item["state"] == "ready" for item in registry.status()["workers"]
+        ) == 1
+        assert len(spawn_calls) >= 20
     finally:
         registry.stop_all()
-
-
-# --- 4. the acceptance test: N concurrent HTTP POSTs for one cold model cause exactly ONE load -----
-
-
-def test_ten_concurrent_http_posts_through_projection_file_router_cause_exactly_one_load(
-    tmp_path, monkeypatch
-):
-    """The specific gap this ticket closes.
-
-    Not PreloadedModelRouter.select() called directly (tests/test_model_routing_gateway.py already
-    proves that invariant at the router level). Not a hand-built PreloadedModelRouter monkeypatched
-    onto MODEL_ROUTER (tests/test_worker_concurrency_gate.py already proves THAT through real HTTP
-    dispatch). Specifically ProjectionFileRouter -- the class clozn/server/app.py's main() actually
-    constructs for `clozn serve --models-config` -- now threading a real loader through its
-    file-backed refresh() cycle, driven by ten real concurrent HTTP POSTs through the real do_POST
-    dispatch path, for a model that starts genuinely cold (never preloaded).
-
-    Flake-hunted: builds a completely fresh registry/router/projection/run-store each of ITERATIONS
-    times below, so every iteration independently races the same single-flight guarantee from
-    scratch. See the printed summary (and the returned counts) for the real executed/failed totals.
-    """
-    ITERATIONS = 25
-    THREADS = 10
-    total_requests = 0
-    iteration_failures = []
-
-    for iteration in range(ITERATIONS):
-        iter_dir = tmp_path / f"iter{iteration}"
-        iter_dir.mkdir()
-        alpha_def, cold_def = _definitions()
-
-        call_count = 0
-        call_lock = threading.Lock()
-        spawn_entered = threading.Event()
-        release_spawn = threading.Event()
-
-        def spawn(model, port, flags, **kwargs):
-            nonlocal call_count
-            with call_lock:
-                call_count += 1
-            definition = alpha_def if model == alpha_def.model else cold_def
-            if definition is cold_def:
-                spawn_entered.set()
-                assert release_spawn.wait(timeout=5), "test setup: release_spawn was never set"
-            return _FakeSupervisorProcess(), _registry_handshake(definition, 1), False
-
-        registry = WorkerRegistry(
-            [alpha_def, cold_def], default_model_id="alpha", preload_model_ids=["alpha"],
-            max_loaded_workers=2, spawn=spawn,
-        )
-        registry.start_preloaded()
-        call_count = 0  # reset: only "cold"'s spawns below are under test
-        projection_path = _write_projection(iter_dir, registry)
-
-        router = ProjectionFileRouter(
-            str(projection_path),
-            engine_factory=lambda port: FakeEngine("cold", "c" * 64, "3" * 32, "engine-cold"),
-            substrate_factory=lambda engine: FakeSub(engine),
-            loader=_loader_from_registry(registry),
-            gate=WorkerGateRegistry(["alpha", "cold"]),
-        )
-        _wire(monkeypatch, iter_dir, router)
-
-        start_barrier = threading.Barrier(THREADS)
-
-        def send_one(_index):
-            start_barrier.wait(timeout=5)
-            raw = _dispatch("POST", "/v1/chat/completions", {
-                "model": "cold",
-                "messages": [{"role": "user", "content": "wake up"}],
-            })
-            return _response(raw)
-
-        try:
-            with ThreadPoolExecutor(max_workers=THREADS) as pool:
-                futures = [pool.submit(send_one, i) for i in range(THREADS)]
-                assert spawn_entered.wait(timeout=5), "loader never reached spawn"
-                # Let the other nine requests genuinely reach the registry's coalescing wait before
-                # releasing the spawn -- this is scheduling generosity, not the correctness
-                # mechanism itself (that's call_count and the coalesced-flag counts asserted below,
-                # both computed from real post-hoc state, never from timing).
-                time.sleep(0.05)
-                release_spawn.set()
-                responses = [f.result(timeout=10) for f in futures]
-
-            total_requests += THREADS
-            assert call_count == 1, (
-                f"iteration {iteration}: {call_count} spawns for {THREADS} concurrent requests"
-            )
-            assert all(status == 200 for status, _ in responses), (
-                f"iteration {iteration}: statuses {[s for s, _ in responses]}"
-            )
-            coalesced = []
-            worker_ids = set()
-            for _status, payload in responses:
-                logged = runlog.get_run(payload["clozn_run_id"])
-                receipt = logged["meta"]["model_routing"]["result"]["receipt"]
-                schemas.validate(logged["meta"]["model_routing"])
-                coalesced.append(receipt["load_event"]["coalesced"])
-                worker_ids.add(receipt["worker_identity"]["worker_id"])
-            assert coalesced.count(False) == 1 and coalesced.count(True) == THREADS - 1, (
-                f"iteration {iteration}: coalesced flags {coalesced}"
-            )
-            assert worker_ids == {"cold-worker-1"}, (
-                f"iteration {iteration}: worker_ids {worker_ids}"
-            )
-            status_after = {w["model_id"]: w for w in registry.status()["workers"]}
-            assert status_after["cold"]["state"] == "ready"
-            resident = sum(1 for w in status_after.values() if w["state"] == "ready")
-            assert resident <= registry.max_loaded_workers
-        except AssertionError as error:
-            iteration_failures.append((iteration, str(error)))
-        finally:
-            registry.stop_all()
-
-    print(
-        f"\nflake-hunt: {ITERATIONS} iterations x {THREADS} threads = "
-        f"{total_requests} HTTP requests executed through the real dispatch path, "
-        f"{len(iteration_failures)} iteration failures"
-    )
-    assert not iteration_failures, iteration_failures

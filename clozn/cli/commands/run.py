@@ -419,7 +419,7 @@ def cmd_run(args):
     # its live /readyz worker reports the same n_ctx; silently borrowing a different context would make
     # --ctx look accepted while ignoring it.
     warm = None if args.cpu else _find_warm(model, args.ctx)
-    stack = worker_log = gateway_log = None
+    stack = worker_log = None
     if warm:
         port, gpu, mode = warm
         print(f"{fmt.DIM}- {_friendly(model)} warm on port {port} ({'GPU' if gpu else 'CPU'}, {mode}){fmt.RST}",
@@ -427,14 +427,12 @@ def cmd_run(args):
     else:
         os.makedirs(ctx.HOME, exist_ok=True)
         worker_log = open(os.path.join(ctx.HOME, "worker-run.log"), "w", encoding="utf-8")
-        gateway_log = open(os.path.join(ctx.HOME, "gateway-run.log"), "w", encoding="utf-8")
         port = args.port or _free_port()
         print(f"{fmt.DIM}- loading {_friendly(model)} …{fmt.RST}", file=sys.stderr, flush=True)
         t0 = time.time()
         stack = spawn_runtime(
             RuntimeConfig(model=model, public_port=port, flags=flags, prefer_gpu=not args.cpu),
             worker_log=worker_log,
-            gateway_log=gateway_log,
         )
         health, gpu = stack.worker_health, stack.gpu
         mode = health.get("mode", "?")
@@ -457,5 +455,3 @@ def cmd_run(args):
             stack.stop()
         if worker_log:
             worker_log.close()
-        if gateway_log:
-            gateway_log.close()

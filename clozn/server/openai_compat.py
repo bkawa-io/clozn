@@ -2,9 +2,9 @@
 
 The gateway used to pick a few fields out of a request and silently discard the rest.  That is especially
 dangerous for tools, stop sequences, structured output, penalties, and ``n``: a client sees HTTP 200 and
-reasonably assumes the requested behavior happened.  This module is the single policy table used by both
-OpenAI routes.  It accepts fields Clozn implements, strips only documented neutral/no-op values, and raises
-an OpenAI-shaped 400 for every behavior-bearing field the runtime cannot honor.
+reasonably assumes the requested behavior happened.  This module is the single policy table for the public
+OpenAI Chat Completions route. It accepts fields Clozn implements, strips only documented neutral/no-op
+values, and raises an OpenAI-shaped 400 for every behavior-bearing field the runtime cannot honor.
 
 Keep docs/OPENAI_COMPATIBILITY.md in lockstep with the exported field sets below.
 """
@@ -78,25 +78,6 @@ CHAT_NEUTRAL_FIELDS: dict[str, Callable[[Any], bool]] = {
     "metadata": _empty_mapping,
     "service_tier": lambda v: v in ("auto", "default"),
     "stream_options": lambda v: v == {"include_usage": False},
-}
-
-
-COMPLETION_SUPPORTED_FIELDS = frozenset({
-    "model", "prompt", "max_tokens", "temperature", "top_p", "seed", "stream", "top_k",
-    "repeat_penalty", "rep_penalty",
-})
-
-COMPLETION_NEUTRAL_FIELDS: dict[str, Callable[[Any], bool]] = {
-    "n": lambda v: _is_int(v) and v == 1,
-    "best_of": lambda v: _is_int(v) and v == 1,
-    "echo": lambda v: v is False,
-    "user": lambda v: isinstance(v, str),
-    "frequency_penalty": _zero,
-    "presence_penalty": _zero,
-    "logprobs": lambda _v: False,
-    "stop": lambda _v: False,
-    "suffix": lambda _v: False,
-    "logit_bias": _empty_mapping,
 }
 
 
@@ -321,45 +302,4 @@ def normalize_chat_request(body: Mapping[str, Any]) -> dict[str, Any]:
     # clozn_lens's own boolean-or-object split.
     if "clozn_guard" in out and not isinstance(out["clozn_guard"], (bool, dict)):
         _fail("clozn_guard must be an object", "clozn_guard")
-    return out
-
-
-def normalize_completion_request(body: Mapping[str, Any]) -> dict[str, Any]:
-    if not isinstance(body, Mapping):
-        _fail("request body must be a JSON object", "body")
-    _check_known_fields(body, COMPLETION_SUPPORTED_FIELDS, COMPLETION_NEUTRAL_FIELDS)
-    out = {key: value for key, value in body.items() if key in COMPLETION_SUPPORTED_FIELDS}
-    for field in ("max_tokens", "temperature", "top_p", "seed", "stream", "top_k", "repeat_penalty",
-                  "rep_penalty"):
-        if out.get(field) is None:
-            out.pop(field, None)
-
-    if not isinstance(out.get("prompt"), str):
-        _fail("prompt must be a string (prompt arrays and token arrays are unsupported)", "prompt")
-    if "model" in out and (not isinstance(out["model"], str) or not out["model"].strip()):
-        _fail("model must be a non-empty string", "model")
-    if "stream" in out and not isinstance(out["stream"], bool):
-        _fail("stream must be a boolean", "stream")
-    maximum = _positive_int(body, "max_tokens")
-    if maximum is not None:
-        out["max_tokens"] = maximum
-    temperature = _number_in(body, "temperature", 0.0, 2.0)
-    top_p = _number_in(body, "top_p", 0.0, 1.0, low_inclusive=False)
-    if temperature is not None:
-        out["temperature"] = temperature
-    if top_p is not None:
-        out["top_p"] = top_p
-    if "seed" in out and out["seed"] is not None and not _is_int(out["seed"]):
-        _fail("seed must be an integer", "seed")
-    if "top_k" in out and (not _is_int(out["top_k"]) or out["top_k"] < 0):
-        _fail("top_k must be a non-negative integer", "top_k")
-    if "repeat_penalty" in out and "rep_penalty" in out:
-        _fail("use only one of repeat_penalty or rep_penalty", "repeat_penalty")
-    if "repeat_penalty" in out:
-        out["rep_penalty"] = out.pop("repeat_penalty")
-    if "rep_penalty" in out:
-        if (not _is_number(out["rep_penalty"]) or not math.isfinite(float(out["rep_penalty"]))
-                or float(out["rep_penalty"]) <= 0):
-            _fail("repeat_penalty must be a positive number", "repeat_penalty")
-        out["rep_penalty"] = float(out["rep_penalty"])
     return out

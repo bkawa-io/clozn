@@ -12,7 +12,6 @@ from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
 import json
-import os
 import secrets
 import threading
 import time
@@ -362,6 +361,7 @@ class PreloadedModelRouter:
         engine_factory: Callable[[int], object] | None = None,
         substrate_factory: Callable[[object], object] | None = None,
         gate: WorkerGateRegistry | None = None,
+        worker_call_tracker: Callable[[str], object] | None = None,
     ) -> None:
         bindings = tuple(bindings)
         preload_model_ids = tuple(preload_model_ids)
@@ -436,6 +436,10 @@ class PreloadedModelRouter:
         # active-generation-path limit and EngineSubstrate's per-worker,
         # not shared, mutable request/steer state).
         self._gate = gate
+        # The merged runtime supplies WorkerRegistry.track_call here so idle
+        # eviction has an honest in-flight signal. Callers that do not own a
+        # worker registry leave it unset and preserve their existing behavior.
+        self._worker_call_tracker = worker_call_tracker
 
     @classmethod
     def from_projection(
@@ -446,6 +450,7 @@ class PreloadedModelRouter:
         substrate_factory: Callable[[object], object],
         loader: ColdLoader | None = None,
         gate: WorkerGateRegistry | None = None,
+        worker_call_tracker: Callable[[str], object] | None = None,
     ) -> "PreloadedModelRouter":
         """Build gateway bindings from ``WorkerRegistry.routing_projection``."""
         if not isinstance(projection, Mapping):
@@ -487,6 +492,7 @@ class PreloadedModelRouter:
             engine_factory=engine_factory,
             substrate_factory=substrate_factory,
             gate=gate,
+            worker_call_tracker=worker_call_tracker,
         )
 
     @property
@@ -748,6 +754,15 @@ class PreloadedModelRouter:
         if load_event is None:
             load_event = self._load_event("ready", ready=True)
 
+        # Reserve the registry's worker before entering the generation queue.
+        # Otherwise a concurrent cold-load could observe this worker as idle in
+        # the small interval between identity qualification and gate admission.
+        tracker_exit = None
+        if self._worker_call_tracker is not None:
+            tracker = self._worker_call_tracker(binding.model_id)
+            tracker.__enter__()
+            tracker_exit = tracker.__exit__
+
         # RT-05: the worker is ready and identity-qualified.  If a
         # concurrency gate is configured, admit this request into that
         # SPECIFIC worker's bounded generation queue -- never a different
@@ -761,6 +776,8 @@ class PreloadedModelRouter:
                 binding.model_id, cancel_check=cancel_check
             )
             if outcome is not None:
+                if tracker_exit is not None:
+                    tracker_exit(None, None, None)
                 code = _GATE_OUTCOME_CODES[outcome]
                 raise self._error(
                     base,
@@ -775,6 +792,20 @@ class PreloadedModelRouter:
                     binding=binding,
                     load_event=load_event,
                 )
+
+        # The handler's existing finally path calls the combined release
+        # exactly once after the route completes.
+        if tracker_exit is not None:
+            prior_release = gate_release
+
+            def release_worker_call():
+                try:
+                    tracker_exit(None, None, None)
+                finally:
+                    if prior_release is not None:
+                        prior_release()
+
+            gate_release = release_worker_call
 
         receipt = self._attempt_receipt(
             requested_model, selection_source, binding, load_event
@@ -841,7 +872,13 @@ class PreloadedModelRouter:
             "coalesced": outcome.coalesced,
             "wait_ms": outcome.wait_ms,
         }
-        if outcome.outcome == "loaded" and outcome.state == "ready":
+        # A concurrent caller can arrive after the registry's single-flight
+        # owner has finished but before this router instance materializes its
+        # binding. ``already_ready`` is therefore a successful refresh, not a
+        # load failure.
+        if outcome.state == "ready" and outcome.outcome in {
+            "loaded", "already_ready"
+        }:
             return self._materialize_ready_binding(binding, outcome), load_event
         code = (
             "model_load_timeout" if outcome.outcome == "timed_out"
@@ -946,6 +983,23 @@ class PreloadedModelRouter:
                 lifecycle_state="unloaded",
                 message=f"unknown parent run model {requested_model!r}",
             )
+        if binding.state != "ready" and self._loader is not None:
+            # Control-plane analyses may be the first caller for a configured cold model. Use the
+            # same single-flight loader as generation instead of requiring a warm worker or silently
+            # borrowing another model. A caller that did not configure a loader retains the original
+            # preload-only refusal below.
+            try:
+                binding, _load_event = self._cold_load(base, binding)
+            except ModelRoutingError:
+                raise
+            except Exception as exc:
+                raise self._error(
+                    base,
+                    code="model_load_failed",
+                    lifecycle_state="failed",
+                    message=f"control-plane cold load for {requested_model!r} failed: {exc}",
+                    binding=binding,
+                ) from exc
         if binding.state != "ready":
             code = (
                 "worker_identity_mismatch"
@@ -989,43 +1043,34 @@ class PreloadedModelRouter:
         )
 
 
-class ProjectionFileRouter:
-    """Atomically refreshed RT-03 router backed by a private supervisor file."""
+class InMemoryProjectionRouter:
+    """Routing projection refreshed from a callable rather than a file.
 
-    _MAX_BYTES = 4 * 1024 * 1024
+    This is the construction seam for ADR 008's merged runtime.  The
+    callable is owned by the supervisor and normally returns
+    ``WorkerRegistry.routing_projection()``; the server package only sees a
+    JSON-shaped projection and never imports ``clozn.cli``. It retains the
+    long-lived gate across projection refreshes.
+
+    ``loader`` remains optional for compatibility, but the merged runtime now
+    supplies the live registry adapter so configured cold models can load on
+    demand without crossing a process boundary.
+    """
 
     def __init__(
         self,
-        path: str,
+        projection_source,
         *,
         engine_factory: Callable[[int], object],
         substrate_factory: Callable[[object], object],
         gate: "WorkerGateRegistry | bool" = True,
         loader: ColdLoader | None = None,
+        worker_call_tracker: Callable[[str], object] | None = None,
     ) -> None:
-        """``gate``: ``True`` (default) auto-builds one ``WorkerGateRegistry``
-        from the first projection's configured model IDs, so the real
-        managed-mode gateway (``clozn.server.app.main``) gets RT-05's
-        per-worker generation concurrency with no extra wiring.  ``False``
-        disables gating entirely (RT-04's original fully-ungated behavior).
-        An explicit ``WorkerGateRegistry`` lets a caller (tests, or a future
-        supervisor integration) own and share one across routers/restarts.
-
-        ``loader``: mirrors ``gate`` -- ``None`` (the default) preserves RT-03's
-        exact original behavior, a not-ready model fails immediately with no
-        cold-load attempt.  A caller may pass a real ``ColdLoader`` (see that
-        type's definition above: ``Callable[[str, float], ColdLoadOutcome]``)
-        to drive RT-04's single-flight cold-load coalescing and idle-LRU
-        eviction on refresh-selected models.  As with ``gate``, this class
-        never constructs one itself -- ``clozn/server`` must never import
-        ``clozn/cli``, so a caller adapts a real ``WorkerRegistry.ensure_loaded``
-        (or an equivalent) to the ``ColdLoader`` shape before passing it in
-        (see ``ColdLoadOutcome``'s docstring). The SAME loader instance is
-        reused across every ``refresh()`` rebuild below, exactly like
-        ``_built_gate`` -- a fresh loader per refresh would be harmless here
-        (unlike the gate, this seam holds no in-flight state of its own) but
-        there is no reason to rebuild what doesn't change."""
-        self.path = os.path.abspath(os.fspath(path))
+        if not callable(projection_source):
+            projection = projection_source
+            projection_source = lambda: projection
+        self._projection_source = projection_source
         self._engine_factory = engine_factory
         self._substrate_factory = substrate_factory
         self._fingerprint: str | None = None
@@ -1036,35 +1081,29 @@ class ProjectionFileRouter:
             gate if isinstance(gate, WorkerGateRegistry) else None
         )
         self._loader = loader
+        self._worker_call_tracker = worker_call_tracker
         self.refresh(force=True)
 
     def _read_projection(self) -> tuple[str, dict]:
         try:
-            size = os.path.getsize(self.path)
-            if size < 2 or size > self._MAX_BYTES:
-                raise ModelRoutingConfigError(
-                    "routing projection has an invalid byte size"
-                )
-            with open(self.path, "rb") as handle:
-                raw = handle.read(self._MAX_BYTES + 1)
-        except ModelRoutingConfigError:
-            raise
+            projection = self._projection_source()
         except Exception as error:
             raise ModelRoutingConfigError(
                 f"routing projection is unavailable: {error}"
-            ) from None
-        if len(raw) > self._MAX_BYTES:
-            raise ModelRoutingConfigError("routing projection exceeds size limit")
-        try:
-            projection = json.loads(raw)
-        except Exception as error:
-            raise ModelRoutingConfigError(
-                f"routing projection is invalid JSON: {error}"
             ) from None
         if not isinstance(projection, Mapping):
             raise ModelRoutingConfigError(
                 "routing projection must be an object"
             )
+        try:
+            raw = json.dumps(
+                dict(projection), ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"), allow_nan=False,
+            ).encode("utf-8")
+        except Exception as error:
+            raise ModelRoutingConfigError(
+                f"routing projection is not JSON-shaped: {error}"
+            ) from None
         return hashlib.sha256(raw).hexdigest(), dict(projection)
 
     def refresh(self, *, force: bool = False) -> bool:
@@ -1073,37 +1112,29 @@ class ProjectionFileRouter:
             if not force and fingerprint == self._fingerprint:
                 return False
             if self._gate_setting is True and self._built_gate is None:
-                # Built once, from the first projection's configured model
-                # IDs (a closed, config-driven set that a later cold load or
-                # eviction never adds to or removes from -- see
-                # WorkerRegistry's docstring). Every later refresh() reuses
-                # this SAME registry so an in-flight or queued generation
-                # permit is never orphaned by a routine projection update
-                # (e.g. a sibling worker's restart).
                 model_ids = sorted({
                     raw.get("model_id") for raw in (projection.get("models") or [])
-                    if isinstance(raw, Mapping) and isinstance(raw.get("model_id"), str)
+                    if isinstance(raw, Mapping)
+                    and isinstance(raw.get("model_id"), str)
                 })
                 if model_ids:
                     self._built_gate = WorkerGateRegistry(model_ids)
-            gate = (
-                self._built_gate if self._gate_setting is not False else None
-            )
-            router = PreloadedModelRouter.from_projection(
+            gate = self._built_gate if self._gate_setting is not False else None
+            self._router = PreloadedModelRouter.from_projection(
                 projection,
                 engine_factory=self._engine_factory,
                 substrate_factory=self._substrate_factory,
                 loader=self._loader,
                 gate=gate,
+                worker_call_tracker=self._worker_call_tracker,
             )
-            self._router = router
             self._fingerprint = fingerprint
             return True
 
     def _current(self) -> PreloadedModelRouter:
         self.refresh()
         with self._lock:
-            if self._router is None:  # constructor/refresh invariant
+            if self._router is None:
                 raise ModelRoutingConfigError(
                     "routing projection has not been initialized"
                 )
@@ -1129,19 +1160,18 @@ class ProjectionFileRouter:
 
     @property
     def gate(self) -> WorkerGateRegistry | None:
-        """The one long-lived WorkerGateRegistry, stable across refresh()
-        rebuilds -- see __init__'s docstring for why a fresh registry per
-        refresh would orphan in-flight/queued permits."""
         with self._lock:
             return self._built_gate if self._gate_setting is not False else None
 
     @property
     def loader(self) -> ColdLoader | None:
-        """The configured cold loader, if any -- ``None`` by default (RT-03's
-        original fail-fast behavior). Stable across refresh() rebuilds, same
-        as ``gate``."""
         with self._lock:
             return self._loader
+
+    @property
+    def worker_call_tracker(self):
+        """Optional same-process busy tracker used by the merged runtime."""
+        return self._worker_call_tracker
 
 
 def clear_handler_selection(handler) -> None:

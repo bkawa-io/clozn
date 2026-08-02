@@ -18,8 +18,8 @@ actually needs, composing existing producers rather than reimplementing them:
                          already runs synchronously (composed read-only; that route is unchanged).
   * source-measure     -> clozn.server.routes.influence_map's own job worker + cache_matches (composed
                          read-only) -- source-measure IS the influence-map machinery, not a second one.
-  * mechanistic-diff    -> clozn.analysis.pair_compatibility.assess(), composed read-only and pure
-                         (no engine, GGUF-header-shaped identity dicts only).
+  * mechanistic-diff    -> clozn.analysis.mechanistic_diff.compare(), run through the managed router's
+                         sequential model loaders after the same pair-compatibility gate.
 
 ONE JOB SYSTEM
 --------------
@@ -39,20 +39,15 @@ engine build is not the same evidence). Cached causal-trace results are persiste
 from a different process -- is a cache hit, never a recompute. fork's cache is its own already-durable
 child runs (an existing child with the same parent + position + forced piece IS the cached artifact;
 no separate cache entry duplicates it). source-measure reuses influence-map's own persisted
-`run["influence_map"]` + `cache_matches` verbatim. mechanistic-diff's gate is pure and cheap (GGUF-header
-digests, no engine) -- there is nothing expensive to cache until cross-model execution is wired (see
-that function's own docstring for why this milestone stops at the typed-refusal gate).
+`run["influence_map"]` + `cache_matches` verbatim. mechanistic-diff's cache includes both run
+fingerprints, the capture grid, top-k request, and tensor-retention policy.
 
-WHY THIS DOES NOT WIRE A SUCCESSFUL mechanistic-diff EXECUTION
--------------------------------------------------------------------
-Actually running a cross-model diff (clozn.analysis.mechanistic_diff.compare()) needs two GGUFs loaded
-SEQUENTIALLY -- the worker_registry/worker_handle/model_routing cold-load-and-evict machinery another
-agent owns and is actively changing this same wave. Wiring a job against infrastructure that is moving
-underneath this task would risk a job that silently cannot actually run, which is worse than an honest
-typed `unavailable`. mechanistic_diff_gate() below still does the REAL, useful, pure work (the pair-
-compatibility refusal), so a genuinely incompatible pair is refused with pair_compatibility's own typed
-reason -- verbatim, never re-derived -- exactly as asked; a genuinely compatible pair gets an honest
-"not yet wired" reason instead of a job that would need infrastructure this module does not touch.
+EXECUTION AND FAILURE BOUNDARY
+------------------------------
+The managed-router path now executes a compatible comparison through one model loader at a time. The
+pair gate remains pure and authoritative, while the job worker owns exact run evidence, model selection,
+progress, persistence, and typed engine failures. A gateway without a managed registry still returns the
+legacy `cross_model_execution_not_wired` refusal; it does not fabricate a successful artifact.
 """
 from __future__ import annotations
 
@@ -60,10 +55,12 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
 import json
+from contextlib import contextmanager
 from typing import Any, Callable, Mapping, Sequence
 
 SCHEMA_VERSION = "clozn.token-workbench-action.v1"
 CAUSAL_TRACE_METHOD_VERSION = "causal_trace.v1"
+MECHANISTIC_DIFF_METHOD_VERSION = "mechanistic_diff.v1"
 
 
 def _now_iso() -> str:
@@ -91,6 +88,21 @@ def _run_fingerprint(run: Mapping[str, Any]) -> str:
         "model_sha256": identity.get("model_sha256"),
     }
     return _sha(payload)
+
+
+def _mechanistic_run_fingerprint(run: Mapping[str, Any]) -> str:
+    """Include the full recorded runtime identity for mechanistic evidence caching.
+
+    The general workbench fingerprint intentionally stays small for legacy action caches. A
+    cross-model capture also depends on template, context, backend, adapter, and engine identity, so
+    this action gets a stricter fingerprint without changing cache identities for the other actions.
+    """
+    identity = run.get("identity") if isinstance(run.get("identity"), Mapping) else {}
+    return _sha({
+        "run_fingerprint": _run_fingerprint(run),
+        "model": run.get("model"),
+        "identity": dict(identity),
+    })
 
 
 def action_cache_key(
@@ -292,6 +304,118 @@ def source_measure_job_worker(run: Mapping[str, Any], sub, max_spans: int) -> Ca
     return _job_worker(run, sub, max_spans)
 
 
+def mechanistic_diff_cache_key(
+    run: Mapping[str, Any], reference_run: Mapping[str, Any], index: int,
+    *, layers: Sequence[int], topk: int, store_tensors: bool,
+) -> str:
+    """Identity key for a cross-model mechanistic action.
+
+    The anchor run's immutable content is not enough: the selected reference run, capture grid, top-k
+    request, and tensor-retention policy all change the evidence.  Keep this key beside the other
+    workbench action keys so a repeat request can never reuse a document from a different pair.
+    """
+    return _sha({
+        "run_fingerprint": _mechanistic_run_fingerprint(run),
+        "reference_run_fingerprint": _mechanistic_run_fingerprint(reference_run),
+        "index": int(index),
+        "action": "mechanistic_diff",
+        "method_version": MECHANISTIC_DIFF_METHOD_VERSION,
+        "layers": sorted({int(layer) for layer in layers}),
+        "topk": int(topk),
+        "store_tensors": bool(store_tensors),
+    })
+
+
+def mechanistic_diff_worker(
+    run: Mapping[str, Any], reference_run: Mapping[str, Any], index: int, *,
+    pair_compatibility: Mapping[str, Any], router, layers: Sequence[int], topk: int,
+    store_tensors: bool, cache_key: str,
+) -> Callable:
+    """Build the cancellable job worker for one managed cross-model comparison.
+
+    ``clozn.analysis.mechanistic_diff.compare`` owns the artifact and its validation.  This adapter only
+    supplies exact recorded prompt/continuation evidence and sequential managed-router loaders.  The
+    loaders enter and leave one model at a time, allowing a resident limit of one to evict the first arm
+    before loading the second without ever exposing a private worker port.
+    """
+    run_id = str(run.get("id") or "")
+    prompt = run.get("final_prompt")
+    trace = run.get("trace") if isinstance(run.get("trace"), Mapping) else {}
+    continuation_ids = trace.get("token_ids") if isinstance(trace.get("token_ids"), list) else []
+
+    def worker(control):
+        from clozn.analysis import mechanistic_diff
+
+        control.checkpoint(phase="preparing", completed=0, total=2)
+        if not isinstance(prompt, str) or not prompt:
+            return {"state": "failed", "error": {
+                "code": "mechanistic_diff_missing_prompt",
+                "message": "the anchor run has no exact final_prompt to compare",
+            }}
+        if not continuation_ids or any(
+                isinstance(token_id, bool) or not isinstance(token_id, int)
+                for token_id in continuation_ids):
+            return {"state": "failed", "error": {
+                "code": "mechanistic_diff_missing_token_ids",
+                "message": "the anchor run has no exact recorded continuation token IDs",
+            }}
+
+        @contextmanager
+        def selected_engine(model_id: str):
+            selection = router.select_control_model(
+                model_id, route="/runs/<id>/tokens/<index>/mechanistic-diff")
+            engine = getattr(selection, "engine", None)
+            if engine is None:
+                raise RuntimeError(f"managed model {model_id!r} has no ready engine")
+            yield engine
+
+        try:
+            result = mechanistic_diff.compare(
+                pair_compat=dict(pair_compatibility),
+                reference_loader=lambda: selected_engine(str(run.get("model") or "")),
+                candidate_loader=lambda: selected_engine(str(reference_run.get("model") or "")),
+                prompt=prompt,
+                continuation_ids=list(continuation_ids),
+                continuation_indices=[int(index)],
+                layers=list(layers),
+                topk=int(topk),
+                store_tensors=bool(store_tensors),
+            )
+        except Exception as exc:  # noqa: BLE001 -- job boundary reports typed failure, never raises
+            return {"state": "failed", "error": {
+                "code": "mechanistic_diff_job_failed",
+                "message": f"{type(exc).__name__}: {exc}",
+            }}
+        control.checkpoint(phase="captured", completed=2, total=2)
+        if not isinstance(result, dict):
+            return {"state": "failed", "error": {
+                "code": "mechanistic_diff_job_failed",
+                "message": "mechanistic diff did not produce a result object",
+            }}
+
+        if not result.get("ok"):
+            error = result.get("error")
+            return {"state": "failed", "error": {
+                "code": "mechanistic_diff_unavailable",
+                "message": str(error or "mechanistic diff was unavailable"),
+            }}
+        artifact = result["document"]
+        entry = build_action_entry(
+            action="mechanistic_diff", cache_key=cache_key,
+            method_version=MECHANISTIC_DIFF_METHOD_VERSION, run_id=run_id, index=index,
+            outcome="ok", result=artifact,
+        )
+
+        def persist():
+            return store_action_result(run_id, entry)
+
+        control.commit(persist)
+        control.attach_result(entry)
+        return {"state": "completed"}
+
+    return worker
+
+
 # ============================================================================== mechanistic-diff's gate
 def mechanistic_diff_gate(run: Mapping[str, Any], reference_run: Mapping[str, Any]) -> dict:
     """Typed pair-compatibility gate for a cross-model mechanistic diff, composing
@@ -308,8 +432,28 @@ def mechanistic_diff_gate(run: Mapping[str, Any], reference_run: Mapping[str, An
     exactly the typed-unavailable outcome this gate is supposed to produce for that common case."""
     from clozn.analysis import pair_compatibility
 
-    identity_a = dict(run.get("identity") or {})
-    identity_b = dict(reference_run.get("identity") or {})
+    def enriched_identity(record: Mapping[str, Any]) -> dict:
+        identity = dict(record.get("identity") or {})
+        # Normal run receipts intentionally keep GGUF header facts optional. When the immutable model
+        # path is present, enrich the pure gate from that file's header without hashing the multi-GB
+        # payload; a missing/legacy path simply preserves the existing explicit-unknown refusal.
+        model_path = identity.get("model_path")
+        if isinstance(model_path, str) and model_path:
+            try:
+                from clozn.artifacts.contracts import gguf_identity
+                header = gguf_identity(model_path, include_file_hash=False)
+                for field in (
+                    "architecture", "layer_count", "hidden_size", "vocab_size", "head_count",
+                    "head_count_kv", "tokenizer_sha256", "chat_template_sha256", "filename",
+                ):
+                    if field not in identity and field in header:
+                        identity[field] = header[field]
+            except Exception:
+                pass
+        return identity
+
+    identity_a = enriched_identity(run)
+    identity_b = enriched_identity(reference_run)
     report = pair_compatibility.assess(
         identity_a, identity_b,
         label_a=str(run.get("model") or "") or None,

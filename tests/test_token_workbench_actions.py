@@ -15,14 +15,14 @@ Covers, per the coordinator's contract:
     reports "completed" nor persists a result once cancelled, even though the underlying computation
     (which has no cooperative cancellation hook) keeps running in its own thread until it returns.
   * mechanistic-diff refuses with pair_compatibility's own typed reason when it does not permit the
-    comparison, and separately reports an honest "not yet wired" reason when it DOES permit one (see
-    clozn.runs.token_workbench_actions's module docstring for why cross-model execution itself is out
-    of scope this wave).
+    comparison, and runs through the managed-router job/cache path when a model registry is supplied;
+    the legacy no-router case remains an honest typed unavailable response.
 """
 from __future__ import annotations
 
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -413,6 +413,63 @@ def test_mechanistic_diff_permitted_pair_is_still_honestly_unavailable_this_mile
     assert h.body["outcome"] == "unavailable"
     assert h.body["reason"]["code"] == "cross_model_execution_not_wired"
     assert h.body["pair_compatibility"]["verdict"]["operations"]["per_token_comparison"]["permitted"] is True
+
+
+def test_mechanistic_diff_managed_router_runs_sequential_capture_and_caches(stores, monkeypatch):
+    identity = {
+        "architecture": "qwen2", "layer_count": 6, "hidden_size": 4, "vocab_size": 100,
+        "tokenizer_sha256": "e" * 64, "chat_template_sha256": "f" * 64,
+    }
+    run = _organic_run(model="model-a", identity=dict(identity))
+    reference = _organic_run(model="model-b", identity=dict(identity))
+
+    class Engine:
+        def __init__(self, name):
+            self.name, self.calls = name, []
+
+        def score(self, **kwargs):
+            self.calls.append(kwargs)
+            if "capture_layers" not in kwargs:
+                return {"n_prompt": 2, "n_cont": 3, "tokens": []}
+            return {
+                "n_prompt": 2, "n_cont": 3,
+                "tokens": [
+                    {"id": 11, "piece": "one", "logprob": -0.1, "topk": [{"id": 11, "logprob": -0.1}]},
+                    {"id": 22, "piece": " two", "logprob": -0.2, "topk": [{"id": 22, "logprob": -0.2}]},
+                    {"id": 33, "piece": " three", "logprob": -0.3, "topk": [{"id": 33, "logprob": -0.3}]},
+                ],
+                "captured": {str(kwargs["capture_layers"][0]): {
+                    str(kwargs["capture_positions"][0]): [1.0, 0.0, 0.0, 0.0],
+                }},
+            }
+
+    engines = {"model-a": Engine("a"), "model-b": Engine("b")}
+
+    class Router:
+        def select_control_model(self, model_id, *, route):
+            return SimpleNamespace(engine=engines[model_id])
+
+    import clozn.server.app as app
+    monkeypatch.setattr(app, "MODEL_ROUTER", Router())
+
+    claimed, h = _post(FakeSub(), run["id"], 1, "mechanistic-diff", {
+        "reference_run_id": reference["id"], "layers": [1],
+    })
+    assert claimed is True and h.status == 202
+    assert h.body["job"]["kind"] == "mechanistic_diff"
+    final = _wait_for_job(run["id"], h.body["job"]["job_id"], {"completed", "failed", "cancelled"})
+    assert final["state"] == "completed"
+    assert final["result"]["outcome"] == "ok"
+    assert final["result"]["result"]["schema_version"] == "clozn.mechanistic-diff.v1"
+    assert engines["model-a"].calls[-1]["capture_positions"] == [3]
+    assert engines["model-b"].calls[-1]["capture_positions"] == [3]
+
+    stored = runlog.get_run(run["id"])
+    assert stored["token_workbench_actions"][0]["action"] == "mechanistic_diff"
+    claimed2, h2 = _post(FakeSub(), run["id"], 1, "mechanistic-diff", {
+        "reference_run_id": reference["id"], "layers": [1],
+    })
+    assert claimed2 is True and h2.status == 200 and h2.body["outcome"] == "cached"
 
 
 # =================================================================================== job status/cancel

@@ -192,27 +192,6 @@ def _chat_content(payload: dict) -> str:
         return ""
 
 
-def _completion_stream_text(result: SSEResult) -> tuple[bool, str, str]:
-    if result.status != 200:
-        return False, "", f"HTTP {result.status}: {result.error}"
-    if not result.done:
-        return False, "", result.error or "missing [DONE]"
-    text = []
-    for frame in result.frames:
-        if not isinstance(frame, dict):
-            return False, "", "non-JSON frame on /v1/completions"
-        if "error" in frame:
-            return False, "", str(frame["error"])
-        if frame.get("object") != "text_completion" or "type" in frame:
-            return False, "", f"native frame leaked into /v1/completions: {frame}"
-        choices = frame.get("choices")
-        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
-            return False, "", "completion chunk has no choices[0]"
-        text.append(str(choices[0].get("text") or ""))
-    joined = "".join(text)
-    return bool(joined), joined, "standard chunks + [DONE]" if joined else "stream produced no text"
-
-
 def _chat_stream_text(result: SSEResult) -> tuple[bool, str, str]:
     if result.status != 200:
         return False, "", f"HTTP {result.status}: {result.error}"
@@ -455,20 +434,6 @@ def _exercise(base: str, timeout: float, report: Report, *, deep: bool = False) 
     )
     report.metrics["chat_stream_seconds"] = round(chat_stream.elapsed_s, 3)
 
-    completion_stream = client.sse("/v1/completions", {
-        "model": model_id or "clozn-local",
-        "prompt": "Reply with the single word ready.",
-        "max_tokens": 12,
-        "temperature": 0,
-        "stream": True,
-    })
-    standard_ok, standard_text, standard_detail = _completion_stream_text(completion_stream)
-    report.add("OpenAI completion stream contains only standard chunks", standard_ok, standard_detail)
-    report.metrics["openai_stream_ttft_seconds"] = (
-        round(completion_stream.first_data_s, 3) if completion_stream.first_data_s is not None else None
-    )
-    report.metrics["openai_stream_seconds"] = round(completion_stream.elapsed_s, 3)
-
     native_stream = client.sse("/api/clozn/generate", {
         "prompt": "Reply with the single word ready.",
         "max_tokens": 12,
@@ -478,8 +443,8 @@ def _exercise(base: str, timeout: float, report: Report, *, deep: bool = False) 
     native_ok, native_text, native_detail = _native_stream_text(native_stream)
     report.add("native stream preserves typed Clozn events", native_ok, native_detail)
     report.add("all generation protocols produced text",
-               bool(chat_stream_text and standard_text and native_text),
-               f"chat={chat_stream_text[:30]!r} completion={standard_text[:30]!r} "
+               bool(chat_stream_text and native_text),
+               f"chat={chat_stream_text[:30]!r} "
                f"native={native_text[:30]!r}")
 
     if deep and rid:

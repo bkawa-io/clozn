@@ -1,0 +1,12 @@
+{
+  "schema_version": "clozn.qualification-lab-step.v1",
+  "generated_at": "2026-08-01T00:00:00Z",
+  "step_id": "dials",
+  "boundary": "product",
+  "status": "passed",
+  "model_sha256": null,
+  "evidence": {},
+  "reason": null,
+  "artifact": null,
+  "receipt_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}

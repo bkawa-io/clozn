@@ -39,8 +39,10 @@ module -- and its tests -- stay model-free. IO/among-tensors ops never raise int
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 import inspect
 import time
+import uuid
 
 import clozn.settings as settings  # the single settings file (studio_settings.json) + its never-raise get/set helpers
 import clozn.runs.store as runlog
@@ -53,6 +55,285 @@ _ENABLED_KEY = "timetravel_snapshots"
 # per-snapshot cost without bound (a snapshot's size is O(seq)).
 DEFAULT_CAP = 8                    # keep at most this many per-turn snapshots per run (the "last N turns")
 DEFAULT_BUDGET_MB = 512           # ... and never exceed this many MB of offloaded KV across a store
+
+TIME_MACHINE_SCHEMA = "clozn.time-machine-eligibility.v1"
+TIME_MACHINE_VERIFICATION_SCHEMA = "clozn.time-machine-verification.v1"
+
+
+def replay_eligibility(run: dict | None, store: "SnapshotStore | None" = None) -> dict:
+    """Return the model-free Answer Time Machine eligibility receipt for ``run``.
+
+    The current product branch path re-generates a truncated transcript.  It is therefore a
+    *structurally reproducible* replay, even when the bounded snapshot ring happens to contain a KV
+    descriptor.  A snapshot is reported as useful availability evidence, but it must never be promoted
+    to ``exact_replay_eligible`` until a generation path actually restores and verifies that state.
+
+    This is intentionally read-only and never asks a worker to load or generate.  The route can safely
+    call it from run inspection and the UI can use the per-turn records to disable an exact-replay action
+    with a concrete reason instead of guessing from the presence of a snapshot.
+    """
+    base = {
+        "schema_version": TIME_MACHINE_SCHEMA,
+        "run_id": str((run or {}).get("id") or ""),
+        "state": "unavailable",
+        "eligible": False,
+        "exact_replay": {"eligible": False, "reason": {
+            "code": "exact_replay_not_available",
+            "message": "this Time Machine path does not restore a recorded KV state yet",
+        }},
+        "reasons": [],
+        "turns": [],
+    }
+    if not isinstance(run, dict) or not base["run_id"]:
+        base["reasons"] = [{"code": "run_unavailable", "message": "the run record is unavailable"}]
+        return base
+
+    turns = message_turns(run.get("messages") or [])
+    if not turns:
+        base["reasons"] = [{"code": "no_replayable_turns",
+                            "message": "the run has no user turn that can be branched"}]
+        return base
+
+    has_cache = False
+    for turn in turns:
+        snap = store.get(base["run_id"], turn["turn"]) if store is not None else None
+        descriptor = snap.descriptor() if snap is not None else None
+        cache = bool(snap is not None and snap.has_cache)
+        has_cache = has_cache or cache
+        turn_reasons = [{
+            "code": "structural_replay_only",
+            "message": "branching replays the truncated transcript and does not restore exact KV state",
+        }]
+        if snap is not None and not cache:
+            turn_reasons.append({
+                "code": "snapshot_descriptor_only",
+                "message": "a turn descriptor is present, but it contains no reusable KV payload",
+            })
+        elif cache:
+            turn_reasons.append({
+                "code": "snapshot_fast_path_reserved",
+                "message": "a KV snapshot is retained, but the current branch implementation does not restore it",
+            })
+        turn_receipt = {
+            "turn": int(turn["turn"]),
+            "branch_eligible": True,
+            "replay_fidelity": "structurally_reproducible",
+            "exact_replay_eligible": False,
+            "snapshot": descriptor,
+            "reasons": turn_reasons,
+        }
+        # A prior verification is evidence to display, not a fresh exactness claim: the worker
+        # checkpoint is scoped to its process generation and GET must remain cheap/read-only.
+        try:
+            from clozn.replay import timetravel_results
+            previous = timetravel_results.latest_for_run(base["run_id"], int(turn["turn"]))
+        except Exception:
+            previous = None
+        if isinstance(previous, dict):
+            last_verification = {
+                "verification_id": previous.get("verification_id"),
+                "status": previous.get("status"),
+                "fidelity": previous.get("fidelity"),
+                "exact_replay": previous.get("exact_replay") is True,
+                "message": ((previous.get("reasons") or [{}])[0].get("message")
+                            if isinstance((previous.get("reasons") or [{}])[0], dict)
+                            else None),
+            }
+            # Historical session-turn proofs name both sides explicitly. Preserve that
+            # provenance in the read-only eligibility projection so the UI cannot imply that
+            # the final run itself supplied the verified checkpoint.
+            for key in ("scope", "requested_run_id", "source_run_id", "source_turn"):
+                if key in previous:
+                    last_verification[key] = previous[key]
+            turn_receipt["last_verification"] = last_verification
+        base["turns"].append(turn_receipt)
+
+    base["state"] = "structurally_reproducible"
+    base["eligible"] = True
+    base["reasons"] = [{
+        "code": "structural_replay_available",
+        "message": "the recorded messages can be truncated and regenerated when a compatible worker is ready",
+    }]
+    if has_cache:
+        base["reasons"].append({
+            "code": "exact_restore_pending",
+            "message": "the run has at least one retained KV snapshot, but exact restore is not enabled in this path",
+        })
+    return base
+
+
+def resolve_turn_source_run(run: Mapping, turn: int) -> dict | None:
+    """Find the one immutable session run that exactly contains ``run``'s requested turn prefix.
+
+    A final transcript does not carry an earlier worker KV state.  The session's earlier organic run
+    can supply that state, but only when its sanitized message list is byte-for-byte the prefix through
+    the requested assistant turn.  Missing session identity, derived/branched candidates, malformed
+    histories, and ambiguous matches all fail closed.
+    """
+    if not isinstance(run, Mapping) or not isinstance(run.get("session_key"), str):
+        return None
+    from clozn.runs.think_tags import sanitize_messages
+    turns = message_turns(run.get("messages") or [])
+    if turn < 0 or turn >= len(turns):
+        return None
+    target = turns[turn]
+    parent_messages = sanitize_messages(run.get("messages") or [])
+    prefix = parent_messages[:int(target["assistant_idx"] or target["user_idx"]) + 1]
+    if target.get("assistant_idx") is None:
+        return None
+    try:
+        from clozn.runs import sessions, store as runlog
+        page = sessions.list_session_runs(run["session_key"], limit=1000)
+    except Exception:
+        return None
+    matches: list[dict] = []
+    for summary in (page.get("runs") or []) if isinstance(page, Mapping) else ():
+        candidate_id = summary.get("id") if isinstance(summary, Mapping) else None
+        if not isinstance(candidate_id, str) or candidate_id == run.get("id"):
+            continue
+        try:
+            candidate = runlog.get_run(candidate_id)
+        except Exception:
+            candidate = None
+        if not isinstance(candidate, dict):
+            continue
+        # Exact checkpoint capture requires an organic, non-derived parent.  Do not choose a branch
+        # child merely because it happens to share the same text prefix.
+        if candidate.get("parent_run_id") is not None or candidate.get("source") in {
+            "branch", "replay", "fork", "execution_fork",
+        }:
+            continue
+        candidate_messages = sanitize_messages(candidate.get("messages") or [])
+        # Generation requests persist the input messages separately from the assistant response.  For
+        # session-prefix comparison, reconstruct the immutable completed turn without writing it back.
+        candidate_response = candidate.get("response")
+        if (
+            isinstance(candidate_response, str)
+            and candidate_messages
+            and candidate_messages[-1].get("role") == "user"
+        ):
+            candidate_messages = candidate_messages + [{
+                "role": "assistant", "content": candidate_response,
+            }]
+        if candidate_messages != prefix:
+            continue
+        candidate_turns = message_turns(candidate_messages)
+        if len(candidate_turns) != turn + 1 or candidate_turns[-1].get("assistant") != target.get("assistant"):
+            continue
+        matches.append(candidate)
+    return matches[0] if len(matches) == 1 else None
+
+
+def verify_prompt_boundary(
+    run: dict,
+    turn: int,
+    engine,
+    *,
+    runtime_identity,
+    worker_identity,
+    source_run: Mapping | None = None,
+    requested_run_id: str | None = None,
+    checkpoint_envelope: Mapping | None = None,
+    clock=time.time,
+) -> dict:
+    """Run the existing exact checkpoint capture/control proof for a Time Machine turn.
+
+    v1 deliberately verifies the *full run prompt boundary* and therefore only accepts the latest
+    conversational turn.  Earlier turns need their own persisted worker checkpoint; a final-run
+    checkpoint cannot honestly be presented as an earlier-turn restore.  The returned artifact is
+    terminal and safe to persist even when capture is unavailable or the unchanged control fails.
+    """
+    requested_id = str(requested_run_id or (run or {}).get("id") or "")
+    source = source_run if isinstance(source_run, Mapping) else run
+    parent_id = str((source or {}).get("id") or "")
+    verification_id = "tmv_" + uuid.uuid4().hex[:20]
+    turns = message_turns((source or {}).get("messages") or [])
+    is_session_turn = bool(requested_id and requested_id != parent_id)
+    base = {
+        "schema_version": TIME_MACHINE_VERIFICATION_SCHEMA,
+        "verification_id": verification_id,
+        "parent_run_id": parent_id,
+        "turn": int(turn),
+        "scope": "session_turn_prompt_boundary" if is_session_turn else "full_run_prompt_boundary",
+        "status": "unavailable",
+        "exact_replay": False,
+        "fidelity": "unavailable",
+        "exactness_regime": "prompt_boundary_reprefill",
+        "created_ts": float(clock()),
+        "reasons": [],
+        "proof": {"status": "not_run"},
+        "capture": {},
+    }
+    if is_session_turn:
+        base["requested_run_id"] = requested_id
+        base["source_run_id"] = parent_id
+        base["source_turn"] = int(turn)
+    if not requested_id or not parent_id:
+        base["reasons"] = [{"code": "run_unavailable", "message": "the parent run is unavailable"}]
+    elif not turns:
+        base["reasons"] = [{
+            "code": "no_replayable_turns",
+            "message": "the run has no conversational turn to verify",
+        }]
+    elif turn < 0 or turn >= len(turns):
+        base["reasons"] = [{
+            "code": "turn_out_of_range",
+            "message": f"turn {turn} is outside the recorded conversation",
+        }]
+    elif turn != turns[-1]["turn"]:
+        base["reasons"] = [{
+            "code": "turn_state_not_available",
+            "message": (
+                "exact verification currently covers the full-run prompt boundary; "
+                "this earlier conversational turn has no persisted worker KV state"),
+        }]
+    else:
+        try:
+            from clozn.replay.checkpoint_capture import (
+                CheckpointCaptureError,
+                capture_parent_checkpoint,
+            )
+            capture = capture_parent_checkpoint(
+                source,
+                engine,
+                runtime_identity=runtime_identity,
+                worker_identity=worker_identity,
+                checkpoint_envelope=checkpoint_envelope,
+            )
+            base["capture"] = capture
+            if isinstance(capture, dict):
+                if isinstance(capture.get("parent_fingerprint_sha256"), str):
+                    base["parent_fingerprint_sha256"] = capture["parent_fingerprint_sha256"]
+                if isinstance(capture.get("checkpoint_reference_id"), str):
+                    base["checkpoint_reference_id"] = capture["checkpoint_reference_id"]
+                if isinstance(capture.get("proof"), dict):
+                    base["proof"] = capture["proof"]
+                if capture.get("status") == "available":
+                    base["status"] = "verified"
+                    base["exact_replay"] = True
+                    base["fidelity"] = "exact_replay_eligible"
+                    base["reasons"] = [{
+                        "code": "exact_prompt_boundary_verified",
+                        "message": "the unchanged exact-fork control matched the immutable parent",
+                    }]
+                else:
+                    base["status"] = capture.get("status") if capture.get("status") in {
+                        "unavailable", "failed"} else "failed"
+                    base["reasons"] = list(capture.get("reasons") or [{
+                        "code": "exact_verification_unavailable",
+                        "message": "the exact checkpoint proof did not complete",
+                    }])
+        except CheckpointCaptureError as exc:
+            base["reasons"] = [{"code": "verification_request_invalid", "message": str(exc)}]
+        except Exception as exc:
+            base["status"] = "failed"
+            base["reasons"] = [{
+                "code": "verification_failed",
+                "message": f"exact prompt-boundary verification failed: {type(exc).__name__}: {exc}",
+            }]
+    from clozn import schemas
+    schemas.validate(base, TIME_MACHINE_VERIFICATION_SCHEMA)
+    return base
 
 
 def enabled() -> bool:

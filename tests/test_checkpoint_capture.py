@@ -236,6 +236,16 @@ class CaptureEngine:
             "size_bytes": 987654,
         }
 
+    def import_checkpoint(self, envelope):
+        self.calls.append(("import_checkpoint", deepcopy(envelope)))
+        state = envelope["state"]
+        return {
+            "checkpoint_id": "ckpt-generation-a-imported",
+            "worker_generation_id": "generation-a",
+            "n_past": state["n_past"],
+            "size_bytes": 987654,
+        }
+
     def execution_fork(self, **kwargs):
         self.calls.append(("execution_fork", deepcopy(kwargs)))
         assert kwargs["intervention"] == {"type": "none"}
@@ -731,6 +741,92 @@ def test_gateway_checkpoint_route_returns_public_artifact_and_rejects_v1_options
     )
     assert rejected.status == 400
     assert rejected.body["code"] == "checkpoint_capture_options_unsupported"
+
+
+def test_gateway_checkpoint_route_can_explicitly_hydrate_a_durable_pin(store, monkeypatch):
+    parent = _parent()
+    engine = CaptureEngine()
+    envelope = {
+        "envelope_version": "clozn.checkpoint-export.v1",
+        "identity": {"model_sha256": "a" * 64},
+        "state": {
+            "tokens": [1, 2, 11, 22, 33],
+            "n_tokens": 5,
+            "n_past": 5,
+            "prompt_tokens": 2,
+        },
+        "payload_sha256": "c" * 64,
+    }
+    monkeypatch.setattr(
+        "clozn.replay.checkpoint_pin_store.resolve_pin",
+        lambda run_id: {"ok": True, "manifest": {"run_id": run_id}, "envelope": envelope},
+    )
+    handler = Handler(FakeSub(engine))
+
+    assert route.try_post(
+        handler,
+        f"/runs/{parent['id']}/execution-fork/checkpoint",
+        {"pinned": True},
+    )
+    assert handler.status == 201
+    assert handler.body["status"] == "available"
+    assert [name for name, _call in engine.calls] == [
+        "score", "import_checkpoint", "execution_fork"
+    ]
+
+
+def test_capture_can_hydrate_a_resolved_pin_and_still_prove_the_same_control(store):
+    parent = _parent()
+    engine = CaptureEngine()
+    envelope = {
+        "envelope_version": "clozn.checkpoint-export.v1",
+        "identity": {"model_sha256": "a" * 64},
+        "state": {
+            "tokens": [1, 2, 11, 22, 33],
+            "n_tokens": 5,
+            "n_past": 5,
+            "prompt_tokens": 2,
+        },
+        "payload_sha256": "c" * 64,
+    }
+
+    artifact = capture_parent_checkpoint(
+        parent,
+        engine,
+        runtime_identity=RUNTIME,
+        worker_identity=WORKER,
+        checkpoint_envelope=envelope,
+    )
+
+    schemas.validate(artifact)
+    assert artifact["status"] == "available"
+    assert artifact["proof"]["status"] == "matched"
+    assert [name for name, _call in engine.calls] == [
+        "score", "import_checkpoint", "execution_fork"
+    ]
+    assert engine.calls[1][1] == envelope
+
+
+def test_capture_refuses_a_pin_whose_token_history_is_not_the_parent(store):
+    parent = _parent()
+    engine = CaptureEngine()
+    artifact = capture_parent_checkpoint(
+        parent,
+        engine,
+        runtime_identity=RUNTIME,
+        worker_identity=WORKER,
+        checkpoint_envelope={
+            "state": {
+                "tokens": [1, 2, 99],
+                "n_tokens": 3,
+                "n_past": 3,
+                "prompt_tokens": 2,
+            }
+        },
+    )
+    assert artifact["status"] == "unavailable"
+    assert artifact["reasons"][0]["code"] == "pinned_checkpoint_parent_mismatch"
+    assert [name for name, _call in engine.calls] == ["score"]
 
 
 def test_gateway_capture_selects_non_default_parent_model_worker(

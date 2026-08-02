@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.qualification-plan.v1",
+  "title": "Model-free qualification readiness plan",
+  "description": "Q1/Q2 artifact emitted by clozn qualify --plan. It is a readiness report, never qualification evidence: no model generation, lab fit, artifact installation, or capability claim is performed by the planner.",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "model", "resources", "lab_dependencies", "steps", "claims"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.qualification-plan.v1"},
+    "generated_at": {"type": "string", "minLength": 1},
+    "model": {"$ref": "#/$defs/Model"},
+    "resources": {"$ref": "#/$defs/Resources"},
+    "lab_dependencies": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/Dependency"}
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/Step"}
+    },
+    "claims": {"$ref": "#/$defs/Claims"}
+  },
+  "$defs": {
+    "Model": {
+      "type": "object",
+      "required": ["input", "source", "path", "summary", "file_size_bytes", "header_bytes_read"],
+      "additionalProperties": false,
+      "properties": {
+        "input": {"type": "string", "minLength": 1},
+        "source": {"enum": ["local", "url"]},
+        "path": {"type": ["string", "null"]},
+        "summary": {"type": "object", "additionalProperties": true},
+        "file_size_bytes": {"type": ["integer", "null"], "minimum": 0},
+        "header_bytes_read": {"type": ["integer", "null"], "minimum": 0}
+      }
+    },
+    "Resources": {
+      "type": "object",
+      "required": ["disk_bytes", "disk_gb", "vram_budget_gb", "estimated_vram_gb", "estimated_ram_gb", "vram_fits_estimate", "context_tokens", "method", "note", "offload_hint"],
+      "additionalProperties": false,
+      "properties": {
+        "disk_bytes": {"type": ["integer", "null"], "minimum": 0},
+        "disk_gb": {"type": ["number", "null"], "minimum": 0},
+        "vram_budget_gb": {"type": "number", "minimum": 0},
+        "estimated_vram_gb": {"type": ["number", "null"], "minimum": 0},
+        "estimated_ram_gb": {"type": ["number", "null"], "minimum": 0},
+        "vram_fits_estimate": {"type": ["boolean", "null"]},
+        "context_tokens": {"type": "integer", "minimum": 1},
+        "method": {"type": "string", "minLength": 1},
+        "note": {"type": ["string", "null"]},
+        "offload_hint": {"type": ["string", "null"]}
+      }
+    },
+    "Dependency": {
+      "type": "object",
+      "required": ["module", "label", "present", "purpose"],
+      "additionalProperties": false,
+      "properties": {
+        "module": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "present": {"type": "boolean"},
+        "purpose": {"type": "string", "minLength": 1}
+      }
+    },
+    "Step": {
+      "type": "object",
+      "required": ["id", "label", "boundary", "status", "estimated"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "boundary": {"enum": ["product", "lab"]},
+        "status": {"enum": ["ready", "planned", "blocked"]},
+        "estimated": {"type": "boolean"},
+        "requires": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    },
+    "Claims": {
+      "type": "object",
+      "required": ["qualification_status", "generation_performed", "artifacts_installed", "note"],
+      "additionalProperties": false,
+      "properties": {
+        "qualification_status": {"const": "not_qualified"},
+        "generation_performed": {"const": false},
+        "artifacts_installed": {"const": false},
+        "note": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

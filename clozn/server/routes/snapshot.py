@@ -8,10 +8,11 @@ runtime-identity resolution as clozn/server/routes/execution_fork.py, reused rat
 (2) export it via the engine's new POST /v1/checkpoint/export; (3) persist it durably via
 clozn.replay.checkpoint_pin_store.pin_checkpoint (content-addressed blob + SQLite metadata).
 
-``clozn snapshot unpin``/``clozn snapshot list`` need no live worker at all -- they are pure local
-SQLite/blob operations -- and are therefore NOT exposed as gateway routes here; the CLI (clozn/cli/
-commands/snapshot.py) calls clozn.replay.checkpoint_pin_store directly for those. Only `pin` needs a
-live engine (to materialize the checkpoint from the run's recorded history in the first place).
+``clozn snapshot unpin``/``clozn snapshot list`` still need no live worker at all -- they are pure local
+SQLite/blob operations -- and the CLI continues to call clozn.replay.checkpoint_pin_store directly for
+those. Studio's read/manage surface is provided by the separate `clozn.server.routes.snapshots` module;
+only `pin` needs a live engine (to materialize the checkpoint from the run's recorded history in the
+first place).
 """
 from __future__ import annotations
 

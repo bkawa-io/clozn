@@ -299,7 +299,10 @@ def verify_offline(*, since: str | None = None, environ=None) -> dict:
     configured = _persisted_policy(environ=environ)
     effective_since = str(since) if since is not None else configured.get("activated_at")
     if effective_since is not None:
-        rows = [row for row in rows if str(row.get("timestamp") or "") >= effective_since]
+        # ``activated_at`` is captured in the same clock domain as ledger timestamps. An allowed
+        # request can legitimately receive the exact activation timestamp when the clock resolution
+        # is coarse; treat that boundary as pre-activation rather than reporting it as a violation.
+        rows = [row for row in rows if str(row.get("timestamp") or "") > effective_since]
     external = [row for row in rows
                 if row.get("destination_category") not in {"loopback", "local_file"}]
     violations = [row for row in external if row.get("outcome") != "blocked"]

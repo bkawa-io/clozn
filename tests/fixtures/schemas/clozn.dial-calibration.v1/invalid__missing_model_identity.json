@@ -1,0 +1,8 @@
+{
+  "schema_version": "clozn.dial-calibration.v1",
+  "generated_at": "2026-08-01T00:00:00Z",
+  "method": "engine sweep",
+  "dials": {
+    "warm": {"usable_max": 0.5, "usable_range": [0.25, 0.5], "derail_point": null, "works": true}
+  }
+}

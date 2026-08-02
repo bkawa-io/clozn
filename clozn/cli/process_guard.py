@@ -1,20 +1,18 @@
-"""process_guard -- OS-level parent-death guard for spawned child processes (gateway + worker).
+"""process_guard -- OS-level parent-death guard for spawned C++ worker processes.
 
-Stage 0 of ``docs/design/008-single-process-runtime.md`` (ADR 008 section 3.3). Today there is NO
-parent-death guard of any kind: kill ``clozn serve``'s supervisor process ungracefully (SIGKILL, a
-crash, ``taskkill /F``, an IDE stop button) and every child it spawned -- the gateway subprocess and
-every C++ worker -- orphans. A worker holds GPU VRAM and binds a random loopback port reachable only
-by the gateway, so an orphaned worker is simultaneously invisible and useless; on a 16GB box that is
-stranded VRAM with nothing left alive to reclaim it. This has happened four separate times on this
-project (see ``docs/HANDOFF_2026-07-30.md``'s process-lessons section).
+Stage 0 of ``docs/design/008-single-process-runtime.md`` (ADR 008 section 3.3) is implemented. It
+protects every spawned C++ worker. The Python gateway shares the supervisor lifetime, while each worker
+still holds GPU VRAM and binds a private loopback port; an unguarded worker after an abnormal supervisor death
+would be invisible and useless. This has happened four separate times on this project (see
+``docs/HANDOFF_2026-07-30.md``'s process-lessons section).
 
 This module is exclusively about that UNGRACEFUL case. The graceful path -- ``RuntimeStack.stop()``
 calling ``worker_registry.stop_all()`` / terminating the gateway from ``cmd_serve``'s ``finally``
 (``clozn/cli/runtime_process.py``, ``clozn/cli/commands/serve.py``) -- already works today and is
 untouched by anything here.
 
-Public API. Both call sites (the worker spawn in ``clozn/cli/engine_process.py::spawn_engine`` and the
-two gateway spawns in ``clozn/cli/runtime_process.py``) use the same two functions, in this order::
+Public API. The worker spawn in ``clozn/cli/engine_process.py::spawn_engine`` uses the same two
+functions, in this order::
 
     proc = subprocess.Popen(args, ..., **process_guard.subprocess_kwargs())   # BEFORE spawn (Linux hook)
     process_guard.guard(proc)                                                  # AFTER spawn (Windows hook)
@@ -92,7 +90,7 @@ def _load_libc():
         # wrong under test: `subprocess.run` opens its child via `with Popen(...)`, so any suite that
         # monkeypatches Popen sees a phantom call it never made. That is exactly how this landed --
         # CI caught `test_two_preloads_boot_independently_and_transport_exact_projection` failing
-        # because the spurious call became `gateway_calls[0]`, displacing the real gateway spawn.
+        # because a spurious call can otherwise obscure the worker spawn under test.
         #
         # `CDLL(None)` is dlopen(NULL): a handle to the already-loaded main program, whose symbol
         # table includes libc (and therefore prctl) on any glibc or musl system. No file search, no
@@ -108,7 +106,7 @@ def _load_libc():
         _LIBC = None
         _warn_once(
             "linux-libc-load-failed",
-            f"could not load libc for PR_SET_PDEATHSIG ({exc!r}); this worker/gateway will NOT be "
+            f"could not load libc for PR_SET_PDEATHSIG ({exc!r}); this worker will NOT be "
             "guarded against an ungraceful parent death on this host.",
         )
     return _LIBC
@@ -342,7 +340,7 @@ def subprocess_kwargs() -> dict:
 
 def guard(proc) -> bool:
     """Best-effort, POST-spawn half of the parent-death guard. Call immediately after
-    ``subprocess.Popen(...)`` returns, on both the gateway and every worker.
+    ``subprocess.Popen(...)`` returns for each worker.
 
     Returns ``True`` iff a real, OS-enforced guard is now believed to be protecting this child;
     ``False`` means the child is unguarded (unsupported platform, or an install failure). Either way

@@ -1,0 +1,11 @@
+{
+  "schema_version": "clozn.time-machine-branch.v1",
+  "requested_run_id": "run_time_machine",
+  "source_turn": 0,
+  "status": "completed",
+  "exact_replay": true,
+  "fidelity": "exact_replay_eligible",
+  "reasons": [{"code": "completed", "message": "completed"}],
+  "capture": {},
+  "execution_fork": {}
+}

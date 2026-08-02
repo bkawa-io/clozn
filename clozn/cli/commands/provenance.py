@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 
 from clozn.cli import main as ctx
-from clozn.analysis.provenance import DEFAULT_ENGINE, ProvenanceBudget, SCOPE_NOTE
+from clozn.analysis.provenance import DEFAULT_ENGINE, ProvenanceBudget, SCOPE_NOTE, verdict_label
 
 
 def add_subparser(subparsers) -> None:
@@ -78,7 +78,8 @@ def format_provenance(receipt: dict) -> str:
     ratio = receipt.get("best_control_ratio")
     dep_s = f"{dependence:.2f}" if isinstance(dependence, (int, float)) else "?"
     ratio_s = f"{ratio:.1f}x" if isinstance(ratio, (int, float)) else "n/a"
-    lines.append(f"verdict: {receipt.get('verdict', '?')}   "
+    raw_verdict = receipt.get("verdict", "?")
+    lines.append(f"verdict: {raw_verdict} ({verdict_label(raw_verdict)})   "
                  f"(dependence {dep_s}, best control ratio {ratio_s})")
 
     span_tokens = receipt.get("span_tokens")

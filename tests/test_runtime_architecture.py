@@ -25,29 +25,6 @@ from clozn.server.request_gate import RequestGate
 from clozn.server.routes import health
 
 
-def _stub_engine_discovery(prefer_gpu):
-    """Stand in for `runtime_process._selected_engine_discovery`.
-
-    The boundary tests below assert spawn ORDER and interrupt cleanup -- which process starts first,
-    and whether an interrupted gateway boot terminates the worker it already started. Which engine
-    binary is on disk is incidental to both. Without this stub the real discovery runs, raises
-    "no engine found" on any machine with no local build, and the two invariants go untested exactly
-    where they matter most: CI. Neither CI job builds an engine, so both tests errored there from
-    2026-07-20 until this stub existed -- invisible, because a separate ci.yml bug meant the primary
-    gate never ran at all.
-
-    Stubbed rather than skipped on purpose. A skip would have been honest but would have left these
-    invariants verified only on a developer box that happens to have a build.
-    """
-    return (
-        types.SimpleNamespace(
-            exe="fake-engine", discovery_source="test-stub", backend=None,
-            engine_version=None, build_id=None, llama_cpp_commit=None, gpu=False,
-        ),
-        "0" * 64,
-    )
-
-
 class FakeProcess:
     _next_pid = 2000
 
@@ -107,6 +84,7 @@ class CaptureHandler:
         self.sent_headers = []
         self.wfile = io.BytesIO()
         self.json = None
+        self.log_calls = []
 
     def send_response(self, code):
         self.code = code
@@ -124,7 +102,8 @@ class CaptureHandler:
         self.code = code
         self.wfile.write(body if isinstance(body, bytes) else body.encode("utf-8"))
 
-    def _log_run(self, *_args, **_kwargs):
+    def _log_run(self, *args, **kwargs):
+        self.log_calls.append((args, kwargs))
         return "run_test"
 
 
@@ -150,6 +129,16 @@ def raw_gateway_request(method: str, *, path="/jlens", body=b"", headers=None):
 
 
 class RuntimeBoundaryTests(unittest.TestCase):
+
+    def test_serve_has_one_gateway_topology(self):
+        from clozn.cli import main as cli_main
+
+        parser = cli_main.build_parser()
+        args = parser.parse_args(["serve", "model.gguf"])
+        self.assertFalse(hasattr(args, "gateway_python"))
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["serve", "model.gguf", "--legacy-subprocess-gateway"])
+
     def test_worker_mode_is_explicit_not_inferred_from_vocabulary_tokens(self):
         ar = engine_process._launch_args("worker", "gemma.gguf", 9000, {"chat": True}, False)
         diffusion = engine_process._launch_args(
@@ -303,43 +292,73 @@ class RuntimeBoundaryTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             config.flags["mask"] = 9
 
-    def test_spawn_runtime_starts_private_worker_before_gateway(self):
-        originals = (runtime_process.spawn_engine, runtime_process.subprocess.Popen,
-                     runtime_process.gateway_health, runtime_process.port_is_open,
-                     runtime_process._selected_engine_discovery)
-        calls = []
+    def test_runtime_uses_background_gateway_without_popen(self):
+        """The merged runtime keeps the HTTP gateway in the supervisor process."""
+        originals = (
+            runtime_process.spawn_engine,
+            runtime_process.gateway_health,
+            runtime_process.port_is_open,
+            runtime_process._selected_engine_discovery,
+            runtime_process.subprocess.Popen,
+            app.EngineClient,
+            app.EngineSubstrate,
+            app.build_server,
+        )
         worker = FakeProcess()
-        gateway = FakeProcess()
 
-        def fake_spawn(model, port, flags, **kwargs):
-            calls.append(("worker", port))
-            return worker, {"status": "ok", "mode": "autoregressive"}, True
+        class FakeServer:
+            def __init__(self):
+                self.stop_event = threading.Event()
 
-        def fake_popen(command, **kwargs):
-            calls.append(("gateway", command, kwargs))
-            return gateway
+            def serve_forever(self):
+                self.stop_event.wait()
 
-        runtime_process.spawn_engine = fake_spawn
-        runtime_process.subprocess.Popen = fake_popen
-        runtime_process.gateway_health = lambda port: {"status": "ok"}
-        runtime_process.port_is_open = lambda port: False
-        runtime_process._selected_engine_discovery = _stub_engine_discovery
+            def shutdown(self):
+                self.stop_event.set()
+
+            def server_close(self):
+                pass
+
+        fake_server = FakeServer()
+        runtime_process.spawn_engine = lambda *args, **kwargs: (
+            worker, {"status": "ok", "mode": "autoregressive"}, False
+        )
+        runtime_process.gateway_health = lambda _port: {"status": "ok"}
+        runtime_process.port_is_open = lambda _port: False
+        runtime_process._selected_engine_discovery = lambda _prefer_gpu: (
+            types.SimpleNamespace(exe="fake-engine"), "0" * 64
+        )
+        runtime_process.subprocess.Popen = lambda *args, **kwargs: self.fail(
+            "the in-process runtime must not launch a gateway subprocess"
+        )
+        app.EngineClient = lambda *, port: types.SimpleNamespace(port=port)
+        app.EngineSubstrate = lambda *, engine: types.SimpleNamespace(engine=engine)
+        app.build_server = lambda **kwargs: fake_server
         try:
             stack = runtime_process.spawn_runtime(runtime_process.RuntimeConfig(
-                model="m.gguf", public_port=8123, worker_port=8456
+                model="m.gguf",
+                public_port=8124,
+                worker_port=8457,
             ))
+            self.assertEqual(stack.public_port, 8124)
+            self.assertEqual(stack.worker_port, 8457)
+            self.assertEqual(stack.gateway.pid, os.getpid())
+            self.assertIsNone(stack.gateway.poll())
         finally:
-            (runtime_process.spawn_engine, runtime_process.subprocess.Popen,
-             runtime_process.gateway_health, runtime_process.port_is_open,
-             runtime_process._selected_engine_discovery) = originals
-
-        self.assertEqual([call[0] for call in calls], ["worker", "gateway"])
-        gateway_call = calls[1]
-        self.assertEqual(gateway_call[2]["env"]["CLOZN_ENGINE_PORT"], "8456")
-        self.assertEqual(gateway_call[2]["env"]["CLOZN_RUNTIME_KIND"], "product")
-        self.assertNotIn("--substrate", gateway_call[1])
-        self.assertEqual(stack.public_port, 8123)
-        self.assertEqual(stack.worker_port, 8456)
+            if "stack" in locals():
+                stack.stop()
+            (
+                runtime_process.spawn_engine,
+                runtime_process.gateway_health,
+                runtime_process.port_is_open,
+                runtime_process._selected_engine_discovery,
+                runtime_process.subprocess.Popen,
+                app.EngineClient,
+                app.EngineSubstrate,
+                app.build_server,
+            ) = originals
+        self.assertIsNotNone(stack.gateway.poll())
+        self.assertTrue(worker.terminated)
 
     def test_interrupted_worker_boot_terminates_the_child(self):
         originals = (engine_process.find_engine, engine_process.subprocess.Popen, engine_process._health)
@@ -353,30 +372,6 @@ class RuntimeBoundaryTests(unittest.TestCase):
         finally:
             (engine_process.find_engine, engine_process.subprocess.Popen,
              engine_process._health) = originals
-        self.assertTrue(worker.terminated)
-
-    def test_interrupted_gateway_boot_terminates_the_worker(self):
-        originals = (runtime_process.spawn_engine, runtime_process.subprocess.Popen,
-                     runtime_process.port_is_open,
-                     runtime_process._selected_engine_discovery)
-        worker = FakeProcess()
-        runtime_process._selected_engine_discovery = _stub_engine_discovery
-        runtime_process.spawn_engine = lambda *args, **kwargs: (
-            worker, {"status": "ok", "mode": "autoregressive"}, False
-        )
-        runtime_process.subprocess.Popen = lambda *args, **kwargs: (
-            (_ for _ in ()).throw(KeyboardInterrupt())
-        )
-        runtime_process.port_is_open = lambda port: False
-        try:
-            with self.assertRaises(KeyboardInterrupt):
-                runtime_process.spawn_runtime(runtime_process.RuntimeConfig(
-                    model="m.gguf", public_port=8123, worker_port=8456
-                ))
-        finally:
-            (runtime_process.spawn_engine, runtime_process.subprocess.Popen,
-             runtime_process.port_is_open,
-             runtime_process._selected_engine_discovery) = originals
         self.assertTrue(worker.terminated)
 
     def test_readiness_requires_the_one_worker(self):
@@ -502,38 +497,6 @@ class RuntimeBoundaryTests(unittest.TestCase):
 
 
 
-    def test_openai_completion_stream_uses_instrumented_substrate_and_standard_chunks(self):
-        class CompletionSubstrate:
-            def chat(self, messages, max_new=256, sample=True, trace_out=None, mem_out=None):
-                return "hello"
-
-            def chat_stream(self, messages, max_new=256, mem_out=None, sample=True):
-                if mem_out is not None:
-                    mem_out.update(mode="prompt", applied=[], assembled_messages=list(messages),
-                                   final_prompt="<rendered>hi</rendered>")
-                yield "hel"
-                yield "lo"
-
-            def last_finish_reason(self):
-                return "stop"
-
-            def last_stream_trace(self):
-                return []
-
-        original = app.SUB
-        app.SUB = CompletionSubstrate()
-        handler = CaptureHandler()
-        try:
-            generation_gateway.openai_completion(handler, {"prompt": "hi", "stream": True, "model": "m"})
-        finally:
-            app.SUB = original
-        wire = handler.wfile.getvalue().decode("utf-8")
-        self.assertIn('"text": "hel"', wire)
-        self.assertIn('"text": "lo"', wire)
-        self.assertNotIn("tokens_committed", wire)
-        self.assertNotIn("step_lens", wire)
-        self.assertTrue(wire.endswith("data: [DONE]\n\n"))
-
     def test_native_stream_preserves_clozn_events(self):
         frame = b'data: {"type":"tokens_committed","items":[{"piece":"x"}]}\n\n'
         response = FakeResponse([frame])
@@ -546,6 +509,11 @@ class RuntimeBoundaryTests(unittest.TestCase):
             generation_gateway._request = original
         self.assertEqual(handler.wfile.getvalue(), frame)
         self.assertTrue(response.closed)
+        self.assertEqual(len(handler.log_calls), 1)
+        args, kwargs = handler.log_calls[0]
+        self.assertEqual(args[0], "native_api")
+        self.assertEqual(args[2], "x")
+        self.assertEqual(kwargs["extra_meta"]["native_surface"], "/api/clozn/generate")
 
     def test_openai_chat_lens_stays_inside_standard_chunk_envelopes(self):
         class LensSubstrate:

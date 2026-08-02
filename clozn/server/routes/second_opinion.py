@@ -4,13 +4,10 @@
     POST /runs/<id>/second-opinion
 
 The Studio "Would another model disagree?" question (`studio-frontend/src/data/askAnotherQuestion.ts`,
-id `second_opinion`) has shipped disabled since C4 because nothing served it: `POST /runs/<id>/tokens/
-<index>/mechanistic-diff` (`clozn/server/routes/token_workbench_actions.py::_mechanistic_diff_action`)
-always 422s `cross_model_execution_not_wired`, and the only place that ever ran two models was `clozn
-diff-model` at the CLI. This route closes that gap for the case the owner's spec explicitly scopes to
-v1: two models ALREADY resident in the managed router (A3's load-on-demand path is a process-boundary
-decision -- docs/design/006-cross-process-cold-load-protocol.md -- and out of scope here; this route
-refuses cleanly, not silently, when a second model is not already preloaded).
+id `second_opinion`) is served independently from the mechanistic-diff action. The mechanistic route
+now executes compatible teacher-forced comparisons through the managed registry; this second-opinion
+route intentionally remains a free-generation experiment and keeps its own compatibility and failure
+semantics.
 
 MECHANISTIC-DIFF IS THE WRONG SUBSTRATE FOR THIS -- A FINDING, NOT A REUSE
 ------------------------------------------------------------------------------

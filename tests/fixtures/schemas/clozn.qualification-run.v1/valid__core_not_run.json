@@ -1,0 +1,18 @@
+{
+  "schema_version": "clozn.qualification-run.v1",
+  "generated_at": "2026-08-01T00:00:00Z",
+  "model": {"input": "fixture.gguf", "identity": null},
+  "steps": [
+    {"id": "core.identity", "boundary": "product", "status": "failed", "reason": "fixture only"},
+    {"id": "core.template", "boundary": "product", "status": "blocked", "reason": "model identity is unavailable"},
+    {"id": "core.smoke", "boundary": "product", "status": "not_run", "reason": "use --run"},
+    {"id": "dials", "boundary": "lab", "status": "not_run", "reason": "not supplied"}
+  ],
+  "claims": {
+    "qualification_status": "not_qualified",
+    "generation_performed": false,
+    "artifacts_installed": false,
+    "note": "Core runtime evidence is separate from lab and white-box qualification."
+  },
+  "receipt_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}

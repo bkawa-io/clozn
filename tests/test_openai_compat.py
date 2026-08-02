@@ -4,7 +4,6 @@ import pytest
 from clozn.server.openai_compat import (
     CompatibilityError,
     normalize_chat_request,
-    normalize_completion_request,
 )
 
 
@@ -99,10 +98,7 @@ def test_chat_accepts_and_strips_documented_neutral_values():
 def test_nullable_supported_options_are_treated_as_absent():
     chat = normalize_chat_request({"messages": [{"role": "user", "content": "hi"}],
                                    "max_tokens": None, "temperature": None, "stream": None})
-    completion = normalize_completion_request({"prompt": "hi", "max_tokens": None,
-                                               "temperature": None, "stream": None})
     assert chat == {"messages": [{"role": "user", "content": "hi"}]}
-    assert completion == {"prompt": "hi"}
 
 
 @pytest.mark.parametrize("field,value", [("temperature", float("nan")), ("top_p", float("inf"))])
@@ -129,23 +125,3 @@ def test_chat_rejects_conflicting_token_limit_aliases():
         normalize_chat_request({"messages": [{"role": "user", "content": "hi"}],
                                 "max_tokens": 8, "max_completion_tokens": 9})
     assert caught.value.param == "max_completion_tokens"
-
-
-def test_completion_normalizes_extensions_and_neutral_legacy_fields():
-    out = normalize_completion_request({
-        "model": "local", "prompt": "Hello", "max_tokens": 7, "stream": False,
-        "temperature": 0.5, "top_p": 0.8, "seed": 4, "top_k": 20,
-        "repeat_penalty": 1.1, "n": 1, "best_of": 1, "echo": False, "user": "sdk-user",
-    })
-    assert out == {"model": "local", "prompt": "Hello", "max_tokens": 7, "stream": False,
-                   "temperature": 0.5, "top_p": 0.8, "seed": 4, "top_k": 20,
-                   "rep_penalty": 1.1}
-
-
-@pytest.mark.parametrize("field,value", [("prompt", ["a", "b"]), ("echo", True),
-                                           ("logprobs", 5), ("best_of", 2), ("stop", "END")])
-def test_completion_rejects_unsupported_shapes_and_behavior(field, value):
-    body = {"prompt": "hi", field: value}
-    with pytest.raises(CompatibilityError) as caught:
-        normalize_completion_request(body)
-    assert caught.value.param == field

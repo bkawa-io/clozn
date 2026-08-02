@@ -1,0 +1,15 @@
+{
+  "schema_version": "clozn.time-machine-verification.v1",
+  "verification_id": "tmv_123",
+  "parent_run_id": "run_123",
+  "turn": 2,
+  "scope": "earlier_turn_boundary",
+  "status": "verified",
+  "exact_replay": false,
+  "fidelity": "unavailable",
+  "exactness_regime": "prompt_boundary_reprefill",
+  "parent_fingerprint_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "created_ts": 1785628800.0,
+  "reasons": [{"code": "bad", "message": "bad"}],
+  "capture": {}
+}

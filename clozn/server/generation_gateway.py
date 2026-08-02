@@ -1,8 +1,8 @@
 """Generation transport at the public/private boundary.
 
 The private C++ worker emits Clozn state events alongside its completion stream.  The
-public gateway exposes those frames only on ``/api/clozn/generate``.  Standard OpenAI
-``/v1/completions`` responses are normalized here so ordinary clients never receive
+public gateway exposes those frames only on ``/api/clozn/generate``. Standard OpenAI Chat
+Completions responses are normalized by the route layer so ordinary clients never receive
 engine-internal event types.
 """
 from __future__ import annotations
@@ -65,6 +65,88 @@ def apply_corrective_policy(handler, messages: list) -> tuple[list, dict | None]
             presets, session_key=session_key, profile_name=profile_name,
         ),
     )
+
+
+def apply_scoped_corrections(handler, messages: list) -> tuple[list, dict | None]:
+    """Apply explicitly confirmed F5 corrections for this request's exact scope.
+
+    Selection is content-blind and uses only the opaque session/client/project association keys plus
+    the loaded model's exact digest.  The original list is never mutated.  The returned evidence is
+    metadata-only (safe for run ``meta``); the same resolution is retained on the handler so the
+    central ``_log_run`` seam can attach it to the immutable receipt and write the correction ledger
+    after the run is durably created.  No active corrections means the legacy request path remains
+    completely unchanged.
+    """
+    from clozn.runs import corrections
+    if not corrections.has_active_corrections():
+        return list(messages), None
+
+    from clozn.runs.association import request_client, request_project, request_session
+    headers = getattr(handler, "headers", None)
+    session_key = request_session(headers)
+    client_key, _ = request_client(headers)
+    project_key = request_project(headers)
+    model_sha256 = None
+    try:
+        sub = ctx.active_sub(handler)
+        identity = sub.identity_meta() if sub and callable(getattr(sub, "identity_meta", None)) else {}
+        if isinstance(identity, Mapping):
+            model_sha256 = identity.get("model_sha256")
+        if not model_sha256 and sub is not None:
+            model_sha256 = getattr(sub, "model_sha256", None)
+    except Exception:
+        model_sha256 = None
+    # A model-scoped correction is eligible only when the worker reports the exact digest.  Passing an
+    # unusable label into resolve_corrections would turn a missing identity into a hard request error.
+    if not isinstance(model_sha256, str) or len(model_sha256) != 64:
+        model_sha256 = None
+    resolution = corrections.resolve_corrections(
+        session_id=session_key, client_id=client_key, project_id=project_key,
+        model_sha256=model_sha256,
+    )
+    # Keep the one resolution used for prompt materialization and receipt recording request-local.  The
+    # request handler is not reused concurrently, and do_POST clears this field at request start.
+    handler._correction_resolution = resolution
+    evidence = corrections.receipt_fields(resolution)
+    additive = corrections.messages_for_resolution(resolution)
+    return additive + list(messages), evidence
+
+
+def reapply_scoped_resolution(handler, messages: list) -> list:
+    """Rebuild the prompt from the one resolution already selected for this request.
+
+    OpenAI's opt-in guard path intentionally does not compose with the legacy corrective-policy layer.
+    The ordinary path therefore selects scoped corrections before guard parsing, applies the old policy
+    only after the guard has declined the request, and then reuses this exact saved resolution rather
+    than querying mutable correction state a second time.
+    """
+    from clozn.runs import corrections
+    resolution = getattr(handler, "_correction_resolution", None)
+    if not isinstance(resolution, dict):
+        return list(messages)
+    return corrections.messages_for_resolution(resolution) + list(messages)
+
+
+def flatten_messages_for_native(messages: list) -> str:
+    """Flatten chat-shaped correction context for the transparent completion protocol.
+
+    The native surface accepts a single raw prompt rather than role-tagged messages.  Keep the user's
+    original prompt verbatim after an explicit, bounded correction block; this helper is used only when
+    a confirmed correction actually applies.
+    """
+    parts = []
+    for message in messages:
+        if not isinstance(message, Mapping):
+            continue
+        content = message.get("content")
+        if content is None:
+            continue
+        text = str(content)
+        if message.get("role") == "system":
+            parts.append(text)
+        else:
+            parts.append(text)
+    return "\n\n".join(parts)
 
 
 def instrumented_chat(handler, messages: list, *, model: str, max_tokens: int = 256,
@@ -519,8 +601,97 @@ def _error(handler, exc: Exception) -> None:
     handler._json(status, {"error": {"message": detail, "type": "upstream_error", "code": status}})
 
 
+def _native_run_text(frames) -> str:
+    """Extract the final native answer without inventing text when the worker sent none."""
+    text = ""
+    for obj in frames or []:
+        if not isinstance(obj, dict):
+            continue
+        choices = obj.get("choices")
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            value = choices[0].get("text")
+            if isinstance(value, str):
+                text = value
+    if text:
+        return text
+    try:
+        import clozn.runs.store as runlog
+        return "".join(str(step.get("piece") or "")
+                        for step in runlog.accumulate_ar_events(frames))
+    except Exception:
+        return ""
+
+
+def _native_log_run(handler, body: dict, frames: list[dict], started: float,
+                    *, response_text: str | None = None, error: str | None = None):
+    """Persist a native generation after its transparent worker exchange.
+
+    Native mode deliberately keeps the worker's typed event stream on the wire, so it cannot use
+    ``instrumented_chat`` without changing the protocol.  This helper folds the same event frames into
+    the shared trace/timing shape and calls the handler's normal journal seam exactly once.
+    """
+    try:
+        import clozn.runs.store as runlog
+        prompt = body.get("prompt", "")
+        if not isinstance(prompt, str):
+            prompt = str(prompt)
+        journal_prompt = getattr(handler, "_native_journal_prompt", None)
+        if not isinstance(journal_prompt, str):
+            journal_prompt = prompt
+        messages = [{"role": "user", "content": journal_prompt}]
+        steps = runlog.accumulate_ar_events(frames)
+        finish = runlog.finish_reason_from_frames(frames)
+        raw_finish = runlog.raw_finish_reason_from_frames(frames)
+        timing = runlog.generation_timing_from_frames(frames)
+        response = _native_run_text(frames) if response_text is None else str(response_text)
+        prompt_tokens = next(
+            (obj.get("prompt_tokens") for obj in frames
+             if isinstance(obj, dict) and obj.get("type") == "gen_started"
+             and isinstance(obj.get("prompt_tokens"), int)),
+            None,
+        )
+        assembled_messages = getattr(handler, "_native_assembled_messages", None)
+        if not isinstance(assembled_messages, list):
+            assembled_messages = messages
+        mem_out = {"assembled_messages": assembled_messages, "final_prompt": prompt}
+        if isinstance(prompt_tokens, int):
+            mem_out["actual_prompt_tokens"] = prompt_tokens
+        extra_meta = {
+            "native_surface": "/api/clozn/generate",
+            "native_stream": bool(body.get("stream")),
+        }
+        scoped_resolution = getattr(handler, "_correction_resolution", None)
+        if isinstance(scoped_resolution, dict):
+            from clozn.runs import corrections as correction_store
+            extra_meta["scoped_corrections"] = correction_store.receipt_fields(scoped_resolution)
+        if raw_finish:
+            extra_meta["raw_finish_reason"] = raw_finish
+        extra_meta.update(timing or {})
+        try:
+            from clozn.runs import sections as clozn_sections
+            sections = clozn_sections.auto_chunk_prompt(prompt)
+        except Exception:
+            sections = None
+        model = (
+            getattr(handler, "_selected_model_id", None)
+            or body.get("model")
+            or model_id()
+        )
+        return handler._log_run(
+            "native_api", messages, response, str(model), started,
+            error=error, trace=steps, mem_out=mem_out, finish_reason=finish,
+            extra_meta=extra_meta, sections=sections,
+        )
+    except Exception:
+        # Journaling is best effort for compatibility routes.  The route must still return the native
+        # worker response if a local receipt writer is unavailable.
+        return None
+
+
 def native_completion(handler, body: dict) -> None:
     """Transparent Clozn event stream used by the CLI and Studio instrumentation."""
+    started = time.time()
+    frames: list[dict] = []
     try:
         # Keep the historical one-argument `_request` test/extension seam while
         # the built-in implementation accepts the request handler needed for
@@ -534,6 +705,7 @@ def native_completion(handler, body: dict) -> None:
         )
         response = _request(body, handler) if handler_aware else _request(body)
     except Exception as exc:
+        _native_log_run(handler, body, frames, started, error=str(exc))
         _error(handler, exc)
         return
     try:
@@ -543,6 +715,8 @@ def native_completion(handler, body: dict) -> None:
             handler.send_header("Cache-Control", "no-cache")
             send_cors_headers(handler)
             handler.end_headers()
+            stream_error = None
+            saw_done = False
             try:
                 routing = getattr(handler, "_model_routing_artifact", None)
                 if routing is not None:
@@ -555,286 +729,61 @@ def native_completion(handler, body: dict) -> None:
                     )
                     handler.wfile.flush()
                 for line in response:
+                    decoded = line.decode("utf-8", "replace").strip()
+                    if decoded.startswith("data:"):
+                        payload = decoded[5:].strip()
+                        if payload == "[DONE]":
+                            saw_done = True
+                            # Preserve the worker's terminal marker byte-for-byte.  Native streaming is
+                            # intentionally transparent; journaling happens after the exchange and does
+                            # not add a protocol frame.
+                            handler.wfile.write(line)
+                            handler.wfile.flush()
+                            continue
+                        try:
+                            obj = json.loads(payload)
+                        except Exception:
+                            obj = None
+                        if isinstance(obj, dict):
+                            frames.append(obj)
                     handler.wfile.write(line)
                     handler.wfile.flush()
             except Exception as exc:
-                frame = {"error": {"message": str(exc), "type": "upstream_error"}}
+                stream_error = str(exc)
+            _native_log_run(
+                handler, body, frames, started,
+                error=(f"native stream failed: {stream_error}" if stream_error else None),
+            )
+            if stream_error:
+                frame = {"error": {"message": stream_error, "type": "upstream_error"}}
                 try:
                     handler.wfile.write(("data: " + json.dumps(frame) + "\n\n").encode("utf-8"))
-                    handler.wfile.write(b"data: [DONE]\n\n")
+                    if not saw_done:
+                        handler.wfile.write(b"data: [DONE]\n\n")
+                except Exception:
+                    pass
+            if stream_error:
+                try:
                     handler.wfile.flush()
                 except Exception:
                     pass
             return
         raw = response.read()
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+            if isinstance(payload, dict):
+                frames.append(payload)
+        except Exception:
+            payload = None
+        run_id = _native_log_run(handler, body, frames, started)
         routing = getattr(handler, "_model_routing_artifact", None)
         if routing is not None:
-            payload = json.loads(raw.decode("utf-8"))
-            payload["clozn_model_routing"] = routing
+            if isinstance(payload, dict):
+                payload["clozn_model_routing"] = routing
+                raw = json.dumps(payload).encode("utf-8")
+        if run_id and isinstance(payload, dict):
+            payload["clozn_run_id"] = run_id
             raw = json.dumps(payload).encode("utf-8")
         handler._send(getattr(response, "status", 200), raw, "application/json")
     finally:
         response.close()
-
-
-def _completion_messages(prompt: str) -> list[dict[str, str]]:
-    """Represent a legacy text prompt at the shared, message-based substrate seam.
-
-    The public route remains OpenAI's legacy ``prompt -> text`` API.  Inside Clozn,
-    however, using the same user-turn representation as every other compatibility
-    entrance is what makes memory assembly, steering, rendered-prompt capture, token
-    traces, and journaling impossible to bypass.
-    """
-    return [{"role": "user", "content": prompt}]
-
-
-def _completion_sample(body: dict):
-    """Translate the validated legacy sampling vocabulary to Substrate.chat's contract."""
-    sample = {key: body[key] for key in ("temperature", "top_p", "top_k", "seed")
-              if key in body}
-    if "rep_penalty" in body:
-        sample["repeat_penalty"] = body["rep_penalty"]
-    # No explicit fields means Clozn's configured interactive sampling, just like
-    # /v1/chat/completions.  A dict containing temperature=0 remains explicit and
-    # resolves to greedy in EngineSubstrate.
-    return sample or True
-
-
-def _stream_completion(handler, messages: list, *, model: str, max_tokens: int,
-                       sample, journal_messages=None, corrective_evidence=None) -> None:
-    """Instrumented OpenAI legacy-completion SSE stream.
-
-    Generation crosses ``Substrate.chat_stream`` and the completed/failed/abandoned
-    turn is journaled exactly once.  The serializer intentionally emits only standard
-    ``text_completion`` chunks: native worker frames and Clozn trace frames never leak
-    onto a compatibility endpoint.
-
-    A streaming run id cannot be sent as an HTTP header because the header is committed
-    before generation, while the journal creates the id after generation.  Nor is a
-    proprietary trailing chunk injected into this strict legacy wire shape.  The run is
-    still persisted and can be associated through the server-side latest-run/session
-    side channel when that Phase-2 facility lands.
-    """
-    sub = ctx.active_sub(handler)
-    started = time.time()
-    memout: dict = {}
-    acc: list[str] = []
-    stream_id = "cmpl-" + secrets.token_hex(8)
-    created = int(time.time())
-    logged_messages = journal_messages if journal_messages is not None else messages
-    extra_meta = {"compatibility_api": "openai", "openai_operation": "completion",
-                  "corrective_policy": corrective_evidence}
-
-    handler.send_response(200)
-    handler.send_header("Content-Type", "text/event-stream")
-    handler.send_header("Cache-Control", "no-cache")
-    send_cors_headers(handler)
-    handler.end_headers()
-
-    def write_chunk(text: str, finish_reason=None, *, run_id=None, warnings=None) -> None:
-        chunk = {
-            "id": stream_id,
-            "object": "text_completion",
-            "created": created,
-            "model": model,
-            "choices": [{"text": text, "index": 0, "logprobs": None,
-                         "finish_reason": finish_reason}],
-        }
-        if run_id:
-            chunk["clozn_run_id"] = run_id
-        if warnings:
-            chunk["clozn_warnings"] = list(warnings)
-        handler.wfile.write(("data: " + json.dumps(chunk) + "\n\n").encode("utf-8"))
-        handler.wfile.flush()
-
-    gen = None
-    disconnect_error = None
-    think_stream = None
-    try:
-        if getattr(sub, "chat_stream", None):
-            import inspect
-            try:
-                params = inspect.signature(sub.chat_stream).parameters
-            except Exception:
-                params = {}
-            stream_kw = {"mem_out": memout}
-            if "sample" in params:
-                stream_kw["sample"] = sample
-            gen = sub.chat_stream(messages, max_tokens, **stream_kw)
-            for piece in gen:
-                raw_text = str(piece)
-                acc.append(raw_text)
-                if think_stream is None:
-                    from clozn.runs.think_tags import ThinkTagStream, prompt_opens_think
-                    think_stream = ThinkTagStream(
-                        implicit_open=prompt_opens_think(memout.get("final_prompt"))
-                    )
-                text = think_stream.feed(raw_text)
-                if not text:
-                    continue
-                try:
-                    write_chunk(text)
-                except OSError as exc:
-                    disconnect_error = exc
-                    break
-        else:
-            # A custom/lab substrate may implement only chat().  Keep the request on
-            # the instrumented seam and emit its completed text as one standard chunk.
-            try:
-                generated = instrumented_chat(
-                    handler, messages, model=model, max_tokens=max_tokens, sample=sample,
-                    source="openai_api",
-                    extra_meta={**extra_meta, "requested_stream": True},
-                    journal_messages=logged_messages,
-                )
-            except Exception as exc:
-                # instrumented_chat already journaled the failure exactly once.
-                error = {"error": {"message": str(exc), "type": "upstream_error"}}
-                try:
-                    handler.wfile.write(("data: " + json.dumps(error) + "\n\n").encode("utf-8"))
-                    handler.wfile.write(b"data: [DONE]\n\n")
-                    handler.wfile.flush()
-                except OSError:
-                    pass
-                return
-            acc.append(generated.reply)
-            try:
-                write_chunk(generated.reply)
-                write_chunk("", generated.public_finish_reason, run_id=generated.run_id,
-                            warnings=generated.warnings)
-                handler.wfile.write(b"data: [DONE]\n\n")
-                handler.wfile.flush()
-            except OSError:
-                pass
-            return
-
-        if disconnect_error is not None:
-            req_ctx = getattr(sub, "_request", None)
-            if req_ctx is not None and hasattr(req_ctx, "cancel"):
-                req_ctx.cancel()
-            handler._log_run(
-                "openai_api", logged_messages, "".join(acc), model, started,
-                error=f"client disconnected mid-stream: {disconnect_error}", mem_out=memout,
-                extra_meta={**extra_meta, "stream_failure": "client_disconnected"},
-            )
-            return
-
-        if think_stream is not None:
-            tail, _think = think_stream.finish()
-            if tail:
-                try:
-                    write_chunk(tail)
-                except OSError as exc:
-                    disconnect_error = exc
-        if disconnect_error is not None:
-            req_ctx = getattr(sub, "_request", None)
-            if req_ctx is not None and hasattr(req_ctx, "cancel"):
-                req_ctx.cancel()
-            handler._log_run(
-                "openai_api", logged_messages, "".join(acc), model, started,
-                error=f"client disconnected mid-stream: {disconnect_error}", mem_out=memout,
-                extra_meta={**extra_meta, "stream_failure": "client_disconnected"},
-            )
-            return
-
-        finish = sub.last_finish_reason() if hasattr(sub, "last_finish_reason") else None
-        public_finish = ctx._openai_finish_reason(finish)
-        trace = sub.last_stream_trace() if hasattr(sub, "last_stream_trace") else None
-        run_id = handler._log_run(
-            "openai_api", logged_messages, "".join(acc), model, started, trace=trace,
-            mem_out=memout, finish_reason=finish,
-            finish_reason_fallback=None if finish else public_finish,
-            extra_meta=extra_meta,
-        )
-        try:
-            write_chunk("", public_finish, run_id=run_id,
-                        warnings=warnings_for(finish, {"max_tokens": int(max_tokens)}))
-            handler.wfile.write(b"data: [DONE]\n\n")
-            handler.wfile.flush()
-        except OSError:
-            # The model completed and the durable run above is already accurate; a
-            # disconnect while delivering the terminal marker must not create a
-            # second contradictory failure run.
-            return
-    except Exception as exc:
-        handler._log_run(
-            "openai_api", logged_messages, "".join(acc), model, started, error=str(exc),
-            mem_out=memout,
-            extra_meta={**extra_meta, "stream_failure": "worker_disconnected"},
-        )
-        try:
-            error = {"error": {"message": str(exc), "type": "upstream_error"}}
-            handler.wfile.write(("data: " + json.dumps(error) + "\n\n").encode("utf-8"))
-            handler.wfile.write(b"data: [DONE]\n\n")
-            handler.wfile.flush()
-        except OSError:
-            pass
-    finally:
-        if gen is not None and hasattr(gen, "close"):
-            try:
-                gen.close()
-            except Exception:
-                pass
-
-
-def openai_completion(handler, body: dict) -> None:
-    """Strict OpenAI text-completion view over Clozn's instrumented substrate."""
-    from clozn.server.openai_compat import CompatibilityError, normalize_completion_request
-    try:
-        body = normalize_completion_request(body)
-    except CompatibilityError as exc:
-        handler._json(400, {"error": {"message": str(exc), "type": "invalid_request_error",
-                                      "param": exc.param, "code": exc.code}})
-        return
-    from clozn.server.model_routing import select_for_handler
-    selection = select_for_handler(
-        handler, body, surface="openai", route="/v1/completions"
-    )
-    if selection is None:
-        return
-    model = selection.model_id
-    journal_messages = _completion_messages(body["prompt"])
-    messages, corrective_evidence = apply_corrective_policy(handler, journal_messages)
-    max_tokens = int(body.get("max_tokens", 256))
-    sample = _completion_sample(body)
-    sub = ctx.active_sub(handler)
-    if not (sub and getattr(sub, "chat", None)):
-        handler._json(503, {"error": {"message": "model worker unavailable",
-                                      "type": "service_unavailable"}})
-        return
-    if body.get("stream"):
-        _stream_completion(handler, messages, model=model, max_tokens=max_tokens, sample=sample,
-                           journal_messages=journal_messages,
-                           corrective_evidence=corrective_evidence)
-        return
-    try:
-        generated = instrumented_chat(
-            handler, messages, model=model, max_tokens=max_tokens, sample=sample,
-            source="openai_api",
-            extra_meta={"compatibility_api": "openai", "openai_operation": "completion",
-                        "corrective_policy": corrective_evidence},
-            journal_messages=journal_messages,
-        )
-    except Exception as exc:
-        _error(handler, exc)
-        return
-    response = {
-        "id": "cmpl-" + secrets.token_hex(8),
-        "object": "text_completion",
-        "created": int(time.time()),
-        "model": model,
-        "choices": [{
-            "text": generated.reply,
-            "index": 0,
-            "logprobs": None,
-            "finish_reason": generated.public_finish_reason,
-        }],
-    }
-    if generated.run_id:
-        response["clozn_run_id"] = generated.run_id
-    if generated.warnings:
-        response["clozn_warnings"] = generated.warnings
-    headers = {"X-Clozn-Run-Id": generated.run_id} if generated.run_id else {}
-    if generated.warnings:
-        headers["X-Clozn-Warning"] = "output-truncated"
-    handler._json(200, response, extra_headers=headers)

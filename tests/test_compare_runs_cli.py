@@ -51,6 +51,13 @@ def test_add_subparser_parses_flags():
     args = p.parse_args(["compare-runs", "run_a", "run_b", "--json", "--replay"])
     assert args.json is True
     assert args.replay is True
+    assert args.execute is False
+
+
+def test_add_subparser_parses_replay_execution_flag():
+    args = _build_parser().parse_args(["compare-runs", "run_a", "run_b", "--replay", "--execute"])
+    assert args.replay is True
+    assert args.execute is True
 
 
 def test_add_subparser_accepts_one_candidate_for_automatic_selection():
@@ -125,6 +132,49 @@ def test_replay_flag_adds_section_to_human_output(monkeypatch, capsys):
     cr.cmd_compare_runs(args)
     out = capsys.readouterr().out
     assert "replay (planned, not executed)" in out
+
+
+def test_replay_execute_uses_available_planner_swaps(monkeypatch, capsys):
+    sampling_a = {"sampling": "sample", "temperature": 0.2, "top_p": 0.9, "top_k": 40,
+                  "repetition_penalty": 1.1, "seed": 1}
+    sampling_b = {**sampling_a, "temperature": 0.8, "seed": 2}
+    a = _run("run_a", response="good", messages=[{"role": "system", "content": "setup"},
+                                                   {"role": "user", "content": "full"}],
+             meta=sampling_a, context_receipt={"delivered": [{"segment_id": "one"},
+                                                              {"segment_id": "two"}]})
+    b = _run("run_b", response="bad", messages=[{"role": "user", "content": "short"}],
+             meta=sampling_b, context_receipt={"delivered": [{"segment_id": "one"}]})
+    monkeypatch.setattr(runlog, "get_run", lambda rid: {"run_a": a, "run_b": b}[rid])
+    calls = []
+
+    def fake_request(run_a, run_b, **kwargs):
+        calls.append((run_a, run_b, kwargs))
+        return {
+            "schema_version": "clozn.run-change-test.v1",
+            "status": "completed",
+            "budget": {"runs_used": 2, "max_runs": 4},
+            "tests": [{"kind": "context", "status": "observed", "runs_used": 2,
+                       "reason": "controlled"}],
+        }
+
+    monkeypatch.setattr(cr, "_request_tests", fake_request)
+    args = _build_parser().parse_args([
+        "compare-runs", "run_a", "run_b", "--replay", "--execute", "--json",
+    ])
+    cr.cmd_compare_runs(args)
+    payload = json.loads(capsys.readouterr().out)
+    assert calls and calls[0][0:2] == ("run_a", "run_b")
+    assert calls[0][2]["tests"] == ["context", "sampling"]
+    assert payload["replay_execution"]["status"] == "completed"
+
+
+def test_execute_requires_replay(monkeypatch):
+    a = _run("run_a")
+    b = _run("run_b")
+    monkeypatch.setattr(runlog, "get_run", lambda rid: {"run_a": a, "run_b": b}[rid])
+    args = _build_parser().parse_args(["compare-runs", "run_a", "run_b", "--execute"])
+    with pytest.raises(CloznError, match="requires --replay"):
+        cr.cmd_compare_runs(args)
 
 
 def test_no_replay_flag_omits_replay_section(monkeypatch, capsys):

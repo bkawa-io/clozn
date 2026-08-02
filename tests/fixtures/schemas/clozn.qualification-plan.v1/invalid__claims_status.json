@@ -1,0 +1,9 @@
+{
+  "schema_version": "clozn.qualification-plan.v1",
+  "generated_at": "2026-08-01T00:00:00Z",
+  "model": {"input": "demo.gguf", "source": "local", "path": null, "summary": {}, "file_size_bytes": null, "header_bytes_read": null},
+  "resources": {"disk_bytes": null, "disk_gb": null, "vram_budget_gb": 16.0, "estimated_vram_gb": null, "estimated_ram_gb": null, "vram_fits_estimate": null, "context_tokens": 8192, "method": "header math", "note": null, "offload_hint": null},
+  "lab_dependencies": [],
+  "steps": [{"id": "core.identity", "label": "Identity", "boundary": "product", "status": "ready", "estimated": false}],
+  "claims": {"qualification_status": "passed", "generation_performed": false, "artifacts_installed": false, "note": "not allowed"}
+}

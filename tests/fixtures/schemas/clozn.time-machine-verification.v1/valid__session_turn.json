@@ -1,0 +1,19 @@
+{
+  "schema_version": "clozn.time-machine-verification.v1",
+  "verification_id": "tmv_session_123",
+  "parent_run_id": "run_turn_0",
+  "requested_run_id": "run_turn_2",
+  "source_run_id": "run_turn_0",
+  "source_turn": 0,
+  "turn": 0,
+  "scope": "session_turn_prompt_boundary",
+  "status": "verified",
+  "exact_replay": true,
+  "fidelity": "exact_replay_eligible",
+  "exactness_regime": "prompt_boundary_reprefill",
+  "parent_fingerprint_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "created_ts": 1785628800.0,
+  "reasons": [{"code": "exact_prompt_boundary_verified", "message": "the unchanged control matched"}],
+  "proof": {"status": "matched"},
+  "capture": {"schema_version": "clozn.checkpoint-reference.v1", "status": "available"}
+}

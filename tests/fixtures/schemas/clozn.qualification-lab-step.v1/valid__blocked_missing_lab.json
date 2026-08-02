@@ -1,0 +1,12 @@
+{
+  "schema_version": "clozn.qualification-lab-step.v1",
+  "generated_at": "2026-08-01T00:00:00Z",
+  "step_id": "dials",
+  "boundary": "lab",
+  "status": "blocked",
+  "model_sha256": null,
+  "evidence": {},
+  "reason": "PyTorch is not installed",
+  "artifact": null,
+  "receipt_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}

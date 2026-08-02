@@ -142,12 +142,31 @@ def _candidate_dials(run: dict) -> dict:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _model_identity(run: dict):
+    """Return the strongest recorded model identity available for a run.
+
+    Controlled swaps hold the candidate model fixed.  If both source runs carry a model identity and
+    those identities differ, running a context/template/sampling arm would confound the requested swap
+    with a model change, so the arm must be reported unavailable rather than compared as if it were a
+    causal test.
+    """
+    identity = _dict(run.get("identity"))
+    value = identity.get("model_sha256") or run.get("model")
+    return str(value) if value else None
+
+
 def _max_tokens(run: dict) -> int:
     value = _dict(run.get("meta")).get("max_tokens")
     return int(value) if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 256
 
 
 def _available(test: str, baseline: dict, candidate: dict, diff: dict) -> tuple[bool, str | None]:
+    baseline_model, candidate_model = _model_identity(baseline), _model_identity(candidate)
+    if baseline_model and candidate_model and baseline_model != candidate_model:
+        return False, (
+            "controlled swaps require one unchanged model identity; the reference and candidate "
+            "runs use different models"
+        )
     by_dim = {
         d.get("dimension"): d for d in diff.get("differences") or []
         if isinstance(d, dict) and d.get("dimension")

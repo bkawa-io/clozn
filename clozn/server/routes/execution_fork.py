@@ -116,6 +116,10 @@ def _parent_sub_facts(h, parent: Mapping, route_path: str):
         if route_path.endswith(_PLAN_SUFFIX)
         else "/runs/<id>/snapshot/pin"
         if route_path.endswith("/snapshot/pin")
+        else "/runs/<id>/time-machine/verify"
+        if route_path.endswith("/time-machine/verify")
+        else "/runs/<id>/time-machine/branch"
+        if route_path.endswith("/time-machine/branch")
         else "/runs/<id>/execution-fork"
     )
     selection = select_control_model_for_run(h, parent.get("model"), route=normalized_route)
@@ -173,12 +177,52 @@ def try_post(h, p, body):
         return True
 
     if is_checkpoint:
-        if body:
+        use_pinned = False
+        if isinstance(body, Mapping):
+            unknown = set(body) - {"pinned"}
+            if unknown:
+                h._json(400, {
+                    "error": "checkpoint capture accepts only an optional {\"pinned\": bool} body",
+                    "code": "checkpoint_capture_options_unsupported",
+                })
+                return True
+            raw_pinned = body.get("pinned", False)
+            if not isinstance(raw_pinned, bool):
+                h._json(400, {
+                    "error": "pinned must be a boolean",
+                    "code": "checkpoint_capture_invalid_pinned",
+                })
+                return True
+            use_pinned = raw_pinned
+        elif body:
             h._json(400, {
-                "error": "checkpoint capture v1 accepts no options",
+                "error": "checkpoint capture accepts only an optional {\"pinned\": bool} body",
                 "code": "checkpoint_capture_options_unsupported",
             })
             return True
+        pinned_envelope = None
+        if use_pinned:
+            from clozn.replay.checkpoint_pin_store import resolve_pin
+            resolved = resolve_pin(run_id)
+            if not isinstance(resolved, Mapping) or resolved.get("ok") is not True:
+                reason = (
+                    resolved.get("unavailable")
+                    if isinstance(resolved, Mapping)
+                    else "the pinned checkpoint could not be resolved")
+                h._json(422, {
+                    "error": str(reason),
+                    "code": "checkpoint_capture_pinned_unavailable",
+                    "run_id": run_id,
+                })
+                return True
+            pinned_envelope = resolved.get("envelope")
+            if not isinstance(pinned_envelope, Mapping):
+                h._json(422, {
+                    "error": "the pinned checkpoint did not contain a valid export envelope",
+                    "code": "checkpoint_capture_pinned_unavailable",
+                    "run_id": run_id,
+                })
+                return True
         try:
             from clozn.replay.checkpoint_capture import (
                 CheckpointCaptureError,
@@ -189,6 +233,7 @@ def try_post(h, p, body):
                 engine,
                 runtime_identity=runtime,
                 worker_identity=worker,
+                checkpoint_envelope=pinned_envelope,
             )
         except CheckpointCaptureError as exc:
             h._json(400, {

@@ -24,10 +24,8 @@ from clozn.cli.worker_registry import (
 )
 from clozn.server import app
 from clozn.server.model_routing import (
-    ModelRoutingError,
     PreloadedModelBinding,
     PreloadedModelRouter,
-    ProjectionFileRouter,
 )
 from clozn.server.routes import health
 
@@ -109,7 +107,6 @@ class ManagedHarness:
     worker_processes: dict[str, list[FakeProcess]]
     health_by_port: dict[int, dict]
     spawn_calls: list[tuple]
-    gateway_call: tuple
 
 
 def _spawn_harness(
@@ -183,14 +180,40 @@ def _spawn_harness(
         return process, worker_health, False
 
     monkeypatch.setattr(runtime_process, "spawn_engine", fake_spawn)
-    gateway = FakeProcess()
-    gateway_calls = []
+    class FakeServer:
+        def __init__(self):
+            import threading
+            self.stop_event = threading.Event()
 
-    def fake_popen(command, **kwargs):
-        gateway_calls.append((list(command), kwargs))
-        return gateway
+        def serve_forever(self):
+            self.stop_event.wait()
 
-    monkeypatch.setattr(runtime_process.subprocess, "Popen", fake_popen)
+        def shutdown(self):
+            self.stop_event.set()
+
+        def server_close(self):
+            pass
+
+    fake_server = FakeServer()
+    monkeypatch.setattr(
+        app,
+        "EngineClient",
+        lambda *, port: type(
+            "FakeEngine", (), {"health": lambda _self: dict(health_by_port[port])}
+        )(),
+    )
+    monkeypatch.setattr(
+        app,
+        "EngineSubstrate",
+        lambda *, engine: type("FakeSubstrate", (), {"engine": engine})(),
+    )
+    def fake_build_server(**kwargs):
+        monkeypatch.setattr(app, "MODEL_ROUTER", kwargs["model_router"])
+        monkeypatch.setattr(app, "ENGINE", kwargs["engine"])
+        monkeypatch.setattr(app, "SUB", app.MODEL_ROUTER.control_pair()[0])
+        return fake_server
+
+    monkeypatch.setattr(app, "build_server", fake_build_server)
     stack = runtime_process.spawn_runtime(
         runtime_process.RuntimeConfig(
             model=str(model_a),
@@ -207,157 +230,23 @@ def _spawn_harness(
         worker_processes=worker_processes,
         health_by_port=health_by_port,
         spawn_calls=spawn_calls,
-        gateway_call=gateway_calls[0],
     )
 
 
-def test_two_preloads_boot_independently_and_transport_exact_projection(
-    monkeypatch, tmp_path
-):
-    for name in runtime_process._ENGINE_IDENTITY_ENV:
-        monkeypatch.setenv(name, "ambient-value-must-not-cross")
+def test_managed_runtime_uses_live_in_memory_projection(monkeypatch, tmp_path):
     harness = _spawn_harness(monkeypatch, tmp_path)
     stack = harness.stack
-    path = stack.routing_transport.path
     try:
-        assert [call[0] for call in harness.spawn_calls] == ["alpha", "beta"]
-        assert [call[1] for call in harness.spawn_calls] == [43101, 43102]
-        assert harness.gateway_call[1]["env"]["CLOZN_MODEL_ROUTING_FILE"] == path
-        assert harness.gateway_call[1]["env"]["CLOZN_ENGINE_PORT"] == "43101"
-        assert all(
-            name not in harness.gateway_call[1]["env"]
-            for name in runtime_process._ENGINE_IDENTITY_ENV
-        )
-        projection = json.loads(Path(path).read_text(encoding="utf-8"))
-        assert projection == stack.worker_registry.routing_projection()
-        assert {
-            model["state"] for model in projection["models"]
-        } == {"ready"}
-        assert {
-            model["worker_port"] for model in projection["models"]
-        } == {43101, 43102}
-
-        router = ProjectionFileRouter(
-            path,
-            engine_factory=lambda port: SimpleNamespace(
-                health=lambda: dict(harness.health_by_port[port])
-            ),
-            substrate_factory=lambda engine: SimpleNamespace(engine=engine),
-        )
-        selected = router.select_control_model(
+        assert stack.gateway.pid == os.getpid()
+        selected = app.MODEL_ROUTER.select_control_model(
             "beta", route="/runs/<id>/execution-fork/plan"
         )
         assert selected.model_id == "beta"
-        assert selected.runtime_key == harness.definitions[1].runtime_key.as_dict()
-        assert (
-            selected.worker_identity["runtime_key_sha256"]
-            == harness.definitions[1].runtime_key.key_sha256
+        assert selected.worker_identity["runtime_key_sha256"] == (
+            harness.definitions[1].runtime_key.key_sha256
         )
     finally:
         stack.stop()
-    assert not os.path.exists(path)
-    assert all(
-        process.terminated
-        for processes in harness.worker_processes.values()
-        for process in processes
-    )
-
-
-def test_partial_boot_stays_usable_and_failed_sibling_recovers(
-    monkeypatch, tmp_path
-):
-    harness = _spawn_harness(
-        monkeypatch, tmp_path, fail_once={"beta"}
-    )
-    stack = harness.stack
-    try:
-        before = json.loads(
-            Path(stack.routing_transport.path).read_text(encoding="utf-8")
-        )
-        states = {item["model_id"]: item["state"] for item in before["models"]}
-        assert states == {"alpha": "ready", "beta": "failed"}
-        alpha_pid = harness.worker_processes["alpha"][0].pid
-
-        assert stack.recover_worker("beta") is True
-        after = json.loads(
-            Path(stack.routing_transport.path).read_text(encoding="utf-8")
-        )
-        states = {item["model_id"]: item["state"] for item in after["models"]}
-        assert states == {"alpha": "ready", "beta": "ready"}
-        assert harness.worker_processes["alpha"][0].pid == alpha_pid
-        assert len(harness.worker_processes["alpha"]) == 1
-        assert len(harness.worker_processes["beta"]) == 1
-    finally:
-        stack.stop()
-
-
-def test_transient_gateway_health_probe_does_not_poison_cached_binding(
-    monkeypatch, tmp_path
-):
-    harness = _spawn_harness(monkeypatch, tmp_path)
-    fail = {"once": True}
-
-    class Engine:
-        def __init__(self, port):
-            self.port = port
-
-        def health(self):
-            if self.port == 43101 and fail.pop("once", False):
-                raise OSError("transient loopback refusal")
-            return dict(harness.health_by_port[self.port])
-
-    router = ProjectionFileRouter(
-        harness.stack.routing_transport.path,
-        engine_factory=Engine,
-        substrate_factory=lambda engine: SimpleNamespace(engine=engine),
-    )
-    try:
-        with pytest.raises(ModelRoutingError) as raised:
-            router.select_control_model(
-                "alpha", route="/runs/<id>/execution-fork/plan"
-            )
-        assert raised.value.code == "worker_failed"
-        selected = router.select_control_model(
-            "alpha", route="/runs/<id>/execution-fork/plan"
-        )
-        assert selected.model_id == "alpha"
-    finally:
-        harness.stack.stop()
-
-
-def test_managed_public_status_and_failure_copy_never_disclose_private_port(
-    monkeypatch, tmp_path
-):
-    harness = _spawn_harness(monkeypatch, tmp_path)
-    router = ProjectionFileRouter(
-        harness.stack.routing_transport.path,
-        engine_factory=lambda port: SimpleNamespace(
-            base=f"http://127.0.0.1:{port}",
-            health=lambda: dict(harness.health_by_port[port]),
-        ),
-        substrate_factory=lambda engine: SimpleNamespace(engine=engine),
-    )
-    previous = app.MODEL_ROUTER, app.ENGINE, app.SUB
-    app.MODEL_ROUTER = router
-    app.ENGINE = SimpleNamespace(base="http://127.0.0.1:43101")
-    app.SUB = SimpleNamespace(engine=app.ENGINE)
-    try:
-        envelopes = []
-        for path in ("/readyz", "/runtime/models", "/engine/health"):
-            handler = CaptureHandler()
-            assert health.try_get(handler, path)
-            assert handler.code == 200
-            envelopes.append(handler.json)
-        envelopes.append({"error": app._engine_unreachable_message()})
-    finally:
-        app.MODEL_ROUTER, app.ENGINE, app.SUB = previous
-        harness.stack.stop()
-
-    wire = json.dumps(envelopes, sort_keys=True)
-    assert "worker_port" not in wire
-    assert "worker_url" not in wire
-    assert "127.0.0.1" not in wire
-    assert "43101" not in wire
 
 
 def _manifest(definitions: tuple[WorkerDefinition, ...]) -> dict:
@@ -418,68 +307,6 @@ def test_managed_active_substrate_never_falls_back_to_control_worker():
         assert app.active_engine(handler) is None
     finally:
         app.MODEL_ROUTER, app.SUB, app.ENGINE = previous
-
-
-def test_legacy_runtime_uses_one_measured_engine_selection_and_scrubs_routing(
-    monkeypatch, tmp_path
-):
-    executable = tmp_path / "clozn-server"
-    executable.write_bytes(b"the-selected-legacy-executable")
-    discovery = EngineDiscovery(
-        exe=str(executable),
-        dll_dirs=[],
-        gpu=False,
-        discovery_source="repo_dev_build",
-        backend="cpu",
-        artifact_sha256="f" * 64,
-    )
-    monkeypatch.setattr(
-        runtime_process, "find_engine_ex", lambda prefer_gpu=True: discovery
-    )
-    monkeypatch.setattr(runtime_process, "port_is_open", lambda _port: False)
-    monkeypatch.setattr(
-        runtime_process, "gateway_health", lambda _port: {"status": "ok"}
-    )
-    monkeypatch.setenv("CLOZN_MODEL_ROUTING_FILE", "stale-user-projection.json")
-    for name in runtime_process._ENGINE_IDENTITY_ENV:
-        monkeypatch.setenv(name, "stale-user-value")
-
-    worker = FakeProcess()
-    spawn_calls = []
-
-    def fake_spawn(model, port, flags, **kwargs):
-        spawn_calls.append(kwargs)
-        return worker, {"status": "ok", "mode": "autoregressive"}, False
-
-    monkeypatch.setattr(runtime_process, "spawn_engine", fake_spawn)
-    gateway = FakeProcess()
-    gateway_calls = []
-    monkeypatch.setattr(
-        runtime_process.subprocess,
-        "Popen",
-        lambda command, **kwargs: (
-            gateway_calls.append((command, kwargs)) or gateway
-        ),
-    )
-    stack = runtime_process.spawn_runtime(
-        runtime_process.RuntimeConfig(
-            model="legacy.gguf",
-            public_port=8182,
-            worker_port=43111,
-            prefer_gpu=False,
-        )
-    )
-    try:
-        assert len(spawn_calls) == 1
-        assert spawn_calls[0]["engine_discovery"] is discovery
-        env = gateway_calls[0][1]["env"]
-        assert "CLOZN_MODEL_ROUTING_FILE" not in env
-        assert env["CLOZN_ENGINE_ARTIFACT_SHA256"] == _sha(executable)
-        assert env["CLOZN_ENGINE_DISCOVERY_SOURCE"] == "repo_dev_build"
-        assert env["CLOZN_ENGINE_BACKEND"] == "cpu"
-        assert env["CLOZN_ENGINE_ARTIFACT_SHA256"] != discovery.artifact_sha256
-    finally:
-        stack.stop()
 
 
 def test_legacy_engine_substrate_identity_is_exact_fork_eligible(

@@ -29,6 +29,10 @@ WHAT THIS PROVES
      (b) Protocol 1.1's whole reason for generation-scoped checkpoint IDs: a checkpoint captured
          before a worker RESTART, resubmitted unchanged to /plan AFTER the restart, must return
          unavailable -- a stale ckpt-N must never resolve against the new process generation.
+6. An explicit durable-pin path: a run-scoped checkpoint pin survives that worker restart, and
+   `POST .../execution-fork/checkpoint {"pinned": true}` hydrates it into the new generation before
+   proving the unchanged control. The public receipt remains ephemeral; the durable bytes never leave
+   the local pin store.
 
 HONEST DEGRADE
 ---------------
@@ -353,10 +357,36 @@ def _exercise(rows: list, client: Client, port: int, args) -> None:
     # --- step 6a: a checkpoint reference that was never actually issued ---------------------
     _run_bogus_reference_check(rows, client, run_id, confirmed)
 
-    # --- step 6b: THE guard -- a checkpoint captured before a worker restart must not resolve
+    # --- step 6b: durable pin creation (preview, then explicit write) -----------------------
+    # Keep this late in the battery so an earlier happy-path refusal cannot leave a durable test
+    # artifact behind. The restart check below always removes a successfully-created pin.
+    pin_status, pin_preview_raw, pin_err = client.post(
+        f"/runs/{run_id}/snapshot/pin", {"preview": True})
+    pin_preview = _j(pin_preview_raw)
+    preview_ok = pin_status == 200 and pin_preview.get("preview") is True
+    rows.append(_row("durable snapshot pin preview reports its byte cost",
+                     PASS if preview_ok else FAIL,
+                     f"HTTP {pin_status} preview={pin_preview.get('preview')!r} "
+                     f"envelope_bytes={pin_preview.get('envelope_bytes')!r}"))
+    pin_manifest = {}
+    if preview_ok:
+        pin_status, pin_receipt_raw, pin_err = client.post(
+            f"/runs/{run_id}/snapshot/pin", {"preview": False, "note": "gateway smoke"})
+        pin_receipt = _j(pin_receipt_raw)
+        pin_manifest = pin_receipt.get("manifest") if isinstance(pin_receipt.get("manifest"), dict) else {}
+        pin_ok = pin_status == 201 and pin_manifest.get("run_id") == run_id
+        rows.append(_row("durable snapshot pin persists only after explicit confirmation",
+                         PASS if pin_ok else FAIL,
+                         f"HTTP {pin_status} run_id={pin_manifest.get('run_id')!r} err={pin_err}"))
+    else:
+        rows.append(_row("durable snapshot pin persists only after explicit confirmation",
+                         SKIP, "preview did not complete; see the row above"))
+
+    # --- step 6c: THE guard -- a checkpoint captured before a worker restart must not resolve
     #     after the restart (generation-scoped checkpoint IDs, Protocol 1.1) ------------------
     _run_restart_invalidation_check(rows, client, port, run_id, checkpoint_reference,
-                                    original_worker_generation, confirmed, args)
+                                    original_worker_generation, confirmed, args,
+                                    pin_manifest=pin_manifest)
 
 
 def _run_bogus_reference_check(rows: list, client: Client, run_id: str, confirmed: list) -> None:
@@ -385,7 +415,7 @@ def _run_bogus_reference_check(rows: list, client: Client, run_id: str, confirme
 
 def _run_restart_invalidation_check(rows: list, client: Client, port: int, run_id: str,
                                     checkpoint_reference: dict, original_generation, confirmed: list,
-                                    args) -> None:
+                                    args, *, pin_manifest: dict | None = None) -> None:
     if not checkpoint_reference or not original_generation:
         rows.append(_row("a stale checkpoint from BEFORE a worker restart fails honestly after it",
                          SKIP, "no successful earlier checkpoint capture to make stale"))
@@ -435,6 +465,38 @@ def _run_restart_invalidation_check(rows: list, client: Client, port: int, run_i
         PASS if ok else FAIL,
         f"HTTP {status} old_generation={original_generation!r} new_generation={new_generation!r} "
         f"classification={classification!r} reasons={plan.get('reasons')}"))
+
+    # The durable pin is intentionally a separate, explicit path: the old in-memory reference above
+    # must fail, while importing the verified pin into this new worker generation must succeed.
+    if pin_manifest:
+        status, hydrated_raw, err = client.post(
+            f"/runs/{run_id}/execution-fork/checkpoint", {"pinned": True})
+        hydrated = _j(hydrated_raw)
+        hydrated_reference = hydrated.get("checkpoint_reference") if isinstance(
+            hydrated.get("checkpoint_reference"), dict) else {}
+        hydrated_ok = (
+            status == 201
+            and hydrated.get("status") == "available"
+            and hydrated_reference.get("worker_generation_id") == new_generation
+            and hydrated_reference.get("worker_generation_id") != original_generation
+            and hydrated.get("proof", {}).get("status") == "matched"
+        )
+        rows.append(_row(
+            "durable snapshot hydrates and proves after worker restart",
+            PASS if hydrated_ok else FAIL,
+            f"HTTP {status} status={hydrated.get('status')!r} "
+            f"generation={hydrated_reference.get('worker_generation_id')!r} "
+            f"reasons={hydrated.get('reasons')!r} err={err}"))
+        cleanup_status, _cleanup_raw, cleanup_err = client.post(
+            f"/snapshots/{run_id}/unpin", {"cascade": True})
+        rows.append(_row(
+            "gateway smoke removes its durable pin explicitly",
+            PASS if cleanup_status == 200 else FAIL,
+            f"HTTP {cleanup_status} err={cleanup_err}"))
+    else:
+        rows.append(_row(
+            "durable snapshot hydrates and proves after worker restart",
+            SKIP, "pin was not created; see the pin rows above"))
 
 
 def _teardown(port: int, proc) -> None:

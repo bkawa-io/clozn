@@ -76,6 +76,20 @@ def test_plan_is_schema_valid_and_starts_no_runs():
     assert doc["tests"][0]["stop_reason"] == "planned"
 
 
+def test_mixed_model_pairs_are_unavailable_before_any_controlled_arm():
+    a = _run("run_a", "good", messages=[{"role": "user", "content": "full"}])
+    b = _run("run_b", "bad", messages=[{"role": "user", "content": "short"}])
+    a["identity"] = {"model_sha256": "a" * 64}
+    b["identity"] = {"model_sha256": "b" * 64}
+    a["context_receipt"] = {"delivered": [{"segment_id": "one"}, {"segment_id": "two"}]}
+    b["context_receipt"] = {"delivered": [{"segment_id": "one"}]}
+    doc = controlled.plan_change_tests(a, b, tests=["context"])
+    test = doc["tests"][0]
+    assert test["status"] == "not_run"
+    assert test["stop_reason"] == "unavailable"
+    assert "different models" in test["reason"]
+
+
 def test_context_control_and_treatment_can_support_one_cause():
     clock = Clock()
     a = _run("run_a", "good", messages=[{"role": "user", "content": "full"}])

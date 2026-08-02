@@ -95,15 +95,6 @@ class SmokeGatewayHandler(BaseHTTPRequestHandler):
             })
         elif self.path == f"/runs/{self.run_id}/explain":
             self._send(200, {"run_id": self.run_id, "confidence": {"available": True}})
-        elif self.path == "/v1/completions":
-            frames = (
-                'data: {"id":"cmpl-fake","object":"text_completion","choices":'
-                '[{"text":"ready","index":0,"finish_reason":null}]}\n\n'
-                'data: {"id":"cmpl-fake","object":"text_completion","choices":'
-                '[{"text":"","index":0,"finish_reason":"stop"}]}\n\n'
-                "data: [DONE]\n\n"
-            )
-            self._send(200, frames, "text/event-stream")
         elif self.path == "/api/clozn/generate":
             frames = (
                 'data: {"type":"tokens_committed","items":[{"piece":"ready"}]}\n\n'
@@ -233,7 +224,6 @@ class ProductSmokeTests(unittest.TestCase):
         self.assertEqual(rid, SmokeGatewayHandler.run_id)
         self.assertTrue(report.ok, report.render())
         names = {check.name for check in report.checks}
-        self.assertIn("OpenAI completion stream contains only standard chunks", names)
         self.assertIn("native stream preserves typed Clozn events", names)
         self.assertIn("trace blob exists and matches recorded SHA-256", names)
 
@@ -432,9 +422,9 @@ class ProductSmokeTests(unittest.TestCase):
             frames=[{"type": "tokens_committed", "items": [{"piece": "oops"}]}],
             done=True,
         )
-        ok, _, detail = smoke._completion_stream_text(result)
+        ok, _, detail = smoke._chat_stream_text(result)
         self.assertFalse(ok)
-        self.assertIn("native frame leaked", detail)
+        self.assertIn("foreign frame leaked", detail)
 
     def test_base_url_parser_rejects_paths_and_https(self):
         self.assertEqual(smoke._parse_base("127.0.0.1:8080"), ("http://127.0.0.1:8080", 8080))

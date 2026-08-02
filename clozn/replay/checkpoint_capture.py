@@ -1,8 +1,11 @@
 """Fail-closed recorded-parent capture for exact execution forks.
 
 The private worker's checkpoint store is bounded process memory.  This module turns one eligible,
-immutable run into that worker state and returns a versioned public receipt.  It does not persist,
-pin, export, import, truncate, or promise the checkpoint will survive a restart.
+immutable run into that worker state and returns a versioned public receipt.  The default path creates
+an ephemeral checkpoint; an explicit ``checkpoint_envelope`` may instead hydrate a previously pinned
+export into the selected worker before running the same exact unchanged-control proof.  The public
+receipt remains ephemeral after hydration -- the durable bytes stay in the pin store and never enter
+the receipt.
 
 Prompt IDs are obtained from the matching worker's existing ``/score`` contract.  Prompt text and
 the run's recorded continuation IDs are sent as separate fields, so no prompt/continuation BPE
@@ -235,17 +238,18 @@ def _score_prompt_ids(engine, final_prompt: str, output_ids: list[int],
 
 def _checkpoint_reference(parent_id: str, response: Mapping,
                           expected_generation: str, prompt_tokens: int,
-                          total_tokens: int) -> dict:
+                          total_tokens: int, *, allow_missing_n_tokens: bool = False) -> dict:
     checkpoint_id = response.get("checkpoint_id")
     generation = response.get("worker_generation_id")
     n_past = response.get("n_past")
     n_tokens = response.get("n_tokens")
     size_bytes = response.get("size_bytes")
+    n_tokens_ok = n_tokens == total_tokens or (allow_missing_n_tokens and n_tokens is None)
     if not (
         isinstance(checkpoint_id, str) and checkpoint_id
         and generation == expected_generation
         and n_past == total_tokens
-        and n_tokens == total_tokens
+        and n_tokens_ok
         and isinstance(size_bytes, int) and not isinstance(size_bytes, bool) and size_bytes >= 0
     ):
         raise CheckpointCaptureError(
@@ -267,6 +271,7 @@ def capture_parent_checkpoint(
     *,
     runtime_identity: Mapping,
     worker_identity: Mapping,
+    checkpoint_envelope: Mapping | None = None,
     clock: Callable[[], float] = time.time,
 ) -> dict:
     """Capture and prove one ephemeral checkpoint, returning a v1 lifecycle artifact.
@@ -274,6 +279,9 @@ def capture_parent_checkpoint(
     Expected eligibility failures are returned as ``status == "unavailable"``. Worker calls that
     fail, return inconsistent evidence, or produce a divergent unchanged control return
     ``status == "failed"``. Only ``status == "available"`` may be handed to the exact fork planner.
+    ``checkpoint_envelope`` is an internal, already-resolved durable pin. It is deliberately not
+    accepted from the public request body: the gateway resolves the run-scoped pin and passes the
+    envelope here only after the pin store has re-verified its blob and sidecar digests.
     """
     if not isinstance(parent_run, Mapping):
         raise CheckpointCaptureError("parent_run must be an object")
@@ -417,19 +425,49 @@ def capture_parent_checkpoint(
         "execution_shape": "prompt_batch_then_single_token_decode",
     }
 
-    checkpoint_kwargs = {
-        "n_past": len(full_ids),
-        "prefill_to": len(prompt_ids),
-        "worker_generation_id": worker["worker_generation_id"],
-    }
-    if sampler_wire is not None:
-        checkpoint_kwargs["sampler"] = sampler_wire
-    checkpoint_kwargs.update(steering_wire)
+    if checkpoint_envelope is not None:
+        if not isinstance(checkpoint_envelope, Mapping):
+            return _finish(
+                artifact, status="unavailable",
+                code="pinned_checkpoint_envelope_invalid",
+                message="the resolved pinned checkpoint envelope is not an object")
+        state = checkpoint_envelope.get("state")
+        state = state if isinstance(state, Mapping) else {}
+        pinned_tokens = state.get("tokens")
+        if (
+            not isinstance(pinned_tokens, list)
+            or any(not isinstance(token, int) or isinstance(token, bool) for token in pinned_tokens)
+            or pinned_tokens != full_ids
+            or state.get("n_tokens") != len(full_ids)
+            or state.get("n_past") != len(full_ids)
+            or state.get("prompt_tokens") != len(prompt_ids)
+        ):
+            return _finish(
+                artifact, status="unavailable",
+                code="pinned_checkpoint_parent_mismatch",
+                message=(
+                    "the pinned checkpoint token history does not match the immutable parent "
+                    "under the selected worker"))
+        checkpoint_kwargs = None
+    else:
+        checkpoint_kwargs = {
+            "n_past": len(full_ids),
+            "prefill_to": len(prompt_ids),
+            "worker_generation_id": worker["worker_generation_id"],
+        }
+        if sampler_wire is not None:
+            checkpoint_kwargs["sampler"] = sampler_wire
+        checkpoint_kwargs.update(steering_wire)
     try:
-        response = engine.create_checkpoint(full_ids, **checkpoint_kwargs)
+        response = (
+            engine.import_checkpoint(dict(checkpoint_envelope))
+            if checkpoint_envelope is not None
+            else engine.create_checkpoint(full_ids, **checkpoint_kwargs)
+        )
         reference = _checkpoint_reference(
             parent_id, response, worker["worker_generation_id"],
-            len(prompt_ids), len(full_ids))
+            len(prompt_ids), len(full_ids),
+            allow_missing_n_tokens=checkpoint_envelope is not None)
     except Exception as exc:
         return _finish(
             artifact, status="failed",
@@ -491,6 +529,11 @@ def capture_parent_checkpoint(
         artifact, status="available",
         code="exact_checkpoint_captured",
         message=(
-            "the ephemeral checkpoint matched its unchanged exact-fork control and is eligible "
-            "until worker restart, FIFO eviction, or gateway shutdown"),
+            (
+                "the hydrated pinned checkpoint matched its unchanged exact-fork control and is "
+                "eligible until worker restart, FIFO eviction, or gateway shutdown"
+                if checkpoint_envelope is not None
+                else
+                "the ephemeral checkpoint matched its unchanged exact-fork control and is eligible "
+                "until worker restart, FIFO eviction, or gateway shutdown")),
         proof=proof)

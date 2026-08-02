@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.dial-calibration.v1",
+  "title": "Exact-model engine dial calibration",
+  "description": "A model-bound dial calibration produced by the engine coherence/effect/null sweep. Root-level legacy calibration files are not this artifact.",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "model_sha256", "method", "dials"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.dial-calibration.v1"},
+    "generated_at": {"type": "string", "minLength": 1},
+    "model_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "method": {"type": "string", "minLength": 1},
+    "dials": {"type": "object", "additionalProperties": {"$ref": "#/$defs/Dial"}}
+  },
+  "$defs": {
+    "Dial": {
+      "type": "object",
+      "required": ["usable_max", "usable_range", "derail_point", "works"],
+      "additionalProperties": true,
+      "properties": {
+        "usable_max": {"type": ["number", "null"]},
+        "usable_range": {
+          "type": ["array", "null"],
+          "items": {"type": ["number", "null"]},
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "derail_point": {"type": ["number", "null"]},
+        "works": {"type": "boolean"}
+      }
+    }
+  }
+}

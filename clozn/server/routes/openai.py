@@ -16,6 +16,20 @@ def _api_error(h, status: int, message: str, *, param=None, kind="invalid_reques
     h._json(status, {"error": error})
 
 
+def _retired_legacy_completions(h) -> None:
+    """Return the migration response for the removed public legacy route.
+
+    The private worker still speaks its own ``/v1/completions`` protocol; this response is only for
+    callers reaching the public Python gateway. Keep it before model selection so a retired route
+    never loads a model, consumes a worker permit, or creates a run.
+    """
+    _api_error(
+        h, 410,
+        "POST /v1/completions was retired; use POST /v1/chat/completions instead",
+        code="endpoint_retired",
+    )
+
+
 def _calibration_task(body) -> tuple[dict | Any, str | None]:
     """Extract Clozn's task extension before standard OpenAI normalization.
 
@@ -342,6 +356,9 @@ def try_get(h, p):
 
 
 def try_post(h, p, body):
+    if p == "/v1/completions":
+        _retired_legacy_completions(h)
+        return True
     if p == "/api/clozn/generate":
         from clozn.server.model_routing import select_for_handler
         selection = select_for_handler(
@@ -349,12 +366,28 @@ def try_post(h, p, body):
         )
         if selection is None:
             return True
-        from clozn.server.generation_gateway import native_completion
+        from clozn.server.generation_gateway import (
+            apply_scoped_corrections, flatten_messages_for_native, native_completion,
+        )
+        original_prompt = body.get("prompt", "")
+        if not isinstance(original_prompt, str):
+            original_prompt = str(original_prompt)
+        try:
+            corrected_messages, scoped_evidence = apply_scoped_corrections(
+                h, [{"role": "user", "content": original_prompt}]
+            )
+        except Exception as exc:
+            from clozn.runs.corrections import CorrectionError
+            if isinstance(exc, CorrectionError):
+                _api_error(h, 409, str(exc), param="prompt", code="correction_unavailable")
+                return True
+            raise
+        if scoped_evidence and scoped_evidence.get("applied"):
+            body = dict(body)
+            body["prompt"] = flatten_messages_for_native(corrected_messages)
+            h._native_journal_prompt = original_prompt
+            h._native_assembled_messages = corrected_messages
         native_completion(h, body)
-        return True
-    if p == "/v1/completions":
-        from clozn.server.generation_gateway import openai_completion
-        openai_completion(h, body)
         return True
     if p != "/v1/chat/completions":   # OpenAI-compatible: chat with memory prefix + tone steering applied
         return False
@@ -416,6 +449,23 @@ def try_post(h, p, body):
         section_manifest = []
     msgs = [{k: v for k, v in message.items() if k != "clozn_section"} for message in msgs]
 
+    delivered_messages = msgs
+    journal_delivered_messages = [dict(message) for message in delivered_messages]
+    for source in source_metadata:
+        index = source["message_index"]
+        journal_delivered_messages[index]["source_id"] = source["source_id"]
+        if source.get("label"):
+            journal_delivered_messages[index]["source_label"] = source["label"]
+    from clozn.server.generation_gateway import apply_scoped_corrections
+    try:
+        msgs, scoped_correction_evidence = apply_scoped_corrections(h, delivered_messages)
+    except Exception as exc:
+        from clozn.runs.corrections import CorrectionError
+        if isinstance(exc, CorrectionError):
+            _api_error(h, 409, str(exc), param="messages", code="correction_unavailable")
+            return True
+        raise
+
     # CLOSED-LOOP DISPOSITION GUARDRAILS (FRONTIER_BETS section 9.1 / experiment A1.1), opt-in, default
     # off -- see generation_guard.py's own module docstring for the full honesty framing (present-tense
     # detect-and-correct, NEVER predictive/lead-time/"acts on intent"). Parsed here, before the corrective-
@@ -432,6 +482,14 @@ def try_post(h, p, body):
         _api_error(h, 400, str(exc), param="clozn_guard", code="invalid_parameter")
         return True
     if guard_spec is not None:
+        if scoped_correction_evidence and scoped_correction_evidence.get("applied"):
+            _api_error(
+                h, 409,
+                "confirmed scoped corrections cannot yet be combined with clozn_guard; retry without "
+                "the guard or use the ordinary chat path",
+                param="clozn_guard", code="correction_inapplicable",
+            )
+            return True
         if source_metadata:
             _api_error(
                 h, 409,
@@ -480,26 +538,23 @@ def try_post(h, p, body):
         ))
         return True
 
-    delivered_messages = msgs
-    journal_delivered_messages = [dict(message) for message in delivered_messages]
-    for source in source_metadata:
-        index = source["message_index"]
-        journal_delivered_messages[index]["source_id"] = source["source_id"]
-        if source.get("label"):
-            journal_delivered_messages[index]["source_label"] = source["label"]
-    from clozn.server.generation_gateway import apply_corrective_policy
-    msgs, corrective_evidence = apply_corrective_policy(h, delivered_messages)
-    if structured and corrective_evidence:
+    from clozn.server.generation_gateway import apply_corrective_policy, reapply_scoped_resolution
+    policy_messages, corrective_evidence = apply_corrective_policy(h, delivered_messages)
+    msgs = reapply_scoped_resolution(h, policy_messages)
+    if structured and (corrective_evidence or (scoped_correction_evidence and
+                                               scoped_correction_evidence.get("applied"))):
         _api_error(
             h, 409,
-            "active corrective response policies are prose interventions and cannot be applied "
-            "to a structured-output request; undo the policy or use a different session/profile",
+            "active prose corrections/policies cannot be applied to a structured-output request; "
+            "undo the correction or policy, or use a different session/profile",
             param="response_format" if structured.get("mode") != "tools" else "tools",
-            code="corrective_policy_inapplicable",
+            code=("correction_inapplicable" if scoped_correction_evidence and
+                  scoped_correction_evidence.get("applied") else "corrective_policy_inapplicable"),
         )
         return True
     journal_messages = (
-        journal_delivered_messages if corrective_evidence or source_metadata else None
+        journal_delivered_messages if corrective_evidence or source_metadata or
+        scoped_correction_evidence is not None else None
     )
     output_processor = None
     native_structured = None
@@ -556,6 +611,8 @@ def try_post(h, p, body):
     run_meta = {}
     if corrective_evidence is not None:
         run_meta["corrective_policy"] = corrective_evidence
+    if scoped_correction_evidence is not None:
+        run_meta["scoped_corrections"] = scoped_correction_evidence
     if calibration_task is not None:
         run_meta["clozn_task"] = calibration_task
     try:

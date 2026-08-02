@@ -1,4 +1,4 @@
-"""managed_runtime_smoke.py -- the first LIVE acceptance battery for the managed preloaded
+"""managed_runtime_smoke.py -- the LIVE acceptance battery for the managed
 multi-model runtime (RT-BOOT-01 / ADR 004, docs/design/004-multi-model-routing-contract.md).
 
 Two large waves landed on origin/main@8ec835f with model-free coverage only. This script is the
@@ -32,9 +32,14 @@ silently. A genuine divergence from the claims above (wrong identity served, a r
 wrong model, a worker that doesn't recover, a leaked PID/port after stop) is a HARD FAIL naming the
 exact observed value. Nothing here is tuned to make the battery pass.
 
+The battery exercises two preloaded workers through the merged in-process gateway. Adding
+``--cold-load`` changes the default battery to one preload and a resident cap of one, proving a real
+cold load, idle eviction, and reload.
+
 Usage:
     python scripts/smoke/managed_runtime_smoke.py
     python scripts/smoke/managed_runtime_smoke.py --port 8181 --tag managed
+    python scripts/smoke/managed_runtime_smoke.py --cold-load --cold-cycles 5
 """
 from __future__ import annotations
 
@@ -146,7 +151,9 @@ def _qualify(model_path: str, port: int, engine_build_sha: str, backend: str):
     return flags, runtime_key, gpu, device
 
 
-def build_manifest(rows: list, tmp_dir: str, free_port) -> "tuple[str, object, object] | None":
+def build_manifest(
+    rows: list, tmp_dir: str, free_port, *, cold_load: bool = False
+) -> "tuple[str, object, object] | None":
     """Qualify both small models and write a real clozn.managed-models.v1 manifest. Returns
     (manifest_path, default_definition, other_definition) or None on an environmental SKIP (rows
     records the reason either way)."""
@@ -207,8 +214,8 @@ def build_manifest(rows: list, tmp_dir: str, free_port) -> "tuple[str, object, o
     manifest = {
         "schema_version": "clozn.managed-models.v1",
         "default_model_id": DEFAULT_ID,
-        "preload_model_ids": [DEFAULT_ID, OTHER_ID],
-        "max_loaded_models": 2,
+        "preload_model_ids": [DEFAULT_ID] if cold_load else [DEFAULT_ID, OTHER_ID],
+        "max_loaded_models": 1 if cold_load else 2,
         "models": [
             {"model_id": d.model_id, "model": d.model, "runtime_key": d.runtime_key.as_dict(),
              "flags": dict(d.flags), "prefer_gpu": d.prefer_gpu}
@@ -295,7 +302,7 @@ def run_battery(args) -> tuple[list, dict]:
     from clozn.cli.engine_process import _free_port
     tmp = tempfile.TemporaryDirectory(prefix="clozn-managed-smoke-")
     try:
-        built = build_manifest(rows, tmp.name, _free_port)
+        built = build_manifest(rows, tmp.name, _free_port, cold_load=args.cold_load)
         if built is None:
             return rows, metrics
         manifest_path, default_def, other_def = built
@@ -319,11 +326,16 @@ def run_battery(args) -> tuple[list, dict]:
                 rows.append(_row("1", "clozn serve --models-config boots", FAIL,
                                  f"{problem}; log: {_tail(log_path)}"))
                 return rows, metrics
-            rows.append(_row("1", "clozn serve --models-config boots", PASS,
+            topology = "in-process"
+            mode = "cold-load" if args.cold_load else "preloaded"
+            rows.append(_row("1", f"clozn serve --models-config boots ({topology}, {mode})", PASS,
                              f"port={port} in {metrics['startup_seconds']}s"))
 
             client = Client(base, args.timeout)
-            _exercise(rows, metrics, client, port, default_def, other_def, args)
+            if args.cold_load:
+                _exercise_cold_load(rows, metrics, client, port, default_def, other_def, args)
+            else:
+                _exercise(rows, metrics, client, port, default_def, other_def, args)
         finally:
             _teardown(rows, port, proc)
     finally:
@@ -473,6 +485,188 @@ def _exercise(rows, metrics, client: Client, port: int, default_def, other_def, 
                              f"old pid={default_pid} alive={bool(still_default_alive)}"))
 
 
+def _routing_receipt(run: dict) -> dict:
+    meta = run.get("meta") if isinstance(run.get("meta"), dict) else {}
+    routing = meta.get("model_routing") if isinstance(meta.get("model_routing"), dict) else {}
+    result = routing.get("result") if isinstance(routing.get("result"), dict) else {}
+    receipt = result.get("receipt") if isinstance(result.get("receipt"), dict) else {}
+    return receipt
+
+
+def _exercise_cold_load(rows, metrics, client: Client, port: int, default_def, other_def, args) -> None:
+    """Exercise a real cold load, resident-cap eviction, and a subsequent reload.
+
+    This mode requires the in-process gateway: the legacy subprocess fallback has no command
+    channel back to the supervisor's registry.
+    """
+    status, raw, err = client.get("/readyz")
+    ready_doc = _j(raw)
+    managed = ready_doc.get("models") or {}
+    starts_one = (
+        status == 200
+        and ready_doc.get("status") == "ok"
+        and managed.get("resident_count") == 1
+        and managed.get("default_model_id") == default_def.model_id
+    )
+    rows.append(_row("2", "cold-load boot starts only the configured default",
+                     PASS if starts_one else FAIL,
+                     f"HTTP {status} resident_count={managed.get('resident_count')} "
+                     f"default={managed.get('default_model_id')} err={err}"))
+
+    status, raw, err = client.get("/runtime/models")
+    models_doc = _j(raw)
+    by_id = {m.get("model_id"): m for m in (models_doc.get("models") or []) if isinstance(m, dict)}
+    initial_states_ok = (
+        status == 200
+        and by_id.get(default_def.model_id, {}).get("state") == "ready"
+        and by_id.get(other_def.model_id, {}).get("state") == "unloaded"
+        and models_doc.get("managed") is True
+    )
+    rows.append(_row("2", "the non-default model is honestly reported as unloaded",
+                     PASS if initial_states_ok else FAIL,
+                     f"HTTP {status} states="
+                     f"{default_def.model_id}:{by_id.get(default_def.model_id, {}).get('state')} "
+                     f"{other_def.model_id}:{by_id.get(other_def.model_id, {}).get('state')} err={err}"))
+
+    def generate(model_id: str):
+        status, raw, err = client.post(
+            "/v1/chat/completions",
+            {"model": model_id, "messages": [{"role": "user", "content": "Reply with ready."}],
+             "max_tokens": 8, "temperature": 0},
+        )
+        doc = _j(raw)
+        run_id = doc.get("clozn_run_id")
+        reply = ((doc.get("choices") or [{}])[0].get("message") or {}).get("content")
+        run = {}
+        if run_id:
+            run_status, run_raw, _ = client.get(f"/runs/{run_id}")
+            if run_status == 200:
+                run = _j(run_raw)
+        return status, err, run_id, reply, run
+
+    started = time.monotonic()
+    status, err, run_id, reply, other_run = generate(other_def.model_id)
+    receipt = _routing_receipt(other_run)
+    load_event = receipt.get("load_event") if isinstance(receipt, dict) else {}
+    cold_ok = (
+        status == 200 and bool(run_id) and bool(reply)
+        and receipt.get("resolved_model_id") == other_def.model_id
+        and load_event.get("kind") == "cold_load"
+        and load_event.get("outcome") == "loaded"
+        and load_event.get("coalesced") is False
+    )
+    metrics["live_cold_load_seconds"] = round(time.monotonic() - started, 3)
+    rows.append(_row("2", "a request cold-loads the non-default model once",
+                     PASS if cold_ok else FAIL,
+                     f"HTTP {status} run_id={run_id!r} load_event={load_event} err={err}"))
+
+    status, raw, err = client.get("/runtime/models")
+    after_doc = _j(raw)
+    after = {m.get("model_id"): m for m in (after_doc.get("models") or []) if isinstance(m, dict)}
+    evicted_default = (
+        status == 200
+        and after.get(other_def.model_id, {}).get("state") == "ready"
+        and after.get(default_def.model_id, {}).get("state") == "unloaded"
+        and after_doc.get("resident_count") == 1
+    )
+    rows.append(_row("2", "resident cap evicts only the idle default worker",
+                     PASS if evicted_default else FAIL,
+                     f"HTTP {status} resident_count={after_doc.get('resident_count')} states="
+                     f"{default_def.model_id}:{after.get(default_def.model_id, {}).get('state')} "
+                     f"{other_def.model_id}:{after.get(other_def.model_id, {}).get('state')} err={err}"))
+
+    status, err, run_id, reply, default_run = generate(default_def.model_id)
+    receipt = _routing_receipt(default_run)
+    load_event = receipt.get("load_event") if isinstance(receipt, dict) else {}
+    reload_ok = (
+        status == 200 and bool(run_id) and bool(reply)
+        and receipt.get("resolved_model_id") == default_def.model_id
+        and load_event.get("kind") == "cold_load"
+        and load_event.get("outcome") == "loaded"
+        and load_event.get("coalesced") is False
+    )
+    rows.append(_row("2", "an evicted default model reloads on demand",
+                     PASS if reload_ok else FAIL,
+                     f"HTTP {status} run_id={run_id!r} load_event={load_event} err={err}"))
+
+    status, raw, err = client.get("/runtime/models")
+    final_doc = _j(raw)
+    final = {m.get("model_id"): m for m in (final_doc.get("models") or []) if isinstance(m, dict)}
+    reloaded = (
+        status == 200
+        and final.get(default_def.model_id, {}).get("state") == "ready"
+        and final.get(other_def.model_id, {}).get("state") == "unloaded"
+        and final_doc.get("resident_count") == 1
+    )
+    rows.append(_row("2", "reload restores the resident cap without duplicate workers",
+                     PASS if reloaded else FAIL,
+                     f"HTTP {status} resident_count={final_doc.get('resident_count')} states="
+                     f"{default_def.model_id}:{final.get(default_def.model_id, {}).get('state')} "
+                     f"{other_def.model_id}:{final.get(other_def.model_id, {}).get('state')} err={err}"))
+
+    # A single cold-load/reload proves the route. The optional multi-cycle mode keeps one
+    # supervisor, gateway, and registry alive while repeatedly forcing both workers through the
+    # resident-cap transition, which is the useful soak signal for stale bindings and cleanup.
+    if args.cold_cycles <= 1:
+        return
+    soak_started = time.monotonic()
+    failures = []
+    for cycle in range(2, args.cold_cycles + 1):
+        status, err, run_id, reply, other_run = generate(other_def.model_id)
+        receipt = _routing_receipt(other_run)
+        event = receipt.get("load_event") if isinstance(receipt, dict) else {}
+        other_ok = (
+            status == 200 and bool(run_id) and bool(reply)
+            and receipt.get("resolved_model_id") == other_def.model_id
+            and event.get("kind") == "cold_load"
+            and event.get("outcome") == "loaded"
+            and event.get("coalesced") is False
+        )
+        if not other_ok:
+            failures.append(f"cycle {cycle} other load: HTTP {status} event={event} err={err}")
+
+        status, err, run_id, reply, default_run = generate(default_def.model_id)
+        receipt = _routing_receipt(default_run)
+        event = receipt.get("load_event") if isinstance(receipt, dict) else {}
+        default_ok = (
+            status == 200 and bool(run_id) and bool(reply)
+            and receipt.get("resolved_model_id") == default_def.model_id
+            and event.get("kind") == "cold_load"
+            and event.get("outcome") == "loaded"
+            and event.get("coalesced") is False
+        )
+        if not default_ok:
+            failures.append(f"cycle {cycle} default reload: HTTP {status} event={event} err={err}")
+
+        status, raw, err = client.get("/runtime/models")
+        state_doc = _j(raw)
+        state = {
+            m.get("model_id"): m for m in (state_doc.get("models") or [])
+            if isinstance(m, dict)
+        }
+        state_ok = (
+            status == 200
+            and state_doc.get("resident_count") == 1
+            and state.get(default_def.model_id, {}).get("state") == "ready"
+            and state.get(other_def.model_id, {}).get("state") == "unloaded"
+        )
+        if not state_ok:
+            failures.append(
+                f"cycle {cycle} final state: HTTP {status} resident_count="
+                f"{state_doc.get('resident_count')} states={state} err={err}"
+            )
+
+    metrics["live_cold_cycles"] = args.cold_cycles
+    metrics["live_cold_soak_seconds"] = round(time.monotonic() - soak_started, 3)
+    rows.append(_row(
+        "2", f"live cold-load soak ({args.cold_cycles} total cycles)",
+        FAIL if failures else PASS,
+        "; ".join(failures[:3]) if failures else
+        f"{args.cold_cycles} cold-load/reload cycles held resident_count=1 "
+        f"in {metrics['live_cold_soak_seconds']}s",
+    ))
+
+
 def _check_persisted_identity(rows, battery, client: Client, surface: str, run_id: str,
                               default_def, other_def) -> None:
     status, raw, err = client.get(f"/runs/{run_id}")
@@ -569,7 +763,22 @@ def main(argv=None) -> int:
     ap.add_argument("--timeout", type=float, default=60.0, help="per-request timeout (s)")
     ap.add_argument("--startup-timeout", type=float, default=120.0, help="boot/restart timeout (s)")
     ap.add_argument("--tag", default="managed", help="output filename tag")
+    ap.add_argument(
+        "--cold-load",
+        action="store_true",
+        help="use one preload and max-loaded=1 to exercise live cold load and eviction",
+    )
+    ap.add_argument(
+        "--cold-cycles",
+        type=int,
+        default=1,
+        help="total cold-load/reload cycles to run in one runtime (requires --cold-load)",
+    )
     args = ap.parse_args(argv)
+    if args.cold_cycles < 1:
+        ap.error("--cold-cycles must be at least 1")
+    if args.cold_cycles > 1 and not args.cold_load:
+        ap.error("--cold-cycles requires --cold-load")
 
     rows, metrics = run_battery(args)
 

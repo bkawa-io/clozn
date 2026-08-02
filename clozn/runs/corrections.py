@@ -34,23 +34,24 @@ preserves the properties that make it different:
 
 RECEIPT INTEGRATION (the acceptance criterion this module exists to make structural)
 ----------------------------------------------------------------------------------------
-`apply_and_record()` is the ONE function that both (a) passes a resolution's `applied` list into
-`clozn.runs.store.record(applied_corrections=...)`, which folds it into the SAME immutable, schema-
-validated `context_receipt` the run is created with, and (b) calls `record_applications()` to write
-"applied"/"conflict_lost" events into this module's own ledger -- both derived from the identical
-`resolution` dict, computed once. Concretely: `record_applications()` is only ever called (by code in
-this repo) from `apply_and_record()`, immediately after `store.record()` has already embedded that exact
-`applied` list into the created run's receipt. So "this module's ledger says correction X applied to run
-R" cannot be true in any call path shipped here without "run R's receipt lists correction X" also being
-true -- not because a convention says to keep them in sync, but because there is only one function that
-writes either, and it writes both from one input.
+`apply_and_record()` is the reusable forcing function that both (a) passes a resolution's `applied` list
+into `clozn.runs.store.record(applied_corrections=...)`, which folds it into the SAME immutable,
+schema-validated `context_receipt` the run is created with, and (b) calls `record_applications()` to
+write "applied"/"conflict_lost" events into this module's own ledger -- both derived from the identical
+`resolution` dict, computed once. The live generation adapter follows the same two-step seam directly
+because it must materialize the selected content before the worker call: it saves one resolution on the
+handler, passes its receipt fields to `store.record()`, then invokes `record_applications()` only after
+that record succeeds. Thus "this module's ledger says correction X applied to run R" cannot be true in
+the shipped request path without "run R's receipt lists correction X" also being true -- the two writes
+are structurally paired from one resolution, not merely kept in sync by convention.
 
 Two honest limits on that guarantee, stated plainly rather than glossed over:
-  1. Nothing in this CORE SLICE calls `apply_and_record()` from a live request path -- no HTTP route
-     exists yet (explicitly out of scope; see the owner's brief). This is a tested, ready, currently-
-     UNWIRED seam, the same status `clozn.runs.store.record`'s `execution_fork_receipt` parameter had
-     before its own route existed.
-  2. Python does not enforce that a future caller goes through `apply_and_record()` -- someone COULD call
+  1. The live request adapter is intentionally separate from this storage module (`clozn.server.routes.
+     corrections`) and has to keep its handler-local resolution paired with `store.record()` and
+     `record_applications()`. Other callers should use `apply_and_record()` rather than calling
+     `store.record()` directly if they want the same guarantee. This is the same single-writer boundary
+     as the execution-fork receipt seam.
+  2. Python does not enforce that a future caller goes through either paired path -- someone COULD call
      `store.record(applied_corrections=...)` directly and skip `record_applications()`, or vice versa.
      That is a real gap this module cannot close by itself; it is convention beyond this one point, not a
      mechanical impossibility. What IS mechanical is the direction that matters most for the acceptance
@@ -495,6 +496,22 @@ def list_corrections(*, scope_kind=None, scope_value=None, correction_type=None,
     return [_row_to_document(r) for r in rows]
 
 
+def has_active_corrections() -> bool:
+    """Return whether any confirmed, enabled, non-deleted correction exists.
+
+    This existence probe intentionally selects no content.  The gateway uses it to keep the normal
+    no-correction request path byte-for-byte quiet while preserving ``resolve_corrections``'s
+    content-blind selection boundary.
+    """
+    store._ensure()
+    with closing(store._connect()) as db:
+        row = db.execute(
+            "SELECT 1 FROM corrections WHERE confirmed_ts IS NOT NULL AND enabled = 1 "
+            "AND deleted_ts IS NULL LIMIT 1"
+        ).fetchone()
+    return row is not None
+
+
 def export_correction(correction_id: str) -> "dict | None":
     """A portable, schema-governed bundle: the live document plus its complete event ledger, oldest
     first. Read-only -- never mutates the correction or writes an event for the export itself."""
@@ -648,6 +665,39 @@ def receipt_fields(resolution: dict) -> dict:
             "correction_conflicts": list(resolution.get("conflicts") or [])}
 
 
+def messages_for_resolution(resolution: dict) -> list[dict]:
+    """Materialize the already-selected corrections as one system message.
+
+    Resolution deliberately remains content-blind: selection is made from exact scope identities and
+    the returned document contains only hashes/metadata.  Generation is the one point where the
+    selected opaque payloads are allowed to be read.  This helper keeps that boundary explicit and
+    refuses a missing/deleted payload rather than silently applying an incomplete correction set.
+    The caller still owns the original request messages; this function returns only the additive
+    system message so it cannot mutate a caller-owned list.
+    """
+    entries = list((resolution or {}).get("applied") or [])
+    if not entries:
+        return []
+    lines: list[str] = []
+    for entry in entries:
+        correction_id = entry.get("correction_id") if isinstance(entry, dict) else None
+        if not correction_id:
+            raise CorrectionStateError("correction resolution contained an entry without an id")
+        doc = get_correction(correction_id)
+        if not isinstance(doc, dict) or not isinstance(doc.get("content"), str):
+            raise CorrectionStateError(
+                f"selected correction {correction_id!r} is no longer available for generation"
+            )
+        # The type is metadata only; the user-approved content remains the instruction payload.
+        kind = str(entry.get("type") or "correction")
+        lines.append(f"[{kind}] {doc['content']}")
+    return [{
+        "role": "system",
+        "content": "Clozn confirmed corrections (explicitly approved by the user):\n- "
+                   + "\n- ".join(lines),
+    }]
+
+
 def record_applications(run_id: str, resolution: dict) -> dict:
     """Append 'applied' events (winners) and 'conflict_lost' events (losers) to each affected
     correction's ledger, all tagged with `run_id`. Best-effort by design, mirroring
@@ -714,6 +764,7 @@ __all__ = [
     "CorrectionError", "CorrectionValueError", "CorrectionNotFoundError", "CorrectionStateError",
     "validate_scope", "draft_correction", "confirm_correction", "disable_correction",
     "enable_correction", "delete_correction", "undo_last_change", "get_correction",
-    "list_corrections", "export_correction", "resolve_corrections", "receipt_fields",
+    "list_corrections", "has_active_corrections", "export_correction", "resolve_corrections", "receipt_fields",
+    "messages_for_resolution",
     "record_applications", "apply_and_record",
 ]

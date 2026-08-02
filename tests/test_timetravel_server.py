@@ -28,6 +28,7 @@ import clozn.settings as clozn_settings          # noqa: E402
 
 import clozn.runs.store as runlog               # noqa: E402
 import clozn.replay.timetravel as timetravel           # noqa: E402
+from clozn import schemas                         # noqa: E402
 
 
 # --- fake substrate: .chat() echoes the transcript it saw; dials/strength are restorable ---------------
@@ -116,6 +117,22 @@ def _seed_parent():
                          substrate="QwenSubstrate", messages=CONV, response="a2")
 
 
+def _seed_session_history():
+    """Three organic session runs whose message prefixes identify turns 0, 1, and 2."""
+    session = "session_0123456789abcdef01234567"
+    # Match the real OpenAI shape: each request persists messages through its user turn and stores the
+    # completed assistant text in the separate immutable `response` field.
+    prefixes = [CONV[:1], CONV[:3], CONV[:5]]
+    ids = []
+    for index, (messages, response) in enumerate(zip(prefixes, ("a0", "a1", "a2"))):
+        ids.append(runlog.record(
+            source="studio_chat", client="studio", model="clozn-qwen", substrate="engine",
+            messages=messages, response=response, session_key=session,
+            started=100.0 + index,
+        ))
+    return ids[-1], ids[0], ids[1]
+
+
 # ===================================================================================================
 # the gate -- default OFF, config round-trips, honest stats
 # ===================================================================================================
@@ -167,6 +184,238 @@ def test_mode_reports_store_stats(iso):
     out = _get("/timetravel/mode")
     assert out["store"]["snapshots"] == 2
     assert out["store"]["mb"] == 2.0
+
+
+def test_time_machine_reports_structural_replay_and_turns(iso):
+    rid = _seed_parent()
+    out = _get("/runs/" + rid + "/time-machine")
+    assert out["schema_version"] == "clozn.time-machine-eligibility.v1"
+    assert out["state"] == "structurally_reproducible"
+    assert out["eligible"] is True
+    assert out["exact_replay"]["eligible"] is False
+    assert [turn["turn"] for turn in out["turns"]] == [0, 1, 2]
+    assert all(turn["branch_eligible"] for turn in out["turns"])
+    assert all(turn["replay_fidelity"] == "structurally_reproducible" for turn in out["turns"])
+    schemas.validate(out, "clozn.time-machine-eligibility.v1")
+
+
+def test_time_machine_reports_snapshot_without_overclaiming_exactness(iso):
+    rid = _seed_parent()
+    cs._snap_store().snapshot_turn(rid, 1, n_tok=10, kv=((_FakeT(), _FakeT()),))
+    out = _get("/runs/" + rid + "/time-machine")
+    turn = out["turns"][1]
+    assert turn["snapshot"]["has_cache"] is True
+    assert turn["exact_replay_eligible"] is False
+    assert any(reason["code"] == "exact_restore_pending" for reason in out["reasons"])
+
+
+def test_resolve_turn_source_run_requires_an_exact_session_prefix(iso):
+    rid, turn_zero_id, turn_one_id = _seed_session_history()
+    parent = runlog.get_run(rid)
+    assert timetravel.resolve_turn_source_run(parent, 0)["id"] == turn_zero_id
+    assert timetravel.resolve_turn_source_run(parent, 1)["id"] == turn_one_id
+    assert timetravel.resolve_turn_source_run(parent, 2) is None
+
+
+def test_time_machine_verifies_an_earlier_session_turn(iso, monkeypatch):
+    rid, turn_zero_id, _ = _seed_session_history()
+    from clozn.replay import checkpoint_capture, timetravel_results
+    monkeypatch.setattr(timetravel_results, "RESULTS_DIR", str(iso / "time-machine-results"))
+    monkeypatch.setattr(
+        checkpoint_capture,
+        "capture_parent_checkpoint",
+        lambda parent, *args, **kwargs: {
+            "status": "available",
+            "parent_run_id": parent["id"],
+            "parent_fingerprint_sha256": "c" * 64,
+            "checkpoint_reference_id": "checkpoint_ref_session",
+            "proof": {"status": "matched"},
+            "reasons": [{"code": "exact_checkpoint_captured", "message": "matched"}],
+        },
+    )
+    from clozn.server.routes import execution_fork
+    monkeypatch.setattr(execution_fork, "_parent_sub_facts", lambda *args: ({}, {}, object()))
+    out = _post("/runs/" + rid + "/time-machine/verify", {"turn": 0})
+    assert out["status"] == "verified"
+    assert out["scope"] == "session_turn_prompt_boundary"
+    assert out["requested_run_id"] == rid
+    assert out["source_run_id"] == turn_zero_id
+    assert out["parent_run_id"] == turn_zero_id
+    assert timetravel_results.latest_for_run(rid, 0)["verification_id"] == out["verification_id"]
+    schemas.validate(out, "clozn.time-machine-verification.v1")
+
+
+def test_time_machine_verification_hydrates_a_durable_source_pin(iso, monkeypatch):
+    rid, turn_zero_id, _ = _seed_session_history()
+    from clozn.replay import checkpoint_capture, checkpoint_pin_store, timetravel_results
+    monkeypatch.setattr(timetravel_results, "RESULTS_DIR", str(iso / "time-machine-results"))
+    seen = {}
+
+    def capture(parent, *args, **kwargs):
+        seen["parent_id"] = parent["id"]
+        seen["envelope"] = kwargs.get("checkpoint_envelope")
+        return {
+            "status": "available",
+            "parent_run_id": parent["id"],
+            "parent_fingerprint_sha256": "d" * 64,
+            "checkpoint_reference_id": "checkpoint_ref_pinned",
+            "proof": {"status": "matched"},
+            "reasons": [{"code": "exact_checkpoint_captured", "message": "hydrated"}],
+        }
+
+    monkeypatch.setattr(checkpoint_capture, "capture_parent_checkpoint", capture)
+    monkeypatch.setattr(
+        checkpoint_pin_store,
+        "resolve_pin",
+        lambda run_id: {
+            "ok": True,
+            "envelope": {"envelope_version": "clozn.checkpoint-export.v1", "state": {}},
+        } if run_id == turn_zero_id else {"unavailable": "no pin"},
+    )
+    from clozn.server.routes import execution_fork
+    monkeypatch.setattr(execution_fork, "_parent_sub_facts", lambda *args: ({}, {}, object()))
+    out = _post("/runs/" + rid + "/time-machine/verify", {"turn": 0})
+    assert out["status"] == "verified"
+    assert seen == {
+        "parent_id": turn_zero_id,
+        "envelope": {"envelope_version": "clozn.checkpoint-export.v1", "state": {}},
+    }
+    schemas.validate(out, "clozn.time-machine-verification.v1")
+
+
+def test_time_machine_exact_branch_rejects_an_edited_question(iso):
+    rid = _seed_parent()
+    out = _post("/runs/" + rid + "/time-machine/branch", {"turn": 0, "alt_user": "different"})
+    assert out["code"] == "time_machine_branch_options_unsupported"
+
+
+def test_time_machine_exact_branch_reports_missing_historical_source(iso):
+    rid = _seed_parent()
+    out = _post("/runs/" + rid + "/time-machine/branch", {"turn": 0})
+    assert out["schema_version"] == "clozn.time-machine-branch.v1"
+    assert out["status"] == "unavailable"
+    assert out["exact_replay"] is False
+    schemas.validate(out, "clozn.time-machine-branch.v1")
+
+
+def test_time_machine_exact_branch_persists_a_same_prompt_child(iso, monkeypatch):
+    rid = _seed_parent()
+    from clozn.replay import checkpoint_capture, execution_fork, execution_fork_execute
+    monkeypatch.setattr(
+        checkpoint_capture,
+        "capture_parent_checkpoint",
+        lambda parent, *args, **kwargs: {
+            "status": "available",
+            "parent_run_id": parent["id"],
+            "checkpoint_reference": {
+                "checkpoint_id": "ckpt-test",
+                "worker_generation_id": "worker-generation-test",
+                "state": "available",
+                "parent_run_id": parent["id"],
+                "prompt_tokens": 3,
+                "n_past": 6,
+            },
+            "reasons": [{"code": "exact_checkpoint_captured", "message": "matched"}],
+        },
+    )
+    monkeypatch.setattr(
+        execution_fork,
+        "plan_execution_fork",
+        lambda *args, **kwargs: {
+            "classification": "exact_execution_fork",
+            "plan_id": "fork_plan_0123456789abcdef0123",
+        },
+    )
+    monkeypatch.setattr(
+        execution_fork_execute,
+        "execute_exact_fork",
+        lambda *args, **kwargs: {
+            "receipt": {
+                "phase": "completed",
+                "execution_id": "fork_exec_0123456789abcdef0123",
+            },
+            "child": {"id": "run_exact_child_0123456789"},
+        },
+    )
+    from clozn.server.routes import execution_fork as execution_fork_route
+    monkeypatch.setattr(
+        execution_fork_route,
+        "_parent_sub_facts",
+        lambda *args: ({"runtime": "facts"}, {"worker": "facts"}, object()),
+    )
+    out = _post("/runs/" + rid + "/time-machine/branch", {"turn": 2})
+    assert out["status"] == "completed"
+    assert out["exact_replay"] is True
+    assert out["source_run_id"] == rid
+    assert out["child_run_id"] == "run_exact_child_0123456789"
+    assert out["execution_fork_execution_id"] == "fork_exec_0123456789abcdef0123"
+    schemas.validate(out, "clozn.time-machine-branch.v1")
+
+
+def test_time_machine_missing_run_404s(iso):
+    out = _get("/runs/run_nope/time-machine")
+    assert "error" in out and "not found" in out["error"]
+
+
+def test_time_machine_verification_reports_earlier_turn_unavailable(iso):
+    rid = _seed_parent()
+    out = _post("/runs/" + rid + "/time-machine/verify", {"turn": 0})
+    assert out["schema_version"] == "clozn.time-machine-verification.v1"
+    assert out["status"] == "unavailable"
+    assert out["exact_replay"] is False
+    assert out["reasons"][0]["code"] == "turn_state_not_available"
+    schemas.validate(out, "clozn.time-machine-verification.v1")
+
+
+def test_time_machine_verification_persists_verified_prompt_boundary(iso, monkeypatch):
+    rid = _seed_parent()
+    from clozn.replay import checkpoint_capture, timetravel_results
+    monkeypatch.setattr(timetravel_results, "RESULTS_DIR", str(iso / "time-machine-results"))
+    monkeypatch.setattr(
+        checkpoint_capture,
+        "capture_parent_checkpoint",
+        lambda *args, **kwargs: {
+            "status": "available",
+            "parent_fingerprint_sha256": "a" * 64,
+            "checkpoint_reference_id": "checkpoint_ref_test",
+            "proof": {"status": "matched"},
+            "reasons": [{"code": "exact_checkpoint_captured", "message": "matched"}],
+        },
+    )
+    from clozn.server.routes import execution_fork
+    monkeypatch.setattr(execution_fork, "_parent_sub_facts", lambda *args: ({}, {}, object()))
+    out = _post("/runs/" + rid + "/time-machine/verify", {"turn": 2})
+    assert out["status"] == "verified"
+    assert out["exact_replay"] is True
+    assert out["fidelity"] == "exact_replay_eligible"
+    assert timetravel_results.latest_for_run(rid, 2)["verification_id"] == out["verification_id"]
+    schemas.validate(out, "clozn.time-machine-verification.v1")
+
+
+def test_time_machine_eligibility_exposes_prior_proof_without_overclaiming(iso, monkeypatch):
+    rid = _seed_parent()
+    from clozn.replay import checkpoint_capture, timetravel_results
+    monkeypatch.setattr(timetravel_results, "RESULTS_DIR", str(iso / "time-machine-results"))
+    monkeypatch.setattr(
+        checkpoint_capture,
+        "capture_parent_checkpoint",
+        lambda *args, **kwargs: {
+            "status": "available",
+            "parent_fingerprint_sha256": "b" * 64,
+            "checkpoint_reference_id": "checkpoint_ref_test",
+            "proof": {"status": "matched"},
+            "reasons": [{"code": "exact_checkpoint_captured", "message": "matched"}],
+        },
+    )
+    from clozn.server.routes import execution_fork
+    monkeypatch.setattr(execution_fork, "_parent_sub_facts", lambda *args: ({}, {}, object()))
+    verified = _post("/runs/" + rid + "/time-machine/verify", {"turn": 2})
+    out = _get("/runs/" + rid + "/time-machine")
+    turn = out["turns"][2]
+    assert turn["last_verification"]["verification_id"] == verified["verification_id"]
+    assert turn["last_verification"]["exact_replay"] is True
+    assert turn["exact_replay_eligible"] is False
+    schemas.validate(out, "clozn.time-machine-eligibility.v1")
 
 
 def test_unknown_timetravel_route_404s(iso):

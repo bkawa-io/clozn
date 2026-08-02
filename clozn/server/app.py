@@ -1,11 +1,10 @@
 """The single public Clozn product gateway.
 
-``clozn serve`` starts this Torch-free process after its private C++ model worker is
+``clozn serve`` hosts this Torch-free server in a background thread after its private C++ model worker is
 healthy.  All product HTTP surfaces—OpenAI compatibility, Studio, runs, memory,
 receipts, steering, and readouts—live here.  Training and calibration are offline lab
 jobs and cannot be selected as alternate serving substrates.
 """
-import argparse
 import json
 import os
 import secrets
@@ -13,19 +12,15 @@ import subprocess
 import sys
 import time
 
+# ``python -m clozn.server.app`` executes this file as ``__main__`` while route and substrate modules
+# import ``clozn.server.app`` by its dotted name.  Alias the live module before any of those imports so
+# they share the same SUB/ENGINE/route tables instead of recursively importing a second, half-built app.
+# Normal imports leave the package-owned module untouched.
+if __name__ == "__main__":
+    sys.modules.setdefault("clozn.server.app", sys.modules[__name__])
+
 os.environ.setdefault("CLOZN_RUNTIME_KIND", "product")
 RUNTIME_KIND = os.environ["CLOZN_RUNTIME_KIND"]
-
-# `python -m clozn.server.app` executes this file as `__main__`, a SEPARATE module object from
-# `clozn.server.app` in sys.modules terms. Every route module below does `from clozn.server import app
-# as ctx` to read the shared SUB/SUBNAME/ENGINE state live -- if that import were left to run normally,
-# it would import (and re-execute) THIS FILE A SECOND TIME under its real dotted name, creating a second,
-# disconnected copy of all this module's state: main() would mutate the __main__ copy's SUB/SUBNAME
-# while every route handler reads the OTHER copy's untouched defaults (SUB=None, SUBNAME="qwen") --
-# invisible to the test suite (which only ever imports the dotted name, never runs this as __main__) but
-# fatal to a live `-m` boot. Aliasing sys.modules here, before any of the routes/* imports at the bottom
-# of this file run, makes `from clozn.server import app` resolve to THIS SAME object either way.
-sys.modules.setdefault("clozn.server.app", sys.modules[__name__])
 
 from clozn.server.config import HERE, REPO_ROOT, DEMO, CLOZN_DIR   # noqa: E402 (side effects: sys.path/env/stdout)
 from clozn.server.http_policy import (                            # noqa: E402
@@ -45,15 +40,17 @@ POST_GATE = RequestGate.from_env()
 # but does NOT eliminate -- the reason the gate exists: self.steer.strength and the memory-card store are
 # STILL live, shared, mutable state that a concurrent /steer/* or /memory/* write could tear out from under
 # an in-flight generation read. So the gate stays broad by default; this is a DELIBERATELY SMALL allowlist
-# of the only two POST paths audited to touch NEITHER the substrate's generation state NOR steer/memory:
+# of POST paths audited to touch NEITHER the substrate's generation state NOR steer/memory:
 #   /capture/tier -- a bare settings-file flag (clozn.runs.capture_mode), unrelated to SUB entirely.
 #   /substrate    -- POST always 410s (routes/health.py); it never reaches the substrate at all.
+#   /cancel       -- cancellation control does not select a worker or start generation.
+#   /v1/completions -- the retired public route returns a typed 410 before routing.
 # Every other POST -- every /memory/* and /steer/* mutation, plus fork/checkpoint/replay/journal and
 # everything else NOT in _GENERATION_POST_PATHS below -- still reads or writes worker-shaped state and
 # stays fully serialized through POST_GATE. The risk of a wrong "this is safe" call here is a corrupted
 # run record or a torn dial read, so the bar is "audited to touch nothing substrate-shaped", not a coarse
 # heuristic like "looks read-only".
-_GATE_EXEMPT_POSTS = frozenset({"/capture/tier", "/substrate", "/cancel"})
+_GATE_EXEMPT_POSTS = frozenset({"/capture/tier", "/substrate", "/cancel", "/v1/completions"})
 
 # RT-05: the closed set of routes that resolve a model through
 # clozn.server.model_routing.select_for_handler (ADR 004's native/OpenAI/
@@ -75,7 +72,6 @@ _GATE_EXEMPT_POSTS = frozenset({"/capture/tier", "/substrate", "/cancel"})
 # a worker it might touch.
 _GENERATION_POST_PATHS = frozenset({
     "/api/clozn/generate",
-    "/v1/completions",
     "/v1/chat/completions",
     "/api/generate",
     "/api/chat",
@@ -243,8 +239,9 @@ def _resolve_sampling(want_sample):
         "repeat_penalty": float(overrides.get("repeat_penalty", settings.get_setting(
             "sample_repeat_penalty", _SAMPLING_DEFAULTS["sample_repeat_penalty"]))),
         # A FRESH seed every turn (not a fixed one) -- what makes a sampled reply vary turn to turn while
-        # still being independently reproducible: re-POSTing /v1/completions with this same seed+params
-        # reproduces the text (mode.decode records it on the run).
+        # still being independently reproducible: reissuing the same generation request through the
+        # configured gateway/private-worker path with this seed+params reproduces the text (mode.decode
+        # records it on the run).
         "seed": int(overrides.get("seed", secrets.randbits(63))),
     }
     return resolved if resolved["temperature"] > 0 else None
@@ -611,7 +608,6 @@ def _profiles_switch(sub, p) -> dict:
             "cards_note": cards_note, "facts_note": facts_note}
 
 
-ARGS = None
 SUB = None         # the active substrate object
 SUBNAME = "engine"  # product server has one substrate; PyTorch model work lives in the lab
 
@@ -971,9 +967,9 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 # only meaningfully-nonzero dials (|v| >= 0.05); steer.active() drops exact-zeros but a
                 # slider nudged to a hair (e.g. 0.02) still slips through and would clutter the record.
                 if "active_dials" in mo:
-                    # Some accepted surfaces (currently raw legacy text completions) build steering
-                    # explicitly and report exactly what reached the worker. This prevents a live dial
-                    # setting from being journaled as applied when that surface could not materialize it.
+                    # Some accepted surfaces build steering explicitly and report exactly what reached
+                    # the worker. This prevents a live dial setting from being journaled as applied when
+                    # that surface could not materialize it.
                     dials = dict(mo.get("active_dials") or {})
                 else:
                     dials = (
@@ -1058,16 +1054,32 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 # `sections` (prompt-section influence manifest) is threaded straight through to
                 # runlog.record below, exactly as the caller passed it in -- see this method's own
                 # docstring for why nothing here derives or augments it anymore.
-                rid = runlog.record(source=source, client=self._client(self.headers.get("User-Agent", "")),
-                                    model=str(model), substrate=request_subname, messages=messages, response=response,
-                                    behavior={"active_dials": dials}, started=started, error=error,
-                                    trace=trace, finish_reason=finish_reason, meta=meta,
-                                    assembled_messages=assembled_messages, final_prompt=final_prompt,
-                                    workspace_provider=workspace_provider, identity=identity,
-                                    reasoning=reasoning, session_key=session_key,
-                                    client_key=client_key, client_key_source=client_key_source,
-                                    project_key=project_key,
-                                    output_contract=output_contract, sections=sections)
+                record_kwargs = dict(
+                    source=source, client=self._client(self.headers.get("User-Agent", "")),
+                    model=str(model), substrate=request_subname, messages=messages, response=response,
+                    behavior={"active_dials": dials}, started=started, error=error,
+                    trace=trace, finish_reason=finish_reason, meta=meta,
+                    assembled_messages=assembled_messages, final_prompt=final_prompt,
+                    workspace_provider=workspace_provider, identity=identity,
+                    reasoning=reasoning, session_key=session_key,
+                    client_key=client_key, client_key_source=client_key_source,
+                    project_key=project_key,
+                    output_contract=output_contract, sections=sections,
+                )
+                correction_resolution = getattr(self, "_correction_resolution", None)
+                if isinstance(correction_resolution, dict):
+                    from clozn.runs import corrections as correction_store
+                    record_kwargs.update(correction_store.receipt_fields(correction_resolution))
+                rid = runlog.record(**record_kwargs)
+                # The immutable receipt is the source of truth.  Only after it exists do we append the
+                # matching per-correction application/conflict events; a ledger side-write can never
+                # claim an application for a run whose receipt failed to persist.
+                if rid and isinstance(correction_resolution, dict):
+                    try:
+                        from clozn.runs import corrections as correction_store
+                        correction_store.record_applications(rid, correction_resolution)
+                    except Exception:
+                        pass
                 self._maybe_snapshot_turn(rid, messages, trace, error)
                 self._last_logged_run_id = rid
                 return rid                        # M5 bridge: the run id, for callers that want to surface it
@@ -1129,6 +1141,9 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
             from clozn.server.model_routing import clear_handler_selection
             clear_handler_selection(self)
             self._last_logged_run_id = None
+            self._correction_resolution = None
+            self._native_journal_prompt = None
+            self._native_assembled_messages = None
             self._request_wall_started = time.time()
             self._gateway_timing_phases = []
             if self._reject_untrusted_origin():
@@ -1214,6 +1229,24 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
             router = MODEL_ROUTER
             registry = getattr(router, "gate", None) if router is not None else None
             exclusive_release = None
+            tracked_calls = []
+            tracker_factory = (
+                getattr(router, "worker_call_tracker", None)
+                if router is not None else None
+            )
+            if callable(tracker_factory):
+                # Unclassified mutations (steer, checkpoint, replay, journal,
+                # and similar routes) are serialized through POST_GATE, but a
+                # cold generation can arrive concurrently because generation
+                # routes intentionally bypass that global gate. Reserve every
+                # currently-ready worker before waiting so a capacity load
+                # cannot evict one while this mutation is in flight.
+                for model in (router.runtime_status().get("models") or []):
+                    if model.get("state") != "ready":
+                        continue
+                    tracker = tracker_factory(model["model_id"])
+                    tracker.__enter__()
+                    tracked_calls.append(tracker)
             if registry is not None:
                 exclusive_started_ns = time.monotonic_ns()
                 exclusive_rejected, exclusive_release = registry.acquire_all(
@@ -1224,6 +1257,8 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                     aggregation="exclusive",
                 )
                 if exclusive_rejected:
+                    for tracker in reversed(tracked_calls):
+                        tracker.__exit__(None, None, None)
                     POST_GATE.release()
                     self._reject_post_gate(exclusive_rejected)
                     return
@@ -1232,6 +1267,8 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
             finally:
                 if exclusive_release is not None:
                     exclusive_release()
+                for tracker in reversed(tracked_calls):
+                    tracker.__exit__(None, None, None)
                 POST_GATE.release()
                 clear_handler_selection(self)
 
@@ -1290,68 +1327,34 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
     return H
 
 
-def main():
-    global ARGS, SUB, SUBNAME, RUNTIME_KIND, ENGINE, MODEL_ROUTER
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--port", type=int, default=8080)
-    ap.add_argument("--host", default="127.0.0.1")
-    ARGS = ap.parse_args()
-    if ENGINE is None:
-        ap.error("CLOZN_ENGINE_PORT is missing; launch the product with `clozn serve <model>`")
+def build_server(*, host: str, port: int, engine, model_router=None, sub=None):
+    """Build the public HTTP server for either gateway construction path.
+
+    ``clozn serve`` supplies the already-owned worker/router objects directly,
+    so no projection file or engine-port environment handoff is needed. The
+    globals are intentional: route modules
+    already resolve the active product substrate through this module, while the
+    returned server owns only socket/thread lifetime.
+    """
+    global SUB, SUBNAME, RUNTIME_KIND, ENGINE, MODEL_ROUTER
+    if engine is None:
+        raise RuntimeError("the product gateway needs a private model worker")
     os.environ["CLOZN_RUNTIME_KIND"] = "product"
     RUNTIME_KIND = "product"
     SUBNAME = "engine"
-    routing_file = os.environ.get("CLOZN_MODEL_ROUTING_FILE")
-    if routing_file:
-        if "EngineClient" not in globals():
-            ap.error("the private worker client is unavailable")
-        from clozn.server.model_routing import ProjectionFileRouter
-        print("clozn gateway: connecting to private model workers ...", flush=True)
-        # ProjectionFileRouter accepts a `loader=` (RT-04's cold-load/coalesce/evict
-        # capability, see model_routing.py) but none is constructed here. Doing so would
-        # need a real WorkerRegistry.ensure_loaded reachable from THIS process -- and this
-        # process is the gateway subprocess (`python -m clozn.server.app`), a separate OS
-        # process from the `clozn serve` supervisor that owns the real WorkerRegistry and
-        # the model file paths/flags needed to spawn a worker (see
-        # clozn/cli/runtime_process.py's _spawn_managed_runtime and substrates.py's
-        # _ENGINE_DISCOVERY_ENV_KEYS comment for the same process-boundary fact). Building a
-        # loader here would mean either importing clozn.cli into clozn.server (forbidden --
-        # see ColdLoadOutcome's docstring) or constructing a second, disconnected
-        # WorkerRegistry in this process with no access to those paths and no shared state
-        # with the supervisor's real one -- spawning duplicate, desynchronized workers
-        # instead of coalescing onto the supervisor's. Wiring a real loader across that
-        # process boundary needs its own IPC integration (the supervisor exposing
-        # ensure_loaded to the gateway); until that exists, a not-preloaded model keeps
-        # RT-03's original fail-fast behavior here, unchanged.
-        MODEL_ROUTER = ProjectionFileRouter(
-            routing_file,
-            engine_factory=lambda port: EngineClient(port=port),
-            substrate_factory=lambda engine: EngineSubstrate(engine=engine),
-        )
-        SUB, managed_engine = MODEL_ROUTER.control_pair()
+    ENGINE = engine
+    MODEL_ROUTER = model_router
+    if model_router is not None:
+        SUB, managed_engine = model_router.control_pair()
         if managed_engine is not None:
             ENGINE = managed_engine
     else:
-        print("clozn gateway: connecting to private model worker ...", flush=True)
-        SUB = EngineSubstrate()
-    # RT-05: warm the run store's SQLite schema single-threaded, before ThreadingHTTPServer starts
-    # dispatching any request handler thread below. clozn/runs/store.py auto-migrates on first use
-    # (_ensure()), but a from-scratch database's CREATE TABLE/migration is not safe against two threads
-    # racing to run it for the very first time at once -- harmless before RT-05 (POST_GATE fully
-    # serialized every request, so record() was never actually called concurrently), but RT-05's
-    # per-worker generation gate now lets two different workers' first requests reach it together. This
-    # closes that gap without touching clozn/runs/store.py (a file this ticket does not own): by the
-    # time the server below can accept its first connection, the schema already exists, so any request
-    # count/order sees only the fast, already-migrated _ensure() path. Never fatal to boot.
+        SUB = sub if sub is not None else EngineSubstrate(engine=engine)
+    # RT-05: warm the run store's SQLite schema single-threaded, before
+    # ThreadingHTTPServer starts dispatching request handler threads.
     try:
         import clozn.runs.store as _runlog_warmup
         _runlog_warmup.list_runs(limit=1)
     except Exception:
         pass
-    srv = ThreadingHTTPServer((ARGS.host, ARGS.port), make_handler())
-    print(f"\n  Clozn -> http://{ARGS.host}:{ARGS.port}/\n", flush=True)
-    srv.serve_forever()
-
-
-if __name__ == "__main__":
-    main()
+    return ThreadingHTTPServer((host, int(port)), make_handler())

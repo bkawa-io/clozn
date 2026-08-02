@@ -129,7 +129,6 @@ def cmd_serve(args):
     port = args.port or 8080
     os.makedirs(ctx.HOME, exist_ok=True)
     worker_log = open(os.path.join(ctx.HOME, "worker.log"), "w", encoding="utf-8")
-    gateway_log = open(os.path.join(ctx.HOME, "gateway.log"), "w", encoding="utf-8")
     stack = None
     registered = False
     previous_sigterm = None
@@ -163,9 +162,7 @@ def cmd_serve(args):
             if isinstance(error, WorkerRegistryConfigError):
                 raise ctx.CloznError(str(error)) from None
             raise
-        stack = spawn_runtime(
-            runtime_config, worker_log=worker_log, gateway_log=gateway_log
-        )
+        stack = spawn_runtime(runtime_config, worker_log=worker_log)
         health = stack.worker_health
         _register(
             model,
@@ -195,10 +192,9 @@ def cmd_serve(args):
                 f"\n  {fmt.BOLD}{_friendly(model)}{fmt.RST} ready on "
                 f"{'GPU' if stack.gpu else 'CPU'} ({health.get('mode')}) "
                 f"in {time.time()-started:.1f}s"
-            )
+        )
         print(f"  Studio:                    {fmt.BOLD}{base}/{fmt.RST}")
         print(f"  OpenAI chat:               POST {base}/v1/chat/completions")
-        print(f"  OpenAI text completions:   POST {base}/v1/completions")
         print(f"  Clozn event stream:        POST {base}/api/clozn/generate")
         print(f"  Readiness:                 GET  {base}/readyz")
         worker_phrase = (
@@ -236,7 +232,6 @@ def cmd_serve(args):
         if registered:
             _unregister(port)
         worker_log.close()
-        gateway_log.close()
         if previous_sigterm is not None:
             try:
                 signal.signal(signal.SIGTERM, previous_sigterm)

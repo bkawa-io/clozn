@@ -360,9 +360,8 @@ def test_mechanistic_diff_available_for_a_genuinely_different_model_reference():
     mech = doc["capabilities"]["mechanistic_diff"]
     assert mech["available"] is True
     assert mech["reason"]
-    # Milestone F: points at the token-workbench mechanistic-diff action, which runs this SAME
-    # pair-compatibility gate authoritatively (and is honest that cross-model execution itself is not
-    # yet wired -- clozn diff-model at the CLI remains the only way to actually run one today).
+    # Points at the token-workbench mechanistic-diff action, which runs this SAME pair-compatibility
+    # gate authoritatively and queues managed-router execution when the gateway has a model registry.
     assert mech["action"] == {
         "method": "POST", "href": "/runs/run_current/tokens/1/mechanistic-diff",
         "request_body": {"reference_run_id": "run_other_model"},

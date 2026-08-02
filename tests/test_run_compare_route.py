@@ -158,3 +158,44 @@ def test_post_execution_returns_real_runner_child_ids(monkeypatch):
     assert [e["run_id"] for e in h.body["tests"][0]["evidence"]] == [
         "run_control", "run_treatment",
     ]
+
+
+def test_post_execution_resolves_the_candidate_run_model(monkeypatch):
+    from types import SimpleNamespace
+    from clozn.replay import controlled
+    from clozn.server import model_routing
+
+    meta = {"sampling": "greedy", "temperature": 0.0}
+    a = _run("run_a", response="good", model="candidate-model",
+             messages=[{"role": "user", "content": "full"}], meta=meta)
+    b = _run("run_b", response="bad", model="candidate-model",
+             messages=[{"role": "user", "content": "short"}], meta=meta)
+    monkeypatch.setattr(runlog, "get_run", lambda rid: {"run_a": a, "run_b": b}.get(rid))
+    calls = []
+    substrate = type("Sub", (), {"chat": lambda *_a, **_k: ""})()
+
+    def select(_handler, model, *, route):
+        calls.append((model, route))
+        return SimpleNamespace(sub=substrate)
+
+    monkeypatch.setattr(model_routing, "select_control_model_for_run", select)
+
+    class FakeLiveRunner:
+        def __init__(self, _sub):
+            pass
+
+        def qualify(self, *_args):
+            return {"ok": True}
+
+        def run_arm(self, _kind, arm, _a, _b, *, timeout_seconds):
+            return {"run": {"id": f"managed_{arm}", "response": "bad" if arm == "control" else "good",
+                            "context_receipt": {}, "trace": {}}}
+
+    monkeypatch.setattr(controlled, "SubstrateReplayRunner", FakeLiveRunner)
+    h = Handler("/runs/compare/test")
+    route.try_post(h, "/runs/compare/test", {
+        "a": "run_a", "b": "run_b", "tests": ["context"],
+        "max_runs": 2, "max_seconds": 30,
+    })
+    assert h.status == 200
+    assert calls == [("candidate-model", "/runs/compare/test")]

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.time-machine-eligibility.v1",
+  "title": "Answer Time Machine replay and branch eligibility",
+  "description": "A read-only, model-free eligibility receipt. Structural replay is not exact KV replay; a retained snapshot is evidence of availability only until a generation path restores and verifies it.",
+  "type": "object",
+  "required": ["schema_version", "run_id", "state", "eligible", "exact_replay", "reasons", "turns"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.time-machine-eligibility.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "state": {"enum": ["exact_replay_eligible", "same_inputs_environment_changed", "structurally_reproducible", "unavailable"]},
+    "eligible": {"type": "boolean"},
+    "exact_replay": {"$ref": "#/$defs/ExactReplay"},
+    "reasons": {"type": "array", "items": {"$ref": "#/$defs/Reason"}},
+    "turns": {"type": "array", "items": {"$ref": "#/$defs/Turn"}}
+  },
+  "$defs": {
+    "Reason": {
+      "type": "object",
+      "required": ["code", "message"],
+      "additionalProperties": false,
+      "properties": {"code": {"type": "string", "minLength": 1}, "message": {"type": "string", "minLength": 1}}
+    },
+    "ExactReplay": {
+      "type": "object",
+      "required": ["eligible", "reason"],
+      "additionalProperties": false,
+      "properties": {"eligible": {"type": "boolean"}, "reason": {"$ref": "#/$defs/Reason"}}
+    },
+    "Snapshot": {
+      "type": ["object", "null"],
+      "additionalProperties": true
+    },
+    "Turn": {
+      "type": "object",
+      "required": ["turn", "branch_eligible", "replay_fidelity", "exact_replay_eligible", "snapshot", "reasons"],
+      "additionalProperties": false,
+      "properties": {
+        "turn": {"type": "integer", "minimum": 0},
+        "branch_eligible": {"type": "boolean"},
+        "replay_fidelity": {"enum": ["exact_replay_eligible", "same_inputs_environment_changed", "structurally_reproducible", "unavailable"]},
+        "exact_replay_eligible": {"type": "boolean"},
+        "snapshot": {"$ref": "#/$defs/Snapshot"},
+        "reasons": {"type": "array", "items": {"$ref": "#/$defs/Reason"}},
+        "last_verification": {"$ref": "#/$defs/LastVerification"}
+      }
+    },
+    "LastVerification": {
+      "type": "object",
+      "required": ["verification_id", "status", "fidelity", "exact_replay", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "verification_id": {"type": ["string", "null"]},
+        "status": {"enum": ["verified", "unavailable", "failed", null]},
+        "fidelity": {"enum": ["exact_replay_eligible", "unavailable", null]},
+        "exact_replay": {"type": "boolean"},
+        "message": {"type": ["string", "null"]},
+        "scope": {"enum": ["full_run_prompt_boundary", "session_turn_prompt_boundary"]},
+        "requested_run_id": {"type": "string", "minLength": 1},
+        "source_run_id": {"type": "string", "minLength": 1},
+        "source_turn": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "schema_version": "clozn.time-machine-eligibility.v1",
+  "run_id": "run_time_machine_fixture",
+  "state": "structurally_reproducible",
+  "eligible": true,
+  "exact_replay": {
+    "eligible": false,
+    "reason": {"code": "exact_replay_not_available", "message": "exact restore is not enabled"}
+  },
+  "reasons": [{"code": "structural_replay_available", "message": "messages can be replayed"}],
+  "turns": [{
+    "turn": 0,
+    "branch_eligible": true,
+    "replay_fidelity": "structurally_reproducible",
+    "exact_replay_eligible": false,
+    "snapshot": null,
+    "reasons": [{"code": "structural_replay_only", "message": "the transcript is regenerated"}]
+  }]
+}

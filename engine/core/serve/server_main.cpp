@@ -442,7 +442,18 @@ int main(int argc, char** argv) {
                                           // later hand back (to THIS worker or a fresh one), fail-
                                           // closed on any identity/format mismatch at import
         };
+        // Keep the model/runtime health document self-identifying.  These values already back the
+        // model-free --version contract and checkpoint export/import identity; exposing them here lets
+        // the Python gateway persist the exact engine build for direct one-worker `clozn serve MODEL`
+        // runs as well as qualified managed workers.  They are additive health fields, not new
+        // capability flags, so older supervisors can ignore them while newer exact-replay paths fail
+        // closed when an older worker does not provide them.
+        json build = engine_build_info();
         json h{{"status", "ok"},
+               {"engine_version", build.value("engine_version", std::string())},
+               {"build_id", build.value("build_id", std::string())},
+               {"backend", build.value("backend", std::string())},
+               {"llama_cpp_commit", build.value("llama_cpp_commit", std::string())},
                {"protocol_version", PROTOCOL_VERSION},        // worker <-> supervisor wire contract
                {"worker_generation_id", worker_generation_id},  // opaque identity for this process
                {"capabilities", capabilities},

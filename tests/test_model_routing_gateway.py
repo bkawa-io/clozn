@@ -340,27 +340,19 @@ def test_omitted_model_selects_configured_default_without_fabricating_request(
     assert routed["beta_sub"].calls == []
 
 
-def test_legacy_openai_completion_is_not_a_default_worker_escape_hatch(routed):
+def test_retired_legacy_completion_does_not_select_or_load_a_worker(routed):
     raw, handler = _dispatch("POST", "/v1/completions", {
         "model": "beta",
         "prompt": "legacy route",
         "max_tokens": 4,
     })
     status, payload, _headers = _response(raw)
-    assert status == 200
-    assert payload["model"] == "beta"
-    assert payload["choices"][0]["text"] == "beta reply"
+    assert status == 410
+    assert payload["error"]["code"] == "endpoint_retired"
+    assert "chat/completions" in payload["error"]["message"]
     assert routed["alpha_sub"].calls == []
-    assert len(routed["beta_sub"].calls) == 1
-    logged = runlog.get_run(payload["clozn_run_id"])
-    routing = logged["meta"]["model_routing"]
-    schemas.validate(routing)
-    assert routing["protocol"] == {
-        "surface": "openai",
-        "route": "/v1/completions",
-    }
-    assert routing["result"]["receipt"]["resolved_model_id"] == "beta"
-    assert logged["identity"]["model_sha256"] == SHA_BETA
+    assert routed["beta_sub"].calls == []
+    assert runlog.list_runs(5) == []
     _assert_clean(handler)
 
 
@@ -518,6 +510,7 @@ def test_native_route_uses_selected_private_engine_and_returns_receipt(
     status, payload, _headers = _response(raw)
     assert status == 200
     assert payload["choices"][0]["text"] == "native beta"
+    assert payload["clozn_run_id"]
     assert seen["url"] == "http://127.0.0.1/beta/v1/completions"
     assert seen["body"] == {"prompt": "raw prompt", "max_tokens": 3}
     assert seen["closed"] is True
@@ -528,6 +521,12 @@ def test_native_route_uses_selected_private_engine_and_returns_receipt(
         "route": "/api/clozn/generate",
     }
     assert artifact["result"]["receipt"]["resolved_model_id"] == "beta"
+    logged = runlog.get_run(payload["clozn_run_id"])
+    assert logged["source"] == "native_api"
+    assert logged["model"] == "beta"
+    assert logged["response"] == "native beta"
+    assert logged["identity"]["model_sha256"] == SHA_BETA
+    assert logged["meta"]["model_routing"] == artifact
     _assert_clean(handler)
 
 

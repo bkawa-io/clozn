@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.pinned-checkpoint-list.v1",
+  "title": "Durable pinned checkpoint list",
+  "description": "Read-only Studio projection of the local durable checkpoint ledger. Each item is a clozn.pinned-checkpoint.v1 manifest; checkpoint bytes are never included.",
+  "type": "object",
+  "required": ["schema_version", "snapshots"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.pinned-checkpoint-list.v1"},
+    "snapshots": {
+      "type": "array",
+      "items": {"type": "object"}
+    }
+  }
+}

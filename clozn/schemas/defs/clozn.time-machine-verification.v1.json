@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.time-machine-verification.v1",
+  "title": "Answer Time Machine prompt-boundary verification",
+  "description": "A terminal receipt for an explicit prompt-boundary replay verification. A full-run receipt proves the latest run; a session-turn receipt proves the matching immutable historical run that contains the requested turn prefix.",
+  "type": "object",
+  "required": ["schema_version", "verification_id", "parent_run_id", "turn", "scope", "status", "exact_replay", "fidelity", "created_ts", "reasons", "capture"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.time-machine-verification.v1"},
+    "verification_id": {"type": "string", "minLength": 1},
+    "parent_run_id": {"type": "string", "minLength": 1},
+    "turn": {"type": "integer", "minimum": 0},
+    "scope": {"enum": ["full_run_prompt_boundary", "session_turn_prompt_boundary"]},
+    "requested_run_id": {"type": "string", "minLength": 1},
+    "source_run_id": {"type": "string", "minLength": 1},
+    "source_turn": {"type": "integer", "minimum": 0},
+    "status": {"enum": ["verified", "unavailable", "failed"]},
+    "exact_replay": {"type": "boolean"},
+    "fidelity": {"enum": ["exact_replay_eligible", "unavailable"]},
+    "exactness_regime": {"const": "prompt_boundary_reprefill"},
+    "parent_fingerprint_sha256": {"type": "string", "minLength": 64, "maxLength": 64},
+    "checkpoint_reference_id": {"type": "string", "minLength": 1},
+    "created_ts": {"type": "number"},
+    "reasons": {"type": "array", "items": {"$ref": "#/$defs/Reason"}},
+    "proof": {"type": "object", "additionalProperties": true},
+    "capture": {"type": "object", "additionalProperties": true}
+  },
+  "$defs": {
+    "Reason": {
+      "type": "object",
+      "required": ["code", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {"type": "string", "minLength": 1},
+        "message": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

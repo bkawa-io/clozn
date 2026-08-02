@@ -342,21 +342,87 @@ def _mechanistic_diff_action(h, run, index, body):
         })
         return True
 
-    # Pair compatibility permits a cross-model comparison in principle. Actually EXECUTING one needs
-    # two GGUFs loaded sequentially through worker_registry/model_routing's cold-load-and-evict
-    # machinery -- owned by a different agent and under concurrent development this same wave. Wiring
-    # a job against infrastructure that could change shape mid-task would risk a job that silently
-    # cannot run; an honest, typed "not yet" is the more correct outcome (see clozn.runs.
-    # token_workbench_actions's module docstring).
-    h._json(422, {
-        "outcome": "unavailable",
-        "reason": {
-            "code": "cross_model_execution_not_wired",
-            "message": (
-                "pair compatibility permits this comparison, but sequential cross-model loading is "
-                "not yet wired to an HTTP job in this milestone; run `clozn diff-model` at the CLI, "
-                "which loads both GGUFs directly"),
-        },
-        "pair_compatibility": gate["report"],
-    })
+    # A successful mechanistic comparison needs the exact prompt and continuation token IDs already
+    # recorded by the anchor run. Refuse before creating a job when that evidence is absent; this keeps
+    # a missing trace distinct from an engine-side capture failure.
+    trace = run.get("trace") if isinstance(run.get("trace"), dict) else {}
+    token_ids = trace.get("token_ids") if isinstance(trace.get("token_ids"), list) else []
+    if not isinstance(run.get("final_prompt"), str) or not run.get("final_prompt"):
+        h._json(422, {"outcome": "unavailable", "reason": {
+            "code": "mechanistic_diff_missing_prompt",
+            "message": "mechanistic diff needs the anchor run's exact final_prompt",
+        }, "pair_compatibility": gate["report"]})
+        return True
+    if index < 0 or index >= len(token_ids):
+        h._json(400, {"error": f"token index {index} has no exact recorded token id to compare"})
+        return True
+
+    from clozn.server import app as ctx
+    router = getattr(ctx, "MODEL_ROUTER", None)
+    if router is None:
+        # Preserve the legacy single-worker behavior: a compatible pair is still honestly unavailable
+        # when this process has no managed model registry capable of selecting two model identities.
+        h._json(422, {
+            "outcome": "unavailable",
+            "reason": {
+                "code": "cross_model_execution_not_wired",
+                "message": (
+                    "pair compatibility permits this comparison, but this gateway is not serving a "
+                    "managed multi-model registry; configure two models or use `clozn diff-model` "
+                    "at the CLI"),
+            },
+            "pair_compatibility": gate["report"],
+        })
+        return True
+
+    layers = body.get("layers")
+    if layers is None:
+        layer_info = gate["report"].get("layer_count") or {}
+        layer_count = layer_info.get("value_a") if isinstance(layer_info, dict) else None
+        if not isinstance(layer_count, int) or layer_count < 3:
+            h._json(422, {"outcome": "unavailable", "reason": {
+                "code": "mechanistic_diff_layer_grid_unavailable",
+                "message": "the pair report has no usable layer_count; supply body.layers explicitly",
+            }, "pair_compatibility": gate["report"]})
+            return True
+        # A small, deterministic default keeps a click bounded while still sampling early, middle, and
+        # late capturable layers. Callers can request a full grid explicitly.
+        layers = sorted({1, max(1, layer_count // 2), layer_count - 2})
+    if (isinstance(layers, (str, bytes)) or not isinstance(layers, list)
+            or not layers or any(isinstance(layer, bool) or not isinstance(layer, int) or layer < 1 for layer in layers)):
+        h._json(400, {"error": "body.layers must be a non-empty list of positive integers"})
+        return True
+    layers = sorted(set(layers))
+
+    topk = body.get("topk", 8)
+    if isinstance(topk, bool) or not isinstance(topk, int) or not 0 <= topk <= 128:
+        h._json(400, {"error": "body.topk must be an integer in [0, 128]"})
+        return True
+    store_tensors = body.get("store_tensors", False)
+    if not isinstance(store_tensors, bool):
+        h._json(400, {"error": "body.store_tensors must be a boolean"})
+        return True
+
+    from clozn.runs.token_workbench_actions import (
+        mechanistic_diff_cache_key, mechanistic_diff_worker, find_cached_action)
+
+    cache_key = mechanistic_diff_cache_key(
+        run, reference_run, index, layers=layers, topk=topk, store_tensors=store_tensors)
+    if not body.get("refresh"):
+        cached = find_cached_action(run, cache_key)
+        if cached is not None:
+            h._json(200, {"outcome": "cached", "mechanistic_diff_id": cache_key, "artifact": cached})
+            return True
+
+    worker = mechanistic_diff_worker(
+        run, reference_run, index, pair_compatibility=gate["report"], router=router,
+        layers=layers, topk=topk, store_tensors=store_tensors, cache_key=cache_key)
+    from clozn.server.influence_jobs import JOBS, JobCapacityError
+
+    try:
+        job = JOBS.start(run["id"], worker, kind="mechanistic_diff")
+    except JobCapacityError as exc:
+        h._json(429, {"error": str(exc)})
+        return True
+    h._json(202, {"outcome": "job", "mechanistic_diff_id": cache_key, "job": job})
     return True

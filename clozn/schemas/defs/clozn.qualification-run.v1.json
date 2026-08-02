@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.qualification-run.v1",
+  "title": "Qualification run receipt",
+  "description": "Q3-Q8 qualification orchestration receipt. Core runtime evidence is not a claim of lab or white-box qualification.",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "model", "steps", "claims", "receipt_sha256"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.qualification-run.v1"},
+    "generated_at": {"type": "string", "minLength": 1},
+    "model": {"$ref": "#/$defs/Model"},
+    "steps": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/Step"}},
+    "claims": {"$ref": "#/$defs/Claims"},
+    "receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "$defs": {
+    "Model": {
+      "type": "object",
+      "required": ["input", "identity"],
+      "additionalProperties": false,
+      "properties": {
+        "input": {"type": "string", "minLength": 1},
+        "identity": {"type": ["object", "null"], "additionalProperties": true}
+      }
+    },
+    "Step": {
+      "type": "object",
+      "required": ["id", "boundary", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "boundary": {"enum": ["product", "lab"]},
+        "status": {"enum": ["passed", "failed", "blocked", "not_run", "unavailable", "cancelled"]},
+        "evidence": {},
+        "reason": {"type": "string", "minLength": 1},
+        "started_at": {"type": "string", "minLength": 1},
+        "finished_at": {"type": "string", "minLength": 1}
+      }
+    },
+    "Claims": {
+      "type": "object",
+      "required": ["qualification_status", "generation_performed", "artifacts_installed", "note"],
+      "additionalProperties": false,
+      "properties": {
+        "qualification_status": {"enum": ["not_qualified", "core_passed", "failed"]},
+        "generation_performed": {"type": "boolean"},
+        "artifacts_installed": {"type": "boolean"},
+        "note": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

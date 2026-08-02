@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.qualification-lab-step.v1",
+  "title": "Qualification lab step receipt",
+  "description": "Receipt for an explicit Q4, Q5, or Q6 lab command. A passed command is not accepted by product runtime until its artifact is validated and installed.",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "step_id", "boundary", "status", "model_sha256", "evidence", "reason", "artifact", "receipt_sha256"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.qualification-lab-step.v1"},
+    "generated_at": {"type": "string", "minLength": 1},
+    "step_id": {"type": "string", "minLength": 1},
+    "boundary": {"const": "lab"},
+    "status": {"enum": ["passed", "failed", "blocked", "not_run", "unavailable", "cancelled"]},
+    "model_sha256": {"type": ["string", "null"]},
+    "evidence": {"type": "object", "additionalProperties": true},
+    "reason": {"type": ["string", "null"]},
+    "artifact": {"type": ["object", "null"], "additionalProperties": true},
+    "receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

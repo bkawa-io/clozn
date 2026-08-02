@@ -8,10 +8,10 @@ Local-journal-only, zero generation, no model/GPU/network -- both runs are looke
 uses), matching `clozn inspect`'s own "local journal first" discipline
 (`clozn/cli/commands/explain.py`'s `cmd_inspect`).
 
-`--replay` retains the cheap planner-only view. `--test` executes the selected two-arm controlled swaps
-through a running gateway; `--plan`/`--dry-run` emits the same versioned test artifact without starting a
-model run. Both `--json` and human output expose the selected comparison, budget, stop state and child run
-ids.
+`--replay` retains the cheap planner view. `--replay --execute` executes the available planner swaps as
+bounded two-arm controlled tests through a running gateway; `--test` remains the explicit lower-level
+form. `--plan`/`--dry-run` emits the same versioned test artifact without starting a model run. Both
+`--json` and human output expose the selected comparison, budget, stop state and child run ids.
 
 Registered via `CLOZN_AUTOLOAD` (docs/SEAMS.md Seam 1) -- no edit to clozn/cli/main.py.
 """
@@ -22,6 +22,7 @@ import math
 import os
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 
 from clozn.analysis import run_diff
 from clozn.cli import formatting as fmt
@@ -81,7 +82,8 @@ def _format_difference(d: dict) -> str:
 
 
 def format_compare_runs(result: dict, *, replay_plan: dict | None = None,
-                        controlled_tests: dict | None = None) -> str:
+                        controlled_tests: dict | None = None,
+                        replay_execution: dict | None = None) -> str:
     """Pure JSON(compare_runs result) -> text render. Never raises: a malformed section degrades to a
     one-line notice instead of losing the rest -- same discipline as `clozn/cli/commands/explain.py`'s
     `format_explain`."""
@@ -131,13 +133,29 @@ def format_compare_runs(result: dict, *, replay_plan: dict | None = None,
 
     if replay_plan is not None:
         lines.append("")
-        lines.append(f"{fmt.BOLD}replay (planned, not executed){fmt.RST}")
+        executed = replay_execution is not None
+        lines.append(f"{fmt.BOLD}replay ({'planned + execution requested' if executed else 'planned, not executed'}){fmt.RST}")
         for c in replay_plan.get("candidates", []):
             mark = "available" if c.get("available") else "skipped"
             lines.append(f"  {c.get('order')}. {c.get('description')}  [{mark}]"
                          + (f" -- {c['note']}" if c.get("note") else ""))
         lines.append(f"  {fmt.DIM}{replay_plan.get('runs_required', 0)} run(s) would be required; "
                      f"{replay_plan.get('note', '')}{fmt.RST}")
+
+    if replay_execution is not None:
+        lines.append("")
+        lines.append(
+            f"{fmt.BOLD}replay execution{fmt.RST}  status={replay_execution.get('status', '?')} "
+            f"runs={((replay_execution.get('budget') or {}).get('runs_used', 0))}/"
+            f"{((replay_execution.get('budget') or {}).get('max_runs', 0))}"
+        )
+        for test in replay_execution.get("tests") or []:
+            lines.append(
+                f"  [{test.get('status', '?')}] {test.get('kind', '?')} "
+                f"runs={test.get('runs_used', 0)} -- {test.get('reason', '')}"
+            )
+            for evidence in test.get("evidence") or []:
+                lines.append(f"    {evidence.get('arm')}: {evidence.get('run_id')}")
 
     if controlled_tests is not None:
         lines.append("")
@@ -181,9 +199,10 @@ def add_subparser(sub):
                    help="allow replay/branch/fork children in automatic selection (excluded by default)")
     p.add_argument("--json", action="store_true", help="print the raw clozn.run-diff.v1 document as "
                    "JSON instead of the human table")
-    p.add_argument("--replay", action="store_true", help="also print the model-free replay planner's "
-                   "proposal (which of context/template/sampling could be swapped and re-run) -- never "
-                   "executes anything")
+    p.add_argument("--replay", action="store_true", help="also show the model-free replay planner's "
+                   "proposal (which of context/template/sampling could be swapped and re-run)")
+    p.add_argument("--execute", action="store_true", help="with --replay, execute available swaps as "
+                   "bounded two-arm controlled tests through the running gateway")
     p.add_argument("--test", default=None, metavar="SWAP[,SWAP...]",
                    help="execute context/template/sampling controlled swaps through a running gateway")
     p.add_argument("--plan", action="store_true", help="plan --test swaps and cost without model runs")
@@ -291,10 +310,58 @@ def cmd_compare_runs(args):
     if not result.get("ok"):
         raise ctx.CloznError(result.get("error") or "comparison failed for an unknown reason")
 
-    replay_plan = run_diff.plan_replay(run_a, run_b, result) if args.replay else None
+    replay_requested = bool(getattr(args, "replay", False))
+    execute_replay = bool(getattr(args, "execute", False))
+    if execute_replay and not replay_requested:
+        raise ctx.CloznError("--execute requires --replay")
+    if execute_replay and getattr(args, "test", None):
+        raise ctx.CloznError("--execute cannot be combined with --test; use one replay mode")
+
+    replay_plan = run_diff.plan_replay(run_a, run_b, result) if replay_requested else None
     plan_only = bool(getattr(args, "plan", False) or getattr(args, "dry_run", False))
     tests = _parse_tests(getattr(args, "test", None), plan_only=plan_only)
     controlled_tests = None
+    replay_execution = None
+    if execute_replay:
+        if plan_only:
+            raise ctx.CloznError("--execute cannot be combined with --plan/--dry-run")
+        replay_tests = [
+            candidate["swap"] for candidate in (replay_plan or {}).get("candidates", [])
+            if candidate.get("available")
+        ]
+        if replay_tests:
+            try:
+                port = int(args.port or os.environ.get("CLOZN_PORT", "8080"))
+                replay_execution = _request_tests(
+                    run_a["id"], run_b["id"], tests=replay_tests,
+                    max_runs=budget_runs, max_seconds=budget_seconds,
+                    match_criterion=args.match, port=port,
+                )
+            except (ctx.CloznError, ValueError) as exc:
+                raise ctx.CloznError(str(exc)) from None
+        else:
+            replay_execution = {
+                "schema_version": "clozn.run-change-test.v1",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "run_a": run_a.get("id") or "?",
+                "run_b": run_b.get("id") or "?",
+                "status": "inconclusive",
+                "dry_run": False,
+                "match_criterion": {
+                    "kind": args.match,
+                    "note": "exact recorded evidence only; semantic similarity is never used",
+                },
+                "budget": {
+                    "max_runs": budget_runs, "max_seconds": float(budget_seconds),
+                    "runs_used": 0, "duration_ms": 0,
+                    "remaining_runs": budget_runs,
+                    "remaining_seconds": float(budget_seconds),
+                },
+                "tests": [],
+                "summary": {"classification": "undetermined", "causally_supported": [],
+                            "entangled": False},
+                "reason": "no replay swap is available from the recorded run evidence",
+            }
     if tests is not None:
         from clozn.replay import controlled
         try:
@@ -312,18 +379,22 @@ def cmd_compare_runs(args):
         except ValueError as exc:
             raise ctx.CloznError(str(exc)) from None
     if getattr(args, "test_out", None):
-        if controlled_tests is None:
-            raise ctx.CloznError("--test-out requires --test, --plan, or --dry-run")
-        _write_test_artifact(args.test_out, controlled_tests, force=bool(args.force))
+        artifact = controlled_tests if controlled_tests is not None else replay_execution
+        if artifact is None:
+            raise ctx.CloznError("--test-out requires --test, --replay --execute, --plan, or --dry-run")
+        _write_test_artifact(args.test_out, artifact, force=bool(args.force))
 
     if args.json:
         out = dict(result)
         if replay_plan is not None:
             out["replay_plan"] = replay_plan
+        if replay_execution is not None:
+            out["replay_execution"] = replay_execution
         if controlled_tests is not None:
             out["controlled_tests"] = controlled_tests
         print(json.dumps(out, ensure_ascii=False, indent=2, sort_keys=True, default=str))
     else:
         print(format_compare_runs(
-            result, replay_plan=replay_plan, controlled_tests=controlled_tests))
+            result, replay_plan=replay_plan, controlled_tests=controlled_tests,
+            replay_execution=replay_execution))
     return 0

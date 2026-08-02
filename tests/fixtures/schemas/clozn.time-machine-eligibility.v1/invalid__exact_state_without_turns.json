@@ -1,0 +1,12 @@
+{
+  "schema_version": "clozn.time-machine-eligibility.v1",
+  "run_id": "run_time_machine_fixture",
+  "state": "exact_replay_eligible",
+  "eligible": "yes",
+  "exact_replay": {
+    "eligible": true,
+    "reason": {"code": "not_allowed", "message": "fixture must be rejected without turns"}
+  },
+  "reasons": [],
+  "turns": []
+}

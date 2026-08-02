@@ -193,7 +193,7 @@ def generate_fresh_run(sub_a: "_EngineScoreSub", category: str, prompt: str, *, 
     """LIVE (needs sub_a.engine up -- a real EngineClient in production, a fake in tests): generate ONE
     greedy completion under A, then score that SAME text back on A to fix the exact continuation token
     ids from A's own tokenizer -- the "generate under the reference quant, then teacher-force everywhere
-    else" methodology already run for real (prompt -> /v1/completions on the reference -> /score on the
+    else" methodology already run for real (prompt -> private worker /v1/completions on the reference -> /score on the
     reference fixes the continuation ids -> /score the SAME ids on the other quant). Returns a run-shaped
     dict (messages/response/
     trace.token_ids/category) that `quant_receipts.quant_receipt_for_run` can consume via

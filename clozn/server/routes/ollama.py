@@ -240,8 +240,16 @@ def try_post(h, p, body):
             messages.append({"role": "system", "content": str(body.get("system") or "")})
         messages.append({"role": "user", "content": prompt})
         journal_messages = messages
-        from clozn.server.generation_gateway import apply_corrective_policy
+        from clozn.server.generation_gateway import apply_corrective_policy, apply_scoped_corrections
         messages, corrective_evidence = apply_corrective_policy(h, journal_messages)
+        try:
+            messages, scoped_correction_evidence = apply_scoped_corrections(h, messages)
+        except Exception as exc:
+            from clozn.runs.corrections import CorrectionError
+            if isinstance(exc, CorrectionError):
+                h._json(409, {"error": str(exc), "code": "correction_unavailable"})
+                return True
+            raise
         if _stream_wanted(body) and getattr(sub, "chat_stream", None):
             from clozn.server import ndjson
             ndjson.ndjson_stream(h, messages, max_tokens, model, operation="generate", sample=sample,
@@ -254,7 +262,8 @@ def try_post(h, p, body):
                 h, messages, model=model, max_tokens=max_tokens, sample=sample,
                 source="ollama_api",
                 extra_meta={"compatibility_api": "ollama", "ollama_operation": "generate",
-                            "corrective_policy": corrective_evidence},
+                            "corrective_policy": corrective_evidence,
+                            "scoped_corrections": scoped_correction_evidence},
                 journal_messages=journal_messages,
             )
         except Exception as e:
@@ -292,8 +301,16 @@ def try_post(h, p, body):
         from clozn.runs.think_tags import sanitize_messages
         messages = sanitize_messages(messages)
         journal_messages = messages
-        from clozn.server.generation_gateway import apply_corrective_policy
+        from clozn.server.generation_gateway import apply_corrective_policy, apply_scoped_corrections
         messages, corrective_evidence = apply_corrective_policy(h, journal_messages)
+        try:
+            messages, scoped_correction_evidence = apply_scoped_corrections(h, messages)
+        except Exception as exc:
+            from clozn.runs.corrections import CorrectionError
+            if isinstance(exc, CorrectionError):
+                h._json(409, {"error": str(exc), "code": "correction_unavailable"})
+                return True
+            raise
         if _stream_wanted(body) and getattr(sub, "chat_stream", None):
             from clozn.server import ndjson
             ndjson.ndjson_stream(h, messages, max_tokens, model, operation="chat", sample=sample,
@@ -306,7 +323,8 @@ def try_post(h, p, body):
                 h, messages, model=model, max_tokens=max_tokens, sample=sample,
                 source="ollama_api",
                 extra_meta={"compatibility_api": "ollama", "ollama_operation": "chat",
-                            "corrective_policy": corrective_evidence},
+                            "corrective_policy": corrective_evidence,
+                            "scoped_corrections": scoped_correction_evidence},
                 journal_messages=journal_messages,
             )
         except Exception as e:

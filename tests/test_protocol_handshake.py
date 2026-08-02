@@ -69,6 +69,20 @@ def test_cpp_health_required_fields_match_fixture(fixture):
     assert "worker_generation_id" in fixture["health_required_fields"]
 
 
+def test_cpp_health_exposes_additive_engine_build_identity():
+    """Direct one-worker serving must expose the same truthful build identity used by checkpoints.
+
+    The fields are intentionally not part of ``health_required_fields``: an older worker may omit
+    them and the Python gateway must then fail closed for exact replay rather than fabricate a build.
+    """
+    src = CPP_HEALTH.read_text(encoding="utf-8")
+    block = re.search(r'json h\{\{"status", "ok"\},(.*?)\};', src, re.DOTALL)
+    assert block, "/health response literal not found in server_main.cpp"
+    keys = set(re.findall(r'\{"(\w+)",', block.group(1)))
+    assert {"engine_version", "build_id", "backend", "llama_cpp_commit"}.issubset(keys)
+    assert "json build = engine_build_info();" in src
+
+
 def test_checkpoint_reference_contract_is_generation_scoped(fixture):
     checkpoint_ref = fixture["checkpoint_reference"]
     assert checkpoint_ref["fields"] == ["checkpoint_id", "worker_generation_id"]
