@@ -187,6 +187,10 @@ label somebody trusted.
 
 ## Serving
 
+Current runtime note: the Python gateway is hosted in the `clozn serve` supervisor process. The
+legacy Python gateway subprocess, projection-file transport, and gateway environment handoff were
+removed in ADR 008 Stage 4. Only the private C++ model workers remain subprocesses.
+
 ```
 clozn serve --models-config manifest.json
 ```
@@ -198,8 +202,8 @@ Optional overrides — each requires `--models-config`, and each is mutually exc
 
 - `--default-model ID` — override the manifest's `default_model_id`.
 - `--preload ID` — override the manifest's `preload_model_ids`; repeat once per model ID.
-- `--max-loaded-models N` — override the resident-worker cap. Its own `--help` text says exactly what
-  it is today: "resident-worker limit for the qualified config (no cold loading yet)".
+- `--max-loaded-models N` — override the resident-worker cap. The default in-process `clozn serve`
+  path uses cold loading and verified-idle eviction.
 
 On boot, every model in the (possibly overridden) preload set starts, one at a time, before the
 gateway is considered ready. A failed preload never tears down an already-ready sibling
@@ -207,10 +211,14 @@ gateway is considered ready. A failed preload never tears down an already-ready 
 
 Once serving:
 
+The ADR 008 in-process topology is the only `clozn serve` topology. It hosts the gateway on a
+background thread in the supervisor, passes the live routing projection in memory, and connects cold
+loading to the supervisor's registry. The C++ workers remain private subprocesses.
+
 - `GET /readyz` and `GET /runtime/models` report each configured worker's state
   (`unloaded`/`loading`/`ready`/`evicting`/`failed`), its `runtime_key_sha256`, and whether it's the
   default/preloaded — never a private worker port or local file path.
-- Native (`/api/clozn/generate`), OpenAI (`/v1/chat/completions`, `/v1/completions`), and Ollama
+- Native (`/api/clozn/generate`), OpenAI Chat (`/v1/chat/completions`), and Ollama
   (`/api/chat`, `/api/generate`) requests all resolve `model` through the same router; an omitted
   `model` resolves the configured default, exactly as ADR 004 specifies.
 - A successful generation's persisted run and its `meta.model_routing` receipt carry the resolved
@@ -221,64 +229,18 @@ Once serving:
 
 ## Limitations (read this before you rely on any of the above)
 
-**Preloaded only — still true for `clozn serve`, for a narrower reason than before.**
+The in-process gateway connects `InMemoryProjectionRouter` directly to the supervisor's
+`WorkerRegistry.ensure_loaded()`: cold requests coalesce, load failures remain typed, and idle-LRU
+eviction is permitted only when same-process call tracking proves a resident worker is idle.
+
+**Managed workers are loaded through the supervisor-owned registry.**
 `clozn.cli.worker_registry.WorkerRegistry.ensure_loaded()` implements single-flight cold-load
-coalescing and idle-LRU eviction, and both router classes in `clozn.server.model_routing` now accept
-an optional `loader` callback to drive exactly that: `PreloadedModelRouter` already did, and
-`ProjectionFileRouter` — the class `clozn/server/app.py`'s `main()` actually constructs for
-`clozn serve --models-config` — now does too (`ProjectionFileRouter.__init__(..., loader=...)`,
-threaded through every `refresh()` rebuild, not just the first). This is proven end to end,
-including under real concurrent HTTP dispatch with a real `WorkerRegistry` behind it (single-flight
-coalescing, typed load-failure state, and eviction/resident-limit safety), by
+coalescing and idle-LRU eviction. `InMemoryProjectionRouter` passes the live loader and busy tracker
+through every refresh in the merged gateway. This behavior is covered by
 `tests/test_projection_file_router_loader.py`.
 
-What is **not** done: `clozn/server/app.py`'s `main()` still constructs `ProjectionFileRouter` with no
-`loader` argument, so `clozn serve --models-config` itself does not cold-load on demand. The reason
-changed from "the parameter doesn't exist" to a real process-topology fact: the gateway
-(`python -m clozn.server.app`) is a separate OS process from the `clozn serve` supervisor that owns
-the real `WorkerRegistry` and the model file paths/flags needed to spawn a worker (the routing
-projection file is supervisor→gateway one-way state, never a command channel). Building a loader
-inside the gateway process would mean either importing `clozn.cli` into `clozn.server` (forbidden —
-see `ColdLoadOutcome`'s docstring in `clozn/server/model_routing.py`) or constructing a second,
-disconnected `WorkerRegistry` there with no access to those paths and no shared state with the
-supervisor's real one — spawning duplicate, desynchronized workers instead of coalescing onto the
-supervisor's single-flight guarantee. Wiring a real loader across that process boundary needs its own
-supervisor↔gateway IPC integration, which does not exist yet and is separately owned; see the comment
-at `MODEL_ROUTER`'s construction in `clozn/server/app.py::main()`. The design for that integration —
-who arbitrates, the transport, cross-process coalescing, typed failure states, eviction backpressure,
-and why cooperative cancellation of an in-flight worker call still doesn't exist afterward — is
-recorded in [ADR 006](design/006-cross-process-cold-load-protocol.md). It is a proposed decision, not
-implemented; this section remains accurate until it ships.
-
-So, concretely, today: only the workers named in your (possibly overridden) preload set ever exist.
-Requesting a model that isn't preloaded, or one whose preload failed, returns
-`model_not_ready`/`model_load_failed` immediately — it does not queue, load on demand, or wait. No
-worker is ever evicted for capacity while serving. `--max-loaded-models`'s help text reflects this:
-"clozn serve does not cold-load on demand yet."
-
-**Eviction fails closed pending ADR 006 — its "never evicts an in-flight worker" guarantee was
-vacuous until this was fixed.** `WorkerRegistry`'s idle-LRU eviction (used when a cold load needs to
-free a resident slot) and its explicit `evict()` method both exist to avoid stopping a worker with
-active generation or mutation work in flight, and both do so by consulting
-`WorkerHandle.busy`/`track_call()`. But nothing in production ever calls `track_call()` — real
-generation traffic flows gateway↔worker directly, bypassing the supervisor entirely (see ADR 006's
-Context section) — so `busy` read permanently `False` regardless of what a worker was actually doing,
-and eviction would have picked a victim on that unverified assumption the moment cold load became
-reachable. `WorkerRegistry` now refuses to trust an unwired signal: it only ever picks an eviction
-candidate, or lets an explicit `evict()` call proceed past its busy check, when constructed with
-`busy_tracking_wired=True` — an explicit declaration that today only test code (deliberately driving
-`track_call()` itself) sets. Without it, a capacity-triggered cold load fails closed with the typed
-`no_verifiable_idle_worker` code (distinct from `no_evictable_worker`, which means every candidate's
-busy state *was* verified and all were genuinely busy), and `evict()` raises
-`UnverifiableWorkerStateError` instead of proceeding. This does not change `clozn serve`'s behavior
-today, because cold load and eviction are already unreachable through it (above) — it closes the gap
-for the moment they become reachable. ADR 006 designs the real fix: a live cross-process query to the
-gateway's own `WorkerGateRegistry` at the moment of eviction. Until that ships and something wires
-`busy_tracking_wired` for real, eviction is safe by construction but permanently un-triggerable in
-production.
-
 **Same-worker calls are serialized; the parallelism is across different models.** This part *is*
-wired: `ProjectionFileRouter` defaults to building one `WorkerGateRegistry`
+wired: `InMemoryProjectionRouter` uses one `WorkerGateRegistry`
 (`clozn/server/request_gate.py`) keyed by the configured model IDs. Two requests naming different
 models run concurrently. Two requests naming the *same* model still serialize one at a time — matching
 the engine's single active-generation-path limit and `EngineSubstrate`'s per-worker (not shared)

@@ -1,14 +1,13 @@
 # OpenAI client compatibility
 
-**Status (2026-07-21):** Clozn implements a deliberately small, strict subset of the OpenAI HTTP API.
+**Status (2026-07-31):** Clozn implements a deliberately small, strict subset of the OpenAI HTTP API.
 This is an endpoint/field contract, not a claim of full platform compatibility. Behavior-bearing fields
 that Clozn cannot honor return an OpenAI-shaped HTTP 400 instead of being silently ignored.
 
 The field inventory was checked against OpenAI's official
-[Chat Completions](https://developers.openai.com/api/reference/resources/chat/methods/create) and
-[legacy Completions](https://developers.openai.com/api/reference/resources/completions/methods/create)
-references. OpenAI recommends the Responses API for new platform integrations; Clozn does not currently
-implement `/v1/responses`.
+[Chat Completions](https://developers.openai.com/api/reference/resources/chat/methods/create) reference.
+OpenAI recommends the Responses API for new platform integrations; Clozn does not currently implement
+`/v1/responses`.
 
 ## Endpoint matrix
 
@@ -16,7 +15,7 @@ implement `/v1/responses`.
 |---|---|---|
 | `GET /v1/models` | supported | one currently loaded local model |
 | `POST /v1/chat/completions` | supported subset | text, plus fail-closed qualified tools/structured output; one choice; streaming or non-streaming |
-| `POST /v1/completions` | supported subset | legacy text prompt, one choice, streaming or non-streaming; exact raw prompt and token evidence are journaled |
+| `POST /v1/completions` | retired | returns HTTP 410 with code `endpoint_retired`; use Chat Completions |
 | `POST /v1/responses` | unsupported | returns the normal route-level 404 |
 | embeddings, audio, images, files, batches, fine-tuning | unsupported | no routes |
 | stored chat list/get/update/delete | unsupported | Clozn's local run journal is a different API |
@@ -125,29 +124,32 @@ This is a model-free-tested native/gateway contract, not a broad local-model com
 exact-model qualification artifacts from the live battery and a successful Open WebUI two-request tool loop
 remain acceptance work for Phase 2.8.
 
-## Legacy Completions request fields
+## Retired legacy Completions
 
-| Field | Status | Exact behavior |
-|---|---|---|
-| `model` | supported | response label for the loaded local worker |
-| `prompt` | supported subset | one string; prompt/token arrays are rejected |
-| `max_tokens`, `stream`, `temperature`, `top_p`, `seed` | supported | validated and forwarded |
-| `n`, `best_of` | one only | `1`/null accepted and stripped |
-| `echo` | false only | `false`/null accepted and stripped |
-| `top_k` | Clozn extension | forwarded |
-| `repeat_penalty` / `rep_penalty` | Clozn extension | one spelling only; normalized to the worker's `rep_penalty` field |
-| `user` | documented ignored | string/null accepted and stripped |
+The public `POST /v1/completions` route was retired on 2026-07-31. It returns a stable HTTP 410 response:
 
-`stop`, `suffix`, nonzero frequency/presence penalties, logprobs, logit bias, multiple choices, and unknown fields are rejected
-unless they carry the neutral values defined in `clozn/server/openai_compat.py`.
+```json
+{
+  "error": {
+    "message": "POST /v1/completions was retired; use POST /v1/chat/completions instead",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": "endpoint_retired"
+  }
+}
+```
+
+This retirement applies only to the public Python gateway. The private C++ worker still uses its internal
+`/v1/completions` protocol underneath Chat Completions, native generation, and offline research tools; that
+loopback-only protocol is not part of the public compatibility surface.
 
 ## Response boundary
 
-- Chat and completion response objects/chunks use the standard object names and one choice at index 0.
-- Every accepted chat or legacy completion request crosses Clozn's instrumented substrate and is written
-  to the local run journal with its delivered messages, rendered prompt, active dials/corrective policy,
-  trace, and finish/failure state.
-- Non-streaming chat and text completions may add `clozn_run_id` and `X-Clozn-Run-Id`; opt-in Clozn fields are additive.
+- Chat response objects/chunks use the standard object names and one choice at index 0.
+- Every accepted Chat Completions request crosses Clozn's instrumented substrate and is written to the local
+  run journal with its delivered messages, rendered prompt, active dials/corrective policy, trace, and
+  finish/failure state.
+- Non-streaming chat responses may add `clozn_run_id` and `X-Clozn-Run-Id`; opt-in Clozn fields are additive.
 - Token usage is omitted when unknown. Clozn no longer fabricates zero prompt/completion token counts.
 - Finish reasons map worker EOS to `stop` and token limits to `length`. A worker failure is an error, never a
   successful `stop`.
@@ -155,11 +157,11 @@ unless they carry the neutral values defined in `clozn/server/openai_compat.py`.
   responses and the terminal stream chunk. Non-stream responses additionally carry
   `X-Clozn-Warning: output-truncated`; this warns that the reply may be incomplete and does not claim the
   input prompt was truncated (overlong prompts are rejected).
-- Token-live chat and text-completion streams cannot return a run id in headers because the run is persisted
-  after headers are sent. Both are still finalized as one journal run after the stream ends. A buffered
+- Token-live chat streams cannot return a run id in headers because the run is persisted after headers are
+  sent. They are still finalized as one journal run after the stream ends. A buffered
   structured stream is validated and journaled first, so it can also return `X-Clozn-Run-Id`.
-- Model-emitted `<think>...</think>` scratch text is excluded from `message.content`, legacy completion
-  `text`, streaming deltas, echoed assistant history, and the public token trace. Prompt-prefilled and
+- Model-emitted `<think>...</think>` scratch text is excluded from `message.content`, streaming deltas,
+  echoed assistant history, and the public token trace. Prompt-prefilled and
   unclosed think blocks are handled without leaking partial reasoning. The stripped text remains local in
   the run's versioned reasoning evidence for Replay inspection; it is not returned on the OpenAI wire.
 
@@ -197,18 +199,16 @@ Unqualified structured request example:
 - CI pins `openai==2.46.0` in the CPU Python lane, so the SDK integration test cannot silently skip there.
 - `tests/test_runtime_architecture.py` and `tests/test_product_smoke.py` guard the standard-vs-native stream
   envelope boundary.
-- `tests/test_legacy_completion_instrumented.py` drives the real HTTP handler with a model-free substrate
-  and verifies delivered-prompt/dial/trace capture plus success, worker-failure, and disconnect runs.
-- `tests/test_gate0_request_paths.py` proves legacy text completions retain their exact raw prompt, decode
-  metadata, token trace, finish reason, stable terminal/non-stream run ID, and one coherent journal record.
+- `tests/test_model_routing_gateway.py` verifies the retired legacy route returns the typed 410 migration
+  response without selecting a model, loading a worker, or creating a run.
 - `tests/test_think_tags.py` plus the OpenAI/Ollama streaming integration tests prove chunk-split think tags
   never enter public answer/history content while their journal evidence remains inspectable.
 
 ## Run association
 
-Non-streaming responses expose `clozn_run_id` in the body and `X-Clozn-Run-Id` in headers. Token-live
-streams cannot know the finalized journal ID before their headers are committed, so the ordinary terminal
-OpenAI completion chunk carries additive `clozn_run_id` before `[DONE]`; Ollama NDJSON does the same on its
+Non-streaming Chat Completions responses expose `clozn_run_id` in the body and `X-Clozn-Run-Id` in headers.
+Token-live chat streams cannot know the finalized journal ID before their headers are committed, so the
+ordinary terminal OpenAI chat chunk carries additive `clozn_run_id` before `[DONE]`; Ollama NDJSON does the same on its
 `done: true` object. Buffered structured streams finish and journal generation before committing SSE, so
 they return both the header and the terminal extension.
 

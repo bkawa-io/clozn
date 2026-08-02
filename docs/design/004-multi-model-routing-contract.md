@@ -127,10 +127,11 @@ All generation surfaces resolve the model before generation and use this same co
 | Surface | Routes | Selection |
 |---|---|---|
 | Native | `/api/clozn/generate` | Optional `model`; omitted means configured default. |
-| OpenAI | `/v1/chat/completions`, `/v1/completions` while it exists | Standard `model`; omitted remains accepted for Clozn compatibility. |
+| OpenAI | `/v1/chat/completions` | Standard `model`; omitted remains accepted for Clozn compatibility. |
 | Ollama | `/api/chat`, `/api/generate` | Standard `model`; omitted means configured default. `keep_alive` is not repurposed as routing policy. |
 
-If `/v1/completions` is retired separately, its retirement response occurs before routing.
+The retired public `/v1/completions` path returns its typed HTTP 410 migration response before routing;
+the private worker's same-named loopback protocol remains an internal generation primitive.
 
 OpenAI errors keep the OpenAI error envelope with `type: "model_routing_error"` and `param: "model"`.
 Ollama keeps its string `error` plus the stable `code`. Native returns the common structured error.

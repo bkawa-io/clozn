@@ -95,8 +95,9 @@ for an interactive chat (multi-turn; `/reset` clears, `/bye` quits).
 gateway/worker pair and tears it down after. Product commands never bypass the gateway to call a warm
 worker directly. `clozn serve` supervises the private worker and restarts it after an unexpected exit.
 
-OpenAI clients use the documented subset of `/v1/chat/completions`, `/v1/completions`, and `/v1/models`;
-unsupported behavior-bearing fields return a typed 400 instead of being silently ignored. See the exact
+OpenAI clients use the documented subset of `/v1/chat/completions` and `/v1/models`; the retired
+`/v1/completions` path returns a typed HTTP 410 migration response. Unsupported behavior-bearing fields
+return a typed 400 instead of being silently ignored. See the exact
 [endpoint/field matrix](docs/OPENAI_COMPATIBILITY.md). Clozn's CLI and Studio instrumentation use
 `/api/clozn/generate`, which preserves the native state-event stream. Native event frames never leak into
 an OpenAI completion stream.
@@ -115,9 +116,9 @@ clozn context export <run_id> --out receipt.json --privacy metadata_only
 ```
 
 `clozn trace`, `clozn inspect`, and Studio read the same SQLite journal. Non-streaming OpenAI chat
-exposes the exact id as `clozn_run_id` and `X-Clozn-Run-Id`; legacy text completions use the header while
-keeping their standard body shape. Streaming requests are journaled but cannot expose a post-generation
-run id in already-committed headers yet. `inspect` assembles confidence, active influences, and captured
+exposes the exact id as `clozn_run_id` and `X-Clozn-Run-Id`. Streaming requests are journaled but cannot
+expose a post-generation run id in already-committed headers; the terminal chat chunk carries the id.
+`inspect` assembles confidence, active influences, and captured
 concepts locally, falling back to a running gateway only when the id is not in this journal.
 Queryable run
 metadata lives in `~/.clozn/runs/runs.sqlite3`; large traces are immutable, content-addressed blobs under

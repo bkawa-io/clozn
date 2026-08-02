@@ -1,13 +1,19 @@
 # ADR 008 — Merge the gateway process into the supervisor process
 
-Status: proposed; not implemented. The merge itself was decided by BK from a summary, not from this
-code; this document is the requested design-before-the-change review, including a re-check of the
-premise.
+Status: Stage 4 cleanup implemented and live-verified. `clozn serve` uses the in-process gateway;
+the legacy Python gateway subprocess, projection-file transport, and gateway environment handoff have
+been removed. The C++ worker remains a private subprocess. Model-free tests, the default live battery,
+and a twenty-cycle real CPU cold-load soak pass. The merge itself was decided by BK from a summary,
+not from this code; this document remains the design-before-the-change review and historical rationale.
 Date: 2026-07-30
+
+The process-boundary descriptions below are historical design evidence. They document what Stage 4
+removed; they are not current construction paths. Current code starts the HTTP server through
+`runtime_process.spawn_runtime_inprocess()` and retains subprocess isolation only for C++ workers.
 
 ## Context
 
-`clozn serve` runs three processes today:
+Historically, the legacy topology ran three processes:
 
 - **supervisor** — the `clozn serve` CLI process. Constructs `WorkerRegistry`, blocks in
   `RuntimeStack.wait()` (`clozn/cli/runtime_process.py:389-410`), restarts a dead `ready` worker via
@@ -20,13 +26,14 @@ Date: 2026-07-30
   a random loopback port, reachable only by the gateway. Not a second product server
   (`clozn/cli/runtime_process.py:1-6`'s module docstring).
 
-This ADR is scoped to folding **gateway into supervisor**. The worker stays a separate OS process —
-that is explicitly not in question, and nothing below proposes changing it.
+This ADR folds the gateway into the supervisor for the default topology. The worker stays a separate
+OS process — that is explicitly not in question, and nothing below proposes changing it.
 
 **Motivation.** `docs/design/006-cross-process-cold-load-protocol.md` records that cold
 load/coalescing/eviction (RT-04) are built and proven in-process
 (`tests/test_worker_registry.py:507`, `tests/test_projection_file_router_loader.py`'s 25×10-iteration
-flake hunt) but unreachable from `clozn serve`, because the loader needs a live `WorkerRegistry` and the
+flake hunt) but unreachable from the legacy subprocess gateway, because the loader needs a live
+`WorkerRegistry` and the
 only live one is owned by the supervisor — a separate OS process from the gateway that would need one
 (ADR 006 Context, `clozn/server/app.py:1310-1325`). ADR 006's own recommendation was a control-channel
 protocol that keeps both processes and adds a wire contract between them. The owner's read of that
@@ -35,7 +42,7 @@ that conclusion against the actual code, per this document's brief.
 
 ## 1. What actually breaks
 
-### 1.1 `RoutingProjectionTransport` / `ProjectionFileRouter`
+### 1.1 Retired projection-file transport (historical)
 
 `RoutingProjectionTransport` (`clozn/cli/runtime_process.py:140-207`) atomically publishes
 `WorkerRegistry.routing_projection()` to a private temp-file (`os.O_CREAT|O_TRUNC` write, `fsync`,
@@ -47,26 +54,16 @@ that conclusion against the actual code, per this document's brief.
 (almost) every gateway request, this is a `os.path.getsize` + full file read + SHA-256 hash, even when
 nothing changed.
 
-In one process this file round-trip has no reason to exist for production traffic: the merged process
+In one process this file round-trip had no reason to exist for production traffic: the merged process
 can hold one `WorkerRegistry` and one router object referencing it directly, and a state change
-(`ensure_loaded`, eviction, `maintain()`'s restart) can call a plain Python method instead of
-write-then-poll. **What must stay:** the class and the on-disk format themselves, as a test seam.
-`tests/test_projection_file_router_loader.py`'s whole flake-hunted proof
-(`test_ten_concurrent_http_posts_through_projection_file_router_cause_exactly_one_load`, ADR 006 line
-17-19) constructs `ProjectionFileRouter` directly from a file it writes — it does not require a live
-`WorkerRegistry` process at all, by design (that is what makes it possible to run in-process at 250
-requests/25 iterations without spawning anything). Deleting the file-based path outright would force that
-test (grep confirms `ProjectionFileRouter(` is constructed directly the same way in
-`tests/test_managed_model_bootstrap.py` too) to be rewritten around a different construction seam, for no
-production benefit. **Recommendation:
-keep `RoutingProjectionTransport`/`ProjectionFileRouter` alive as a supported construction path (used by
-those unit tests and by any future networked deployment), and add a second, direct in-memory router
-construction for the merged production path** — not a replacement, an addition. This avoids relitigating
-already-proven, flake-hunted test coverage as part of this migration.
+(`ensure_loaded`, eviction, `maintain()`'s restart) calls a plain Python method instead of
+write-then-poll. The original design recommended retaining the file-backed classes as a test seam.
+Stage 4 instead removed that transport and router from the product; the shipped acceptance tests use
+the direct in-memory construction seam.
 
-### 1.2 The env-var boot handoff
+### 1.2 Retired env-var boot handoff (historical)
 
-Three env vars do one-shot, boot-time process-boundary crossing today:
+The old topology used three env vars for one-shot, boot-time process-boundary crossing:
 
 - `CLOZN_ENGINE_PORT` — the worker's port (`runtime_process.py:493,626`; read at `clozn/server/app.py:89`).
 - `CLOZN_MODEL_ROUTING_FILE` — the projection path (`runtime_process.py:494`; read at `app.py:1304`).
@@ -383,22 +380,18 @@ the last.
 | Stage | What lands | Gate |
 |---|---|---|
 | **0 — Parent-death guard** (independent of the rest; do this regardless of the merge decision) | `preexec_fn`-based `PR_SET_PDEATHSIG` on Linux and a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` on Windows, wired into the single worker-spawn call site (`clozn/cli/engine_process.py:381-382`); explicitly a no-op stub on macOS with a comment naming §3.3's gap | Existing product suite + `managed_runtime_smoke.py` unaffected; a **new** live test that `SIGKILL`s the supervisor process and asserts the worker process is also gone within a few seconds — runnable in CI on Linux (matches `real-runtime-smoke.yml`'s `ubuntu-24.04` runner); Windows verified locally only, matching today's existing coverage gap (§1.5) |
-| **1 — In-process gateway construction, opt-in, additive** | A new function (e.g. `runtime_process.spawn_runtime_inprocess` or a new module) that starts `ThreadingHTTPServer` + `make_handler()` on a background thread inside the supervisor, wires `WorkerRegistry` directly (no env vars, no `RoutingProjectionTransport` file — §1.1/§1.2), and moves `maintain()`'s poll loop onto its own thread. The existing `subprocess.Popen`-based `spawn_runtime`/`_spawn_managed_runtime` stay completely intact and remain the default; the new path is reachable only behind an explicit flag (e.g. `RuntimeConfig.inprocess_gateway: bool = False`, or a CLI-only `--experimental-single-process`) | New tests mirroring `test_runtime_architecture.py`'s shape but against the in-process path, green; **zero** existing tests changed or deleted — the whole point of this stage is that nothing observable moves yet |
-| **2 — Direct router wiring, cold load reachable** | The in-process path's `ProjectionFileRouter` construction is replaced with a direct `PreloadedModelRouter`/registry reference (or a thin in-memory equivalent), and a real `ColdLoader` is finally passed at the merged construction site — the actual payoff this ADR exists for. `RoutingProjectionTransport`/`ProjectionFileRouter` remain in the tree, used only by the tests named in §1.1 and by the (still-default) subprocess path | ADR 006's own acceptance bar, adapted: the flake-hunted concurrent-cold-load proof (`test_projection_file_router_loader.py`'s 25×10 pattern) reproduced against the in-process wiring; `docs/MANAGED_MODELS.md`'s Limitations section updated to say cold load is reachable, per ADR 006's own compatibility note |
-| **3 — Flip the default** | `clozn serve` defaults to the in-process runtime; the subprocess path becomes the fallback (kept for one deprecation window, or immediately deletable if Stage 2's proof is solid — implementer's call). `clozn stop`'s multi-PID fallback (`serve.py:308-333`) simplifies: one fewer PID class to track (gateway and supervisor share a PID now; only worker PIDs remain distinct). `product-minimal`'s CI assertion (`ci.yml:81-90`) should be extended to import the merged entry point itself, not just `clozn.server.app`, since there is no longer a separate-process boundary reinforcing the torch-free property — a future accidental heavy import in `clozn.cli` would now also break the gateway, where today it wouldn't | Full smoke battery (`managed_runtime_smoke.py`, `real-runtime-smoke.yml`) green against the new default; docs updated (`docs/RUNTIME_SPLIT.md`'s topology diagram, `docs/ARCHITECTURE.md`, `docs/MANAGED_MODELS.md`) |
-| **4 — Cleanup (separate, later PR)** | Remove the dead `subprocess.Popen` gateway path, `gateway_python`, the env-var handoff constants, and any test left asserting a two-process boundary that no longer applies. This is the only irreversible stage — do it last, after a soak period, as its own reviewable change | Same product suite; a diff that is almost entirely deletions, easy to review in isolation from the stages that actually changed behavior |
+| **1–2 — Direct in-process runtime** | Completed: background HTTP server, direct in-memory router, worker registry maintenance, cold-load coalescing, and bounded concurrency | Model-free lifecycle and concurrency tests |
+| **3 — Default flip** | Completed: `clozn serve` defaults to the in-process gateway | Default managed smoke and twenty-cycle cold-load soak |
+| **4 — Cleanup** | Remove the dead Python gateway subprocess path, `gateway_python`, projection-file transport, gateway env handoff, and tests asserting the retired boundary. Keep C++ workers as subprocesses. | Same product suite; default live battery and twenty-cycle cold-load soak remain green |
 
-Stage 0 has no dependency on the others and should land first regardless of what happens next. Stages 1-2
-can be built and merged with the default behavior completely unchanged (an explicit flag, off by default)
-— this is what makes the staging safe: nothing about production `clozn serve` moves until Stage 3, by
-which point Stage 2 has already produced the flake-hunted, cross-process-turned-in-process proof this
-project's own stated bar requires before calling a capability real (`docs/HANDOFF_2026-07-30.md`'s
-"flake-hunt every concurrency test" lesson, §6).
+Stage 0 has landed, Stages 1-2 were additive while their evidence accumulated, Stage 3 flipped the
+default, and Stage 4 removed the retired Python gateway path. The evidence bar is recorded above and in
+the live smoke reports.
 
 ## 7. Recommendation
 
-**Build Stage 0 (the parent-death guard) immediately, independent of the merge decision — the evidence for
-it stands on its own regardless of anything else in this document.**
+**Current status:** Stage 0 and Stage 4 are implemented and verified. `clozn serve` owns the gateway
+in-process and supervises only the private C++ workers. Process-guard coverage remains for those workers.
 
 **On the merge itself: the code supports proceeding, but not for the reason the brief's own framing would
 suggest, and the margin is smaller than "merge because ADR 006's protocol is unnecessary overhead" implies.**
@@ -454,10 +447,11 @@ test... the bar used here was 25+ consecutive runs"*):
    coalesced-split assertions — this is the capability the whole ADR exists to unlock, and it should be
    held to the identical bar the in-process router proof already met, not a weaker one just because it's
    now "really" in-process.
-3. Stage 3: the full `managed_runtime_smoke.py` battery green against the new default, plus a repeat of
-   its existing "kill one worker's OS process, confirm independent supervisor-side recovery" scenario
-   (script docstring point 4) to prove `maintain()`'s restart budget survived the move to a background
-   thread unchanged.
+3. Stage 3: the full `managed_runtime_smoke.py` battery green against the new default and the explicit
+   legacy fallback, plus the existing "kill one worker's OS process, confirm independent supervisor-side
+   recovery" scenario and a five-cycle cold-load soak. This proves `maintain()`'s restart budget and
+   resident-cap transitions survived the move to a background thread; the soak covered twenty cycles.
 
-Until Stage 2's flake-hunted proof passes, this remains a decision record and a partial implementation,
-not a shipped capability — per this project's own convention for every prior ADR in this series.
+Stage 0's parent-death guard, Stage 2's flake-hunted model-free proof, and Stage 3's default/fallback
+live batteries now pass. The in-process gateway is the default; the legacy subprocess path remains for
+rollback during the longer production soak. Stage 4 cleanup is intentionally not part of this change.

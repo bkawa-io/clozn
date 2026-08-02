@@ -103,7 +103,7 @@ A release candidate is not runtime-validated until the managed smoke report pass
 At minimum it must prove:
 
 - Studio and `/readyz` share the one public port;
-- `/v1/completions` contains only standard completion chunks;
+- `/v1/chat/completions` contains only standard chat-completion chunks;
 - `/api/clozn/generate` retains typed native events;
 - chat produces a resolvable SQLite run and content-addressed trace;
 - the worker PID changes while the gateway PID does not; and

@@ -56,8 +56,11 @@ parent's steering claim.
 
 ## Recorded-parent checkpoint capture
 
-`POST /runs/<id>/execution-fork/checkpoint` prepares the exact reference required by the planner. It
-returns `clozn.checkpoint-reference.v1` with one of three statuses:
+`POST /runs/<id>/execution-fork/checkpoint` prepares the exact reference required by the planner. An
+empty body captures a fresh ephemeral checkpoint. An explicit `{"pinned": true}` body resolves the
+run's durable snapshot, imports its verified export envelope into the currently selected worker, and
+then runs the same unchanged-control proof. The pin is never implicitly selected: callers must opt in.
+The route returns `clozn.checkpoint-reference.v1` with one of three statuses:
 
 - `available`: the checkpoint was captured on the matching worker generation and its unchanged
   prompt-boundary exact-fork control matched the parent token IDs and decoded text.
@@ -81,6 +84,11 @@ library because calibration drift could change the vector.
 The returned reference reports the worker's actual `size_bytes` and always states
 `storage: worker_memory`, `durability: ephemeral`, `pinned: false`, and
 `eviction_policy: bounded_fifo`. It expires on worker restart, FIFO eviction, or gateway shutdown.
-This endpoint does not persist, pin, export, import, truncate, or delete checkpoints. It also does
-not alter the parent or create a proof child run; the reusable unchanged-control seam records only
-hash-based proof inside the checkpoint-reference receipt.
+The default empty-body path does not persist, pin, export, import, truncate, or delete checkpoints. It
+also does not alter the parent or create a proof child run; the reusable unchanged-control seam records only
+hash-based proof inside the checkpoint-reference receipt. In pinned mode, the durable bytes remain in
+the local content-addressed pin store and the returned reference is a newly imported, ephemeral
+worker-generation-scoped checkpoint. Pin hydration fails closed on missing/corrupt blobs, worker
+identity mismatch, prompt boundary mismatch, or token-history mismatch; it never falls back to text
+reconstruction. The worker's import response may omit `n_tokens` by contract, but `n_past` and the
+parent's full token history remain mandatory.

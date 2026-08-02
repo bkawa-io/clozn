@@ -87,7 +87,7 @@ below are still queued/not started. Commit IDs are included so this snapshot can
 
 | Roadmap item | Status | Evidence and remaining work |
 |---|---|---|
-| Gate 0.1 — one instrumented request path | **DONE** | OpenAI Chat, legacy text completions, Ollama chat/generate, and `clozn run` share the instrumented substrate and finalize coherent journal runs with the exact delivered prompt. CLI turns retain the readable user message separately from the rendered engine prompt (`c56e320`, `fd4f68e`, `fc7e28d`; `tests/test_gate0_request_paths.py`). |
+| Gate 0.1 — one instrumented request path | **DONE** | OpenAI Chat, Ollama chat/generate, and `clozn run` share the instrumented substrate and finalize coherent journal runs with the exact delivered prompt. The public legacy text-completions route was retired 2026-07-31; the private worker protocol remains internal. CLI turns retain the readable user message separately from the rendered engine prompt (`c56e320`, `fd4f68e`, `fc7e28d`; `tests/test_gate0_request_paths.py`). |
 | Gate 0.2 — no silent field ignoring | **DONE** for the current OpenAI/Ollama shims | Central OpenAI validation and Ollama explicit-or-rejected field policy are tested and documented (`fd4f68e`). Unsupported behavior-bearing values now receive named 400s; accepted neutral values are documented. |
 | Gate 0.4 — artifact-qualified white-box features | **DONE** | `clozn qualify-whitebox` is the model/artifact capability gate; unqualified or mismatched artifacts fail closed. |
 | Phase 1.1 — `clozn diff-model` | **DONE** | Command, same-tokenizer preflight, template policy, paired token receipts, and heuristic verdict shipped (`0ee66f2`). A real Qwen2.5-0.5B-Instruct → Reasoning-0.5b SFT run verified 8/8 ladders in both directions and produced the worked case study (`5d6439f`); the live run also exposed and fixed a capped-detail denominator bug (`1971fe5`). |
@@ -98,10 +98,10 @@ below are still queued/not started. Commit IDs are included so this snapshot can
 | Phase 1.6 — positioning collateral | **DONE** | README now leads with Model CI + an inspectable no-switch runtime and links the real Qwen reasoning-SFT case study (`5d6439f`). The worked experiment found one target gain and one structured-output guard regression; the strict identity-qualified CI policy rejected it. |
 | Phase 2.1 — Ollama NDJSON streaming | **DONE** | Default-stream semantics, NDJSON framing, cancellation, finish reasons, and one instrumented final run are implemented and tested (`fd4f68e`). |
 | Phase 2.2 — honest Ollama fields/tags | **DONE** | Unsupported top-level/options fields are rejected, supported sampler options are forwarded, and `/api/tags` uses the real digest or omits it (`fd4f68e`). |
-| Phase 2.3 — legacy completions + CLI journal unification | **DONE** | Legacy streaming/non-streaming completions use the shared instrumented substrate and capture memory, dials, trace, raw and rendered prompts, decode metadata, finish/error state, and one journal run. CLI journals keep the user message plus the exact rendered prompt and immutable identity (`04af391`, `fc7e28d`; `tests/test_gate0_request_paths.py`). |
+| Phase 2.3 — legacy completions + CLI journal unification | **RETIRED** | The public legacy route was removed 2026-07-31 after its usage/compatibility audit. Historical runs remain readable; the private worker's `/v1/completions` wire protocol is unchanged. CLI journals keep the user message plus the exact rendered prompt and immutable identity. |
 | Phase 2.4 — truncation/context receipts | **DONE** | Every new run carries `clozn.context_receipt.v1`: gateway-delivered messages remain distinct from the assembled messages/exact rendered prompt that survived into generation. OpenAI/Ollama bodies and terminal stream frames emit structured `output_truncated` warnings on a proven `length` stop; non-stream responses also carry `X-Clozn-Warning`. Replay children retain their own post-change prompt and show a loud cutoff alert. `clozn context last [--json]` reads the latest organic receipt (`tests/test_context_receipt.py`). Overlong inputs remain rejected, never silently described as truncated. |
 | Phase 2.5 — think-tag hygiene | **DONE** | A shared batch/stream policy removes model-emitted `<think>` blocks (including prompt-prefilled and unclosed blocks) from OpenAI content, CLI/Studio history, replay/branch inputs, and the public token timeline. The local journal retains `clozn.reasoning_trace.v1` blocks plus separated reasoning token evidence; Replay exposes them only in a collapsed evidence drawer. Ollama places captured reasoning in its separate `thinking` field (`tests/test_think_tags.py` and protocol integration tests). |
-| Phase 2.6 — stable run-ID side-channel | **DONE** | OpenAI SSE, legacy completion SSE, and Ollama NDJSON terminal frames expose the finalized run ID; opt-in client/session headers support privacy-preserving exact lookup; `/runs/latest`, insertion-ordered `/runs/watch`, `clozn watch`, and Studio exact-run adoption close concurrent-client races. |
+| Phase 2.6 — stable run-ID side-channel | **DONE** | OpenAI Chat SSE and Ollama NDJSON terminal frames expose the finalized run ID; opt-in client/session headers support privacy-preserving exact lookup; `/runs/latest`, insertion-ordered `/runs/watch`, `clozn watch`, and Studio exact-run adoption close concurrent-client races. |
 | Phase 2.7 — real-client conformance | **IN PROGRESS** | Pinned released clients now have executable lanes: OpenAI Python 2.46.0, Ollama Python 0.6.2, Ollama JS 0.6.3, and Aider 0.86.2. SDK discovery, non-stream/stream, cancellation, stable IDs, journaling, and typed unsupported-field cases are covered. `docs/CLIENT_CONFORMANCE.md` publishes the honest matrix. Open WebUI 0.10.2 has a pinned scheduled provider-path lane, but remains pending until that external lane runs successfully; its full native-tool loop remains unqualified. |
 | Phase 2.8 — tools/function calls + structured output | **IN PROGRESS; local acceptance MET** | OpenAI Chat Completions has a fail-closed native slice: up to 32 strict function definitions with `auto`/`none` and at most one returned call, assistant tool-call + matching tool-result continuation, buffered validated SSE deltas, `json_object`, and restricted strict `json_schema`. The private AR worker now atomically renders with llama-common, enforces the emitted grammar during sampling, and parses with llama-common; the public gateway independently validates the parsed message. Qualification registry v2 binds the exact active `model_sha256`, `template_fingerprint`, native pipeline IDs, schema subset, and passing evidence. Model-free C++/Python tests and the pinned OpenAI SDK exercise the path, typed failures, and atomic `output_contract` evidence. A live CPU smoke on exact Qwen2.5-0.5B Q4_K_M passed tool call, tool-result continuation, `json_object`, and strict `json_schema`; this is not yet an installed qualification artifact. The scheduled Open WebUI lane now carries a deterministic two-request tool proxy probe, but its released-client job and a qualified real-model gateway pass remain open. |
 | Phase 3.3 — memory receipts | **DONE** | Run records capture selected/injected/omitted card evidence and the causal receipt backend exists. `memory used last`, token-cost/scoping UX, and Markdown card import/export remain open. |
@@ -251,8 +251,8 @@ becomes inspectable." No broad compatibility claim until the conformance matrix 
    `options`/`think`/etc.; honest `/api/tags` metadata (no placeholder digests). **S–M.** (Gate-0.)
 3. **Instrument or retire legacy `/v1/completions`**; unify `clozn run` onto the rendered-template
    journal record. **S–M.** (Gate-0 violations, found by audit B.)
-   **Status: DONE (2026-07-20).** Both completion modes use the shared substrate and create one
-   honest run record; CLI stores the raw message and exact rendered engine input separately.
+   **Status: RETIRED (2026-07-31).** The public legacy route now returns typed HTTP 410; the private
+   worker protocol remains internal. CLI stores the raw message and exact rendered engine input separately.
 4. **Truncation + context receipts** — loud warning on context capping/truncation in API + Replay;
    `clozn context last` with delivered/survived sections. **S–M.**
    *Why:* silent context mishandling is persona-1's top named pain; we already record the truth.
@@ -261,14 +261,14 @@ becomes inspectable." No broad compatibility claim until the conformance matrix 
    mislabeling them as prompt truncation, and `clozn context last` renders the receipt locally.
 5. **Think-tag hygiene** — strip/manage per client so think-blocks never corrupt history or tool
    parsing; journal the stripped reasoning as inspectable trace material. **S–M.**
-   **Status: DONE (2026-07-20).** OpenAI, legacy completions, CLI, Studio, replay/branch, and stateful
+   **Status: DONE (2026-07-20; legacy public route retired 2026-07-31).** OpenAI Chat, CLI, Studio, replay/branch, and stateful
    lab history now consume only the public answer. Ollama carries reasoning separately as `thinking`;
    the journal and Replay retain it as explicitly labeled, non-privileged evidence.
 6. **Stable run-ID side-channel** — `X-Clozn-Run-Id` header + latest-by-client/session lookup +
    `clozn watch`. **S–M.**
    *Why:* third-party clients drop custom body fields; the sidecar needs a reliable hook.
-   **Status: DONE (2026-07-20).** Non-stream replies carry `X-Clozn-Run-Id` and body IDs; OpenAI SSE,
-   legacy completion SSE, and Ollama NDJSON carry the ID on their ordinary terminal frame. Callers can
+   **Status: DONE (2026-07-20).** Non-stream replies carry `X-Clozn-Run-Id` and body IDs; OpenAI Chat SSE
+   and Ollama NDJSON carry the ID on their ordinary terminal frame. Callers can
    opt into exact cross-protocol correlation with `X-Clozn-Client-Id` / `X-Clozn-Session-Id`; only
    install-local HMAC fingerprints are journaled, and portable receipts omit them. `/runs/latest`,
    cursor-based `/runs/watch`, `clozn watch`, and Studio use journal insertion order so overlapping slow
@@ -306,7 +306,7 @@ becomes inspectable." No broad compatibility claim until the conformance matrix 
    silent 256-token per-sequence KV cap, armed since 2.2). Remaining: the scheduled Open WebUI
    released-client lane (external).
 9. **`clozn connect <app>`** setup helper with config backup. **M.**
-10. **Real-browser pass over Studio** (BACKLOG #2, still open) as the phase quality gate. **S.**
+10. **Real-browser pass over Studio** (BACKLOG #2, completed 2026-08-01) as the phase quality gate. **S.**
 
 Explicitly later: Anthropic-Messages compat, vision, embeddings sidecar, broad lifecycle API —
 sequencing deferrals, not non-goals.

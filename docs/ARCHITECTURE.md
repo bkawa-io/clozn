@@ -44,8 +44,9 @@ read-only run inspection remain concurrent.
 
 ## Public and native APIs
 
-- `/v1/models`, `/v1/chat/completions`, and `/v1/completions` form the strict client-facing OpenAI
-  subset documented in [OPENAI_COMPATIBILITY.md](OPENAI_COMPATIBILITY.md).
+- `/v1/models` and `/v1/chat/completions` form the strict client-facing OpenAI subset documented in
+  [OPENAI_COMPATIBILITY.md](OPENAI_COMPATIBILITY.md). The retired `/v1/completions` path returns a
+  typed HTTP 410 migration response.
 - `/api/clozn/generate` carries Clozn's typed native state stream. Native event frames never leak into
   an OpenAI completion stream.
 - `/runs/*`, `/experiment-results/*`, and other namespaced routes expose recorded evidence and derived
@@ -83,7 +84,7 @@ The engine provides measurements; the Python layer composes them into bounded cl
 
 ## Product acceptance gate
 
-`clozn smoke MODEL` launches the real supervised stack, checks Studio and both protocol surfaces,
+`clozn smoke MODEL` launches the real supervised stack, checks Studio and the public/native protocol surfaces,
 verifies journaling and trace integrity, replaces the private worker behind the stable gateway, proves
 generation still works, and cleans up the complete process tree. `--deep` adds forced scoring/receipt
 paths; `--preflight` reports prerequisites without starting anything.

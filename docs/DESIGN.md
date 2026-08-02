@@ -230,7 +230,9 @@ One server, two presentations of the same event stream.
 > [OPENAI_COMPATIBILITY.md](OPENAI_COMPATIBILITY.md). The bullets below are the original diffusion-serving
 > design, not a claim that every OpenAI field or the proposed `cloze` object shipped.
 
-Endpoints: `POST /v1/chat/completions`, `POST /v1/completions` (+ `GET /v1/models`).
+Endpoints: `POST /v1/chat/completions` (+ `GET /v1/models`). The former public
+`POST /v1/completions` compatibility route is retired with a typed HTTP 410; the private worker's
+same-named loopback protocol remains an internal implementation detail.
 
 Mapping rules:
 

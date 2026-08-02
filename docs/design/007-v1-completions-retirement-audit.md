@@ -1,19 +1,23 @@
-# ADR 007 — `/v1/completions` retirement audit (M1)
+# ADR 007 — `/v1/completions` retirement audit (M1/M2/M3)
 
-Status: audit only, no decision made. The removal itself (M2) is reserved for BK.
+Status: accepted — public route retired 2026-07-31 with a typed HTTP 410 migration response.
 Date: 2026-07-30
+
+## Decision (2026-07-31)
+
+The public Python gateway route is removed as a generation surface. Requests to `POST
+/v1/completions` receive HTTP 410 with `error.code = "endpoint_retired"` and are directed to
+`POST /v1/chat/completions`. The private C++ worker's same-named loopback protocol remains unchanged;
+it is still the generation primitive used by the gateway, CLI, and offline research tools. Historical
+run readers remain unchanged because they do not branch on the route's write path.
 
 ## Scope
 
-This is `docs/PRODUCT_ROADMAP.md`'s open item, restated in `docs/HANDOFF_2026-07-30.md:96`:
-"`/v1/completions` retirement — never done, compatibility route still live." It is a *different*
-question from the one `docs/PRODUCT_ROADMAP.md:252-255` already answered: item 3 there ("Instrument or
-retire legacy `/v1/completions`") is marked **DONE (2026-07-20)** — the team chose "instrument," not
-"retire," and legacy completions has been fully journaled ever since (§2 below proves this with current
-code and a passing test). What remains open is the *narrower* question this ADR audits: now that the
-route is safe, should it still be removed as dead surface area, given how little real-world usage it
-has? This document answers "how much would it cost and what's at risk," not "yes" or "no" — that
-decision, and its exact shape (§7), is explicitly BK's to make.
+This was `docs/PRODUCT_ROADMAP.md`'s open item at the time of the 2026-07-30 audit, restated in
+`docs/HANDOFF_2026-07-30.md:96`: "`/v1/completions` retirement — never done, compatibility route still
+live." The audit compared the cost and risk of removal against the then-current instrumented route.
+The implementation decision is now recorded above: choose the typed 410 retirement response and keep
+the private worker protocol separate.
 
 ## Read this first: two surfaces share one path string, and they are not related
 
@@ -261,7 +265,7 @@ enum — removing `/v1/completions` as a valid value for an existing required fi
 of change that rule forbids inside v1: every historical routing receipt that recorded
 `route: "/v1/completions"` while the route was live would fail re-validation against a narrowed schema.
 
-**Concrete constraint for M2, whichever option is chosen: `clozn.model-routing.v1.json`'s enum must
+**Concrete constraint for the retirement implementation: `clozn.model-routing.v1.json`'s enum must
 keep `/v1/completions` as a permanently valid — but, after removal, permanently unproduced — value.**
 This is cheap (zero cost: nothing has to change here at all) but easy to get wrong by "cleaning up" the
 schema alongside the code, which would be a real, avoidable compatibility break for existing receipts.
@@ -327,7 +331,7 @@ one extra small responder to write and keep correct. **Risk:** essentially none 
 and strictly better for the one thing that matters if an unmeasured caller exists — they get an
 answer that says what happened and what to do next, not silence.
 
-### Recommendation: Option B
+### Recommendation (accepted): Option B
 
 Given (a) ADR 004 already specifies the retirement-response-before-routing behavior a 410 responder
 implements almost for free, (b) `/substrate` is a live, working precedent for exactly this pattern in
@@ -338,12 +342,10 @@ new ones written from scratch later if a regression is ever suspected) — **a p
 the better choice**. It is barely more expensive than outright removal and meaningfully kinder to
 anyone this audit's evidence gathering did not — and, per §3, could not have — reached.
 
-## 8. Left to M2
+## 8. Implementation record (2026-07-31)
 
-- Writing and landing the actual code change (either option), including the exact 410 message copy if
-  Option B is chosen.
-- Fixing the two doc discrepancies in §5 (independently worth doing regardless of M2's outcome).
-- Correcting the stale docstring in `generation_gateway.py:611-616` (§2).
-- Deciding whether `docs/design/004-multi-model-routing-contract.md`'s "while it exists" hedge (line
-  130) gets a short dated addendum noting retirement, consistent with ADR 004's own rule that accepted
-  ADRs describe the decision at acceptance time and historical receipts are never reinterpreted.
+- Option B was implemented: the public route returns HTTP 410 with `endpoint_retired` before routing.
+- The public validator, stream serializer, direct endpoint tests, smoke check, and compatibility docs
+  were removed or updated.
+- The v1 routing schema intentionally still accepts `/v1/completions` so historical receipts continue to
+  validate; the route is permanently unproduced going forward.

@@ -25,10 +25,26 @@ SQLite journal and become available in Studio.
   history, settings, tools, and output changes.
 - **Experiments** renders the case × variant × seed matrix, summaries, filters, and cell detail from
   versioned experiment results.
-- **Behavior** exposes qualified steering controls and the corrective-action state.
+- **Behavior** exposes qualified steering controls, corrective actions, and Teach Once. Teach Once keeps
+  drafts inert, supports explicit scope/confirmation, and can verify a target/child run pair before
+  promotion; disable, enable, and undo remain explicit reversible actions.
 - **Model** reports the loaded worker and optional artifact state.
 - **Scope** explores recorded token and layer evidence without upgrading post-hoc readouts to causal
   claims.
+- **Snapshots** previews and pins durable checkpoints, lists manifest metadata, and requires an
+  explicit confirmation before unpinning. Checkpoint bytes remain in the local blob store.
+- **Answer Time Machine** reports per-run replay fidelity and which turns can branch through
+  `GET /runs/<id>/time-machine`. The current branch action is explicitly structural transcript replay;
+  retained KV snapshots do not become an exact-replay claim until a restore-and-verify path is enabled.
+  The latest turn can now request an explicit prompt-boundary proof through
+  `POST /runs/<id>/time-machine/verify`; earlier conversational turns can use an exact matching
+  organic session run, while missing or ambiguous session history remains unavailable.
+  The eligibility receipt preserves requested/source run IDs, and the card shows that provenance when
+  an earlier turn was verified from its historical session run. If a durable checkpoint pin exists
+  for that source, verification hydrates the pin after worker restart before running the same proof.
+  POST /runs/<id>/time-machine/branch is the explicit same-prompt exact-child action; it restores
+  the source checkpoint, runs the unchanged control, and persists a child only after that control
+  matches. It rejects alternate questions because changing the prompt is not exact.
 
 The panel registry is additive: a failed optional panel is reported without taking down the other
 surfaces.
@@ -40,7 +56,14 @@ surfaces.
   independently; it never invents links for missing measurements.
 - Token confidence describes commitment, not correctness.
 - Run comparison reports what changed; only a controlled intervention can support a causal claim.
+- Time Machine distinguishes structural replay from exact replay. Snapshot presence alone is not proof of
+  exactness, and branch execution still requires a ready compatible worker. A successful prompt-boundary
+  verification is an ephemeral worker-generation-scoped proof, not a durable checkpoint guarantee; a
+  session-turn proof records the requested run separately from its historical source run.
 - J-lens and other latent readouts carry method, artifact, and qualification provenance in the view.
+- Provenance labels use “measured context dependence” language; they do not claim an answer literally
+  came from a document. The raw `CONTEXT_CARRIED`/`MIXED`/`PARAMETRIC` enum remains available in the
+  receipt alongside the attention-knockout method and control caveat.
 - Performance diagnoses render only rules supported by recorded phases and metrics. A phase measured on
   the gateway monotonic clock is never offset-aligned with one measured on the worker steady clock;
   only non-overlapping measured durations contribute to the known-time total.
