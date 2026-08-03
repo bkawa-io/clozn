@@ -1,0 +1,153 @@
+{
+  "schema_version": "clozn.time-machine-continuation.v1",
+  "continuation_id": "tmc_0123456789abcdef0123",
+  "created_ts": 1785700000.0,
+  "finished_ts": 1785700002.5,
+  "requested_run_id": "run_requested",
+  "source_turn": 1,
+  "status": "completed",
+  "request": {
+    "request_id": "continue-request-1",
+    "turn": 1,
+    "append_kind": "new_user_turn",
+    "user_content_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "user_content_bytes": 31,
+    "max_tokens": 128,
+    "generation_config_sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "source": {
+    "status": "resolved",
+    "source_run_id": "run_organic_turn_1",
+    "source_turn": 1,
+    "resolution": "exact_organic_session_prefix",
+    "session_key_sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "source_checkpoint": {
+    "status": "available",
+    "provenance": "durable_pin_import",
+    "capture_regime": "verified_prompt_boundary_reprefill",
+    "restart_safe": true,
+    "source_run_id": "run_organic_turn_1",
+    "checkpoint_reference_id": "checkpoint_ref_0123456789abcdef0123",
+    "checkpoint_id": "ckpt-new-generation-4",
+    "pin_id": "pin_0123456789abcdef0123",
+    "pin_blob_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "source_worker_generation_id": "old-worker-generation",
+    "executing_worker_generation_id": "new-worker-generation",
+    "prompt_tokens": 20,
+    "n_past": 34,
+    "token_history_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "payload_sha256": "6666666666666666666666666666666666666666666666666666666666666666"
+  },
+  "identity": {
+    "status": "matched",
+    "source_runtime_key_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+    "selected_runtime_key_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+    "model_sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+    "tokenizer_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+    "template_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "generation_settings_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "engine_build": "clozn-engine-test",
+    "context_size": 4096,
+    "backend": "metal",
+    "adapter": {
+      "present": false,
+      "identity_sha256": null,
+      "artifact_sha256": null,
+      "scale": null
+    },
+    "worker": {
+      "worker_id": "worker-qwen",
+      "worker_generation_id": "new-worker-generation",
+      "protocol_version": "1.0"
+    },
+    "checks": {
+      "runtime": true,
+      "model": true,
+      "tokenizer": true,
+      "template": true,
+      "adapter": true,
+      "settings": true,
+      "checkpoint": true
+    }
+  },
+  "append": {
+    "status": "validated",
+    "derivation": "validated_full_render_suffix",
+    "decode_regime": "sequential_single_token",
+    "historical_token_count": 34,
+    "historical_token_ids_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "full_render_token_count": 41,
+    "full_render_token_ids_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "prefix_match": true,
+    "append_token_ids": [100, 101, 102, 103, 104, 105, 106],
+    "append_token_count": 7,
+    "append_token_ids_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "rendered_append_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "generation_prefix_token_count": 2,
+    "template_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "tokenizer_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+    "special_tokens_preserved": true
+  },
+  "sampler": {
+    "status": "preserved",
+    "mode": "greedy",
+    "source": "checkpoint",
+    "config_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "state_sha256": null,
+    "rng_draws_before_append": 0
+  },
+  "exactness": {
+    "status": "confirmed",
+    "claim": "exact_historical_state_append",
+    "historical_state_source": "durable_import",
+    "source_capture_regime": "verified_prompt_boundary_reprefill",
+    "historical_prefix_recomputed": false,
+    "historical_prefix_retokenized_for_execution": false,
+    "append_only_execution": true,
+    "append_decode_regime": "sequential_single_token",
+    "historical_boundary_preserved": true,
+    "source_checkpoint_identity_verified": true,
+    "worker_generation_verified": true,
+    "structural_fallback_used": false,
+    "fresh_full_prompt_equivalence_claimed": false,
+    "worker_receipt_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "worker": {
+    "status": "completed",
+    "request_id": "continue-request-1",
+    "worker_generation_id": "new-worker-generation",
+    "checkpoint_id": "ckpt-new-generation-4",
+    "restore_mode": "durable_import",
+    "n_past_restored": 34,
+    "n_past_after_append": 41,
+    "append_token_count": 7,
+    "generated_token_count": 12,
+    "generated_token_ids_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "text_sha256": "1010101010101010101010101010101010101010101010101010101010101010",
+    "finish_reason": "eos",
+    "cancelled": false,
+    "sampler_state_preserved": true,
+    "adapter_state_preserved": true,
+    "final_checkpoint_id": "ckpt-new-generation-5"
+  },
+  "child_lineage": {
+    "status": "created",
+    "requested_parent_run_id": "run_requested",
+    "source_checkpoint_run_id": "run_organic_turn_1",
+    "child_run_id": "run_exact_continuation_child",
+    "relation": "exact_continuation",
+    "parent_immutable": true,
+    "source_immutable": true,
+    "receipt_persisted": true
+  },
+  "unavoidable_differences": [
+    "new_append_tokens",
+    "new_generated_suffix",
+    "worker_process_generation_changed_after_durable_import"
+  ],
+  "reasons": [
+    {"code": "continuation_completed", "message": "the exact historical state was restored, appended, and persisted as a child"}
+  ],
+  "failure": null
+}

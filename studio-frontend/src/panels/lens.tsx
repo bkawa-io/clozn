@@ -4,7 +4,7 @@ import type { PanelContext, StudioPanel } from "./types";
 
 const panel: StudioPanel = {
   id: "lens",
-  navLabel: "Lens",
+  navLabel: "Debug",
   order: 20,
   icon: () => <Icon name="lens" />,
   match: (hash): Record<string, string> | null => {
@@ -15,11 +15,11 @@ const panel: StudioPanel = {
     const deep = hash.match(/^#\/runs\/([^/]+)$/);
     return deep ? { runId: decodeURIComponent(deep[1]) } : null;
   },
-  routeName: () => "LENS",
+  routeName: () => "DEBUG",
   topStats: ({ runtime }: PanelContext) => (
     <span className="top-stat"><b>RECORDED</b>{runtime.runs.length}</span>
   ),
-  modeChip: () => "READOUT",
+  modeChip: () => "RUN WORKSPACE",
   Component: ({ runtime, inspectorOpen, params }: PanelContext) => (
     <Lens
       key={params.runId ?? "latest"}

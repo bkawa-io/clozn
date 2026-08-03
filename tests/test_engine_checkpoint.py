@@ -46,6 +46,22 @@ def test_create_checkpoint_minimal_request_and_response_are_exact():
     assert result["additive_new_field"] == {"kept": True}
 
 
+def test_checkpoint_payload_hash_is_an_additive_worker_reply_field():
+    """The gateway needs the worker-computed hash as a proof in a later closed continuation call."""
+    digest = "a" * 64
+    client = StubClient([checkpoint_response(payload_sha256=digest)])
+    result = client.create_checkpoint([10, 11, 12, 13])
+    assert result["payload_sha256"] == digest
+
+    source = open(
+        os.path.join(REPO_ROOT, "engine", "core", "serve", "server_main.cpp"), encoding="utf-8"
+    ).read()
+    checkpoint_block = source[source.index('svr.Post("/v1/checkpoint"'):source.index('svr.Post("/v1/restore"')]
+    import_block = source[source.index('svr.Post("/v1/checkpoint/import"'):source.index('svr.Post("/v1/checkpoint/truncate"')]
+    assert '{"payload_sha256", payload_sha256}' in checkpoint_block
+    assert '{"payload_sha256", actual_hash}' in import_block
+
+
 def test_create_checkpoint_sends_exact_execution_provenance_and_generation_precondition():
     client = StubClient([checkpoint_response()])
     sampler = {
@@ -150,8 +166,9 @@ def test_worker_source_uses_one_store_for_every_checkpoint_issuance():
     ).read()
     assert source.count("make_worker_generation_id()") == 1
     # Checkpoint-producing call sites: completion checkpointing, /v1/checkpoint, /v1/execution-fork's
-    # checkpoint_on_finish, and (FORK-PIN-01) /v1/checkpoint/import + /v1/checkpoint/truncate.
-    assert source.count("checkpoints.insert(std::move(") == 5
+    # checkpoint_on_finish, ADR-010 continuation's optional final checkpoint, and (FORK-PIN-01)
+    # /v1/checkpoint/import + /v1/checkpoint/truncate.
+    assert source.count("checkpoints.insert(std::move(") == 6
     assert 'make_id("ckpt-")' not in source
     assert "checkpoints.erase(checkpoints.begin())" not in source
     # Completion checkpointing plus checkpoint/restore/branch/execution-fork/export/truncate all accept

@@ -1,0 +1,21 @@
+{
+  "schema_version": "clozn.time-machine-continuation.v1",
+  "continuation_id": "tmc_0123456789abcdef0123",
+  "created_ts": 1785700000.0,
+  "finished_ts": 1785700000.1,
+  "requested_run_id": "run_requested",
+  "source_turn": 0,
+  "status": "completed",
+  "request": {"request_id": "r", "turn": 0, "append_kind": "new_user_turn", "user_content_sha256": "1111111111111111111111111111111111111111111111111111111111111111", "user_content_bytes": 1, "max_tokens": 1, "generation_config_sha256": "2222222222222222222222222222222222222222222222222222222222222222"},
+  "source": {"status": "unavailable", "reasons": [{"code": "historical_source_unavailable", "message": "missing"}]},
+  "source_checkpoint": {"status": "unavailable", "reasons": [{"code": "checkpoint_unavailable", "message": "missing"}]},
+  "identity": {"status": "unavailable", "reasons": [{"code": "checkpoint_unavailable", "message": "not checked"}]},
+  "append": {"status": "unavailable", "reasons": [{"code": "checkpoint_unavailable", "message": "not derived"}]},
+  "sampler": {"status": "unavailable", "reasons": [{"code": "checkpoint_unavailable", "message": "not restored"}]},
+  "exactness": {"status": "not_confirmed", "claim": "unavailable", "structural_fallback_used": false, "reasons": [{"code": "checkpoint_unavailable", "message": "not exact"}]},
+  "worker": {"status": "not_run", "cancelled": false, "reasons": [{"code": "checkpoint_unavailable", "message": "not run"}]},
+  "child_lineage": {"status": "not_created", "requested_parent_run_id": "run_requested", "relation": "exact_continuation", "parent_immutable": true, "reasons": [{"code": "checkpoint_unavailable", "message": "not created"}]},
+  "unavoidable_differences": [],
+  "reasons": [{"code": "checkpoint_unavailable", "message": "missing"}],
+  "failure": null
+}

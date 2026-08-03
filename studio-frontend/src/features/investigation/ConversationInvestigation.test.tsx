@@ -164,7 +164,7 @@ describe("Conversation investigation view", () => {
     // would be ambiguous between the two, real, honest affordances.
     await user.click(screen.getByRole("button", { name: "JUMP TO run-1" }));
     await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
-    expect(within(turnEl).getByText("Open full diagnostics for this turn in Lens")).toBeInTheDocument();
+    expect(within(turnEl).getByText("Open this turn in Debug")).toBeInTheDocument();
   });
 
   test("when no rule ever fired in this session, the candidate card says so -- never a fabricated arrow", async () => {

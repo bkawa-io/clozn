@@ -79,6 +79,17 @@ add_executable(test_checkpoint_store tests/test_checkpoint_store.cpp)
 target_include_directories(test_checkpoint_store PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/serve)
 add_test(NAME checkpoint_store COMMAND test_checkpoint_store)
 
+# ADR 010's private continuation route has a model-free preflight: stale worker generations,
+# missing checkpoints, position/history/payload proof mismatch, malformed or empty append tokens,
+# and cancellation all fail before a lease is acquired.  Keep that contract runnable in CPU-only CI.
+add_executable(test_time_machine_continuation_protocol
+    tests/test_time_machine_continuation_protocol.cpp)
+target_include_directories(test_time_machine_continuation_protocol PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/serve
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sha256)
+target_link_libraries(test_time_machine_continuation_protocol PRIVATE clozn_sha256)
+add_test(NAME time_machine_continuation_protocol COMMAND test_time_machine_continuation_protocol)
+
 # --- On-device SAE readout (ROADMAP 3.3 wired into the engine) ---
 # clozn_sae (src/sae_encoder.cu + clozn/sae.hpp): the JumpReLU SAE encoder GEMV + the vendored
 # sae_topk kernel, behind a CUDA-free pimpl header so clozn-server links it untouched by nvcc.

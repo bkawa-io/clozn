@@ -483,6 +483,95 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
     return result;
 }
 
+GenerateResult generate_ar_appended(GgmlAdapter& adapter,
+                                    const EngineCheckpoint& checkpoint,
+                                    const std::vector<int>& append_token_ids,
+                                    const GenerateConfig& config,
+                                    const SampleConfig& sample,
+                                    const std::function<void()>& check_cancelled) {
+    if (checkpoint.n_past < 1 || checkpoint.n_past > static_cast<int>(checkpoint.tokens.size()))
+        throw std::invalid_argument("append continuation: checkpoint n_past is outside its token history");
+    if (!checkpoint.causal)
+        throw std::invalid_argument("append continuation requires a causal checkpoint");
+    if (append_token_ids.empty())
+        throw std::invalid_argument("append continuation requires non-empty append_token_ids");
+    if (config.max_new < 1)
+        throw std::invalid_argument("append continuation requires max_new >= 1");
+    if (check_cancelled) check_cancelled();
+
+    const ModelConfig& mcfg = adapter.config();
+    for (const int token_id : append_token_ids) {
+        if (token_id < 0 || token_id >= mcfg.vocab_size)
+            throw std::invalid_argument("append continuation token id is outside the model vocabulary");
+    }
+
+    // `load_checkpoint` restores the historical KV byte-for-byte.  Do not bridge-decode or evict its
+    // final historical position: the first call below starts at exactly checkpoint.n_past and consumes
+    // a gateway-validated NEW append token.  This is the operation's defining no-reprefill invariant.
+    adapter.load_checkpoint(checkpoint);
+    int n_past = checkpoint.n_past;
+    const int n_ctx = adapter.n_ctx();
+    std::vector<int> board(checkpoint.tokens.begin(), checkpoint.tokens.begin() + checkpoint.n_past);
+    board.reserve(board.size() + append_token_ids.size() + static_cast<size_t>(config.max_new));
+
+    ForwardResult fwd;
+    for (const int token_id : append_token_ids) {
+        if (check_cancelled) check_cancelled();
+        if (n_past >= n_ctx)
+            throw std::invalid_argument(
+                "append continuation exceeds context window before all append tokens were decoded");
+        // Exactly one supplied token at exactly one position: no text tokenization, template rendering,
+        // prefix prefill, or batch-shaped append is possible through this primitive.
+        fwd = adapter.ar_forward({token_id}, n_past);
+        board.push_back(token_id);
+        ++n_past;
+    }
+
+    std::mt19937_64 rng(sample.seed);
+    if (sample.rng_discard > 0) rng.discard(sample.rng_discard);
+    SampleOpts sopts;
+    sopts.temperature = sample.temperature;
+    sopts.rep_penalty = sample.rep_penalty;
+    sopts.top_k = sample.top_k;
+    sopts.top_p = sample.top_p;
+    sopts.mask_token = mcfg.mask_token_id;
+    if (sample.rep_penalty != 1.0) sopts.board = &board;
+    if (sample.temperature > 0.0) sopts.rng = &rng;
+
+    std::vector<int> generated;
+    generated.reserve(config.max_new);
+    std::string reason = "length";
+    int steps_total = 0;
+    const int eos = mcfg.eos_token_id;
+    for (int k = 0; k < config.max_new; ++k) {
+        if (check_cancelled) check_cancelled();
+        if (n_past >= n_ctx) { reason = "length"; break; }
+        const Candidate candidate = sample_committed_candidate(fwd, n_past, sopts);
+        const int token_id = candidate.token_id;
+        generated.push_back(token_id);
+        board.push_back(token_id);
+        ++steps_total;
+        // One generated token per forward is the existing AR decode regime.  It is deliberately
+        // distinct from the supplied append loop only in who chose the token, never in batch shape.
+        // This includes EOS: as in generate_ar, a committed EOS belongs in the live KV and advancing
+        // n_past before stopping keeps `board`, saved checkpoints, and restored state consistent.
+        fwd = adapter.ar_forward({token_id}, n_past);
+        ++n_past;
+        if (eos >= 0 && token_id == eos) { reason = "eos"; break; }
+    }
+
+    GenerateResult result;
+    std::vector<int> visible = generated;
+    if (reason == "eos" && !visible.empty()) visible.pop_back();
+    result.board = std::move(board);  // includes EOS when one was committed, like generate_ar.
+    result.generated = std::move(visible);
+    result.text = adapter.decode(result.generated);
+    result.reason = reason;
+    result.new_tokens = static_cast<int>(result.generated.size());
+    result.steps_total = steps_total;
+    return result;
+}
+
 std::vector<BranchResult> generate_ar_branched(
     GgmlAdapter& adapter,
     const std::vector<int>& prompt_ids,

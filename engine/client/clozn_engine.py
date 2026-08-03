@@ -120,6 +120,12 @@ class Observation:
 class EngineError(RuntimeError):
     """An error returned by the engine (non-2xx with a JSON {error: ...} body)."""
 
+    def __init__(self, message: str, *, response: Optional[Mapping[str, Any]] = None):
+        super().__init__(message)
+        # Most endpoints expose non-2xx replies as exceptions.  A small number of transactional
+        # endpoints also define typed terminal JSON failures which their orchestrator must retain.
+        self.response = dict(response) if isinstance(response, Mapping) else None
+
 
 def _chat_io_object(value: object, label: str) -> dict[str, Any]:
     """Copy a JSON object or fail before a malformed private chat-I/O round trip.
@@ -158,6 +164,12 @@ def _require_response_type(response: Mapping[str, Any], field_name: str, expecte
         raise EngineError(
             f"POST {endpoint} returned invalid {field_name!r} (expected {expected.__name__})")
     return value
+
+
+def _is_lower_sha256(value: object) -> bool:
+    """True only for the canonical lower-case hex SHA-256 spelling used on private wires."""
+    return (isinstance(value, str) and len(value) == 64
+            and all("0" <= char <= "9" or "a" <= char <= "f" for char in value))
 
 
 def _validate_checkpoint_create_response(value: object) -> dict[str, Any]:
@@ -389,10 +401,15 @@ class EngineClient:
             # The engine reports client errors as 400 + {"error": "..."}; surface that message.
             payload = e.read().decode("utf-8", "replace")
             try:
-                msg = json.loads(payload).get("error", payload)
+                document = json.loads(payload)
+                msg = document.get("error", payload) if isinstance(document, Mapping) else payload
             except json.JSONDecodeError:
+                document = None
                 msg = payload
-            raise EngineError(f"{method} {path} -> {e.code}: {msg}") from None
+            raise EngineError(
+                f"{method} {path} -> {e.code}: {msg}",
+                response=document if isinstance(document, Mapping) else None,
+            ) from None
 
     def _get(self, path: str) -> dict:
         return self._request("GET", path)
@@ -944,6 +961,91 @@ class EngineClient:
         if worker_generation_id is not None:
             body["worker_generation_id"] = worker_generation_id
         return self._post("/v1/execution-fork", body)
+
+    def time_machine_continue(
+        self,
+        *,
+        checkpoint_id: str,
+        worker_generation_id: str,
+        expected_n_past: int,
+        expected_token_history_sha256: str,
+        expected_checkpoint_payload_sha256: str,
+        append_token_ids: Sequence[int],
+        append_token_ids_sha256: str,
+        max_tokens: int,
+        request_id: str,
+        checkpoint_on_finish: Optional[bool] = None,
+    ) -> dict:
+        """POST the closed private ADR-010 append-and-generate request.
+
+        This is intentionally narrower than :meth:`execution_fork`: all generation behavior is
+        restored from the named checkpoint and the only executable input is an already rendered,
+        validated token suffix.  The client neither computes nor silently substitutes any of the
+        identity proofs; the gateway owns those proofs and the worker verifies them atomically.
+
+        ``checkpoint_on_finish`` remains absent by default because the worker's default is false.
+        The raw reply is retained verbatim so the gateway can validate the worker's full exactness
+        receipt (including additive future fields) before it creates an immutable child run.
+        """
+        string_fields = {
+            "checkpoint_id": checkpoint_id,
+            "worker_generation_id": worker_generation_id,
+            "expected_token_history_sha256": expected_token_history_sha256,
+            "expected_checkpoint_payload_sha256": expected_checkpoint_payload_sha256,
+            "append_token_ids_sha256": append_token_ids_sha256,
+            "request_id": request_id,
+        }
+        for field, value in string_fields.items():
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{field} must be a non-empty string")
+        for field in (
+            "expected_token_history_sha256", "expected_checkpoint_payload_sha256",
+            "append_token_ids_sha256",
+        ):
+            if not _is_lower_sha256(string_fields[field]):
+                raise ValueError(f"{field} must be a lower-case 64-character SHA-256 hex digest")
+        if (not isinstance(expected_n_past, int) or isinstance(expected_n_past, bool)
+                or expected_n_past < 1):
+            raise ValueError("expected_n_past must be a positive integer")
+        if not isinstance(append_token_ids, Sequence) or isinstance(append_token_ids, (str, bytes, bytearray)):
+            raise ValueError("append_token_ids must be a non-empty sequence of non-negative integers")
+        append_ids = list(append_token_ids)
+        if not append_ids or any(
+            not isinstance(token, int) or isinstance(token, bool) or token < 0 for token in append_ids
+        ):
+            raise ValueError("append_token_ids must be a non-empty sequence of non-negative integers")
+        if not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or max_tokens < 1:
+            raise ValueError("max_tokens must be a positive integer")
+        if checkpoint_on_finish is not None and not isinstance(checkpoint_on_finish, bool):
+            raise ValueError("checkpoint_on_finish must be a bool or None")
+
+        body: dict[str, Any] = {
+            "checkpoint_id": checkpoint_id,
+            "worker_generation_id": worker_generation_id,
+            "expected_n_past": expected_n_past,
+            "expected_token_history_sha256": expected_token_history_sha256,
+            "expected_checkpoint_payload_sha256": expected_checkpoint_payload_sha256,
+            "append_token_ids": append_ids,
+            "append_token_ids_sha256": append_token_ids_sha256,
+            "max_tokens": max_tokens,
+            "request_id": request_id,
+        }
+        if checkpoint_on_finish is not None:
+            body["checkpoint_on_finish"] = checkpoint_on_finish
+        try:
+            return self._post("/v1/time-machine/continue", body)
+        except EngineError as exc:
+            # This endpoint's non-2xx body is itself part of the protocol: the gateway converts its
+            # typed code/stage into an immutable terminal receipt.  Preserve only that closed shape;
+            # ordinary transport/server errors remain exceptions.
+            response = exc.response
+            if (
+                isinstance(response, Mapping)
+                and response.get("status") in {"unavailable", "failed", "cancelled"}
+                and isinstance(response.get("code"), str)
+            ):
+                return dict(response)
+            raise
 
     def cancel(self, req_id: str) -> dict:
         """POST /cancel: cooperative cancel of a running generation. Idempotent — an unknown or

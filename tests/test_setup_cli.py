@@ -21,6 +21,17 @@ from clozn.cli.commands import setup_engine
 from clozn.cli.main import CloznError
 
 
+def _host_platform() -> tuple[str, str]:
+    """Use the installer's canonical names so this genuinely cross-platform fixture matches host."""
+    from clozn.setup.platform_detect import detect_platform
+
+    detected = detect_platform(probe_gpu=False)
+    return detected["os"], detected["arch"]
+
+
+HOST_OS, HOST_ARCH = _host_platform()
+
+
 @pytest.fixture
 def http_server(tmp_path):
     serve_dir = tmp_path / "_served"
@@ -55,7 +66,7 @@ def _publish_manifest(http_server, *, clozn_version="1.0.0"):
         "clozn_version": clozn_version,
         "protocol_version": "1.0",
         "artifacts": [{
-            "os": "windows" if sys.platform == "win32" else "linux", "arch": "x86_64", "backend": "cpu",
+            "os": HOST_OS, "arch": HOST_ARCH, "backend": "cpu",
             "url": f"{base_url}/{archive_path.name}",
             "sha256": hashlib.sha256(data).hexdigest(),
             "size_bytes": len(data), "entrypoint": entrypoint_name,
@@ -71,8 +82,8 @@ def _publish_manifest(http_server, *, clozn_version="1.0.0"):
     return f"{base_url}/manifest.json"
 
 
-INSTALL_KEY = "1.0.0/windows-x86_64-cpu" if sys.platform == "win32" else "1.0.0/linux-x86_64-cpu"
-INSTALL_KEY_V2 = "1.1.0/windows-x86_64-cpu" if sys.platform == "win32" else "1.1.0/linux-x86_64-cpu"
+INSTALL_KEY = f"1.0.0/{HOST_OS}-{HOST_ARCH}-cpu"
+INSTALL_KEY_V2 = f"1.1.0/{HOST_OS}-{HOST_ARCH}-cpu"
 
 
 @pytest.fixture

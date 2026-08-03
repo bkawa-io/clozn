@@ -155,6 +155,13 @@ class RuntimeBoundaryTests(unittest.TestCase):
         self.assertIn("--gpu-layers", args)
         self.assertEqual(args[args.index("--ctx") + 1], "2048")
 
+    def test_measured_tokenizer_identity_reaches_the_private_worker(self):
+        digest = "a" * 64
+        args = engine_process._launch_args(
+            "worker", "qwen35.gguf", 9000, {"_tokenizer_sha256": digest}, False
+        )
+        self.assertEqual(args[args.index("--tokenizer-sha256") + 1], digest)
+
     def test_explicit_context_does_not_reuse_a_mismatched_warm_runtime(self):
         registry = {"8080": {"model": "qwen35.gguf", "gpu": True, "mode": "autoregressive"}}
         health = {"status": "ok", "mode": "autoregressive", "worker": {"n_ctx": 4096}}

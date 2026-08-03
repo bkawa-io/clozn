@@ -374,6 +374,8 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
            output_contract: dict | None = None,
            sections: list | None = None,
            execution_fork_receipt: dict | None = None,
+           time_machine_continuation_receipt: dict | None = None,
+           _reserved_run_id: str | None = None,
            applied_corrections: list | None = None,
            correction_conflicts: list | None = None) -> str | None:
     """Persist a completed run and return its id. Logging failures remain non-fatal.
@@ -407,7 +409,9 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
         _ensure()
         started = started if started is not None else time.time()
         ended = ended if ended is not None else time.time()
-        rid = f"run_{int(started * 1000):013x}_{uuid.uuid4().hex[:6]}"
+        rid = _reserved_run_id or f"run_{int(started * 1000):013x}_{uuid.uuid4().hex[:6]}"
+        if not _valid_rid(rid):
+            raise ValueError("_reserved_run_id must be a valid run ID")
         from .think_tags import prompt_opens_think, sanitize_messages, sanitize_reply, sanitize_steps
         implicit_think = prompt_opens_think(final_prompt)
         msgs = sanitize_messages(messages or [])
@@ -519,6 +523,24 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
             from clozn import schemas
             schemas.validate(receipt, "clozn.execution-fork.v1")
             rec["execution_fork"] = receipt
+        if time_machine_continuation_receipt is not None:
+            # ADR 010: the continuation child and its terminal exactness receipt are one immutable
+            # write.  The orchestrator reserves the run ID before generation so the schema-valid
+            # receipt can name the child before this transaction begins; refuse any mismatch rather
+            # than repairing lineage after persistence.
+            receipt = deepcopy(time_machine_continuation_receipt)
+            lineage = receipt.get("child_lineage")
+            if (
+                not isinstance(lineage, dict)
+                or receipt.get("status") != "completed"
+                or lineage.get("child_run_id") != rid
+                or lineage.get("requested_parent_run_id") != parent_run_id
+            ):
+                raise ValueError(
+                    "time_machine_continuation_receipt must describe this completed child")
+            from clozn import schemas
+            schemas.validate(receipt, "clozn.time-machine-continuation.v1")
+            rec["time_machine_continuation"] = receipt
         rec["flags"] = _flags(rec)
         if not _put(rec):
             return None

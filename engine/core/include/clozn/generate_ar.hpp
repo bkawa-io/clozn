@@ -123,6 +123,23 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
                            // steady clock, but offsets may be absent when their local origin differs.
                            const std::vector<PerformancePhase>* request_phases = nullptr);
 
+// ADR 010 exact appended-turn continuation.  This is intentionally NOT a convenience wrapper around
+// generate_ar(resume_from): that older resume path bridge-decodes the historical last token to recover
+// a logits row, which is correct for ordinary continuation but would rewrite historical KV state here.
+//
+// Instead this primitive restores checkpoint's KV unchanged, decodes ONLY the already-tokenized append
+// IDs one at a time at positions [checkpoint.n_past, ...), then samples a newly generated suffix from
+// the logits row produced by the final append token.  It never tokenizes text or re-prefills/recomputes
+// the historical prefix.  `check_cancelled`, when supplied, may throw (the server uses
+// GenerationCancelled) and is called before restore, every append decode, and every generated token.
+// The caller owns checkpoint identity, sampler/steer provenance, context leasing, and context cleanup.
+GenerateResult generate_ar_appended(GgmlAdapter& adapter,
+                                    const EngineCheckpoint& checkpoint,
+                                    const std::vector<int>& append_token_ids,
+                                    const GenerateConfig& config,
+                                    const SampleConfig& sample = {},
+                                    const std::function<void()>& check_cancelled = {});
+
 // Batched multi-sequence branching: prefill a shared prompt once, then decode N independent
 // continuations in parallel using a single llama_decode per step. Each branch gets its own
 // KV sequence (via branch_kv) and its own RNG (base_sample.seed + branch_index). Greedy

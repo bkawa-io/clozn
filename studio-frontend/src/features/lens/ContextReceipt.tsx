@@ -9,6 +9,10 @@ import {
 
 interface ContextReceiptProps {
   runId: string;
+  /** Start with recorded facts expanded when the parent interaction is already an explicit reveal. */
+  defaultDetailedOpen?: boolean;
+  /** Reveal retained rendered text immediately after an explicit parent disclosure. */
+  defaultAdvancedOpen?: boolean;
 }
 
 type LoadState =
@@ -271,8 +275,8 @@ function SegmentTable({ title, segments }: { title: string; segments: ReceiptSeg
   );
 }
 
-function NewDetail({ receipt }: { receipt: NewReceipt }) {
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+function NewDetail({ receipt, defaultAdvancedOpen = false }: { receipt: NewReceipt; defaultAdvancedOpen?: boolean }) {
+  const [advancedOpen, setAdvancedOpen] = useState(defaultAdvancedOpen);
   const estimatedBadge = receipt.rendered?.estimated == null
     ? undefined
     : receipt.rendered.estimated ? "ESTIMATED" : "EXACT";
@@ -453,8 +457,8 @@ function MessageList({ title, messages }: { title: string; messages: Array<{ rol
   );
 }
 
-function LegacyDetail({ receipt }: { receipt: LegacyReceipt }) {
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+function LegacyDetail({ receipt, defaultAdvancedOpen = false }: { receipt: LegacyReceipt; defaultAdvancedOpen?: boolean }) {
+  const [advancedOpen, setAdvancedOpen] = useState(defaultAdvancedOpen);
   return (
     <div className="context-receipt-detail">
       <p className="context-receipt-caveat context-receipt-legacy-banner">
@@ -531,22 +535,26 @@ function LegacyDetail({ receipt }: { receipt: LegacyReceipt }) {
 // top-level card
 // ---------------------------------------------------------------------------------------------------
 
-export function ContextReceipt({ runId }: ContextReceiptProps) {
+export function ContextReceipt({
+  runId,
+  defaultDetailedOpen = false,
+  defaultAdvancedOpen = false,
+}: ContextReceiptProps) {
   const [state, setState] = useState<LoadState>({ status: "idle" });
-  const [detailedOpen, setDetailedOpen] = useState(false);
+  const [detailedOpen, setDetailedOpen] = useState(defaultDetailedOpen);
 
   useEffect(() => {
     if (!runId) return;
     const controller = new AbortController();
     setState({ status: "loading" });
-    setDetailedOpen(false);
+    setDetailedOpen(defaultDetailedOpen);
     void loadContextReceipt(runId, controller.signal).then((view) => {
       if (!controller.signal.aborted) setState({ status: "ready", view });
     }).catch(() => {
       if (!controller.signal.aborted) setState({ status: "error" });
     });
     return () => controller.abort();
-  }, [runId]);
+  }, [defaultDetailedOpen, runId]);
 
   const view = state.status === "ready" ? state.view : null;
 
@@ -589,8 +597,8 @@ export function ContextReceipt({ runId }: ContextReceiptProps) {
           >{detailedOpen ? "HIDE DETAILED VIEW" : "SHOW DETAILED VIEW"}</button>
           {detailedOpen && (
             view.shape === "new"
-              ? <NewDetail receipt={view.receipt} />
-              : <LegacyDetail receipt={view.receipt} />
+              ? <NewDetail receipt={view.receipt} defaultAdvancedOpen={defaultAdvancedOpen} />
+              : <LegacyDetail receipt={view.receipt} defaultAdvancedOpen={defaultAdvancedOpen} />
           )}
         </>
       )}

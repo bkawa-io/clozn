@@ -297,7 +297,7 @@ function TurnDetail({
               No rule in D1&apos;s registry reported a finding for this turn.
             </p>
           )}
-        <a href={`#/runs/${encodeURIComponent(turn.runId)}`}>Open full diagnostics for this turn in Lens</a>
+        <a href={`#/runs/${encodeURIComponent(turn.runId)}`}>Open this turn in Debug</a>
       </section>
 
       <section aria-label={`Changes since the previous turn for ${shortId(turn.runId)}`}>

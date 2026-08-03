@@ -14,6 +14,17 @@
     "replay_fidelity": "structurally_reproducible",
     "exact_replay_eligible": false,
     "snapshot": null,
+    "source": {
+      "status": "available",
+      "run_id": "run_time_machine_fixture",
+      "scope": "full_run_prompt_boundary",
+      "source_turn": 0,
+      "durable_pin": {
+        "status": "unavailable",
+        "reason": {"code": "durable_pin_missing", "message": "no restart-safe checkpoint has been pinned"}
+      },
+      "reasons": [{"code": "requested_run_source_resolved", "message": "the requested immutable run backs this boundary"}]
+    },
     "reasons": [{"code": "structural_replay_only", "message": "the transcript is regenerated"}]
   }]
 }

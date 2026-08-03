@@ -272,6 +272,7 @@ def capture_parent_checkpoint(
     runtime_identity: Mapping,
     worker_identity: Mapping,
     checkpoint_envelope: Mapping | None = None,
+    material_out: dict | None = None,
     clock: Callable[[], float] = time.time,
 ) -> dict:
     """Capture and prove one ephemeral checkpoint, returning a v1 lifecycle artifact.
@@ -285,6 +286,8 @@ def capture_parent_checkpoint(
     """
     if not isinstance(parent_run, Mapping):
         raise CheckpointCaptureError("parent_run must be an object")
+    if material_out is not None and not isinstance(material_out, dict):
+        raise CheckpointCaptureError("material_out must be a dict when supplied")
     parent_id = parent_run.get("id")
     if not isinstance(parent_id, str) or not parent_id:
         raise CheckpointCaptureError("parent_run.id must be a non-empty string")
@@ -522,6 +525,24 @@ def capture_parent_checkpoint(
             code="unchanged_control_diverged",
             message="the reconstructed checkpoint did not reproduce the parent token IDs and text",
             proof=proof)
+
+    # Private integration seam for append-only continuation.  The public checkpoint-reference
+    # artifact intentionally keeps prompt token IDs out of its closed schema, but the gateway needs
+    # the exact in-memory history to prove the newly rendered conversation is a strict token suffix.
+    # Publish it only after the unchanged control matched, and never mutate the immutable source run.
+    if material_out is not None:
+        material_out.update({
+            "historical_token_ids": list(full_ids),
+            "checkpoint_response": deepcopy(dict(response)),
+            "capture_regime": "verified_prompt_boundary_reprefill",
+            "checkpoint_provenance": (
+                "durable_pin_import" if checkpoint_envelope is not None
+                else "live_worker_checkpoint"
+            ),
+            "sampler": deepcopy(sampler_artifact),
+            "sampler_wire": deepcopy(sampler_wire),
+            "steering": deepcopy(steering_artifact),
+        })
 
     artifact["lifecycle"] = _lifecycle(
         "available", size_bytes=reference["size_bytes"])

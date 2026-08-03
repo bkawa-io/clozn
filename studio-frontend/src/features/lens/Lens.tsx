@@ -22,20 +22,19 @@ import type {
   RunConcepts,
   RunPerformance as RunPerformanceData,
   RuntimeState,
-  SourceReading,
   TokenReading,
 } from "../../data/types";
 import { SlotHost } from "../../components/SlotHost";
-import { ConfidencePlot } from "../observatory/ConfidencePlot";
-import {
-  aggregateSources,
-  buildResponseClaims,
-  influenceSplit,
-  summarizeRange,
-  weakestTokenInRange,
-} from "./analysis";
-import { describeAbsence, EvidenceCaveat, evidenceStateBadge } from "./EvidenceCaveat";
+import { buildResponseClaims, weakestTokenInRange } from "./analysis";
+import { EvidenceDeck } from "./EvidenceDeck";
+import { LensContextCanvas } from "./LensContextCanvas";
+import { LensSelectionInspector } from "./LensSelectionInspector";
+import { ContextReceipt } from "./ContextReceipt";
+import { ReceivedContext } from "./ReceivedContext";
 import { RunPerformance } from "./RunPerformance";
+import { RunEventRail, type RunEventRailEvent } from "./RunEventRail";
+import { RunFrame } from "./RunFrame";
+import { LensRunNavigator } from "./LensRunNavigator";
 import { TimeMachine } from "./TimeMachine";
 
 interface LensProps {
@@ -90,12 +89,6 @@ function tokenBreaks(text: string) {
   return text.match(/\r\n|\r|\n/g)?.length ?? 0;
 }
 
-function nextIndex(indexes: number[], current: number, direction: 1 | -1) {
-  if (!indexes.length) return current;
-  if (direction === 1) return indexes.find((index) => index > current) ?? indexes[0];
-  return [...indexes].reverse().find((index) => index < current) ?? indexes[indexes.length - 1];
-}
-
 function bandCounts(tokens: TokenReading[]) {
   return tokens.reduce(
     (counts, token) => {
@@ -124,41 +117,6 @@ function waitForSourcePoll(signal: AbortSignal, delayMs = 250) {
   });
 }
 
-function SourceCard({
-  source,
-  selected,
-  linkedTokens,
-  onSelect,
-}: {
-  source: SourceReading;
-  selected: boolean;
-  linkedTokens: number;
-  onSelect: () => void;
-}) {
-  // clearEffect is only meaningful once a source has actually been measured (`source.measured`); an
-  // omitted/unmeasured source keeps its plain token count so "never looked at" is never confused with
-  // "looked at, found nothing that cleared the floor."
-  const noClearEffect = source.measured && source.clearEffect === false && linkedTokens === 0;
-  return (
-    <button
-      type="button"
-      className={`lens-source ${selected ? "is-selected" : ""}`}
-      aria-pressed={selected}
-      onClick={onSelect}
-    >
-      <span>{source.label ?? source.role ?? "CONTEXT"}</span>
-      <strong>{source.text}</strong>
-      <small className={noClearEffect ? "is-evidence-observed" : undefined}>
-        {source.measured === false
-          ? "NOT MEASURED"
-          : noClearEffect
-            ? "MEASURED · NO CLEAR EFFECT"
-            : `${linkedTokens} ${linkedTokens === 1 ? "TOKEN" : "TOKENS"}`}
-      </small>
-    </button>
-  );
-}
-
 export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
   const [runId, setRunId] = useState(initialRunId ?? "");
   const [data, setData] = useState<ObservatoryData | null>(null);
@@ -175,7 +133,6 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
   const [sourceJob, setSourceJob] = useState<InfluenceMapJob | null>(null);
   const sourceRequest = useRef<AbortController | null>(null);
   const sourceJobId = useRef<string | null>(null);
-  const [performanceOpen, setPerformanceOpen] = useState(false);
   const [performance, setPerformance] = useState<PerformanceState>({ status: "idle" });
   const [selectedPerformanceFinding, setSelectedPerformanceFinding] = useState("generation");
 
@@ -247,9 +204,6 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
   const counts = bandCounts(tokens);
   const contextSources = data?.contextSources ?? data?.sources ?? [];
   const claims = useMemo(() => buildResponseClaims(tokens), [tokens]);
-  const rangeSummary = selectedRange
-    ? summarizeRange(tokens, selectedRange.start, selectedRange.end)
-    : null;
   const selectedClaimIndex = selectedRange
     ? claims.findIndex(
       (claim) => claim.start === selectedRange.start && claim.end === selectedRange.end,
@@ -266,27 +220,7 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
     });
     return () => cancelAnimationFrame(frame);
   }, [activeClaimIndex]);
-  const rangeSources = useMemo(
-    () => selectedRange
-      ? aggregateSources(tokens, selectedRange.start, selectedRange.end)
-      : [],
-    [selectedRange, tokens],
-  );
-  const answerSources = useMemo(
-    () => aggregateSources(tokens, 0, Math.max(0, tokens.length - 1)),
-    [tokens],
-  );
-  const mostLinkedSource = [...answerSources].sort(
-    (a, b) => b.tokenCount - a.tokenCount || Math.abs(b.deltaNats) - Math.abs(a.deltaNats),
-  )[0];
-  const directionCounts = useMemo(() => influenceSplit(tokens), [tokens]);
-  const recordedTokenCount = tokens.filter((token) => token.text).length;
   const linkedTokenCount = tokens.filter((token) => token.text && token.sources?.length).length;
-  const lowestClaimIndex = claims.reduce((lowest, claim, index) => {
-    if (claim.meanConfidence == null) return lowest;
-    if (lowest < 0 || (claims[lowest].meanConfidence ?? Infinity) > claim.meanConfidence) return index;
-    return lowest;
-  }, -1);
   const linkedIndexes = useMemo(
     () => selectedSourceId
       ? tokens.flatMap((token, index) =>
@@ -299,30 +233,6 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
   );
   const linkedSet = new Set(linkedIndexes);
   const selectedSource = contextSources.find((source) => source.id === selectedSourceId);
-  const sourceCounts = useMemo(() => {
-    const output = new Map<string, number>();
-    for (const token of tokens) {
-      if (!token.text) continue;
-      for (const source of token.sources ?? []) {
-        output.set(source.sourceId, (output.get(source.sourceId) ?? 0) + 1);
-      }
-    }
-    return output;
-  }, [tokens]);
-  const markedIndexes = tokens.flatMap((token, index) => {
-    if (!token.text) return [];
-    if (mode === "shakiness") return token.band === "okay" || token.band === "shaky" ? [index] : [];
-    if (mode === "concepts") {
-      const conceptData = concepts.status === "done" ? concepts.data : null;
-      return conceptData?.available && conceptData.readouts[index]?.length ? [index] : [];
-    }
-    return token.sources?.length ? [index] : [];
-  });
-  const strongestSourceIndex = tokens.reduce((best, token, index) => {
-    const value = token.text ? Math.abs(dominantInfluence(token)?.deltaNats ?? 0) : 0;
-    const bestValue = Math.abs(dominantInfluence(tokens[best])?.deltaNats ?? 0);
-    return value > bestValue ? index : best;
-  }, 0);
   const conceptData = concepts.status === "done" ? concepts.data : null;
   const conceptsAligned = Boolean(
     data?.response
@@ -330,7 +240,6 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
     && conceptData.tokens.length === tokens.length
     && conceptData.tokens.join("") === data.response,
   );
-  const selectedConcepts = conceptsAligned ? conceptData?.readouts[selectedToken] ?? [] : [];
 
   function selectToken(index: number, extend = false) {
     setSelectedSourceId(null);
@@ -474,140 +383,124 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
     setSourceStatus("idle");
   }
 
+  const selectedRun = runtime.runs.find((run) => run.id === runId) ?? null;
+  const finishReason = selectedRun?.finishReason
+    ?? (performance.status === "ready" ? performance.data.finishReason : undefined);
+  const finishMarker = selectedRun
+    ? {
+      reason: finishReason,
+      truncated: selectedRun.finishReason === "length" || selectedRun.flags.includes("truncated"),
+      tokenIndex: tokens.length ? tokens.length - 1 : undefined,
+    }
+    : null;
+  const runEvents: RunEventRailEvent[] = selectedRun
+    ? [
+      {
+        id: "run-recorded",
+        label: "Run recorded",
+        kind: "run-start",
+        timestamp: selectedRun.createdAt,
+        status: "complete",
+      },
+      {
+        id: "response-recorded",
+        label: "Response recorded",
+        kind: "generation",
+        detail: `${tokens.filter((token) => token.text).length} output tokens`,
+        status: "complete",
+      },
+      ...(selectedRun.flags.length
+        ? [{
+          id: "run-warning",
+          label: "Run warnings",
+          kind: "warning" as const,
+          detail: selectedRun.flags.join(" · "),
+          status: "warning" as const,
+        }]
+        : []),
+      {
+        id: "run-finish",
+        label: finishReason ? "Generation finished" : "Run captured",
+        kind: "run-finish",
+        detail: finishReason ?? "Finish reason unavailable",
+        status: finishMarker?.truncated ? "warning" : "complete",
+      },
+    ]
+    : [];
+
   return (
     <>
-      <section className="instrument lens-context" aria-labelledby="lens-context-title">
-        <header className="instrument-head compact">
-          <div>
-            <span className="eyebrow">INPUT</span>
-            <h2 id="lens-context-title">Context</h2>
-          </div>
-          <strong>{contextSources.length} SOURCES</strong>
-        </header>
-        <div className="lens-context-body">
-          <section className="lens-prompt">
-            <span>PROMPT</span>
-            <p>{data?.prompt || "—"}</p>
-          </section>
-          {sourceStatus === "measuring" && (
-            <p className="lens-source-measurement-state">
-              {sourceJob
-                ? `MEASURING CONTEXT SUPPORT · ${sourceJob.progress.phase.toUpperCase()} · ${
-                    sourceJob.progress.completedUnits
-                  }/${sourceJob.progress.totalUnits}`
-                : "STARTING CONTEXT SUPPORT MEASUREMENT"}
-            </p>
-          )}
-          {contextSources.length ? (
-            <>
-              <EvidenceCaveat
-                method={data?.influenceMethod}
-                thresholds={data?.influenceThresholds}
-                coverage={data?.contextCoverage}
-              />
-              {sourceCache && (
-                <p className="lens-source-measurement-state">
-                  {sourceCache === "hit"
-                    ? "MEASURED CONTEXT SUPPORT · CACHED"
-                    : sourceCache === "miss"
-                      ? "MEASURED CONTEXT SUPPORT · NEWLY MEASURED"
-                      : "MEASURED CONTEXT SUPPORT"}
-                </p>
-              )}
-              <div className="lens-source-list">
-                {contextSources.map((source) => (
-                  <SourceCard
-                    key={source.id}
-                    source={source}
-                    selected={source.id === selectedSourceId}
-                    linkedTokens={sourceCounts.get(source.id) ?? 0}
-                    onSelect={() => {
-                      setMode("sources");
-                      setSelectedRange(null);
-                      setSelectedSourceId((current) => current === source.id ? null : source.id);
-                    }}
-                  />
-                ))}
-              </div>
-              {!data?.sources.length && (
-                <div className="lens-source-empty">
-                  {(() => {
-                    const described = describeAbsence(
-                      sourceAbsence ?? data?.influenceAbsence ?? { kind: "not_measured" },
-                    );
-                    return (
-                      <>
-                        <span>{described.title}</span>
-                        {described.detail && <p>{described.detail}</p>}
-                      </>
-                    );
-                  })()}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (sourceStatus === "measuring") {
-                        void stopWaitingForSources();
-                        return;
-                      }
-                      void measureSources();
-                    }}
-                  >{sourceStatus === "measuring" ? "STOP WAITING" : "MEASURE SOURCES"}</button>
-                </div>
-              )}
-            </>
-          ) : (
-            <div className="lens-source-empty">
-              {(() => {
-                const absence: InfluenceAbsence = sourceAbsence ?? data?.influenceAbsence ?? { kind: "not_measured" };
-                const described = describeAbsence(absence);
-                return (
-                  <>
-                    <span>{described.title}</span>
-                    {described.detail && <p>{described.detail}</p>}
-                  </>
-                );
-              })()}
-              <button
-                type="button"
-                disabled={!data}
-                onClick={() => {
-                  if (sourceStatus === "measuring") {
-                    void stopWaitingForSources();
-                    return;
-                  }
-                  void measureSources();
-                }}
-              >{sourceStatus === "measuring" ? "STOP WAITING" : "MEASURE SOURCES"}</button>
-            </div>
-          )}
-          {runId && <SlotHost slot="lens.evidence" data={{ runId }} />}
-        </div>
-      </section>
+      <RunFrame
+        run={selectedRun}
+        runtime={runtime}
+        performance={performance.status === "ready" ? performance.data : null}
+        lineage={{
+          parent: selectedRun?.parentRunId
+            ? {
+              id: selectedRun.parentRunId,
+              label: runtime.runs.find((run) => run.id === selectedRun.parentRunId)?.label,
+              href: `#/runs/${encodeURIComponent(selectedRun.parentRunId)}`,
+            }
+            : null,
+          children: runtime.runs
+            .filter((run) => run.parentRunId === runId)
+            .map((run) => ({
+              id: run.id,
+              label: run.label,
+              href: `#/runs/${encodeURIComponent(run.id)}`,
+            })),
+        }}
+        title="Selected run"
+      />
+      <LensRunNavigator
+        runs={runtime.runs}
+        selectedRunId={runId}
+        onSelectRun={(nextRunId) => setRunId(nextRunId)}
+      />
+      <LensContextCanvas
+        data={data}
+        selectedSourceId={selectedSourceId}
+        onSelectedSourceChange={(sourceId) => {
+          setMode("sources");
+          setSelectedRange(null);
+          setSelectedSourceId(sourceId);
+        }}
+        deliveryContent={runId ? <ReceivedContext runId={runId} /> : null}
+        renderedContent={runId ? (
+          <ContextReceipt
+            runId={runId}
+            defaultDetailedOpen
+            defaultAdvancedOpen
+          />
+        ) : null}
+        supplementaryContent={runId ? (
+          <details className="lens-context-tools">
+            <summary>Investigation tools</summary>
+            <SlotHost slot="lens.evidence" data={{ runId }} exclude={["context-receipt"]} />
+          </details>
+        ) : null}
+        sourceMeasurementStatus={sourceStatus}
+        sourceMeasurementJob={sourceJob}
+        sourceMeasurementCache={sourceCache}
+        sourceAbsence={sourceAbsence ?? data?.influenceAbsence}
+        onMeasureSources={() => void measureSources()}
+        onStopWaitingForSources={() => void stopWaitingForSources()}
+      />
 
       {runId && <TimeMachine runId={runId} />}
 
       <section className={`instrument lens-reader mode-${mode}`} aria-labelledby="lens-title">
-        <header className="instrument-head lens-head">
+        <header className="lens-output-head">
           <div>
-            <span className="eyebrow">RECORDED RUN</span>
-            <h1 id="lens-title">Response</h1>
+            <span className="eyebrow">GENERATED RESPONSE</span>
+            <h2 id="lens-title">Output</h2>
           </div>
-          <div className="lens-metrics">
-            <span><b>TOKENS</b>{tokens.length}</span>
-            <span><b>CLAIMS</b>{claims.length}</span>
-            <span><b>LINKED</b>{linkedTokenCount}</span>
-            <span><b>SHAKY</b>{counts.shaky}</span>
+          <div className="lens-output-summary" aria-label="Output summary">
+            <span>{tokens.length} tokens</span>
+            <span>{claims.length} claims</span>
+            <span>{linkedTokenCount} linked</span>
+            <span>{counts.shaky} shaky</span>
           </div>
-          <label className="lens-run-picker">
-            <span>RUN</span>
-            <select
-              value={runId}
-              disabled={status === "loading"}
-              onChange={(event) => setRunId(event.target.value)}
-            >
-              {runtime.runs.map((run) => <option key={run.id} value={run.id}>{run.label}</option>)}
-            </select>
-          </label>
         </header>
 
         <nav className="lens-modes" aria-label="Response overlay">
@@ -623,22 +516,7 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
               key={item.id}
             >{item.label}</button>
           ))}
-          <button
-            type="button"
-            className={`lens-performance-toggle ${performanceOpen ? "is-active" : ""}`}
-            aria-expanded={performanceOpen}
-            onClick={() => setPerformanceOpen((open) => !open)}
-          >PERFORMANCE</button>
         </nav>
-
-        {performanceOpen && (
-          <RunPerformance
-            data={performance.status === "ready" ? performance.data : undefined}
-            status={performance.status}
-            selectedFindingId={selectedPerformanceFinding}
-            onSelectFinding={setSelectedPerformanceFinding}
-          />
-        )}
 
         <div className="lens-response-stage">
           {status === "error" && <div className="lens-state is-error">RUN LOAD FAILED</div>}
@@ -737,296 +615,122 @@ export function Lens({ runtime, initialRunId, inspectorOpen }: LensProps) {
       </section>
 
       {inspectorOpen && (
-        <aside className="instrument lens-inspector" aria-labelledby="lens-inspector-title">
-          <header className="instrument-head compact">
-            <div>
-              <span className="eyebrow">
-                {selectedSource
-                  ? "CONTEXT SPAN"
-                  : rangeSummary
-                    ? selectedClaimIndex >= 0 ? `CLAIM ${selectedClaimIndex + 1}` : "TOKEN SPAN"
-                    : "SELECTION"}
-              </span>
-              <h2 id="lens-inspector-title">
-                {selectedSource ? "Source inspector" : rangeSummary ? "Span inspector" : "Token inspector"}
-              </h2>
-            </div>
-            <strong>
-              {selectedSource
-                ? `${linkedIndexes.length} TOKENS`
-                : rangeSummary ? `${rangeSummary.tokenCount} TOKENS` : `#${selectedToken + 1}`}
-            </strong>
-          </header>
-
-          {selectedSource ? (
-            <div className="lens-inspector-body">
-              <section className="lens-selected-source">
-                <span>{selectedSource.label ?? selectedSource.role ?? "CONTEXT"}</span>
-                <p>{selectedSource.text}</p>
-              </section>
-              <div className="lens-linked-output">
-                <span>LINKED OUTPUT</span>
-                <p>{linkedIndexes.map((index) => tokens[index]?.text).join("") || "—"}</p>
-                {(selectedSource.measured === false || selectedSource.clearEffect === false) && (
-                  <p className="lens-evidence-observed-label">
-                    {selectedSource.measured === false
-                      ? "NOT MEASURED"
-                      : "MEASURED · NO LINK CLEARED THE FLOOR"}
-                  </p>
-                )}
-              </div>
-              <button
-                type="button"
-                className="lens-inspector-action"
-                disabled={!linkedIndexes.length}
-                onClick={() => selectToken(linkedIndexes[0])}
-              >SELECT FIRST TOKEN</button>
-            </div>
-          ) : rangeSummary ? (
-            <div className="lens-inspector-body">
-              <section className="lens-span-readout">
-                <span>{selectedClaimIndex >= 0 ? `CLAIM ${selectedClaimIndex + 1}` : "SELECTED SPAN"}</span>
-                <p>{rangeSummary.text}</p>
-              </section>
-              <dl className="lens-token-facts">
-                <div><dt>Position</dt><dd>{rangeSummary.start + 1}–{rangeSummary.end + 1}</dd></div>
-                <div><dt>Mean confidence</dt><dd>{rangeSummary.meanConfidence?.toFixed(4) ?? "—"}</dd></div>
-                <div><dt>Shaky tokens</dt><dd>{rangeSummary.shakyCount}</dd></div>
-                <div><dt>Source-linked</dt><dd>{rangeSummary.linkedCount} / {rangeSummary.tokenCount}</dd></div>
-              </dl>
-              <section className="lens-evidence">
-                <header><span>SPAN SOURCES · Σ TOKEN Δ</span><b>{rangeSources.length}</b></header>
-                {rangeSources.map((source) => (
-                  <button
-                    type="button"
-                    className={`lens-evidence-row effect-${source.effect} ${
-                      source.clearTokenCount && source.observedTokenCount ? "is-evidence-mixed"
-                        : source.observedTokenCount ? "is-evidence-observed" : ""
-                    }`}
-                    onClick={() => {
-                      setMode("sources");
-                      setSelectedRange(null);
-                      setSelectedSourceId(source.sourceId);
-                    }}
-                    key={source.sourceId}
-                  >
-                    <strong>{source.label}</strong>
-                    <span>
-                      {source.clearTokenCount ? `${source.clearTokenCount} CLEAR` : ""}
-                      {source.clearTokenCount && source.observedTokenCount ? " · " : ""}
-                      {source.observedTokenCount ? `${source.observedTokenCount} BELOW FLOOR` : ""}
-                    </span>
-                    <output>{source.deltaNats >= 0 ? "+" : ""}{source.deltaNats.toFixed(4)} Σ nats</output>
-                  </button>
-                ))}
-                {!rangeSources.length && (
-                  <div className="lens-unavailable">
-                    {data?.sources.length
-                      ? "NO SOURCE CLEARED THE FLOOR FOR THIS SPAN"
-                      : describeAbsence(sourceAbsence ?? data?.influenceAbsence ?? { kind: "not_measured" }).title}
-                  </div>
-                )}
-              </section>
-              <button
-                type="button"
-                className="lens-inspector-action"
-                onClick={() => selectToken(
-                  weakestTokenInRange(tokens, rangeSummary.start, rangeSummary.end),
-                )}
-              >SELECT LOWEST-CONFIDENCE TOKEN</button>
-              {data && (
-                <a
-                  className="lens-inspector-action"
-                  href={`#/runs/${encodeURIComponent(data.id)}/scope?token=${selectedToken}`}
-                >OPEN SELECTED TOKEN IN SCOPE</a>
-              )}
-            </div>
-          ) : selected ? (
-            <div className="lens-inspector-body">
-              <section className="lens-token-readout">
-                <strong>{selected.text || "∅"}</strong>
-                <span className={`band-chip band-${selected.band ?? "none"}`}>
-                  {selected.band?.toUpperCase() ?? "UNBANDED"}
-                </span>
-              </section>
-              <dl className="lens-token-facts">
-                <div><dt>Position</dt><dd>{selectedToken + 1} / {tokens.length}</dd></div>
-                <div><dt>Confidence</dt><dd>{selected.confidence?.toFixed(4) ?? "—"}</dd></div>
-                <div><dt>Top-k entropy</dt><dd>{selected.entropy.toFixed(4)} bits</dd></div>
-                <div><dt>Sources</dt><dd>{selected.sources?.length ?? 0}</dd></div>
-              </dl>
-
-              {mode === "concepts" ? (
-                <section className="lens-evidence">
-                  <header><span>J-LENS · RAW LOGIT</span><b>{conceptData?.layer == null ? "—" : `L${conceptData.layer}`}</b></header>
-                  {concepts.status === "loading" && <div className="lens-unavailable">READING CONCEPTS</div>}
-                  {conceptData?.available && !conceptsAligned && (
-                    <div className="lens-unavailable">TOKEN ALIGNMENT UNAVAILABLE</div>
-                  )}
-                  {selectedConcepts.map((concept) => (
-                    <div className="lens-concept-row" key={concept.piece}>
-                      <strong>{concept.piece}</strong>
-                      <output>{concept.score.toFixed(3)}</output>
-                    </div>
-                  ))}
-                  {conceptData && !conceptData.available && (
-                    <div className="lens-unavailable">{conceptData.reason}</div>
-                  )}
-                </section>
-              ) : (
-                <section className="lens-evidence">
-                  <header><span>{mode === "influences" ? "SIGNED INFLUENCE" : "SOURCES"}</span><b>{selected.sources?.length ?? 0}</b></header>
-                  {(selected.sources ?? []).map((source) => (
-                    <button
-                      type="button"
-                      className={`lens-evidence-row effect-${source.effect} ${evidenceStateBadge(source.evidenceState).className}`}
-                      onClick={() => {
-                        setMode("sources");
-                        setSelectedSourceId(source.sourceId);
-                      }}
-                      key={source.sourceId}
-                    >
-                      <strong>{source.label}</strong>
-                      <span>{source.effect.toUpperCase()}</span>
-                      <output>{source.deltaNats >= 0 ? "+" : ""}{source.deltaNats.toFixed(4)} nats</output>
-                    </button>
-                  ))}
-                  {!selected.sources?.length && (
-                    <div className="lens-unavailable">
-                      {!data?.sources.length
-                        ? describeAbsence(sourceAbsence ?? data?.influenceAbsence ?? { kind: "not_measured" }).title
-                        : selected.observedSources?.length
-                          ? "NO SOURCE CLEARED THE FLOOR FOR THIS TOKEN"
-                          : "NOT MEASURED"}
-                    </div>
-                  )}
-                  {/* Below-floor links are shown separately, never merged into the cleared list above --
-                      an observed-but-insufficient delta must stay visually and structurally distinct from
-                      a causally_supported one (this feature's binding constraint). */}
-                  {Boolean(selected.observedSources?.length) && (
-                    <div className="lens-evidence-observed-group">
-                      <span className="lens-evidence-observed-label">
-                        MEASURED · BELOW FLOOR ({selected.observedSources?.length})
-                      </span>
-                      {(selected.observedSources ?? []).map((source) => (
-                        <button
-                          type="button"
-                          className={`lens-evidence-row effect-${source.effect} ${evidenceStateBadge(source.evidenceState).className}`}
-                          onClick={() => {
-                            setMode("sources");
-                            setSelectedSourceId(source.sourceId);
-                          }}
-                          key={source.sourceId}
-                        >
-                          <strong>{source.label}</strong>
-                          <span>{source.effect.toUpperCase()} · {evidenceStateBadge(source.evidenceState).label}</span>
-                          <output>{source.deltaNats >= 0 ? "+" : ""}{source.deltaNats.toFixed(4)} nats</output>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </section>
-              )}
-
-              {data && (
-                <a
-                  className="lens-inspector-action"
-                  href={`#/runs/${encodeURIComponent(data.id)}/scope?token=${selectedToken}`}
-                >OPEN IN SCOPE</a>
-              )}
-            </div>
-          ) : <div className="lens-unavailable">NO TOKEN TRACE</div>}
-        </aside>
+        <LensSelectionInspector
+          selection={selectedSource
+            ? { kind: "source", sourceId: selectedSource.id, source: selectedSource }
+            : selectedRange
+              ? {
+                kind: "span",
+                start: selectedRange.start,
+                end: selectedRange.end,
+                claimIndex: selectedClaimIndex >= 0 ? selectedClaimIndex : undefined,
+              }
+              : selected
+                ? { kind: "token", index: selectedToken }
+                : null}
+          tokens={tokens}
+          sources={contextSources}
+          influenceAbsence={sourceAbsence ?? data?.influenceAbsence}
+          influenceMethod={data?.influenceMethod}
+          influenceThresholds={data?.influenceThresholds}
+          contextCoverage={data?.contextCoverage}
+          tokenTrace={tokens.length
+            ? { state: "available", provenance: "recorded" }
+            : { state: "not_captured", detail: "This run did not retain a token trace." }}
+          sourceEvidence={data?.influenceMethod
+            ? { state: "available", provenance: "measured" }
+            : sourceStatus === "measuring"
+              ? { state: "not_measured", detail: "Source influence measurement is in progress." }
+              : { state: "not_measured", detail: "Source influence has not been measured for this run." }}
+          onSelectToken={(index) => selectToken(index)}
+          onSelectSource={(sourceId) => {
+            setMode("sources");
+            setSelectedRange(null);
+            setSelectedSourceId(sourceId);
+          }}
+          scopeHref={data ? `#/runs/${encodeURIComponent(data.id)}/scope?token=${selectedToken}` : undefined}
+          actions={data && !data.influenceMethod ? (
+            <button
+              type="button"
+              disabled={sourceStatus === "measuring"}
+              onClick={() => void measureSources()}
+            >{sourceStatus === "measuring" ? "Measuring sources" : "Measure sources"}</button>
+          ) : undefined}
+          events={<RunEventRail events={runEvents} ariaLabel="Recorded events related to this run" />}
+        />
       )}
 
-      <section className="instrument lens-map" aria-labelledby="lens-map-title">
-        <header className="instrument-head compact">
-          <div>
-            <span className="eyebrow">RESPONSE POSITION</span>
-            <h2 id="lens-map-title">Confidence map</h2>
-          </div>
-          <div className="lens-map-legend" aria-label="Plot legend">
-            <span className="is-confidence">CONFIDENCE</span>
-            <span className="is-entropy">TOP-K ENTROPY</span>
-          </div>
-          <div className="lens-map-actions">
-            <button type="button" disabled={!markedIndexes.length} onClick={() => selectToken(nextIndex(markedIndexes, selectedToken, -1))}>PREV MARK</button>
-            <button type="button" disabled={!markedIndexes.length} onClick={() => selectToken(nextIndex(markedIndexes, selectedToken, 1))}>NEXT MARK</button>
-            <button
-              type="button"
-              disabled={!counts.shaky}
-              onClick={() => selectToken(nextIndex(
-                tokens.flatMap((token, index) => token.band === "shaky" ? [index] : []),
-                selectedToken,
-                1,
-              ))}
-            >NEXT SHAKY</button>
-            <button type="button" disabled={!tokens.some((token) => token.text && token.sources?.length)} onClick={() => selectToken(strongestSourceIndex)}>MAX LINK</button>
-          </div>
-        </header>
-        <div className="lens-map-plot">
-          <div className="lens-map-graph">
-            <ConfidencePlot tokens={tokens} selectedToken={selectedToken} />
-            <input
-              type="range"
-              aria-label="Selected response token"
-              min="0"
-              max={Math.max(0, tokens.length - 1)}
-              value={selectedToken}
-              disabled={!tokens.length}
-              onChange={(event) => selectToken(Number(event.target.value))}
-            />
-            <div className="lens-map-axis">
-              <span>1</span>
-              <span>{tokens.length ? Math.ceil(tokens.length / 2) : "—"}</span>
-              <span>{tokens.length || "—"}</span>
-            </div>
-          </div>
-          <aside className="lens-patterns" aria-labelledby="lens-patterns-title">
-            <header>
-              <strong id="lens-patterns-title">ANSWER PATTERNS</strong>
-              <span>TRACE DERIVED</span>
-            </header>
-            <button
-              type="button"
-              disabled={lowestClaimIndex < 0}
-              onClick={() => selectClaim(lowestClaimIndex)}
-            >
-              <span>LOWEST CLAIM MEAN</span>
-              <strong>
-                {lowestClaimIndex >= 0
-                  ? `C${lowestClaimIndex + 1} · ${claims[lowestClaimIndex].meanConfidence?.toFixed(4)}`
-                  : "—"}
-              </strong>
-            </button>
-            <div>
-              <span>SOURCE COVERAGE</span>
-              <strong>
-                {recordedTokenCount
-                  ? `${linkedTokenCount} / ${recordedTokenCount} · ${Math.round(linkedTokenCount / recordedTokenCount * 100)}%`
-                  : "—"}
-              </strong>
-            </div>
-            <button
-              type="button"
-              disabled={!mostLinkedSource}
-              onClick={() => {
-                if (!mostLinkedSource) return;
-                setMode("sources");
-                setSelectedRange(null);
-                setSelectedSourceId(mostLinkedSource.sourceId);
-              }}
-            >
-              <span>MOST LINKED CONTEXT</span>
-              <strong>{mostLinkedSource ? `${mostLinkedSource.tokenCount} TOK · ${mostLinkedSource.label}` : "—"}</strong>
-            </button>
-            <div>
-              <span>DOMINANT EFFECTS</span>
-              <strong>{directionCounts.supports} SUPPORT · {directionCounts.suppresses} SUPPRESS</strong>
-            </div>
-          </aside>
-        </div>
-      </section>
+
+      <EvidenceDeck
+        title="Run evidence"
+        defaultHeight={390}
+        evidenceLanes={{
+          tokens,
+          selectedToken,
+          selectedRange,
+          rangeAnchor,
+          onSelectionChange: ({ tokenIndex, range }) => {
+            setSelectedSourceId(null);
+            setSelectedToken(tokenIndex);
+            setSelectedRange(range);
+            setRangeAnchor(range?.start ?? tokenIndex);
+          },
+          sourceAvailability: data?.influenceMethod
+            ? { available: true }
+            : { available: false, reason: "Source influence was not measured for this response." },
+          semanticEventsAvailability: {
+            available: false,
+            reason: "No semantic event trace is recorded in this run payload.",
+          },
+          finish: finishMarker,
+        }}
+        sections={{
+          events: {
+            content: runEvents.length
+              ? <div className="lens-deck-events"><RunEventRail events={runEvents} ariaLabel="Recorded run events" /></div>
+              : undefined,
+            availability: runEvents.length
+              ? { state: "available" }
+              : { state: "not_captured", detail: "No recorded run events are available." },
+          },
+          performance: {
+            content: (
+              <RunPerformance
+                data={performance.status === "ready" ? performance.data : undefined}
+                status={performance.status}
+                selectedFindingId={selectedPerformanceFinding}
+                onSelectFinding={setSelectedPerformanceFinding}
+              />
+            ),
+          },
+          lineage: selectedRun?.parentRunId || runtime.runs.some((run) => run.parentRunId === runId)
+            ? {
+              content: (
+                <section className="lens-deck-lineage" aria-label="Run lineage">
+                  {selectedRun?.parentRunId && (
+                    <a href={`#/runs/${encodeURIComponent(selectedRun.parentRunId)}`}>
+                      <span>PARENT</span>
+                      <strong>{runtime.runs.find((run) => run.id === selectedRun.parentRunId)?.label ?? selectedRun.parentRunId}</strong>
+                    </a>
+                  )}
+                  {runtime.runs.filter((run) => run.parentRunId === runId).map((run) => (
+                    <a href={`#/runs/${encodeURIComponent(run.id)}`} key={run.id}>
+                      <span>CHILD</span>
+                      <strong>{run.label}</strong>
+                    </a>
+                  ))}
+                </section>
+              ),
+            }
+            : {
+              availability: {
+                state: "available",
+                detail: "This run has no recorded parent, child, retry, or branch relationship.",
+              },
+            },
+        }}
+      />
+
     </>
   );
 }

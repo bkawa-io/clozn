@@ -8,6 +8,8 @@ The design docs, indexed. Read top-down: the synthesis first, then the per-layer
   state-stream protocol, the interp maturity ladder. *How the whole thing fits.*
 - **[CAPABILITIES.md](CAPABILITIES.md)** — the single current matrix for merged, released,
   qualified, and limited capabilities.
+- **[CLOZN_FEATURE_MAP.md](CLOZN_FEATURE_MAP.md)** — the comprehensive code-derived map of product
+  features, available information, actions, evidence types, and capability boundaries.
 - **[ROADMAP.md](ROADMAP.md)** — the consolidated map: what's done, the v1 cut, what's next.
 
 ## Per-layer design
@@ -16,6 +18,8 @@ The design docs, indexed. Read top-down: the synthesis first, then the per-layer
   kernel references but is not a current-user product contract.
 - **[TECHNICAL.md](TECHNICAL.md)** — archived diffusion research measurements and engineering notes.
 - **[STUDIO.md](STUDIO.md)** — the studio UI: pages, panels, and what each surface shows.
+- **[design/UX_FOUNDATION.md](design/UX_FOUNDATION.md)** — the capability-driven information
+  architecture, workspace model, evidence hierarchy, and single-run investigation frame.
 - **[MODEL_SUPPORT.md](MODEL_SUPPORT.md)** — which model families run, and on which paths. Use
   `clozn qualify MODEL --plan` for a model-free qualification readiness report; it does not qualify
   or install an artifact.

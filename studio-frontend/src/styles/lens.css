@@ -202,7 +202,7 @@
   position: relative;
   z-index: 3;
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   border-bottom: 1px solid var(--line);
 }
 
@@ -1793,6 +1793,262 @@
    Context receipt (feature 06) -- slot panel rendered via <SlotHost slot="lens.evidence"/>, inside
    .lens-context-body below the source list. See docs/SURFACES.md's "Registered slots" table.
    ----------------------------------------------------------------------------------------------- */
+
+/* Run-workspace composition: prompt/context and output are the paired primary readers. Run identity is
+   anchored above them; the navigator and inspector support the reading task without narrowing it. */
+.workspace.is-lens {
+  grid-template-columns:
+    minmax(220px, 248px)
+    minmax(390px, .95fr)
+    minmax(460px, 1.05fr)
+    minmax(320px, 380px);
+  grid-template-rows: auto minmax(560px, calc(100vh - 285px)) auto auto;
+  align-items: stretch;
+  overflow-y: auto;
+}
+
+.workspace.is-lens.inspector-closed {
+  grid-template-columns: minmax(220px, 248px) minmax(390px, .95fr) minmax(460px, 1.05fr);
+}
+
+.workspace.is-lens > .run-frame {
+  grid-column: 2 / -1;
+  grid-row: 1;
+}
+
+.workspace.is-lens .lens-run-navigator {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  min-height: 0;
+}
+
+.workspace.is-lens .lens-context-canvas {
+  grid-column: 2;
+  grid-row: 2;
+  min-height: 0;
+}
+
+.workspace.is-lens .lens-reader {
+  grid-column: 3;
+  grid-row: 2;
+  min-height: 0;
+}
+
+.workspace.is-lens .lens-selection-inspector {
+  grid-column: 4;
+  grid-row: 2;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.workspace.is-lens.inspector-closed .lens-selection-inspector {
+  display: none;
+}
+
+.workspace.is-lens .evidence-deck {
+  grid-column: 2 / -1;
+  grid-row: 3;
+}
+
+.workspace.is-lens .lens-time-machine {
+  grid-column: 2 / -1;
+  grid-row: 4;
+}
+
+.lens-output-head {
+  display: flex;
+  min-height: 78px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.lens-output-head h2 {
+  margin: 4px 0 0;
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 540;
+}
+
+.lens-output-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px 12px;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 11px;
+}
+
+.lens-output-summary span {
+  white-space: nowrap;
+}
+
+.lens-inspector-events {
+  display: grid;
+  gap: 8px;
+  margin-top: auto;
+  border-top: 1px solid var(--line);
+  padding: 13px;
+}
+
+.lens-inspector-events > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.lens-inspector-events h3 {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.lens-inspector-events .run-event-rail {
+  max-height: 210px;
+  overflow-y: auto;
+}
+
+/* Readability floor for the active Lens surfaces. Density comes from layout and disclosure, not type. */
+.workspace.is-lens .eyebrow {
+  font-size: 10px;
+}
+
+.workspace.is-lens .instrument-head h2 {
+  font-size: 15px;
+}
+
+.workspace.is-lens .lens-inspector .instrument-head > strong {
+  font-size: 11px;
+}
+
+.workspace.is-lens .lens-modes button {
+  min-height: 42px;
+  font-size: 11px;
+}
+
+.workspace.is-lens .lens-response-stage {
+  padding: clamp(24px, 3.5vh, 42px) clamp(22px, 3vw, 44px);
+}
+
+.workspace.is-lens .lens-response-text,
+.workspace.is-lens .lens-response-plain {
+  font-size: 16px;
+  line-height: 1.72;
+}
+
+.workspace.is-lens .lens-claims > header strong,
+.workspace.is-lens .lens-claims > header span,
+.workspace.is-lens .lens-claim-nav button {
+  font-size: 11px;
+}
+
+.workspace.is-lens .lens-claim {
+  min-height: 88px;
+  padding: 12px;
+}
+
+.workspace.is-lens .lens-claim > span,
+.workspace.is-lens .lens-claim > small {
+  font-size: 11px;
+}
+
+.workspace.is-lens .lens-claim > strong {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.workspace.is-lens .lens-span-readout > span,
+.workspace.is-lens .lens-evidence > header span,
+.workspace.is-lens .lens-evidence > header b,
+.workspace.is-lens .lens-evidence-observed-label {
+  font-size: 11px;
+}
+
+.workspace.is-lens .lens-span-readout p,
+.workspace.is-lens .lens-selected-source p,
+.workspace.is-lens .lens-linked-output p {
+  font-size: 13px;
+}
+
+.workspace.is-lens .lens-token-facts dt,
+.workspace.is-lens .lens-token-facts dd,
+.workspace.is-lens .lens-evidence-row strong,
+.workspace.is-lens .lens-evidence-row span,
+.workspace.is-lens .lens-evidence-row output,
+.workspace.is-lens .lens-concept-row strong,
+.workspace.is-lens .lens-concept-row output,
+.workspace.is-lens .lens-inspector-action {
+  font-size: 11px;
+}
+
+@media (max-width: 1390px) {
+  .workspace.is-lens {
+    grid-template-columns: minmax(190px, 214px) minmax(330px, .95fr) minmax(390px, 1.05fr);
+    grid-template-rows: auto minmax(560px, calc(100vh - 285px)) auto auto auto;
+  }
+
+  .workspace.is-lens.inspector-closed {
+    grid-template-columns: minmax(190px, 214px) minmax(330px, .95fr) minmax(390px, 1.05fr);
+  }
+
+  .workspace.is-lens .lens-selection-inspector {
+    grid-column: 2 / -1;
+    grid-row: 3;
+    width: 100%;
+    min-height: 420px;
+    max-height: 520px;
+  }
+
+  .workspace.is-lens .evidence-deck {
+    grid-row: 4;
+  }
+
+  .workspace.is-lens .lens-time-machine {
+    grid-row: 5;
+  }
+}
+
+@media (max-width: 960px) {
+  .workspace.is-lens,
+  .workspace.is-lens.inspector-closed {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: auto auto minmax(600px, auto) auto auto auto;
+    overflow-y: auto;
+  }
+
+  .workspace.is-lens .lens-run-navigator { grid-column: 1 / -1; grid-row: 1; max-height: 260px; }
+  .workspace.is-lens > .run-frame { grid-column: 1 / -1; grid-row: 2; }
+  .workspace.is-lens .lens-context-canvas { grid-column: 1; grid-row: 3; max-height: none; }
+  .workspace.is-lens .lens-reader { grid-column: 2; grid-row: 3; min-height: 600px; }
+  .workspace.is-lens .lens-selection-inspector { grid-column: 1 / -1; grid-row: 4; width: 100%; min-height: 440px; max-height: 620px; }
+  .workspace.is-lens .evidence-deck { grid-column: 1 / -1; grid-row: 5; }
+  .workspace.is-lens .lens-time-machine { grid-column: 1 / -1; grid-row: 6; }
+}
+
+@media (max-width: 720px) {
+  .workspace.is-lens,
+  .workspace.is-lens.inspector-closed {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .workspace.is-lens .lens-run-navigator { order: 1; }
+  .workspace.is-lens > .run-frame { order: 2; }
+  .workspace.is-lens .lens-context-canvas { order: 3; min-height: 620px; }
+  .workspace.is-lens .lens-reader { order: 4; min-height: 620px; }
+  .workspace.is-lens .lens-selection-inspector { order: 5; max-height: none; }
+  .workspace.is-lens .evidence-deck { order: 6; }
+  .workspace.is-lens .lens-time-machine { order: 7; }
+}
 
 .context-receipt {
   display: flex;
@@ -4857,3 +5113,136 @@
   .investigation-experiment-arms li { grid-template-columns: 1fr; gap: 3px; }
   .investigation-experiment-arms li a { text-align: left; }
 }
+
+/* Debug workspace readability: delivery receipts are primary evidence, not miniature metadata. */
+.workspace.is-lens .lens-context-canvas-supplementary {
+  padding: 0;
+}
+
+.lens-context-tools > summary {
+  padding: 16px 20px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-family: var(--font-machine);
+  font-size: 12px;
+  letter-spacing: .055em;
+  text-transform: uppercase;
+}
+
+.lens-context-tools[open] > summary {
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--signal-violet) 7%, transparent);
+}
+
+.workspace.is-lens .received-context {
+  border-top: 0;
+}
+
+.workspace.is-lens .received-context-head {
+  padding: 18px 20px 12px;
+}
+
+.workspace.is-lens .received-context-head h3,
+.workspace.is-lens .context-receipt-head h3 {
+  font-size: 17px;
+}
+
+.workspace.is-lens :where(
+  .received-context-overall,
+  .received-context-state,
+  .received-context-privacy > span,
+  .received-context-privacy > strong,
+  .received-context-privacy > small,
+  .received-context-cost-strip dt,
+  .received-context-notice strong,
+  .received-context-group h4,
+  .received-context-group > header b,
+  .received-context-order,
+  .received-context-row-main small,
+  .received-context-cost,
+  .received-context-span-link,
+  .received-context-no-span,
+  .context-receipt-shape,
+  .context-receipt-fact > span,
+  .context-receipt-fact > small,
+  .context-receipt-toggle,
+  .context-receipt-section > header,
+  .context-receipt-facts dt,
+  .context-receipt-badge,
+  .context-receipt-row,
+  .context-receipt-category,
+  .context-receipt-section.is-advanced button
+) {
+  font-size: 12px;
+}
+
+.workspace.is-lens :where(
+  .received-context-boundary,
+  .received-context-notice span,
+  .received-context-row-main strong,
+  .received-context-row > p,
+  .received-context-empty,
+  .received-context-authorized > p,
+  .context-receipt-facts dd,
+  .context-receipt-list li,
+  .context-receipt-list strong,
+  .context-receipt-list small,
+  .context-receipt-note,
+  .context-receipt-caveat,
+  .context-receipt-empty
+) {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.workspace.is-lens .received-context-cost-strip dd {
+  font-size: 14px;
+}
+
+.workspace.is-lens .received-context-authorized > button {
+  min-height: 40px;
+  font-size: 12px;
+}
+
+.workspace.is-lens .context-receipt-raw {
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.workspace.is-lens .lens-context-tools :where(p, li, dd) {
+  font-size: 14px !important;
+  line-height: 1.5;
+}
+
+.workspace.is-lens .lens-context-tools :where(button, small, span, dt, code) {
+  font-size: 12px !important;
+}
+
+.workspace.is-lens .lens-context-tools :where(h2, h3, h4) {
+  font-size: 15px !important;
+}
+
+.lens-deck-events .run-event-rail {
+  max-width: 920px;
+}
+
+.lens-deck-lineage {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.lens-deck-lineage a {
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--line);
+  padding: 14px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel-raised) 48%, transparent);
+  text-decoration: none;
+}
+
+.lens-deck-lineage a:hover { border-color: var(--signal-violet); }
+.lens-deck-lineage span { color: var(--ink-faint); font-family: var(--font-machine); font-size: 12px; }
+.lens-deck-lineage strong { font-size: 14px; }

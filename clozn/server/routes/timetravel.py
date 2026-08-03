@@ -125,12 +125,8 @@ def try_post(h, p, body):
             return True
 
         import clozn.replay.timetravel as timetravel
-        turns = timetravel.message_turns(run.get("messages") or [])
-        source_run = None
-        if 0 <= turn < len(turns) and turn == turns[-1]["turn"]:
-            source_run = run
-        elif 0 <= turn < len(turns):
-            source_run = timetravel.resolve_turn_source_run(run, turn)
+        turns = timetravel.completed_message_turns(run)
+        source_run = timetravel.resolve_exact_turn_source_run(run, turn)
         if (
             source_run is None
             or turn < 0
@@ -358,10 +354,8 @@ def try_post(h, p, body):
         # Resolve an earlier turn only through its exact immutable session-run prefix.  A final-run
         # checkpoint cannot restore that earlier state, and an ambiguous/missing session history must
         # remain a typed unavailable receipt rather than a guessed worker selection.
-        turns = timetravel.message_turns(run.get("messages") or [])
-        source_run = None
-        if turns and 0 <= turn < len(turns) and turn != turns[-1]["turn"]:
-            source_run = timetravel.resolve_turn_source_run(run, turn)
+        turns = timetravel.completed_message_turns(run)
+        source_run = timetravel.resolve_exact_turn_source_run(run, turn)
         if not turns or turn < 0 or turn >= len(turns) or (turn != turns[-1]["turn"] and source_run is None):
             artifact = timetravel.verify_prompt_boundary(
                 run, turn, None, runtime_identity={}, worker_identity={})

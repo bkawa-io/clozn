@@ -80,8 +80,23 @@ export function slotPanelsFor(slot: string): SlotPanel[] {
   return found;
 }
 
-export function SlotHost<TData>({ slot, data }: { slot: string; data: TData }) {
-  const panels = slotPanelsFor(slot);
+export function SlotHost<TData>({
+  slot,
+  data,
+  include,
+  exclude,
+}: {
+  slot: string;
+  data: TData;
+  /** Optional panel-id allow list for hosts that place one slot across purpose-specific regions. */
+  include?: readonly string[];
+  /** Optional panel-id deny list; applied after `include` when both are supplied. */
+  exclude?: readonly string[];
+}) {
+  const panels = slotPanelsFor(slot).filter((panel) => (
+    (!include || include.includes(panel.id))
+    && (!exclude || !exclude.includes(panel.id))
+  ));
   if (!panels.length) return null;
   return (
     <>

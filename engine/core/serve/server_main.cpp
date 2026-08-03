@@ -33,6 +33,7 @@
 
 #include "checkpoint_store.hpp"
 #include "checkpoint_codec.hpp"  // FORK-PIN-01: /v1/checkpoint/export + /import + /truncate
+#include "time_machine_continuation.hpp"  // ADR 010: private exact appended-turn continuation
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -118,6 +119,7 @@ int main(int argc, char** argv) {
                              "[--ar | --diffusion] [--mask-token ID] [--eos ID] [--ctx N] [--workers N] "
                              "[--lora PATH] [--lora-scale F] "
                              "[--sae <dir>] [--sae-k N] [--jlens <dir>] [--model-sha256 HEX] "
+                             "[--tokenizer-sha256 HEX] "
                              "[--no-flash-attn]\n", argv[0]);
         return 1;
     }
@@ -128,6 +130,7 @@ int main(int argc, char** argv) {
     int sae_k = 16;
     std::string jlens_dir;  // --jlens: already validated/model-scoped by the product supervisor
     std::string model_sha256;
+    std::string tokenizer_sha256;
     bool force_ar = false;
     bool force_diffusion = false;
     // --no-flash-attn: build contexts with FA disabled so "kq_soft_max-<il>" materializes and
@@ -154,6 +157,7 @@ int main(int argc, char** argv) {
         else if (a == "--sae-k") sae_k = std::atoi(next());
         else if (a == "--jlens") jlens_dir = next();
         else if (a == "--model-sha256") model_sha256 = next();
+        else if (a == "--tokenizer-sha256") tokenizer_sha256 = next();
         else if (a == "--ar") force_ar = true;
         else if (a == "--diffusion") force_diffusion = true;
         else if (a == "--no-flash-attn") flash_attn = false;
@@ -441,6 +445,9 @@ int main(int argc, char** argv) {
                                           // persist outside this worker's bounded FIFO memory and
                                           // later hand back (to THIS worker or a fresh one), fail-
                                           // closed on any identity/format mismatch at import
+            {"time_machine_continuation", ar_mode},  // ADR 010 private /v1/time-machine/continue:
+                                          // restore a proved checkpoint, sequentially append already
+                                          // rendered token IDs, then generate with no replay fallback
         };
         // Keep the model/runtime health document self-identifying.  These values already back the
         // model-free --version contract and checkpoint export/import identity; exposing them here lets
@@ -461,6 +468,7 @@ int main(int argc, char** argv) {
                {"mode", ar_mode ? "autoregressive" : "diffusion"},
                {"architecture", model_architecture},
                {"model_sha256", model_sha256},
+               {"tokenizer_sha256", tokenizer_sha256},  // measured by spawn_engine from the GGUF
                {"n_embd", model_n_embd},
                {"n_layer", model_n_layer},
                {"vocab_size", model->config().vocab_size},
@@ -1402,10 +1410,12 @@ int main(int argc, char** argv) {
                 ckpt.top_p = sb.value("top_p", 1.0);
             }
             const size_t sz = ckpt.kv_data.size();
+            const std::string payload_sha256 = hash_checkpoint_payload(ckpt);
             const std::string id = checkpoints.insert(std::move(ckpt));
             res.set_content(json{{"checkpoint_id", id}, {"n_past", n_past},
                                  {"n_tokens", static_cast<int>(tokens.size())},
                                  {"size_bytes", sz},
+                                 {"payload_sha256", payload_sha256},
                                  {"worker_generation_id", worker_generation_id}}.dump(),
                             "application/json");
         } catch (const std::exception& e) {
@@ -1908,6 +1918,295 @@ int main(int argc, char** argv) {
         }
     });
 
+    // POST /v1/time-machine/continue -- private gateway-only ADR 010 primitive.
+    //
+    // The gateway has already rendered/tokenized the new user turn and proved it is an append to
+    // this checkpoint's historical token history.  This route deliberately accepts token IDs only:
+    // it has no text field, does not invoke a tokenizer/chat template, and has no structural-replay
+    // escape hatch.  Under one lease it restores the exact checkpoint KV, decodes each supplied ID
+    // at batch shape one, and then generates the new assistant suffix.  The parent checkpoint is
+    // read by value from the store and never rewritten.
+    //
+    // Required body:
+    // {checkpoint_id, worker_generation_id, expected_n_past, expected_token_history_sha256,
+    //  expected_checkpoint_payload_sha256, append_token_ids, append_token_ids_sha256,
+    //  max_tokens, request_id}
+    // Optional: checkpoint_on_finish (default false).  There are intentionally no sampling,
+    // steering, adapter, template, or text fields: sampler/steer come only from the checkpoint;
+    // model/template/adapter/settings source identity is the gateway + durable-import contract.
+    svr.Post("/v1/time-machine/continue", [&](const httplib::Request& req, httplib::Response& res) {
+        auto respond_error = [&](int http_status, TimeMachineContinuationCode code,
+                                 const std::string& message, const std::string& request_id) {
+            const char* status = "failed";
+            if (code == TimeMachineContinuationCode::CheckpointUnavailable ||
+                code == TimeMachineContinuationCode::WorkerGenerationStale)
+                status = "unavailable";
+            if (code == TimeMachineContinuationCode::RequestCancelled)
+                status = "cancelled";
+            json response{{"status", status},
+                          {"code", time_machine_continuation_code(code)},
+                          {"message", message},
+                          {"cancelled", code == TimeMachineContinuationCode::RequestCancelled},
+                          {"worker_generation_id", worker_generation_id}};
+            if (!request_id.empty()) response["request_id"] = request_id;
+            res.status = http_status;
+            res.set_content(dump_json(response), "application/json");
+        };
+
+        TimeMachineContinuationRequest continuation;
+        try {
+            const json body = json::parse(req.body, nullptr, false);
+            if (body.is_discarded() || !body.is_object()) {
+                respond_error(400, TimeMachineContinuationCode::RequestInvalid,
+                              "invalid JSON object", "");
+                return;
+            }
+            for (auto field = body.begin(); field != body.end(); ++field) {
+                if (!time_machine_continuation_request_key_allowed(field.key())) {
+                    respond_error(400, TimeMachineContinuationCode::RequestInvalid,
+                                  "unknown continuation request field: " + field.key(), "");
+                    return;
+                }
+            }
+            auto require_string = [&](const char* field) -> std::string {
+                if (!body.contains(field) || !body[field].is_string())
+                    throw std::invalid_argument(std::string("need string '") + field + "'");
+                const std::string value = body[field].get<std::string>();
+                if (value.empty()) throw std::invalid_argument(std::string("'") + field + "' must not be empty");
+                return value;
+            };
+            continuation.checkpoint_id = require_string("checkpoint_id");
+            continuation.worker_generation_id = require_string("worker_generation_id");
+            continuation.expected_token_history_sha256 = require_string("expected_token_history_sha256");
+            continuation.expected_checkpoint_payload_sha256 =
+                require_string("expected_checkpoint_payload_sha256");
+            continuation.append_token_ids_sha256 = require_string("append_token_ids_sha256");
+            continuation.request_id = require_string("request_id");
+            if (!body.contains("expected_n_past") || !body["expected_n_past"].is_number_integer())
+                throw std::invalid_argument("need integer 'expected_n_past'");
+            continuation.expected_n_past = body["expected_n_past"].get<int>();
+            if (!body.contains("max_tokens") || !body["max_tokens"].is_number_integer())
+                throw std::invalid_argument("need integer 'max_tokens'");
+            continuation.max_tokens = body["max_tokens"].get<int>();
+            if (!body.contains("append_token_ids") || !body["append_token_ids"].is_array())
+                throw std::invalid_argument("need array 'append_token_ids'");
+            continuation.append_token_ids.reserve(body["append_token_ids"].size());
+            for (const json& value : body["append_token_ids"]) {
+                if (!value.is_number_integer())
+                    throw std::invalid_argument("append_token_ids must contain only integer token ids");
+                continuation.append_token_ids.push_back(value.get<int>());
+            }
+            if (body.contains("checkpoint_on_finish") && !body["checkpoint_on_finish"].is_boolean())
+                throw std::invalid_argument("checkpoint_on_finish must be a boolean when present");
+            const bool checkpoint_on_finish = body.value("checkpoint_on_finish", false);
+
+            // Register before looking up the checkpoint.  The preflight and lookup are very short, but
+            // this gives the established /cancel registry one request id across the whole atomic lease.
+            const std::shared_ptr<std::atomic<bool>> cancelled =
+                cancel_registry.register_request(continuation.request_id);
+            CancelRegistry::Guard cancellation_guard{cancel_registry, continuation.request_id};
+            auto check_cancelled = [&]() {
+                if (cancelled->load(std::memory_order_relaxed)) throw GenerationCancelled();
+            };
+            check_cancelled();
+
+            std::optional<EngineCheckpoint> found = checkpoints.find_copy(continuation.checkpoint_id);
+            TimeMachineContinuationCheckpointView checkpoint_view;
+            checkpoint_view.worker_generation_id = worker_generation_id;
+            if (found) {
+                checkpoint_view.exists = true;
+                if (found->n_past < 1 || found->n_past > static_cast<int>(found->tokens.size())) {
+                    respond_error(409, TimeMachineContinuationCode::CheckpointIdentityMismatch,
+                                  "checkpoint has an invalid restored position", continuation.request_id);
+                    return;
+                }
+                checkpoint_view.n_past = found->n_past;
+                checkpoint_view.historical_token_ids.assign(
+                    found->tokens.begin(), found->tokens.begin() + found->n_past);
+                checkpoint_view.payload_sha256 = hash_checkpoint_payload(*found);
+            }
+            const TimeMachineContinuationValidation validation = validate_time_machine_continuation(
+                continuation, checkpoint_view, model->config().vocab_size,
+                cancelled->load(std::memory_order_relaxed));
+            if (!validation.ok()) {
+                const int status = validation.code == TimeMachineContinuationCode::CheckpointUnavailable ? 404
+                                 : validation.code == TimeMachineContinuationCode::WorkerGenerationStale ? 409
+                                 : validation.code == TimeMachineContinuationCode::RequestCancelled ? 409 : 400;
+                respond_error(status, validation.code, validation.message, continuation.request_id);
+                return;
+            }
+            if (!ar_mode) {
+                // No currently supported non-AR worker can satisfy sequential causal append.  Keep the
+                // reason typed rather than accepting it and quietly taking a prefill/replay path.
+                respond_error(409, TimeMachineContinuationCode::RequestInvalid,
+                              "exact appended continuation requires an autoregressive worker",
+                              continuation.request_id);
+                return;
+            }
+
+            EngineCheckpoint checkpoint = std::move(*found);
+            TimeMachineSamplerProvenance sampler_provenance;
+            SampleConfig sampler;  // explicit greedy default when the checkpoint has no sampler provenance
+            if (checkpoint.has_sampler) {
+                sampler_provenance.has_sampler = true;
+                sampler_provenance.temperature = checkpoint.temperature;
+                sampler_provenance.rep_penalty = checkpoint.rep_penalty;
+                sampler_provenance.top_k = checkpoint.top_k;
+                sampler_provenance.top_p = checkpoint.top_p;
+                sampler_provenance.seed = checkpoint.seed;
+                sampler_provenance.rng_draws = checkpoint.rng_draws;
+                sampler.temperature = checkpoint.temperature;
+                sampler.rep_penalty = checkpoint.rep_penalty;
+                sampler.top_k = checkpoint.top_k;
+                sampler.top_p = checkpoint.top_p;
+                sampler.seed = checkpoint.seed;
+                sampler.rng_discard = checkpoint.rng_draws;
+            }
+
+            ContextPool::Lease lease = pool.acquire();
+            bool steer_applied = false;
+            auto clear_steer = [&]() {
+                if (steer_applied) {
+                    (*lease).clear_steer();
+                    steer_applied = false;
+                }
+            };
+            try {
+                check_cancelled();
+                // A checkpoint without steering means precisely "no steering".  Reset the leased
+                // context first so a failed/legacy handler cannot leak a control vector into this
+                // exact continuation, then re-apply only the checkpoint's recorded vector below.
+                (*lease).clear_steer();
+                if (checkpoint.has_steer) {
+                    const size_t expected_dimensions =
+                        static_cast<size_t>((*lease).n_embd()) * static_cast<size_t>((*lease).n_layer());
+                    if (checkpoint.steer_cvec.empty() ||
+                        checkpoint.steer_cvec.size() != expected_dimensions) {
+                        clear_steer();
+                        respond_error(409, TimeMachineContinuationCode::CheckpointIdentityMismatch,
+                                      "checkpoint steering state does not match this worker", continuation.request_id);
+                        return;
+                    }
+                    (*lease).set_steer(checkpoint.steer_cvec, checkpoint.steer_lo, checkpoint.steer_hi);
+                    steer_applied = true;
+                }
+
+                GenerateConfig config{};
+                config.max_new = continuation.max_tokens;
+                // generate_ar_appended owns the exact state transition: load checkpoint unchanged ->
+                // append supplied IDs sequentially -> generate.  It cannot invoke encode(), a template,
+                // or a prefix prefill by construction.
+                GenerateResult generated = generate_ar_appended(
+                    *lease, checkpoint, continuation.append_token_ids, config, sampler, check_cancelled);
+                check_cancelled();  // a late cancel before persistence prevents an optional child checkpoint
+
+                std::string final_checkpoint_id;
+                if (checkpoint_on_finish) {
+                    // Re-decode the final continuation token at shape one before saving, exactly as
+                    // existing checkpoint_on_finish/execution-fork do.  This is a top-up-safe
+                    // normalization even though the ordinary AR loop has already decoded it; it only
+                    // touches the new append/generated tail, never a historical position.
+                    const int n_board = static_cast<int>(generated.board.size());
+                    if (n_board < 1) throw std::runtime_error("continuation produced an empty board");
+                    (*lease).evict_from(n_board - 1);
+                    (*lease).ar_forward({generated.board[static_cast<size_t>(n_board - 1)]}, n_board - 1);
+                    EngineCheckpoint out = (*lease).save_checkpoint(generated.board, n_board);
+                    // The new user's rendered suffix ends at this boundary.  It is semantic checkpoint
+                    // provenance for a future child; it never authorizes a re-prefill of this operation.
+                    out.prompt_tokens = checkpoint.n_past +
+                                        static_cast<int>(continuation.append_token_ids.size());
+                    if (checkpoint.has_sampler) {
+                        out.has_sampler = true;
+                        out.temperature = checkpoint.temperature;
+                        out.rep_penalty = checkpoint.rep_penalty;
+                        out.top_k = checkpoint.top_k;
+                        out.top_p = checkpoint.top_p;
+                        out.seed = checkpoint.seed;
+                        out.rng_draws = checkpoint.rng_draws +
+                            (checkpoint.temperature > 0.0
+                                 ? static_cast<std::uint64_t>(generated.steps_total) : 0ULL);
+                    }
+                    if (checkpoint.has_steer) {
+                        out.has_steer = true;
+                        out.steer_cvec = checkpoint.steer_cvec;
+                        out.steer_lo = checkpoint.steer_lo;
+                        out.steer_hi = checkpoint.steer_hi;
+                    }
+                    final_checkpoint_id = checkpoints.insert(std::move(out));
+                }
+
+                clear_steer();
+                // Keep per-token decoding adjacent to the IDs.  ``text`` is the concatenated
+                // display string; ``token_pieces`` is deliberately aligned 1:1 with ``tokens`` so
+                // a child trace can retain exact output tokens without re-tokenizing text.
+                json token_pieces = json::array();
+                for (const int token_id : generated.generated)
+                    token_pieces.push_back(model->decode({token_id}));
+                json response{{"status", "completed"},
+                              {"code", time_machine_continuation_code(
+                                  TimeMachineContinuationCode::ContinuationCompleted)},
+                              {"request_id", continuation.request_id},
+                              {"worker_generation_id", worker_generation_id},
+                              {"checkpoint_id", continuation.checkpoint_id},
+                              {"restore_mode", "live_checkpoint"},
+                              {"n_past_restored", checkpoint.n_past},
+                              {"n_past_after_append", checkpoint.n_past +
+                                  static_cast<int>(continuation.append_token_ids.size())},
+                              {"append_token_count", static_cast<int>(continuation.append_token_ids.size())},
+                              {"append_token_ids_sha256", continuation.append_token_ids_sha256},
+                              {"generated_token_count", generated.new_tokens},
+                              {"tokens", generated.generated},
+                              {"token_pieces", token_pieces},
+                              {"text", generated.text},
+                              {"finish_reason", finish_reason(generated.reason)},
+                              {"cancelled", false},
+                              {"historical_prefix_recomputed", false},
+                              {"historical_prefix_retokenized_for_execution", false},
+                              {"append_only_execution", true},
+                              {"append_decode_regime", "sequential_single_token"},
+                              {"checkpoint_payload_sha256", checkpoint_view.payload_sha256},
+                              {"sampler", {
+                                  {"source", "checkpoint"},
+                                  {"mode", sampler.temperature > 0.0 ? "sample" : "greedy"},
+                                  {"config_sha256", time_machine_sampler_config_sha256(sampler_provenance)},
+                                  {"state_sha256", sampler.temperature > 0.0
+                                      ? json(time_machine_sampler_state_sha256(sampler_provenance)) : json()},
+                                  {"rng_draws_before_append", sampler_provenance.rng_draws},
+                              }},
+                              {"sampler_state_preserved", true},
+                              {"steering_state_preserved", true},
+                              // The worker has no serialized native-grammar/additional-stop state in an
+                              // EngineCheckpoint and accepts no rendered text/template to reconstruct it.
+                              // A gateway must reject an inherited run that required either constraint;
+                              // `false` is an explicit capability fact, never a claim that they were kept.
+                              {"native_grammar_constraints_applied", false},
+                              {"additional_stop_constraints_applied", false},
+                              // This worker never mutates LoRA/adapter attachment in the primitive.
+                              // It cannot prove that the source run used this attachment; the gateway's
+                              // selected-runtime identity check owns that cross-run assertion.
+                              {"adapter_state_mutated", false}};
+                if (!final_checkpoint_id.empty()) response["final_checkpoint_id"] = final_checkpoint_id;
+                res.set_content(dump_json(response), "application/json");
+            } catch (const GenerationCancelled&) {
+                clear_steer();
+                respond_error(409, TimeMachineContinuationCode::RequestCancelled,
+                              "request was cancelled before continuation completion", continuation.request_id);
+            } catch (const std::exception& error) {
+                clear_steer();
+                // The preflight above classifies every caller-controlled input.  Anything remaining is a
+                // restore/decode/runtime failure; keep it typed and do not attempt a structural fallback.
+                respond_error(500, TimeMachineContinuationCode::WorkerProtocolError,
+                              std::string("continuation worker failed: ") + error.what(),
+                              continuation.request_id);
+            }
+        } catch (const GenerationCancelled&) {
+            respond_error(409, TimeMachineContinuationCode::RequestCancelled,
+                          "request was cancelled before continuation completion", continuation.request_id);
+        } catch (const std::exception& error) {
+            respond_error(400, TimeMachineContinuationCode::RequestInvalid, error.what(), continuation.request_id);
+        }
+    });
+
     // --- FORK-PIN-01: durable checkpoint lifecycle (export / import / truncate) --------------
     // Checkpoints above are bounded, insertion-order-FIFO, process-generation-scoped worker memory
     // (checkpoint_store.hpp's own docstring): nothing survives a worker restart, and there is no way
@@ -2084,6 +2383,7 @@ int main(int argc, char** argv) {
                 {"worker_generation_id", worker_generation_id},
                 {"n_past", n_past},
                 {"size_bytes", sz},
+                {"payload_sha256", actual_hash},
                 {"source_worker_generation_id", source_generation},
             }.dump(), "application/json");
         } catch (const std::exception& e) {

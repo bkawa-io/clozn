@@ -1,0 +1,465 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.time-machine-continuation.v1",
+  "title": "Answer Time Machine exact appended-turn continuation receipt",
+  "description": "A closed terminal receipt for restoring an exact historical checkpoint, appending only a validated new user-turn token suffix, generating, and persisting an immutable child. Structural replay and historical-prefix re-prefill are forbidden fallbacks.",
+  "type": "object",
+  "oneOf": [
+    {
+      "required": ["status"],
+      "properties": {
+        "status": {"const": "completed"},
+        "source": {"$ref": "#/$defs/ResolvedSource"},
+        "source_checkpoint": {"anyOf": [{"$ref": "#/$defs/LiveCheckpoint"}, {"$ref": "#/$defs/DurableCheckpoint"}]},
+        "identity": {"$ref": "#/$defs/MatchedIdentity"},
+        "append": {"$ref": "#/$defs/ValidatedAppend"},
+        "sampler": {"anyOf": [{"$ref": "#/$defs/GreedySampler"}, {"$ref": "#/$defs/SampledSampler"}]},
+        "exactness": {"$ref": "#/$defs/ConfirmedExactness"},
+        "worker": {"$ref": "#/$defs/CompletedWorker"},
+        "child_lineage": {"$ref": "#/$defs/CreatedChild"},
+        "failure": {"type": "null"}
+      }
+    },
+    {
+      "required": ["status"],
+      "properties": {
+        "status": {"enum": ["unavailable", "failed", "cancelled"]},
+        "failure": {"$ref": "#/$defs/Failure"}
+      }
+    }
+  ],
+  "required": [
+    "schema_version",
+    "continuation_id",
+    "created_ts",
+    "finished_ts",
+    "requested_run_id",
+    "source_turn",
+    "status",
+    "request",
+    "source",
+    "source_checkpoint",
+    "identity",
+    "append",
+    "sampler",
+    "exactness",
+    "worker",
+    "child_lineage",
+    "unavoidable_differences",
+    "reasons",
+    "failure"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.time-machine-continuation.v1"},
+    "continuation_id": {"type": "string", "pattern": "^tmc_[0-9a-f]{20}$"},
+    "created_ts": {"type": "number", "minimum": 0},
+    "finished_ts": {"type": "number", "minimum": 0},
+    "requested_run_id": {"type": "string", "minLength": 1},
+    "source_turn": {"type": "integer", "minimum": 0},
+    "status": {"enum": ["completed", "unavailable", "failed", "cancelled"]},
+    "request": {"$ref": "#/$defs/Request"},
+    "source": {"anyOf": [{"$ref": "#/$defs/ResolvedSource"}, {"$ref": "#/$defs/UnresolvedSource"}]},
+    "source_checkpoint": {"anyOf": [{"$ref": "#/$defs/LiveCheckpoint"}, {"$ref": "#/$defs/DurableCheckpoint"}, {"$ref": "#/$defs/UnavailableCheckpoint"}]},
+    "identity": {"anyOf": [{"$ref": "#/$defs/MatchedIdentity"}, {"$ref": "#/$defs/UnmatchedIdentity"}]},
+    "append": {"anyOf": [{"$ref": "#/$defs/ValidatedAppend"}, {"$ref": "#/$defs/UnavailableAppend"}]},
+    "sampler": {"anyOf": [{"$ref": "#/$defs/GreedySampler"}, {"$ref": "#/$defs/SampledSampler"}, {"$ref": "#/$defs/UnavailableSampler"}]},
+    "exactness": {"anyOf": [{"$ref": "#/$defs/ConfirmedExactness"}, {"$ref": "#/$defs/UnconfirmedExactness"}]},
+    "worker": {"anyOf": [{"$ref": "#/$defs/CompletedWorker"}, {"$ref": "#/$defs/IncompleteWorker"}]},
+    "child_lineage": {"anyOf": [{"$ref": "#/$defs/CreatedChild"}, {"$ref": "#/$defs/UncreatedChild"}]},
+    "unavoidable_differences": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "new_append_tokens",
+          "new_generated_suffix",
+          "worker_process_generation_changed_after_durable_import",
+          "sampler_rng_advanced_for_new_generation",
+          "backend_nondeterminism"
+        ]
+      }
+    },
+    "reasons": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/Reason"}},
+    "failure": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/Failure"}]}
+  },
+  "$defs": {
+    "Sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "Request": {
+      "type": "object",
+      "required": ["request_id", "turn", "append_kind", "user_content_sha256", "user_content_bytes", "max_tokens", "generation_config_sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "request_id": {"type": "string", "minLength": 1},
+        "turn": {"type": "integer", "minimum": 0},
+        "append_kind": {"const": "new_user_turn"},
+        "user_content_sha256": {"$ref": "#/$defs/Sha256"},
+        "user_content_bytes": {"type": "integer", "minimum": 1},
+        "max_tokens": {"type": "integer", "minimum": 1},
+        "generation_config_sha256": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "ResolvedSource": {
+      "type": "object",
+      "required": ["status", "source_run_id", "source_turn", "resolution"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"const": "resolved"},
+        "source_run_id": {"type": "string", "minLength": 1},
+        "source_turn": {"type": "integer", "minimum": 0},
+        "resolution": {"enum": ["exact_latest_run", "exact_organic_session_prefix"]},
+        "session_key_sha256": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "UnresolvedSource": {
+      "type": "object",
+      "required": ["status", "reasons"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"enum": ["unavailable", "ambiguous"]},
+        "reasons": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/Reason"}}
+      }
+    },
+    "LiveCheckpoint": {
+      "type": "object",
+      "required": ["status", "provenance", "capture_regime", "restart_safe", "source_run_id", "checkpoint_reference_id", "checkpoint_id", "source_worker_generation_id", "executing_worker_generation_id", "prompt_tokens", "n_past", "token_history_sha256", "payload_sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"const": "available"},
+        "provenance": {"const": "live_worker_checkpoint"},
+        "capture_regime": {"enum": ["organic_live_kv", "verified_prompt_boundary_reprefill"]},
+        "restart_safe": {"const": false},
+        "source_run_id": {"type": "string", "minLength": 1},
+        "checkpoint_reference_id": {"type": "string", "minLength": 1},
+        "checkpoint_id": {"type": "string", "minLength": 1},
+        "source_worker_generation_id": {"type": "string", "minLength": 1},
+        "executing_worker_generation_id": {"type": "string", "minLength": 1},
+        "prompt_tokens": {"type": "integer", "minimum": 1},
+        "n_past": {"type": "integer", "minimum": 1},
+        "token_history_sha256": {"$ref": "#/$defs/Sha256"},
+        "payload_sha256": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "DurableCheckpoint": {
+      "type": "object",
+      "required": ["status", "provenance", "capture_regime", "restart_safe", "source_run_id", "checkpoint_reference_id", "checkpoint_id", "pin_id", "pin_blob_sha256", "source_worker_generation_id", "executing_worker_generation_id", "prompt_tokens", "n_past", "token_history_sha256", "payload_sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"const": "available"},
+        "provenance": {"const": "durable_pin_import"},
+        "capture_regime": {"enum": ["organic_live_kv", "verified_prompt_boundary_reprefill"]},
+        "restart_safe": {"const": true},
+        "source_run_id": {"type": "string", "minLength": 1},
+        "checkpoint_reference_id": {"type": "string", "minLength": 1},
+        "checkpoint_id": {"type": "string", "minLength": 1},
+        "pin_id": {"type": "string", "pattern": "^pin_[0-9a-f]{20}$"},
+        "pin_blob_sha256": {"$ref": "#/$defs/Sha256"},
+        "source_worker_generation_id": {"type": "string", "minLength": 1},
+        "executing_worker_generation_id": {"type": "string", "minLength": 1},
+        "prompt_tokens": {"type": "integer", "minimum": 1},
+        "n_past": {"type": "integer", "minimum": 1},
+        "token_history_sha256": {"$ref": "#/$defs/Sha256"},
+        "payload_sha256": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "UnavailableCheckpoint": {
+      "type": "object",
+      "required": ["status", "reasons"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"enum": ["unavailable", "failed"]},
+        "reasons": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/Reason"}}
+      }
+    },
+    "NoAdapter": {
+      "type": "object",
+      "required": ["present", "identity_sha256", "artifact_sha256", "scale"],
+      "additionalProperties": false,
+      "properties": {
+        "present": {"const": false},
+        "identity_sha256": {"type": "null"},
+        "artifact_sha256": {"type": "null"},
+        "scale": {"type": "null"}
+      }
+    },
+    "Adapter": {
+      "type": "object",
+      "required": ["present", "identity_sha256", "artifact_sha256", "scale"],
+      "additionalProperties": false,
+      "properties": {
+        "present": {"const": true},
+        "identity_sha256": {"$ref": "#/$defs/Sha256"},
+        "artifact_sha256": {"$ref": "#/$defs/Sha256"},
+        "scale": {"type": "number"}
+      }
+    },
+    "WorkerIdentity": {
+      "type": "object",
+      "required": ["worker_id", "worker_generation_id", "protocol_version"],
+      "additionalProperties": false,
+      "properties": {
+        "worker_id": {"type": "string", "minLength": 1},
+        "worker_generation_id": {"type": "string", "minLength": 1},
+        "protocol_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$"}
+      }
+    },
+    "IdentityChecks": {
+      "type": "object",
+      "required": ["runtime", "model", "tokenizer", "template", "adapter", "settings", "checkpoint"],
+      "additionalProperties": false,
+      "properties": {
+        "runtime": {"const": true},
+        "model": {"const": true},
+        "tokenizer": {"const": true},
+        "template": {"const": true},
+        "adapter": {"const": true},
+        "settings": {"const": true},
+        "checkpoint": {"const": true}
+      }
+    },
+    "MatchedIdentity": {
+      "type": "object",
+      "required": ["status", "source_runtime_key_sha256", "selected_runtime_key_sha256", "model_sha256", "tokenizer_sha256", "template_fingerprint", "generation_settings_sha256", "engine_build", "context_size", "backend", "adapter", "worker", "checks"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"const": "matched"},
+        "source_runtime_key_sha256": {"$ref": "#/$defs/Sha256"},
+        "selected_runtime_key_sha256": {"$ref": "#/$defs/Sha256"},
+        "model_sha256": {"$ref": "#/$defs/Sha256"},
+        "tokenizer_sha256": {"$ref": "#/$defs/Sha256"},
+        "template_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{16,64}$"},
+        "generation_settings_sha256": {"$ref": "#/$defs/Sha256"},
+        "engine_build": {"type": "string", "minLength": 1},
+        "context_size": {"type": "integer", "minimum": 1},
+        "backend": {"type": "string", "minLength": 1},
+        "adapter": {"oneOf": [{"$ref": "#/$defs/NoAdapter"}, {"$ref": "#/$defs/Adapter"}]},
+        "worker": {"$ref": "#/$defs/WorkerIdentity"},
+        "checks": {"$ref": "#/$defs/IdentityChecks"}
+      }
+    },
+    "UnmatchedIdentity": {
+      "type": "object",
+      "required": ["status", "reasons"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"enum": ["unavailable", "mismatch"]},
+        "reasons": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/Reason"}}
+      }
+    },
+    "ValidatedAppend": {
+      "type": "object",
+      "required": ["status", "derivation", "decode_regime", "historical_token_count", "historical_token_ids_sha256", "full_render_token_count", "full_render_token_ids_sha256", "prefix_match", "append_token_ids", "append_token_count", "append_token_ids_sha256", "rendered_append_sha256", "generation_prefix_token_count", "template_fingerprint", "tokenizer_sha256", "special_tokens_preserved"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"const": "validated"},
+        "derivation": {"const": "validated_full_render_suffix"},
+        "decode_regime": {"const": "sequential_single_token"},
+        "historical_token_count": {"type": "integer", "minimum": 1},
+        "historical_token_ids_sha256": {"$ref": "#/$defs/Sha256"},
+        "full_render_token_count": {"type": "integer", "minimum": 2},
+        "full_render_token_ids_sha256": {"$ref": "#/$defs/Sha256"},
+        "prefix_match": {"const": true},
+        "append_token_ids": {"type": "array", "minItems": 1, "items": {"type": "integer", "minimum": 0}},
+        "append_token_count": {"type": "integer", "minimum": 1},
+        "append_token_ids_sha256": {"$ref": "#/$defs/Sha256"},
+        "rendered_append_sha256": {"$ref": "#/$defs/Sha256"},
+        "generation_prefix_token_count": {"type": "integer", "minimum": 0},
+        "template_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{16,64}$"},
+        "tokenizer_sha256": {"$ref": "#/$defs/Sha256"},
+        "special_tokens_preserved": {"const": true}
+      }
+    },
+    "UnavailableAppend": {
+      "type": "object",
+      "required": ["status", "reasons"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"enum": ["unavailable", "failed"]},
+        "reasons": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/Reason"}}
+      }
+    },
+    "GreedySampler": {
+      "type": "object",
+      "required": ["status", "mode", "source", "config_sha256", "state_sha256", "rng_draws_before_append"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"const": "preserved"},
+        "mode": {"const": "greedy"},
+        "source": {"const": "checkpoint"},
+        "config_sha256": {"$ref": "#/$defs/Sha256"},
+        "state_sha256": {"type": "null"},
+        "rng_draws_before_append": {"const": 0}
+      }
+    },
+    "SampledSampler": {
+      "type": "object",
+      "required": ["status", "mode", "source", "config_sha256", "state_sha256", "rng_draws_before_append"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"const": "preserved"},
+        "mode": {"const": "sample"},
+        "source": {"const": "checkpoint"},
+        "config_sha256": {"$ref": "#/$defs/Sha256"},
+        "state_sha256": {"$ref": "#/$defs/Sha256"},
+        "rng_draws_before_append": {"type": "integer", "minimum": 0}
+      }
+    },
+    "UnavailableSampler": {
+      "type": "object",
+      "required": ["status", "reasons"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"enum": ["unavailable", "mismatch"]},
+        "reasons": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/Reason"}}
+      }
+    },
+    "ConfirmedExactness": {
+      "type": "object",
+      "required": ["status", "claim", "historical_state_source", "source_capture_regime", "historical_prefix_recomputed", "historical_prefix_retokenized_for_execution", "append_only_execution", "append_decode_regime", "historical_boundary_preserved", "source_checkpoint_identity_verified", "worker_generation_verified", "structural_fallback_used", "fresh_full_prompt_equivalence_claimed", "worker_receipt_sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"const": "confirmed"},
+        "claim": {"const": "exact_historical_state_append"},
+        "historical_state_source": {"enum": ["live_kv", "durable_import"]},
+        "source_capture_regime": {"enum": ["organic_live_kv", "verified_prompt_boundary_reprefill"]},
+        "historical_prefix_recomputed": {"const": false},
+        "historical_prefix_retokenized_for_execution": {"const": false},
+        "append_only_execution": {"const": true},
+        "append_decode_regime": {"const": "sequential_single_token"},
+        "historical_boundary_preserved": {"const": true},
+        "source_checkpoint_identity_verified": {"const": true},
+        "worker_generation_verified": {"const": true},
+        "structural_fallback_used": {"const": false},
+        "fresh_full_prompt_equivalence_claimed": {"const": false},
+        "worker_receipt_sha256": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "UnconfirmedExactness": {
+      "type": "object",
+      "required": ["status", "claim", "structural_fallback_used", "reasons"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"enum": ["not_confirmed", "failed"]},
+        "claim": {"const": "unavailable"},
+        "structural_fallback_used": {"const": false},
+        "reasons": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/Reason"}}
+      }
+    },
+    "CompletedWorker": {
+      "type": "object",
+      "required": ["status", "request_id", "worker_generation_id", "checkpoint_id", "restore_mode", "n_past_restored", "n_past_after_append", "append_token_count", "generated_token_count", "generated_token_ids_sha256", "text_sha256", "finish_reason", "cancelled", "sampler_state_preserved", "adapter_state_preserved"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"const": "completed"},
+        "request_id": {"type": "string", "minLength": 1},
+        "worker_generation_id": {"type": "string", "minLength": 1},
+        "checkpoint_id": {"type": "string", "minLength": 1},
+        "restore_mode": {"enum": ["live_checkpoint", "durable_import"]},
+        "n_past_restored": {"type": "integer", "minimum": 1},
+        "n_past_after_append": {"type": "integer", "minimum": 2},
+        "append_token_count": {"type": "integer", "minimum": 1},
+        "generated_token_count": {"type": "integer", "minimum": 0},
+        "generated_token_ids_sha256": {"$ref": "#/$defs/Sha256"},
+        "text_sha256": {"$ref": "#/$defs/Sha256"},
+        "finish_reason": {"enum": ["eos", "length", "stop"]},
+        "cancelled": {"const": false},
+        "sampler_state_preserved": {"const": true},
+        "adapter_state_preserved": {"const": true},
+        "final_checkpoint_id": {"type": "string", "minLength": 1}
+      }
+    },
+    "IncompleteWorker": {
+      "type": "object",
+      "required": ["status", "cancelled", "reasons"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"enum": ["not_run", "failed", "cancelled"]},
+        "request_id": {"type": "string", "minLength": 1},
+        "worker_generation_id": {"type": "string", "minLength": 1},
+        "cancelled": {"type": "boolean"},
+        "reasons": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/Reason"}}
+      }
+    },
+    "CreatedChild": {
+      "type": "object",
+      "required": ["status", "requested_parent_run_id", "source_checkpoint_run_id", "child_run_id", "relation", "parent_immutable", "source_immutable", "receipt_persisted"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"const": "created"},
+        "requested_parent_run_id": {"type": "string", "minLength": 1},
+        "source_checkpoint_run_id": {"type": "string", "minLength": 1},
+        "child_run_id": {"type": "string", "minLength": 1},
+        "relation": {"const": "exact_continuation"},
+        "parent_immutable": {"const": true},
+        "source_immutable": {"const": true},
+        "receipt_persisted": {"const": true}
+      }
+    },
+    "UncreatedChild": {
+      "type": "object",
+      "required": ["status", "requested_parent_run_id", "relation", "parent_immutable", "reasons"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"enum": ["not_created", "failed", "cancelled"]},
+        "requested_parent_run_id": {"type": "string", "minLength": 1},
+        "source_checkpoint_run_id": {"type": "string", "minLength": 1},
+        "relation": {"const": "exact_continuation"},
+        "parent_immutable": {"const": true},
+        "reasons": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/Reason"}}
+      }
+    },
+    "Failure": {
+      "type": "object",
+      "required": ["stage", "code", "message", "retryable"],
+      "additionalProperties": false,
+      "properties": {
+        "stage": {"enum": ["request", "source_resolution", "checkpoint", "identity", "append_derivation", "worker_restore", "worker_append", "generation", "persistence"]},
+        "code": {"$ref": "#/$defs/ReasonCode"},
+        "message": {"type": "string", "minLength": 1},
+        "retryable": {"type": "boolean"}
+      }
+    },
+    "ReasonCode": {
+      "enum": [
+        "continuation_completed",
+        "request_invalid",
+        "requested_run_not_found",
+        "turn_out_of_range",
+        "historical_source_unavailable",
+        "historical_source_ambiguous",
+        "checkpoint_unavailable",
+        "checkpoint_expired",
+        "checkpoint_corrupt",
+        "checkpoint_identity_mismatch",
+        "model_identity_mismatch",
+        "tokenizer_identity_mismatch",
+        "template_identity_mismatch",
+        "adapter_identity_mismatch",
+        "settings_identity_mismatch",
+        "worker_generation_stale",
+        "worker_capability_missing",
+        "append_render_failed",
+        "append_prefix_mismatch",
+        "append_tokens_invalid",
+        "append_empty",
+        "batch_shape_unsupported",
+        "checkpoint_import_failed",
+        "worker_restore_failed",
+        "worker_append_failed",
+        "generation_failed",
+        "request_cancelled",
+        "parent_changed",
+        "child_persistence_failed",
+        "worker_protocol_error"
+      ]
+    },
+    "Reason": {
+      "type": "object",
+      "required": ["code", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {"$ref": "#/$defs/ReasonCode"},
+        "message": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

@@ -42,8 +42,64 @@
         "replay_fidelity": {"enum": ["exact_replay_eligible", "same_inputs_environment_changed", "structurally_reproducible", "unavailable"]},
         "exact_replay_eligible": {"type": "boolean"},
         "snapshot": {"$ref": "#/$defs/Snapshot"},
+        "source": {"$ref": "#/$defs/TurnSource"},
         "reasons": {"type": "array", "items": {"$ref": "#/$defs/Reason"}},
         "last_verification": {"$ref": "#/$defs/LastVerification"}
+      }
+    },
+    "TurnSource": {
+      "description": "Read-only projection of the immutable run that backs this exact prompt boundary. A stored durable pin survives process restart, but GET does not read its checkpoint bytes or claim that the next worker will accept it; the explicit exact action re-checks both.",
+      "type": "object",
+      "required": ["status", "durable_pin", "reasons"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"enum": ["available", "unavailable"]},
+        "run_id": {"type": "string", "minLength": 1},
+        "scope": {"enum": ["full_run_prompt_boundary", "session_turn_prompt_boundary"]},
+        "source_turn": {"type": "integer", "minimum": 0},
+        "durable_pin": {"$ref": "#/$defs/DurablePin"},
+        "reasons": {"type": "array", "items": {"$ref": "#/$defs/Reason"}}
+      },
+      "oneOf": [
+        {
+          "properties": {"status": {"const": "available"}},
+          "required": ["status", "run_id", "scope", "source_turn", "durable_pin", "reasons"]
+        },
+        {
+          "properties": {"status": {"const": "unavailable"}},
+          "required": ["status", "durable_pin", "reasons"]
+        }
+      ]
+    },
+    "DurablePin": {
+      "type": "object",
+      "required": ["status", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {"enum": ["stored", "unavailable"]},
+        "reason": {"$ref": "#/$defs/Reason"},
+        "pin": {"$ref": "#/$defs/DurablePinSummary"}
+      },
+      "oneOf": [
+        {
+          "properties": {"status": {"const": "stored"}},
+          "required": ["status", "reason", "pin"]
+        },
+        {
+          "properties": {"status": {"const": "unavailable"}},
+          "required": ["status", "reason"]
+        }
+      ]
+    },
+    "DurablePinSummary": {
+      "type": "object",
+      "required": ["pin_id", "pinned_at", "kv_bytes", "envelope_bytes"],
+      "additionalProperties": false,
+      "properties": {
+        "pin_id": {"type": "string", "minLength": 1},
+        "pinned_at": {"type": "string", "minLength": 1},
+        "kv_bytes": {"type": "integer", "minimum": 1},
+        "envelope_bytes": {"type": "integer", "minimum": 1}
       }
     },
     "LastVerification": {

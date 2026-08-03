@@ -133,6 +133,178 @@ def _seed_session_history():
     return ids[-1], ids[0], ids[1]
 
 
+_EXACT_MODEL_SHA = "a" * 64
+_EXACT_TOKENIZER_SHA = "b" * 64
+_EXACT_TEMPLATE = "c" * 16
+_EXACT_PAYLOAD = "d" * 64
+_EXACT_RUNTIME = {
+    "gguf_artifact_sha256": _EXACT_MODEL_SHA,
+    "template_fingerprint": _EXACT_TEMPLATE,
+    "engine_build": "fixture-build",
+    "context_size": 128,
+    "backend": "cpu",
+    "adapter": {
+        "present": False,
+        "identity_sha256": None,
+        "artifact_sha256": None,
+        "scale": None,
+    },
+    "white_box_flags": {},
+}
+_EXACT_WORKER = {
+    "worker_id": "generation-exact",
+    "worker_generation_id": "generation-exact",
+    "protocol_version": "1.1",
+}
+
+
+class ExactContinuationEngine:
+    def __init__(self, *, prefix_matches=True):
+        self.prefix_matches = prefix_matches
+        self.continuations = []
+
+    def health(self):
+        return {
+            "status": "ok",
+            "worker_generation_id": "generation-exact",
+            "protocol_version": "1.1",
+            "tokenizer_sha256": _EXACT_TOKENIZER_SHA,
+            "capabilities": {"time_machine_continuation": True},
+        }
+
+    def apply_template_info(self, messages, add_assistant=True):
+        assert messages[-1] == {"role": "user", "content": "new question"}
+        prompt = "<prompt>answer<user>new question</user>"
+        if add_assistant:
+            prompt += "<assistant>"
+        return {"prompt": prompt, "prompt_tokens": 5 if add_assistant else 4}
+
+    def score(self, **kwargs):
+        ids = [1, 2, 3, 9, 10] if self.prefix_matches else [1, 8, 3, 9, 10]
+        return {"prompt_ids": ids, "n_prompt": len(ids)}
+
+    def time_machine_continue(self, **body):
+        from clozn.replay.time_machine_continuation import sampler_config_sha256
+
+        self.continuations.append(dict(body))
+        return {
+            "status": "completed",
+            "code": "continuation_completed",
+            "request_id": body["request_id"],
+            "worker_generation_id": "generation-exact",
+            "checkpoint_id": "checkpoint-imported",
+            "checkpoint_payload_sha256": _EXACT_PAYLOAD,
+            "restore_mode": "live_checkpoint",
+            "n_past_restored": 3,
+            "n_past_after_append": 5,
+            "append_token_count": 2,
+            "append_token_ids_sha256": body["append_token_ids_sha256"],
+            "generated_token_count": 1,
+            "tokens": [55],
+            "token_pieces": ["next answer"],
+            "text": "next answer",
+            "finish_reason": "stop",
+            "cancelled": False,
+            "historical_prefix_recomputed": False,
+            "historical_prefix_retokenized_for_execution": False,
+            "append_only_execution": True,
+            "append_decode_regime": "sequential_single_token",
+            "sampler": {
+                "source": "checkpoint",
+                "mode": "greedy",
+                "config_sha256": sampler_config_sha256(has_sampler=False),
+                "state_sha256": None,
+                "rng_draws_before_append": 0,
+            },
+            "sampler_state_preserved": True,
+            "steering_state_preserved": True,
+            "native_grammar_constraints_applied": False,
+            "additional_stop_constraints_applied": False,
+            "adapter_state_mutated": False,
+            "final_checkpoint_id": "checkpoint-child",
+        }
+
+
+class ExactContinuationSub:
+    name = "engine"
+
+    def __init__(self, engine):
+        self.engine = engine
+        self.runtime_identity = dict(_EXACT_RUNTIME)
+        self.worker_identity = dict(_EXACT_WORKER)
+
+
+def _seed_exact_continuation_source():
+    return runlog.record(
+        source="studio_chat",
+        client="studio",
+        model="fixture-exact-model",
+        substrate="engine",
+        messages=[{"role": "user", "content": "original question"}],
+        response="answer",
+        final_prompt="<prompt>",
+        trace={"tokens": ["answer"], "token_ids": [3]},
+        meta={
+            "prompt_tokens": 2,
+            "stream": False,
+            "decode": {"mode": "greedy", "temperature": 0.0, "seed": 0},
+            "sampler_mode": "greedy",
+            "n_ctx": 128,
+            "device": "cpu",
+            "white_box_flags": {},
+        },
+        identity={
+            "model_sha256": _EXACT_MODEL_SHA,
+            "tokenizer_sha256": _EXACT_TOKENIZER_SHA,
+            "template_fingerprint": _EXACT_TEMPLATE,
+            "engine_build": "fixture-build",
+            "context_size": 128,
+            "backend": "cpu",
+            "white_box_flags": {},
+        },
+    )
+
+
+def _install_exact_continuation_fakes(monkeypatch, tmp_path, engine):
+    from clozn.replay import checkpoint_capture, checkpoint_pin_store
+    from clozn.replay import time_machine_continuation_results
+
+    monkeypatch.setattr(cs, "SUB", ExactContinuationSub(engine))
+    monkeypatch.setattr(time_machine_continuation_results, "RESULTS_DIR", str(tmp_path / "tm-results"))
+    monkeypatch.setattr(checkpoint_pin_store, "resolve_pin", lambda _run_id: {
+        "ok": True,
+        "manifest": {
+            "pin_id": "pin_0123456789abcdef0123",
+            "source": {"worker_generation_id": "generation-source"},
+            "blob": {"sha256": "e" * 64},
+        },
+        "envelope": {"payload_sha256": _EXACT_PAYLOAD},
+    })
+
+    def capture(source, _engine, *, material_out, **_kwargs):
+        material_out.update({
+            "historical_token_ids": [1, 2, 3],
+            "checkpoint_response": {"payload_sha256": _EXACT_PAYLOAD},
+            "capture_regime": "verified_prompt_boundary_reprefill",
+            "checkpoint_provenance": "durable_pin_import",
+            "sampler": {"mode": "greedy", "config_sha256": "ignored", "rng_draws": 0},
+            "sampler_wire": None,
+            "steering": {"mode": "none", "provenance": "recorded_none"},
+        })
+        return {
+            "status": "available",
+            "checkpoint_reference_id": "checkpoint_ref_fixture",
+            "checkpoint_reference": {
+                "checkpoint_id": "checkpoint-imported",
+                "worker_generation_id": "generation-exact",
+                "prompt_tokens": 2,
+                "n_past": 3,
+            },
+        }
+
+    monkeypatch.setattr(checkpoint_capture, "capture_parent_checkpoint", capture)
+
+
 # ===================================================================================================
 # the gate -- default OFF, config round-trips, honest stats
 # ===================================================================================================
@@ -196,6 +368,26 @@ def test_time_machine_reports_structural_replay_and_turns(iso):
     assert [turn["turn"] for turn in out["turns"]] == [0, 1, 2]
     assert all(turn["branch_eligible"] for turn in out["turns"])
     assert all(turn["replay_fidelity"] == "structurally_reproducible" for turn in out["turns"])
+    assert out["turns"][0]["source"]["status"] == "unavailable"
+    assert out["turns"][-1]["source"] == {
+        "status": "available",
+        "run_id": rid,
+        "scope": "full_run_prompt_boundary",
+        "source_turn": 2,
+        "durable_pin": {
+            "status": "unavailable",
+            "reason": {
+                "code": "durable_pin_missing",
+                "message": (
+                    "no durable checkpoint is recorded for this source run; restart-safe hydration "
+                    "is unavailable until an explicit pin succeeds"),
+            },
+        },
+        "reasons": [{
+            "code": "requested_run_source_resolved",
+            "message": "the requested immutable run backs its latest completed prompt boundary",
+        }],
+    }
     schemas.validate(out, "clozn.time-machine-eligibility.v1")
 
 
@@ -215,6 +407,159 @@ def test_resolve_turn_source_run_requires_an_exact_session_prefix(iso):
     assert timetravel.resolve_turn_source_run(parent, 0)["id"] == turn_zero_id
     assert timetravel.resolve_turn_source_run(parent, 1)["id"] == turn_one_id
     assert timetravel.resolve_turn_source_run(parent, 2) is None
+
+
+def test_time_machine_projects_each_exact_source_and_restart_safe_pin_state(iso, monkeypatch):
+    rid, turn_zero_id, turn_one_id = _seed_session_history()
+    from clozn.replay import checkpoint_pin_store
+    monkeypatch.setattr(
+        checkpoint_pin_store,
+        "get_pin",
+        lambda run_id: {
+            "pin_id": "pin_source_turn_zero",
+            "pinned_at": "2026-08-02T00:00:00Z",
+            "blob": {"kv_bytes": 2048, "envelope_bytes": 3072},
+        } if run_id == turn_zero_id else None,
+    )
+    out = _get("/runs/" + rid + "/time-machine")
+    first, second, latest = out["turns"]
+    assert first["source"]["status"] == "available"
+    assert first["source"]["run_id"] == turn_zero_id
+    assert first["source"]["scope"] == "session_turn_prompt_boundary"
+    assert first["source"]["durable_pin"] == {
+        "status": "stored",
+        "reason": {
+            "code": "durable_pin_recorded",
+            "message": (
+                "a durable checkpoint is recorded for this source run; the next exact action will "
+                "re-read its bytes and fail closed if integrity or runtime compatibility does not match"),
+        },
+        "pin": {
+            "pin_id": "pin_source_turn_zero",
+            "pinned_at": "2026-08-02T00:00:00Z",
+            "kv_bytes": 2048,
+            "envelope_bytes": 3072,
+        },
+    }
+    assert second["source"]["run_id"] == turn_one_id
+    assert second["source"]["durable_pin"]["status"] == "unavailable"
+    assert latest["source"]["run_id"] == rid
+    assert latest["source"]["scope"] == "full_run_prompt_boundary"
+    schemas.validate(out, "clozn.time-machine-eligibility.v1")
+
+
+def test_time_machine_projects_separately_stored_latest_response_as_completed_turn(iso):
+    import clozn.runs.store as runlog
+
+    rid = runlog.record(
+        source="openai",
+        client="fixture",
+        model="fixture-model",
+        messages=[{"role": "user", "content": "latest question"}],
+        response="latest answer",
+        session_key="session_latest_response",
+    )
+    run = runlog.get_run(rid)
+    assert run["messages"] == [{"role": "user", "content": "latest question"}]
+    assert run["response"] == "latest answer"
+
+    out = _get("/runs/" + rid + "/time-machine")
+    assert len(out["turns"]) == 1
+    assert out["turns"][0]["turn"] == 0
+    assert out["turns"][0]["source"]["status"] == "available"
+    assert out["turns"][0]["source"]["run_id"] == rid
+    schemas.validate(out, "clozn.time-machine-eligibility.v1")
+
+
+def test_exact_appended_turn_continuation_persists_child_and_closed_receipt(iso, monkeypatch):
+    engine = ExactContinuationEngine()
+    _install_exact_continuation_fakes(monkeypatch, iso, engine)
+    parent_id = _seed_exact_continuation_source()
+    parent_before = runlog.get_run(parent_id)
+
+    out = _post(f"/runs/{parent_id}/time-machine/continue", {
+        "turn": 0,
+        "user": {"content": "new question"},
+        "max_tokens": 12,
+    })
+
+    assert out["status"] == "completed"
+    assert out["exactness"]["append_only_execution"] is True
+    assert out["exactness"]["historical_prefix_recomputed"] is False
+    assert out["source_checkpoint"]["provenance"] == "durable_pin_import"
+    assert out["source_checkpoint"]["source_worker_generation_id"] == "generation-source"
+    assert out["source_checkpoint"]["executing_worker_generation_id"] == "generation-exact"
+    assert out["append"]["append_token_ids"] == [9, 10]
+    assert "new question" not in json.dumps(out)
+    schemas.validate(out, "clozn.time-machine-continuation.v1")
+
+    child = runlog.get_run(out["child_lineage"]["child_run_id"])
+    assert child["parent_run_id"] == parent_id
+    assert child["messages"][-1] == {"role": "user", "content": "new question"}
+    assert child["response"] == "next answer"
+    assert child["trace"]["token_ids"] == [55]
+    assert child["trace"]["tokens"] == ["next answer"]
+    assert child["time_machine_continuation"] == out
+    assert runlog.get_run(parent_id) == parent_before
+    assert engine.continuations[0]["append_token_ids"] == [9, 10]
+    assert set(engine.continuations[0]) == {
+        "checkpoint_id", "worker_generation_id", "expected_n_past",
+        "expected_token_history_sha256", "expected_checkpoint_payload_sha256",
+        "append_token_ids", "append_token_ids_sha256", "max_tokens", "request_id",
+        "checkpoint_on_finish",
+    }
+
+
+def test_exact_appended_turn_requires_a_valid_durable_pin(iso, monkeypatch):
+    from clozn.replay import checkpoint_capture, checkpoint_pin_store
+    from clozn.replay import time_machine_continuation_results
+
+    engine = ExactContinuationEngine()
+    monkeypatch.setattr(cs, "SUB", ExactContinuationSub(engine))
+    monkeypatch.setattr(time_machine_continuation_results, "RESULTS_DIR", str(iso / "tm-results"))
+    monkeypatch.setattr(
+        checkpoint_pin_store, "resolve_pin",
+        lambda _run_id: {"unavailable": "pinned checkpoint blob corrupt (digest mismatch)"},
+    )
+    captures = []
+    monkeypatch.setattr(
+        checkpoint_capture, "capture_parent_checkpoint",
+        lambda *_args, **_kwargs: captures.append(True),
+    )
+    parent_id = _seed_exact_continuation_source()
+
+    out = _post(f"/runs/{parent_id}/time-machine/continue", {
+        "turn": 0,
+        "user": {"content": "new question"},
+        "max_tokens": 12,
+    })
+
+    assert out["status"] == "unavailable"
+    assert out["failure"]["stage"] == "checkpoint"
+    assert out["failure"]["code"] == "checkpoint_corrupt"
+    assert captures == []
+    assert engine.continuations == []
+    schemas.validate(out, "clozn.time-machine-continuation.v1")
+
+
+def test_exact_appended_turn_fails_on_token_prefix_drift_without_child(iso, monkeypatch):
+    engine = ExactContinuationEngine(prefix_matches=False)
+    _install_exact_continuation_fakes(monkeypatch, iso, engine)
+    parent_id = _seed_exact_continuation_source()
+    before_ids = {run["id"] for run in runlog.iter_runs()}
+
+    out = _post(f"/runs/{parent_id}/time-machine/continue", {
+        "turn": 0,
+        "user": {"content": "new question"},
+        "max_tokens": 12,
+    })
+
+    assert out["status"] == "failed"
+    assert out["failure"]["stage"] == "append_derivation"
+    assert out["failure"]["code"] == "append_prefix_mismatch"
+    assert {run["id"] for run in runlog.iter_runs()} == before_ids
+    assert engine.continuations == []
+    schemas.validate(out, "clozn.time-machine-continuation.v1")
 
 
 def test_time_machine_verifies_an_earlier_session_turn(iso, monkeypatch):

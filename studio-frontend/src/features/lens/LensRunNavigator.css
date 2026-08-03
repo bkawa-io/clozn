@@ -1,0 +1,199 @@
+.lens-run-navigator {
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  background:
+    linear-gradient(170deg, color-mix(in srgb, var(--signal-violet) 7%, transparent), transparent 30%),
+    var(--panel);
+  box-shadow: var(--shadow-soft);
+}
+
+.lens-run-navigator-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 74px;
+  padding: 15px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.lens-run-navigator-head h2 {
+  margin: 4px 0 0;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 540;
+}
+
+.lens-run-navigator-head > span,
+.lens-run-navigator-row-topline,
+.lens-run-navigator-model,
+.lens-run-navigator-row-bottomline,
+.lens-run-navigator-list small,
+.lens-run-navigator-empty {
+  font-family: var(--font-machine);
+}
+
+.lens-run-navigator-head > span {
+  color: var(--ink-faint);
+  font-size: 11px;
+  letter-spacing: .08em;
+}
+
+.lens-run-navigator-list {
+  display: grid;
+  max-height: min(70vh, 720px);
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.lens-run-navigator-list > li {
+  position: relative;
+  min-width: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.lens-run-navigator-list > li:last-child {
+  border-bottom: 0;
+}
+
+.lens-run-navigator-list > li::before {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 0;
+  z-index: 1;
+  width: 3px;
+  content: "";
+  opacity: 0;
+  background: var(--signal-cyan);
+  box-shadow: 0 0 9px var(--signal-cyan);
+}
+
+.lens-run-navigator-list > li.is-selected::before {
+  opacity: 1;
+}
+
+.lens-run-navigator-list button {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 6px;
+  padding: 14px 16px;
+  color: var(--ink);
+  background: transparent;
+  text-align: left;
+}
+
+.lens-run-navigator-list button:hover {
+  background: color-mix(in srgb, var(--panel-raised) 48%, transparent);
+}
+
+.lens-run-navigator-list > li.is-selected button {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--signal-cyan) 13%, transparent), transparent 86%),
+    color-mix(in srgb, var(--panel-raised) 50%, transparent);
+}
+
+.lens-run-navigator-row-topline,
+.lens-run-navigator-row-bottomline {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--ink-faint);
+  font-size: 11px;
+  letter-spacing: .025em;
+}
+
+.lens-run-navigator-row-topline time,
+.lens-run-navigator-row-bottomline span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lens-run-navigator-status {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-soft);
+  font-size: 11px;
+  letter-spacing: .065em;
+}
+
+.lens-run-navigator-status::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  content: "";
+  background: var(--ink-faint);
+}
+
+.lens-run-navigator-status.is-complete::before {
+  background: var(--signal-mint);
+  box-shadow: 0 0 7px var(--signal-mint);
+}
+
+.lens-run-navigator-status.is-truncated {
+  color: var(--signal-peach);
+}
+
+.lens-run-navigator-status.is-truncated::before {
+  background: var(--signal-peach);
+}
+
+.lens-run-navigator-status.is-error {
+  color: var(--danger);
+}
+
+.lens-run-navigator-status.is-error::before {
+  background: var(--danger);
+}
+
+.lens-run-navigator-list strong {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 540;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.lens-run-navigator-model {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lens-run-navigator-row-bottomline {
+  color: var(--ink-faint);
+}
+
+.lens-run-navigator-list small {
+  overflow: hidden;
+  color: color-mix(in srgb, var(--ink-faint) 78%, var(--signal-violet));
+  font-size: 11px;
+  letter-spacing: .06em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lens-run-navigator-empty {
+  margin: 0;
+  padding: 18px 16px;
+  color: var(--ink-faint);
+  font-size: 12px;
+  line-height: 1.5;
+}

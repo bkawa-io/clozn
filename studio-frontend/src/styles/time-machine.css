@@ -30,13 +30,19 @@
 }
 
 .lens-time-machine-controls select,
-.lens-time-machine-controls input {
+.lens-time-machine-controls input,
+.lens-time-machine-controls textarea {
   min-width: 0;
   border: 1px solid var(--line);
   background: var(--surface-raised);
   color: var(--ink);
   padding: 7px 8px;
   font: inherit;
+}
+
+.lens-time-machine-controls textarea {
+  min-height: 58px;
+  resize: vertical;
 }
 
 .lens-time-machine-controls button {
@@ -69,6 +75,121 @@
 .lens-time-machine-provenance code {
   color: var(--signal-cyan);
   font-size: 9px;
+}
+
+.lens-time-machine-source {
+  display: grid;
+  gap: 5px;
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface-raised);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.lens-time-machine-source p {
+  margin: 0;
+}
+
+.lens-time-machine-source code {
+  color: var(--signal-cyan);
+  font-size: 9px;
+}
+
+.lens-time-machine-source .is-ready {
+  color: var(--signal-cyan);
+}
+
+.lens-time-machine-source .is-unavailable {
+  color: var(--ink-faint);
+}
+
+.lens-time-machine-source-detail {
+  color: var(--ink-faint);
+}
+
+.lens-time-machine-source-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 3px;
+}
+
+.lens-time-machine-source-actions button {
+  border: 1px solid var(--signal-cyan);
+  background: transparent;
+  color: var(--signal-cyan);
+  padding: 7px 9px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.lens-time-machine-source-actions button.is-danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.lens-time-machine-source-actions button:disabled {
+  cursor: default;
+  opacity: .45;
+}
+
+.lens-time-machine-operation {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface-raised);
+}
+
+.lens-time-machine-operation.is-exact-continuation {
+  border-color: var(--signal-cyan);
+}
+
+.lens-time-machine-operation-controls {
+  margin-top: 0;
+}
+
+.lens-time-machine-continuation-preview {
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  border-left: 2px solid var(--signal-cyan);
+  color: var(--ink-faint);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.lens-time-machine-continuation-preview p {
+  margin: 0;
+}
+
+.lens-time-machine-continuation-preview code {
+  color: var(--signal-cyan);
+  font-size: 9px;
+}
+
+.lens-time-machine-continuation-preview .is-ready {
+  color: var(--signal-cyan);
+}
+
+.lens-time-machine-continuation-preview .is-unavailable {
+  color: var(--ink-faint);
+}
+
+.lens-time-machine-unavailable {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding-left: 16px;
+  color: var(--danger);
+}
+
+.lens-time-machine-pin-preview {
+  align-self: center;
+  color: var(--ink-faint);
 }
 
 @media (max-width: 760px) {

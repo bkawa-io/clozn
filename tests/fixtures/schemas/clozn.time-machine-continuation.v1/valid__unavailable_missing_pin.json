@@ -1,0 +1,83 @@
+{
+  "schema_version": "clozn.time-machine-continuation.v1",
+  "continuation_id": "tmc_abcdef0123456789abcd",
+  "created_ts": 1785700100.0,
+  "finished_ts": 1785700100.1,
+  "requested_run_id": "run_requested",
+  "source_turn": 0,
+  "status": "unavailable",
+  "request": {
+    "request_id": "continue-request-2",
+    "turn": 0,
+    "append_kind": "new_user_turn",
+    "user_content_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "user_content_bytes": 12,
+    "max_tokens": 64,
+    "generation_config_sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "source": {
+    "status": "resolved",
+    "source_run_id": "run_organic_turn_0",
+    "source_turn": 0,
+    "resolution": "exact_organic_session_prefix"
+  },
+  "source_checkpoint": {
+    "status": "unavailable",
+    "reasons": [
+      {"code": "checkpoint_unavailable", "message": "the source run has no live checkpoint or durable pin"}
+    ]
+  },
+  "identity": {
+    "status": "unavailable",
+    "reasons": [
+      {"code": "checkpoint_unavailable", "message": "identity checks did not run without a checkpoint"}
+    ]
+  },
+  "append": {
+    "status": "unavailable",
+    "reasons": [
+      {"code": "checkpoint_unavailable", "message": "append derivation did not run without a checkpoint"}
+    ]
+  },
+  "sampler": {
+    "status": "unavailable",
+    "reasons": [
+      {"code": "checkpoint_unavailable", "message": "sampler state was not available"}
+    ]
+  },
+  "exactness": {
+    "status": "not_confirmed",
+    "claim": "unavailable",
+    "structural_fallback_used": false,
+    "reasons": [
+      {"code": "checkpoint_unavailable", "message": "exact continuation requires historical worker state"}
+    ]
+  },
+  "worker": {
+    "status": "not_run",
+    "cancelled": false,
+    "reasons": [
+      {"code": "checkpoint_unavailable", "message": "the worker was not invoked"}
+    ]
+  },
+  "child_lineage": {
+    "status": "not_created",
+    "requested_parent_run_id": "run_requested",
+    "source_checkpoint_run_id": "run_organic_turn_0",
+    "relation": "exact_continuation",
+    "parent_immutable": true,
+    "reasons": [
+      {"code": "checkpoint_unavailable", "message": "no child was created"}
+    ]
+  },
+  "unavoidable_differences": [],
+  "reasons": [
+    {"code": "checkpoint_unavailable", "message": "the source run has no live checkpoint or durable pin"}
+  ],
+  "failure": {
+    "stage": "checkpoint",
+    "code": "checkpoint_unavailable",
+    "message": "the source run has no live checkpoint or durable pin",
+    "retryable": true
+  }
+}

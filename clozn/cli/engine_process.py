@@ -293,6 +293,11 @@ def _launch_args(exe: str, model: str, port: int, flags: dict, gpu: bool) -> lis
         args += ["--jlens", str(flags["jlens"])]
     if flags.get("_model_sha256"):
         args += ["--model-sha256", str(flags["_model_sha256"])]
+    # The complete GGUF and its tokenizer metadata are distinct identity facets.  The latter is
+    # what Time Machine uses to prove the worker launched with the tokenizer that rendered a
+    # candidate append-only turn.
+    if flags.get("_tokenizer_sha256"):
+        args += ["--tokenizer-sha256", str(flags["_tokenizer_sha256"])]
     # A fine-tune adapter (LoRA). Given a first-class key rather than riding extra_args because the
     # adapter is part of the run's REPRODUCTION IDENTITY -- what weights actually answered -- not a
     # tuning knob, so callers that record identity need to read it back structurally. The engine
@@ -361,6 +366,7 @@ def spawn_engine(
                                                gguf_identity)
         identity = gguf_identity(model)
         launch_flags["_model_sha256"] = identity["sha256"]
+        launch_flags["_tokenizer_sha256"] = identity["tokenizer_sha256"]
         if disable_auto_jlens:
             # Managed routing v1 cannot key a value-bearing J-lens artifact.
             # Suppress legacy auto-discovery explicitly rather than launching

@@ -60,6 +60,226 @@ TIME_MACHINE_SCHEMA = "clozn.time-machine-eligibility.v1"
 TIME_MACHINE_VERIFICATION_SCHEMA = "clozn.time-machine-verification.v1"
 
 
+def _completed_messages(run: Mapping) -> list[dict]:
+    """Return a run's recorded messages with its separately stored reply reattached.
+
+    Session runs retain the input prompt and response as separate immutable fields.  Time Machine
+    source matching must compare the completed conversational prefix, but it must never mutate the
+    stored run to do so.
+    """
+    from clozn.runs.think_tags import sanitize_messages
+
+    messages = sanitize_messages(run.get("messages") or [])
+    response = run.get("response")
+    if (
+        isinstance(response, str)
+        and messages
+        and messages[-1].get("role") == "user"
+    ):
+        messages = messages + [{"role": "assistant", "content": response}]
+    return messages
+
+
+def completed_message_turns(run: Mapping) -> list[dict]:
+    """Return conversational turns from an immutable run's complete recorded output.
+
+    Product generation stores the request messages and current assistant reply in separate fields.
+    Exact source resolution must see that reply, while structural branch helpers that operate on a
+    caller-supplied message list keep using ``message_turns`` directly.
+    """
+    if not isinstance(run, Mapping):
+        return []
+    return message_turns(_completed_messages(run))
+
+
+def _historical_turn_sources(run: Mapping, turns: list[dict]) -> dict[int, dict]:
+    """Resolve unique earlier organic session prefixes in one bounded history scan.
+
+    ``resolve_turn_source_run`` used to scan the session once for every requested turn.  The
+    eligibility projection needs all turns, so keep that inspection bounded to one session page and
+    one load per candidate.  An ambiguous prefix is deliberately omitted: callers must receive the
+    typed unavailable state rather than select a checkpoint by guesswork.
+    """
+    if not isinstance(run.get("session_key"), str):
+        return {}
+    try:
+        from clozn.runs import sessions, store as runlog
+        page = sessions.list_session_runs(run["session_key"], limit=1000)
+    except Exception:
+        return {}
+
+    requested_id = run.get("id")
+    requested_messages = _completed_messages(run)
+    candidates: dict[int, list[dict]] = {}
+    for summary in (page.get("runs") or []) if isinstance(page, Mapping) else ():
+        candidate_id = summary.get("id") if isinstance(summary, Mapping) else None
+        if not isinstance(candidate_id, str) or candidate_id == requested_id:
+            continue
+        try:
+            candidate = runlog.get_run(candidate_id)
+        except Exception:
+            candidate = None
+        if not isinstance(candidate, dict):
+            continue
+        # A historic source has to be an organic completed run.  A child that happens to have the
+        # same text prefix is not interchangeable with the source that produced it.
+        if candidate.get("parent_run_id") is not None or candidate.get("source") in {
+            "branch", "replay", "fork", "execution_fork",
+        }:
+            continue
+        candidate_messages = _completed_messages(candidate)
+        candidate_turns = message_turns(candidate_messages)
+        if not candidate_turns:
+            continue
+        turn = int(candidate_turns[-1]["turn"])
+        if turn < 0 or turn >= len(turns):
+            continue
+        target = turns[turn]
+        if target.get("assistant_idx") is None:
+            continue
+        prefix = requested_messages[:int(target["assistant_idx"]) + 1]
+        if (
+            len(candidate_turns) == turn + 1
+            and candidate_turns[-1].get("assistant") == target.get("assistant")
+            and candidate_messages == prefix
+        ):
+            candidates.setdefault(turn, []).append(candidate)
+
+    return {
+        turn: matches[0]
+        for turn, matches in candidates.items()
+        if len(matches) == 1
+    }
+
+
+def resolve_turn_source_run(run: Mapping, turn: int) -> dict | None:
+    """Find the unique earlier organic session run for ``turn``'s exact completed prefix.
+
+    The final requested run is intentionally *not* returned here.  This compatibility helper names
+    only historical organic sources; ``resolve_exact_turn_source_run`` below also handles the latest
+    boundary, whose source is the requested run itself.
+    """
+    if not isinstance(run, Mapping):
+        return None
+    turns = completed_message_turns(run)
+    if turn < 0 or turn >= len(turns) or turn == turns[-1]["turn"]:
+        return None
+    return _historical_turn_sources(run, turns).get(turn)
+
+
+def resolve_exact_turn_source_run(run: Mapping, turn: int) -> dict | None:
+    """Return the immutable source run the exact Time Machine routes would use for ``turn``.
+
+    The latest completed boundary is backed by the requested run.  Earlier boundaries are available
+    only when a unique organic session-prefix run proves the historical provenance.
+    """
+    if not isinstance(run, Mapping):
+        return None
+    turns = completed_message_turns(run)
+    if turn < 0 or turn >= len(turns) or turns[turn].get("assistant_idx") is None:
+        return None
+    if turn == turns[-1]["turn"]:
+        return dict(run)
+    return _historical_turn_sources(run, turns).get(turn)
+
+
+def _durable_pin_projection(source_run_id: str) -> dict:
+    """Read only the pin ledger row; do not read checkpoint bytes during GET eligibility.
+
+    A stored manifest survives gateway/worker restart, but its blob digest and compatibility with the
+    selected worker are checked only when an explicit exact action hydrates it.  Calling
+    ``resolve_pin`` here would eagerly read a potentially large KV blob and would overstate a
+    worker-specific result from a read-only inspection route.
+    """
+    try:
+        from clozn.replay.checkpoint_pin_store import get_pin
+        manifest = get_pin(source_run_id)
+    except Exception:
+        manifest = None
+    if not isinstance(manifest, Mapping):
+        return {
+            "status": "unavailable",
+            "reason": {
+                "code": "durable_pin_missing",
+                "message": (
+                    "no durable checkpoint is recorded for this source run; restart-safe hydration "
+                    "is unavailable until an explicit pin succeeds"),
+            },
+        }
+    blob = manifest.get("blob")
+    pin_id = manifest.get("pin_id")
+    pinned_at = manifest.get("pinned_at")
+    if not (
+        isinstance(pin_id, str) and pin_id
+        and isinstance(pinned_at, str) and pinned_at
+        and isinstance(blob, Mapping)
+        and isinstance(blob.get("kv_bytes"), int)
+        and isinstance(blob.get("envelope_bytes"), int)
+    ):
+        return {
+            "status": "unavailable",
+            "reason": {
+                "code": "durable_pin_manifest_invalid",
+                "message": "the recorded durable checkpoint manifest is incomplete; refusing to claim restart safety",
+            },
+        }
+    return {
+        "status": "stored",
+        "reason": {
+            "code": "durable_pin_recorded",
+            "message": (
+                "a durable checkpoint is recorded for this source run; the next exact action will "
+                "re-read its bytes and fail closed if integrity or runtime compatibility does not match"),
+        },
+        "pin": {
+            "pin_id": pin_id,
+            "pinned_at": pinned_at,
+            "kv_bytes": blob["kv_bytes"],
+            "envelope_bytes": blob["envelope_bytes"],
+        },
+    }
+
+
+def turn_source_projection(run: Mapping, turn: int, *, source_run: Mapping | None = None) -> dict:
+    """Return a typed, read-only source/pin projection for one Time Machine turn."""
+    source = source_run if isinstance(source_run, Mapping) else resolve_exact_turn_source_run(run, turn)
+    source_id = source.get("id") if isinstance(source, Mapping) else None
+    if not isinstance(source_id, str) or not source_id:
+        return {
+            "status": "unavailable",
+            "durable_pin": {
+                "status": "unavailable",
+                "reason": {
+                    "code": "organic_source_unavailable",
+                    "message": (
+                        "no unique organic session source run proves this earlier prompt boundary; "
+                        "restart-safe checkpoint hydration is unavailable"),
+                },
+            },
+            "reasons": [{
+                "code": "organic_source_unavailable",
+                "message": (
+                    "no unique organic session source run proves this earlier prompt boundary"),
+            }],
+        }
+    requested_id = run.get("id")
+    historical = source_id != requested_id
+    return {
+        "status": "available",
+        "run_id": source_id,
+        "scope": "session_turn_prompt_boundary" if historical else "full_run_prompt_boundary",
+        "source_turn": int(turn),
+        "durable_pin": _durable_pin_projection(source_id),
+        "reasons": [{
+            "code": "organic_session_source_resolved" if historical else "requested_run_source_resolved",
+            "message": (
+                "a unique organic session run exactly matches this completed historical turn"
+                if historical else
+                "the requested immutable run backs its latest completed prompt boundary"),
+        }],
+    }
+
+
 def replay_eligibility(run: dict | None, store: "SnapshotStore | None" = None) -> dict:
     """Return the model-free Answer Time Machine eligibility receipt for ``run``.
 
@@ -88,12 +308,13 @@ def replay_eligibility(run: dict | None, store: "SnapshotStore | None" = None) -
         base["reasons"] = [{"code": "run_unavailable", "message": "the run record is unavailable"}]
         return base
 
-    turns = message_turns(run.get("messages") or [])
+    turns = completed_message_turns(run)
     if not turns:
         base["reasons"] = [{"code": "no_replayable_turns",
                             "message": "the run has no user turn that can be branched"}]
         return base
 
+    historical_sources = _historical_turn_sources(run, turns)
     has_cache = False
     for turn in turns:
         snap = store.get(base["run_id"], turn["turn"]) if store is not None else None
@@ -120,6 +341,11 @@ def replay_eligibility(run: dict | None, store: "SnapshotStore | None" = None) -
             "replay_fidelity": "structurally_reproducible",
             "exact_replay_eligible": False,
             "snapshot": descriptor,
+            "source": turn_source_projection(
+                run,
+                int(turn["turn"]),
+                source_run=(run if turn["turn"] == turns[-1]["turn"] else historical_sources.get(turn["turn"])),
+            ),
             "reasons": turn_reasons,
         }
         # A prior verification is evidence to display, not a fresh exactness claim: the worker
@@ -162,68 +388,6 @@ def replay_eligibility(run: dict | None, store: "SnapshotStore | None" = None) -
     return base
 
 
-def resolve_turn_source_run(run: Mapping, turn: int) -> dict | None:
-    """Find the one immutable session run that exactly contains ``run``'s requested turn prefix.
-
-    A final transcript does not carry an earlier worker KV state.  The session's earlier organic run
-    can supply that state, but only when its sanitized message list is byte-for-byte the prefix through
-    the requested assistant turn.  Missing session identity, derived/branched candidates, malformed
-    histories, and ambiguous matches all fail closed.
-    """
-    if not isinstance(run, Mapping) or not isinstance(run.get("session_key"), str):
-        return None
-    from clozn.runs.think_tags import sanitize_messages
-    turns = message_turns(run.get("messages") or [])
-    if turn < 0 or turn >= len(turns):
-        return None
-    target = turns[turn]
-    parent_messages = sanitize_messages(run.get("messages") or [])
-    prefix = parent_messages[:int(target["assistant_idx"] or target["user_idx"]) + 1]
-    if target.get("assistant_idx") is None:
-        return None
-    try:
-        from clozn.runs import sessions, store as runlog
-        page = sessions.list_session_runs(run["session_key"], limit=1000)
-    except Exception:
-        return None
-    matches: list[dict] = []
-    for summary in (page.get("runs") or []) if isinstance(page, Mapping) else ():
-        candidate_id = summary.get("id") if isinstance(summary, Mapping) else None
-        if not isinstance(candidate_id, str) or candidate_id == run.get("id"):
-            continue
-        try:
-            candidate = runlog.get_run(candidate_id)
-        except Exception:
-            candidate = None
-        if not isinstance(candidate, dict):
-            continue
-        # Exact checkpoint capture requires an organic, non-derived parent.  Do not choose a branch
-        # child merely because it happens to share the same text prefix.
-        if candidate.get("parent_run_id") is not None or candidate.get("source") in {
-            "branch", "replay", "fork", "execution_fork",
-        }:
-            continue
-        candidate_messages = sanitize_messages(candidate.get("messages") or [])
-        # Generation requests persist the input messages separately from the assistant response.  For
-        # session-prefix comparison, reconstruct the immutable completed turn without writing it back.
-        candidate_response = candidate.get("response")
-        if (
-            isinstance(candidate_response, str)
-            and candidate_messages
-            and candidate_messages[-1].get("role") == "user"
-        ):
-            candidate_messages = candidate_messages + [{
-                "role": "assistant", "content": candidate_response,
-            }]
-        if candidate_messages != prefix:
-            continue
-        candidate_turns = message_turns(candidate_messages)
-        if len(candidate_turns) != turn + 1 or candidate_turns[-1].get("assistant") != target.get("assistant"):
-            continue
-        matches.append(candidate)
-    return matches[0] if len(matches) == 1 else None
-
-
 def verify_prompt_boundary(
     run: dict,
     turn: int,
@@ -238,16 +402,17 @@ def verify_prompt_boundary(
 ) -> dict:
     """Run the existing exact checkpoint capture/control proof for a Time Machine turn.
 
-    v1 deliberately verifies the *full run prompt boundary* and therefore only accepts the latest
-    conversational turn.  Earlier turns need their own persisted worker checkpoint; a final-run
-    checkpoint cannot honestly be presented as an earlier-turn restore.  The returned artifact is
-    terminal and safe to persist even when capture is unavailable or the unchanged control fails.
+    Verification always covers the latest completed boundary of its immutable source run.  For an
+    earlier requested turn the route must first resolve and pass that exact organic session-prefix
+    run; a final-run checkpoint can never be presented as an earlier-turn restore.  The returned
+    artifact is terminal and safe to persist even when capture is unavailable or the unchanged
+    control fails.
     """
     requested_id = str(requested_run_id or (run or {}).get("id") or "")
     source = source_run if isinstance(source_run, Mapping) else run
     parent_id = str((source or {}).get("id") or "")
     verification_id = "tmv_" + uuid.uuid4().hex[:20]
-    turns = message_turns((source or {}).get("messages") or [])
+    turns = completed_message_turns(source or {})
     is_session_turn = bool(requested_id and requested_id != parent_id)
     base = {
         "schema_version": TIME_MACHINE_VERIFICATION_SCHEMA,
