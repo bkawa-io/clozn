@@ -1,0 +1,128 @@
+/*
+ * The offer is a compact decision record: absence remains EvidenceMark's shared visual language,
+ * while cost, preconditions, and the one possible action stay visibly separate. A blocked action uses
+ * text and a dashed outline together so its explanation, not a muted colour alone, communicates why
+ * it cannot run.
+ */
+
+.typed-action-offer {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  padding: 12px;
+  background: var(--panel);
+}
+
+.typed-action-offer-header {
+  display: grid;
+  gap: 3px;
+}
+
+.typed-action-offer-eyebrow,
+.typed-action-offer-label,
+.typed-action-offer-details dt {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.typed-action-offer-header h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.typed-action-offer-reason {
+  display: grid;
+  gap: 5px;
+}
+
+.typed-action-offer-reason .evidence-mark-chip {
+  max-width: 100%;
+}
+
+.typed-action-offer-details {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.typed-action-offer-details > div {
+  display: grid;
+  grid-template-columns: minmax(104px, auto) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.typed-action-offer-details dt,
+.typed-action-offer-details dd {
+  margin: 0;
+}
+
+.typed-action-offer-details dd {
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.typed-action-offer-details ul {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding-left: 17px;
+}
+
+.typed-action-offer-action {
+  display: grid;
+  gap: 7px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.typed-action-offer-action button {
+  justify-self: start;
+  border: 1px solid var(--line-strong);
+  padding: 7px 10px;
+  color: var(--ink);
+  background: var(--panel-raised);
+  font-family: var(--font-machine);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .035em;
+  text-transform: uppercase;
+}
+
+.typed-action-offer-action button:hover:not(:disabled) {
+  border-color: var(--signal-violet);
+  background: var(--panel-solid);
+}
+
+.typed-action-offer-action button:disabled {
+  border-style: dashed;
+  color: var(--ink-faint);
+  background: var(--panel-solid);
+  cursor: not-allowed;
+}
+
+.typed-action-offer-blocker {
+  margin: 0;
+  border-left: 3px solid var(--danger);
+  padding-left: 8px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.typed-action-offer-blocker strong {
+  color: var(--danger);
+}
+
+@media (max-width: 520px) {
+  .typed-action-offer-details > div {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+}
