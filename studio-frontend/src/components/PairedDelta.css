@@ -1,0 +1,400 @@
+/*
+ * C4 -- the paired-delta grammar. A is always a round recessive-ink marker and B is always a square violet
+ * marker, so their identities survive a monochrome capture as well as a colourblind one. The 2px
+ * panel-coloured ring keeps each 12px endpoint legible where it crosses the 2px connector; it is a
+ * structural separation, not decorative shading. Absence deliberately composes EvidenceMark instead
+ * of borrowing the quiet coincident-dot treatment used for a known unchanged value.
+ */
+
+.paired-delta {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--ink);
+}
+
+.paired-delta-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.paired-delta-head h2,
+.paired-delta-findings h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.paired-delta-legend {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px 12px;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 11px;
+  letter-spacing: .035em;
+  text-transform: uppercase;
+}
+
+.paired-delta-legend-title {
+  color: var(--ink-faint);
+}
+
+.paired-delta-legend-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.paired-delta-legend-entry b {
+  color: var(--ink);
+}
+
+.paired-delta-dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  box-sizing: border-box;
+  flex: none;
+  outline: 2px solid var(--panel-solid);
+}
+
+.paired-delta-dot.is-a {
+  border-radius: 50%;
+  background: var(--ink-faint);
+}
+
+.paired-delta-dot.is-b {
+  border-radius: var(--radius-small);
+  background: var(--signal-violet);
+}
+
+.paired-delta-dot.is-missing {
+  background: var(--panel-solid);
+  border: 2px dashed var(--ink-faint);
+}
+
+.paired-delta-summary-axes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.paired-delta-axis-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  border: 1px solid var(--line);
+  padding: 4px 7px;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 11px;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+
+.paired-delta-axis-chip b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.paired-delta-axis-chip.is-changed {
+  border-left: 3px solid var(--signal-peach);
+}
+
+.paired-delta-axis-chip.is-unchanged {
+  border-left: 3px double var(--signal-mint);
+}
+
+.paired-delta-axis-chip.is-unavailable {
+  border-style: dashed;
+  border-left: 3px solid var(--danger);
+}
+
+.paired-delta-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.paired-delta-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(180px, 1.3fr);
+  gap: 12px;
+  border: 1px solid var(--line);
+  padding: 10px;
+  background: var(--panel);
+}
+
+.paired-delta-row:focus-visible {
+  outline: 2px solid var(--line-strong);
+  outline-offset: 2px;
+}
+
+.paired-delta-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: start;
+  align-items: baseline;
+  gap: 5px 8px;
+}
+
+.paired-delta-row-head strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.paired-delta-rank,
+.paired-delta-kind,
+.paired-delta-note,
+.paired-delta-finding-step {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 11px;
+  letter-spacing: .035em;
+  text-transform: uppercase;
+}
+
+.paired-delta-kind {
+  border-left: 1px solid var(--line-strong);
+  padding-left: 8px;
+}
+
+.paired-delta-row-body {
+  min-width: 0;
+}
+
+.paired-delta-dumbbell {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 18px auto;
+  align-items: center;
+  min-width: 180px;
+}
+
+.paired-delta-connector {
+  position: absolute;
+  z-index: 0;
+  top: 8px;
+  right: 6px;
+  left: 6px;
+  height: 2px;
+  background: var(--line-strong);
+}
+
+.paired-delta-dumbbell > .paired-delta-dot {
+  position: relative;
+  z-index: 1;
+}
+
+.paired-delta-dumbbell > .paired-delta-dot.is-a {
+  justify-self: start;
+}
+
+.paired-delta-dumbbell > .paired-delta-dot.is-b {
+  justify-self: end;
+}
+
+.paired-delta-dumbbell.is-added .paired-delta-connector {
+  background: repeating-linear-gradient(90deg, var(--line-strong) 0 4px, transparent 4px 7px);
+}
+
+.paired-delta-dumbbell.is-removed .paired-delta-connector {
+  background: repeating-linear-gradient(90deg, var(--ink-faint) 0 2px, transparent 2px 5px);
+}
+
+.paired-delta-values {
+  display: flex;
+  grid-column: 1 / -1;
+  grid-row: 2;
+  justify-content: space-between;
+  gap: 12px;
+  max-height: 0;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 11px;
+  line-height: 1.35;
+  opacity: 0;
+  visibility: hidden;
+}
+
+.paired-delta-values span {
+  display: inline-flex;
+  gap: 4px;
+  min-width: 0;
+}
+
+.paired-delta-values b {
+  flex: none;
+  color: var(--ink-faint);
+  font-size: inherit;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+/* Endpoint values are intentionally deferred for scanability, while the mark's accessible name and
+   tooltip expose them without requiring sight or a pointer. Keyboard focus gets the same disclosure. */
+.paired-delta-row:hover .paired-delta-values,
+.paired-delta-row:focus .paired-delta-values,
+.paired-delta-row:focus-within .paired-delta-values {
+  max-height: 32px;
+  opacity: 1;
+  visibility: visible;
+}
+
+.paired-delta-dumbbell.is-unchanged {
+  grid-template-columns: 1fr;
+  justify-items: center;
+}
+
+.paired-delta-unchanged-stack {
+  position: relative;
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  grid-row: 1;
+}
+
+.paired-delta-unchanged-stack .paired-delta-dot {
+  position: absolute;
+  inset: 0;
+}
+
+.paired-delta-unchanged-stack .paired-delta-dot.is-b {
+  z-index: 1;
+}
+
+.paired-delta-unchanged-stack .paired-delta-dot.is-a {
+  z-index: 2;
+}
+
+.paired-delta-dumbbell.is-unchanged .paired-delta-values {
+  width: 100%;
+}
+
+.paired-delta-row .evidence-mark-chip {
+  max-width: 100%;
+}
+
+.paired-delta-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.paired-delta-findings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.paired-delta-finding {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  border: 1px solid var(--line);
+  padding: 9px;
+}
+
+.paired-delta-finding header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.paired-delta-finding header strong,
+.paired-delta-finding p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.paired-delta-finding header strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.paired-delta-status-ladder {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 2px;
+  margin: 3px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.paired-delta-status-ladder li {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  border-top: 2px solid var(--line);
+  padding-top: 4px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 10px;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+
+.paired-delta-status-ladder li span {
+  display: inline-grid;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  color: var(--ink-faint);
+  font-size: 9px;
+}
+
+/* Current means its fixed ordinal position has been reached. There are deliberately no per-status
+   colour hooks: progressing across the ladder should not ask readers to memorise five unrelated hues. */
+.paired-delta-status-ladder li.is-current {
+  border-top-color: var(--ink);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.paired-delta-status-ladder li.is-current span {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+@media (max-width: 680px) {
+  .paired-delta-head,
+  .paired-delta-row {
+    grid-template-columns: 1fr;
+  }
+
+  .paired-delta-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .paired-delta-legend {
+    justify-content: flex-start;
+  }
+
+  .paired-delta-status-ladder {
+    grid-template-columns: 1fr;
+  }
+}
