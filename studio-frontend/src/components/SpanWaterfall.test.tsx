@@ -12,10 +12,12 @@ const PHASES: SpanWaterfallPhase[] = [
     name: "gateway_queue",
     durationNs: 125_000_000,
     startNs: 0,
+    owner: "clozn_gateway",
     clockOwner: "clozn_gateway",
     clockDomain: "clozn_gateway:monotonic",
     measurement: "measured",
     aggregation: "exclusive",
+    includes: ["queue_wait"],
   },
   {
     id: "worker-prefill",
@@ -40,6 +42,8 @@ describe("SpanWaterfall", () => {
     // assertion is about ownership, not merely whether some similarly named span rendered somewhere.
     expect(within(gatewayLane).getByText("gateway queue")).toBeInTheDocument();
     expect(within(workerLane).getByText("prefill")).toBeInTheDocument();
+    expect(within(gatewayLane).getByText("owner: clozn_gateway")).toBeInTheDocument();
+    expect(within(gatewayLane).getByText("includes: queue_wait")).toBeInTheDocument();
     expect(screen.getByText(/Separate clock-owner lanes are not mutually aligned/)).toBeInTheDocument();
   });
 
@@ -55,6 +59,27 @@ describe("SpanWaterfall", () => {
     expect(within(accounting).getByText("Unaccounted gap")).toBeInTheDocument();
     expect(within(accounting).getByText("625 ms")).toBeInTheDocument();
     expect(container.querySelector(".span-waterfall-accounting-gap")).not.toBeNull();
+  });
+
+  test("scales accounting from the additive duration ledger and surfaces recorded coverage facts", () => {
+    const { container } = render(
+      <SpanWaterfall
+        phases={PHASES}
+        aggregation={{
+          knownDurationNs: 600_000_000,
+          unaccountedDurationNs: 400_000_000,
+          measurementCoverage: 0.6,
+          consistency: "consistent",
+        }}
+      />,
+    );
+
+    const accounting = screen.getByRole("region", { name: "Request accounting" });
+    expect(container.querySelector<HTMLElement>(".span-waterfall-accounting-known")?.style.width).toBe("60%");
+    expect(container.querySelector<HTMLElement>(".span-waterfall-accounting-gap")?.style.width).toBe("40%");
+    expect(within(accounting).getByText("Measurement coverage")).toBeInTheDocument();
+    expect(within(accounting).getByText("60%")).toBeInTheDocument();
+    expect(within(accounting).getByText("consistent")).toBeInTheDocument();
   });
 
   test("uses EvidenceMark for an absent duration instead of drawing a zero-width bar", () => {

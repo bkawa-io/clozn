@@ -25,11 +25,13 @@ export interface SpanWaterfallPhase {
   name: string;
   durationNs?: number;
   startNs?: number;
+  owner?: string;
   clockOwner?: string;
   clockDomain?: string;
   measurement?: SpanWaterfallMeasurement;
   aggregation?: SpanWaterfallPhaseAggregation;
   scope?: string;
+  includes?: readonly string[];
 }
 
 /** Whole-request accounting. These values are intentionally not nested in `SpanWaterfallPhase`: adding
@@ -98,6 +100,14 @@ export function formatDurationNs(durationNs: number | undefined): string {
 
 // Kept as a named alias for callers that use the trace schema's `duration_ns` vocabulary directly.
 export const formatNanoseconds = formatDurationNs;
+
+function formatCoverage(coverage: number): string {
+  const percentage = coverage * 100;
+  const display = Number.isInteger(percentage)
+    ? percentage
+    : percentage.toFixed(1).replace(/0+$/, "").replace(/\.$/, "");
+  return `${display}%`;
+}
 
 function phasePresentation(phase: SpanWaterfallPhase): PhasePresentation {
   // The trace producer defaults omitted fields to measured/exclusive for backwards-compatible worker
@@ -190,6 +200,9 @@ function PhaseRow({ item, extentNs }: { item: IndexedPhase; extentNs: number }) 
   const hasDuration = recordedNonNegative(phase.durationNs);
   const phaseKey = phase.id ?? `${phase.name}-${index}`;
   const hasStartOffset = recordedNonNegative(phase.startNs);
+  // Older traces legitimately omit `includes`; treating that as an empty list preserves their meaning
+  // without manufacturing a second absence treatment for a field that is merely supplementary detail.
+  const includes = phase.includes ?? [];
 
   return (
     <article className="span-waterfall-phase" data-phase-id={phaseKey}>
@@ -218,8 +231,10 @@ function PhaseRow({ item, extentNs }: { item: IndexedPhase; extentNs: number }) 
         <b className="span-waterfall-phase-duration">{formatDurationNs(phase.durationNs)}</b>
       </div>
       <div className="span-waterfall-phase-facts">
+        {phase.owner && <span>owner: {phase.owner}</span>}
         <span>measurement: {presentation.measurement}</span>
         <span>aggregation: {presentation.aggregation.replaceAll("_", " ")}</span>
+        {includes.length > 0 && <span>includes: {includes.join(", ")}</span>}
         {!hasStartOffset && hasDuration && <span>Start offset not recorded</span>}
         {presentation.exclusionLabels.map((label) => <span key={label}>{label}</span>)}
         {presentation.excludedFromKnown && <strong>Excluded from known in-request arithmetic</strong>}
@@ -256,9 +271,15 @@ function Accounting({ aggregation }: { aggregation: SpanWaterfallAggregation }) 
     ? aggregation.unaccountedDurationNs
     : undefined;
   const wallClockTotalNs = recordedNonNegative(aggregation.wallClockTotalNs) ? aggregation.wallClockTotalNs : undefined;
-  const total = Math.max(knownDurationNs ?? 0, unaccountedDurationNs ?? 0, wallClockTotalNs ?? 0, 1);
+  // The accounting strip represents the additive duration ledger, not the largest individual entry.
+  // A missing (or smaller) wall total must not stretch known time to 100% and hide the unaccounted gap.
+  const additiveDurationNs = (knownDurationNs ?? 0) + (unaccountedDurationNs ?? 0);
+  const total = Math.max(additiveDurationNs, wallClockTotalNs ?? 0, 1);
   const knownWidth = knownDurationNs == null ? 0 : (knownDurationNs / total) * 100;
   const unaccountedWidth = unaccountedDurationNs == null ? 0 : (unaccountedDurationNs / total) * 100;
+  const measurementCoverage = recordedNonNegative(aggregation.measurementCoverage)
+    ? aggregation.measurementCoverage
+    : undefined;
 
   return (
     <section className="span-waterfall-accounting" aria-label="Request accounting">
@@ -308,6 +329,18 @@ function Accounting({ aggregation }: { aggregation: SpanWaterfallAggregation }) 
                 reason="The trace did not record an unaccounted duration."
               />
             </dd>
+          </div>
+        )}
+        {measurementCoverage != null && (
+          <div>
+            <dt>Measurement coverage</dt>
+            <dd>{formatCoverage(measurementCoverage)}</dd>
+          </div>
+        )}
+        {aggregation.consistency && (
+          <div>
+            <dt>Consistency</dt>
+            <dd>{aggregation.consistency.replaceAll("_", " ")}</dd>
           </div>
         )}
       </dl>
