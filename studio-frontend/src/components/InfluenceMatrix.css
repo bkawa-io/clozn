@@ -1,0 +1,219 @@
+/*
+ * A 2px panel-colour gap is part of the matrix's evidence grammar: adjacent effects remain separate
+ * observations instead of merging into a continuous heat field that suggests interpolation.
+ */
+
+.influence-matrix {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.influence-matrix-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.influence-matrix-eyebrow,
+.influence-matrix-clamp-note {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.influence-matrix-header h3 {
+  margin: 3px 0 0;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.influence-matrix-clamp-note[data-clamp-applied="true"] {
+  color: var(--signal-peach);
+}
+
+.influence-matrix-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.influence-matrix-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 11px;
+  letter-spacing: .035em;
+  text-transform: uppercase;
+}
+
+.influence-matrix-legend .evidence-mark {
+  gap: 0;
+}
+
+.influence-matrix-legend-swatch {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  box-sizing: border-box;
+  border: 1px solid var(--line-strong);
+}
+
+.influence-matrix-legend-swatch.is-supports {
+  background: var(--signal-mint);
+}
+
+.influence-matrix-legend-swatch.is-suppresses {
+  background: var(--signal-pink);
+}
+
+.influence-matrix-legend-swatch.is-neutral {
+  background: var(--panel-solid);
+}
+
+.influence-matrix-legend-swatch.is-below-floor {
+  background-color: var(--panel-solid);
+  background-image: repeating-linear-gradient(135deg, var(--signal-peach) 0 2px, var(--panel-solid) 2px 5px);
+}
+
+.influence-matrix-legend-floor,
+.influence-matrix-legend-clamp {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.influence-matrix-legend-clamp[data-clamp-applied="true"] {
+  color: var(--signal-peach);
+}
+
+.influence-matrix-empty {
+  padding: 12px 0;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 12px;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.influence-matrix-scroll {
+  overflow-x: auto;
+}
+
+.influence-matrix-table {
+  width: max-content;
+  min-width: 100%;
+  table-layout: fixed;
+  border-spacing: 2px;
+  background: var(--panel-solid);
+}
+
+.influence-matrix-corner,
+.influence-matrix-column-header,
+.influence-matrix-row-header {
+  box-sizing: border-box;
+  background: var(--panel-raised);
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .035em;
+  text-transform: uppercase;
+}
+
+.influence-matrix-corner {
+  width: 154px;
+  min-width: 154px;
+  padding: 7px 9px;
+  text-align: left;
+}
+
+.influence-matrix-column-header {
+  width: 54px;
+  min-width: 54px;
+  max-width: 54px;
+  height: 54px;
+  padding: 6px;
+  vertical-align: middle;
+}
+
+.influence-matrix-row-header {
+  width: 154px;
+  min-width: 154px;
+  max-width: 154px;
+  padding: 0 9px;
+  text-align: left;
+}
+
+.influence-matrix-column-header > span,
+.influence-matrix-row-header > span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.influence-matrix-cell {
+  width: 54px;
+  min-width: 54px;
+  height: 54px;
+  padding: 0;
+  vertical-align: middle;
+  box-shadow: inset 0 0 0 1px var(--line);
+  text-align: center;
+}
+
+/* Sign chooses a pole and the custom fill percentage chooses only lightness, preserving a neutral zero
+   instead of smuggling magnitude into a rainbow hue sequence. */
+.influence-matrix-cell.is-measured-effect.is-supports {
+  background: color-mix(in srgb, var(--signal-mint) var(--influence-matrix-fill), var(--panel-solid));
+}
+
+.influence-matrix-cell.is-measured-effect.is-suppresses {
+  background: color-mix(in srgb, var(--signal-pink) var(--influence-matrix-fill), var(--panel-solid));
+}
+
+.influence-matrix-cell.is-measured-effect.is-neutral {
+  background: var(--panel-solid);
+}
+
+.influence-matrix-cell.is-below-floor {
+  background-color: var(--panel-solid);
+  background-image: repeating-linear-gradient(135deg, var(--signal-peach) 0 2px, var(--panel-solid) 2px 5px);
+}
+
+.influence-matrix-cell.is-not-measured,
+.influence-matrix-cell.is-omitted {
+  background: var(--panel-solid);
+}
+
+.influence-matrix-polarity,
+.influence-matrix-below-floor-glyph {
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.influence-matrix-absence-mark {
+  justify-content: center;
+  vertical-align: middle;
+}
+
+@media (max-width: 640px) {
+  .influence-matrix-header {
+    flex-direction: column;
+    gap: 5px;
+  }
+}
