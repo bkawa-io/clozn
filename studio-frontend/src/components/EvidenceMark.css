@@ -1,0 +1,83 @@
+/*
+ * Four states, four silhouettes -- never a colour-only swap:
+ *   measured      solid fill        a real, cleared effect
+ *   below_floor   diagonal hatch    measured, but not licensed to call
+ *   not_measured  hollow + dashed   nothing was ever scored here
+ *   unavailable   hollow + solid    scoring was impossible or failed here
+ * The two "presence" states (measured/below_floor) differ by fill; the two "absence" states
+ * (not_measured/unavailable) are both hollow and differ only by border style -- the one bit of form
+ * standing in for "never scheduled" vs "was attempted and failed". Colour rides on top of this but is
+ * never load-bearing: see EvidenceMark.tsx for the colourblind-separation numbers this replaces.
+ */
+
+.evidence-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-machine);
+  line-height: 1;
+}
+
+.evidence-mark-glyph {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  flex: none;
+}
+
+.evidence-mark-dot {
+  vertical-align: middle;
+}
+
+.evidence-mark-chip {
+  border: 1px solid var(--line);
+  padding: 4px 9px 4px 7px;
+}
+
+.evidence-mark-copy {
+  display: inline-flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.evidence-mark-copy strong {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .035em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.evidence-mark-copy small {
+  overflow: hidden;
+  color: var(--ink-faint);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.is-mark-measured {
+  border: 1.5px solid var(--signal-mint);
+  background: var(--signal-mint);
+}
+
+.is-mark-below-floor {
+  border: 1.5px solid var(--signal-peach);
+  background: repeating-linear-gradient(135deg, var(--signal-peach) 0 2px, transparent 2px 4px);
+}
+
+.is-mark-not-measured {
+  border: 1.5px dashed var(--ink-faint);
+  background: transparent;
+}
+
+.is-mark-unavailable {
+  border: 1.5px solid var(--danger);
+  background: transparent;
+}
