@@ -1,0 +1,170 @@
+/*
+ * C5 -- the composition bar. Four segment forms, never colour alone (same CVD-separation rationale as
+ * EvidenceMark.css, which this file deliberately echoes rather than reinvents):
+ *   present       solid mint fill        reached the model in full
+ *   reduced       solid peach fill       reached the model, but not faithfully (redacted, truncated, ...)
+ *   absent        diagonal hatch         did not reach the model -- always paired with a reason
+ *   unaccounted   stippled dots          this component's own bookkeeping gap, not a caller-supplied fact
+ * "absent" and "unaccounted" are both hollow-ish (ink-faint on the surface colour) because both mean
+ * "no content here"; they differ in form (lines vs. dots) because one carries an explicit, caller-given
+ * reason and the other is this component noticing the numbers do not add up -- a different kind of
+ * absence, so it earns a different silhouette rather than being folded into the same hatch.
+ */
+
+.composition-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.composition-bar-title {
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.composition-bar-empty {
+  padding: 8px 0;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 12px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+/* The track is the one place a real 2px gap (not a border) shows between segments: the track's own
+   background is the "surface" colour, flex `gap` punches a 2px hole down to it between every pair of
+   adjacent segments, and `overflow: hidden` plus a 2px radius round only the bar's outer silhouette --
+   never the individual segments, which stay square-cornered against each other. */
+.composition-bar-track {
+  display: flex;
+  height: 26px;
+  gap: 2px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--panel-solid);
+}
+
+.composition-bar-segment {
+  display: flex;
+  min-width: 3px;
+  overflow: hidden;
+  flex-shrink: 0;
+  align-items: center;
+}
+
+.composition-bar-segment.is-present {
+  background: var(--signal-mint);
+}
+
+.composition-bar-segment.is-reduced {
+  background: var(--signal-peach);
+}
+
+.composition-bar-segment.is-absent {
+  background: repeating-linear-gradient(135deg, var(--ink-faint) 0 2px, transparent 2px 5px);
+}
+
+.composition-bar-segment.is-unaccounted {
+  background-image: radial-gradient(var(--ink-faint) 1px, transparent 1.2px);
+  background-size: 6px 6px;
+  background-position: 1px 1px;
+}
+
+/* A backdrop pill rather than text laid directly on the fill: `--ink` flips between near-black (light
+   theme) and near-white (dark theme), but the pastel signal fills stay light in both themes, so text
+   coloured `--ink` would lose contrast against them in dark mode. Sitting the label on a translucent
+   panel-solid chip keeps it on the same ink-on-panel pairing used everywhere else in Studio, in both
+   themes, regardless of which segment colour is underneath. */
+.composition-bar-segment-label {
+  display: inline-flex;
+  overflow: hidden;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  margin: 3px;
+  padding: 2px 6px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--panel-solid) 82%, transparent);
+  font-family: var(--font-machine);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.composition-bar-segment-label strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .02em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+}
+
+.composition-bar-segment-label span {
+  color: var(--ink-soft);
+  font-size: 11px;
+}
+
+.composition-bar-key {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.composition-bar-key-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.composition-bar-key-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.composition-bar-key-entry strong {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .035em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.composition-bar-swatch {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  flex: none;
+  border-radius: 2px;
+}
+
+.composition-bar-swatch.is-present {
+  background: var(--signal-mint);
+}
+
+.composition-bar-swatch.is-reduced {
+  background: var(--signal-peach);
+}
+
+.composition-bar-key-value {
+  flex: none;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
