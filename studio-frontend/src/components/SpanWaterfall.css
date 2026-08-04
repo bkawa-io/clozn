@@ -1,0 +1,313 @@
+/*
+ * C3 -- timing has two different axes that must not be conflated. A phase bar lives on one process's
+ * local monotonic clock; the request-accounting strip is an additive duration summary. The strip is
+ * therefore explicitly labelled as accounting rather than drawn as an extra lane, and each clock owner
+ * receives its own recessed track. A matching left edge across owner lanes is not evidence of a shared
+ * start time.
+ *
+ * The bar forms also carry their arithmetic status without relying on hue: normal exclusive spans are
+ * solid, overlapping/context-only spans are hatched, and process-startup has a denser stripe. The text
+ * tag still states the exclusion because a pattern alone cannot explain why it is excluded.
+ */
+
+.span-waterfall {
+  display: grid;
+  gap: 12px;
+}
+
+.span-waterfall-header,
+.span-waterfall-lane-header,
+.span-waterfall-domain-header,
+.span-waterfall-accounting > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.span-waterfall-header > div,
+.span-waterfall-accounting > header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.span-waterfall-header span,
+.span-waterfall-accounting > header span,
+.span-waterfall-lane-header span,
+.span-waterfall-domain-header span {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.span-waterfall-header h3,
+.span-waterfall-accounting > header strong,
+.span-waterfall-lane-header strong,
+.span-waterfall-domain-header strong {
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.span-waterfall-boundary,
+.span-waterfall-domain-note,
+.span-waterfall-accounting > p {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.span-waterfall-accounting,
+.span-waterfall-lane {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.span-waterfall-accounting > header > b {
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.span-waterfall-accounting-track {
+  display: flex;
+  height: 13px;
+  overflow: hidden;
+  gap: 2px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--panel-solid);
+}
+
+.span-waterfall-accounting-known {
+  display: block;
+  min-width: 3px;
+  background: var(--signal-mint);
+}
+
+/* The hatch is a real visible segment for the stated unaccounted duration. It is never represented by
+   stretching the known segment, because a shorter known bar and a bookkeeping gap mean different facts. */
+.span-waterfall-accounting-gap {
+  display: block;
+  min-width: 3px;
+  background: repeating-linear-gradient(135deg, var(--ink-faint) 0 2px, var(--panel-solid) 2px 5px);
+}
+
+.span-waterfall-accounting-key {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.span-waterfall-accounting-key > div {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.span-waterfall-accounting-key dt {
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.span-waterfall-accounting-key dd {
+  display: inline-flex;
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.span-waterfall-accounting-key .is-unaccounted dt::before {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  margin-right: 6px;
+  border: 1px solid var(--ink-faint);
+  border-radius: 2px;
+  background: repeating-linear-gradient(135deg, var(--ink-faint) 0 2px, var(--panel-solid) 2px 5px);
+  content: "";
+  vertical-align: -1px;
+}
+
+.span-waterfall-lanes,
+.span-waterfall-lane-domains,
+.span-waterfall-domain,
+.span-waterfall-domain-track {
+  display: grid;
+}
+
+.span-waterfall-lanes {
+  gap: 2px;
+}
+
+.span-waterfall-lane-domains {
+  gap: 10px;
+}
+
+.span-waterfall-domain {
+  gap: 6px;
+}
+
+.span-waterfall-domain-header {
+  padding-inline: 2px;
+}
+
+/* This recessed stack is scoped to a single `clockDomain`. Its 2px row gap is deliberately visible:
+   adjacent bars can overlap in real time, but they never fuse into a faux sequential duration. */
+.span-waterfall-domain-track {
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--panel-solid);
+}
+
+.span-waterfall-phase {
+  display: grid;
+  grid-template-columns: minmax(108px, 0.75fr) minmax(0, 2fr);
+  column-gap: 10px;
+  row-gap: 3px;
+  min-width: 0;
+  padding: 3px;
+}
+
+.span-waterfall-phase-heading {
+  display: grid;
+  min-width: 0;
+  align-content: center;
+  gap: 1px;
+}
+
+.span-waterfall-phase-heading strong {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.span-waterfall-phase-heading span {
+  overflow: hidden;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.span-waterfall-phase-timeline {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(74px, auto);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.span-waterfall-phase-track {
+  display: flex;
+  min-width: 0;
+  height: 13px;
+  overflow: hidden;
+  align-items: center;
+  border-radius: 2px;
+  background: var(--page-deep);
+}
+
+.span-waterfall-bar {
+  display: block;
+  box-sizing: border-box;
+  min-width: 3px;
+  height: 13px;
+  flex: none;
+  border-radius: 2px;
+  background: var(--signal-blue);
+}
+
+.span-waterfall-bar.is-overlapping {
+  background: repeating-linear-gradient(135deg, var(--signal-violet) 0 2px, var(--panel-solid) 2px 5px);
+}
+
+.span-waterfall-bar.is-context-only {
+  background: repeating-linear-gradient(45deg, var(--signal-peach) 0 2px, var(--panel-solid) 2px 5px);
+}
+
+.span-waterfall-bar.is-process-startup {
+  background: repeating-linear-gradient(90deg, var(--signal-magenta) 0 2px, var(--panel-solid) 2px 4px);
+}
+
+.span-waterfall-bar.is-estimated {
+  outline: 1px dashed var(--ink-faint);
+  outline-offset: -1px;
+  background: var(--signal-gold);
+}
+
+.span-waterfall-phase-duration {
+  min-width: 0;
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.span-waterfall-phase-facts {
+  display: flex;
+  grid-column: 2;
+  flex-wrap: wrap;
+  gap: 3px 7px;
+  min-width: 0;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.span-waterfall-phase-facts strong {
+  color: var(--signal-peach);
+  font-weight: 600;
+}
+
+.span-waterfall-empty {
+  margin: 0;
+  padding: 8px 0;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 12px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 620px) {
+  .span-waterfall-accounting-key {
+    grid-template-columns: 1fr;
+  }
+
+  .span-waterfall-phase {
+    grid-template-columns: 1fr;
+  }
+
+  .span-waterfall-phase-facts {
+    grid-column: 1;
+  }
+}
