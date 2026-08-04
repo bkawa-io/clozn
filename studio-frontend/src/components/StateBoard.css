@@ -1,0 +1,367 @@
+/*
+ * C7's grammar is intentionally textual and structural before it is chromatic. Solid, hatched,
+ * dashed, and outlined forms distinguish conditions in a greyscale capture; the signal tokens are
+ * secondary reinforcement. This matters especially for `partial`, `blocked`, and `not run`, which
+ * are different facts and must never become one generic muted row.
+ */
+
+.state-board {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.state-board-header,
+.state-board-card-header,
+.state-board-availability-row-head,
+.state-board-qualification-step-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.state-board-header > span,
+.state-board-card-header > span {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.state-board-header h2,
+.state-board-card-header h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.state-board-card-header {
+  display: grid;
+  justify-content: start;
+  gap: 3px;
+}
+
+.state-board-card-header h3 {
+  font-size: 14px;
+}
+
+.state-board-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px;
+}
+
+.state-board-card {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  padding: 11px;
+  background: var(--panel);
+}
+
+.state-board-card-description,
+.state-board-item-copy p,
+.state-board-qualification-step > p,
+.state-board-availability-row > p,
+.state-board-empty {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.state-board-hard-cap {
+  display: grid;
+  gap: 7px;
+}
+
+/* This is a capacity ledger, not a task. It deliberately has no percentage text, native progress
+   element, or progressbar role: the explicit N of M below is the only quantitative claim. */
+.state-board-capacity-meter {
+  display: flex;
+  min-height: 16px;
+  align-items: stretch;
+  gap: 3px;
+}
+
+.state-board-capacity-slot {
+  display: block;
+  width: 16px;
+  min-width: 5px;
+  flex: 1 1 0;
+  box-sizing: border-box;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-solid);
+}
+
+.state-board-capacity-slot.is-filled {
+  border-color: var(--signal-mint);
+  background: var(--signal-mint);
+}
+
+.state-board-hard-cap[data-over-cap="true"] .state-board-capacity-slot.is-filled {
+  border-color: var(--danger);
+  background: repeating-linear-gradient(135deg, var(--danger) 0 2px, var(--panel-solid) 2px 5px);
+}
+
+.state-board-capacity-none {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 11px;
+  letter-spacing: .035em;
+  text-transform: uppercase;
+}
+
+.state-board-capacity-copy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 5px 8px;
+}
+
+.state-board-capacity-copy strong,
+.state-board-capacity-copy span,
+.state-board-capacity-copy b {
+  font-family: var(--font-machine);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.state-board-capacity-copy strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.state-board-capacity-copy span {
+  color: var(--ink-faint);
+}
+
+.state-board-capacity-copy b {
+  color: var(--danger);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.state-board-worker-list,
+.state-board-qualification-list,
+.state-board-availability-list {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.state-board-worker,
+.state-board-engine-condition,
+.state-board-qualification-step,
+.state-board-availability-row {
+  min-width: 0;
+  border: 1px solid var(--line);
+  padding: 8px;
+  background: var(--panel-solid);
+}
+
+.state-board-worker,
+.state-board-engine-condition {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+}
+
+.state-board-engine-condition.is-unavailable {
+  display: block;
+}
+
+.state-board-worker-form,
+.state-board-condition-form,
+.state-board-qualification-form,
+.state-board-availability-form {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  box-sizing: border-box;
+  flex: none;
+}
+
+/* The three present worker states have different silhouettes: square resident, round busy, and
+   dashed starting. An unavailable worker delegates its fourth silhouette and reason to EvidenceMark. */
+.state-board-worker-form.is-resident {
+  border: 1px solid var(--signal-mint);
+  background: var(--signal-mint);
+}
+
+.state-board-worker-form.is-busy {
+  border: 1px solid var(--signal-violet);
+  border-radius: 50%;
+  background: repeating-linear-gradient(90deg, var(--signal-violet) 0 2px, var(--panel-solid) 2px 4px);
+}
+
+.state-board-worker-form.is-starting {
+  border: 1px dashed var(--signal-cyan);
+  background: var(--panel-solid);
+}
+
+.state-board-worker-form.is-unavailable {
+  border: 1px solid var(--danger);
+  background: var(--panel-solid);
+}
+
+.state-board-item-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.state-board-item-copy > strong,
+.state-board-availability-row-head > strong,
+.state-board-qualification-step-head > strong {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state-board-status-label,
+.state-board-qualification-status,
+.state-board-availability {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  gap: 6px;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.state-board-status-label.is-resident,
+.state-board-status-label.is-healthy,
+.state-board-qualification-status.is-passed,
+.state-board-availability.is-available {
+  color: var(--signal-mint);
+}
+
+.state-board-status-label.is-busy,
+.state-board-status-label.is-checking {
+  color: var(--signal-cyan);
+}
+
+.state-board-status-label.is-starting,
+.state-board-qualification-status.is-partial,
+.state-board-status-label.is-degraded {
+  color: var(--signal-peach);
+}
+
+.state-board-qualification-status.is-failed {
+  color: var(--danger);
+}
+
+/* Health's three positive conditions likewise stay form-distinct: a filled square, a hatched square,
+   and a dashed outline. The status word repeats the distinction in selectable text. */
+.state-board-condition-form.is-healthy {
+  border: 1px solid var(--signal-mint);
+  background: var(--signal-mint);
+}
+
+.state-board-condition-form.is-degraded {
+  border: 1px solid var(--signal-peach);
+  background: repeating-linear-gradient(135deg, var(--signal-peach) 0 2px, var(--panel-solid) 2px 5px);
+}
+
+.state-board-condition-form.is-checking {
+  border: 1px dashed var(--signal-cyan);
+  border-radius: 50%;
+  background: var(--panel-solid);
+}
+
+.state-board-qualification-step {
+  display: grid;
+  gap: 5px;
+}
+
+.state-board-qualification-step.is-passed {
+  border-left: 3px solid var(--signal-mint);
+}
+
+.state-board-qualification-step.is-failed {
+  border-left: 3px double var(--danger);
+}
+
+.state-board-qualification-step.is-partial {
+  border-left: 3px solid var(--signal-peach);
+  background-image: repeating-linear-gradient(135deg, var(--panel-solid) 0 4px, var(--panel) 4px 7px);
+}
+
+.state-board-qualification-step.is-blocked {
+  border-style: dashed;
+}
+
+.state-board-qualification-step.is-not-run {
+  border-left: 3px double var(--ink-faint);
+}
+
+.state-board-qualification-form.is-passed {
+  border: 1px solid var(--signal-mint);
+  background: var(--signal-mint);
+}
+
+.state-board-qualification-form.is-failed {
+  border: 2px solid var(--danger);
+  border-radius: 50%;
+  background: var(--panel-solid);
+}
+
+.state-board-qualification-form.is-partial {
+  border: 1px solid var(--signal-peach);
+  background: repeating-linear-gradient(135deg, var(--signal-peach) 0 2px, var(--panel-solid) 2px 4px);
+}
+
+.state-board-availability-row {
+  display: grid;
+  gap: 5px;
+}
+
+.state-board-availability-row.is-available {
+  border-left: 3px solid var(--signal-mint);
+}
+
+.state-board-availability-row.is-unavailable {
+  border-style: dashed;
+  border-left: 3px solid var(--danger);
+}
+
+.state-board-availability-form {
+  border: 1px solid var(--signal-mint);
+  background: var(--signal-mint);
+}
+
+.state-board-availability-row .evidence-mark-chip,
+.state-board-qualification-step .evidence-mark-chip,
+.state-board-worker .evidence-mark-chip,
+.state-board-engine-condition .evidence-mark-chip {
+  max-width: 100%;
+}
+
+@media (max-width: 540px) {
+  .state-board-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .state-board-availability-row-head,
+  .state-board-qualification-step-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
