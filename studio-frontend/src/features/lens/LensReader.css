@@ -1,0 +1,345 @@
+.workspace.is-lens,
+.workspace.is-lens.inspector-closed {
+  display: block;
+  overflow: hidden;
+  padding: 0;
+}
+
+.lens-reader-page {
+  position: relative;
+  display: grid;
+  height: 100%;
+  min-width: 0;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  color: var(--ink);
+  background: var(--page);
+}
+
+.lens-reader-toolbar {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--panel-raised) 56%, var(--panel));
+}
+
+.lens-reader-toggles {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lens-reader-toggles button,
+.lens-reader-diagnostics-link {
+  min-height: 32px;
+  border: 1px solid var(--line-strong);
+  padding: 6px 10px;
+  color: var(--ink-faint);
+  background: color-mix(in srgb, var(--panel) 76%, transparent);
+  font-family: var(--font-machine);
+  font-size: 12px;
+  letter-spacing: .025em;
+  text-decoration: none;
+}
+
+.lens-reader-toggles button:hover,
+.lens-reader-diagnostics-link:hover { color: var(--ink); border-color: var(--signal-violet); }
+
+.lens-reader-toggles button.is-active {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--signal-violet) 62%, var(--line-strong));
+  background: color-mix(in srgb, var(--signal-violet) 12%, var(--panel));
+  box-shadow: inset 0 -2px var(--signal-violet);
+}
+
+.lens-reader-diagnostics-link { flex: 0 0 auto; color: var(--signal-cyan); }
+
+.lens-reader-notices:empty { display: none; }
+
+.lens-reader-availability {
+  margin: 0;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-soft);
+  background: color-mix(in srgb, var(--signal-peach) 7%, var(--panel));
+  font-size: 13px;
+}
+
+.lens-reader-surface {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1px;
+  overflow: hidden;
+  background: var(--line-strong);
+}
+
+.lens-reader-pane {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--signal-cyan) 3%, transparent), transparent 32%),
+    var(--panel);
+}
+
+.lens-reader-pane > header {
+  display: flex;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 46px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-raised) 34%, transparent);
+}
+
+.lens-reader-pane > header h2 { margin: 0; font-size: 16px; font-weight: 560; }
+.lens-reader-pane > header small { color: var(--ink-faint); font-family: var(--font-machine); font-size: 11px; }
+
+.lens-reader-document {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: clamp(24px, 4vw, 54px);
+  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.lens-reader-input-span {
+  display: grid;
+  width: 100%;
+  gap: 12px;
+  margin: 0 0 18px;
+  border: 0;
+  border-left: 3px solid var(--line-strong);
+  padding: 4px 0 4px 18px;
+  color: var(--ink);
+  background: transparent;
+  text-align: left;
+}
+
+.lens-reader-input-span:hover,
+.lens-reader-input-span.is-selected {
+  border-left-color: var(--signal-violet);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--signal-violet) 7%, transparent), transparent 55%);
+}
+
+.lens-reader-span-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 12px;
+  letter-spacing: .035em;
+  text-transform: uppercase;
+}
+
+.lens-reader-span-meta b {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 11px;
+}
+
+.lens-reader-span-meta small { margin-left: auto; color: var(--ink-faint); font-size: 11px; }
+
+.lens-reader-input-span > strong {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 430;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.lens-reader-output-document { max-width: 880px; }
+
+.lens-reader-output-stream {
+  margin: 0;
+  color: var(--ink);
+  font-size: 17px;
+  line-height: 1.78;
+  white-space: pre-wrap;
+}
+
+.lens-reader-token {
+  position: relative;
+  display: inline;
+  margin: 0;
+  border: 0;
+  border-radius: 2px;
+  padding: 1px 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  line-height: inherit;
+  white-space: pre-wrap;
+}
+
+.lens-reader-token:hover,
+.lens-reader-token.is-selected {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--signal-violet) 16%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--signal-violet) 18%, transparent);
+}
+
+/* Shakiness is encoded as underline rhythm and thickness, not another heatmap. */
+.lens-reader-token.is-okay {
+  text-decoration: underline dotted color-mix(in srgb, var(--signal-cyan) 68%, transparent) 1.5px;
+  text-underline-offset: 4px;
+}
+
+.lens-reader-token.is-shaky {
+  text-decoration: underline wavy color-mix(in srgb, var(--signal-peach) 84%, transparent) 1.5px;
+  text-underline-offset: 4px;
+}
+
+.lens-reader-token.has-provenance { box-shadow: inset 0 -2px color-mix(in srgb, var(--signal-violet) 38%, transparent); }
+
+.lens-reader-token sup {
+  display: inline-grid;
+  min-width: 13px;
+  height: 13px;
+  margin-left: 1px;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-family: var(--font-machine);
+  font-size: 8px;
+  line-height: 1;
+  vertical-align: super;
+}
+
+.lens-reader-concept-mark {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin: 0 2px 0 1px;
+  border: 1px solid var(--signal-violet);
+  transform: rotate(45deg) translateY(-1px);
+  background: color-mix(in srgb, var(--signal-violet) 24%, transparent);
+}
+
+.lens-reader-state,
+.lens-reader-plain-output {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 16px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+.lens-reader-state.is-error { color: var(--danger); }
+
+.lens-reader-provenance {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.lens-reader-provenance path {
+  fill: none;
+  stroke: color-mix(in srgb, var(--signal-violet) 62%, transparent);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 5;
+  vector-effect: non-scaling-stroke;
+}
+.lens-reader-provenance path.effect-supports { stroke: color-mix(in srgb, var(--signal-mint) 72%, transparent); }
+.lens-reader-provenance path.effect-suppresses { stroke: color-mix(in srgb, var(--signal-pink) 72%, transparent); }
+.lens-reader-provenance path.effect-observed { stroke: color-mix(in srgb, var(--signal-peach) 72%, transparent); stroke-dasharray: 2 7; }
+
+.lens-reader-drawer {
+  position: absolute;
+  z-index: 20;
+  right: 0;
+  bottom: 44px;
+  left: 0;
+  display: grid;
+  width: auto;
+  height: min(42%, 370px);
+  min-height: 260px;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border-top: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--panel) 96%, transparent);
+  box-shadow: 0 -18px 42px rgb(0 0 0 / 19%);
+  backdrop-filter: blur(12px);
+}
+
+.lens-reader-drawer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  padding: 5px 10px 5px 14px;
+  border-bottom: 1px solid var(--line-strong);
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 12px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.lens-reader-drawer-bar button {
+  border: 1px solid var(--line-strong);
+  padding: 7px 9px;
+  color: var(--ink-soft);
+  background: transparent;
+  font: inherit;
+}
+
+.lens-reader-drawer .lens-selection-inspector {
+  width: 100%;
+  max-width: 1480px;
+  margin: 0 auto;
+  min-width: 0;
+  max-height: none;
+  border: 0;
+  background: transparent;
+}
+
+.source-tone-0 { color: var(--signal-cyan) !important; border-color: var(--signal-cyan) !important; }
+.source-tone-1 { color: var(--signal-violet) !important; border-color: var(--signal-violet) !important; }
+.source-tone-2 { color: var(--signal-mint) !important; border-color: var(--signal-mint) !important; }
+.source-tone-3 { color: var(--signal-peach) !important; border-color: var(--signal-peach) !important; }
+.source-tone-4 { color: var(--signal-pink) !important; border-color: var(--signal-pink) !important; }
+.source-tone-5 { color: var(--ink-soft) !important; border-color: var(--ink-soft) !important; }
+.lens-reader-input-span[class*="source-tone-"] > strong { color: var(--ink) !important; }
+
+@media (max-width: 860px) {
+  .lens-reader-page { overflow: auto; }
+  .lens-reader-toolbar { align-items: flex-start; flex-wrap: wrap; }
+  .lens-reader-surface { min-height: 1100px; grid-template-columns: 1fr; }
+  .lens-reader-pane { min-height: 540px; }
+  .lens-reader-provenance { display: none; }
+  .lens-reader-drawer {
+    position: fixed;
+    height: min(56%, 440px);
+  }
+  .lens-reader-page > .run-workspace-header {
+    position: sticky;
+    z-index: 22;
+    bottom: 0;
+  }
+}

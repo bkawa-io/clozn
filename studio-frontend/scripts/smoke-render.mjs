@@ -37,9 +37,13 @@ const ROUTES = [
   ["#/runs", "runs"],
   ["#/lens", "lens"],
   ["#/runs/run_abc123", "lens"],
-  ["#/scope", "scope"],
-  ["#/runs/run_abc123/scope", "scope"],
-  ["#/runs/run_abc123/scope?token=7", "scope"],
+  ["#/runs/run_abc123/lens", "lens"],
+  ["#/diagnostics", "diagnostics"],
+  ["#/runs/run_abc123/diagnostics", "diagnostics"],
+  ["#/runs/run_abc123/diagnostics/influence", "diagnostics"],
+  ["#/scope", "diagnostics"],
+  ["#/runs/run_abc123/scope", "diagnostics"],
+  ["#/runs/run_abc123/scope?token=7", "diagnostics"],
   ["#/compare", "compare"],
   ["#/compare/run_a/run_b", "compare"],
   ["#/behavior", "behavior"],
@@ -62,7 +66,7 @@ check("registry has no load failures", panelRegistry.loadFailures.length === 0,
       JSON.stringify(panelRegistry.loadFailures));
 
 const ids = panelRegistry.panels.map((p) => p.id);
-for (const expected of ["runs", "lens", "scope", "compare", "behavior", "model", "experiments"]) {
+for (const expected of ["runs", "lens", "diagnostics", "scope", "compare", "behavior", "model", "experiments"]) {
   check(`panel "${expected}" is registered`, ids.includes(expected), `found: ${ids.join(", ")}`);
 }
 check("panel ids are unique", new Set(ids).size === ids.length, ids.join(", "));
@@ -81,8 +85,12 @@ for (const [hash, expectedId] of ROUTES) {
 const scopeDeep = resolveRoute(panelRegistry.panels, "#/runs/run_abc123/scope?token=7");
 check("scope deep link keeps runId", scopeDeep?.params.runId === "run_abc123",
       JSON.stringify(scopeDeep?.params));
-check("scope deep link keeps tokenIndex", scopeDeep?.params.tokenIndex === "7",
+check("retired scope deep link opens generation diagnostics", scopeDeep?.params.view === "generation",
       JSON.stringify(scopeDeep?.params));
+const diagnosticsDeep = resolveRoute(panelRegistry.panels, "#/runs/run_abc123/diagnostics/influence");
+check("diagnostics deep link keeps run and section",
+      diagnosticsDeep?.params.runId === "run_abc123" && diagnosticsDeep?.params.view === "influence",
+      JSON.stringify(diagnosticsDeep?.params));
 const compareDeep = resolveRoute(panelRegistry.panels, "#/compare/run_a/run_b");
 check("compare deep link keeps both ids",
       compareDeep?.params.runA === "run_a" && compareDeep?.params.runB === "run_b",

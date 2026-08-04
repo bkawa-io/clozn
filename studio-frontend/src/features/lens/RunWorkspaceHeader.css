@@ -1,0 +1,93 @@
+.run-workspace-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 44px;
+  padding: 5px 10px 5px 14px;
+  border-top: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--panel) 96%, var(--page-deep));
+}
+
+.run-workspace-identity {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+}
+
+.run-workspace-label {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 10px;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.run-workspace-identity > strong {
+  overflow: hidden;
+  max-width: min(34vw, 520px);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-workspace-identity p {
+  display: flex;
+  min-width: 0;
+  gap: 5px 10px;
+  margin: 0;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.run-workspace-identity p span {
+  overflow: hidden;
+  max-width: 150px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-workspace-identity code { color: var(--signal-violet); }
+
+.run-workspace-switcher {
+  display: flex;
+  flex: 0 0 auto;
+  border: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--panel-raised) 42%, transparent);
+}
+
+.run-workspace-switcher a {
+  min-width: 78px;
+  padding: 6px 9px;
+  border-right: 1px solid var(--line);
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 10px;
+  letter-spacing: .04em;
+  text-align: center;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+
+.run-workspace-switcher a:last-child { border-right: 0; }
+.run-workspace-switcher a:hover { color: var(--ink); }
+.run-workspace-switcher a.is-active {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--signal-violet) 12%, transparent);
+  box-shadow: inset 0 -2px var(--signal-violet);
+}
+
+@media (max-width: 720px) {
+  .run-workspace-header { gap: 8px; padding-left: 10px; }
+  .run-workspace-label,
+  .run-workspace-identity p span { display: none; }
+  .run-workspace-identity > strong { max-width: 38vw; }
+  .run-workspace-switcher a { flex: 1; }
+}

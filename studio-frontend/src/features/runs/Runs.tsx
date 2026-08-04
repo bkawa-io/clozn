@@ -281,10 +281,10 @@ export function Runs({ runtime, inspectorOpen }: RunsProps) {
           {selected ? (
             <div className="runs-inspector-body">
               <div className="runs-actions">
-                <a href={`#/runs/${encodeURIComponent(selected.id)}`}>READ</a>
-                <a href={`#/runs/${encodeURIComponent(selected.id)}/scope`}>SCOPE</a>
+                <a href={`#/runs/${encodeURIComponent(selected.id)}/lens`}>OPEN LENS</a>
+                <a href={`#/runs/${encodeURIComponent(selected.id)}/diagnostics`}>DIAGNOSTICS</a>
                 {selected.sessionKey && (
-                  <a href={`#/sessions/${encodeURIComponent(selected.sessionKey)}/investigate`}>INVESTIGATE SESSION</a>
+                  <a href={`#/sessions/${encodeURIComponent(selected.sessionKey)}/investigate`}>SESSION DIAGNOSTICS</a>
                 )}
                 <button type="button" onClick={() => stage(selected.id, compareA ? "b" : "a")}>
                   {compareA ? "STAGE B" : "STAGE A"}

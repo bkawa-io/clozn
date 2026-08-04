@@ -525,7 +525,7 @@ export function WhatMattered({ runId }: WhatMatteredProps) {
                         return (
                           <th scope="col" key={col.key} className="what-mattered-col-head">
                             {col.tokenIndex != null ? (
-                              <a href={`#/runs/${encodeURIComponent(runId)}/scope?token=${col.tokenIndex}`}>
+                              <a href={`#/runs/${encodeURIComponent(runId)}/diagnostics/influence`}>
                                 {col.label}
                               </a>
                             ) : address ? (

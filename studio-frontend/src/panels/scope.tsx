@@ -153,6 +153,7 @@ const panel: StudioPanel = {
   id: "scope",
   navLabel: "Scope",
   order: 30,
+  hiddenFromNav: true,
   icon: () => <Icon name="observatory" />,
   match: (hash) => {
     // `#/runs/<id>/scope?...` -- must be tried before lens's bare `#/runs/<id>`, which nav order

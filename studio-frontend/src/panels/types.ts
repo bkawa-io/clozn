@@ -30,6 +30,10 @@ export interface StudioPanel {
   navLabel: string;
   /** Nav rail position; ties broken by id. Existing surfaces are 10..60. */
   order?: number;
+  /** Keep a compatibility route available without advertising it as a primary destination. */
+  hiddenFromNav?: boolean;
+  /** Some focused workspaces own their own drawers and do not use the shell inspector. */
+  showInspectorToggle?: boolean;
   /**
    * The rail icon. A function rather than a name so a new panel can bring its own inline SVG without
    * widening `Icon.tsx`'s closed union -- the six original surfaces just return `<Icon name="..." />`.

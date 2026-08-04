@@ -340,8 +340,8 @@ function TurnDetail({
       </dl>
 
       <div className="investigation-turn-actions">
-        <a href={`#/runs/${encodeURIComponent(turn.runId)}`}>OPEN IN LENS</a>
-        <a href={`#/runs/${encodeURIComponent(turn.runId)}/scope`}>OPEN IN SCOPE</a>
+        <a href={`#/runs/${encodeURIComponent(turn.runId)}/lens`}>OPEN IN LENS</a>
+        <a href={`#/runs/${encodeURIComponent(turn.runId)}/diagnostics`}>OPEN DIAGNOSTICS</a>
         <button
           type="button"
           className={compareA === turn.runId ? "is-a is-active" : "is-a"}

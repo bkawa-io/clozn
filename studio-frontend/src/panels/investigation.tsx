@@ -16,6 +16,7 @@ const panel: StudioPanel = {
   id: "investigation",
   navLabel: "Investigate",
   order: 25,
+  hiddenFromNav: true,
   icon: () => <Icon name="investigation" />,
   match: (hash): Record<string, string> | null => {
     const deep = hash.match(/^#\/sessions\/([^/]+)\/investigate\/?$/);

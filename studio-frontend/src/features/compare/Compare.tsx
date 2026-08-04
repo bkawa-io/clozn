@@ -253,7 +253,7 @@ export function Compare({ runtime, initialA, initialB, inspectorOpen }: CompareP
           </header>
 
           <section className="compare-readout is-a">
-            <header><span>A</span><a href={runA ? `#/runs/${encodeURIComponent(runA.id)}/scope` : "#/scope"}>{runA ? shortId(runA.id) : "—"}</a></header>
+            <header><span>A</span><a href={runA ? `#/runs/${encodeURIComponent(runA.id)}/diagnostics/generation` : "#/diagnostics"}>{runA ? shortId(runA.id) : "—"}</a></header>
             <strong>{tokenA?.text || "∅"}</strong>
             <dl>
               <div><dt>Confidence</dt><dd>{tokenA?.confidence?.toFixed(4) ?? "—"}</dd></div>
@@ -263,7 +263,7 @@ export function Compare({ runtime, initialA, initialB, inspectorOpen }: CompareP
           </section>
 
           <section className="compare-readout is-b">
-            <header><span>B</span><a href={runB ? `#/runs/${encodeURIComponent(runB.id)}/scope` : "#/scope"}>{runB ? shortId(runB.id) : "—"}</a></header>
+            <header><span>B</span><a href={runB ? `#/runs/${encodeURIComponent(runB.id)}/diagnostics/generation` : "#/diagnostics"}>{runB ? shortId(runB.id) : "—"}</a></header>
             <strong>{tokenB?.text || "∅"}</strong>
             <dl>
               <div><dt>Confidence</dt><dd>{tokenB?.confidence?.toFixed(4) ?? "—"}</dd></div>

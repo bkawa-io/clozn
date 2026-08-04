@@ -47,6 +47,7 @@ export function App() {
   const topbar = useMemo(() => ({ publish }), [publish]);
 
   const { panels, loadFailures } = panelRegistry;
+  const navPanels = panels.filter((item) => !item.hiddenFromNav);
   const resolved = resolveRoute(panels, hash);
 
   if (!resolved) {
@@ -69,7 +70,7 @@ export function App() {
         <aside className="rail" aria-label="Primary navigation">
           <div className="wordmark" aria-label="Clozn">C</div>
           <nav className="rail-nav">
-            {panels.map((item) => (
+            {navPanels.map((item) => (
               <a
                 className={`rail-item ${item.id === panel.id ? "is-active" : ""}`}
                 href={`#/${item.id}`}
@@ -87,15 +88,17 @@ export function App() {
             ))}
           </nav>
           <div className="rail-actions">
-            <button
-              className="rail-button"
-              type="button"
-              onClick={() => setInspectorOpen((open) => !open)}
-              aria-pressed={inspectorOpen}
-              aria-label="Toggle inspector"
-            >
-              <Icon name="inspector" />
-            </button>
+            {panel.showInspectorToggle !== false && (
+              <button
+                className="rail-button"
+                type="button"
+                onClick={() => setInspectorOpen((open) => !open)}
+                aria-pressed={inspectorOpen}
+                aria-label="Toggle inspector"
+              >
+                <Icon name="inspector" />
+              </button>
+            )}
             <button
               className="rail-button"
               type="button"
@@ -122,14 +125,16 @@ export function App() {
           {stats}
           {modeChip != null && <span className="mode-chip">{modeChip}</span>}
           <div className="topbar-actions">
-            <button
-              type="button"
-              onClick={() => setInspectorOpen((open) => !open)}
-              aria-pressed={inspectorOpen}
-              aria-label="Toggle compact inspector"
-            >
-              <Icon name="inspector" />
-            </button>
+            {panel.showInspectorToggle !== false && (
+              <button
+                type="button"
+                onClick={() => setInspectorOpen((open) => !open)}
+                aria-pressed={inspectorOpen}
+                aria-label="Toggle compact inspector"
+              >
+                <Icon name="inspector" />
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setTheme((value) => value === "halo" ? "cathedral" : "halo")}
