@@ -15,26 +15,16 @@
 }
 
 .evidence-lanes-head {
-  min-height: 52px;
-  padding: 10px 13px;
+  min-height: 32px;
+  padding: 7px 13px;
   border-bottom: 1px solid var(--line);
 }
 
-.evidence-lanes-head h2 {
-  margin: 2px 0 0;
-  font-family: var(--font-machine);
-  font-size: 15px;
-  font-weight: 500;
-  letter-spacing: .02em;
-}
-
-.evidence-lanes .eyebrow,
 .evidence-lanes-head output {
   color: color-mix(in srgb, var(--signal-cyan) 65%, var(--ink));
   font-family: var(--font-machine);
   font-size: 12px;
   letter-spacing: .08em;
-  text-align: right;
 }
 
 .evidence-lanes-lane > header output {

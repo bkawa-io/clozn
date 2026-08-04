@@ -55,7 +55,7 @@ describe("EvidenceLanes", () => {
       />,
     );
 
-    expect(screen.getByText("Evidence lanes")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Evidence lanes" })).toBeInTheDocument();
     expect(screen.getByText("TOKENS 1–2")).toBeInTheDocument();
     expect(screen.getByText("24% · 0.240")).toBeInTheDocument();
     expect(screen.getByText("0.910 BITS · SHAKY")).toBeInTheDocument();

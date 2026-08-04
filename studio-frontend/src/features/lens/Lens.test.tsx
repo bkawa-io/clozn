@@ -17,19 +17,25 @@ const linkedToken: TokenReading = {
 };
 
 describe("Lens reader annotations", () => {
-  test("combines independent text lenses without replacing the prose", () => {
-    const active = new Set<ReaderLensId>(["shakiness", "sources", "provenance", "concepts"]);
-    expect(tokenLensClasses(linkedToken, active, 2).split(" ")).toEqual(expect.arrayContaining([
+  test("combines independent per-token decoration without replacing the prose", () => {
+    const active = new Set<ReaderLensId>(["shakiness", "concepts"]);
+    expect(tokenLensClasses(linkedToken, active).split(" ")).toEqual(expect.arrayContaining([
       "lens-reader-token",
       "is-shaky",
-      "has-source-index",
-      "source-tone-2",
-      "has-provenance",
       "concept-lens-active",
     ]));
   });
 
+  test("source links are a claim/span-level concern, never a per-token class", () => {
+    const active = new Set<ReaderLensId>(["shakiness", "sources", "concepts"]);
+    expect(tokenLensClasses(linkedToken, active).split(" ")).not.toEqual(expect.arrayContaining([
+      "has-source-index",
+      "source-tone-2",
+      "has-provenance",
+    ]));
+  });
+
   test("keeps the clean reader free of evidence styling", () => {
-    expect(tokenLensClasses(linkedToken, new Set(), 2)).toBe("lens-reader-token");
+    expect(tokenLensClasses(linkedToken, new Set())).toBe("lens-reader-token");
   });
 });

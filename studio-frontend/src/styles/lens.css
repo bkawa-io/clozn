@@ -1834,18 +1834,6 @@
   min-height: 0;
 }
 
-.workspace.is-lens .lens-selection-inspector {
-  grid-column: 4;
-  grid-row: 2;
-  width: 100%;
-  min-width: 0;
-  min-height: 0;
-}
-
-.workspace.is-lens.inspector-closed .lens-selection-inspector {
-  display: none;
-}
-
 .workspace.is-lens .evidence-deck {
   grid-column: 2 / -1;
   grid-row: 3;
@@ -2000,14 +1988,6 @@
     grid-template-columns: minmax(190px, 214px) minmax(330px, .95fr) minmax(390px, 1.05fr);
   }
 
-  .workspace.is-lens .lens-selection-inspector {
-    grid-column: 2 / -1;
-    grid-row: 3;
-    width: 100%;
-    min-height: 420px;
-    max-height: 520px;
-  }
-
   .workspace.is-lens .evidence-deck {
     grid-row: 4;
   }
@@ -2029,7 +2009,6 @@
   .workspace.is-lens > .run-frame { grid-column: 1 / -1; grid-row: 2; }
   .workspace.is-lens .lens-context-canvas { grid-column: 1; grid-row: 3; max-height: none; }
   .workspace.is-lens .lens-reader { grid-column: 2; grid-row: 3; min-height: 600px; }
-  .workspace.is-lens .lens-selection-inspector { grid-column: 1 / -1; grid-row: 4; width: 100%; min-height: 440px; max-height: 620px; }
   .workspace.is-lens .evidence-deck { grid-column: 1 / -1; grid-row: 5; }
   .workspace.is-lens .lens-time-machine { grid-column: 1 / -1; grid-row: 6; }
 }
@@ -2045,7 +2024,6 @@
   .workspace.is-lens > .run-frame { order: 2; }
   .workspace.is-lens .lens-context-canvas { order: 3; min-height: 620px; }
   .workspace.is-lens .lens-reader { order: 4; min-height: 620px; }
-  .workspace.is-lens .lens-selection-inspector { order: 5; max-height: none; }
   .workspace.is-lens .evidence-deck { order: 6; }
   .workspace.is-lens .lens-time-machine { order: 7; }
 }
@@ -2062,16 +2040,6 @@
   justify-content: space-between;
   gap: 10px;
   padding: 11px 14px 7px;
-}
-
-.context-receipt-head h3 {
-  margin: 2px 0 0;
-  color: var(--ink);
-  font-family: var(--font-machine);
-  font-size: 9px;
-  font-weight: 550;
-  letter-spacing: .03em;
-  text-transform: uppercase;
 }
 
 .context-receipt-shape {
@@ -2399,15 +2367,6 @@
   justify-content: space-between;
   gap: 10px;
   padding: 12px 14px 7px;
-}
-
-.received-context-head h3 {
-  margin: 2px 0 0;
-  color: var(--ink);
-  font-family: var(--font-machine);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: .02em;
 }
 
 .received-context-overall,
@@ -5140,12 +5099,7 @@
 }
 
 .workspace.is-lens .received-context-head {
-  padding: 18px 20px 12px;
-}
-
-.workspace.is-lens .received-context-head h3,
-.workspace.is-lens .context-receipt-head h3 {
-  font-size: 17px;
+  padding: 18px 20px 8px;
 }
 
 .workspace.is-lens :where(

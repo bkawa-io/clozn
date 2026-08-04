@@ -106,15 +106,7 @@
 
 /* These instruments also appear in compact drawers elsewhere. Diagnostics is their full workspace:
    restore readable type and breathing room here without changing their intentionally compact uses. */
-.run-diagnostics-main .received-context-head { padding: 18px 20px 12px; }
-.run-diagnostics-main .received-context-head .eyebrow,
-.run-diagnostics-main .context-receipt-head .eyebrow { font-size: 11px; }
-.run-diagnostics-main .received-context-head h3,
-.run-diagnostics-main .context-receipt-head h3 {
-  font-size: 17px;
-  letter-spacing: 0;
-  text-transform: none;
-}
+.run-diagnostics-main .received-context-head { padding: 16px 20px 4px; }
 .run-diagnostics-main .received-context-overall,
 .run-diagnostics-main .received-context-state,
 .run-diagnostics-main .context-receipt-shape,
@@ -148,7 +140,7 @@
 .run-diagnostics-main .received-context-authorized > p { font-size: 12px; }
 .run-diagnostics-main .received-context-authorized > button { padding: 10px 12px; font-size: 11px; }
 
-.run-diagnostics-main .context-receipt-head { padding: 18px 20px 12px; }
+.run-diagnostics-main .context-receipt-head { padding: 16px 20px 4px; }
 .run-diagnostics-main .context-receipt-facts-strip { padding: 0 20px 15px; }
 .run-diagnostics-main .context-receipt-fact { padding: 9px 0; }
 .run-diagnostics-main .context-receipt-fact > span,
@@ -374,3 +366,22 @@
   .diagnostics-runtime-findings article > header,
   .diagnostics-runtime-rules article > header { align-items: start; flex-direction: column; }
 }
+
+/* The `lens.evidence` slot panels, mounted as siblings in the Investigate section. Ask Another
+   Question scrolls to anchors owned by the panels below it, so they stack in one scrolling column
+   rather than becoming separate nav destinations. */
+.run-diagnostics-main .slot-panel {
+  display: block;
+  border-bottom: 1px solid var(--line);
+  padding: 4px 0 26px;
+}
+.run-diagnostics-main .slot-panel:last-child { border-bottom: 0; padding-bottom: 4px; }
+
+.run-diagnostics-main .slot-panel.is-failed {
+  border: 1px solid var(--danger);
+  padding: 14px 16px;
+  color: var(--danger);
+  font-family: var(--font-machine);
+  font-size: 12px;
+}
+.run-diagnostics-main .slot-panel.is-failed b { margin-right: 6px; }

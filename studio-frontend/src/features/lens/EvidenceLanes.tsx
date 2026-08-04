@@ -260,12 +260,8 @@ export function EvidenceLanes({
     : `Token ${activeToken + 1}`;
 
   return (
-    <section className={["evidence-lanes", className].filter(Boolean).join(" ")} aria-labelledby="evidence-lanes-title">
+    <section className={["evidence-lanes", className].filter(Boolean).join(" ")} aria-label="Evidence lanes">
       <header className="evidence-lanes-head">
-        <div>
-          <span className="eyebrow">SYNCHRONIZED TRACE</span>
-          <h2 id="evidence-lanes-title">Evidence lanes</h2>
-        </div>
         <output aria-live="polite">{tokenCount ? selectionLabel.toUpperCase() : "NO TOKEN TRACE"}</output>
       </header>
 

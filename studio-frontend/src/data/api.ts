@@ -735,6 +735,7 @@ function spanBands(spansBody: unknown): Map<number, TokenReading["band"]> {
 interface InfluenceIndex {
   sources: SourceReading[];
   contextSources: SourceReading[];
+  contextMessages: SourceReading[];
   coverage: ContextCoverage;
   tokenSources: Map<number, TokenSourceReading[]>;
   observedSources: Map<number, TokenSourceReading[]>;
@@ -873,6 +874,8 @@ function influenceIndex(body: unknown, run: JsonRecord): InfluenceIndex {
     return {
       sources: [],
       contextSources: fallbackSources,
+      // With no map computed, the run's own messages ARE the spans -- nothing subdivides them yet.
+      contextMessages: fallbackSources,
       coverage: {
         totalSources: fallbackSources.length,
         measuredSources: 0,
@@ -926,6 +929,14 @@ function influenceIndex(body: unknown, run: JsonRecord): InfluenceIndex {
     if (startDelta) return startDelta;
     return a.id.localeCompare(b.id);
   });
+  // The delivered messages, each with its own full text. These are what a reader reads; the spans
+  // above are how the measurement carved them up, and a refined span overlaps its own parent.
+  const contextMessages = promptSourceRows
+    .flatMap((source) => {
+      const reading = sourceReading(source, measuredParents.has(String(source.id || "")));
+      return reading ? [reading] : [];
+    })
+    .sort((a, b) => (a.messageIndex ?? 0) - (b.messageIndex ?? 0));
   const sourceById = new Map(sources.map((source) => [source.id, source]));
 
   const tokenByAnswerId = new Map<string, number>();
@@ -994,6 +1005,7 @@ function influenceIndex(body: unknown, run: JsonRecord): InfluenceIndex {
   return {
     sources,
     contextSources,
+    contextMessages,
     coverage: {
       totalSources,
       measuredSources,
@@ -1181,6 +1193,7 @@ export async function loadRunInspection(runId: string, signal?: AbortSignal): Pr
     candidates: tokens[0]?.alternatives ?? [],
     sources: influence.sources,
     contextSources: influence.contextSources,
+    contextMessages: influence.contextMessages,
     contextCoverage: influence.coverage,
     influenceMethod: influence.method,
     influenceThresholds: influence.thresholds,

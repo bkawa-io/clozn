@@ -341,18 +341,14 @@ export function ReceivedContext({ runId }: ReceivedContextProps) {
   const sourceRedacted = contextSource?.nativeStatus === "redacted";
 
   return (
-    <section className="received-context" aria-labelledby="received-context-title">
-      <header className="received-context-head">
-        <div>
-          <span className="eyebrow">DELIVERY RECEIPT</span>
-          <h3 id="received-context-title">What did the model receive?</h3>
-        </div>
-        {received && (
+    <section className="received-context" id="received-context-title" aria-label="What did the model receive?">
+      {received && (
+        <header className="received-context-head">
           <span className={`received-context-overall is-${received.state}`}>
             {statusLabel(received.state)}
           </span>
-        )}
-      </header>
+        </header>
+      )}
 
       <p className="received-context-boundary">
         Delivery shows what reached prompt assembly. It does not prove that a passage changed the answer.

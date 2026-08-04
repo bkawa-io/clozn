@@ -28,6 +28,7 @@ import { renderToString } from "react-dom/server";
 import { createElement } from "react";
 
 import { App } from "../src/app/App";
+import { slotPanelsFor } from "../src/components/SlotHost";
 import { panelRegistry, resolveRoute } from "../src/panels/registry";
 
 // Routes to exercise, and the panel id each MUST resolve to. Hardcoded on purpose: this is the
@@ -41,6 +42,11 @@ const ROUTES = [
   ["#/diagnostics", "diagnostics"],
   ["#/runs/run_abc123/diagnostics", "diagnostics"],
   ["#/runs/run_abc123/diagnostics/influence", "diagnostics"],
+  // The Investigate section hosts the whole `lens.evidence` slot. Rendering it here is the guard that
+  // caught nothing last time: the slot's only mount was deleted with the old Lens page and every panel
+  // under it went unreachable while the component tests -- which mount each panel directly -- stayed green.
+  ["#/runs/run_abc123/diagnostics/investigate", "diagnostics"],
+  ["#/runs/run_abc123/diagnostics/timemachine", "diagnostics"],
   ["#/scope", "diagnostics"],
   ["#/runs/run_abc123/scope", "diagnostics"],
   ["#/runs/run_abc123/scope?token=7", "diagnostics"],
@@ -113,9 +119,31 @@ for (const [hash, expectedId] of ROUTES) {
   check(`render "${hash}" has no failed-panel placeholder`, !html.includes("is-failed"));
 }
 
+// --- every slot panel is actually reachable ------------------------------------------------------
+// The check the suite was missing. Component tests mount each slot panel directly, so they cannot tell
+// a mounted panel from an orphaned one -- when the old Lens page was replaced, its lone
+// `<SlotHost slot="lens.evidence">` went with it and seven panels became unreachable with every test
+// still green. SlotHost renders each panel as `<section class="slot-panel" aria-label={title}>`, so
+// asserting each registered title appears in real rendered output is what makes orphaning fail loudly.
+location.hash = "#/runs/run_abc123/diagnostics/investigate";
+let evidenceHtml = "";
+try {
+  evidenceHtml = renderToString(createElement(App));
+} catch (error) {
+  check("render lens.evidence host", false, `${error?.name}: ${error?.message}`);
+}
+const evidencePanels = slotPanelsFor("lens.evidence");
+check("lens.evidence slot still registers panels", evidencePanels.length > 0);
+for (const panel of evidencePanels) {
+  check(`slot panel "${panel.id}" is mounted by a host`,
+        evidenceHtml.includes(`aria-label="${panel.title}"`),
+        "registered but absent from rendered output -- has its host been removed?");
+}
+
 if (failures.length) {
   console.error(`\nStudio smoke render FAILED (${failures.length}):`);
   for (const failure of failures) console.error(`  - ${failure}`);
   process.exit(1);
 }
-console.log(`Studio smoke render passed: ${panelRegistry.panels.length} panels, ${ROUTES.length} routes.`);
+console.log(`Studio smoke render passed: ${panelRegistry.panels.length} panels, `
+  + `${ROUTES.length} routes, ${evidencePanels.length} slot panels reachable.`);

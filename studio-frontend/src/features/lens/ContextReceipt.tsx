@@ -559,16 +559,12 @@ export function ContextReceipt({
   const view = state.status === "ready" ? state.view : null;
 
   return (
-    <section className="context-receipt" aria-labelledby="context-receipt-title">
-      <header className="context-receipt-head">
-        <div>
-          <span className="eyebrow">EVIDENCE</span>
-          <h3 id="context-receipt-title">Context receipt</h3>
-        </div>
-        {view && view.shape !== "absent" && (
+    <section className="context-receipt" aria-label="Context receipt">
+      {view && view.shape !== "absent" && (
+        <header className="context-receipt-head">
           <span className={`context-receipt-shape is-${view.shape}`}>{view.shape.toUpperCase()}</span>
-        )}
-      </header>
+        </header>
+      )}
 
       {state.status === "idle" || state.status === "loading" ? (
         <div className="context-receipt-empty">LOADING CONTEXT RECEIPT</div>

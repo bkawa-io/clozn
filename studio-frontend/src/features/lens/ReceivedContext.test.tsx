@@ -189,7 +189,7 @@ describe("What did the model receive panel", () => {
     controller.respondJson(requests.investigation, investigation("run-one"));
     controller.respondJson(requests.spans, spanDocument("run-one"));
 
-    expect(await screen.findByRole("heading", {
+    expect(await screen.findByRole("region", {
       name: "What did the model receive?",
     })).toBeInTheDocument();
     expect(await screen.findByText("42")).toBeInTheDocument();

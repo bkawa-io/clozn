@@ -6,16 +6,19 @@ import type {
   RuntimeState,
   TokenReading,
 } from "../../data/types";
+import { SlotHost } from "../../components/SlotHost";
 import { ContextReceipt } from "../lens/ContextReceipt";
 import { EvidenceLanes } from "../lens/EvidenceLanes";
 import { ReceivedContext } from "../lens/ReceivedContext";
 import { RunEventRail, type RunEventRailEvent } from "../lens/RunEventRail";
 import { RunWorkspaceHeader } from "../lens/RunWorkspaceHeader";
+import { TimeMachine } from "../lens/TimeMachine";
 import { aggregateSources, buildResponseClaims } from "../lens/analysis";
 import "./RunDiagnostics.css";
 
 export const DIAGNOSTIC_SECTIONS = [
   { id: "overview", label: "Overview" },
+  { id: "investigate", label: "Investigate" },
   { id: "delivery", label: "Prompt delivery" },
   { id: "rendered", label: "Rendered prompt" },
   { id: "context", label: "Context & sources" },
@@ -25,6 +28,7 @@ export const DIAGNOSTIC_SECTIONS = [
   { id: "runtime", label: "Runtime & performance" },
   { id: "events", label: "Events" },
   { id: "lineage", label: "Lineage" },
+  { id: "timemachine", label: "Time machine" },
   { id: "raw", label: "Raw artifacts" },
 ] as const;
 
@@ -280,7 +284,33 @@ export function RunDiagnostics({ runtime, initialRunId, initialView, sessionId }
     : undefined;
 
   function content() {
-    if (status === "loading" || !runId) {
+    if (!runId) {
+      return <div className="diagnostics-loading">Loading recorded diagnostics…</div>;
+    }
+
+    // These two sections own their own fetches, keyed only by run id, and each renders its own typed
+    // loading / not-measured / unavailable state. Gating them behind THIS page's run-inspection fetch
+    // would replace those honest states with one generic "could not be loaded" that is not even true
+    // of them -- so they resolve before the gate below.
+    if (view === "investigate") {
+      // The whole `lens.evidence` slot as SIBLINGS on purpose: Ask Another Question routes by scrolling
+      // to an in-page anchor owned by one of the panels beneath it, so splitting them across sections
+      // would break every one of its targets (see data/askAnotherQuestion.ts). Panel `order` puts AAQ first.
+      return (
+        <SectionFrame title="Investigate">
+          <SlotHost slot="lens.evidence" data={{ runId }} />
+        </SectionFrame>
+      );
+    }
+    if (view === "timemachine") {
+      return (
+        <SectionFrame title="Time machine">
+          <TimeMachine runId={runId} />
+        </SectionFrame>
+      );
+    }
+
+    if (status === "loading") {
       return <div className="diagnostics-loading">Loading recorded diagnostics…</div>;
     }
     if (status === "error" || !data) {

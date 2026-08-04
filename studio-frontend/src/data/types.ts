@@ -192,6 +192,13 @@ export interface ObservatoryData {
   candidates: CandidateReading[];
   sources: SourceReading[];
   contextSources?: SourceReading[];
+  /**
+   * The delivered messages themselves, each carrying its own full text -- the reading surface.
+   * `contextSources` holds the measurement's spans, which subdivide these and (once a span is
+   * refined) overlap each other; rendering those as siblings repeats the prompt back at the reader
+   * at two granularities. Render messages, and place spans inside them by their offsets.
+   */
+  contextMessages?: SourceReading[];
   contextCoverage?: ContextCoverage;
   /** Present exactly when a source map has been computed and persisted for this run. */
   influenceMethod?: InfluenceMethod;
