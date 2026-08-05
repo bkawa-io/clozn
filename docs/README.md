@@ -33,6 +33,13 @@ The design docs, indexed. Read top-down: the synthesis first, then the per-layer
 - **[RUNTIME_SPLIT.md](RUNTIME_SPLIT.md)** — how the Python package splits between the pure
   library and the served runtime.
 
+## Studio UI review
+
+- **[STUDIO_UI_AUDIT_2026-08-04.md](STUDIO_UI_AUDIT_2026-08-04.md)** — hands-on audit of every
+  primary Studio workspace, Run section, Behavior module, and reachable compatibility surface.
+- **[STUDIO_UI_REDESIGN_2026-08-04.md](STUDIO_UI_REDESIGN_2026-08-04.md)** — proposed five-workspace
+  information architecture, page consolidation, layouts, visualization choices, and delivery sequence.
+
 ## Protocol
 
 - **[../protocol/README.md](../protocol/README.md)** — the state-stream contract the engine
