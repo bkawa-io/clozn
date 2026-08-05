@@ -1490,3 +1490,559 @@
   .behavior-teach-fields { grid-template-columns: 1fr; }
   .behavior-teach-verify-fields { grid-template-columns: 1fr; }
 }
+
+/* Corrections are durable scoped records, so the visual hierarchy leads with lifecycle and reach rather
+   than treating the authoring form as the whole feature. Form + label carry lifecycle; signal colour is
+   only a secondary cue because an enabled and disabled record must survive a greyscale read. */
+.behavior-scope-hierarchy {
+  display: grid;
+  gap: 10px;
+  margin: 2px 0 14px;
+  border: 1px solid var(--line);
+  padding: 10px;
+  background: color-mix(in srgb, var(--panel-raised) 42%, var(--paper));
+}
+
+.behavior-scope-hierarchy > header,
+.behavior-teach-list > header,
+.behavior-correction-resolution > header,
+.behavior-correction-comparison > header,
+.behavior-resolution-report > section > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.behavior-scope-hierarchy > header span,
+.behavior-scope-hierarchy > header b,
+.behavior-teach-list > header span,
+.behavior-teach-list > header b,
+.behavior-correction-resolution > header span,
+.behavior-resolution-report > section > header span,
+.behavior-resolution-report > section > header b,
+.behavior-correction-comparison > header span,
+.behavior-correction-comparison > header b {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  font-weight: 500;
+  letter-spacing: .08em;
+}
+
+.behavior-scope-hierarchy > header b {
+  max-width: 62%;
+  text-align: right;
+}
+
+.behavior-scope-hierarchy ol {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.behavior-scope-hierarchy li {
+  position: relative;
+  display: grid;
+  min-height: 62px;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 6px;
+  align-items: start;
+  border: 1px dashed var(--line);
+  padding: 7px;
+}
+
+.behavior-scope-hierarchy li:not(:last-child)::after {
+  position: absolute;
+  z-index: 2;
+  top: 28px;
+  right: -8px;
+  width: 10px;
+  height: 1px;
+  background: var(--ink-faint);
+  content: "";
+}
+
+.behavior-scope-hierarchy li.is-selected {
+  border-style: solid;
+  box-shadow: inset 0 2px var(--signal-violet);
+}
+
+.behavior-scope-index {
+  display: grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border: 1px solid var(--ink-faint);
+  border-radius: 50%;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 6px;
+}
+
+.behavior-scope-hierarchy li.is-selected .behavior-scope-index {
+  border-radius: 1px;
+  border-color: var(--signal-violet);
+  color: var(--ink);
+}
+
+.behavior-scope-hierarchy li > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.behavior-scope-hierarchy li strong,
+.behavior-scope-hierarchy li small {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .04em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.behavior-scope-hierarchy li small {
+  color: var(--ink-faint);
+  font-family: var(--font-sans);
+  font-size: 8px;
+  letter-spacing: 0;
+  white-space: normal;
+}
+
+.behavior-scope-hierarchy > p,
+.behavior-teach-verify > p,
+.behavior-correction-resolution-note,
+.behavior-correction-comparison > p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.behavior-teach-list {
+  gap: 10px;
+}
+
+.behavior-teach-list > header {
+  padding: 2px 2px 7px;
+  border-bottom: 1px solid var(--line);
+}
+
+.behavior-teach-list > header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.behavior-teach-list > header h2,
+.behavior-correction-resolution > header h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.behavior-teach-list > header > b {
+  display: grid;
+  min-width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--ink-soft);
+}
+
+.behavior-teach-list article {
+  display: grid;
+  gap: 11px;
+  border-left-width: 3px;
+}
+
+.behavior-teach-list article.is-draft {
+  border-left-style: dashed;
+}
+
+.behavior-teach-list article.is-disabled {
+  border-left-style: double;
+}
+
+.behavior-teach-list article > header > .behavior-correction-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.behavior-correction-heading > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.behavior-teach-list article > header .behavior-correction-heading strong,
+.behavior-teach-list article > header .behavior-correction-heading span,
+.behavior-teach-list article > header .behavior-correction-state b,
+.behavior-teach-list article > header .behavior-correction-state span {
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .06em;
+}
+
+.behavior-teach-list article > header .behavior-correction-heading strong {
+  color: var(--ink);
+  text-transform: uppercase;
+}
+
+.behavior-teach-list article > header .behavior-correction-heading > div > span,
+.behavior-teach-list article > header .behavior-correction-state span {
+  overflow: hidden;
+  color: var(--ink-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.behavior-correction-form {
+  position: relative;
+  display: block;
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+  border: 1px solid var(--ink-faint);
+}
+
+.behavior-correction-form.is-draft {
+  border-style: dashed;
+  border-radius: 50%;
+}
+
+.behavior-correction-form.is-enabled {
+  border-color: var(--signal-mint);
+  background: var(--signal-mint);
+}
+
+.behavior-correction-form.is-disabled {
+  border-style: double;
+  border-radius: 2px;
+}
+
+.behavior-correction-form.is-disabled::after {
+  position: absolute;
+  top: 5px;
+  left: 1px;
+  width: 9px;
+  height: 1px;
+  transform: rotate(-45deg);
+  background: var(--ink-soft);
+  content: "";
+}
+
+.behavior-correction-state {
+  display: grid;
+  justify-items: end;
+  gap: 3px;
+}
+
+.behavior-correction-state b {
+  color: var(--ink);
+}
+
+.behavior-teach-list article.is-draft .behavior-correction-state b {
+  text-decoration: underline dashed var(--ink-faint);
+  text-underline-offset: 3px;
+}
+
+.behavior-teach-list article.is-disabled .behavior-correction-state b {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.behavior-correction-state-note {
+  margin: 0 !important;
+  color: var(--ink-soft);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.behavior-correction-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  border: 1px solid var(--line);
+  background: var(--line);
+}
+
+.behavior-correction-facts > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 7px;
+  background: var(--panel);
+}
+
+.behavior-correction-facts dt,
+.behavior-correction-facts dd {
+  overflow: hidden;
+  margin: 0;
+  font-family: var(--font-machine);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.behavior-correction-facts dt {
+  color: var(--ink-faint);
+  font-size: 5.5px;
+  letter-spacing: .08em;
+}
+
+.behavior-correction-facts dd,
+.behavior-correction-facts code {
+  color: var(--ink-soft);
+  font-size: 7px;
+}
+
+.behavior-correction-content {
+  margin: 0 !important;
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.behavior-teach-verify {
+  gap: 11px;
+  margin: 0;
+  border-style: solid;
+  background: color-mix(in srgb, var(--paper) 78%, var(--panel-raised));
+}
+
+.behavior-teach-verify > header b {
+  padding-left: 8px;
+  border-left: 2px solid var(--ink-faint);
+}
+
+.behavior-teach-verify > button {
+  border-color: var(--signal-violet);
+  color: var(--signal-violet);
+}
+
+.behavior-teach-verify .evidence-mark {
+  justify-self: start;
+}
+
+.behavior-correction-comparison {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  padding: 12px;
+  background: color-mix(in srgb, var(--panel-raised) 35%, var(--paper));
+}
+
+.behavior-correction-comparison > header strong {
+  display: block;
+  margin-top: 3px;
+  color: var(--ink);
+  font-family: var(--font-machine);
+  font-size: 9px;
+  letter-spacing: .06em;
+}
+
+.behavior-correction-comparison > header > b {
+  border: 1px solid var(--line);
+  padding: 4px 6px;
+}
+
+.behavior-correction-paired-delta {
+  margin-top: 1px;
+}
+
+.behavior-teach-list article > footer {
+  margin-top: 1px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.behavior-teach-list article > footer .behavior-correction-undo {
+  margin-left: auto;
+  border-style: double;
+  border-color: var(--signal-peach);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.behavior-correction-resolution {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  padding: 16px;
+  background: var(--paper);
+}
+
+.behavior-correction-resolution > header > div {
+  display: grid;
+  gap: 4px;
+}
+
+.behavior-resolution-state {
+  border: 1px solid var(--line);
+  padding: 4px 6px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+
+.behavior-resolution-state.is-available {
+  border-style: solid;
+  color: var(--ink-soft);
+}
+
+.behavior-resolution-state.is-not-measured,
+.behavior-resolution-state.is-unavailable {
+  border-style: dashed;
+}
+
+.behavior-resolution-run {
+  display: grid;
+  max-width: 640px;
+  gap: 6px;
+}
+
+.behavior-resolution-run > span {
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 6px;
+  letter-spacing: .08em;
+}
+
+.behavior-resolution-run select {
+  min-height: 32px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+  padding: 7px;
+  font: inherit;
+}
+
+.behavior-resolution-loading {
+  display: grid;
+  min-height: 86px;
+  place-items: center;
+  border: 1px dashed var(--line);
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  letter-spacing: .08em;
+}
+
+.behavior-resolution-offer {
+  max-width: 760px;
+}
+
+.behavior-resolution-report {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  border: 1px solid var(--line);
+  background: var(--line);
+}
+
+.behavior-resolution-report > section {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 11px;
+  background: var(--panel);
+}
+
+.behavior-resolution-report > section > header b {
+  display: grid;
+  min-width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 1px solid var(--line);
+}
+
+.behavior-resolution-report ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.behavior-resolution-report li {
+  display: grid;
+  gap: 3px;
+  border-left: 2px solid var(--ink-faint);
+  padding: 4px 0 4px 7px;
+}
+
+.behavior-resolution-report li strong,
+.behavior-resolution-report li span,
+.behavior-resolution-report li small,
+.behavior-resolution-report li code,
+.behavior-resolution-report > section > p {
+  overflow: hidden;
+  margin: 0;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.behavior-resolution-report li span,
+.behavior-resolution-report li small,
+.behavior-resolution-report > section > p {
+  color: var(--ink-faint);
+}
+
+@media (max-width: 860px) {
+  .behavior-scope-hierarchy ol,
+  .behavior-correction-facts,
+  .behavior-resolution-report {
+    grid-template-columns: 1fr;
+  }
+
+  .behavior-scope-hierarchy li:not(:last-child)::after {
+    top: auto;
+    right: auto;
+    bottom: -5px;
+    left: 15px;
+    width: 1px;
+    height: 8px;
+  }
+}
+
+@media (max-width: 520px) {
+  .behavior-scope-hierarchy > header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .behavior-scope-hierarchy > header b {
+    max-width: none;
+    text-align: left;
+  }
+
+  .behavior-correction-heading,
+  .behavior-teach-list article > header {
+    align-items: flex-start;
+  }
+
+  .behavior-correction-state {
+    justify-items: start;
+  }
+
+  .behavior-teach-list article > footer .behavior-correction-undo {
+    width: 100%;
+    margin-left: 0;
+  }
+}

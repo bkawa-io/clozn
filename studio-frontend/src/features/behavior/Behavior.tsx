@@ -49,12 +49,12 @@ interface OperationState {
 }
 
 const modules: Array<{ id: BehaviorView; label: string }> = [
-  { id: "fixes", label: "ANSWER FIXES" },
+  { id: "teach", label: "CORRECTIONS" },
+  { id: "fixes", label: "ONE-SHOT RETRIES" },
   { id: "dials", label: "TONE DIALS" },
   { id: "concepts", label: "CONCEPT STEERING" },
   { id: "runtime", label: "RUNTIME DEFAULTS" },
   { id: "profiles", label: "PROFILES" },
-  { id: "teach", label: "TEACH ONCE" },
 ];
 
 const PREVIEW_PROMPT = "Tell me about your day.";
@@ -94,7 +94,7 @@ function metricText(value: unknown) {
 }
 
 export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
-  const [view, setView] = useState<BehaviorView>("fixes");
+  const [view, setView] = useState<BehaviorView>("teach");
   const [loadStatus, setLoadStatus] = useState<LoadStatus>("loading");
   const [axes, setAxes] = useState<BehaviorAxis[]>([]);
   const [drafts, setDrafts] = useState<Record<string, number>>({});
@@ -1119,7 +1119,7 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
             </div>
           </>
         ) : view === "teach" ? (
-          <TeachOnce />
+          <TeachOnce runs={runtime.runs} />
         ) : (
           <>
             <header className="instrument-head behavior-console-head">
