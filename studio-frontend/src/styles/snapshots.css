@@ -1,4 +1,23 @@
-.snapshots-workspace { max-width: 1040px; margin: 0 auto; padding: 28px 34px 64px; }
+/* Scrolls on its own. `.workspace` is `overflow: hidden` (workspace.css), so a panel that does not
+   provide a scroll container simply has its overflow cut off with no way to reach it -- at a short
+   viewport the pin form's own submit button was below the fold and unclickable, and with several
+   pinned snapshots the last card was unreachable (STUDIO_UI_AUDIT 3.6, 5, 9.5). */
+.snapshots-workspace {
+  max-width: 1040px;
+  height: 100%;
+  margin: 0 auto;
+  overflow-y: auto;
+  padding: 28px 34px 64px;
+  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-width: thin;
+}
+
+/* The embedded copy inside Runtime must NOT scroll independently -- it is one section of a page that
+   already has its own scroll, and a nested scroller there traps the wheel. */
+.snapshots-workspace.is-embedded {
+  height: auto;
+  overflow-y: visible;
+}
 .snapshots-workspace.is-embedded { max-width: none; margin: 0; padding: 0; }
 .snapshots-head { margin-bottom: 10px; }
 .snapshots-boundary { max-width: 760px; color: var(--ink-muted); line-height: 1.6; }

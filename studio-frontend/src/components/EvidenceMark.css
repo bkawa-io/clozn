@@ -32,6 +32,13 @@
 }
 
 .evidence-mark-chip {
+  /* The chip renders its full `reason` inline, and inline-flex sizes to content -- so a long reason
+     grew the chip past its container and off the viewport. Runtime's capability list was the visible
+     casualty: "Execution Fork Regimes is r…" and "Infill is reported unavailable by /engine/…" both
+     ran off the right edge of the page (STUDIO_UI_AUDIT 3.6, 4.27).
+     `max-width` bounds it to whatever laid it out; the ellipsis rules below then do their job, and
+     the untruncated reason is still on the element's `title`. */
+  max-width: 100%;
   border: 1px solid var(--line);
   padding: 4px 9px 4px 7px;
 }
@@ -55,6 +62,13 @@
 }
 
 .evidence-mark-copy small {
+  /* The leaf of the overflow chain. This is nowrap text inside an inline-flex parent, and a flex item
+     defaults to `min-width: auto` -- so it refused to shrink below the full reason string and drove
+     every ancestor wide with it. The ellipsis rules here could never fire, because the element was
+     always granted its full intrinsic width.
+     Fixing it at the chip or the row did nothing for exactly this reason: the pressure originates
+     here and pushes outward. */
+  min-width: 0;
   overflow: hidden;
   color: var(--ink-faint);
   font-size: 12px;

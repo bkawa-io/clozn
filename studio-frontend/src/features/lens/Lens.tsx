@@ -364,13 +364,21 @@ export function Lens({ runtime, initialRunId }: LensProps) {
     };
   }, [focus, relatedClaimIndexes, claimAggregates, claimDominantSources]);
 
-  function toggleLens(id: ReaderLensId) {
-    setActiveLenses((current) => {
-      const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  /** Exactly one lens, or Clean.
+   *
+   * These controls have always LOOKED like a tab bar while behaving as composable overlays: the state
+   * was a Set and this function added to it, so choosing Concepts left Shakiness and Sources switched
+   * on underneath. The audit caught it from the outside -- "selecting Concepts produced no discernible
+   * new visual encoding, while Shakiness and Sources remained active" -- because stacked overlays on
+   * the same text are indistinguishable from a broken one.
+   *
+   * The set is kept (tokenLensClasses and its tests take a ReadonlySet, and a token can legitimately
+   * be asked about several lenses) but selection now REPLACES rather than accumulates, so it holds at
+   * most one member. Clean is the explicit empty choice, which is why this never deselects: with a
+   * radio group you turn a lens off by choosing Clean, not by clicking the lit button again.
+   */
+  function selectLens(id: ReaderLensId) {
+    setActiveLenses(new Set([id]));
   }
 
   function openToken(index: number) {
@@ -416,20 +424,24 @@ export function Lens({ runtime, initialRunId }: LensProps) {
   return (
     <section className="lens-reader-page" aria-label="Run Lens">
       <div className="lens-reader-toolbar">
-        <div className="lens-reader-toggles" role="group" aria-label="Text lenses">
+        {/* radiogroup, not a group of toggles. aria-pressed announced four independent on/off buttons,
+            which is what the visuals promised and the old Set-based state did not deliver. */}
+        <div className="lens-reader-toggles" role="radiogroup" aria-label="Text lens">
           <button
             type="button"
+            role="radio"
             className={activeLenses.size === 0 ? "is-active" : ""}
-            aria-pressed={activeLenses.size === 0}
+            aria-checked={activeLenses.size === 0}
             onClick={() => setActiveLenses(new Set())}
           >Clean</button>
           {LENSES.map((lens) => (
             <button
               type="button"
+              role="radio"
               className={activeLenses.has(lens.id) ? "is-active" : ""}
-              aria-pressed={activeLenses.has(lens.id)}
+              aria-checked={activeLenses.has(lens.id)}
               title={lens.description}
-              onClick={() => toggleLens(lens.id)}
+              onClick={() => selectLens(lens.id)}
               key={lens.id}
             >{lens.label}</button>
           ))}

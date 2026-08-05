@@ -21,6 +21,40 @@
   gap: 10px;
 }
 
+/* A flex item defaults to `min-width: auto`, so it refuses to shrink below its own content. The
+   availability indicator carries an EvidenceMark chip that renders its full reason inline, so on
+   Runtime's capability list it simply would not shrink -- the row grew past the card and ran off the
+   right of the page ("Execution Fork Regimes is r…", "Infill is reported unavailable by /engine/…").
+   `max-width: 100%` on the chip could not save it, because the chip's own parent was already too
+   wide; the ceiling has to be set here, at the flex item (STUDIO_UI_AUDIT 3.6, 4.27). */
+.state-board-availability-row-head > *,
+.state-board-qualification-step-head > * {
+  min-width: 0;
+}
+
+/* `min-width: 0` alone was not enough. The indicator is an inline-flex chip whose own content sets
+   its intrinsic width, and a flex item is still free to grow to that width unless something bounds
+   it -- `max-width: 100%` on the chip resolves against this row, and this row was happily as wide as
+   its contents. `overflow: hidden` gives the row a definite boundary, which is what finally lets the
+   ellipsis inside the chip do its job. */
+.state-board-availability-row-head,
+.state-board-qualification-step-head {
+  overflow: hidden;
+}
+
+/* The label keeps its natural size; the chip is the part that yields. Without this the two split the
+   shortfall and the capability NAME truncated too, which is the one word on the row you must be able
+   to read. */
+.state-board-availability-row-head > strong,
+.state-board-qualification-step-head > strong {
+  flex: 0 0 auto;
+}
+
+.state-board-availability-row-head > .evidence-mark,
+.state-board-qualification-step-head > .evidence-mark {
+  flex: 0 1 auto;
+}
+
 .state-board-header > span,
 .state-board-card-header > span {
   color: var(--ink-faint);
