@@ -8,6 +8,7 @@ import {
   unpinSnapshot,
   type SnapshotManifest,
 } from "../data/snapshots";
+import type { RuntimeState } from "../data/types";
 import type { PanelContext, StudioPanel } from "./types";
 import "../styles/snapshots.css";
 
@@ -56,16 +57,31 @@ function SnapshotCard({
   );
 }
 
-export function SnapshotsPanel({ runtime, params }: PanelContext) {
+export interface SnapshotsPanelProps {
+  /** The shared run ledger supplies pin candidates; snapshot manifests remain gateway-owned. */
+  runtime: RuntimeState;
+  /** A compatibility deep link may nominate a candidate without performing any action. */
+  initialRunId?: string;
+  /** Runtime embeds this instrument while the legacy route keeps its standalone heading level. */
+  embedded?: boolean;
+}
+
+/**
+ * The snapshot ledger is also an installation-level Runtime instrument. Exporting the same fragment
+ * keeps the legacy bookmark functional without maintaining two independently-mutating checkpoint UIs.
+ */
+export function SnapshotsPanel({ runtime, initialRunId, embedded = false }: SnapshotsPanelProps) {
   const [state, setState] = useState<LoadState>("idle");
   const [snapshots, setSnapshots] = useState<SnapshotManifest[]>([]);
-  const [selectedRun, setSelectedRun] = useState(params.runId ?? runtime.runs[0]?.id ?? "");
+  const [selectedRun, setSelectedRun] = useState(initialRunId ?? runtime.runs[0]?.id ?? "");
   const [note, setNote] = useState("");
   const [preview, setPreview] = useState<{ sizeBytes?: number; envelopeBytes?: number } | null>(null);
   const [busy, setBusy] = useState<"preview" | "pin" | "unpin" | null>(null);
   const [pendingUnpin, setPendingUnpin] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const requestRef = useRef(0);
+  const Title = embedded ? "h2" : "h1";
+  const SectionTitle = embedded ? "h3" : "h2";
 
   const availableRuns = useMemo(() => runtime.runs.filter((run) => run.id), [runtime.runs]);
 
@@ -138,11 +154,11 @@ export function SnapshotsPanel({ runtime, params }: PanelContext) {
   }
 
   return (
-    <main className="snapshots-workspace" aria-labelledby="snapshots-title">
+    <section className={["snapshots-workspace", embedded ? "is-embedded" : ""].filter(Boolean).join(" ")} aria-labelledby="snapshots-title">
       <header className="instrument-head snapshots-head">
         <div>
           <span className="eyebrow">ANSWER TIME MACHINE</span>
-          <h1 id="snapshots-title">Durable snapshots</h1>
+          <Title id="snapshots-title">Durable snapshots</Title>
         </div>
         <span className="mode-chip">{state === "loading" ? "LOADING" : `${snapshots.length} PINNED`}</span>
       </header>
@@ -152,7 +168,7 @@ export function SnapshotsPanel({ runtime, params }: PanelContext) {
       </p>
 
       <section className="snapshot-pin-form" aria-labelledby="snapshot-pin-title">
-        <header className="section-title"><h2 id="snapshot-pin-title">Pin a run</h2><span>PREVIEW FIRST</span></header>
+        <header className="section-title"><SectionTitle id="snapshot-pin-title">Pin a run</SectionTitle><span>PREVIEW FIRST</span></header>
         <label htmlFor="snapshot-run">RUN</label>
         <select id="snapshot-run" value={selectedRun} onChange={(event) => { setSelectedRun(event.target.value); setPreview(null); }}>
           <option value="">No recorded runs available</option>
@@ -187,7 +203,7 @@ export function SnapshotsPanel({ runtime, params }: PanelContext) {
           />
         ))}
       </section>
-    </main>
+    </section>
   );
 }
 
@@ -195,6 +211,8 @@ const panel: StudioPanel = {
   id: "snapshots",
   navLabel: "Snapshots",
   order: 35,
+  // Runtime owns the primary installation view; preserve these older direct links without adding a sixth rail item.
+  hiddenFromNav: true,
   icon: () => <Icon name="model" />,
   match: (hash): Record<string, string> | null => {
     const deep = hash.match(/^#\/snapshots\/([^/]+)\/?$/);
@@ -202,7 +220,7 @@ const panel: StudioPanel = {
     return /^#\/snapshots\/?$/.test(hash) ? {} : null;
   },
   routeName: () => "SNAPSHOTS",
-  Component: SnapshotsPanel,
+  Component: ({ runtime, params }: PanelContext) => <SnapshotsPanel runtime={runtime} initialRunId={params.runId} />,
 };
 
 export default panel;

@@ -1,4 +1,5 @@
 .snapshots-workspace { max-width: 1040px; margin: 0 auto; padding: 28px 34px 64px; }
+.snapshots-workspace.is-embedded { max-width: none; margin: 0; padding: 0; }
 .snapshots-head { margin-bottom: 10px; }
 .snapshots-boundary { max-width: 760px; color: var(--ink-muted); line-height: 1.6; }
 .snapshot-pin-form { margin-top: 24px; padding: 18px; border: 1px solid var(--line); background: var(--panel); }

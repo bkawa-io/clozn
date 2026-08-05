@@ -15,7 +15,7 @@ const panel: StudioPanel = {
     <span className="top-stat"><b>ENGINE</b>{runtime.engine?.model ?? "—"}</span>
   ),
   modeChip: () => "INSTALLATION",
-  Component: ({ inspectorOpen }: PanelContext) => <Model inspectorOpen={inspectorOpen} />,
+  Component: ({ runtime, inspectorOpen }: PanelContext) => <Model runtime={runtime} inspectorOpen={inspectorOpen} />,
 };
 
 export default panel;

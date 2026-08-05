@@ -7,5 +7,6 @@ describe("snapshots panel routing", () => {
     expect(panel.match("#/snapshots/")).toEqual({});
     expect(panel.match("#/snapshots/run_alpha")).toEqual({ runId: "run_alpha" });
     expect(panel.match("#/runs/run_alpha")).toBeNull();
+    expect(panel.hiddenFromNav).toBe(true);
   });
 });

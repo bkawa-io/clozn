@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { createFetchController, type PendingFetch } from "../../test/fetch";
 import { render, screen, within } from "../../test/render";
+import type { RuntimeState } from "../../data/types";
 import { Model } from "./Model";
 
 function pathOf(request: PendingFetch): string {
@@ -8,17 +9,22 @@ function pathOf(request: PendingFetch): string {
 }
 
 async function respondWithWorkspace(controller: ReturnType<typeof createFetchController>) {
-  const health = await controller.nextRequest();
-  const axes = await controller.nextRequest();
-  const inventory = await controller.nextRequest();
-  const profiles = await controller.nextRequest();
+  const requests = await Promise.all(Array.from({ length: 5 }, () => controller.nextRequest()));
+  const byPath = new Map(requests.map((request) => [pathOf(request), request]));
 
-  expect([pathOf(health), pathOf(axes), pathOf(inventory), pathOf(profiles)]).toEqual([
+  expect([...byPath.keys()].sort()).toEqual([
     "/engine/health",
     "/steer/axes",
     "/models/local",
     "/profiles/list",
-  ]);
+    "/snapshots",
+  ].sort());
+
+  const health = byPath.get("/engine/health")!;
+  const axes = byPath.get("/steer/axes")!;
+  const inventory = byPath.get("/models/local")!;
+  const profiles = byPath.get("/profiles/list")!;
+  const snapshots = byPath.get("/snapshots")!;
 
   controller.respondJson(health, {
     engine: {
@@ -46,7 +52,17 @@ async function respondWithWorkspace(controller: ReturnType<typeof createFetchCon
     }],
   });
   controller.respondJson(profiles, { active: "local-default" });
+  controller.respondJson(snapshots, { schema_version: "clozn.pinned-checkpoint-list.v1", snapshots: [] });
 }
+
+const runtime: RuntimeState = {
+  status: "connected",
+  runs: [{
+    id: "run-alpha", label: "Explain alpha · native · alpha", prompt: "Explain alpha", response: "Alpha",
+    createdAt: "2026-08-01T00:00:00Z", source: "openai_api", client: "local", model: "qwen",
+    substrate: "cpu", duration: "1 s", flags: [], warningCount: 0, activeDialCount: 0, memoryCardCount: 0,
+  }],
+};
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -56,7 +72,7 @@ describe("Runtime Model surface", () => {
   test("reframes the surface as Runtime while preserving the existing scoped fetches", async () => {
     const controller = createFetchController();
     vi.stubGlobal("fetch", controller.fetch);
-    const { container } = render(<Model inspectorOpen={false} />);
+    const { container } = render(<Model runtime={runtime} inspectorOpen={false} />);
 
     await respondWithWorkspace(controller);
 
@@ -73,7 +89,7 @@ describe("Runtime Model surface", () => {
   test("renders an explicit reason for a disabled capability instead of treating it as supported", async () => {
     const controller = createFetchController();
     vi.stubGlobal("fetch", controller.fetch);
-    const { container } = render(<Model inspectorOpen={false} />);
+    const { container } = render(<Model runtime={runtime} inspectorOpen={false} />);
 
     await respondWithWorkspace(controller);
     await screen.findByRole("heading", { name: "Capability flags" });
@@ -87,16 +103,16 @@ describe("Runtime Model surface", () => {
     })).toBeInTheDocument();
   });
 
-  test("keeps unsupported installation controls visibly blocked with their reasons", async () => {
+  test("embeds the backed snapshot ledger while keeping unsupported controls visibly blocked", async () => {
     const controller = createFetchController();
     vi.stubGlobal("fetch", controller.fetch);
-    render(<Model inspectorOpen={false} />);
+    render(<Model runtime={runtime} inspectorOpen={false} />);
 
     await respondWithWorkspace(controller);
 
-    const snapshotOffer = await screen.findByRole("region", { name: "Snapshot storage" });
-    expect(within(snapshotOffer).getByRole("button", { name: "Snapshot controls unavailable" })).toBeDisabled();
-    expect(within(snapshotOffer).getByText(/Studio has no snapshot action descriptor or storage evidence to invoke\./)).toBeInTheDocument();
+    const snapshots = await screen.findByRole("region", { name: "Durable snapshots" });
+    expect(within(snapshots).getByRole("button", { name: "PREVIEW PIN" })).toBeEnabled();
+    expect(screen.queryByRole("region", { name: "Snapshot storage" })).toBeNull();
     expect(screen.getByRole("region", { name: "Ollama adoption" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Privacy controls" })).toBeInTheDocument();
   });

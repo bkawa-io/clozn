@@ -9,6 +9,8 @@ import {
   TypedActionOffer,
   type TypedActionOfferProps,
 } from "../../components/TypedActionOffer";
+import type { RuntimeState } from "../../data/types";
+import { SnapshotsPanel } from "../../panels/snapshots";
 import {
   loadModelWorkspace,
   type EngineModel,
@@ -17,6 +19,7 @@ import {
 } from "./api";
 
 interface ModelProps {
+  runtime: RuntimeState;
   inspectorOpen: boolean;
 }
 
@@ -46,27 +49,9 @@ const loadStateLabels: Record<RuntimeLoadState, string> = {
 /**
  * These are deliberately blocked offers rather than dormant controls. The current Model workspace
  * routes do not expose the backing records or descriptors, so Runtime can say exactly what is absent
- * without pretending it knows a store, a storage total, or a mutation endpoint.
+ * without pretending it knows a transaction the gateway has not described.
  */
 const unavailableOffers: readonly TypedActionOfferProps[] = [
-  {
-    title: "Snapshot storage",
-    absence: {
-      state: "unavailable",
-      label: "Snapshot storage unavailable",
-      reason: "No snapshot inventory, byte budget, or storage envelope is supplied to this Runtime surface.",
-    },
-    cost: "Unknown until a snapshot control reports its storage envelope.",
-    preconditions: [
-      "A snapshot inventory and byte budget must be exposed.",
-      "A backed snapshot action descriptor must be supplied.",
-    ],
-    action: {
-      availability: "blocked",
-      label: "Snapshot controls unavailable",
-      blockerReason: "Studio has no snapshot action descriptor or storage evidence to invoke.",
-    },
-  },
   {
     title: "Ollama adoption",
     absence: {
@@ -263,7 +248,7 @@ function SourceRow({
   );
 }
 
-export function Model({ inspectorOpen }: ModelProps) {
+export function Model({ runtime, inspectorOpen }: ModelProps) {
   const [data, setData] = useState<ModelWorkspaceData>({ axes: [], errors: {} });
   const [loadState, setLoadState] = useState<RuntimeLoadState>("loading");
   const [fatalError, setFatalError] = useState<string>();
@@ -332,7 +317,7 @@ export function Model({ inspectorOpen }: ModelProps) {
 
         <div className="runtime-map-boundary">
           <span>Truthfulness boundary</span>
-          <p>These routes do not report resident capacity, qualification, snapshot storage, adoption, or privacy controls.</p>
+          <p>These routes do not report resident capacity, qualification, adoption, or privacy controls.</p>
         </div>
       </aside>
 
@@ -485,6 +470,8 @@ export function Model({ inspectorOpen }: ModelProps) {
               </article>
             </div>
           </section>
+
+          <SnapshotsPanel runtime={runtime} embedded />
 
           <section className="runtime-section runtime-offers" aria-labelledby="runtime-offers-title">
             <header className="runtime-section-head">

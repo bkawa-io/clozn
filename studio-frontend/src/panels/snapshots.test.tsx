@@ -38,7 +38,7 @@ describe("Snapshots panel", () => {
     const controller = createFetchController();
     vi.stubGlobal("fetch", controller.fetch);
     const user = userEvent.setup();
-    render(<SnapshotsPanel runtime={runtime} inspectorOpen={false} params={{}} />);
+    render(<SnapshotsPanel runtime={runtime} />);
 
     const list = await controller.nextRequest();
     expect(pathOf(list)).toBe("/snapshots");
@@ -66,7 +66,7 @@ describe("Snapshots panel", () => {
     const controller = createFetchController();
     vi.stubGlobal("fetch", controller.fetch);
     const user = userEvent.setup();
-    render(<SnapshotsPanel runtime={runtime} inspectorOpen={false} params={{}} />);
+    render(<SnapshotsPanel runtime={runtime} />);
     const list = await controller.nextRequest();
     controller.respondJson(list, { schema_version: "clozn.pinned-checkpoint-list.v1", snapshots: [] });
     await screen.findByText("No durable snapshots are pinned yet.");
@@ -78,7 +78,7 @@ describe("Snapshots panel", () => {
     const controller = createFetchController();
     vi.stubGlobal("fetch", controller.fetch);
     const user = userEvent.setup();
-    render(<SnapshotsPanel runtime={runtime} inspectorOpen={false} params={{}} />);
+    render(<SnapshotsPanel runtime={runtime} />);
     const list = await controller.nextRequest();
     controller.respondJson(list, { schema_version: "clozn.pinned-checkpoint-list.v1", snapshots: [manifest] });
     await screen.findByRole("article", { name: "Pinned snapshot run-alpha" });
