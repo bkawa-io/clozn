@@ -1,3 +1,11 @@
+/* `.workspace` reserves a fixed 214px second row for a lower panel. Runs only renders one when a
+   selected run actually has a family, so without this the row stays behind as dead space and the
+   list -- the entire point of the page -- keeps the smaller height it had when a one-node canvas
+   was sitting under it. `:has()` is already used elsewhere in this file for the card edge. */
+.workspace.is-runs:not(:has(.runs-lineage)) {
+  grid-template-rows: minmax(0, 1fr);
+}
+
 .workspace.is-runs.inspector-closed .runs-ledger {
   grid-column: 1 / -1;
 }
@@ -32,14 +40,14 @@
   gap: 2px;
   color: var(--ink);
   font-family: var(--font-machine);
-  font-size: 8px;
+  font-size: 12px;
   text-align: right;
   white-space: nowrap;
 }
 
 .runs-metrics b {
   color: var(--ink-faint);
-  font-size: 6px;
+  font-size: 12px;
   font-weight: 500;
   letter-spacing: .09em;
 }
@@ -49,7 +57,7 @@
   width: 100%;
   flex-basis: 100%;
   align-items: end;
-  gap: 7px;
+  gap: 14px;
   overflow-x: auto;
   padding-bottom: 1px;
   scrollbar-color: var(--line-strong) transparent;
@@ -58,16 +66,21 @@
 
 .runs-filter {
   display: grid;
-  min-width: 102px;
+  min-width: 116px;
   gap: 3px;
 }
 
 .runs-filter > span {
   color: var(--ink-faint);
   font-family: var(--font-machine);
-  font-size: 6px;
+  font-size: 12px;
   letter-spacing: .09em;
-  white-space: nowrap;
+  /* Was `white-space: nowrap`. At the documented 12px floor a two-word label ("FINISH REASON", "HAS
+     INFLUENCE") is wider than its cell, so nowrap pushed it past the cell edge and it read as one
+     run-on string with its neighbours: "FINISH REASON HAS INFLUENCE FLAGGED". Wrapping keeps each
+     label inside the control it names. The redesign's longer-term answer is fewer filters up front
+     (STUDIO_UI_REDESIGN 5.2 shows Search + one Filter control), which is component work, not CSS. */
+  line-height: 1.25;
 }
 
 .runs-filter input,
@@ -78,7 +91,7 @@
   color: var(--ink);
   background: color-mix(in srgb, var(--panel-raised) 72%, transparent);
   font-family: var(--font-machine);
-  font-size: 8px;
+  font-size: 13px;
 }
 
 .runs-filter input {
@@ -113,7 +126,7 @@
   gap: 5px 14px;
   color: var(--ink-faint);
   font-family: var(--font-machine);
-  font-size: 7px;
+  font-size: 12px;
   line-height: 1.35;
 }
 
@@ -141,57 +154,8 @@
   scrollbar-width: thin;
 }
 
-.runs-row-main {
-  display: grid;
-  min-width: 1000px;
-  grid-template-columns:
-    minmax(150px, 1.15fr)
-    minmax(206px, 1.7fr)
-    minmax(74px, .55fr)
-    minmax(92px, .75fr)
-    minmax(112px, .8fr)
-    minmax(154px, 1fr);
-  align-items: center;
-  gap: 9px;
-}
-
-.runs-table-head {
-  display: grid;
-  min-width: 1059px;
-  grid-template-columns:
-    minmax(150px, 1.15fr)
-    minmax(206px, 1.7fr)
-    minmax(74px, .55fr)
-    minmax(92px, .75fr)
-    minmax(112px, .8fr)
-    minmax(154px, 1fr)
-    49px;
-  align-items: center;
-  gap: 9px;
-  min-height: 31px;
-  padding: 0 10px;
-  border-bottom: 1px solid var(--line);
-  color: var(--ink-faint);
-  background: color-mix(in srgb, var(--panel-raised) 38%, transparent);
-  font-family: var(--font-machine);
-  font-size: 6px;
-  letter-spacing: .09em;
-}
-
-.runs-table-head span:last-child {
-  position: sticky;
-  right: 0;
-  z-index: 2;
-  display: grid;
-  height: 31px;
-  place-items: center;
-  border-left: 1px solid var(--line);
-  background: var(--panel-solid);
-}
-
 .runs-table {
-  min-width: 1059px;
-  min-height: 0;
+    min-height: 0;
   flex: 1;
   overflow-y: auto;
   scrollbar-color: var(--line-strong) transparent;
@@ -201,8 +165,7 @@
 .runs-row {
   position: relative;
   display: grid;
-  min-width: 1059px;
-  min-height: 70px;
+    min-height: 70px;
   grid-template-columns: minmax(0, 1fr) 49px;
   align-items: stretch;
   border-bottom: 1px solid var(--line);
@@ -267,13 +230,13 @@
 
 .runs-label strong {
   color: var(--ink);
-  font-size: 9px;
+  font-size: 15px;
   font-weight: 550;
 }
 
 .runs-label small {
   color: var(--ink-faint);
-  font-size: 6px;
+  font-size: 13px;
 }
 
 .runs-identity-chips {
@@ -294,14 +257,14 @@
   color: var(--ink-soft);
   background: color-mix(in srgb, var(--panel-raised) 45%, transparent);
   font-family: var(--font-machine);
-  font-size: 6px;
+  font-size: 12px;
   line-height: 1;
 }
 
 .runs-identity-chip b {
   flex: none;
   color: var(--ink-faint);
-  font-size: 5px;
+  font-size: 12px;
   font-weight: 500;
   letter-spacing: .08em;
 }
@@ -332,7 +295,7 @@
   align-items: center;
   gap: 5px;
   color: var(--ink-soft);
-  font-size: 7px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -343,7 +306,7 @@
 
 .runs-duration small {
   color: var(--ink-faint);
-  font-size: 6px;
+  font-size: 12px;
 }
 
 .runs-status {
@@ -357,7 +320,7 @@
   padding: 3px 6px;
   color: var(--ink-soft);
   background: color-mix(in srgb, var(--panel-raised) 52%, transparent);
-  font-size: 6px;
+  font-size: 12px;
   letter-spacing: .04em;
 }
 
@@ -372,7 +335,7 @@
 
 .runs-status small {
   color: var(--ink-faint);
-  font-size: 5px;
+  font-size: 12px;
   letter-spacing: .02em;
 }
 
@@ -430,7 +393,7 @@
 .runs-confidence.is-absent {
   color: var(--ink-faint);
   font-family: var(--font-machine);
-  font-size: 6px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -455,7 +418,7 @@
 .runs-evidence-item small {
   color: var(--ink-faint);
   font-family: var(--font-machine);
-  font-size: 5px;
+  font-size: 12px;
   letter-spacing: .04em;
 }
 
@@ -486,7 +449,7 @@
   color: var(--ink-faint);
   background: color-mix(in srgb, var(--panel-raised) 45%, transparent);
   font-family: var(--font-machine);
-  font-size: 7px;
+  font-size: 12px;
 }
 
 .runs-stage button.is-a.is-active {
@@ -526,7 +489,7 @@
   flex: none;
   color: var(--ink-faint);
   font-family: var(--font-machine);
-  font-size: 6px;
+  font-size: 12px;
   letter-spacing: .08em;
   white-space: nowrap;
 }
@@ -535,7 +498,7 @@
   overflow: hidden;
   color: var(--ink);
   font-family: var(--font-machine);
-  font-size: 8px;
+  font-size: 12px;
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -556,7 +519,7 @@
   color: var(--ink-soft);
   background: transparent;
   font-family: var(--font-machine);
-  font-size: 6px;
+  font-size: 12px;
   letter-spacing: .06em;
   text-decoration: none;
   white-space: nowrap;
@@ -590,7 +553,7 @@
   place-items: center;
   color: var(--ink-faint);
   font-family: var(--font-machine);
-  font-size: 8px;
+  font-size: 13px;
   letter-spacing: .1em;
 }
 
@@ -621,7 +584,7 @@
   color: var(--ink-soft);
   background: color-mix(in srgb, var(--panel-raised) 36%, transparent);
   font-family: var(--font-machine);
-  font-size: 7px;
+  font-size: 12px;
   letter-spacing: .08em;
   text-align: center;
   text-decoration: none;
@@ -640,31 +603,41 @@
   border-bottom: 1px solid var(--line);
 }
 
+/* Stacked, not a single flex row. A label/value pair sharing one line inside a ~290px inspector had
+   to be `white-space: nowrap` + ellipsis on BOTH halves, which meant the value clipped mid-word --
+   `Meta-Llama-3.1-8B-Instru`, `188 TOKE`, `python-urllib/3.`. That was survivable while the type was
+   6-8px and is not at the documented floor. Giving the value its own full-width line costs one row of
+   height and stops destroying the information the panel exists to show. */
 .runs-facts > div {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  gap: 1px;
 }
 
 .runs-facts dt,
 .runs-facts dd {
-  overflow: hidden;
   margin: 0;
   font-family: var(--font-machine);
-  font-size: 7px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .runs-facts dt {
+  font-size: 12px;
   color: var(--ink-faint);
   text-transform: uppercase;
+  letter-spacing: .04em;
 }
 
 .runs-facts dd {
-  max-width: 66%;
+  font-size: 13px;
+  /* Identity values (model names, hashes, client strings) have no spaces to break on, so a normal
+     wrap would still overflow; `anywhere` lets them break mid-token rather than escape the panel. */
+  overflow-wrap: anywhere;
+}
+
+.runs-facts dd {
+  /* Was `max-width: 66%; text-align: right` -- both existed only to keep the value on the same line
+     as its label. Stacked, a right-edge value would float away from the label it belongs to, and the
+     width cap would re-introduce the clipping this change removes. */
   color: var(--ink);
-  text-align: right;
 }
 
 .runs-summary {
@@ -675,7 +648,7 @@
 .runs-summary span {
   color: var(--ink-faint);
   font-family: var(--font-machine);
-  font-size: 6px;
+  font-size: 12px;
   letter-spacing: .1em;
 }
 
@@ -685,7 +658,7 @@
   margin: 6px 0 0;
   color: var(--ink-soft);
   font-family: var(--font-machine);
-  font-size: 8px;
+  font-size: 13px;
   line-height: 1.55;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 4;
@@ -704,7 +677,7 @@
   color: var(--ink-soft);
   background: color-mix(in srgb, var(--signal-violet) 7%, transparent);
   font-family: var(--font-machine);
-  font-size: 6px;
+  font-size: 12px;
   text-transform: uppercase;
 }
 
@@ -712,7 +685,7 @@
   margin-left: auto;
   color: var(--ink-faint);
   font-family: var(--font-machine);
-  font-size: 7px;
+  font-size: 12px;
   font-weight: 500;
   letter-spacing: .08em;
 }
@@ -815,13 +788,13 @@
 }
 
 .runs-tree-node > button span {
-  font-size: 8px;
+  font-size: 12px;
 }
 
 .runs-tree-node > button small {
   grid-column: 2;
   color: var(--ink-faint);
-  font-size: 6px;
+  font-size: 12px;
 }
 
 .runs-tree-node > button.is-selected {
@@ -841,7 +814,7 @@
   margin: auto;
   color: var(--ink-faint);
   font-family: var(--font-machine);
-  font-size: 7px;
+  font-size: 12px;
   letter-spacing: .1em;
 }
 
@@ -901,4 +874,228 @@
   .runs-selection-summary {
     padding-inline: 8px;
   }
+}
+
+/* ---- run cards -------------------------------------------------------------------------------
+   Replaces a six-column grid. A table asks the eye to scan a column and compare values down it, but
+   the columns here were PROVENANCE, CONFIDENCE and EVIDENCE -- nobody scans those, and three of them
+   could not vary at all (see RunSignals' note). The real question on this page is per-item: "is this
+   the run I should open?" That is a card. */
+
+.run-card-prompt {
+  overflow: hidden;
+  /* nowrap + ellipsis rather than -webkit-line-clamp: 1. The clamp is a fragile way to ask for one
+     line -- with padding on the box it let a sliver of the second line bleed below the clip. */
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  margin: 0;
+  /* The prompt is the one thing on this page you actually read, so it gets its own ink rather than
+     sharing the default with every label and value around it. */
+  color: var(--signal-blue);
+  font-family: var(--font-machine);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+/* The reply reads as a quoted block rather than a second paragraph of the prompt. Without the panel
+   the two ran together as one wall of monospace and the answer -- the thing the run actually
+   produced -- was the easiest part of the card to skip. */
+.run-card-response {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  margin: 7px 0 0;
+  border-left: 2px solid var(--line-strong, var(--line));
+  padding: 7px 10px;
+  color: var(--ink-soft);
+  background: color-mix(in srgb, var(--panel-raised) 55%, transparent);
+  font-family: var(--font-machine);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.run-card-signals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 9px 0 0;
+}
+
+.run-signal {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--line);
+  padding: 2px 7px;
+  color: var(--ink-soft);
+  font-family: var(--font-machine);
+  font-size: 12px;
+  letter-spacing: .06em;
+}
+
+.run-signal > i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* Colour is carried by the dot, never by the text alone -- the same reason the evidence vocabulary
+   pairs every state with a glyph rather than a hue. */
+.run-signal.is-error { color: var(--signal-pink); border-color: color-mix(in srgb, var(--signal-pink) 45%, var(--line)); }
+.run-signal.is-warn { color: var(--signal-amber, #b8860b); border-color: color-mix(in srgb, var(--signal-amber, #b8860b) 45%, var(--line)); }
+.run-signal.is-info { color: var(--ink-faint); }
+.run-signal.is-good { color: var(--signal-mint); border-color: color-mix(in srgb, var(--signal-mint) 45%, var(--line)); }
+.run-signal.is-caution { color: var(--signal-peach); border-color: color-mix(in srgb, var(--signal-peach) 50%, var(--line)); }
+
+.run-card-meta {
+  margin: 9px 0 0;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.runs-row-main {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 11px 16px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+/* The sparkline is the one genuinely visual thing this page can honestly show: 32 real per-token
+   confidence samples per run, from clozn/runs/summaries.py::confidence_facts. It renders only when
+   the run recorded a trace -- a card with no sparkline is a run with no measured confidence, which
+   is a different statement from a flat line at zero. */
+.runs-row {
+  transition: background 120ms ease;
+}
+
+.runs-row + .runs-row {
+  border-top: 1px solid var(--line);
+}
+
+/* A run that generated shaky tokens gets a warm edge; the eye finds it without reading a word. Tied
+   to the same measurement as the SHAKY chip, never set independently. */
+.runs-row:has(.run-signal.is-caution)::after {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  content: "";
+  background: var(--signal-peach);
+  opacity: .5;
+}
+
+.runs-row:has(.run-signal.is-warn)::after {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  content: "";
+  background: var(--signal-amber, #b8860b);
+  opacity: .55;
+}
+
+.runs-row:has(.run-signal.is-error)::after {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  content: "";
+  background: var(--signal-pink);
+  opacity: .7;
+}
+
+/* Where a derived run came from, on the card rather than in a separate canvas. Only rendered when
+   `parentRunId` is set, so an original run says nothing at all -- most runs are originals, and
+   "ORIGINAL" on every card is a word that earns nothing. */
+.run-card-derived {
+  overflow: hidden;
+  margin: 6px 0 0;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- header: search inline, filters behind a toggle ------------------------------------------ */
+
+.runs-search-inline {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  margin-left: 18px;
+}
+
+.runs-search-inline input {
+  width: 100%;
+  max-width: 420px;
+  height: 30px;
+  border: 1px solid var(--line);
+  padding: 5px 9px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel-raised) 72%, transparent);
+  font-family: var(--font-machine);
+  font-size: 13px;
+}
+
+.runs-search-inline input::placeholder { color: var(--ink-faint); }
+
+.runs-filter-toggle {
+  height: 30px;
+  border: 1px solid var(--line);
+  padding: 0 14px;
+  color: var(--ink-soft);
+  background: color-mix(in srgb, var(--panel-raised) 72%, transparent);
+  cursor: pointer;
+  font-family: var(--font-machine);
+  font-size: 12px;
+  letter-spacing: .09em;
+}
+
+.runs-filter-toggle.is-active {
+  border-color: color-mix(in srgb, var(--signal-blue) 55%, var(--line));
+  color: var(--signal-blue);
+}
+
+/* The open panel is a dropdown under the header, not a permanent band across the top. */
+.runs-filters {
+  flex-wrap: wrap;
+  overflow: visible;
+  border: 1px solid var(--line);
+  padding: 13px 14px;
+  background: var(--panel-solid, var(--panel-raised));
+}
+
+.runs-filters .runs-filter-limitations { margin-top: 4px; }
+
+/* Signals sit in the metadata line rather than owning a row of their own. */
+.run-card-signals {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 8px 0 0;
+  vertical-align: middle;
+}
+
+/* NOT flex. Making this a flex row turned every text node into a flex item, and the boundary
+   collapsed the leading space of each " · " separator -- the line rendered as "12:03:14· 1.92 s".
+   A normal block keeps the separators as ordinary inline text; the chip sits in the line via
+   inline-flex on .run-card-signals instead. */
+.run-card-meta {
+  display: block;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

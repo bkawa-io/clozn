@@ -134,6 +134,24 @@ function parentLabel(run: RunSummary, runs: readonly RunSummary[]) {
   return parent ? `FROM ${shortId(parent.id)}` : `FROM ${shortId(run.parentRunId)}`;
 }
 
+/** What a derived run says about where it came from.
+ *
+ * Prefers the parent's own prompt over its id: "from 0_e0116e" asks you to hold an eight-character
+ * hash in your head and go find it, while "from A customer was auto-renewed..." tells you which
+ * investigation this run belongs to. Falls back to the id when the parent is not in the loaded page
+ * -- naming a run we cannot see would be worse than admitting we only have its id.
+ */
+function derivedFromLabel(run: RunSummary, runs: readonly RunSummary[]) {
+  const parent = runs.find((candidate) => candidate.id === run.parentRunId);
+  const text = parent && recordedText(parent.prompt);
+  if (text) return text.length > 64 ? `${text.slice(0, 64)}…` : text;
+  // The parent is not in the loaded page. This used to fall back to shortId(), which slices the last
+  // eight characters off a run id and produced things like "from edundant" -- a hash fragment that
+  // reads as a corrupted word, not an identifier. Saying we know it came from somewhere, without
+  // pretending to name it, is the honest version; the full id is on the element's title.
+  return "an earlier run";
+}
+
 export function runLedgerFilterOptions(runs: readonly RunSummary[]): RecordedFilterOptions {
   return {
     models: uniqueRecorded(runs.map((run) => run.model)),
@@ -262,6 +280,82 @@ function RunIdentityChips({ run }: { run: RunSummary }) {
   );
 }
 
+/** The card's at-a-glance row.
+ *
+ * Every signal here is derived from a field `RunSummary` ACTUALLY carries. That constraint is the
+ * point. The table this replaced spent roughly half its width on three columns that were structurally
+ * incapable of varying: `<ConfidenceSparkline />` was called with no `values` prop so it always
+ * rendered NOT RECORDED; `RunEvidenceIndex` hardcoded `state="not_measured"` for all four evidence
+ * marks; and the ADAPTER chip was a literal "NOT RECORDED". Four absence marks on every row, in every
+ * state, forever -- which trains the eye to ignore exactly the marks that are supposed to mean
+ * something.
+ *
+ * So this renders NOTHING when a run has nothing notable, and the quiet card IS the signal. It does
+ * not claim a run is clean -- absence of a warning is not evidence of correctness, and the index
+ * simply does not carry per-run evidence availability. That belongs on the run's own page, where it
+ * can be fetched and stated honestly, not guessed at from a list payload.
+ */
+function RunSignals({ run, state }: { run: RunSummary; state: RunLedgerStatus }) {
+  const signals: { id: string; tone: string; label: string; title: string }[] = [];
+
+  if (state === "error") {
+    signals.push({ id: "error", tone: "error", label: "ERROR", title: "This run recorded an error flag." });
+  }
+  if (state === "truncated") {
+    signals.push({
+      id: "truncated",
+      tone: "warn",
+      label: "CUT OFF",
+      title: "Generation stopped at the token limit, so the answer may be unfinished.",
+    });
+  }
+  if (run.lowConfidenceCount && run.tokenCount) {
+    // A real measurement, unlike the CONFIDENCE column this replaced -- that one rendered NOT
+    // RECORDED on every row because <ConfidenceSparkline /> was mounted with no values prop.
+    //
+    // A SHARE, not a count. "36 SHAKY" raises the question "36 of what?", and the honest answer
+    // (36 of 173 generated tokens) is not something an index should make you do arithmetic on: 36
+    // shaky tokens means something completely different in a 40-token answer than in a 400-token
+    // one. The exact counts stay in the tooltip for anyone who wants them.
+    const share = run.lowConfidenceCount / run.tokenCount;
+    signals.push({
+      id: "shaky",
+      tone: share > 0.25 ? "warn" : "caution",
+      label: `${Math.round(share * 100)}% SHAKY`,
+      title:
+        `${run.lowConfidenceCount} of ${run.tokenCount} generated tokens fell below the confidence `
+        + `floor. Mean ${run.confidenceMean}, lowest ${run.confidenceMin}.`,
+    });
+  }
+  if (run.warningCount > 0) {
+    signals.push({
+      id: "warnings",
+      tone: "warn",
+      label: run.warningCount === 1 ? "1 WARNING" : `${run.warningCount} WARNINGS`,
+      title: "Recorded diagnostic warnings for this run.",
+    });
+  }
+  if (run.activeDialCount > 0) {
+    signals.push({
+      id: "dials",
+      tone: "info",
+      label: `${run.activeDialCount} DIAL${run.activeDialCount === 1 ? "" : "S"}`,
+      title: "Tone dials were active when this run generated.",
+    });
+  }
+
+  if (!signals.length) return null;
+  return (
+    <span className="run-card-signals" aria-label={`Signals for ${runLabel(run)}`}>
+      {signals.map((signal) => (
+        <span className={`run-signal is-${signal.tone}`} key={signal.id} title={signal.title}>
+          <i aria-hidden="true" />{signal.label}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 function RunEvidenceIndex({ run }: { run: RunSummary }) {
   return (
     <span className="runs-evidence-index" role="group" aria-label={`Evidence index for ${runLabel(run)}`}>
@@ -323,46 +417,6 @@ function UnavailableFilter({ label, reason }: { label: string; reason: string })
   );
 }
 
-function LineageNode({
-  run,
-  byParent,
-  selectedId,
-  onSelect,
-}: {
-  run: RunSummary;
-  byParent: Map<string, RunSummary[]>;
-  selectedId: string;
-  onSelect: (id: string) => void;
-}) {
-  const children = byParent.get(run.id) ?? [];
-  return (
-    <div className="runs-tree-node">
-      <button
-        type="button"
-        className={run.id === selectedId ? "is-selected" : ""}
-        onClick={() => onSelect(run.id)}
-        aria-current={run.id === selectedId ? "true" : undefined}
-      >
-        <i />
-        <span>{shortId(run.id)}</span>
-        <small>{recordedText(run.source)?.toUpperCase() ?? "ENTRY NOT RECORDED"}</small>
-      </button>
-      {children.length > 0 && (
-        <div className="runs-tree-children">
-          {children.map((child) => (
-            <LineageNode
-              key={child.id}
-              run={child}
-              byParent={byParent}
-              selectedId={selectedId}
-              onSelect={onSelect}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 function SelectionDock({
   selected,
@@ -423,6 +477,7 @@ function SelectionDock({
 export function Runs({ runtime, inspectorOpen }: RunsProps) {
   const [selectedId, setSelectedId] = useState("");
   const [family, setFamily] = useState<RunSummary[]>([]);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [facts, setFacts] = useState<RunFacts>({ tokenCount: 0, traceAvailable: false });
   const [filters, setFilters] = useState<RunLedgerFilters>({
     query: "",
@@ -431,8 +486,6 @@ export function Runs({ runtime, inspectorOpen }: RunsProps) {
     finishReason: ALL_FILTER,
     flagged: "all",
   });
-  const [compareA, setCompareA] = useState("");
-  const [compareB, setCompareB] = useState("");
 
   useEffect(() => {
     if (!runtime.runs.length) {
@@ -468,35 +521,18 @@ export function Runs({ runtime, inspectorOpen }: RunsProps) {
   const selected = runtime.runs.find((run) => run.id === selectedId)
     ?? family.find((run) => run.id === selectedId)
     ?? visibleRuns[0];
+  // Shown on the toggle so a collapsed panel can never hide a filter that is silently excluding runs.
+  const activeFilterCount = [
+    filters.model !== ALL_FILTER,
+    filters.source !== ALL_FILTER,
+    filters.finishReason !== ALL_FILTER,
+    filters.flagged !== "all",
+  ].filter(Boolean).length;
   const branchCount = runtime.runs.filter((run) => run.parentRunId).length;
   const flaggedCount = runtime.runs.filter(hasFlag).length;
 
-  const familyById = new Map(family.map((run) => [run.id, run]));
-  const byParent = new Map<string, RunSummary[]>();
-  for (const run of family) {
-    if (!run.parentRunId || !familyById.has(run.parentRunId)) continue;
-    const children = byParent.get(run.parentRunId) ?? [];
-    children.push(run);
-    children.sort((left, right) => (left.createdTs ?? 0) - (right.createdTs ?? 0));
-    byParent.set(run.parentRunId, children);
-  }
-  const roots = family
-    .filter((run) => !run.parentRunId || !familyById.has(run.parentRunId))
-    .sort((left, right) => (left.createdTs ?? 0) - (right.createdTs ?? 0));
-
   function setFilter<Key extends keyof RunLedgerFilters>(key: Key, value: RunLedgerFilters[Key]) {
     setFilters((current) => ({ ...current, [key]: value }));
-  }
-
-  function stage(runId: string, slot: "a" | "b") {
-    if (!runId) return;
-    if (slot === "a") {
-      setCompareA((current) => current === runId ? "" : runId);
-      setCompareB((current) => current === runId ? "" : current);
-    } else {
-      setCompareB((current) => current === runId ? "" : runId);
-      setCompareA((current) => current === runId ? "" : current);
-    }
   }
 
   return (
@@ -513,16 +549,28 @@ export function Runs({ runtime, inspectorOpen }: RunsProps) {
             <span><b>BRANCHES</b>{branchCount}</span>
             <span><b>FLAGGED</b>{flaggedCount}</span>
           </div>
+          <label className="runs-search-inline">
+            <span className="sr-only">Search runs</span>
+            <input
+              type="search"
+              value={filters.query}
+              onChange={(event) => setFilter("query", event.target.value)}
+              placeholder="Search prompt, response, model, ID"
+            />
+          </label>
+          <button
+            type="button"
+            className={`runs-filter-toggle${activeFilterCount ? " is-active" : ""}`}
+            aria-expanded={filtersOpen}
+            onClick={() => setFiltersOpen((open) => !open)}
+          >
+            FILTER{activeFilterCount ? ` · ${activeFilterCount}` : ""}
+          </button>
+          {/* Collapsed by default. Seven controls across the top of the index made the first thing
+              you saw a configuration panel rather than your runs -- and six of them are refinements
+              you reach for occasionally, while search is the one you use constantly. */}
+          {filtersOpen && (
           <div className="runs-filters" aria-label="Run provenance filters">
-            <label className="runs-filter runs-search">
-              <span>SEARCH</span>
-              <input
-                type="search"
-                value={filters.query}
-                onChange={(event) => setFilter("query", event.target.value)}
-                placeholder="Label, ID, model, entry point"
-              />
-            </label>
             <RecordedFilter
               label="MODEL"
               value={filters.model}
@@ -558,23 +606,15 @@ export function Runs({ runtime, inspectorOpen }: RunsProps) {
                 <option value="unflagged">Not flagged</option>
               </select>
             </label>
+            <div className="runs-filter-limitations" role="note">
+              <span><EvidenceMark state="not_measured" label="Adapter filter unavailable" reason={ADAPTER_FILTER_REASON} /> Adapter identity is not indexed; no run is assumed to be base.</span>
+              <span><EvidenceMark state="not_measured" label="Influence filter unavailable" reason={INFLUENCE_FILTER_REASON} /> Influence presence is not indexed; the ledger does not claim a missing map is no influence.</span>
+            </div>
           </div>
-          <div className="runs-filter-limitations" role="note">
-            <span><EvidenceMark state="not_measured" label="Adapter filter unavailable" reason={ADAPTER_FILTER_REASON} /> Adapter identity is not indexed; no run is assumed to be base.</span>
-            <span><EvidenceMark state="not_measured" label="Influence filter unavailable" reason={INFLUENCE_FILTER_REASON} /> Influence presence is not indexed; the ledger does not claim a missing map is no influence.</span>
-          </div>
+          )}
         </header>
 
         <div className="runs-table-wrap">
-          <div className="runs-table-head" aria-hidden="true">
-            <span>RUN</span>
-            <span>PROVENANCE</span>
-            <span>DURATION</span>
-            <span>FINISH</span>
-            <span>CONFIDENCE</span>
-            <span>EVIDENCE · CTX / INF / PERF / CLM</span>
-            <span>A / B</span>
-          </div>
           <div className="runs-table" role="list" aria-label="Recorded runs">
             {visibleRuns.map((run) => {
               const state = runLedgerStatus(run);
@@ -594,51 +634,31 @@ export function Runs({ runtime, inspectorOpen }: RunsProps) {
                     aria-pressed={isSelected}
                     aria-label={`Select run ${runLabel(run)}`}
                   >
-                    <span className="runs-label">
-                      <strong title={run.label || run.prompt}>{runLabel(run)}</strong>
-                      <small><time>{timestamp(run.createdAt)}</time> · {shortId(run.id)} · {parentLabel(run, runtime.runs)}</small>
-                    </span>
-                    <RunIdentityChips run={run} />
-                    <span className="runs-duration">
-                      {duration ?? <><EvidenceMark state="not_measured" label="Duration not recorded" reason="The run index did not include a recorded duration." /> <small>NOT RECORDED</small></>}
-                    </span>
-                    <span className={`runs-status is-${state}`}>
-                      {statusLabel(state)}
-                      <small>FINISH {humanize(run.finishReason)}</small>
-                    </span>
-                    <ConfidenceSparkline />
-                    <RunEvidenceIndex run={run} />
+                    <p className="run-card-prompt">{run.prompt || run.label || shortId(run.id)}</p>
+                    {run.response && <p className="run-card-response">{run.response}</p>}
+                    {run.parentRunId && (
+                      <p className="run-card-derived" title={
+                        `Derived from run ${run.parentRunId} -- a replay, fork, or corrective retry `
+                        + `rather than a fresh generation.`
+                      }>
+                        ↳ from {derivedFromLabel(run, runtime.runs)}
+                      </p>
+                    )}
+                    <p className="run-card-meta">
+                      <RunSignals run={run} state={state} />
+                      <time>{timestamp(run.createdAt)}</time>
+                      {duration && <> · {duration}</>}
+                      {recordedText(run.model) && <> · {recordedText(run.model)}</>}
+                      {recordedText(run.source) && <> · {recordedText(run.source)}</>}
+                      {" · "}{shortId(run.id)}
+                    </p>
                   </button>
-                  <span className="runs-stage" aria-label={`Stage ${runLabel(run)} for comparison`}>
-                    <button
-                      type="button"
-                      className={compareA === run.id ? "is-a is-active" : "is-a"}
-                      onClick={() => stage(run.id, "a")}
-                      aria-pressed={compareA === run.id}
-                      aria-label={`Stage ${shortId(run.id)} as run A`}
-                    >A</button>
-                    <button
-                      type="button"
-                      className={compareB === run.id ? "is-b is-active" : "is-b"}
-                      onClick={() => stage(run.id, "b")}
-                      aria-pressed={compareB === run.id}
-                      aria-label={`Stage ${shortId(run.id)} as run B`}
-                    >B</button>
-                  </span>
                 </div>
               );
             })}
             {visibleRuns.length === 0 && <div className="runs-empty">NO MATCHING RUNS</div>}
           </div>
         </div>
-
-        <SelectionDock
-          selected={selected}
-          compareA={compareA}
-          compareB={compareB}
-          onStage={stage}
-          onClear={() => { setCompareA(""); setCompareB(""); }}
-        />
       </section>
 
       {inspectorOpen && (
@@ -699,27 +719,6 @@ export function Runs({ runtime, inspectorOpen }: RunsProps) {
         </aside>
       )}
 
-      <section className="instrument runs-lineage" aria-labelledby="runs-lineage-title">
-        <header className="instrument-head compact">
-          <div>
-            <span className="eyebrow">PARENT / CHILD</span>
-            <h2 id="runs-lineage-title">Run family</h2>
-          </div>
-          <strong>{family.length} {family.length === 1 ? "RUN" : "RUNS"}</strong>
-        </header>
-        <div className="runs-tree">
-          {roots.map((root) => (
-            <LineageNode
-              key={root.id}
-              run={root}
-              byParent={byParent}
-              selectedId={selectedId}
-              onSelect={setSelectedId}
-            />
-          ))}
-          {selected && !family.length && <span className="runs-tree-loading">LOADING FAMILY</span>}
-        </div>
-      </section>
     </>
   );
 }

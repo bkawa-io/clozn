@@ -13,7 +13,8 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # research/ on path
-import clozn.runs.store as runlog  # noqa: E402
+import clozn.runs.store as runlog
+from clozn.runs import summaries  # noqa: E402
 
 
 @pytest.fixture
@@ -554,7 +555,12 @@ def test_list_runs_returns_summary_fields_only(store):
     rows = store.list_runs()
     assert len(rows) == 1
     row = rows[0]
-    assert set(row.keys()) == set(runlog.SUMMARY_FIELDS)
+    # The confidence group is omitted wholesale on a run with no recorded trace rather than sent as
+    # nulls -- `confidence_min: null` invites `?? 0` at a call site, and 0 is a real and terrible
+    # confidence value, not a missing one. Every other field is still always present, because callers
+    # index those directly and have always seen null for absent.
+    assert set(row.keys()) <= set(runlog.SUMMARY_FIELDS)
+    assert set(runlog.SUMMARY_FIELDS) - set(row.keys()) <= set(summaries._CONFIDENCE_FIELDS)
     # the heavy fields are intentionally NOT in the summary
     assert "messages" not in row
     assert "trace" not in row

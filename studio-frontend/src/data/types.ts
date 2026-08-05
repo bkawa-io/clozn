@@ -233,6 +233,15 @@ export interface RunSummary {
   warningCount: number;
   activeDialCount: number;
   memoryCardCount: number;
+  /* Confidence shape from the run index (clozn/runs/summaries.py::confidence_facts). ALL OPTIONAL,
+     and absent together: a run with no recorded trace sends none of these keys rather than zeros,
+     because 0 is a real and terrible confidence value while absence is not a value. Never default
+     them to 0 at a call site -- that is the same lie in TypeScript. */
+  tokenCount?: number;
+  confidence?: number[];
+  confidenceMin?: number;
+  confidenceMean?: number;
+  lowConfidenceCount?: number;
 }
 
 export interface RunFacts {

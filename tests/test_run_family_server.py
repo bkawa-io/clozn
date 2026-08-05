@@ -19,7 +19,8 @@ RESEARCH = os.path.dirname(HERE)
 sys.path.insert(0, RESEARCH)
 
 from clozn.server import app as cs  # noqa: E402
-import clozn.runs.store as runlog  # noqa: E402
+import clozn.runs.store as runlog
+from clozn.runs import summaries  # noqa: E402
 
 
 def _get(path):
@@ -81,11 +82,16 @@ def test_lineage_family_summary_shape_matches_runs_listing(iso):
     ids = _seed_family()
     fam = runlog.lineage_family(ids["child"])
     listing = runlog.list_runs(80)
-    # every family entry has EXACTLY the GET /runs list-entry key set (so buildLineageFromRuns is identical).
+    # Every family entry has the same key set as a GET /runs list entry, so buildLineageFromRuns is
+    # identical on both. Compared with the confidence group excluded on BOTH sides: those five keys
+    # are sent only for a run that recorded a trace (see summaries._summary), so two runs can honestly
+    # differ there while still being the same shape for the tree-builder's purposes.
+    variable = set(summaries._CONFIDENCE_FIELDS)
     listing_keys = set(listing[0].keys())
-    assert listing_keys == set(runlog.SUMMARY_FIELDS)
+    assert listing_keys <= set(runlog.SUMMARY_FIELDS)
+    assert set(runlog.SUMMARY_FIELDS) - listing_keys <= variable
     for entry in fam:
-        assert set(entry.keys()) == listing_keys
+        assert set(entry.keys()) - variable == listing_keys - variable
     # spot-check the fields the client's tree-builder actually reads.
     for entry in fam:
         for k in ("id", "parent_run_id", "created_at", "source", "prompt_summary",

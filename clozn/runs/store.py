@@ -24,7 +24,7 @@ from copy import deepcopy
 from clozn._io import atomic_write_json
 
 from . import migrations
-from .summaries import SUMMARY_FIELDS, _flags, _summ, _summary
+from .summaries import SUMMARY_FIELDS, _flags, _summ, _summary, confidence_facts
 from .trace import (
     TRACE_KEYS,
     _clean_alt,
@@ -476,6 +476,11 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
             "substrate": substrate,
             "prompt_summary": _summ(prompt),
             "response_summary": _summ(response),
+            # Confidence shape for the run index, derived here because `norm_trace` is in hand and the
+            # trace itself is about to become a content-addressed blob (`trace_ref`) that list_runs
+            # deliberately does not open. Spreads to nothing when the run has no confidence, so a
+            # traceless run carries no confidence keys at all rather than zeros.
+            **confidence_facts(norm_trace),
             "messages": msgs,
             "response": response,
             "reasoning": reasoning_doc,

@@ -90,6 +90,16 @@ function runSummary(run: JsonRecord): RunSummary {
     label: runPickerLabel(run),
     prompt: String(run.prompt_summary || ""),
     response: String(run.response_summary || ""),
+    // Passed through only when present. `?? undefined` rather than `|| 0` on purpose -- see
+    // RunSummary's note on why a missing confidence must not become a zero one.
+    tokenCount: typeof run.token_count === "number" ? run.token_count : undefined,
+    confidence: Array.isArray(run.confidence)
+      ? run.confidence.filter((value: unknown): value is number => typeof value === "number")
+      : undefined,
+    confidenceMin: typeof run.confidence_min === "number" ? run.confidence_min : undefined,
+    confidenceMean: typeof run.confidence_mean === "number" ? run.confidence_mean : undefined,
+    lowConfidenceCount:
+      typeof run.low_confidence_count === "number" ? run.low_confidence_count : undefined,
     createdAt: String(run.created_at || "—"),
     createdTs: Number.isFinite(createdTs) ? createdTs : undefined,
     source: String(run.source || "—"),

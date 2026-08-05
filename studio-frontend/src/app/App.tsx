@@ -19,7 +19,16 @@ export function App() {
     localStorage.getItem("clozn.next.theme") === "cathedral" ? "cathedral" : "halo",
   );
   const [runtime, setRuntime] = useState<RuntimeState>({ status: "checking", runs: [] });
-  const [inspectorOpen, setInspectorOpen] = useState(true);
+  /* Open only when there is room for it. STUDIO_UI_REDESIGN 2.5: at 1000-1599px the inspector is a
+     drawer, and only at >=1600px do the browser, stage, and inspector all pin at once.
+     Measured, not assumed: at 1280 the ledger gets ~870px beside a pinned inspector while
+     `.runs-table` declares `min-width: 1059px`, so the table horizontally scrolls and the A/B column
+     is cut off the screen. Defaulting closed here is what makes the primary surface fit its own
+     viewport; the rail control still opens it deliberately. Read once at mount rather than on resize
+     so a user who opens it never has it yanked back shut by a window drag. */
+  const [inspectorOpen, setInspectorOpen] = useState(
+    () => typeof window === "undefined" || window.innerWidth >= 1600,
+  );
   const [hash, setHash] = useState(() => location.hash);
   const [published, setPublished] = useState<TopbarContent | null>(null);
 
