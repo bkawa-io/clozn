@@ -629,7 +629,25 @@ def _native_log_run(handler, body: dict, frames: list[dict], started: float,
     Native mode deliberately keeps the worker's typed event stream on the wire, so it cannot use
     ``instrumented_chat`` without changing the protocol.  This helper folds the same event frames into
     the shared trace/timing shape and calls the handler's normal journal seam exactly once.
+
+    STANDS DOWN when the caller declares it journals the turn itself (``X-Clozn-Client-Journals``).
+    Exactly one caller does: ``clozn run``/REPL, whose ``_log_run_cli`` records a STRICTLY RICHER run
+    than this function can. It has two things unavailable here -- the user's raw question (so
+    ``messages`` reads as a question rather than as chat-template syntax; this route only ever sees the
+    already-rendered ``prompt``) and ``final_prompt``, the exact wire input, which Gate 0 requires and
+    which the ``handler._log_run`` call below does not pass at all. Without this check both writers
+    fire and every CLI turn produces TWO run records -- the richer one and this weaker one.
+
+    Deliberately a request HEADER, not a body field: ``native_completion`` proxies ``body`` verbatim to
+    the C++ worker, so an extra key there would reach a process that never asked for it. Headers stop
+    at the gateway. It is also not a stream frame, which keeps the native stream byte-transparent as
+    that path's own comment requires.
     """
+    try:
+        if str(getattr(handler, "headers", {}).get("X-Clozn-Client-Journals") or "").strip():
+            return None
+    except Exception:
+        pass
     try:
         import clozn.runs.store as runlog
         prompt = body.get("prompt", "")

@@ -66,7 +66,12 @@ def stream_ar(port: int, prompt: str, max_tokens: int, heat: bool = False):
     -> (token count, steps, finish_reason, prompt_tokens, public_text, worker_timing)."""
     body = json.dumps({"prompt": prompt, "max_tokens": max_tokens, "stream": True}).encode()
     req = urllib.request.Request(f"http://127.0.0.1:{port}/api/clozn/generate", data=body,
-                                 headers={"Content-Type": "application/json"})
+                                 headers={"Content-Type": "application/json",
+                                          # This client journals the turn itself, via _log_run_cli
+                                          # below, with the raw question and final_prompt the gateway
+                                          # cannot see. Tells generation_gateway._native_log_run to
+                                          # stand down so one turn does not produce two run records.
+                                          "X-Clozn-Client-Journals": "1"})
     n = 0
     frames = []                                             # every parsed SSE frame, for the shared accumulator
     from clozn.runs.think_tags import ThinkTagStream, prompt_opens_think
@@ -144,7 +149,12 @@ def _complete_once_raw(port: int, prompt: str, max_tokens: int) -> dict:
     engine's real finish_reason)."""
     body = json.dumps({"prompt": prompt, "max_tokens": max_tokens}).encode()
     req = urllib.request.Request(f"http://127.0.0.1:{port}/api/clozn/generate", data=body,
-                                 headers={"Content-Type": "application/json"})
+                                 headers={"Content-Type": "application/json",
+                                          # This client journals the turn itself, via _log_run_cli
+                                          # below, with the raw question and final_prompt the gateway
+                                          # cannot see. Tells generation_gateway._native_log_run to
+                                          # stand down so one turn does not produce two run records.
+                                          "X-Clozn-Client-Journals": "1"})
     with urllib.request.urlopen(req, timeout=600) as resp:
         return json.loads(resp.read())
 
