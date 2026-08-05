@@ -1,7 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { EvidenceMark } from "../../components/EvidenceMark";
+import {
+  StateBoard,
+  type StateBoardCapabilityFlag,
+  type StateBoardCard,
+} from "../../components/StateBoard";
+import {
+  TypedActionOffer,
+  type TypedActionOfferProps,
+} from "../../components/TypedActionOffer";
 import {
   loadModelWorkspace,
   type EngineModel,
+  type LocalModel,
   type ModelWorkspaceData,
 } from "./api";
 
@@ -9,335 +20,535 @@ interface ModelProps {
   inspectorOpen: boolean;
 }
 
-type ModelView = "capabilities" | "stack" | "inventory";
+type RuntimeLoadState = "loading" | "reported" | "partial" | "unavailable";
+type AbsenceState = "not_measured" | "unavailable";
 
-const capabilityLabels: Record<string, { label: string; object: string }> = {
-  streaming: { label: "Token streaming", object: "Incremental generation output" },
-  sampling: { label: "Sampling", object: "Temperature, top-p, top-k, repeat penalty" },
-  steering: { label: "Activation steering", object: "Tone and concept intervention routes" },
-  state_stream: { label: "State stream", object: "Runtime state telemetry" },
-  jlens: { label: "J-lens", object: "Layer concept readout" },
-  sae: { label: "Sparse features", object: "SAE feature readout" },
-  infill: { label: "Infill", object: "Masked-span generation" },
-  revise: { label: "Revision", object: "Revision pass" },
-  score_arms: { label: "Arm scoring", object: "Intervention arm score readout" },
+const capabilityLabels: Record<string, string> = {
+  attn_knockout: "Attention knockout",
+  infill: "Infill",
+  jlens: "J-lens",
+  revise: "Revision",
+  sae: "Sparse features",
+  sampling: "Sampling",
+  score_arms: "Arm scoring",
+  state_stream: "State stream",
+  steering: "Activation steering",
+  streaming: "Token streaming",
 };
 
-const views: Array<{ id: ModelView; label: string }> = [
-  { id: "stack", label: "CONFIGURATION STACK" },
-  { id: "capabilities", label: "CAPABILITIES" },
-  { id: "inventory", label: "MODEL INVENTORY" },
+const loadStateLabels: Record<RuntimeLoadState, string> = {
+  loading: "READING",
+  reported: "REPORTED",
+  partial: "PARTIAL",
+  unavailable: "UNAVAILABLE",
+};
+
+/**
+ * These are deliberately blocked offers rather than dormant controls. The current Model workspace
+ * routes do not expose the backing records or descriptors, so Runtime can say exactly what is absent
+ * without pretending it knows a store, a storage total, or a mutation endpoint.
+ */
+const unavailableOffers: readonly TypedActionOfferProps[] = [
+  {
+    title: "Snapshot storage",
+    absence: {
+      state: "unavailable",
+      label: "Snapshot storage unavailable",
+      reason: "No snapshot inventory, byte budget, or storage envelope is supplied to this Runtime surface.",
+    },
+    cost: "Unknown until a snapshot control reports its storage envelope.",
+    preconditions: [
+      "A snapshot inventory and byte budget must be exposed.",
+      "A backed snapshot action descriptor must be supplied.",
+    ],
+    action: {
+      availability: "blocked",
+      label: "Snapshot controls unavailable",
+      blockerReason: "Studio has no snapshot action descriptor or storage evidence to invoke.",
+    },
+  },
+  {
+    title: "Ollama adoption",
+    absence: {
+      state: "unavailable",
+      label: "Adoption workflow unavailable",
+      reason: "This Runtime surface receives no resolve, fidelity, dry-run, commit, or undo record for adoption.",
+    },
+    cost: "Unknown; no adoption plan or local installation transaction was reported.",
+    preconditions: [
+      "A local adoption plan must be exposed.",
+      "A backed dry-run and commit descriptor must be supplied.",
+    ],
+    action: {
+      availability: "blocked",
+      label: "Adoption controls unavailable",
+      blockerReason: "Studio cannot infer an adoption action from model inventory or engine health alone.",
+    },
+  },
+  {
+    title: "Privacy controls",
+    absence: {
+      state: "unavailable",
+      label: "Privacy controls unavailable",
+      reason: "No installation-level privacy tier or control record is supplied by the current Runtime routes.",
+    },
+    cost: "Unknown until a privacy policy and control descriptor are recorded.",
+    preconditions: [
+      "A privacy policy record must be exposed for this installation.",
+      "A backed control descriptor must identify an allowed change.",
+    ],
+    action: {
+      availability: "blocked",
+      label: "Privacy controls unavailable",
+      blockerReason: "The frontend has no privacy control route or action descriptor to call.",
+    },
+  },
 ];
 
-function shortHash(value?: string) {
-  return value ? `${value.slice(0, 12)}…` : "—";
+function titleCase(value: string): string {
+  return value
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
 }
 
-function sizeText(value?: number) {
-  if (value == null) return "—";
-  return `${(value / 1e9).toFixed(2)} GB`;
+function capabilityLabel(id: string): string {
+  return capabilityLabels[id] ?? titleCase(id);
 }
 
-function modelValue(engine: EngineModel | undefined, key: keyof EngineModel) {
-  const value = engine?.[key];
-  return value == null || value === "" ? "—" : String(value);
+function shortHash(value?: string): string {
+  return value ? `${value.slice(0, 12)}…` : "Not reported";
+}
+
+function formatBytes(value?: number): string {
+  if (value == null || !Number.isFinite(value)) return "Size not reported";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let amount = Math.max(0, value);
+  let unit = 0;
+  while (amount >= 1000 && unit < units.length - 1) {
+    amount /= 1000;
+    unit += 1;
+  }
+  return `${amount >= 10 || unit === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[unit]}`;
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : "Runtime workspace could not be loaded.";
+}
+
+function capabilityFlags(engine?: EngineModel): StateBoardCapabilityFlag[] {
+  return Object.entries(engine?.capabilities ?? {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([id, available]) => {
+      const label = capabilityLabel(id);
+      return available
+        ? {
+            id,
+            label,
+            available: true,
+            note: `Reported available by /engine/health; this is an availability flag, not evidence that the capability ran.`,
+          }
+        : {
+            id,
+            label,
+            available: false,
+            note: "Reported unavailable by /engine/health.",
+            reason: `${label} is reported unavailable by /engine/health; the response did not identify a more specific precondition.`,
+          };
+    });
+}
+
+function stateBoardCards(
+  data: ModelWorkspaceData,
+  flags: readonly StateBoardCapabilityFlag[],
+  loading: boolean,
+  engineReason: string,
+): StateBoardCard[] {
+  const cards: StateBoardCard[] = [{
+    id: "engine-health",
+    kind: "engine_health",
+    title: "Engine health",
+    description: "The existing health route names a serving engine, but it does not expose doctor output or a readiness receipt.",
+    health: data.engine
+      ? {
+          status: "healthy",
+          note: "A successful /engine/health response returned a serving-engine record. Deeper readiness is not reported here.",
+        }
+      : loading
+        ? {
+            status: "checking",
+            note: "Reading the existing /engine/health route; no installation-health conclusion is available yet.",
+          }
+        : {
+            status: "unavailable",
+            reason: engineReason,
+          },
+  }];
+
+  if (flags.length > 0) {
+    cards.push({
+      id: "capability-flags",
+      kind: "capabilities",
+      title: "Capability flags",
+      description: "Other screens can cite these reported preconditions instead of failing silently at click time.",
+      flags,
+    });
+  }
+
+  return cards;
+}
+
+function RuntimeAbsence({
+  label,
+  reason,
+  state = "unavailable",
+  className,
+}: {
+  label: string;
+  reason: string;
+  state?: AbsenceState;
+  className?: string;
+}) {
+  // EvidenceMark owns the four-state grammar. A Runtime-specific empty tile would make these absences
+  // look unlike the same absence on a run or comparison surface.
+  return (
+    <div className={["runtime-absence", className].filter(Boolean).join(" ")} data-evidence-state={state}>
+      {state === "not_measured" ? (
+        <EvidenceMark variant="chip" state="not_measured" label={label} reason={reason} />
+      ) : (
+        <EvidenceMark variant="chip" state="unavailable" label={label} reason={reason} />
+      )}
+    </div>
+  );
+}
+
+function ModelRecord({ model, engine }: { model: LocalModel; engine?: EngineModel }) {
+  const serving = Boolean(engine?.model && model.path === engine.model);
+
+  return (
+    <article className="runtime-model-record" data-model-path={model.path}>
+      <header>
+        <span>{serving ? "Serving engine match" : "Local model record"}</span>
+        <strong>{model.filename}</strong>
+      </header>
+      <dl>
+        <div><dt>Quant</dt><dd>{model.quant ?? "Not reported"}</dd></div>
+        <div><dt>Size</dt><dd>{formatBytes(model.sizeBytes)}</dd></div>
+        <div><dt>SHA256</dt><dd>{shortHash(model.sha256)}</dd></div>
+      </dl>
+    </article>
+  );
+}
+
+function SourceRow({
+  label,
+  endpoint,
+  detail,
+  absence,
+}: {
+  label: string;
+  endpoint: string;
+  detail?: string;
+  absence?: { state: AbsenceState; reason: string };
+}) {
+  return (
+    <li className="runtime-source-row">
+      <div>
+        <strong>{label}</strong>
+        <code>{endpoint}</code>
+      </div>
+      {detail ? <p>{detail}</p> : absence && <RuntimeAbsence label={`${label} unavailable`} {...absence} />}
+    </li>
+  );
 }
 
 export function Model({ inspectorOpen }: ModelProps) {
-  const [view, setView] = useState<ModelView>("stack");
-  const [data, setData] = useState<ModelWorkspaceData>({
-    axes: [],
-    errors: {},
-  });
-  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
-  const [selectedCapability, setSelectedCapability] = useState("");
-  const [selectedModelPath, setSelectedModelPath] = useState("");
+  const [data, setData] = useState<ModelWorkspaceData>({ axes: [], errors: {} });
+  const [loadState, setLoadState] = useState<RuntimeLoadState>("loading");
+  const [fatalError, setFatalError] = useState<string>();
 
   useEffect(() => {
     const controller = new AbortController();
-    void loadModelWorkspace(controller.signal).then((next) => {
-      if (controller.signal.aborted) return;
-      setData(next);
-      setStatus(next.engine ? "ready" : "error");
-      setSelectedCapability(Object.keys(next.engine?.capabilities ?? {})[0] ?? "");
-      setSelectedModelPath(next.engine?.model ?? next.localModels?.[0]?.path ?? "");
-    }).catch(() => {
-      if (!controller.signal.aborted) setStatus("error");
-    });
+    void loadModelWorkspace(controller.signal)
+      .then((next) => {
+        if (controller.signal.aborted) return;
+        setData(next);
+        setFatalError(undefined);
+        setLoadState(next.engine
+          ? (Object.keys(next.errors).length > 0 ? "partial" : "reported")
+          : "unavailable");
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return;
+        setFatalError(errorText(error));
+        setLoadState("unavailable");
+      });
     return () => controller.abort();
   }, []);
 
-  const engine = data.engine;
-  const layers = Array.from({ length: engine?.layers ?? 0 }, (_, layer) => layer);
-  const capabilityRows = Object.entries(engine?.capabilities ?? {}).sort(([a], [b]) => a.localeCompare(b));
-  const activeAxes = data.axes.filter((axis) => Math.abs(axis.value) > .0001);
-  const calibratedAxes = data.axes.filter((axis) => axis.calibrated);
-  const selectedInventory = data.localModels?.find((model) => model.path === selectedModelPath);
-  const selectedCapabilityState = engine?.capabilities[selectedCapability];
-  const selectedCapabilityInfo = capabilityLabels[selectedCapability] ?? {
-    label: selectedCapability || "—",
-    object: selectedCapability ? "Engine capability flag" : "—",
-  };
-  const navigationCounts: Record<ModelView, string | number> = {
-    capabilities: capabilityRows.filter(([, available]) => available).length,
-    stack: 1 + activeAxes.length,
-    inventory: data.localModels?.length ?? "—",
-  };
+  const loading = loadState === "loading";
+  const engineReason = fatalError
+    ?? data.errors.engine
+    ?? "No engine record was received from /engine/health.";
+  const flags = useMemo(() => capabilityFlags(data.engine), [data.engine]);
+  const cards = useMemo(
+    () => stateBoardCards(data, flags, loading, engineReason),
+    [data, engineReason, flags, loading],
+  );
+  const activeAxes = data.axes.filter((axis) => Math.abs(axis.value) > 0.0001);
+  const capabilityReason = loading
+    ? "The engine-health request is still running, so no capability flags are available yet."
+    : data.errors.engine
+      ? data.errors.engine
+      : "The /engine/health response did not include any capability flags.";
+  const inventoryReason = data.errors.inventory
+    ?? "The /models/local response did not provide a model inventory record.";
+  const axesReason = data.errors.axes
+    ?? "The /steer/axes response did not include steering-axis records.";
+  const profileReason = data.errors.profiles
+    ?? "The /profiles/list response did not identify an active profile.";
 
   return (
     <>
-      <aside className="instrument model-map" aria-labelledby="model-map-title">
+      <aside className="instrument runtime-map" aria-labelledby="runtime-map-title">
         <header className="instrument-head compact">
           <div>
-            <span className="eyebrow">MODEL SCOPE</span>
-            <h2 id="model-map-title">Model</h2>
+            <span className="eyebrow">INSTALLATION</span>
+            <h2 id="runtime-map-title">Runtime</h2>
           </div>
-          <strong>{status.toUpperCase()}</strong>
+          <strong data-runtime-load-state={loadState}>{loadStateLabels[loadState]}</strong>
         </header>
-        <nav className="model-sections" aria-label="Model sections">
-          {views.map((item) => (
-            <button
-              type="button"
-              className={view === item.id ? "is-active" : ""}
-              aria-pressed={view === item.id}
-              onClick={() => setView(item.id)}
-              key={item.id}
-            >
-              <span>{item.label}</span>
-              <b>{navigationCounts[item.id]}</b>
-            </button>
-          ))}
-        </nav>
-        <section className="model-serving-summary">
-          <header><span>SERVING</span><b>{engine ? "UP" : "—"}</b></header>
-          <strong>{engine?.modelName ?? "ENGINE UNAVAILABLE"}</strong>
+
+        <div className="runtime-map-copy">
+          <p>The machine-level record: what the current Studio routes can establish about this installation.</p>
           <dl>
-            <div><dt>Architecture</dt><dd>{modelValue(engine, "architecture")}</dd></div>
-            <div><dt>Quant</dt><dd>{modelValue(engine, "quant")}</dd></div>
-            <div><dt>Device</dt><dd>{modelValue(engine, "device")}</dd></div>
-            <div><dt>Layers</dt><dd>{modelValue(engine, "layers")}</dd></div>
-            <div><dt>Context</dt><dd>{modelValue(engine, "context")}</dd></div>
-            <div><dt>Protocol</dt><dd>{modelValue(engine, "protocolVersion")}</dd></div>
+            <div><dt>Engine source</dt><dd>/engine/health</dd></div>
+            <div><dt>Inventory source</dt><dd>/models/local</dd></div>
+            <div><dt>Configuration</dt><dd>/steer/axes</dd></div>
+            <div><dt>Profiles</dt><dd>/profiles/list</dd></div>
           </dl>
-        </section>
+        </div>
+
+        <div className="runtime-map-boundary">
+          <span>Truthfulness boundary</span>
+          <p>These routes do not report resident capacity, qualification, snapshot storage, adoption, or privacy controls.</p>
+        </div>
       </aside>
 
-      <section className="instrument model-console" aria-labelledby="model-console-title">
-        {view === "capabilities" ? (
-          <>
-            <header className="instrument-head model-console-head">
+      <section className="instrument runtime-main" aria-labelledby="runtime-title">
+        <header className="instrument-head runtime-main-head">
+          <div>
+            <span className="eyebrow">THE MACHINE</span>
+            <h1 id="runtime-title">Runtime</h1>
+            <p>Installation-level state, with unavailable systems left visibly unavailable.</p>
+          </div>
+          <div className="runtime-main-status" data-runtime-load-state={loadState}>
+            <span>WORKSPACE</span>
+            <strong>{loadStateLabels[loadState]}</strong>
+          </div>
+        </header>
+
+        <div className="runtime-scroll">
+          <StateBoard cards={cards} title="Installation state" />
+
+          {flags.length === 0 && (
+            <RuntimeAbsence
+              label="Capability flags unavailable"
+              state={loading ? "not_measured" : "unavailable"}
+              reason={capabilityReason}
+              className="runtime-wide-absence"
+            />
+          )}
+
+          <section className="runtime-section runtime-engine-record" aria-labelledby="runtime-engine-record-title">
+            <header className="runtime-section-head">
               <div>
-                <span className="eyebrow">ENGINE CONTRACT</span>
-                <h1 id="model-console-title">Capabilities</h1>
+                <span>Reported engine</span>
+                <h2 id="runtime-engine-record-title">Serving model record</h2>
               </div>
-              <div className="model-head-stats">
-                <span><b>AVAILABLE</b>{capabilityRows.filter(([, available]) => available).length}</span>
-                <span><b>UNAVAILABLE</b>{capabilityRows.filter(([, available]) => !available).length}</span>
+              <code>/engine/health</code>
+            </header>
+            {data.engine ? (
+              <dl className="runtime-fact-grid">
+                <div><dt>Model</dt><dd>{data.engine.modelName}</dd></div>
+                <div><dt>Architecture</dt><dd>{data.engine.architecture}</dd></div>
+                <div><dt>Quant</dt><dd>{data.engine.quant ?? "Not reported"}</dd></div>
+                <div><dt>Device</dt><dd>{data.engine.device ?? "Not reported"}</dd></div>
+                <div><dt>Context</dt><dd>{data.engine.context?.toLocaleString() ?? "Not reported"}</dd></div>
+                <div><dt>GPU layers</dt><dd>{data.engine.gpuLayers?.toLocaleString() ?? "Not reported"}</dd></div>
+                <div><dt>Protocol</dt><dd>{data.engine.protocolVersion ?? "Not reported"}</dd></div>
+                <div><dt>Model SHA256</dt><dd>{shortHash(data.engine.sha256)}</dd></div>
+              </dl>
+            ) : (
+              <RuntimeAbsence
+                label="Serving engine unavailable"
+                state={loading ? "not_measured" : "unavailable"}
+                reason={loading ? "The /engine/health request has not completed." : engineReason}
+              />
+            )}
+          </section>
+
+          <section className="runtime-section" aria-labelledby="runtime-inventory-title">
+            <header className="runtime-section-head">
+              <div>
+                <span>Reported files</span>
+                <h2 id="runtime-inventory-title">Local model inventory</h2>
+              </div>
+              <code>/models/local</code>
+            </header>
+            {data.localModels === undefined ? (
+              <RuntimeAbsence
+                label="Model inventory unavailable"
+                state={loading ? "not_measured" : "unavailable"}
+                reason={loading ? "The /models/local request has not completed." : inventoryReason}
+              />
+            ) : data.localModels.length > 0 ? (
+              <div className="runtime-model-grid">
+                {data.localModels.map((model) => <ModelRecord model={model} engine={data.engine} key={model.path || model.filename} />)}
+              </div>
+            ) : (
+              <RuntimeAbsence
+                label="Model inventory not measured"
+                state="not_measured"
+                reason="The /models/local response contained no model records; Runtime cannot infer an empty installation or a resident-model cap."
+              />
+            )}
+            <RuntimeAbsence
+              label="Resident capacity unavailable"
+              reason="The current inventory route lists model files but does not report worker residency or a hard capacity. No N-of-M meter is shown."
+              className="runtime-capacity-boundary"
+            />
+          </section>
+
+          <section className="runtime-section" aria-labelledby="runtime-configuration-title">
+            <header className="runtime-section-head">
+              <div>
+                <span>Configuration evidence</span>
+                <h2 id="runtime-configuration-title">Profiles, axes, and omitted installation records</h2>
+              </div>
+              <a href="#/behavior">OPEN BEHAVIOR</a>
+            </header>
+            <div className="runtime-configuration-grid">
+              <article className="runtime-configuration-record">
+                <span>Steering axes</span>
+                {loading ? (
+                  <RuntimeAbsence label="Steering axes pending" state="not_measured" reason="The /steer/axes request has not completed." />
+                ) : data.errors.axes ? (
+                  <RuntimeAbsence label="Steering axes unavailable" reason={axesReason} />
+                ) : data.axes.length === 0 ? (
+                  <RuntimeAbsence label="Steering axes not measured" state="not_measured" reason={axesReason} />
+                ) : (
+                  <>
+                    <p>{activeAxes.length} active of {data.axes.length} reported axes.</p>
+                    {activeAxes.length > 0 && (
+                      <ul className="runtime-axis-list" aria-label="Active steering axes">
+                        {activeAxes.map((axis) => (
+                          <li key={axis.name}>
+                            <strong>{axis.name}</strong>
+                            <span>{axis.value >= 0 ? "+" : ""}{axis.value.toFixed(2)} · {axis.calibrated ? "calibrated" : "not calibrated"}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                )}
+              </article>
+
+              <article className="runtime-configuration-record">
+                <span>Active profile</span>
+                {data.activeProfile ? (
+                  <strong className="runtime-profile-name">{data.activeProfile}</strong>
+                ) : (
+                  <RuntimeAbsence
+                    label={loading ? "Active profile pending" : "Active profile not measured"}
+                    state={loading || !data.errors.profiles ? "not_measured" : "unavailable"}
+                    reason={loading ? "The /profiles/list request has not completed." : profileReason}
+                  />
+                )}
+              </article>
+
+              <article className="runtime-configuration-record">
+                <span>Qualification</span>
+                <RuntimeAbsence
+                  label="Qualification record unavailable"
+                  reason="The current Runtime routes do not supply qualification steps, product/lab boundaries, or a qualification receipt."
+                />
+              </article>
+
+              <article className="runtime-configuration-record">
+                <span>Correction scopes</span>
+                <RuntimeAbsence
+                  label="Correction scopes unavailable"
+                  reason="The current Runtime routes do not supply correction-resolution or correction-scope records."
+                />
+              </article>
+            </div>
+          </section>
+
+          <section className="runtime-section runtime-offers" aria-labelledby="runtime-offers-title">
+            <header className="runtime-section-head">
+              <div>
+                <span>Not exposed by these routes</span>
+                <h2 id="runtime-offers-title">Installation controls</h2>
               </div>
             </header>
-            <div className="model-capability-grid">
-              {capabilityRows.map(([name, available]) => {
-                const info = capabilityLabels[name] ?? { label: name, object: "Engine capability flag" };
-                return (
-                  <button
-                    type="button"
-                    className={`${selectedCapability === name ? "is-selected" : ""} ${available ? "is-available" : "is-unavailable"}`}
-                    aria-pressed={selectedCapability === name}
-                    onClick={() => setSelectedCapability(name)}
-                    key={name}
-                  >
-                    <i />
-                    <span>{info.label}</span>
-                    <strong>{available ? "AVAILABLE" : "UNAVAILABLE"}</strong>
-                    <small>{info.object}</small>
-                  </button>
-                );
-              })}
-              {!capabilityRows.length && <div className="model-unavailable">0 CAPABILITY FLAGS</div>}
+            <div className="runtime-offer-grid">
+              {unavailableOffers.map((offer) => <TypedActionOffer {...offer} key={offer.title} />)}
             </div>
-          </>
-        ) : view === "stack" ? (
-          <>
-            <header className="instrument-head model-console-head">
-              <div>
-                <span className="eyebrow">ACTIVE CONFIGURATION</span>
-                <h1 id="model-console-title">Configuration stack</h1>
-              </div>
-              <a className="model-behavior-link" href="#/behavior">OPEN BEHAVIOR</a>
-            </header>
-            <div className="model-stack-stage">
-              <section className="model-architecture-compact" aria-label="Model architecture">
-                <header>
-                  <span>ARCHITECTURE</span>
-                  <strong>{engine?.architecture?.toUpperCase() ?? "—"}</strong>
-                  <dl>
-                    <div><dt>LAYERS</dt><dd>{engine?.layers ?? "—"}</dd></div>
-                    <div><dt>EMBEDDING</dt><dd>{engine?.embedding ?? "—"}</dd></div>
-                    <div><dt>CONTEXT</dt><dd>{engine?.context?.toLocaleString() ?? "—"}</dd></div>
-                    <div><dt>VOCABULARY</dt><dd>{engine?.vocabulary?.toLocaleString() ?? "—"}</dd></div>
-                  </dl>
-                </header>
-                <div className="model-architecture-layers" aria-label={`${layers.length} transformer layers`}>
-                  <span>INPUT</span>
-                  <div style={{ gridTemplateColumns: `repeat(${Math.max(layers.length, 1)}, minmax(3px, 1fr))` }}>
-                    {layers.map((layer) => <i title={`L${layer}`} key={layer} />)}
-                  </div>
-                  <span>OUTPUT</span>
-                </div>
-              </section>
-              <article className="model-stack-row is-base">
-                <b>01</b>
-                <div><span>BASE MODEL</span><strong>{engine?.modelName ?? "—"}</strong></div>
-                <output>{engine?.quant ?? "—"}</output>
-              </article>
-              <article className="model-stack-row">
-                <b>02</b>
-                <div><span>LORA / ADAPTER METADATA</span><strong>UNREPORTED</strong></div>
-                <output>—</output>
-              </article>
-              <article className="model-stack-row is-active">
-                <b>03</b>
-                <div><span>TONE STEERING</span><strong>{activeAxes.length} ACTIVE AXES</strong></div>
-                <output>{calibratedAxes.length}/{data.axes.length} CAL</output>
-              </article>
-              <div className="model-axis-strip">
-                {activeAxes.map((axis) => (
-                  <span key={axis.name}><b>{axis.name}</b>{axis.value >= 0 ? "+" : ""}{axis.value.toFixed(2)}</span>
-                ))}
-              </div>
-              <article className={`model-stack-row ${engine?.capabilities.jlens ? "is-active" : ""}`}>
-                <b>04</b>
-                <div><span>CONCEPT READOUT</span><strong>{engine?.capabilities.jlens ? "J-LENS AVAILABLE" : "J-LENS UNAVAILABLE"}</strong></div>
-                <output>{engine?.capabilities.jlens ? "ON" : "OFF"}</output>
-              </article>
-            </div>
-          </>
-        ) : (
-          <>
-            <header className="instrument-head model-console-head">
-              <div>
-                <span className="eyebrow">READ-ONLY INVENTORY</span>
-                <h1 id="model-console-title">Model inventory</h1>
-              </div>
-              <div className="model-head-stats">
-                <span><b>REPORTED</b>{data.localModels?.length ?? "—"}</span>
-                <span><b>SERVING</b>{engine ? 1 : 0}</span>
-              </div>
-            </header>
-            <div className="model-inventory-stage">
-              <button
-                type="button"
-                className={`model-inventory-row is-serving ${selectedModelPath === engine?.model ? "is-selected" : ""}`}
-                aria-pressed={selectedModelPath === engine?.model}
-                onClick={() => setSelectedModelPath(engine?.model ?? "")}
-              >
-                <span><b>SERVING</b><strong>{engine?.modelName ?? "—"}</strong></span>
-                <span>{engine?.quant ?? "—"}</span>
-                <span>PATH</span>
-                <span>{sizeText(data.localModels?.find((model) => model.path === engine?.model)?.sizeBytes)}</span>
-              </button>
-              {(data.localModels ?? []).filter((model) => model.path !== engine?.model).map((model) => (
-                <button
-                  type="button"
-                  className={selectedModelPath === model.path ? "model-inventory-row is-selected" : "model-inventory-row"}
-                  aria-pressed={selectedModelPath === model.path}
-                  onClick={() => setSelectedModelPath(model.path)}
-                  key={model.path}
-                >
-                  <span><b>INSTALLED</b><strong>{model.filename}</strong></span>
-                  <span>{model.quant ?? "—"}</span>
-                  <span>FILE</span>
-                  <span>{sizeText(model.sizeBytes)}</span>
-                </button>
-              ))}
-              {data.errors.inventory && (
-                <div className="model-inventory-error">
-                  <strong>INVENTORY ROUTE UNAVAILABLE</strong>
-                  <span>{data.errors.inventory}</span>
-                </div>
-              )}
-            </div>
-          </>
-        )}
+          </section>
+        </div>
       </section>
 
       {inspectorOpen && (
-        <aside className="instrument model-inspector" aria-labelledby="model-inspector-title">
+        <aside className="instrument runtime-inspector" aria-labelledby="runtime-inspector-title">
           <header className="instrument-head compact">
             <div>
-              <span className="eyebrow">SELECTION</span>
-              <h2 id="model-inspector-title">
-                {view === "capabilities"
-                  ? "Capability"
-                  : view === "stack"
-                    ? "Configuration"
-                    : "Model file"}
-              </h2>
+              <span className="eyebrow">EVIDENCE BOUNDARY</span>
+              <h2 id="runtime-inspector-title">Source ledger</h2>
             </div>
-            <strong>{view.toUpperCase()}</strong>
+            <strong>READ ONLY</strong>
           </header>
-          {view === "capabilities" ? (
-            <>
-              <section className={`model-capability-inspector ${selectedCapabilityState ? "is-available" : ""}`}>
-                <span>{selectedCapability}</span>
-                <strong>{selectedCapabilityInfo.label}</strong>
-                <b>{selectedCapabilityState ? "AVAILABLE" : "UNAVAILABLE"}</b>
-              </section>
-              <section className="model-inspector-facts">
-                <dl>
-                  <div><dt>Contract key</dt><dd>{selectedCapability || "—"}</dd></div>
-                  <div><dt>Object</dt><dd>{selectedCapabilityInfo.object}</dd></div>
-                  <div><dt>Source</dt><dd>/engine/health</dd></div>
-                </dl>
-              </section>
-            </>
-          ) : view === "stack" ? (
-            <section className="model-inspector-facts">
-              <dl>
-                <div><dt>Base model</dt><dd>{engine?.modelName ?? "—"}</dd></div>
-                <div><dt>Adapter identity</dt><dd>UNREPORTED</dd></div>
-                <div><dt>Active tone axes</dt><dd>{activeAxes.length}</dd></div>
-                <div><dt>Calibrated axes</dt><dd>{calibratedAxes.length} / {data.axes.length}</dd></div>
-                <div><dt>Profile</dt><dd>{data.activeProfile || "—"}</dd></div>
-              </dl>
-              <a className="model-inspector-action" href="#/behavior">EDIT INTERVENTIONS</a>
-            </section>
-          ) : (
-            <>
-              <section className="model-file-selection">
-                <span>{selectedModelPath === engine?.model ? "SERVING" : "INSTALLED"}</span>
-                <strong>{selectedInventory?.filename ?? engine?.modelName ?? "—"}</strong>
-              </section>
-              <section className="model-inspector-facts">
-                <dl>
-                  <div><dt>Quant</dt><dd>{selectedInventory?.quant ?? engine?.quant ?? "—"}</dd></div>
-                  <div><dt>Size</dt><dd>{sizeText(selectedInventory?.sizeBytes)}</dd></div>
-                  <div><dt>SHA256</dt><dd>{shortHash(selectedInventory?.sha256 ?? engine?.sha256)}</dd></div>
-                  <div><dt>Switch route</dt><dd>UNAVAILABLE</dd></div>
-                </dl>
-                <code>clozn serve &lt;model&gt;</code>
-              </section>
-            </>
-          )}
+          <ul className="runtime-source-list">
+            <SourceRow
+              label="Engine record"
+              endpoint="/engine/health"
+              detail={data.engine ? "Returned a serving-engine record." : undefined}
+              absence={data.engine ? undefined : {
+                state: loading ? "not_measured" : "unavailable",
+                reason: loading ? "The request has not completed." : engineReason,
+              }}
+            />
+            <SourceRow
+              label="Local inventory"
+              endpoint="/models/local"
+              detail={data.localModels ? `${data.localModels.length} model record${data.localModels.length === 1 ? "" : "s"} returned.` : undefined}
+              absence={data.localModels ? undefined : {
+                state: loading ? "not_measured" : "unavailable",
+                reason: loading ? "The request has not completed." : inventoryReason,
+              }}
+            />
+            <SourceRow
+              label="Steering axes"
+              endpoint="/steer/axes"
+              detail={!loading && !data.errors.axes && data.axes.length > 0 ? `${data.axes.length} axis record${data.axes.length === 1 ? "" : "s"} returned.` : undefined}
+              absence={!loading && !data.errors.axes && data.axes.length > 0 ? undefined : {
+                state: loading || !data.errors.axes ? "not_measured" : "unavailable",
+                reason: loading ? "The request has not completed." : axesReason,
+              }}
+            />
+            <SourceRow
+              label="Profiles"
+              endpoint="/profiles/list"
+              detail={data.activeProfile ? `Active profile: ${data.activeProfile}.` : undefined}
+              absence={data.activeProfile ? undefined : {
+                state: loading || !data.errors.profiles ? "not_measured" : "unavailable",
+                reason: loading ? "The request has not completed." : profileReason,
+              }}
+            />
+          </ul>
         </aside>
       )}
-
-      <section className="instrument model-readout" aria-labelledby="model-readout-title">
-        <header className="instrument-head compact">
-          <div>
-            <span className="eyebrow">IDENTITY</span>
-            <h2 id="model-readout-title">Serving model</h2>
-          </div>
-          <strong>{engine?.architecture?.toUpperCase() ?? "—"}</strong>
-        </header>
-        <div className="model-identity-row">
-          <span><b>MODEL</b>{engine?.modelName ?? "—"}</span>
-          <span><b>SHA256</b>{shortHash(engine?.sha256)}</span>
-          <span><b>MODE</b>{engine?.mode ?? "—"}</span>
-          <span><b>DEVICE</b>{engine?.device ?? "—"}{engine?.gpuLayers == null ? "" : ` · ${engine.gpuLayers} OFFLOAD`}</span>
-          <span><b>PROTOCOL</b>{engine?.protocolVersion ?? "—"}</span>
-        </div>
-      </section>
     </>
   );
 }

@@ -4,15 +4,17 @@ import type { PanelContext, StudioPanel } from "./types";
 
 const panel: StudioPanel = {
   id: "model",
-  navLabel: "Model",
+  navLabel: "Runtime",
   order: 60,
   icon: () => <Icon name="model" />,
-  match: (hash) => (/^#\/model\/?$/.test(hash) ? {} : null),
-  routeName: () => "MODEL",
+  // The shell derives its rail URL from this file-backed id, so `#/model` remains a supported bookmark.
+  // Recognizing `#/runtime` gives new deep links the product name without changing shared route startup.
+  match: (hash) => (/^#\/(?:runtime|model)\/?$/.test(hash) ? {} : null),
+  routeName: () => "RUNTIME",
   topStats: ({ runtime }: PanelContext) => (
-    <span className="top-stat"><b>MODEL</b>{runtime.engine?.model ?? "—"}</span>
+    <span className="top-stat"><b>ENGINE</b>{runtime.engine?.model ?? "—"}</span>
   ),
-  modeChip: () => "READOUT",
+  modeChip: () => "INSTALLATION",
   Component: ({ inspectorOpen }: PanelContext) => <Model inspectorOpen={inspectorOpen} />,
 };
 
