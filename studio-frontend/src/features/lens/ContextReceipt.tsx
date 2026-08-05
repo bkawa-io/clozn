@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { EvidenceMark } from "../../components/EvidenceMark";
 import {
   loadContextReceipt,
   type LegacyReceipt,
@@ -569,15 +570,31 @@ export function ContextReceipt({
       {state.status === "idle" || state.status === "loading" ? (
         <div className="context-receipt-empty">LOADING CONTEXT RECEIPT</div>
       ) : state.status === "error" || !view ? (
-        <div className="context-receipt-empty is-error">CONTEXT RECEIPT REQUEST FAILED</div>
+        <div className="context-receipt-empty is-error">
+          <EvidenceMark
+            variant="chip"
+            state="unavailable"
+            label="CONTEXT RECEIPT REQUEST FAILED"
+            reason="The recorded context receipt request failed for this run."
+          />
+        </div>
       ) : view.shape === "absent" ? (
-        <div className="context-receipt-empty">NO CONTEXT RECEIPT WAS RECORDED FOR THIS RUN</div>
+        <div className="context-receipt-empty">
+          <EvidenceMark
+            variant="chip"
+            state="not_measured"
+            label="NO CONTEXT RECEIPT WAS RECORDED FOR THIS RUN"
+            reason="This run has no retained context-receipt artifact."
+          />
+        </div>
       ) : view.shape === "unrecognized" ? (
         <div className="context-receipt-empty is-error">
-          CONTEXT RECEIPT HAS AN UNRECOGNIZED SHAPE
-          <small>
-            schema field: {view.schemaVersionRaw ?? "(none)"} · keys: {view.rawKeys.join(", ") || "(none)"}
-          </small>
+          <EvidenceMark
+            variant="chip"
+            state="unavailable"
+            label="CONTEXT RECEIPT HAS AN UNRECOGNIZED SHAPE"
+            reason={`schema field: ${view.schemaVersionRaw ?? "(none)"} · keys: ${view.rawKeys.join(", ") || "(none)"}`}
+          />
         </div>
       ) : (
         <>

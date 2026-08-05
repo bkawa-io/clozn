@@ -35,13 +35,13 @@ export function RunWorkspaceHeader({ run, performance, active }: RunWorkspaceHea
           <a
             className={active === "lens" ? "is-active" : ""}
             aria-current={active === "lens" ? "page" : undefined}
-            href={`#/runs/${encodeURIComponent(runId)}/lens`}
-          >Lens</a>
+            href={`#/runs/${encodeURIComponent(runId)}`}
+          >Run</a>
           <a
             className={active === "diagnostics" ? "is-active" : ""}
             aria-current={active === "diagnostics" ? "page" : undefined}
-            href={`#/runs/${encodeURIComponent(runId)}/diagnostics`}
-          >Diagnostics</a>
+            href={`#/runs/${encodeURIComponent(runId)}?section=timing`}
+          >Timing</a>
         </nav>
       )}
     </footer>

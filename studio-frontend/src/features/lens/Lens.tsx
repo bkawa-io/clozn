@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { EvidenceMark } from "../../components/EvidenceMark";
 import { loadRunConcepts, loadRunInspection } from "../../data/api";
 import type {
   ObservatoryData,
@@ -210,7 +211,9 @@ export function Lens({ runtime, initialRunId }: LensProps) {
       if (controller.signal.aborted) return;
       setData(inspection);
       setStatus("idle");
-      history.replaceState(null, "", `#/runs/${encodeURIComponent(runId)}/lens`);
+      // The linked reader is S2's home. Keep the old `/lens` route readable in the panel parser, but
+      // once this instrument has a concrete run it should name the canonical run address.
+      history.replaceState(null, "", `#/runs/${encodeURIComponent(runId)}`);
     }).catch(() => {
       if (!controller.signal.aborted) {
         setData(null);
@@ -431,8 +434,8 @@ export function Lens({ runtime, initialRunId }: LensProps) {
             >{lens.label}</button>
           ))}
         </div>
-        <a className="lens-reader-diagnostics-link" href={runId ? `#/runs/${encodeURIComponent(runId)}/diagnostics` : "#/diagnostics"}>
-          Diagnostics
+        <a className="lens-reader-diagnostics-link" href={runId ? `#/runs/${encodeURIComponent(runId)}?section=timing` : "#/diagnostics"}>
+          Timing
         </a>
       </div>
 
@@ -458,8 +461,22 @@ export function Lens({ runtime, initialRunId }: LensProps) {
           </header>
           <div className="lens-reader-document">
             {status === "loading" && <p className="lens-reader-state">Loading input…</p>}
-            {status === "error" && <p className="lens-reader-state is-error">This run could not be loaded.</p>}
-            {status === "idle" && !messages.length && <p className="lens-reader-state">No readable input was recorded.</p>}
+            {status === "error" && (
+              <EvidenceMark
+                variant="chip"
+                state="unavailable"
+                label="Input unavailable"
+                reason="The linked-reader inspection request failed for this run."
+              />
+            )}
+            {status === "idle" && !messages.length && (
+              <EvidenceMark
+                variant="chip"
+                state="not_measured"
+                label="Input not recorded"
+                reason="No readable input messages were retained for this run."
+              />
+            )}
             {messages.map((message) => {
               const label = messageLabel(message);
               return (
@@ -520,9 +537,25 @@ export function Lens({ runtime, initialRunId }: LensProps) {
           </header>
           <div className="lens-reader-document lens-reader-output-document">
             {status === "loading" && <p className="lens-reader-state">Loading output…</p>}
-            {status === "error" && <p className="lens-reader-state is-error">This run could not be loaded.</p>}
+            {status === "error" && (
+              <EvidenceMark
+                variant="chip"
+                state="unavailable"
+                label="Output unavailable"
+                reason="The linked-reader inspection request failed for this run."
+              />
+            )}
             {status === "idle" && !tokens.length && (
-              <p className="lens-reader-plain-output">{data?.response || "No readable output was recorded."}</p>
+              data?.response
+                ? <p className="lens-reader-plain-output">{data.response}</p>
+                : (
+                  <EvidenceMark
+                    variant="chip"
+                    state="not_measured"
+                    label="Output not recorded"
+                    reason="No readable output or token trace was retained for this run."
+                  />
+                )
             )}
             {tokens.length > 0 && (
               <div className="lens-reader-output-stream">

@@ -1,4 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { EvidenceMark } from "../../components/EvidenceMark";
+import {
+  InfluenceMatrix,
+  type InfluenceMatrixMeasuredLink,
+  type InfluenceMatrixUnavailableCell,
+} from "../../components/InfluenceMatrix";
+import { TypedActionOffer, type TypedActionOfferAbsence } from "../../components/TypedActionOffer";
 import {
   cancelRunInfluenceMapJob,
   loadRunInfluenceMapJob,
@@ -79,6 +86,14 @@ interface Grid {
   rows: GridRow[];
   columns: GridColumn[];
   linkIndex: Map<string, InfluenceLink>;
+}
+
+interface MatrixInput {
+  contextSpans: Array<{ id: string; text: string }>;
+  answerSpans: Array<{ id: string; text: string }>;
+  measuredLinks: InfluenceMatrixMeasuredLink[];
+  unavailableCells: InfluenceMatrixUnavailableCell[];
+  floorNats: number;
 }
 
 export const CELL_STATE_LABEL: Record<CellState, string> = {
@@ -193,6 +208,100 @@ export function cellGlyph(state: CellState, link?: InfluenceLink): string {
       return exhaustive;
     }
   }
+}
+
+/**
+ * C6 is the overview; the older table below remains the addressable ledger. The adapter preserves all
+ * four existing grid states and refuses to coerce a malformed recorded link into a different evidence
+ * state just to make a colourful square.
+ */
+function matrixInput(section: PromptSourceInfluenceSection, grid: Grid): MatrixInput {
+  const measuredLinks: InfluenceMatrixMeasuredLink[] = [];
+  const unavailableByCell = new Map<string, InfluenceMatrixUnavailableCell>();
+  const key = (contextSpanId: string, answerSpanId: string) => `${contextSpanId}\u0000${answerSpanId}`;
+
+  for (const link of section.links) {
+    if (link.clearsFloor && link.evidenceState === "causally_supported") {
+      measuredLinks.push({
+        contextSpanId: link.contextSpanId,
+        answerSpanId: link.answerSpanId,
+        deltaNats: link.deltaNats,
+        evidenceState: "causally_supported",
+        clearsFloor: true,
+      });
+    } else if (!link.clearsFloor && link.evidenceState === "observed") {
+      measuredLinks.push({
+        contextSpanId: link.contextSpanId,
+        answerSpanId: link.answerSpanId,
+        deltaNats: link.deltaNats,
+        evidenceState: "observed",
+        clearsFloor: false,
+      });
+    } else {
+      unavailableByCell.set(key(link.contextSpanId, link.answerSpanId), {
+        contextSpanId: link.contextSpanId,
+        answerSpanId: link.answerSpanId,
+        evidenceState: "not_measured",
+        reason: "The recorded link has an inconsistent floor/evidence-state pair and cannot be rendered as a measured effect.",
+      });
+    }
+  }
+
+  const measuredKeys = new Set(measuredLinks.map((link) => key(link.contextSpanId, link.answerSpanId)));
+  for (const row of grid.rows) {
+    for (const column of grid.columns) {
+      const contextSpanId = matrixRowId(row);
+      const cellKey = key(contextSpanId, column.spanId);
+      if (measuredKeys.has(cellKey) || unavailableByCell.has(cellKey)) continue;
+      const { state } = cellFor(row, column, grid.linkIndex);
+      if (state === "omitted") {
+        unavailableByCell.set(cellKey, {
+          contextSpanId,
+          answerSpanId: column.spanId,
+          evidenceState: "omitted",
+          reason: row.detail ?? "This context passage never reached the model.",
+        });
+      } else if (state === "not_measured") {
+        unavailableByCell.set(cellKey, {
+          contextSpanId,
+          answerSpanId: column.spanId,
+          evidenceState: "not_measured",
+          reason: row.detail ?? section.reason ?? "This context/answer pair was not scored.",
+        });
+      }
+    }
+  }
+
+  return {
+    contextSpans: grid.rows.map((row) => ({ id: matrixRowId(row), text: row.detail ? `${row.label} — ${row.detail}` : row.label })),
+    answerSpans: grid.columns.map((column) => ({ id: column.spanId, text: column.label })),
+    measuredLinks,
+    unavailableCells: [...unavailableByCell.values()],
+    floorNats: section.thresholds.cellAbsDeltaNats ?? 0.05,
+  };
+}
+
+/** Omitted receipt segments have no influence span id because they never reached the model. C6 still
+ * needs a stable row identity to render their explicit impossible-to-measure cells. */
+function matrixRowId(row: GridRow): string {
+  switch (row.kind) {
+    case "measured":
+    case "not_measured":
+      return row.spanId;
+    case "omitted":
+      return `omitted:${row.segmentId ?? row.clientSourceId ?? row.key}`;
+    default: {
+      const exhaustive: never = row;
+      return exhaustive;
+    }
+  }
+}
+
+function actionAbsence(section: PromptSourceInfluenceSection): TypedActionOfferAbsence {
+  const reason = section.reason ?? "No prompt-to-answer influence measurement is retained for this run.";
+  return section.state === "delivered_not_measured" || section.state === "omitted"
+    ? { state: "not_measured", label: "Influence not measured", reason }
+    : { state: "unavailable", label: "Influence unavailable", reason };
 }
 
 function cellClassName(state: CellState): string {
@@ -456,6 +565,11 @@ export function WhatMattered({ runId }: WhatMatteredProps) {
     };
   }, [influenceSection, isMeasured, omittedSegments]);
 
+  const matrix = useMemo(
+    () => grid && influenceSection ? matrixInput(influenceSection, grid) : null,
+    [grid, influenceSection],
+  );
+
   const addressIndex = useMemo(
     () => spans.status === "ready" ? buildAddressIndex(spans.value.addresses) : new Map<string, SpanAddress>(),
     [spans],
@@ -492,15 +606,23 @@ export function WhatMattered({ runId }: WhatMatteredProps) {
         <div className="what-mattered-empty">LOADING CROSS-LINK EVIDENCE</div>
       ) : investigation.status === "failed" || !influenceSection ? (
         <div className="what-mattered-notice is-failed" role="alert">
-          <strong>INVESTIGATION REQUEST FAILED</strong>
-          <span>The cross-linked influence view could not be loaded.</span>
+          <EvidenceMark
+            variant="chip"
+            state="unavailable"
+            label="INVESTIGATION REQUEST FAILED"
+            reason="The cross-linked influence view could not be loaded."
+          />
         </div>
       ) : (
         <>
           {spans.status === "failed" && (
             <div className="what-mattered-notice is-failed" role="alert">
-              <strong>STABLE SPAN REQUEST FAILED</strong>
-              <span>Cross-linked evidence remains visible, but stable span links are unavailable.</span>
+              <EvidenceMark
+                variant="chip"
+                state="unavailable"
+                label="STABLE SPAN REQUEST FAILED"
+                reason="Cross-linked evidence remains visible, but stable span links are unavailable."
+              />
             </div>
           )}
 
@@ -508,6 +630,16 @@ export function WhatMattered({ runId }: WhatMatteredProps) {
 
           {grid ? (
             <>
+              {matrix && (
+                <InfluenceMatrix
+                  title="Measured influence overview"
+                  contextSpans={matrix.contextSpans}
+                  answerSpans={matrix.answerSpans}
+                  measuredLinks={matrix.measuredLinks}
+                  unavailableCells={matrix.unavailableCells}
+                  floorNats={matrix.floorNats}
+                />
+              )}
               <p className="what-mattered-thresholds">
                 {influenceSection.thresholds.cellAbsDeltaNats != null
                   ? `FLOOR ${influenceSection.thresholds.cellAbsDeltaNats.toFixed(4)} NATS`
@@ -525,7 +657,7 @@ export function WhatMattered({ runId }: WhatMatteredProps) {
                         return (
                           <th scope="col" key={col.key} className="what-mattered-col-head">
                             {col.tokenIndex != null ? (
-                              <a href={`#/runs/${encodeURIComponent(runId)}/diagnostics/influence`}>
+                              <a href={`#/runs/${encodeURIComponent(runId)}?section=what-mattered`}>
                                 {col.label}
                               </a>
                             ) : address ? (
@@ -586,9 +718,6 @@ export function WhatMattered({ runId }: WhatMatteredProps) {
           ) : (
             <div className={`what-mattered-banner is-${influenceSection.state}`}>
               <strong>{stateBannerLabel(influenceSection.state)}</strong>
-              <span>
-                {influenceSection.reason ?? "No cross-linked prompt/answer evidence is available for this run."}
-              </span>
               {measureStatus === "measuring" ? (
                 <>
                   <p className="what-mattered-measuring">
@@ -601,23 +730,26 @@ export function WhatMattered({ runId }: WhatMatteredProps) {
                   <button type="button" onClick={() => void stopMeasurement()}>STOP WAITING</button>
                 </>
               ) : (
-                <>
-                  <button
-                    type="button"
-                    disabled={!measureAction || measureAction.availability !== "ready"}
-                    onClick={() => void startMeasurement()}
-                  >MEASURE WHAT MATTERED</button>
-                  {measureAction && measureAction.availability !== "ready" && (
-                    <p className="what-mattered-measure-reason">
-                      {measureAction.reason ?? "measurement is unavailable for this run"}
-                    </p>
-                  )}
-                  {!measureAction && (
-                    <p className="what-mattered-measure-reason">
-                      no measurement action was reported for this run
-                    </p>
-                  )}
-                </>
+                <TypedActionOffer
+                  title="Measure what mattered"
+                  absence={actionAbsence(influenceSection)}
+                  cost="Runs a bounded prompt × answer intervention job for this recorded run."
+                  preconditions={[
+                    "The recorded run and its retained context must be available.",
+                    "A measurement-capable worker must be available for this run.",
+                  ]}
+                  action={measureAction?.availability === "ready"
+                    ? {
+                      availability: "available",
+                      label: "MEASURE WHAT MATTERED",
+                      onAction: () => void startMeasurement(),
+                    }
+                    : {
+                      availability: "blocked",
+                      label: "MEASURE WHAT MATTERED",
+                      blockerReason: measureAction?.reason ?? "No measurement action was reported for this run.",
+                    }}
+                />
               )}
               {measureStatus === "error" && measureError && (
                 <p className="what-mattered-measure-error" role="alert">{measureError}</p>

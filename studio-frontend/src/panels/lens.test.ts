@@ -1,16 +1,36 @@
 import { describe, expect, test } from "vitest";
-import panel from "./lens";
+import panel, { matchRunReaderRoute } from "./lens";
 
-describe("lens panel routing", () => {
-  test("uses an explicit canonical reader route and preserves bare run links", () => {
-    expect(panel.match("#/lens")).toEqual({});
-    expect(panel.match("#/runs/run_alpha/lens")).toEqual({ runId: "run_alpha" });
-    expect(panel.match("#/runs/run%2Falpha/lens/")).toEqual({ runId: "run/alpha" });
-    expect(panel.match("#/runs/run_alpha")).toEqual({ runId: "run_alpha" });
+describe("run reader panel routing", () => {
+  test("uses #/runs/<id> as the canonical reader and keeps the prior Lens path compatible", () => {
+    expect(panel.navLabel).toBe("Run");
+    expect(panel.match("#/lens")).toEqual({ section: "read" });
+    expect(panel.match("#/runs/run_alpha/lens")).toEqual({ runId: "run_alpha", section: "read" });
+    expect(panel.match("#/runs/run%2Falpha/lens/")).toEqual({ runId: "run/alpha", section: "read" });
+    expect(panel.match("#/runs/run_alpha")).toEqual({ runId: "run_alpha", section: "read" });
+    expect(panel.match("#/runs/run_alpha?section=timing")).toEqual({ runId: "run_alpha", section: "timing" });
   });
 
-  test("does not claim diagnostics or old Scope links", () => {
-    expect(panel.match("#/runs/run_alpha/diagnostics")).toBeNull();
-    expect(panel.match("#/runs/run_alpha/scope")).toBeNull();
+  test("maps old run-specific Diagnostics and Scope links into their S2 instruments", () => {
+    expect(matchRunReaderRoute("#/runs/run_alpha/diagnostics/runtime")).toEqual({
+      runId: "run_alpha",
+      section: "timing",
+    });
+    expect(matchRunReaderRoute("#/runs/run_alpha/diagnostics/raw")).toEqual({
+      runId: "run_alpha",
+      section: "record",
+    });
+    expect(matchRunReaderRoute("#/runs/run_alpha/scope?token=4&view=layers")).toEqual(expect.objectContaining({
+      runId: "run_alpha",
+      section: "mechanism",
+      token: "4",
+      tokenIndex: "4",
+      view: "layers",
+    }));
+  });
+
+  test("does not claim the runs index or session investigation links", () => {
+    expect(panel.match("#/runs")).toBeNull();
+    expect(panel.match("#/sessions/session_alpha/investigate")).toBeNull();
   });
 });

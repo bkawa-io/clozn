@@ -214,6 +214,16 @@ describe("What did the model receive panel", () => {
     expect(within(omitted!).getByText("OMITTED")).toBeInTheDocument();
     expect(within(delivered!).getByText("12 TOK")).toBeInTheDocument();
 
+    // C5 keeps the omitted user message in the composition instead of stretching the delivered
+    // segment to a misleading full bar. This fixture has byte counts for both receipt rows, so the
+    // exact byte ledger is drawable even though only one row has a token count.
+    const composition = screen.getByText("Prompt composition").closest(".composition-bar");
+    expect(composition).not.toBeNull();
+    if (!(composition instanceof HTMLElement)) throw new Error("missing composition bar");
+    expect(within(composition).getByRole("img", { name: /system 512 bytes.*user 512 bytes/ }))
+      .toHaveAccessibleName(expect.stringContaining("user"));
+    expect(within(composition).getByText("context_budget")).toBeInTheDocument();
+
     const systemSpan = screen.getAllByRole("link", {
       name: "Stable span span_111111111111111111111111",
     })[0];

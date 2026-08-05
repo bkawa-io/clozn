@@ -11,6 +11,7 @@ import {
   scopeStateFromParams,
   serializeScopeUrl,
   type ScopeSelectionState,
+  type ScopeUrlState,
 } from "../features/observatory/urlState";
 import { useTopbar } from "./topbar";
 import type { PanelContext, StudioPanel } from "./types";
@@ -31,7 +32,27 @@ import type { PanelContext, StudioPanel } from "./types";
  * The rest of the logic below is moved verbatim, not rewritten. It reports its topbar content through
  * `useTopbar` because App cannot see inside a panel, and should not.
  */
-export function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
+/**
+ * The workbench remains independently routable for compatibility, but S2 embeds the exact same
+ * instrument under a run section. `embedded` changes only navigation ownership: it never changes the
+ * workbench's reads, actions, or evidence vocabulary.
+ */
+export interface ScopePanelProps extends PanelContext {
+  embedded?: boolean;
+  initialState?: ScopeUrlState;
+  onRunChange?: (runId: string) => void;
+  onEmbeddedStateChange?: (state: ScopeSelectionState) => void;
+}
+
+export function ScopePanel({
+  runtime,
+  inspectorOpen,
+  params,
+  embedded = false,
+  initialState: embeddedInitialState,
+  onRunChange,
+  onEmbeddedStateChange,
+}: ScopePanelProps) {
   const [data, setData] = useState<ObservatoryData>(DEMO_OBSERVATORY);
   const [runStatus, setRunStatus] = useState<"idle" | "loading" | "error">("idle");
   const [liveRuntime, setLiveRuntime] = useState(runtime);
@@ -45,7 +66,7 @@ export function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
 
   const runId = params.runId;
   const fixture = params.fixture;
-  const routeState = scopeStateFromParams(params);
+  const routeState = embeddedInitialState ?? scopeStateFromParams(params);
 
   useEffect(() => {
     if (runId) void selectRun(runId);
@@ -77,11 +98,22 @@ export function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
       setData(inspection);
       setLiveRuntime(nextRuntime);
       setRunStatus("idle");
-      history.replaceState(null, "", `#/runs/${encodeURIComponent(nextRunId)}/scope`);
+      if (!embedded) history.replaceState(null, "", `#/runs/${encodeURIComponent(nextRunId)}/scope`);
     } catch {
       if (requestIdRef.current !== requestId) return;
       setRunStatus("error");
     }
+  }
+
+  function requestRunSelection(nextRunId: string) {
+    if (embedded && onRunChange) {
+      // The parent owns the canonical `#/runs/<id>?section=mechanism` address. Keeping the fetch in
+      // this workbench while letting it rewrite to `/scope` would make selecting a token appear to leave
+      // the run reader, even though nothing about the evidence surface actually changed.
+      onRunChange(nextRunId);
+      return;
+    }
+    void selectRun(nextRunId);
   }
 
   const modelLabel = runStatus === "error"
@@ -90,7 +122,7 @@ export function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
   const runLabel = runStatus === "error" ? runId ?? "—" : data.id;
 
   useTopbar(
-    () => ({
+    () => embedded ? {} : ({
       stats: (
         <>
           <span className="top-stat"><b>MODEL</b>{modelLabel}</span>
@@ -104,7 +136,7 @@ export function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
             ? "ERROR"
             : data.mode.toUpperCase(),
     }),
-    [modelLabel, data.id, data.mode, runStatus],
+    [embedded, modelLabel, data.id, data.mode, runStatus],
   );
 
   const tokenIndex = params.tokenIndex == null ? undefined : Number(params.tokenIndex);
@@ -113,8 +145,12 @@ export function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
     : undefined;
   const replaceScopeState = useCallback((state: ScopeSelectionState) => {
     if (data.mode !== "run" || runStatus !== "idle") return;
+    if (embedded) {
+      onEmbeddedStateChange?.(state);
+      return;
+    }
     history.replaceState(null, "", serializeScopeUrl(data.id, state));
-  }, [data.id, data.mode, runStatus]);
+  }, [data.id, data.mode, embedded, onEmbeddedStateChange, runStatus]);
 
   if (runStatus === "error" && runId) {
     return (
@@ -142,7 +178,7 @@ export function ScopePanel({ runtime, inspectorOpen, params }: PanelContext) {
       runtime={liveRuntime}
       inspectorOpen={inspectorOpen}
       runStatus={runStatus}
-      onSelectRun={(nextRunId) => void selectRun(nextRunId)}
+      onSelectRun={requestRunSelection}
       initialState={initialState ?? (tokenIndex == null ? undefined : { token: tokenIndex })}
       onStateChange={replaceScopeState}
     />

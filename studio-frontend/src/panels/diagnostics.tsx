@@ -6,6 +6,9 @@ const panel: StudioPanel = {
   id: "diagnostics",
   navLabel: "Diagnostics",
   order: 25,
+  // Run-specific diagnostics now select S2's Timing/Record instruments through lens.tsx. Keep this
+  // panel only as an addressable compatibility fallback while the older URLs remain in circulation.
+  hiddenFromNav: true,
   showInspectorToggle: false,
   icon: () => <Icon name="observatory" />,
   match: (hash): Record<string, string> | null => {

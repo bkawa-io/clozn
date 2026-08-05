@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { EvidenceMark } from "../../components/EvidenceMark";
+import { SpanWaterfall } from "../../components/SpanWaterfall";
 import { loadRunInspection, loadRunPerformance } from "../../data/api";
 import type {
   ObservatoryData,
@@ -41,7 +43,7 @@ interface RunDiagnosticsProps {
   sessionId?: string;
 }
 
-type PerformanceState =
+export type PerformanceState =
   | { status: "idle" | "loading" | "error" }
   | { status: "ready"; data: RunPerformanceData };
 
@@ -71,10 +73,6 @@ function milliseconds(value?: number) {
   return value < 1000 ? `${Math.round(value)} ms` : `${(value / 1000).toFixed(2)} s`;
 }
 
-function nanoseconds(value?: number) {
-  return value == null ? "Not recorded" : milliseconds(value / 1_000_000);
-}
-
 function RuntimeMetric({ label, value, source }: { label: string; value: string; source?: string }) {
   return (
     <article>
@@ -85,11 +83,42 @@ function RuntimeMetric({ label, value, source }: { label: string; value: string;
   );
 }
 
-function RuntimeReport({ performance }: { performance: PerformanceState }) {
+/** One performance request belongs to the timing instrument, not to the whole run reader. Both the
+ * retained Diagnostics compatibility surface and S2's Timing section call this hook, so their request
+ * handling cannot drift into two subtly different "no trace" stories. */
+export function useRunPerformance(runId: string): PerformanceState {
+  const [performance, setPerformance] = useState<PerformanceState>({ status: "idle" });
+
+  useEffect(() => {
+    if (!runId) {
+      setPerformance({ status: "idle" });
+      return;
+    }
+    const controller = new AbortController();
+    setPerformance({ status: "loading" });
+    void loadRunPerformance(runId, controller.signal).then((result) => {
+      if (!controller.signal.aborted) setPerformance({ status: "ready", data: result });
+    }).catch(() => {
+      if (!controller.signal.aborted) setPerformance({ status: "error" });
+    });
+    return () => controller.abort();
+  }, [runId]);
+
+  return performance;
+}
+
+export function RuntimeReport({ performance }: { performance: PerformanceState }) {
   if (performance.status !== "ready") {
     return performance.status === "error"
-      ? <p className="diagnostics-empty">No performance artifact is available for this run.</p>
-      : <p className="diagnostics-empty">Loading recorded performance…</p>;
+      ? (
+        <EvidenceMark
+          variant="chip"
+          state="unavailable"
+          label="Performance artifact unavailable"
+          reason="The recorded performance trace request failed for this run."
+        />
+      )
+      : <p className="diagnostics-empty" role="status">Loading recorded performance…</p>;
   }
 
   const data = performance.data;
@@ -113,27 +142,21 @@ function RuntimeReport({ performance }: { performance: PerformanceState }) {
         <RuntimeMetric label="Finish" value={data.finishReason?.replaceAll("_", " ") ?? "Not recorded"} source={data.samplerMode} />
       </section>
 
-      <section className="diagnostics-runtime-block">
-        <header><div><span className="eyebrow">MEASURED PHASES</span><h3>Timing breakdown</h3></div><strong>{rules?.phases.length ?? 0} phases</strong></header>
-        {rules?.aggregation && (
-          <dl className="diagnostics-runtime-aggregation">
-            <div><dt>Known duration</dt><dd>{nanoseconds(rules.aggregation.knownDurationNs)}</dd></div>
-            <div><dt>Unaccounted</dt><dd>{nanoseconds(rules.aggregation.unaccountedDurationNs)}</dd></div>
-            <div><dt>Coverage</dt><dd>{rules.aggregation.measurementCoverage == null ? "Not recorded" : `${Math.round(rules.aggregation.measurementCoverage * 100)}%`}</dd></div>
-            <div><dt>Consistency</dt><dd>{rules.aggregation.consistency?.replaceAll("_", " ") ?? "Not recorded"}</dd></div>
-          </dl>
+      <section className="diagnostics-runtime-block diagnostics-runtime-waterfall">
+        {rules ? (
+          <SpanWaterfall
+            title="Timing breakdown"
+            phases={rules.phases}
+            aggregation={rules.aggregation}
+          />
+        ) : (
+          <EvidenceMark
+            variant="chip"
+            state="not_measured"
+            label="Timing phases not recorded"
+            reason="This performance artifact has no clock-domain timing trace."
+          />
         )}
-        <div className="diagnostics-runtime-phases">
-          {rules?.phases.map((phase, index) => (
-            <article key={`${phase.name}-${phase.owner ?? phase.clockOwner ?? index}`}>
-              <div><strong>{phase.name.replaceAll("_", " ")}</strong><small>{phase.scope ?? phase.sourceSchema ?? "Recorded phase"}</small></div>
-              <b>{nanoseconds(phase.durationNs)}</b>
-              <p>{[phase.measurement, phase.aggregation?.replaceAll("_", " "), phase.clockOwner ?? phase.owner, phase.clockDomain].filter(Boolean).join(" · ")}</p>
-              {phase.includes.length > 0 && <small>Includes: {phase.includes.join(", ")}</small>}
-            </article>
-          ))}
-          {!rules?.phases.length && <p className="diagnostics-empty">No individual phases were retained.</p>}
-        </div>
       </section>
 
       <section className="diagnostics-runtime-block">
@@ -170,6 +193,24 @@ function RuntimeReport({ performance }: { performance: PerformanceState }) {
         </div>
       </section>
     </div>
+  );
+}
+
+/** S2's Timing section deliberately owns only the performance request. A failed trace cannot turn the
+ * reader, context receipt, or time machine into a page-wide error because none of them consume it. */
+export function RunTimingInstrument({ runId }: { runId: string }) {
+  const performance = useRunPerformance(runId);
+  return (
+    <section className="run-timing-instrument" aria-labelledby="run-timing-title">
+      <header className="run-timing-instrument-head">
+        <div>
+          <span className="eyebrow">TIMING</span>
+          <h2 id="run-timing-title">Recorded performance</h2>
+        </div>
+        <span>READ ONLY</span>
+      </header>
+      <RuntimeReport performance={performance} />
+    </section>
   );
 }
 
@@ -234,8 +275,8 @@ export function RunDiagnostics({ runtime, initialRunId, initialView, sessionId }
   const [runId, setRunId] = useState(requestedRunId);
   const [data, setData] = useState<ObservatoryData | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
-  const [performance, setPerformance] = useState<PerformanceState>({ status: "idle" });
   const view = diagnosticSection(initialView);
+  const performance = useRunPerformance(runId);
 
   useEffect(() => {
     if (requestedRunId && requestedRunId !== runId) setRunId(requestedRunId);
@@ -245,7 +286,6 @@ export function RunDiagnostics({ runtime, initialRunId, initialView, sessionId }
     if (!runId) return;
     const controller = new AbortController();
     setStatus("loading");
-    setPerformance({ status: "loading" });
     void loadRunInspection(runId, controller.signal).then((inspection) => {
       if (controller.signal.aborted) return;
       setData(inspection);
@@ -256,11 +296,6 @@ export function RunDiagnostics({ runtime, initialRunId, initialView, sessionId }
         setData(null);
         setStatus("error");
       }
-    });
-    void loadRunPerformance(runId, controller.signal).then((result) => {
-      if (!controller.signal.aborted) setPerformance({ status: "ready", data: result });
-    }).catch(() => {
-      if (!controller.signal.aborted) setPerformance({ status: "error" });
     });
     return () => controller.abort();
   }, [runId]);

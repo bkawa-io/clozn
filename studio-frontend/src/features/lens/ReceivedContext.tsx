@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { CompositionBar, type CompositionSegment } from "../../components/CompositionBar";
+import { EvidenceMark } from "../../components/EvidenceMark";
 import {
   loadRunInvestigation,
   loadSpanAddresses,
@@ -245,8 +247,12 @@ function EvidenceNotice({
       className={`received-context-notice ${failed ? "is-failed" : "is-unavailable"}`}
       role={failed ? "alert" : "note"}
     >
-      <strong>{failed ? "EVIDENCE FAILED" : `${statusLabel(state)}`}</strong>
-      <span>{reason ?? "No delivery evidence is available for this run."}</span>
+      <EvidenceMark
+        variant="chip"
+        state="unavailable"
+        label={failed ? "EVIDENCE FAILED" : statusLabel(state)}
+        reason={reason ?? "No delivery evidence is available for this run."}
+      />
     </div>
   );
 }
@@ -294,6 +300,81 @@ function CostStrip({
   );
 }
 
+type ContextComposition =
+  | { kind: "ready"; segments: CompositionSegment[]; total?: number; unit: "tokens" | "bytes" }
+  | { kind: "not_measured"; reason: string };
+
+function segmentKey(segment: ReceivedSegment, index: number) {
+  return segment.segmentId ?? segment.clientSourceId ?? `receipt-row-${index}`;
+}
+
+/**
+ * C5 only accepts exact segment counts. When a receipt omits a segment's token/byte count, drawing it
+ * as zero would make an omission look like an empty message, so the caller returns an explained C1
+ * absence instead of a plausible-looking partial bar.
+ */
+function contextComposition(received: ReceivedContextSection, delivered: ReceivedSegment[]): ContextComposition {
+  const entries = new Map<string, ReceivedSegment>();
+  const merge = (segment: ReceivedSegment, index: number) => {
+    const key = segmentKey(segment, index);
+    const previous = entries.get(key);
+    entries.set(key, {
+      ...previous,
+      ...segment,
+      deliveredTokens: segment.deliveredTokens ?? previous?.deliveredTokens,
+      deliveredBytes: segment.deliveredBytes ?? previous?.deliveredBytes,
+      reason: segment.reason ?? previous?.reason,
+      detail: segment.detail ?? previous?.detail,
+      included: segment.included ?? previous?.included,
+    });
+  };
+  delivered.forEach(merge);
+  received.omitted.forEach(merge);
+
+  const rows = [...entries.values()];
+  if (!rows.length) {
+    return { kind: "not_measured", reason: "The receipt has no delivered or omitted segment counts to compose." };
+  }
+
+  const tokenCountsComplete = rows.every((segment) => typeof segment.deliveredTokens === "number");
+  const byteCountsComplete = rows.every((segment) => typeof segment.deliveredBytes === "number");
+  if (!tokenCountsComplete && !byteCountsComplete) {
+    return {
+      kind: "not_measured",
+      reason: "At least one delivered or omitted segment lacks an exact token or byte count, so prompt composition cannot be drawn honestly.",
+    };
+  }
+
+  const unit = tokenCountsComplete ? "tokens" : "bytes";
+  const omitted = new Set(received.omitted.map(segmentKey));
+  const segments: CompositionSegment[] = rows.map((segment, index) => {
+    const id = segmentKey(segment, index);
+    const value = unit === "tokens" ? segment.deliveredTokens! : segment.deliveredBytes!;
+    const label = segment.sourceLabel ?? segment.sourceType ?? "Unlabelled input";
+    if (segment.included === false || omitted.has(id)) {
+      return {
+        id,
+        label,
+        value,
+        kind: "absent",
+        reason: segment.reason ?? segment.detail ?? "This segment was omitted before generation.",
+      };
+    }
+    return segment.redactionState && segment.redactionState !== "full"
+      ? { id, label, value, kind: "reduced" }
+      : { id, label, value, kind: "present" };
+  });
+  const candidateTotal = unit === "tokens"
+    ? (received.rendered?.tokens ?? received.rendered?.tokenCount ?? received.limits.promptTokens)
+    : received.rendered?.bytes;
+  return {
+    kind: "ready",
+    segments,
+    ...(typeof candidateTotal === "number" && Number.isFinite(candidateTotal) ? { total: candidateTotal } : {}),
+    unit,
+  };
+}
+
 export function ReceivedContext({ runId }: ReceivedContextProps) {
   const [investigation, setInvestigation] = useState<Resource<RunInvestigationReceipt>>({
     status: "idle",
@@ -339,6 +420,10 @@ export function ReceivedContext({ runId }: ReceivedContextProps) {
         || artifact.schema.includes("run-record"))
     : undefined;
   const sourceRedacted = contextSource?.nativeStatus === "redacted";
+  const composition = useMemo(
+    () => received ? contextComposition(received, delivered) : undefined,
+    [delivered, received],
+  );
 
   return (
     <section className="received-context" id="received-context-title" aria-label="What did the model receive?">
@@ -358,8 +443,12 @@ export function ReceivedContext({ runId }: ReceivedContextProps) {
         <div className="received-context-empty">LOADING DELIVERY EVIDENCE</div>
       ) : investigation.status === "failed" || !received ? (
         <div className="received-context-notice is-failed" role="alert">
-          <strong>INVESTIGATION REQUEST FAILED</strong>
-          <span>The recorded delivery view could not be loaded.</span>
+          <EvidenceMark
+            variant="chip"
+            state="unavailable"
+            label="INVESTIGATION REQUEST FAILED"
+            reason="The recorded delivery view could not be loaded."
+          />
         </div>
       ) : (
         <>
@@ -382,10 +471,30 @@ export function ReceivedContext({ runId }: ReceivedContextProps) {
           </div>
           <CostStrip received={received} renderedAddress={renderedAddress} runId={runId} />
 
+          {composition?.kind === "ready" ? (
+            <CompositionBar
+              title="Prompt composition"
+              segments={composition.segments}
+              total={composition.total}
+              unit={composition.unit}
+            />
+          ) : composition?.kind === "not_measured" ? (
+            <EvidenceMark
+              variant="chip"
+              state="not_measured"
+              label="Prompt composition not measured"
+              reason={composition.reason}
+            />
+          ) : null}
+
           {spans.status === "failed" && (
             <div className="received-context-notice is-failed" role="alert">
-              <strong>STABLE SPAN REQUEST FAILED</strong>
-              <span>Delivery evidence remains visible, but stable span links are unavailable.</span>
+              <EvidenceMark
+                variant="chip"
+                state="unavailable"
+                label="STABLE SPAN REQUEST FAILED"
+                reason="Delivery evidence remains visible, but stable span links are unavailable."
+              />
             </div>
           )}
 
