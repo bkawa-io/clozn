@@ -1,21 +1,24 @@
-/* Studio Experiments workspace (roadmap feature 04, slices 2-5). Self-imported by
-   src/panels/experiments.tsx rather than added to main.tsx's stylesheet chain -- see that file's
-   header comment. Reuses the shared `.instrument`/`.instrument-head`/`.eyebrow` chrome from
-   workspace.css and the status-dot vocabulary runs.css established (mint=good, peach=warning,
-   danger=bad), plus one additional signal color for "error" so it reads distinctly from "fail". */
+/* Experiment-matrix styles are imported by the feature itself so Compare can compose this screen mode
+   without changing shared startup. They reuse the shared `.instrument`/`.instrument-head`/`.eyebrow`
+   chrome; cell state also carries an icon and text because colour is not evidence. */
 
-.workspace.is-experiments {
+.workspace.is-experiments,
+.compare-matrix-mode {
   display: flex;
   flex-direction: column;
+  gap: 10px;
+}
+
+.workspace.is-experiments {
   grid-template-columns: none;
   grid-template-rows: none;
-  gap: 10px;
   padding: 10px;
   overflow-y: auto;
   overflow-x: hidden;
 }
 
-.workspace.is-experiments .instrument {
+.workspace.is-experiments .instrument,
+.compare-matrix-mode .instrument {
   flex: 0 0 auto;
 }
 
@@ -558,6 +561,28 @@
   color: var(--ink-faint);
   background: transparent;
   border-style: dashed;
+}
+
+.experiments-cell.is-unavailable {
+  color: var(--ink-faint);
+  background: transparent;
+  border-style: dashed;
+}
+
+.experiments-cell.is-unavailable .evidence-mark-dot {
+  flex: 0 0 auto;
+}
+
+.experiments-cell-icon {
+  display: inline-grid;
+  width: 11px;
+  height: 11px;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .experiments-cell.is-pass { border-color: color-mix(in srgb, var(--signal-mint) 45%, var(--line)); color: color-mix(in srgb, var(--signal-mint) 70%, var(--ink)); }

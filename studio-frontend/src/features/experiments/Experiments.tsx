@@ -8,20 +8,32 @@ import { Matrix } from "./Matrix";
 import { DEFAULT_FILTERS, parseUrlState, serializeUrlState } from "./urlState";
 import type { CellSelection, MatrixFilters } from "./urlState";
 import type { ExperimentDetail, ExperimentList } from "./types";
+import "../../styles/experiments.css";
 
-interface ExperimentsProps {
+export type ExperimentsPresentation = "standalone" | "compare";
+
+export interface ExperimentsProps {
   id?: string;
   /** The raw query string this route's hash carried, e.g. `"suite=target&status=fail"` -- parsed by
    * `urlState.ts`, not by the panel's own `match()` (see that file's header comment). */
   rawQuery?: string;
+  /** `#/experiments` remains valid, while Compare's canonical matrix route keeps filters on its own URL. */
+  routeBase?: string;
+  /** Compare composes this existing instrument rather than maintaining a parallel experiment surface. */
+  presentation?: ExperimentsPresentation;
 }
 
-function pushUrl(id: string | undefined, query: string) {
-  const path = id ? `#/experiments/${encodeURIComponent(id)}` : "#/experiments";
+function pathFor(routeBase: string, id?: string) {
+  const base = routeBase.replace(/\/$/, "");
+  return id ? `${base}/${encodeURIComponent(id)}` : base;
+}
+
+function pushUrl(routeBase: string, id: string | undefined, query: string) {
+  const path = pathFor(routeBase, id);
   history.replaceState(null, "", query ? `${path}?${query}` : path);
 }
 
-function ExperimentsList() {
+function ExperimentsList({ routeBase, presentation }: { routeBase: string; presentation: ExperimentsPresentation }) {
   const [list, setList] = useState<ExperimentList | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
 
@@ -41,16 +53,19 @@ function ExperimentsList() {
   }, []);
 
   useTopbar(
-    () => ({ stats: <span className="top-stat"><b>EXPERIMENTS</b>{list?.total ?? 0}</span> }),
-    [list?.total],
+    () => ({
+      stats: <span className="top-stat"><b>EXPERIMENTS</b>{list?.total ?? 0}</span>,
+      modeChip: presentation === "compare" ? "MATRIX" : undefined,
+    }),
+    [list?.total, presentation],
   );
 
   return (
     <section className="instrument experiments-list-instrument" aria-labelledby="experiments-list-title">
       <header className="instrument-head">
         <div>
-          <span className="eyebrow">EXPERIMENT RESULTS</span>
-          <h1 id="experiments-list-title">Experiments</h1>
+          <span className="eyebrow">{presentation === "compare" ? "RECORDED A / B OUTCOMES" : "EXPERIMENT RESULTS"}</span>
+          <h1 id="experiments-list-title">{presentation === "compare" ? "Experiment matrices" : "Experiments"}</h1>
         </div>
       </header>
 
@@ -72,7 +87,7 @@ function ExperimentsList() {
               <a
                 className="experiments-table-row"
                 role="listitem"
-                href={`#/experiments/${encodeURIComponent(entry.experimentId)}`}
+                href={pathFor(routeBase, entry.experimentId)}
                 key={entry.experimentId}
               >
                 <span className="experiments-name">
@@ -148,7 +163,17 @@ function SummaryStrip({ detail }: { detail: ExperimentDetail }) {
   );
 }
 
-function ExperimentWorkspace({ id, rawQuery }: { id: string; rawQuery: string | undefined }) {
+function ExperimentWorkspace({
+  id,
+  rawQuery,
+  routeBase,
+  presentation,
+}: {
+  id: string;
+  rawQuery: string | undefined;
+  routeBase: string;
+  presentation: ExperimentsPresentation;
+}) {
   const [detail, setDetail] = useState<ExperimentDetail | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   // Lazy initializers run exactly once per mount -- the key={id} at the call site below remounts this
@@ -174,15 +199,15 @@ function ExperimentWorkspace({ id, rawQuery }: { id: string; rawQuery: string | 
   }, [id]);
 
   useEffect(() => {
-    pushUrl(id, serializeUrlState(filters, selection));
-  }, [id, filters, selection]);
+    pushUrl(routeBase, id, serializeUrlState(filters, selection));
+  }, [id, routeBase, filters, selection]);
 
   useTopbar(
     () => ({
       stats: <span className="top-stat"><b>EXPERIMENT</b>{detail?.name ?? id}</span>,
-      modeChip: status === "loading" ? "LOADING" : status === "error" ? "ERROR" : "READY",
+      modeChip: status === "loading" ? "LOADING" : status === "error" ? "ERROR" : presentation === "compare" ? "MATRIX" : "READY",
     }),
-    [id, detail?.name, status],
+    [id, detail?.name, presentation, status],
   );
 
   if (status === "loading") return <div className="experiments-state">LOADING EXPERIMENT</div>;
@@ -190,7 +215,7 @@ function ExperimentWorkspace({ id, rawQuery }: { id: string; rawQuery: string | 
     return (
       <div className="experiments-state is-error">
         <span>EXPERIMENT UNAVAILABLE</span>
-        <a href="#/experiments">BACK TO LIST</a>
+        <a href={routeBase}>BACK TO LIST</a>
       </div>
     );
   }
@@ -220,6 +245,13 @@ function ExperimentWorkspace({ id, rawQuery }: { id: string; rawQuery: string | 
   );
 }
 
-export function Experiments({ id, rawQuery }: ExperimentsProps) {
-  return id ? <ExperimentWorkspace id={id} rawQuery={rawQuery} key={id} /> : <ExperimentsList />;
+export function Experiments({
+  id,
+  rawQuery,
+  routeBase = "#/experiments",
+  presentation = "standalone",
+}: ExperimentsProps) {
+  return id
+    ? <ExperimentWorkspace id={id} rawQuery={rawQuery} routeBase={routeBase} presentation={presentation} key={`${routeBase}:${id}`} />
+    : <ExperimentsList routeBase={routeBase} presentation={presentation} />;
 }

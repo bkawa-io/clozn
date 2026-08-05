@@ -7,6 +7,15 @@
   display: none;
 }
 
+/* The paired-delta rows are intentionally allowed to grow with the recorded document. The generic
+   workspace's two fixed dashboard rows would clip the primary evidence view before a reader could reach
+   an unavailable reason or an ordinal finding. */
+.workspace.is-compare {
+  grid-template-rows: auto auto;
+  grid-auto-rows: minmax(214px, auto);
+  overflow-y: auto;
+}
+
 .compare-hero,
 .compare-inspector,
 .compare-plot-panel,
@@ -68,6 +77,193 @@
   background: color-mix(in srgb, var(--panel-raised) 72%, transparent);
   font-family: var(--font-machine);
   font-size: 8px;
+}
+
+.compare-object-picker select {
+  min-width: 168px;
+}
+
+.compare-token-disclosure {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 14px 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.compare-token-disclosure > div {
+  display: grid;
+  gap: 3px;
+}
+
+.compare-token-disclosure strong,
+.compare-token-disclosure span,
+.compare-token-disclosure button,
+.compare-primary-state,
+.compare-generated-at,
+.compare-privacy-note,
+.compare-action-error,
+.compare-change-receipt {
+  font-family: var(--font-machine);
+}
+
+.compare-token-disclosure strong {
+  color: var(--ink-soft);
+  font-size: 8px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.compare-token-disclosure span {
+  color: var(--ink-faint);
+  font-size: 8px;
+}
+
+.compare-token-disclosure button {
+  flex: 0 0 auto;
+  border: 1px solid var(--line-strong);
+  padding: 6px 8px;
+  color: var(--ink);
+  background: var(--panel-raised);
+  font-size: 8px;
+}
+
+.compare-delta-panel {
+  grid-column: 1 / -1;
+  min-height: 0;
+}
+
+.compare-delta-panel > .paired-delta {
+  border-inline: 0;
+  border-bottom: 0;
+}
+
+.compare-primary-state,
+.compare-primary-absence,
+.compare-privacy-note {
+  margin: 12px 14px;
+}
+
+.compare-primary-state,
+.compare-privacy-note {
+  color: var(--ink-faint);
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.compare-primary-absence {
+  max-width: 620px;
+}
+
+.compare-generated-at {
+  margin-left: auto;
+  color: var(--ink-faint);
+  font-size: 7px;
+  white-space: nowrap;
+}
+
+.compare-action-offer {
+  margin: 14px;
+}
+
+.compare-action-error {
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.compare-change-receipt {
+  display: grid;
+  gap: 10px;
+  margin: 14px;
+  border: 1px solid var(--line);
+  padding: 12px;
+  color: var(--ink-soft);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.compare-change-receipt header {
+  display: grid;
+  gap: 3px;
+}
+
+.compare-change-receipt h3,
+.compare-change-receipt p {
+  margin: 0;
+}
+
+.compare-change-receipt h3 {
+  color: var(--ink);
+  font-size: 12px;
+  text-transform: capitalize;
+}
+
+.compare-change-receipt > ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.compare-change-receipt li {
+  display: grid;
+  grid-template-columns: minmax(90px, auto) minmax(100px, auto) 1fr;
+  gap: 5px 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 7px;
+}
+
+.compare-change-receipt li strong {
+  color: var(--ink);
+  text-transform: capitalize;
+}
+
+.compare-change-receipt li > span {
+  color: var(--ink-faint);
+  text-transform: uppercase;
+}
+
+.compare-change-receipt li p,
+.compare-change-receipt li small {
+  grid-column: 1 / -1;
+}
+
+.compare-change-receipt li small {
+  color: var(--ink-faint);
+}
+
+.compare-change-summary {
+  border-left: 2px solid var(--signal-violet);
+  padding-left: 8px;
+  color: var(--ink);
+}
+
+.compare-matrix-mode {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  grid-column: 1 / -1;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+}
+
+.compare-matrix-intro {
+  flex: 0 0 auto;
+}
+
+.compare-matrix-intro > p {
+  margin: 0;
+  padding: 0 14px 14px;
+  color: var(--ink-faint);
+  font-family: var(--font-machine);
+  font-size: 8px;
+  line-height: 1.5;
 }
 
 .compare-stage {
@@ -486,7 +682,7 @@
 
 @media (max-width: 860px) {
   .compare-hero {
-    min-height: 640px;
+    min-height: auto;
   }
 
   .compare-head {
@@ -508,7 +704,22 @@
   }
 
   .compare-stage {
+    min-height: 440px;
     padding-inline: 14px;
+  }
+
+  .compare-token-disclosure {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .compare-change-receipt li {
+    grid-template-columns: 1fr;
+  }
+
+  .compare-change-receipt li p,
+  .compare-change-receipt li small {
+    grid-column: auto;
   }
 
   .compare-sequence {

@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { EvidenceMark } from "../../components/EvidenceMark";
 import { buildComparisonIndex } from "./comparisonIndex";
 import { buildMatrixRows, type MatrixCellAggregate, type MatrixRow } from "./buildMatrix";
 import { statusLabel } from "./format";
@@ -7,6 +8,20 @@ import type { ExperimentDetail } from "./types";
 import { VirtualList } from "./VirtualList";
 
 const ROW_HEIGHT = 40;
+const UNAVAILABLE_CELL_REASON = "No result cell was recorded at this declared suite, case, and variant coordinate.";
+
+function cellIcon(status: "pass" | "fail" | "error" | "unscored"): string {
+  switch (status) {
+    case "pass": return "✓";
+    case "fail": return "×";
+    case "error": return "!";
+    case "unscored": return "?";
+    default: {
+      const exhaustive: never = status;
+      return exhaustive;
+    }
+  }
+}
 
 interface MatrixProps {
   detail: ExperimentDetail;
@@ -33,7 +48,14 @@ function CellBadge({
   onSelect: (seed: number) => void;
 }) {
   if (!aggregate) {
-    return <span className="experiments-cell is-missing" title="No cell recorded at this coordinate">—</span>;
+    return (
+      <span className="experiments-cell is-unavailable" title={UNAVAILABLE_CELL_REASON}>
+        {/* A missing coordinate is evidence absence, not an unscored/failing result. Compose the shared
+            mark and pair it with text so the distinction survives both colour blindness and a compact cell. */}
+        <EvidenceMark variant="dot" state="unavailable" reason={UNAVAILABLE_CELL_REASON} />
+        <span className="experiments-cell-label">UNAVAILABLE</span>
+      </span>
+    );
   }
   const label = aggregate.perSeed.length > 1
     ? `${aggregate.counts[aggregate.dominant] ?? 0}/${aggregate.perSeed.length} ${statusLabel(aggregate.dominant)}`
@@ -46,6 +68,7 @@ function CellBadge({
       title={`${aggregate.case} · ${aggregate.variant} · ${aggregate.perSeed.map((p) => `seed ${p.seed}: ${p.status}`).join(", ")}`}
       onClick={() => onSelect(aggregate.perSeed[0]?.seed ?? 0)}
     >
+      <span className="experiments-cell-icon" aria-hidden="true">{cellIcon(aggregate.dominant)}</span>
       <span className="experiments-cell-label">{label}</span>
       {aggregate.perSeed.length > 1 && (
         <span className="experiments-cell-dots" aria-hidden="true">

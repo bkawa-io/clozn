@@ -1,10 +1,5 @@
-import { Experiments } from "../features/experiments/Experiments";
+import { Compare } from "../features/compare/Compare";
 import type { PanelContext, StudioPanel } from "./types";
-// Self-imported rather than added to `src/main.tsx`'s hand-listed stylesheet chain: `main.tsx` is a
-// shared file (docs/SURFACES.md notes this is avoidable today), and several other panels are landing in
-// this same window, so a panel that needs its own CSS pulls it in directly instead of contending for an
-// edit to a file it does not own.
-import "../styles/experiments.css";
 
 function ExperimentsIcon() {
   return (
@@ -19,10 +14,11 @@ const panel: StudioPanel = {
   id: "experiments",
   navLabel: "Experiments",
   order: 70,
+  hiddenFromNav: true,
   icon: () => <ExperimentsIcon />,
   match: (hash) => {
-    // `#/experiments/<id>[?...]` -- tried first, same reasoning as scope.tsx's deep-link pattern: an
-    // end-anchored regex without an id group would happily swallow this route too if tried first.
+    // Kept as a defensive compatibility owner for consumers that resolve this panel in isolation. The
+    // Compare panel claims these routes first in the registry, so normal navigation stays on Compare.
     const withId = hash.match(/^#\/experiments\/([^/?]+)(?:\?(.*))?$/);
     if (withId) {
       const params: Record<string, string> = { id: decodeURIComponent(withId[1]) };
@@ -37,8 +33,19 @@ const panel: StudioPanel = {
     }
     return null;
   },
-  routeName: (params) => (params.id ? "EXPERIMENT" : "EXPERIMENTS"),
-  Component: ({ params }: PanelContext) => <Experiments id={params.id} rawQuery={params.q} />,
+  routeName: () => "COMPARE MATRIX",
+  modeChip: () => "MATRIX",
+  Component: ({ runtime, inspectorOpen, params }: PanelContext) => (
+    <Compare
+      key={`legacy-matrix:${params.id ?? ""}:${params.q ?? ""}`}
+      runtime={runtime}
+      inspectorOpen={inspectorOpen}
+      mode="matrix"
+      initialExperimentId={params.id}
+      rawExperimentQuery={params.q}
+      experimentRouteBase="#/experiments"
+    />
+  ),
 };
 
 export default panel;

@@ -1,13 +1,34 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
+import { EvidenceMark } from "../../components/EvidenceMark";
+import { PairedDelta } from "../../components/PairedDelta";
+import { TypedActionOffer } from "../../components/TypedActionOffer";
 import { loadRunInspection } from "../../data/api";
 import type { ObservatoryData, RuntimeState, TokenReading } from "../../data/types";
+import { Experiments } from "../experiments/Experiments";
 import { alignTokens, type TokenAlignment } from "./alignment";
+import {
+  loadRunComparison,
+  plannedChangeTests,
+  previewRunChangeTest,
+  runChangeTest,
+  type RunChangeTestDocument,
+  type RunChangeTestEntry,
+  type RunComparisonDocument,
+} from "./api";
 
-interface CompareProps {
+export type CompareMode = "runs" | "matrix";
+
+export interface CompareProps {
   runtime: RuntimeState;
   initialA?: string;
   initialB?: string;
   inspectorOpen: boolean;
+  /** Compare currently has two backed object types: recorded run pairs and experiment result matrices. */
+  mode?: CompareMode;
+  initialExperimentId?: string;
+  rawExperimentQuery?: string;
+  /** Legacy experiment hashes retain their own base when filters/cell selection are rewritten. */
+  experimentRouteBase?: string;
 }
 
 function shortId(id: string) {
@@ -31,6 +52,30 @@ function signed(value: number, digits = 4) {
 function tokenIdentity(a?: TokenReading, b?: TokenReading) {
   if (!a || !b) return "UNALIGNED";
   return a.text === b.text ? "SAME" : "CHANGED";
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error && error.message ? error.message : "The request failed without a recorded reason.";
+}
+
+function CompareModePicker({ mode }: { mode: CompareMode }) {
+  return (
+    <label className="compare-object-picker">
+      <span>OBJECT TYPE</span>
+      <select
+        aria-label="Comparison object type"
+        value={mode}
+        onChange={(event) => {
+          // These are the only two comparison objects this frontend can load today. Do not advertise a
+          // model/template comparison merely because its labels would fit in this picker.
+          window.location.hash = event.target.value === "matrix" ? "#/compare/matrix" : "#/compare";
+        }}
+      >
+        <option value="runs">Recorded runs</option>
+        <option value="matrix">Experiment result matrix</option>
+      </select>
+    </label>
+  );
 }
 
 function ConfidenceComparison({
@@ -115,13 +160,158 @@ function TokenSequence({
   );
 }
 
-export function Compare({ runtime, initialA, initialB, inspectorOpen }: CompareProps) {
+function changeCost(document: RunChangeTestDocument): string {
+  const parts: string[] = [];
+  if (document.budget.maxRuns != null) parts.push(`up to ${document.budget.maxRuns} child run${document.budget.maxRuns === 1 ? "" : "s"}`);
+  if (document.budget.maxSeconds != null) parts.push(`up to ${document.budget.maxSeconds} seconds`);
+  return parts.length
+    ? `This bounded execution may consume ${parts.join(" and ")}.`
+    : "The preview omitted a numeric budget; the server still enforces its own execution limits.";
+}
+
+function blockerReason(tests: readonly RunChangeTestEntry[]): string {
+  const reasons = [...new Set(tests.map((test) => test.reason).filter(Boolean))];
+  return reasons.length
+    ? reasons.join(" ")
+    : "No replayable context, template, or sampling change was available for this recorded pair.";
+}
+
+function ChangeTestReceipt({ document }: { document: RunChangeTestDocument }) {
+  return (
+    <section className="compare-change-receipt" aria-labelledby="compare-change-receipt-title">
+      <header>
+        <span className="eyebrow">CONTROLLED CHANGE TEST</span>
+        <h3 id="compare-change-receipt-title">{document.dryRun ? "Plan only" : document.status.replaceAll("_", " ")}</h3>
+      </header>
+      <p>
+        {document.dryRun
+          ? "This document is a zero-run preview; it did not execute a model or establish causal support."
+          : "Each completed arm names a persisted child run below; no conclusion is stronger than the recorded test status."}
+      </p>
+      <ul aria-label="Controlled change-test results">
+        {document.tests.map((test) => (
+          <li key={`${test.kind}-${test.status}`} data-change-test-status={test.status}>
+            <strong>{test.kind}</strong>
+            <span>{test.status.replaceAll("_", " ")}</span>
+            <p>{test.reason}</p>
+            {test.evidenceRunIds.length > 0 && <small>Evidence runs: {test.evidenceRunIds.join(", ")}</small>}
+          </li>
+        ))}
+      </ul>
+      {document.summary.causallySupported.length > 0 && (
+        <p className="compare-change-summary">
+          Causally supported: {document.summary.causallySupported.join(", ")}.
+        </p>
+      )}
+    </section>
+  );
+}
+
+function ControlledTestOffer({
+  plan,
+  result,
+  phase,
+  error,
+  onPreview,
+  onRun,
+}: {
+  plan: RunChangeTestDocument | null;
+  result: RunChangeTestDocument | null;
+  phase: "idle" | "planning" | "previewed" | "executing" | "executed";
+  error: string | null;
+  onPreview: () => void;
+  onRun: () => void;
+}) {
+  if (result) return <ChangeTestReceipt document={result} />;
+
+  if (!plan) {
+    const isPlanning = phase === "planning";
+    return (
+      <div className="compare-action-offer">
+        <TypedActionOffer
+          title="Preview a bounded change test"
+          absence={{
+            state: "not_measured",
+            reason: "No controlled change test has been planned or run for this pair.",
+          }}
+          cost="Preview is model-free and starts no child runs; it only reports which recorded swaps could be tested."
+          preconditions={[
+            "A and B must remain two distinct recorded runs.",
+            "The server must be able to read the pair's recorded inputs and identities.",
+            "Only context, template, and sampling swaps are supported by this instrument.",
+          ]}
+          action={isPlanning
+            ? {
+              availability: "blocked",
+              label: "Preparing change-test preview",
+              blockerReason: "The explicit preview request is still in progress.",
+            }
+            : { availability: "available", label: "Preview change test", onAction: onPreview }}
+        />
+        {error && <p className="compare-action-error" role="alert">Preview unavailable: {error}</p>}
+      </div>
+    );
+  }
+
+  const available = plannedChangeTests(plan);
+  const unavailable = plan.tests.filter((test) => !available.includes(test));
+  const hasRecordedBudget = plan.budget.maxRuns != null && plan.budget.maxSeconds != null;
+  const canRun = available.length > 0 && hasRecordedBudget;
+  const isExecuting = phase === "executing";
+  const unavailableReason = hasRecordedBudget
+    ? blockerReason(unavailable.length ? unavailable : plan.tests)
+    : "The change-test preview omitted its run or time cap, so Studio cannot offer an execution with an honest cost.";
+
+  return (
+    <div className="compare-action-offer">
+      <TypedActionOffer
+        title="Run the previewed controlled test"
+        absence={canRun
+          ? {
+            state: "not_measured",
+            reason: "A bounded plan exists, but no live control or treatment arm has run for this pair.",
+          }
+          : {
+            state: "unavailable",
+            reason: unavailableReason,
+          }}
+        cost={changeCost(plan)}
+        preconditions={[
+          `Preview selected ${available.length} replayable swap${available.length === 1 ? "" : "s"}: ${available.map((test) => test.kind).join(", ") || "none"}.`,
+          "The candidate model worker must be ready when execution begins.",
+          "The server rechecks model identity and replay qualification before any child arm starts.",
+        ]}
+        action={!canRun || isExecuting
+          ? {
+            availability: "blocked",
+            label: isExecuting ? "Running controlled test" : "Run controlled test",
+            blockerReason: isExecuting
+              ? "The explicit execution request is still in progress."
+              : unavailableReason,
+          }
+          : { availability: "available", label: "Run controlled test", onAction: onRun }}
+      />
+      {error && <p className="compare-action-error" role="alert">Controlled test unavailable: {error}</p>}
+    </div>
+  );
+}
+
+function RunComparison({ runtime, initialA, initialB, inspectorOpen }: Omit<CompareProps, "mode" | "initialExperimentId" | "rawExperimentQuery" | "experimentRouteBase">) {
   const [idA, setIdA] = useState(initialA ?? "");
   const [idB, setIdB] = useState(initialB ?? "");
   const [runA, setRunA] = useState<ObservatoryData | null>(null);
   const [runB, setRunB] = useState<ObservatoryData | null>(null);
-  const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [inspectionStatus, setInspectionStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [comparison, setComparison] = useState<RunComparisonDocument | null>(null);
+  const [comparisonStatus, setComparisonStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [comparisonError, setComparisonError] = useState<string | null>(null);
   const [selectedColumn, setSelectedColumn] = useState(0);
+  const [tokenDrilldownOpen, setTokenDrilldownOpen] = useState(false);
+  const [changePlan, setChangePlan] = useState<RunChangeTestDocument | null>(null);
+  const [changeResult, setChangeResult] = useState<RunChangeTestDocument | null>(null);
+  const [changePhase, setChangePhase] = useState<"idle" | "planning" | "previewed" | "executing" | "executed">("idle");
+  const [changeError, setChangeError] = useState<string | null>(null);
+  const canCompare = Boolean(idA && idB && idA !== idB);
 
   useEffect(() => {
     if (!runtime.runs.length) return;
@@ -130,24 +320,65 @@ export function Compare({ runtime, initialA, initialB, inspectorOpen }: CompareP
   }, [initialA, initialB, runtime.runs]);
 
   useEffect(() => {
-    if (!idA || !idB) return;
+    // A plan names one exact pair. It must not survive a selector change and be mistaken for a new pair's
+    // evidence, even when the two pairs happen to share a model or a parent run.
+    setChangePlan(null);
+    setChangeResult(null);
+    setChangePhase("idle");
+    setChangeError(null);
+    setTokenDrilldownOpen(false);
+  }, [idA, idB]);
+
+  useEffect(() => {
+    if (!canCompare) {
+      setRunA(null);
+      setRunB(null);
+      setInspectionStatus("idle");
+      setComparison(null);
+      setComparisonStatus("idle");
+      setComparisonError(null);
+      return;
+    }
+
     const controller = new AbortController();
-    setStatus("loading");
+    setRunA(null);
+    setRunB(null);
+    setInspectionStatus("loading");
+    setComparison(null);
+    setComparisonStatus("loading");
+    setComparisonError(null);
+
     void Promise.all([
       loadRunInspection(idA, controller.signal),
       loadRunInspection(idB, controller.signal),
     ]).then(([nextA, nextB]) => {
+      if (controller.signal.aborted) return;
       const nextAlignment = alignTokens(nextA.tokens, nextB.tokens);
       setRunA(nextA);
       setRunB(nextB);
       setSelectedColumn(nextAlignment.firstChangedColumn < 0 ? 0 : nextAlignment.firstChangedColumn);
-      setStatus("idle");
-      history.replaceState(null, "", `#/compare/${encodeURIComponent(idA)}/${encodeURIComponent(idB)}`);
-    }).catch(() => {
-      if (!controller.signal.aborted) setStatus("error");
+      setInspectionStatus("idle");
+    }).catch((error) => {
+      if (!controller.signal.aborted) {
+        setInspectionStatus("error");
+        setComparisonError((current) => current ?? errorText(error));
+      }
     });
+
+    void loadRunComparison(idA, idB, controller.signal).then((next) => {
+      if (controller.signal.aborted) return;
+      setComparison(next);
+      setComparisonStatus("ready");
+      history.replaceState(null, "", `#/compare/${encodeURIComponent(idA)}/${encodeURIComponent(idB)}`);
+    }).catch((error) => {
+      if (!controller.signal.aborted) {
+        setComparisonStatus("error");
+        setComparisonError(errorText(error));
+      }
+    });
+
     return () => controller.abort();
-  }, [idA, idB]);
+  }, [canCompare, idA, idB]);
 
   const alignment = useMemo(
     () => alignTokens(runA?.tokens ?? [], runB?.tokens ?? []),
@@ -174,75 +405,169 @@ export function Compare({ runtime, initialA, initialB, inspectorOpen }: CompareP
     : "—";
   const maxTokens = Math.max(runA?.tokens.length ?? 0, runB?.tokens.length ?? 0);
 
+  const previewControlledTest = async () => {
+    setChangePhase("planning");
+    setChangeError(null);
+    try {
+      const next = await previewRunChangeTest(idA, idB);
+      setChangePlan(next);
+      setChangePhase("previewed");
+    } catch (error) {
+      setChangePhase("idle");
+      setChangeError(errorText(error));
+    }
+  };
+
+  const executeControlledTest = async () => {
+    if (!changePlan) return;
+    const selectedTests = plannedChangeTests(changePlan).map((test) => test.kind);
+    if (!selectedTests.length) return;
+    setChangePhase("executing");
+    setChangeError(null);
+    try {
+      const next = await runChangeTest(idA, idB, selectedTests, changePlan.budget);
+      setChangeResult(next);
+      setChangePhase("executed");
+    } catch (error) {
+      setChangePhase("previewed");
+      setChangeError(errorText(error));
+    }
+  };
+
   return (
     <>
       <section className="instrument compare-hero" aria-labelledby="compare-title">
         <header className="instrument-head compare-head">
           <div>
-            <span className="eyebrow">RUN COMPARISON</span>
-            <h1 id="compare-title">Token divergence</h1>
-          </div>
-          <div className="compare-metrics">
-            <span><b>MATCHED TOKENS</b>{alignment.matched} / {maxTokens}</span>
-            <span><b>FIRST HUNK</b>{firstHunk}</span>
-            <span><b>RELATION</b>{relation}</span>
+            <span className="eyebrow">A / B STRUCTURAL COMPARISON</span>
+            <h1 id="compare-title">What moved</h1>
           </div>
           <div className="compare-pickers">
+            <CompareModePicker mode="runs" />
             <label>
               <span>A RUN</span>
-              <select value={idA} onChange={(event) => setIdA(event.target.value)} disabled={status === "loading"}>
+              <select value={idA} onChange={(event) => setIdA(event.target.value)} disabled={inspectionStatus === "loading"}>
                 <option value="">Select run A</option>
                 {runtime.runs.map((run) => <option key={`a-${run.id}`} value={run.id}>{run.label}</option>)}
               </select>
             </label>
             <label>
               <span>B RUN</span>
-              <select value={idB} onChange={(event) => setIdB(event.target.value)} disabled={status === "loading"}>
+              <select value={idB} onChange={(event) => setIdB(event.target.value)} disabled={inspectionStatus === "loading"}>
                 <option value="">Select run B</option>
                 {runtime.runs.map((run) => <option key={`b-${run.id}`} value={run.id}>{run.label}</option>)}
               </select>
             </label>
           </div>
         </header>
-
-        <div className="compare-stage">
-          {status === "error" && <div className="compare-state is-error">RUN LOAD FAILED</div>}
-          {!runA || !runB ? (
-            <div className="compare-state">{status === "loading" ? "LOADING RUNS" : "SELECT TWO RUNS"}</div>
-          ) : (
-            <>
-              <div className="compare-branch-field" aria-hidden="true"><i /><i /><b /></div>
-              <TokenSequence
-                label="A"
-                tone="a"
-                tokens={runA.tokens}
-                alignment={alignment}
-                selectedColumn={selectedColumn}
-                onSelect={setSelectedColumn}
-              />
-              <div className="compare-seam">
-                <i />
-                <span>
-                  {alignment.firstChangedColumn < 0
-                    ? "NO IDENTITY CHANGE"
-                    : `FIRST HUNK · ${firstHunk} · ${alignment.hunks} ${alignment.hunks === 1 ? "HUNK" : "HUNKS"}`}
-                </span>
-                <i />
-              </div>
-              <TokenSequence
-                label="B"
-                tone="b"
-                tokens={runB.tokens}
-                alignment={alignment}
-                selectedColumn={selectedColumn}
-                onSelect={setSelectedColumn}
-              />
-            </>
-          )}
+        <div className="compare-token-disclosure">
+          <div>
+            <strong>Token alignment</strong>
+            <span>Optional drill-down; token sequence is not the primary statement of what changed.</span>
+          </div>
+          <button
+            type="button"
+            aria-expanded={tokenDrilldownOpen}
+            onClick={() => setTokenDrilldownOpen((open) => !open)}
+          >
+            {tokenDrilldownOpen ? "Hide token alignment" : "Show token alignment"}
+          </button>
         </div>
+
+        {tokenDrilldownOpen && (
+          <div className="compare-stage">
+            {inspectionStatus === "error" && <div className="compare-state is-error">TOKEN ALIGNMENT UNAVAILABLE</div>}
+            {!runA || !runB ? (
+              <div className="compare-state">{inspectionStatus === "loading" ? "LOADING RUNS" : "SELECT TWO DISTINCT RUNS"}</div>
+            ) : (
+              <>
+                <div className="compare-branch-field" aria-hidden="true"><i /><i /><b /></div>
+                <TokenSequence
+                  label="A"
+                  tone="a"
+                  tokens={runA.tokens}
+                  alignment={alignment}
+                  selectedColumn={selectedColumn}
+                  onSelect={setSelectedColumn}
+                />
+                <div className="compare-seam">
+                  <i />
+                  <span>
+                    {alignment.firstChangedColumn < 0
+                      ? "NO IDENTITY CHANGE"
+                      : `FIRST HUNK · ${firstHunk} · ${alignment.hunks} ${alignment.hunks === 1 ? "HUNK" : "HUNKS"}`}
+                  </span>
+                  <i />
+                </div>
+                <TokenSequence
+                  label="B"
+                  tone="b"
+                  tokens={runB.tokens}
+                  alignment={alignment}
+                  selectedColumn={selectedColumn}
+                  onSelect={setSelectedColumn}
+                />
+              </>
+            )}
+          </div>
+        )}
       </section>
 
-      {inspectorOpen && (
+      <section className="instrument compare-delta-panel" aria-labelledby="compare-delta-title">
+        <header className="instrument-head compact">
+          <div>
+            <span className="eyebrow">RECORDED STRUCTURAL DIFFERENCE</span>
+            <h2 id="compare-delta-title">Paired delta</h2>
+          </div>
+          {comparison?.generatedAt && <time className="compare-generated-at">Computed {comparison.generatedAt}</time>}
+        </header>
+        {!canCompare && (
+          <p className="compare-primary-state">Select two distinct recorded runs to establish a comparison.</p>
+        )}
+        {canCompare && comparisonStatus === "loading" && <p className="compare-primary-state">LOADING STRUCTURAL COMPARISON</p>}
+        {canCompare && comparisonStatus === "error" && (
+          <div className="compare-primary-absence">
+            <EvidenceMark
+              variant="chip"
+              state="unavailable"
+              label="Structural comparison unavailable"
+              reason={comparisonError ?? "The structural comparison could not be loaded."}
+            />
+          </div>
+        )}
+        {comparisonStatus === "ready" && comparison && (
+          <>
+            <PairedDelta
+              title="What moved between A and B"
+              rows={comparison.rows}
+              summaryAxes={comparison.summaryAxes}
+              findings={comparison.findings}
+              aLabel={runA?.label ?? shortId(idA)}
+              bLabel={runB?.label ?? shortId(idB)}
+            />
+            {comparison.rows.length === 0 && (
+              <p className="compare-primary-state">
+                No changed dimensions were reported. The eight axes above state what the comparison examined.
+              </p>
+            )}
+            {comparison.privacyLimited && (
+              <p className="compare-privacy-note">
+                Privacy-limited comparison: one or more dimensions were compared through retained hashes or counts rather than full content.
+              </p>
+            )}
+            <ControlledTestOffer
+              plan={changePlan}
+              result={changeResult}
+              phase={changePhase}
+              error={changeError}
+              onPreview={() => void previewControlledTest()}
+              onRun={() => void executeControlledTest()}
+            />
+          </>
+        )}
+      </section>
+
+      {tokenDrilldownOpen && inspectorOpen && (
         <aside className="instrument compare-inspector" aria-labelledby="compare-inspector-title">
           <header className="instrument-head compact">
             <div>
@@ -280,44 +605,101 @@ export function Compare({ runtime, initialA, initialB, inspectorOpen }: CompareP
         </aside>
       )}
 
-      <section className="instrument compare-plot-panel" aria-labelledby="compare-plot-title">
-        <header className="instrument-head compact">
-          <div>
-            <span className="eyebrow">TOKENS</span>
-            <h2 id="compare-plot-title">Confidence comparison</h2>
-          </div>
-          <div className="compare-legend"><span className="is-a">A</span><span className="is-b">B</span></div>
-        </header>
-        <div className="compare-plot-wrap">
-          <ConfidenceComparison
-            a={runA?.tokens ?? []}
-            b={runB?.tokens ?? []}
-            selectedA={selectedAIndex}
-            selectedB={selectedBIndex}
-          />
-          <div className="compare-axis"><span>1</span><span>{Math.max(1, Math.ceil(maxTokens / 2))}</span><span>{maxTokens || "—"}</span></div>
-        </div>
-      </section>
+      {tokenDrilldownOpen && (
+        <>
+          <section className="instrument compare-plot-panel" aria-labelledby="compare-plot-title">
+            <header className="instrument-head compact">
+              <div>
+                <span className="eyebrow">TOKENS</span>
+                <h2 id="compare-plot-title">Confidence comparison</h2>
+              </div>
+              <div className="compare-legend"><span className="is-a">A</span><span className="is-b">B</span></div>
+            </header>
+            <div className="compare-plot-wrap">
+              <ConfidenceComparison
+                a={runA?.tokens ?? []}
+                b={runB?.tokens ?? []}
+                selectedA={selectedAIndex}
+                selectedB={selectedBIndex}
+              />
+              <div className="compare-axis"><span>1</span><span>{Math.max(1, Math.ceil(maxTokens / 2))}</span><span>{maxTokens || "—"}</span></div>
+            </div>
+          </section>
 
-      <section className="instrument compare-relation" aria-labelledby="compare-relation-title">
-        <header className="instrument-head compact">
-          <div>
-            <span className="eyebrow">RUNS</span>
-            <h2 id="compare-relation-title">Pair details</h2>
-          </div>
-        </header>
-        <div className="compare-pair">
-          <div><b>A</b><span>{runA ? shortId(runA.id) : "—"}</span><small>{runA?.duration ?? "—"}</small></div>
-          <i>{relation}</i>
-          <div><b>B</b><span>{runB ? shortId(runB.id) : "—"}</span><small>{runB?.duration ?? "—"}</small></div>
-        </div>
-        <dl className="compare-pair-meta">
-          <div><dt>A model</dt><dd>{runA?.model ?? "—"}</dd></div>
-          <div><dt>B model</dt><dd>{runB?.model ?? "—"}</dd></div>
-          <div><dt>A flags</dt><dd>{runA?.flags?.join(", ") || "—"}</dd></div>
-          <div><dt>B flags</dt><dd>{runB?.flags?.join(", ") || "—"}</dd></div>
-        </dl>
-      </section>
+          <section className="instrument compare-relation" aria-labelledby="compare-relation-title">
+            <header className="instrument-head compact">
+              <div>
+                <span className="eyebrow">RUNS</span>
+                <h2 id="compare-relation-title">Pair details</h2>
+              </div>
+              <div className="compare-metrics">
+                <span><b>MATCHED TOKENS</b>{alignment.matched} / {maxTokens}</span>
+                <span><b>FIRST HUNK</b>{firstHunk}</span>
+                <span><b>RELATION</b>{relation}</span>
+              </div>
+            </header>
+            <div className="compare-pair">
+              <div><b>A</b><span>{runA ? shortId(runA.id) : "—"}</span><small>{runA?.duration ?? "—"}</small></div>
+              <i>{relation}</i>
+              <div><b>B</b><span>{runB ? shortId(runB.id) : "—"}</span><small>{runB?.duration ?? "—"}</small></div>
+            </div>
+            <dl className="compare-pair-meta">
+              <div><dt>A model</dt><dd>{runA?.model ?? "—"}</dd></div>
+              <div><dt>B model</dt><dd>{runB?.model ?? "—"}</dd></div>
+              <div><dt>A flags</dt><dd>{runA?.flags?.join(", ") || "—"}</dd></div>
+              <div><dt>B flags</dt><dd>{runB?.flags?.join(", ") || "—"}</dd></div>
+            </dl>
+          </section>
+        </>
+      )}
     </>
   );
+}
+
+function CompareMatrix({
+  initialExperimentId,
+  rawExperimentQuery,
+  experimentRouteBase = "#/compare/matrix",
+}: Pick<CompareProps, "initialExperimentId" | "rawExperimentQuery" | "experimentRouteBase">) {
+  return (
+    <div className="compare-matrix-mode">
+      <section className="instrument compare-matrix-intro" aria-labelledby="compare-matrix-title">
+        <header className="instrument-head compare-head">
+          <div>
+            <span className="eyebrow">A / B OVER A RECORDED SUITE</span>
+            <h1 id="compare-matrix-title">Experiment matrix</h1>
+          </div>
+          <div className="compare-pickers"><CompareModePicker mode="matrix" /></div>
+        </header>
+        <p>
+          Matrix results compare recorded baseline and variant outcomes. An unavailable coordinate is not a failed assertion.
+        </p>
+      </section>
+      <Experiments
+        id={initialExperimentId}
+        rawQuery={rawExperimentQuery}
+        routeBase={experimentRouteBase}
+        presentation="compare"
+      />
+    </div>
+  );
+}
+
+export function Compare({
+  mode = "runs",
+  runtime,
+  initialA,
+  initialB,
+  inspectorOpen,
+  initialExperimentId,
+  rawExperimentQuery,
+  experimentRouteBase,
+}: CompareProps) {
+  return mode === "matrix"
+    ? <CompareMatrix
+        initialExperimentId={initialExperimentId}
+        rawExperimentQuery={rawExperimentQuery}
+        experimentRouteBase={experimentRouteBase}
+      />
+    : <RunComparison runtime={runtime} initialA={initialA} initialB={initialB} inspectorOpen={inspectorOpen} />;
 }
