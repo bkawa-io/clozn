@@ -77,7 +77,6 @@ from clozn.cli.commands.version import cmd_version                              
 from clozn.cli.commands.doctor import cmd_doctor                                                # noqa: E402
 from clozn.cli.commands.context import add_subparser as _add_context                             # noqa: E402
 from clozn.cli.commands.watch import add_subparser as _add_watch                                 # noqa: E402
-from clozn.cli.commands.connect import add_subparser as _add_connect                             # noqa: E402
 from clozn.cli.commands.retry import add_subparser as _add_retry                                 # noqa: E402
 from clozn.cli.commands.diagnose import add_subparser as _add_diagnose                           # noqa: E402
 from clozn.cli.commands.regression_suite import add_subparser as _add_regression_suite            # noqa: E402
@@ -261,7 +260,6 @@ def build_parser():
     _add_experiment_suite(sub)  # `clozn experiment run/show` — versioned case x variant x seed object (§4.2)
     _add_context(sub)           # `clozn context last` — delivered vs survived prompt receipt (Phase 2.4)
     _add_watch(sub)             # `clozn watch` — insertion-ordered run tail/correlation (Phase 2.6)
-    _add_connect(sub)           # `clozn connect aider` — safe third-party app config with backup
     _add_retry(sub)             # `clozn retry` — request-local, prompt-first corrective compare
     _add_diagnose(sub)          # `clozn diagnose last` — evidence-only latency/cutoff diagnosis
     _add_regression_suite(sub)  # `clozn suite create` — promote captured app runs into Model CI cases

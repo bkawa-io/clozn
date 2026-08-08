@@ -1284,25 +1284,20 @@ CLOZN exposes:
 - OpenAI-compatible chat completions and model listing
 - OpenAI-compatible streaming
 - Ollama-compatible chat, generation, tags, and version
-- Aider connector
-- Open WebUI connector
-- OpenAI environment configuration
 - GitHub Actions integration
 
-Connector operations support:
-
-- Detection
-- Plan
-- Dry run
-- Application
-- Backup
-- Drift detection
-- Undo
+CLOZN does not configure downstream applications. Managing another application's configuration file
+(Aider's YAML, Open WebUI's environment, a generic OpenAI client's `.env`, an Ollama SDK environment)
+was retired -- see [CAPABILITIES.md](CAPABILITIES.md)'s Removed/Retired section. CLOZN documents the
+values an existing client needs (base URL, placeholder API key, model label; see
+[CLIENT_CONFORMANCE.md](CLIENT_CONFORMANCE.md)) and lets the user or the application own its own
+config.
 
 Ollama adoption can discover an existing local model, resolve its underlying GGUF artifact, register or
-copy it without downloading it again, qualify it, and optionally configure connectors.
+copy it without downloading it again, and qualify it -- all inside Clozn's own model directory. It
+never mutates Ollama's storage and, as of this cut, never touches a downstream application either.
 
-Primary implementations: [`_connector.py`](../clozn/cli/commands/_connector.py),
+Primary implementations: [`_fileops.py`](../clozn/cli/commands/_fileops.py),
 [`adopt.py`](../clozn/cli/commands/adopt.py),
 [`ollama_discovery.py`](../clozn/adopt/ollama_discovery.py), and
 [`ollama_resolver.py`](../clozn/adopt/ollama_resolver.py).

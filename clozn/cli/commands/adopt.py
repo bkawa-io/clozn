@@ -1,6 +1,7 @@
 """`clozn adopt ollama` -- try one model from an existing Ollama install without deleting Ollama,
-redownloading multi-gigabyte weights, or permanently reconfiguring applications
-(notes/agent_roadmap/11-adopt-ollama.md).
+redownloading multi-gigabyte weights, or configuring any other application. Clozn owns the model
+entry it creates under its own directory; it does not own or edit another application's config --
+see docs/CAPABILITIES.md for that boundary.
 
 WHAT THIS IS NOT: this is not clozn/server/routes/ollama.py's story. That module makes Clozn *answer*
 Ollama's wire protocol so an Ollama-speaking client can point at Clozn (already built, CI-tested against
@@ -140,11 +141,9 @@ def _engine_capability(header: dict | None) -> dict | None:
 
 def _describe_setup(args) -> dict:
     """`clozn adopt ollama` with no --model: a preview -- what's found, nothing adopted. Mirrors the
-    spec's own worked example output ('Found your Ollama setup / Models / Applications')."""
-    from clozn.cli.commands._connector import connector_for
-
+    spec's own worked example output ('Found your Ollama setup / Models')."""
     disco = discovery.discover(host_override=args.host)
-    report = {"status": "described", "discovery": disco, "models": [], "applications": []}
+    report = {"status": "described", "discovery": disco, "models": []}
     if disco["found"] and disco["source"] in ("env", "endpoint"):
         try:
             raw = discovery.list_models(disco["host"])
@@ -160,12 +159,6 @@ def _describe_setup(args) -> dict:
                 "parameter_size": details.get("parameter_size"),
                 "quantization_level": details.get("quantization_level"),
             })
-    for app in ("aider", "openai-env", "open-webui", "ollama-sdk"):
-        detection = connector_for(app).detect()
-        report["applications"].append({
-            "app": app, "detected": detection.installed,
-            "connector_available": detection.installed, "note": detection.note,
-        })
     return report
 
 
@@ -192,7 +185,7 @@ def _build_plan(args) -> dict:
     model_name = entry.get("name") or entry.get("model") or args.model
     shown = discovery.show_model(host, model_name)
 
-    from clozn.cli.commands._connector import sha256_path
+    from clozn.cli.commands._fileops import sha256_path
     storage_roots = []
     if disco.get("storage_path"):
         storage_roots.append(disco["storage_path"])
@@ -243,33 +236,6 @@ def _build_plan(args) -> dict:
         "mode": "copy" if args.copy else "hard_link",
         "blocked": blocked,
     }
-    if args.connect:
-        from clozn.cli import main as ctx
-        from clozn.cli.commands._connector import connector_for
-        connector = connector_for(args.connect)
-        detection = connector.detect()
-        preview = {
-            "app": args.connect,
-            "available": detection.installed,
-            "note": detection.note,
-        }
-        if detection.installed:
-            state_path = Path(ctx.HOME) / "connect" / f"{args.connect}.json"
-            mutation = connector.plan(
-                base_url=args.url,
-                model=args.client_model_label,
-                api_key=args.api_key,
-                state_path=state_path,
-            )
-            preview.update({
-                "status": mutation.status,
-                "target": mutation.target,
-                "details": mutation.details,
-            })
-            # Keep the exact plan object private to the in-process apply. The public dry-run report
-            # remains JSON-shaped, while apply gets the integrity expectations from this preview.
-            plan["_connect_mutation"] = mutation
-        plan["connect_preview"] = preview
     return plan
 
 
@@ -292,7 +258,6 @@ def _dry_run_report(plan: dict) -> dict:
         "engine_capability": _engine_capability(plan["header"]),
         "template": plan["translation"],
         "blob_resolution": plan["resolution"],
-        "connect_preview": plan.get("connect_preview"),
         "blocked": plan["blocked"],
         "undo_plan": (
             "hard link: --undo removes only Clozn's own directory entry; the Ollama-side blob is never "
@@ -374,41 +339,11 @@ def _run_qualification(plan: dict) -> dict:
             stack.stop()
 
 
-def _apply_connect(args, document: dict, plan: dict) -> dict:
-    """Best-effort: never raises, so a --connect failure cannot roll back an already-successful,
-    already-recorded model adoption -- the two are independently undoable (see this module's schema
-    doc). Returns a status dict; cmd_adopt uses it to decide the process exit code."""
-    from clozn.cli import main as ctx
-    from clozn.cli.commands._connector import connector_for
-
-    connector = connector_for(args.connect)
-    mutation = plan.get("_connect_mutation")
-    preview = plan.get("connect_preview") or {}
-    if mutation is None:
-        return {"status": "failed", "app": args.connect,
-                "error": f"{preview.get('note') or 'connector was unavailable during preview'}. "
-                        f"Install the app first, or run `clozn connect {args.connect}` "
-                        f"manually once it is."}
-    state_path = Path(ctx.HOME) / "connect" / f"{args.connect}.json"
-    try:
-        transaction = connector.apply(mutation, base_url=args.url, model=args.client_model_label,
-                                      api_key=args.api_key, state_path=state_path)
-    except (OSError, ValueError) as exc:
-        return {"status": "failed", "app": args.connect, "error": str(exc)}
-    client_transaction = {
-        "app": args.connect, "status": transaction.report.get("status"),
-        "target": transaction.report.get("path"), "state_path": str(state_path)}
-    if transaction.report.get("backup") is not None:
-        client_transaction["backup"] = transaction.report["backup"]
-    document["client_transactions"].append(client_transaction)
-    return {"status": "connected", "app": args.connect, "target": transaction.report.get("path")}
-
-
 def _apply(args, plan: dict) -> dict:
     if plan["blocked"]:
         raise ValueError(f"cannot adopt {plan['model_name']!r}: {plan['blocked']}")
 
-    from clozn.cli.commands._connector import atomic_copy_file, sha256_path
+    from clozn.cli.commands._fileops import atomic_copy_file, sha256_path
 
     target = Path(plan["clozn_path"])
     tx_path = _transaction_path(plan["registered_name"])
@@ -425,16 +360,11 @@ def _apply(args, plan: dict) -> dict:
                     == (plan.get("resolution") or {}).get("blob_digest")
                 and sha256_path(target) == prior.get("clozn", {}).get("model_sha256")):
             qualification_report = None
-            connect_report = None
             changed = False
             if getattr(args, "qualify", False):
                 qualification_report = _run_qualification(plan)
                 prior["qualification"] = qualification_report
                 changed = True
-            if args.connect:
-                prior.setdefault("client_transactions", [])
-                connect_report = _apply_connect(args, prior, plan)
-                changed = changed or bool(prior["client_transactions"])
             if changed:
                 schemas.validate(prior, _SCHEMA)
                 atomic_write_json(
@@ -443,13 +373,8 @@ def _apply(args, plan: dict) -> dict:
             return {"status": "unchanged", "app": "ollama", "model_name": plan["model_name"],
                    "registered_name": plan["registered_name"], "clozn_path": str(target),
                    "transaction_path": str(tx_path), "qualification": qualification_report,
-                   "connect": connect_report,
                    "undo_commands": {
                        "adoption": f"clozn adopt ollama --model {plan['model_name']} --undo",
-                       **(
-                           {"connector": f"clozn connect {args.connect} --undo"}
-                           if args.connect else {}
-                       ),
                    }}
 
     if target.exists() and not tx_path.is_file():
@@ -505,7 +430,6 @@ def _apply(args, plan: dict) -> dict:
             "registered_name": plan["registered_name"], "path": str(target),
             "mode": plan["mode"], "model_sha256": model_sha256},
         "template": plan["translation"],
-        "client_transactions": [],
     }
     capability = _engine_capability(plan["header"])
     if capability is not None:
@@ -523,7 +447,6 @@ def _apply(args, plan: dict) -> dict:
             pass
         raise
 
-    connect_report = None
     qualification_report = None
     if getattr(args, "qualify", False):
         qualification_report = _run_qualification(plan)
@@ -533,34 +456,19 @@ def _apply(args, plan: dict) -> dict:
             atomic_write_json(str(tx_path), document, ensure_ascii=False, indent=2, sort_keys=True)
         except OSError:
             pass
-    if args.connect:
-        connect_report = _apply_connect(args, document, plan)
-        if document["client_transactions"]:
-            # Best-effort re-save so the receipt reflects the connect step too; a failure here does not
-            # unwind the already-successful, already-independently-recorded model adoption or connect
-            # transaction (see _apply_connect's own docstring).
-            try:
-                atomic_write_json(str(tx_path), document, ensure_ascii=False, indent=2, sort_keys=True)
-            except OSError:
-                pass
 
     return {"status": "adopted", "app": "ollama", "model_name": plan["model_name"],
            "registered_name": plan["registered_name"], "clozn_path": str(target), "mode": plan["mode"],
            "transaction_path": str(tx_path), "qualification": qualification_report,
-           "connect": connect_report,
            "undo_commands": {
                "adoption": f"clozn adopt ollama --model {plan['model_name']} --undo",
-               **(
-                   {"connector": f"clozn connect {args.connect} --undo"}
-                   if args.connect else {}
-               ),
            }}
 
 
 # ---------------------------------------------------------------------------------------------------- undo
 
 def _undo(args) -> dict:
-    from clozn.cli.commands._connector import sha256_path
+    from clozn.cli.commands._fileops import sha256_path
 
     if args.model:
         tx_path = _transaction_path(f"ollama/{args.model}")
@@ -641,22 +549,6 @@ def add_subparser(sub):
     reuse.add_argument("--link", action="store_true", help="hard-link into Clozn's model dir (default)")
     reuse.add_argument("--copy", action="store_true",
                        help="copy instead of hard-linking (uses more disk; works across volumes)")
-    parser.add_argument(
-        "--connect",
-        default=None,
-        metavar="APP",
-        choices=("aider", "openai-env", "open-webui", "ollama-sdk"),
-        help="also point a reversible client config/environment file at Clozn",
-    )
-    parser.add_argument("--url", default="http://127.0.0.1:8080/v1",
-                        help="Clozn OpenAI base URL for --connect (default http://127.0.0.1:8080/v1)")
-    parser.add_argument("--api-key", default="local-clozn",
-                        help="local placeholder API key for --connect (default local-clozn)")
-    parser.add_argument("--client-model-label", default="clozn-local",
-                        help="model label sent to a --connect'd app's config (default clozn-local; "
-                             "deliberately NOT the Ollama model name -- see adopt.py's module docstring "
-                             "for why an 'ollama/...' label would misroute Aider's own provider "
-                             "resolution)")
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--dry-run", action="store_true", help="show the plan without writing anything")
     action.add_argument("--undo", action="store_true", help="remove a previously adopted model")
@@ -696,11 +588,6 @@ def _print_human(report: dict) -> None:
                 print(f"  {m['name']}" + (f"  ({extra})" if extra else ""))
         else:
             print("\nNo models found via Ollama's API.")
-        print("\nApplications")
-        for app in report["applications"]:
-            mark = "✓" if app["connector_available"] else "•"
-            note = "" if app["connector_available"] else f" -- {app['note']}"
-            print(f"  {mark} {app['app']}{note}")
         print("\nNothing was adopted. Pass --model NAME to adopt one (add --dry-run to preview first).")
         return
 
@@ -722,9 +609,6 @@ def _print_human(report: dict) -> None:
              + (f" ({cap.get('architecture')})" if cap and cap.get("architecture") else ""))
         for warning in report["template"]["warnings"]:
             print(f"  template: {warning}")
-        preview = report.get("connect_preview")
-        if preview:
-            print(f"  connector: {preview['app']} -> {preview.get('status') or preview.get('note')}")
         print(f"  undo plan: {report['undo_plan']}")
         if report.get("requires_confirmation"):
             print(f"  confirmation required: {report['confirm_command']}")
@@ -734,17 +618,11 @@ def _print_human(report: dict) -> None:
         print(f"already adopted: {report['registered_name']} -> {report['clozn_path']}")
         if (report.get("qualification") or {}).get("status") == "passed":
             print(f"qualification: core (run {report['qualification']['run_id']})")
-        if report.get("connect"):
-            print(
-                f"connector {report['connect']['app']}: "
-                f"{report['connect']['status']}"
-            )
         return
 
     if status == "adopted":
         print(f"adopted: {report['registered_name']} -> {report['clozn_path']} ({report['mode']})")
         print(f"transaction: {report['transaction_path']}")
-        connect = report.get("connect")
         qualification = report.get("qualification")
         if qualification:
             if qualification["status"] == "passed":
@@ -754,14 +632,12 @@ def _print_human(report: dict) -> None:
                 )
             else:
                 print(f"qualification FAILED: {qualification['error']}")
-        if connect:
-            if connect["status"] == "connected":
-                print(f"connected {connect['app']}: {connect['target']}")
-            else:
-                print(f"--connect {connect['app']} FAILED: {connect['error']}")
         for kind, command in report.get("undo_commands", {}).items():
             print(f"undo {kind}: {command}")
         print(f"next: clozn run {report['model_name'].split(':')[0]} \"hello\"")
+        print("to point an existing app at Clozn: clozn serve, then set its OpenAI-compatible base "
+              "URL to http://127.0.0.1:8080/v1 (see docs/CLIENT_CONFORMANCE.md for Aider/Open WebUI/"
+              "SDK examples)")
         return
 
     if status == "undone":
@@ -783,7 +659,6 @@ def cmd_adopt(args):
                     report["confirm_command"] = (
                         f"clozn adopt ollama --model {args.model} --try --yes"
                         + (" --qualify" if getattr(args, "qualify", False) else "")
-                        + (f" --connect {args.connect}" if args.connect else "")
                     )
             else:
                 report = _apply(args, plan)
@@ -797,10 +672,6 @@ def cmd_adopt(args):
     else:
         _print_human(report)
 
-    if report.get("status") in {"adopted", "unchanged"} and (
-        report.get("connect") or {}
-    ).get("status") == "failed":
-        return 1
     if report.get("status") in {"adopted", "unchanged"} and (
         report.get("qualification") or {}
     ).get("status") == "failed":

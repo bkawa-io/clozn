@@ -126,9 +126,8 @@ class _FakeOllama:
 
 
 def _args(**overrides):
-    base = dict(app="ollama", model=None, host=None, link=False, copy=False, connect=None,
-               url="http://127.0.0.1:8080/v1", api_key="local-clozn",
-               client_model_label="clozn-local", dry_run=False, undo=False, json=False)
+    base = dict(app="ollama", model=None, host=None, link=False, copy=False,
+               dry_run=False, undo=False, json=False)
     base.update(overrides)
     return argparse.Namespace(**base)
 
@@ -199,18 +198,19 @@ def test_resolve_source_blob_path_none_when_modelfile_absent():
 
 # --------------------------------------------------------------------------------------- _describe_setup
 
-def test_describe_setup_lists_models_and_aider_detection(monkeypatch, home):
+def test_describe_setup_lists_models_and_never_scans_for_downstream_applications(monkeypatch, home):
+    """A dry `clozn adopt ollama` (no --model) reports only what Ollama has -- it must not detect or
+    report on any downstream application (Aider, Open WebUI, ...); that scan existed only to decide
+    whether Clozn could configure the app, and configuring downstream apps was retired."""
     ollama = _FakeOllama()
     ollama.add_model("qwen2.5:7b-instruct", details={"parameter_size": "7.6B", "quantization_level": "Q4_K_M"})
     ollama.install(monkeypatch)
-    monkeypatch.setattr("shutil.which", lambda _n: None)
 
     report = adopt._describe_setup(_args())
     assert report["status"] == "described"
     assert report["discovery"]["found"] is True
     assert [m["name"] for m in report["models"]] == ["qwen2.5:7b-instruct"]
-    assert report["applications"][0]["app"] == "aider"
-    assert report["applications"][0]["connector_available"] is False
+    assert "applications" not in report
 
 
 def test_describe_setup_reports_not_found_cleanly(monkeypatch, home, tmp_path):
@@ -578,89 +578,6 @@ def test_undo_without_any_transaction_is_a_clean_error(home):
         adopt._undo(_args())
 
 
-# --------------------------------------------------------------------------------------------- --connect
-
-def test_apply_connect_aider_records_client_transaction(monkeypatch, home, ollama_blob, tmp_path):
-    ollama = _FakeOllama()
-    ollama.add_model("qwen2.5:7b-instruct", blob_path=str(ollama_blob))
-    ollama.install(monkeypatch)
-    monkeypatch.setattr("shutil.which", lambda _n: "/usr/bin/aider")
-
-    args = _args(model="qwen2.5:7b-instruct", connect="aider")
-    plan = adopt._build_plan(args)
-    report = adopt._apply(args, plan)
-
-    assert report["connect"]["status"] == "connected"
-    document = json.loads(Path(report["transaction_path"]).read_text(encoding="utf-8"))
-    assert len(document["client_transactions"]) == 1
-    assert document["client_transactions"][0]["app"] == "aider"
-
-
-def test_apply_connect_failure_does_not_undo_the_model_adoption(monkeypatch, home, ollama_blob):
-    ollama = _FakeOllama()
-    ollama.add_model("qwen2.5:7b-instruct", blob_path=str(ollama_blob))
-    ollama.install(monkeypatch)
-    monkeypatch.setattr("shutil.which", lambda _n: None)   # aider "not installed"
-
-    args = _args(model="qwen2.5:7b-instruct", connect="aider")
-    plan = adopt._build_plan(args)
-    report = adopt._apply(args, plan)
-
-    assert report["status"] == "adopted"
-    assert Path(report["clozn_path"]).is_file()
-    assert report["connect"]["status"] == "failed"
-
-
-def test_apply_connect_failure_reports_the_requested_app(monkeypatch, home, ollama_blob):
-    from clozn.cli.commands import _connector
-
-    ollama = _FakeOllama()
-    ollama.add_model("qwen2.5:7b-instruct", blob_path=str(ollama_blob))
-    ollama.install(monkeypatch)
-
-    class FailingConnector:
-        id = "open-webui"
-
-        def detect(self):
-            return _connector.Detection(installed=True, app=self.id)
-
-        def plan(self, **_kwargs):
-            return _connector.MutationPlan(
-                app=self.id, status="dry_run", target=str(home / "client.env"),
-                details={
-                    "expected_prior_exists": False,
-                    "after_sha256": "a" * 64,
-                },
-            )
-
-        def apply(self, mutation, **_kwargs):
-            assert mutation.app == self.id
-            raise ValueError("simulated connector failure")
-
-    monkeypatch.setattr(_connector, "connector_for", lambda _app: FailingConnector())
-    args = _args(model="qwen2.5:7b-instruct", connect="open-webui")
-    report = adopt._apply(args, adopt._build_plan(args))
-
-    assert report["connect"] == {
-        "status": "failed",
-        "app": "open-webui",
-        "error": "simulated connector failure",
-    }
-
-
-def test_cmd_adopt_returns_nonzero_when_connect_fails_but_adoption_succeeds(monkeypatch, home, ollama_blob, capsys):
-    ollama = _FakeOllama()
-    ollama.add_model("qwen2.5:7b-instruct", blob_path=str(ollama_blob))
-    ollama.install(monkeypatch)
-    monkeypatch.setattr("shutil.which", lambda _n: None)
-
-    exit_code = adopt.cmd_adopt(_args(model="qwen2.5:7b-instruct", connect="aider", json=True))
-    assert exit_code == 1
-    printed = json.loads(capsys.readouterr().out)
-    assert printed["status"] == "adopted"
-    assert printed["connect"]["status"] == "failed"
-
-
 # ---------------------------------------------------------------------------------------------- CLI wiring
 
 def test_cmd_adopt_dry_run_json_round_trips(monkeypatch, home, ollama_blob, capsys):
@@ -703,3 +620,72 @@ def test_add_subparser_registers_expected_flags():
     assert args.yes is True
     assert args.qualify is True
     assert args.json is True
+    assert not hasattr(args, "connect")
+    assert not hasattr(args, "url")
+    assert not hasattr(args, "api_key")
+    assert not hasattr(args, "client_model_label")
+
+
+def test_add_subparser_no_longer_accepts_connect():
+    """`clozn adopt ollama --connect APP` (downstream client configuration) was retired -- the flag
+    must be rejected by the parser, not silently ignored."""
+    p = argparse.ArgumentParser()
+    sub = p.add_subparsers()
+    adopt.add_subparser(sub)
+    with pytest.raises(SystemExit):
+        p.parse_args(["adopt", "ollama", "--model", "x", "--connect", "aider"])
+
+
+# ------------------------------------------------------------------------ no downstream configuration
+
+def test_adoption_never_produces_a_connect_preview_or_client_transaction(monkeypatch, home, ollama_blob):
+    """Neither a dry-run plan nor an applied adoption document carries any connector-shaped field --
+    the concepts (connect_preview, client_transactions, connect) no longer exist anywhere in the
+    adoption pipeline."""
+    ollama = _FakeOllama()
+    ollama.add_model("qwen2.5:7b-instruct", blob_path=str(ollama_blob))
+    ollama.install(monkeypatch)
+
+    args = _args(model="qwen2.5:7b-instruct")
+    plan = adopt._build_plan(args)
+    assert "connect_preview" not in plan
+    assert "_connect_mutation" not in plan
+
+    dry = adopt._dry_run_report(plan)
+    assert "connect_preview" not in dry
+
+    report = adopt._apply(args, adopt._build_plan(args))
+    assert "connect" not in report
+    document = json.loads(Path(report["transaction_path"]).read_text(encoding="utf-8"))
+    assert "client_transactions" not in document
+    from clozn import schemas
+    schemas.validate(document, "clozn.adopt-ollama.v1")
+
+
+def test_adoption_has_no_side_effects_on_any_downstream_client_config(monkeypatch, home, ollama_blob, tmp_path):
+    """Adopting a model must never touch a third-party app's config, even when those configs exist on
+    disk and even when the (now-removed) apps would previously have been detected as installed."""
+    ollama = _FakeOllama()
+    ollama.add_model("qwen2.5:7b-instruct", blob_path=str(ollama_blob))
+    ollama.install(monkeypatch)
+    monkeypatch.setattr("shutil.which", lambda _n: "/usr/bin/aider")  # aider "installed"
+
+    aider_conf = tmp_path / ".aider.conf.yml"
+    aider_conf.write_text("dark-mode: true\n", encoding="utf-8")
+    open_webui_env = tmp_path / ".open-webui" / "clozn.env"
+    open_webui_env.parent.mkdir(parents=True)
+    open_webui_env.write_text("EXISTING=yes\n", encoding="utf-8")
+    openai_env = tmp_path / ".config" / "clozn" / "openai.env"
+    openai_env.parent.mkdir(parents=True)
+    openai_env.write_text("EXISTING=yes\n", encoding="utf-8")
+    ollama_sdk_env = tmp_path / ".config" / "clozn" / "ollama-sdk.env"
+    ollama_sdk_env.write_text("EXISTING=yes\n", encoding="utf-8")
+    before = {p: p.read_bytes() for p in (aider_conf, open_webui_env, openai_env, ollama_sdk_env)}
+
+    args = _args(model="qwen2.5:7b-instruct")
+    adopt._apply(args, adopt._build_plan(args))
+
+    for path, contents in before.items():
+        assert path.read_bytes() == contents, f"{path} was modified by adoption"
+    assert not (aider_conf.parent / (aider_conf.name + ".bak")).exists()
+    assert not any(p.name.startswith(".aider.conf.yml.bak") for p in tmp_path.iterdir())

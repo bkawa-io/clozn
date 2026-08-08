@@ -47,12 +47,15 @@ If the GGUF already exists in Ollama, inspect the adoption plan before copying o
 ```bash
 clozn adopt ollama                        # list discoverable Ollama models
 clozn adopt ollama --model MODEL --dry-run
-clozn adopt ollama --model MODEL --try --yes --qualify --connect open-webui
+clozn adopt ollama --model MODEL --try --yes --qualify
 ```
 
 Managed Ollama manifests resolve the exact model layer by digest and size; Clozn never guesses by
-choosing the largest blob. `--try` previews disk, fidelity, capability, and connector changes until
-`--yes` is supplied. Adoption, qualification, and client configuration remain independently undoable.
+choosing the largest blob. `--try` previews disk, fidelity, and capability changes until `--yes` is
+supplied. Adoption and qualification remain independently undoable. Clozn does not edit any other
+application's configuration — point an existing client at Clozn's OpenAI-compatible endpoint yourself
+(`http://127.0.0.1:8080/v1`; see [docs/CLIENT_CONFORMANCE.md](docs/CLIENT_CONFORMANCE.md) for
+Aider/Open WebUI/SDK setup).
 
 Before changing the runtime, run its managed acceptance gate:
 

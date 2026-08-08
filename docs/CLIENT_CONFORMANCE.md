@@ -4,6 +4,59 @@
 **Scope:** Phase 2.7 text-generation interoperability plus the Phase 2.8 structured-I/O gateway contract.
 This report is intentionally narrower than "OpenAI compatible" or "Ollama compatible" as a general claim.
 
+## Connecting a client
+
+Clozn is the debugger; other applications own their own configuration. Clozn does not edit another
+application's config file or `.env` -- it exposes an OpenAI-compatible endpoint and an
+Ollama-compatible endpoint and documents the values to set. Start Clozn first:
+
+```bash
+clozn serve MODEL --port 8080
+```
+
+Then configure your application with these values (all default placeholders; any non-empty API key
+is accepted since Clozn runs locally with no external auth):
+
+```text
+Base URL:  http://127.0.0.1:8080/v1
+API key:   local-clozn
+Model:     clozn-local
+```
+
+**Aider** -- environment variables, or `~/.aider.conf.yml`:
+
+```bash
+export OPENAI_API_BASE=http://127.0.0.1:8080/v1
+export OPENAI_API_KEY=local-clozn
+aider --model openai/clozn-local
+```
+
+**Open WebUI** -- Admin Settings -> Connections -> OpenAI API, or the equivalent environment
+variables on the Open WebUI server:
+
+```text
+OPENAI_API_BASE_URLS=http://127.0.0.1:8080/v1
+OPENAI_API_KEYS=local-clozn
+```
+
+**A generic OpenAI SDK client** (Python, JS, ...):
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="local-clozn")
+```
+
+**An Ollama SDK client** (Python, JS): point it at Clozn's Ollama-compatible base URL instead of a
+real Ollama install:
+
+```python
+from ollama import Client
+client = Client(host="http://127.0.0.1:8080")
+```
+
+None of the above writes anything to disk on Clozn's behalf -- the values are yours to set the same
+way you would for any other OpenAI- or Ollama-compatible endpoint.
+
 ## Evidence labels
 
 - **Released-client pass** means that the named, released client was actually executed against

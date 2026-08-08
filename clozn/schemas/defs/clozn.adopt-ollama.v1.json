@@ -175,11 +175,6 @@
         "warnings": {"type": "array", "items": {"type": "string"}},
         "undo_command": {"type": "string"}
       }
-    },
-    "client_transactions": {
-      "type": "array",
-      "description": "Zero or more clozn.connect.transaction.v1-shaped records for apps configured via --connect during this adoption (see clozn.cli.commands._connector). Undoing this adopt transaction does not automatically undo these -- each is its own independently undoable transaction.",
-      "items": {"type": "object"}
     }
   }
 }
