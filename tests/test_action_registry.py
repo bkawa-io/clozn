@@ -29,7 +29,8 @@ def test_registry_covers_every_correction_preset_once():
     assert ids == list(CORRECTION_PRESETS)
     assert len(set(ids)) == len(ids)
     for action in doc["actions"]:
-        assert action["scopes"] == ["once", "session", "profile"]
+        # Durable session/profile scoping was retired -- see docs/CAPABILITIES.md.
+        assert action["scopes"] == ["once"]
         assert len(set(action["scopes"])) == len(action["scopes"])
 
 

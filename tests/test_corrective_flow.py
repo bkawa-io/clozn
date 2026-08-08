@@ -7,16 +7,13 @@ import pytest
 
 from clozn import schemas
 from clozn.behavior import corrective_flow as flow
-from clozn.behavior import corrective_retries as policy
 from clozn.profiles import store as profiles
 
 
 @pytest.fixture
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(flow, "_PATH", str(tmp_path / "flow.json"))
-    monkeypatch.setattr(policy, "_PATH", str(tmp_path / "policy.json"))
     profile_store = profiles.ProfileStore(str(tmp_path / "profiles"))
-    monkeypatch.setattr(policy, "_profile_store", lambda: profile_store)
     return profile_store
 
 
@@ -66,15 +63,15 @@ def _confirmed(run, *, active_profile=None):
     return preview, result
 
 
-def test_registry_for_run_discovers_exactly_six_actions_and_unique_scopes(isolated):
+def test_registry_for_run_discovers_exactly_six_actions_with_only_once_scope(isolated):
     doc = flow.registry_for_run(_run(), active_profile=None)
     assert len(doc["actions"]) == 6
     for action in doc["actions"]:
-        assert action["scopes"] == ["once", "session", "profile"]
-        assert len(set(action["scopes"])) == 3
-        assert [item["scope"] for item in action["scope_eligibility"]] == [
-            "once", "session", "profile"
-        ]
+        # Durable session/profile scoping was retired -- a kept correction only ever selects
+        # itself as its own parent run's revision, never a standing policy. See
+        # docs/CAPABILITIES.md.
+        assert action["scopes"] == ["once"]
+        assert [item["scope"] for item in action["scope_eligibility"]] == ["once"]
         assert next(b for b in action["backends"] if b["type"] == "prompt_policy")[
             "qualification_id"
         ] == "clozn.prompt-policy.generic.v1"
@@ -90,7 +87,7 @@ def test_preview_is_bounded_and_reports_explicit_control_vector_fallback(isolate
     assert preview["execution"]["unavailability_reason"]
 
 
-def test_confirm_is_one_shot_idempotent_persisted_and_does_not_mutate_policy(isolated):
+def test_confirm_is_one_shot_idempotent_persisted_and_never_touches_a_standing_policy(isolated):
     run = _run()
     preview = flow.create_preview(run, "less-verbose", now=100.0)
     calls = 0
@@ -113,7 +110,6 @@ def test_confirm_is_one_shot_idempotent_persisted_and_does_not_mutate_policy(iso
     assert first["comparison"]["corrected_reply"] == "A concise reply."
     assert first["execution"]["requested_backend"] == "prompt_policy"
     assert first["execution"]["executed_backend"] == "prompt_policy"
-    assert policy.session_presets(run["session_key"]) == []
     schemas.validate(first, flow.RESULT_SCHEMA)
 
 
@@ -218,7 +214,6 @@ def test_keep_once_selects_corrected_child_without_policy_and_undo_restores_prio
         get_run=get_run, replace_run=replace_run, now=102.0,
     )
     assert runs["run_parent"]["selected_revision"]["child_run_id"] == "run_corrected"
-    assert policy.session_presets(run["session_key"]) == []
     # A repeated request with the same key is a read, not a second mutation.
     assert flow.keep_result(
         result["result_id"], "once", prior["prior_hash"], "keep-key-000001",
@@ -246,26 +241,34 @@ def test_keep_once_refuses_selected_revision_drift(isolated):
         )
 
 
-def test_profile_apply_creates_exact_backup_and_undo_restores_exact_bytes(isolated):
-    isolated.save(profiles.new_profile("work"))
-    profile_path = isolated._path("work")
-    before = open(profile_path, "rb").read()
+def test_keep_result_refuses_durable_session_or_profile_scope(isolated):
+    """Durable session/profile scoping (a kept correction silently shaping future, unrelated
+    requests) was retired -- `keep_result` only ever accepts `once` now."""
     run = _run(meta={"active_profile": "work"})
     preview, result = _confirmed(run, active_profile="work")
-    eligibility = next(s for s in preview["scope_eligibility"] if s["scope"] == "profile")
-    runs = {"run_corrected": {"id": "run_corrected"}}
-    kept = flow.keep_result(
-        result["result_id"], "profile", eligibility["prior_hash"], "keep-key-000001",
-        get_run=lambda rid: runs.get(rid), replace_run=lambda _run: True, now=102.0,
-    )
-    backup = kept["transaction"]["policy"]["backup_path"]
-    assert open(backup, "rb").read() == before
-    assert isolated.load("work")["response_policies"] == ["less-verbose"]
-    flow.undo_keep(
-        kept["transaction"]["id"],
-        get_run=lambda _rid: None, replace_run=lambda _run: False, now=103.0,
-    )
-    assert open(profile_path, "rb").read() == before
+    prior = next(s for s in preview["scope_eligibility"] if s["scope"] == "once")
+    for scope in ("session", "profile"):
+        with pytest.raises(flow.CorrectiveFlowError, match="scope must be once"):
+            flow.keep_result(
+                result["result_id"], scope, prior["prior_hash"], "keep-key-000001",
+                get_run=lambda _rid: run, replace_run=lambda _run: True,
+            )
+
+
+def test_undo_keep_refuses_a_pre_retirement_session_or_profile_transaction(isolated):
+    """A transaction persisted before durable corrections were retired must not silently no-op
+    or crash; it must refuse explicitly, since nothing can reverse it anymore."""
+    with flow._LOCK:
+        doc = flow._load(strict=True)
+        doc["transactions"]["repair_legacy"] = {
+            "id": "repair_legacy", "scope": "session", "target": "session_x",
+            "created_ts": 1.0, "undone_ts": None, "result_id": "fix_result_legacy",
+        }
+        flow._save(doc)
+    with pytest.raises(flow.CorrectiveFlowError, match="no longer be undone"):
+        flow.undo_keep(
+            "repair_legacy", get_run=lambda _rid: None, replace_run=lambda _run: True,
+        )
 
 
 def _map(clear_ids, *, threshold=0.1):

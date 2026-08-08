@@ -7,8 +7,10 @@ steering, timings, and exact rendered context become inspectable runs without re
 live in Studio.
 
 For everyday debugging, Clozn shows what context was delivered and survived, compares any two recorded
-runs, measures source support when the required evidence is available, and offers scoped corrections
-with an explicit undo. For deeper work, it can teacher-force a stored answer, capture token
+runs, measures source support when the required evidence is available, and offers one-shot corrective
+retries and controlled comparisons — try a correction, generate a matched candidate, and see whether it
+actually changed the output. Nothing persists past the run it was generated from. For deeper work, it
+can teacher-force a stored answer, capture token
 alternatives, apply qualified interventions, and attach model-specific J-lens readouts. These are
 evidence tools—not a claim to decode literal thought—and white-box capabilities fail closed unless the
 exact artifact is qualified. See the [capability matrix](docs/CAPABILITIES.md) and

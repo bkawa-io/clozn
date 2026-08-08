@@ -45,110 +45,6 @@ class InstrumentedChatResult:
 
 
 
-def apply_corrective_policy(handler, messages: list) -> tuple[list, dict | None]:
-    """Apply active profile/session response policies to a copied request.
-
-    Callers retain the original messages for journaling, so the context receipt
-    never claims the client supplied Clozn's instruction. The returned evidence is
-    safe to place in run metadata.
-    """
-    from clozn.behavior import corrective_retries
-    from clozn.runs.association import request_session
-    session_key = request_session(getattr(handler, "headers", None))
-    profile_name = ctx._active_profile_name()
-    presets = corrective_retries.effective_presets(
-        session_key=session_key, profile_name=profile_name,
-    )
-    return (
-        corrective_retries.inject(messages, presets),
-        corrective_retries.evidence(
-            presets, session_key=session_key, profile_name=profile_name,
-        ),
-    )
-
-
-def apply_scoped_corrections(handler, messages: list) -> tuple[list, dict | None]:
-    """Apply explicitly confirmed F5 corrections for this request's exact scope.
-
-    Selection is content-blind and uses only the opaque session/client/project association keys plus
-    the loaded model's exact digest.  The original list is never mutated.  The returned evidence is
-    metadata-only (safe for run ``meta``); the same resolution is retained on the handler so the
-    central ``_log_run`` seam can attach it to the immutable receipt and write the correction ledger
-    after the run is durably created.  No active corrections means the legacy request path remains
-    completely unchanged.
-    """
-    from clozn.runs import corrections
-    if not corrections.has_active_corrections():
-        return list(messages), None
-
-    from clozn.runs.association import request_client, request_project, request_session
-    headers = getattr(handler, "headers", None)
-    session_key = request_session(headers)
-    client_key, _ = request_client(headers)
-    project_key = request_project(headers)
-    model_sha256 = None
-    try:
-        sub = ctx.active_sub(handler)
-        identity = sub.identity_meta() if sub and callable(getattr(sub, "identity_meta", None)) else {}
-        if isinstance(identity, Mapping):
-            model_sha256 = identity.get("model_sha256")
-        if not model_sha256 and sub is not None:
-            model_sha256 = getattr(sub, "model_sha256", None)
-    except Exception:
-        model_sha256 = None
-    # A model-scoped correction is eligible only when the worker reports the exact digest.  Passing an
-    # unusable label into resolve_corrections would turn a missing identity into a hard request error.
-    if not isinstance(model_sha256, str) or len(model_sha256) != 64:
-        model_sha256 = None
-    resolution = corrections.resolve_corrections(
-        session_id=session_key, client_id=client_key, project_id=project_key,
-        model_sha256=model_sha256,
-    )
-    # Keep the one resolution used for prompt materialization and receipt recording request-local.  The
-    # request handler is not reused concurrently, and do_POST clears this field at request start.
-    handler._correction_resolution = resolution
-    evidence = corrections.receipt_fields(resolution)
-    additive = corrections.messages_for_resolution(resolution)
-    return additive + list(messages), evidence
-
-
-def reapply_scoped_resolution(handler, messages: list) -> list:
-    """Rebuild the prompt from the one resolution already selected for this request.
-
-    OpenAI's opt-in guard path intentionally does not compose with the legacy corrective-policy layer.
-    The ordinary path therefore selects scoped corrections before guard parsing, applies the old policy
-    only after the guard has declined the request, and then reuses this exact saved resolution rather
-    than querying mutable correction state a second time.
-    """
-    from clozn.runs import corrections
-    resolution = getattr(handler, "_correction_resolution", None)
-    if not isinstance(resolution, dict):
-        return list(messages)
-    return corrections.messages_for_resolution(resolution) + list(messages)
-
-
-def flatten_messages_for_native(messages: list) -> str:
-    """Flatten chat-shaped correction context for the transparent completion protocol.
-
-    The native surface accepts a single raw prompt rather than role-tagged messages.  Keep the user's
-    original prompt verbatim after an explicit, bounded correction block; this helper is used only when
-    a confirmed correction actually applies.
-    """
-    parts = []
-    for message in messages:
-        if not isinstance(message, Mapping):
-            continue
-        content = message.get("content")
-        if content is None:
-            continue
-        text = str(content)
-        if message.get("role") == "system":
-            parts.append(text)
-        else:
-            parts.append(text)
-    return "\n\n".join(parts)
-
-
 def instrumented_chat(handler, messages: list, *, model: str, max_tokens: int = 256,
                       sample=True, source: str, extra_meta: dict | None = None,
                       journal_messages: list | None = None,
@@ -653,10 +549,7 @@ def _native_log_run(handler, body: dict, frames: list[dict], started: float,
         prompt = body.get("prompt", "")
         if not isinstance(prompt, str):
             prompt = str(prompt)
-        journal_prompt = getattr(handler, "_native_journal_prompt", None)
-        if not isinstance(journal_prompt, str):
-            journal_prompt = prompt
-        messages = [{"role": "user", "content": journal_prompt}]
+        messages = [{"role": "user", "content": prompt}]
         steps = runlog.accumulate_ar_events(frames)
         finish = runlog.finish_reason_from_frames(frames)
         raw_finish = runlog.raw_finish_reason_from_frames(frames)
@@ -668,20 +561,13 @@ def _native_log_run(handler, body: dict, frames: list[dict], started: float,
              and isinstance(obj.get("prompt_tokens"), int)),
             None,
         )
-        assembled_messages = getattr(handler, "_native_assembled_messages", None)
-        if not isinstance(assembled_messages, list):
-            assembled_messages = messages
-        mem_out = {"assembled_messages": assembled_messages, "final_prompt": prompt}
+        mem_out = {"assembled_messages": messages, "final_prompt": prompt}
         if isinstance(prompt_tokens, int):
             mem_out["actual_prompt_tokens"] = prompt_tokens
         extra_meta = {
             "native_surface": "/api/clozn/generate",
             "native_stream": bool(body.get("stream")),
         }
-        scoped_resolution = getattr(handler, "_correction_resolution", None)
-        if isinstance(scoped_resolution, dict):
-            from clozn.runs import corrections as correction_store
-            extra_meta["scoped_corrections"] = correction_store.receipt_fields(scoped_resolution)
         if raw_finish:
             extra_meta["raw_finish_reason"] = raw_finish
         extra_meta.update(timing or {})

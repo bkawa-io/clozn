@@ -3,9 +3,11 @@
  * (clozn/server/routes/corrective_actions.py, clozn/behavior/corrective_flow.py) -- the registry of
  * bounded corrective retries (`less-verbose`, `more-concrete`, `use-context`, `ask-before-guessing`,
  * `preserve-formatting`, `stop-repeating`; see clozn/replay/corrective.py's `CORRECTION_PRESETS`, the
- * one place these ids and their exact injected instruction text are defined) plus the reversible
- * scoped-keep transaction that can later promote a corrected child to `once` (this run's own selected
- * revision), `session`, or `profile` scope.
+ * one place these ids and their exact injected instruction text are defined) plus the reversible keep
+ * transaction that selects a corrected child as `once` -- THIS run's own selected revision. Durable
+ * `session`/`profile` scoping (a kept correction silently shaping a later, unrelated request) was
+ * retired; see docs/CAPABILITIES.md. `once` is the only scope left, and it never affects a request
+ * other than the one it was generated from.
  *
  * MOVED HERE FROM `features/behavior/api.ts` (D5, guided-repair UI): this client was originally written
  * for the Behavior panel's own free-standing "ANSWER FIXES" run picker, but D5 needs the identical
@@ -21,7 +23,7 @@
  * these six real action ids.
  */
 
-export type CorrectiveScope = "once" | "session" | "profile";
+export type CorrectiveScope = "once";
 export type CorrectiveBackend = "prompt_policy" | "control_vector";
 
 export interface CorrectiveBackendEntry {

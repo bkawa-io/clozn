@@ -89,22 +89,6 @@ export function flowPhaseLabel(phase: RepairFlowPhase): string {
   }
 }
 
-/** "once" selects the corrected child as THIS run's own revision -- a branch tied to one run, nothing
- * else ever changes. "session"/"profile" mutate a standing preference that shapes every future run in
- * that scope until undone. The UI must never blur these -- see the module docstring on D5's own
- * "branching retries vs mutable preferences visually distinct" requirement. */
-export function keepScopeKind(scope: CorrectiveScope): "branch" | "preference" {
-  switch (scope) {
-    case "once": return "branch";
-    case "session": return "preference";
-    case "profile": return "preference";
-    default: {
-      const exhaustive: never = scope;
-      return exhaustive;
-    }
-  }
-}
-
 export function findingStatusMeta(status: RepairFindingStatus): { label: string; className: string } {
   switch (status) {
     case "finding":
@@ -173,7 +157,6 @@ function KeepScopeButton({
   busy: boolean;
   onKeep: (scope: CorrectiveScope) => void;
 }) {
-  const branch = keepScopeKind(scope.scope) === "branch";
   return (
     <button
       type="button"
@@ -181,12 +164,10 @@ function KeepScopeButton({
       title={scope.unavailability_reason}
       onClick={() => onKeep(scope.scope)}
     >
-      <strong>{branch ? "USE THIS CORRECTION FOR THIS RUN" : scope.scope.toUpperCase()}</strong>
+      <strong>USE THIS CORRECTION FOR THIS RUN</strong>
       <span>
         {scope.available
-          ? scope.note ?? (branch
-            ? "selects the corrected child as this run's own revision"
-            : `${(scope.before ?? []).length} → ${(scope.after ?? []).length} active actions`)
+          ? scope.note ?? "selects the corrected child as this run's own revision"
           : scope.unavailability_reason}
       </span>
     </button>
@@ -617,13 +598,7 @@ export function DiagnosisRepair({ runId }: DiagnosisRepairProps) {
                       <div className="diagnosis-repair-keep">
                         <div className="diagnosis-repair-keep-group is-branch">
                           <header><span>PER-RUN -- BRANCHING RETRY</span><b>NEVER CHANGES FUTURE RUNS</b></header>
-                          {result.scope_eligibility.filter((s) => keepScopeKind(s.scope) === "branch").map((s) => (
-                            <KeepScopeButton scope={s} busy={busy} onKeep={(scope) => void keepActiveResult(scope)} key={s.scope} />
-                          ))}
-                        </div>
-                        <div className="diagnosis-repair-keep-group is-preference">
-                          <header><span>PREFERENCE CHANGE</span><b>APPLIES TO FUTURE RUNS UNTIL UNDONE</b></header>
-                          {result.scope_eligibility.filter((s) => keepScopeKind(s.scope) === "preference").map((s) => (
+                          {result.scope_eligibility.map((s) => (
                             <KeepScopeButton scope={s} busy={busy} onKeep={(scope) => void keepActiveResult(scope)} key={s.scope} />
                           ))}
                         </div>
@@ -634,8 +609,7 @@ export function DiagnosisRepair({ runId }: DiagnosisRepairProps) {
                     ) : (
                       <div className="diagnosis-repair-kept">
                         <span>
-                          KEPT -- {keepScopeKind(result.transaction.scope) === "branch" ? "PER-RUN" : "PREFERENCE"}
-                          {" · "}{result.transaction.scope.toUpperCase()}
+                          KEPT -- PER-RUN{" · "}{result.transaction.scope.toUpperCase()}
                         </span>
                         <button
                           type="button"

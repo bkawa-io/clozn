@@ -61,7 +61,7 @@ def test_retry_compare_uses_two_greedy_children_and_records_exact_correction(mon
     assert all(call[1]["greedy"] is True for call in calls)
     assert calls[0][0]["messages"] == run["messages"]
     assert calls[1][0]["messages"] == run["messages"]
-    assert calls[0][3] == {"prompt_instructions": [], "max_new": 256}
+    assert calls[0][3] == {"max_new": 256}
     assert calls[1][3]["max_new"] == 256
     assert calls[1][3]["prompt_instructions"][0].startswith("Clozn active corrective response policy:")
     assert calls[1][1]["corrective_retry"] == {
@@ -69,7 +69,6 @@ def test_retry_compare_uses_two_greedy_children_and_records_exact_correction(mon
         "preset": "less-verbose",
         "method": "system_instruction",
         "instruction": corrective.CORRECTION_PRESETS["less-verbose"],
-        "scope": "once",
     }
     assert calls[0][2] is sub and calls[1][2] is sub
     assert result["baseline_reply"] == "long answer"
@@ -78,6 +77,16 @@ def test_retry_compare_uses_two_greedy_children_and_records_exact_correction(mon
     assert result["changed"] is True
     assert result["intervention_observed"] is True
     assert isinstance(result["delta"], dict)
+
+
+def test_retry_compare_has_no_scope_or_active_presets_parameter():
+    """Durable session/profile scoping was retired (docs/CAPABILITIES.md) -- retry_compare accepts
+    no `scope` or `active_presets` argument, so a caller has no way to ask for persisted behavior;
+    every retry is request-local by construction."""
+    import inspect
+    params = inspect.signature(corrective.retry_compare).parameters
+    assert "scope" not in params
+    assert "active_presets" not in params
 
 
 def test_retry_compare_stops_when_an_arm_fails(monkeypatch):

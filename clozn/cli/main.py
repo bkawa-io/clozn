@@ -262,7 +262,7 @@ def build_parser():
     _add_context(sub)           # `clozn context last` — delivered vs survived prompt receipt (Phase 2.4)
     _add_watch(sub)             # `clozn watch` — insertion-ordered run tail/correlation (Phase 2.6)
     _add_connect(sub)           # `clozn connect aider` — safe third-party app config with backup
-    _add_retry(sub)             # `clozn retry last` — prompt-first corrective compare + scoped undo
+    _add_retry(sub)             # `clozn retry` — request-local, prompt-first corrective compare
     _add_diagnose(sub)          # `clozn diagnose last` — evidence-only latency/cutoff diagnosis
     _add_regression_suite(sub)  # `clozn suite create` — promote captured app runs into Model CI cases
     _add_runs_privacy(sub)      # `clozn runs` — local journal privacy controls and telemetry export

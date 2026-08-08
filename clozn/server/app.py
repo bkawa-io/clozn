@@ -1066,20 +1066,7 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                     project_key=project_key,
                     output_contract=output_contract, sections=sections,
                 )
-                correction_resolution = getattr(self, "_correction_resolution", None)
-                if isinstance(correction_resolution, dict):
-                    from clozn.runs import corrections as correction_store
-                    record_kwargs.update(correction_store.receipt_fields(correction_resolution))
                 rid = runlog.record(**record_kwargs)
-                # The immutable receipt is the source of truth.  Only after it exists do we append the
-                # matching per-correction application/conflict events; a ledger side-write can never
-                # claim an application for a run whose receipt failed to persist.
-                if rid and isinstance(correction_resolution, dict):
-                    try:
-                        from clozn.runs import corrections as correction_store
-                        correction_store.record_applications(rid, correction_resolution)
-                    except Exception:
-                        pass
                 self._maybe_snapshot_turn(rid, messages, trace, error)
                 self._last_logged_run_id = rid
                 return rid                        # M5 bridge: the run id, for callers that want to surface it
@@ -1141,9 +1128,6 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
             from clozn.server.model_routing import clear_handler_selection
             clear_handler_selection(self)
             self._last_logged_run_id = None
-            self._correction_resolution = None
-            self._native_journal_prompt = None
-            self._native_assembled_messages = None
             self._request_wall_started = time.time()
             self._gateway_timing_phases = []
             if self._reject_untrusted_origin():

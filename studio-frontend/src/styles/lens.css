@@ -3698,7 +3698,7 @@
   background: color-mix(in srgb, var(--signal-violet) 10%, transparent);
 }
 
-/* -- keep: branching retry vs preference change, two visually separate groups, never merged --------- */
+/* -- keep: selecting the corrected child as this run's own revision; never a standing preference ----- */
 
 .diagnosis-repair-keep {
   display: grid;
@@ -3714,10 +3714,6 @@
 
 .diagnosis-repair-keep-group.is-branch {
   border-left: 3px solid var(--signal-blue);
-}
-
-.diagnosis-repair-keep-group.is-preference {
-  border-left: 3px solid var(--signal-peach);
 }
 
 .diagnosis-repair-keep-group > header {

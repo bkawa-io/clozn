@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "clozn.behavior-profile.v1",
   "title": "A named persona/behavior-profile bundle",
-  "description": "The document clozn.profiles.store.ProfileStore persists at ~/.clozn/profiles/<name>.json (clozn/profiles/store.py). This IS the artifact agent_roadmap/08-reversible-behavior-fixes.md's spec calls a 'behavior profile': `dials` is the control-vector half, `response_policies` is the prompt-policy half (each entry a clozn.replay.corrective.CORRECTION_PRESETS key). Deliberately retrofitted onto the EXISTING bundle rather than standing up a second, parallel store -- corrective_retries.py already mutates and transactionally undoes the response_policies half of this exact document (clozn/behavior/corrective_retries.py). `cards`/`custom_dials`/`facts` are carried, never applied (memory cards were cut from the product 2026-07-27); they stay in the schema only so an older bundle's export/import round-trip stays lossless. Only container SHAPES are asserted here (object vs array, dial values numeric), matching exactly what clozn.profiles.store.validate() already guarantees on every path that reaches this schema -- retrofitting adds a machine-checkable contract, not a new behavioral constraint, so a legitimately hand-edited bundle that already passed validate() must never fail this schema.",
+  "description": "The document clozn.profiles.store.ProfileStore persists at ~/.clozn/profiles/<name>.json (clozn/profiles/store.py). `dials` is the control-vector half of a profile. `cards`/`custom_dials`/`facts` are carried, never applied (memory cards were cut from the product 2026-07-27); they stay in the schema only so an older bundle's export/import round-trip stays lossless. `response_policies` is a RETIRED field from the durable 'Teach Once' correction system (docs/CAPABILITIES.md): older bundles may still carry it, and it is preserved verbatim rather than stripped, but nothing reads it to shape a generation anymore. Only container SHAPES are asserted here (object vs array, dial values numeric), matching exactly what clozn.profiles.store.validate() already guarantees on every path that reaches this schema -- retrofitting adds a machine-checkable contract, not a new behavioral constraint, so a legitimately hand-edited bundle that already passed validate() must never fail this schema.",
   "type": "object",
   "required": ["schema_version", "name"],
   "properties": {
@@ -22,7 +22,7 @@
     },
     "response_policies": {
       "type": "array",
-      "description": "Prompt-policy corrective presets active for this profile -- each entry a clozn.replay.corrective.CORRECTION_PRESETS key.",
+      "description": "RETIRED (durable 'Teach Once' correction presets, see docs/CAPABILITIES.md). Preserved verbatim on older bundles for a lossless round-trip; never applied to a generation.",
       "items": {"type": "string"}
     },
     "custom_dials": {

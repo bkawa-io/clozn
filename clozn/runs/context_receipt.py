@@ -344,14 +344,15 @@ def build_context_receipt(*, messages=None, assembled_messages=None, final_promp
     otherwise silently drop the ENTIRE run over a receipt-only defect. A broken receipt must cost its own
     field, never the run (same principle clozn.runs.identity_providers states for identity facets).
 
-    `applied_corrections`/`correction_conflicts` (F5, "Teach Once"): the trimmed output of
-    `clozn.runs.corrections.resolve_corrections()` (see that module's `receipt_fields()`), passed through
-    verbatim into the schema's own `applied_corrections`/`correction_conflicts` arrays. Only present on
-    the built document when the caller actually passed a (possibly empty) list -- an absent key means "no
-    correction evidence was computed for this run" and a `[]` means "corrections were resolved and none
-    matched," a distinction the schema's own field descriptions state explicitly. This function never
-    resolves corrections itself and never reads message content to decide what belongs here; it only
-    carries whatever the caller already resolved.
+    `applied_corrections`/`correction_conflicts` (F5, "Teach Once"): RETIRED -- the durable correction
+    store that used to compute these (`clozn.runs.corrections.resolve_corrections()`) is gone; see
+    docs/CAPABILITIES.md. The parameters stay only so an older run's already-persisted receipt shape
+    keeps reading identically. No production caller passes either anymore. Historically: only present
+    on the built document when the caller actually passed a (possibly empty) list -- an absent key
+    meant "no correction evidence was computed for this run" and a `[]` meant "corrections were
+    resolved and none matched," a distinction the schema's own field descriptions still state. This
+    function never resolved corrections itself and never read message content to decide what belongs
+    here; it only carried whatever the caller had already resolved.
     """
     meta = meta if isinstance(meta, dict) else {}
     trace = trace if isinstance(trace, dict) else {}

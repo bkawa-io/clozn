@@ -117,20 +117,13 @@ def try_post(h, p, body):
                 "error": f"active worker {mismatch} does not match the target run"
             })
             return True
-        from clozn.behavior import corrective_retries
         from clozn.replay.corrective import retry_compare
-        active_presets = corrective_retries.effective_presets(
-            session_key=run.get("session_key"),
-            profile_name=ctx._active_profile_name(),
-        )
 
         def execute(saved_preview):
             return retry_compare(
                 run,
                 saved_preview["action"]["id"],
                 sub,
-                scope="once",
-                active_presets=active_presets,
                 backend=saved_preview["execution"]["requested_backend"],
                 structured=True,
             )

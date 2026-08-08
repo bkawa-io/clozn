@@ -56,7 +56,10 @@ _LABELS = {
     "stop-repeating": "Stop repeating yourself",
 }
 
-SCOPES = ("once", "session", "profile")
+# Durable session/profile scoping was retired -- a kept correction only ever selects itself as its
+# own parent run's revision (clozn.behavior.corrective_flow.keep_result), never a standing policy
+# that could shape a later, unrelated request. See docs/CAPABILITIES.md.
+SCOPES = ("once",)
 
 
 def _prompt_policy_backend(action_id: str) -> dict:

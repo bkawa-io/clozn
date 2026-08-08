@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from clozn.behavior import corrective_flow as flow
-from clozn.behavior import corrective_retries as policy
 from clozn.replay import corrective
 from clozn.server.routes import corrective_actions as route
 import clozn.runs.store as runlog
@@ -31,8 +30,7 @@ def _parent():
     }
 
 
-def _comparison(run, preset, sub, *, scope, active_presets, backend, structured):
-    assert scope == "once"
+def _comparison(run, preset, sub, *, backend, structured):
     assert structured is True
     return {
         "stored_original_reply": run["response"],
@@ -57,7 +55,6 @@ def _comparison(run, preset, sub, *, scope, active_presets, backend, structured)
 
 def test_route_registry_preview_confirm_keep_and_undo(tmp_path, monkeypatch):
     monkeypatch.setattr(flow, "_PATH", str(tmp_path / "flow.json"))
-    monkeypatch.setattr(policy, "_PATH", str(tmp_path / "policy.json"))
     runs = {
         "run_parent": _parent(),
         "run_baseline": {"id": "run_baseline"},

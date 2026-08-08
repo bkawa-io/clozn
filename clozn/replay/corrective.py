@@ -142,20 +142,14 @@ def _dial_applied(child: Mapping[str, Any], dial: str, strength: float) -> bool:
 def _structured_failure(
     run: Mapping[str, Any],
     preset: str,
-    scope: str,
     requested_backend: str,
     budget: int,
-    current_presets: list[str],
-    candidate_presets: list[str],
     baseline: dict[str, Any],
     corrected: dict[str, Any],
 ) -> dict[str, Any]:
     """Return a persistable partial outcome without changing the legacy ``None`` contract."""
     return {
         "preset": preset,
-        "scope": scope,
-        "active_presets_before": current_presets,
-        "active_presets_candidate": candidate_presets,
         "instruction": CORRECTION_PRESETS[preset],
         "stored_original_reply": str(run.get("response") or ""),
         "baseline_reply": str(baseline.get("reply") or ""),
@@ -182,10 +176,16 @@ def _structured_failure(
     }
 
 
-def retry_compare(run: Mapping[str, Any], preset: str, sub, *, scope: str = "once",
-                  active_presets=(), backend: str | None = None,
+def retry_compare(run: Mapping[str, Any], preset: str, sub, *,
+                  backend: str | None = None,
                   structured: bool = False) -> dict[str, Any] | None:
     """Generate mandatory matched greedy baseline/corrected replay children.
+
+    This is a request-local counterfactual debugging tool: the baseline is a plain greedy replay of
+    the run, and the corrected arm is the SAME replay plus one bounded system instruction. Neither arm
+    persists anything beyond the two child runs themselves -- there is no session/profile scope and no
+    standing policy left behind for a later, unrelated request to pick up (durable, auto-applied
+    corrections were retired; see docs/CAPABILITIES.md).
 
     Returns ``None`` when either existing replay operation fails, matching replay's
     established failure contract.  Invalid inputs and preset names raise
@@ -211,15 +211,9 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *, scope: str = "onc
     # Validate before either generation. The injected copy is intentionally not put
     # back into ``run``: replay must journal only caller-delivered messages.
     inject_correction(messages, preset)
-    if scope not in {"once", "session", "profile"}:
-        raise ValueError("scope must be once, session, or profile")
     if backend not in (None, "prompt_policy", "control_vector"):
         raise ValueError("backend must be None, 'prompt_policy', or 'control_vector'")
     budget = _original_budget(run)
-    current_presets = list(dict.fromkeys(
-        str(value) for value in (active_presets or []) if str(value) in CORRECTION_PRESETS
-    ))
-    candidate_presets = list(dict.fromkeys(current_presets + [preset]))
     requested_backend = backend or "prompt_policy"
 
     baseline_changes = {
@@ -231,21 +225,20 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *, scope: str = "onc
             dict(run),
             baseline_changes,
             sub,
-            prompt_instructions=_prompt_blocks(current_presets),
             max_new=budget,
         )
     except Exception as exc:
         if not structured:
             raise
         return _structured_failure(
-            run, preset, scope, requested_backend, budget, current_presets, candidate_presets,
+            run, preset, requested_backend, budget,
             {"status": "error", "error": {"code": "generation_error", "message": str(exc)}},
             {"status": "not_run"},
         )
     if baseline is None:
         if structured:
             return _structured_failure(
-                run, preset, scope, requested_backend, budget, current_presets, candidate_presets,
+                run, preset, requested_backend, budget,
                 {"status": "error", "error": {"code": "generation_failed",
                                                "message": "baseline replay returned no run"}},
                 {"status": "not_run"},
@@ -264,7 +257,7 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *, scope: str = "onc
                       "message": "baseline replay did not persist a child run id"},
         }
         return _structured_failure(
-            run, preset, scope, requested_backend, budget, current_presets, candidate_presets,
+            run, preset, requested_backend, budget,
             baseline_outcome, {"status": "not_run"},
         )
 
@@ -286,7 +279,7 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *, scope: str = "onc
             "greedy": True,
             "corrective_retry": {
                 "arm": "corrected", "preset": preset, "method": "control_vector",
-                "dial": dial, "strength": strength, "scope": scope,
+                "dial": dial, "strength": strength,
             },
             "behavior_overrides": {dial: strength},
         }
@@ -295,14 +288,13 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *, scope: str = "onc
                 dict(run),
                 corrected_changes,
                 sub,
-                prompt_instructions=_prompt_blocks(current_presets),
                 max_new=budget,
             )
         except Exception as exc:
             if not structured:
                 raise
             return _structured_failure(
-                run, preset, scope, requested_backend, budget, current_presets, candidate_presets,
+                run, preset, requested_backend, budget,
                 baseline_outcome,
                 {"status": "error", "error": {"code": "generation_error", "message": str(exc)}},
             )
@@ -314,7 +306,6 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *, scope: str = "onc
                 "preset": preset,
                 "method": "system_instruction",
                 "instruction": instruction,
-                "scope": scope,
             },
         }
         try:
@@ -322,21 +313,21 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *, scope: str = "onc
                 dict(run),
                 corrected_changes,
                 sub,
-                prompt_instructions=_prompt_blocks(candidate_presets),
+                prompt_instructions=_prompt_blocks([preset]),
                 max_new=budget,
             )
         except Exception as exc:
             if not structured:
                 raise
             return _structured_failure(
-                run, preset, scope, requested_backend, budget, current_presets, candidate_presets,
+                run, preset, requested_backend, budget,
                 baseline_outcome,
                 {"status": "error", "error": {"code": "generation_error", "message": str(exc)}},
             )
     if corrected is None:
         if structured:
             return _structured_failure(
-                run, preset, scope, requested_backend, budget, current_presets, candidate_presets,
+                run, preset, requested_backend, budget,
                 baseline_outcome,
                 {"status": "error", "error": {"code": "generation_failed",
                                                "message": "corrected replay returned no run"}},
@@ -360,7 +351,7 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *, scope: str = "onc
                       "message": "corrected replay did not persist a child run id"},
         }
         return _structured_failure(
-            run, preset, scope, requested_backend, budget, current_presets, candidate_presets,
+            run, preset, requested_backend, budget,
             baseline_outcome, corrected_outcome,
         )
     try:
@@ -385,9 +376,6 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *, scope: str = "onc
     )
     return {
         "preset": preset,
-        "scope": scope,
-        "active_presets_before": current_presets,
-        "active_presets_candidate": candidate_presets,
         "instruction": instruction,
         "stored_original_reply": str(run.get("response") or ""),
         "baseline_reply": baseline_reply,

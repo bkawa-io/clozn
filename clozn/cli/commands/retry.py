@@ -1,4 +1,4 @@
-"""`clozn retry`: compare a bounded prompt-first correction and optionally scope it."""
+"""`clozn retry`: compare a request-local, prompt-first correction against the last run."""
 from __future__ import annotations
 
 import json
@@ -17,9 +17,7 @@ _FLAG_TO_PRESET = {
 
 
 def add_subparser(sub):
-    parser = sub.add_parser("retry", help="compare and apply a prompt-first correction to the last run")
-    parser.add_argument("action", choices=("last", "undo"))
-    parser.add_argument("undo_id", nargs="?", help="repair id for `retry undo`")
+    parser = sub.add_parser("retry", help="compare a prompt-first correction against the last run")
     repairs = parser.add_mutually_exclusive_group()
     repairs.add_argument("--less-verbose", action="store_true")
     repairs.add_argument("--more-concrete", action="store_true")
@@ -27,8 +25,6 @@ def add_subparser(sub):
     repairs.add_argument("--ask-before-guessing", action="store_true")
     repairs.add_argument("--preserve-formatting", action="store_true")
     repairs.add_argument("--stop-repeating", action="store_true")
-    parser.add_argument("--scope", choices=("once", "session", "profile"), default="once",
-                        help="how long the correction stays active (default once)")
     parser.add_argument("--port", type=int, default=0, help="Clozn gateway port (default 8080)")
     parser.add_argument("--json", action="store_true", help="print the machine-readable comparison")
     parser.set_defaults(fn=cmd_retry)
@@ -81,42 +77,21 @@ def _print_comparison(result: dict) -> None:
     print(result.get("corrected_reply") or "(empty)")
     delta = result.get("delta") or {}
     print(f"\nchanged: {str(bool(result.get('changed'))).lower()}"
-          f"  |  word change: {delta.get('changed', '?')}%"
-          f"  |  scope: {(result.get('policy') or {}).get('scope', result.get('scope', 'once'))}")
-    undo = result.get("undo") or {}
-    if undo.get("available") and undo.get("id"):
-        print(f"undo: clozn retry undo {undo['id']}")
-    elif undo.get("status") == "automatic_restored":
-        print("undo: automatic — this correction affected only the candidate replay")
-    elif (result.get("policy") or {}).get("reason"):
-        print("not activated: " + str(result["policy"]["reason"]))
+          f"  |  word change: {delta.get('changed', '?')}%")
+    print("this correction applied only to the candidate replay above; it leaves no "
+          "behavior change for future requests.")
 
 
 def cmd_retry(args):
     from clozn.cli import main as ctx
     port = args.port or 8080
     preset = _selected_preset(args)
-    if args.action == "undo":
-        if preset or args.scope != "once":
-            raise ctx.CloznError("`retry undo` accepts only a repair id (and optional --port/--json)")
-        if not args.undo_id:
-            raise ctx.CloznError("`retry undo` needs the repair id printed by the scoped retry")
-        result = _post(port, f"/corrective-retries/{args.undo_id}/undo", {})
-        if args.json:
-            print(json.dumps(result, indent=2, sort_keys=True))
-        else:
-            print(f"undone: {result.get('scope')} correction for {result.get('target')}")
-        return 0
-
-    if args.undo_id:
-        raise ctx.CloznError("unexpected value after `retry last`")
     if not preset:
         raise ctx.CloznError(
             "choose one correction: --less-verbose, --more-concrete, --use-context, "
             "--ask-before-guessing, --preserve-formatting, or --stop-repeating"
         )
-    result = _post(port, f"/runs/{_last_organic_id()}/retry",
-                   {"preset": preset, "scope": args.scope})
+    result = _post(port, f"/runs/{_last_organic_id()}/retry", {"preset": preset})
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:

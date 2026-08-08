@@ -25,9 +25,11 @@ SQLite journal and become available in Studio.
   history, settings, tools, and output changes.
 - **Experiments** renders the case × variant × seed matrix, summaries, filters, and cell detail from
   versioned experiment results.
-- **Behavior** exposes qualified steering controls, corrective actions, and Teach Once. Teach Once keeps
-  drafts inert, supports explicit scope/confirmation, and can verify a target/child run pair before
-  promotion; disable, enable, and undo remain explicit reversible actions.
+- **Behavior** exposes qualified steering controls and one-shot corrective retries: preview a bounded
+  action, confirm it to run a matched baseline/corrected comparison, and optionally keep the corrected
+  child as that run's own revision (with an explicit undo). Durable, auto-applying corrections
+  ("Teach Once") were retired — nothing kept here shapes a later, unrelated request; see
+  [CAPABILITIES.md](CAPABILITIES.md).
 - **Model** reports the loaded worker and optional artifact state.
 - **Scope** explores recorded token and layer evidence without upgrading post-hoc readouts to causal
   claims.

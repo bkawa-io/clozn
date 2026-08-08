@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "clozn.corrective-retry-result.v1",
   "title": "Persisted outcome of one confirmed corrective action",
-  "description": "A confirmed, one-shot matched greedy comparison. Keeping a corrected child is a later transaction recorded under transaction; confirming alone never mutates session or profile policy.",
+  "description": "A confirmed, one-shot matched greedy comparison. Keeping a corrected child (transaction) only ever selects it as this run's own revision -- durable session/profile scoping was retired, see docs/CAPABILITIES.md. Confirming alone never mutates any standing policy.",
   "type": "object",
   "required": [
     "schema_version",
@@ -39,7 +39,7 @@
       "required": ["action_id"],
       "properties": {
         "action_id": {"type": "string", "minLength": 1},
-        "kept_scope": {"enum": ["once", "session", "profile"]}
+        "kept_scope": {"enum": ["once"]}
       }
     },
     "execution": {
@@ -78,8 +78,8 @@
     "intervention_observed": {"type": "boolean"},
     "scope_eligibility": {
       "type": "array",
-      "minItems": 3,
-      "maxItems": 3,
+      "minItems": 1,
+      "maxItems": 1,
       "items": {"$ref": "#/$defs/scope"}
     },
     "outcome": {
@@ -114,7 +114,7 @@
       "type": "object",
       "required": ["scope", "available"],
       "properties": {
-        "scope": {"enum": ["once", "session", "profile"]},
+        "scope": {"enum": ["once"]},
         "available": {"type": "boolean"},
         "target": {"type": "string"},
         "prior_hash": {"type": "string"},

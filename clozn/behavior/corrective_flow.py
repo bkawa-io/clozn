@@ -1,9 +1,12 @@
 """Preview/confirm/keep orchestration for bounded corrective actions.
 
-The generation step and the policy mutation step are deliberately separate.  Confirming a
-preview creates one matched greedy comparison and persists its structured outcome; it never
-changes a session or profile.  Keeping a successful corrected child is a second, CAS-guarded
-operation with its own idempotency key and undo transaction.
+The generation step and the keep step are deliberately separate.  Confirming a preview creates one
+matched greedy comparison and persists its structured outcome; it never changes any standing policy.
+Keeping a successful corrected child selects it as ITS OWN parent run's revision -- a per-run,
+request-local choice, not a session/profile preference that would shape a later, unrelated request.
+Durable, auto-applied corrections (session/profile scope, persistent activation) were retired; see
+docs/CAPABILITIES.md. The keep transaction still has its own idempotency key and undo, but "undo"
+here only ever reverts which revision THIS run points at.
 """
 from __future__ import annotations
 
@@ -18,7 +21,7 @@ from collections.abc import Callable, Mapping
 from copy import deepcopy
 
 from clozn._io import atomic_write_json
-from clozn.behavior import corrective_retries, registry
+from clozn.behavior import registry
 
 
 SCHEMA = "clozn.corrective-flow.v1"
@@ -112,72 +115,20 @@ def _validate_key(value: str) -> str:
 
 
 def scope_eligibility(run: Mapping, action_id: str, *, active_profile: str | None) -> list[dict]:
-    scopes = [{
+    """Return the (now singular) once-scoped keep eligibility for this run/action.
+
+    ``active_profile`` is accepted for call-signature stability with existing callers
+    (clozn.server.routes.corrective_actions) even though it no longer selects a scope -- durable
+    session/profile scoping was retired.
+    """
+    del active_profile
+    return [{
         "scope": "once",
         "available": True,
         "target": str(run.get("id") or ""),
         "prior_hash": _revision_hash(run),
-        "note": "selects the corrected child as this run's revision; no policy is changed",
+        "note": "selects the corrected child as this run's revision; no future request is affected",
     }]
-    session_key = run.get("session_key")
-    if session_key:
-        try:
-            state = corrective_retries.preview("session", str(session_key), action_id)
-            scopes.append({
-                "scope": "session",
-                "available": bool(state["changed"]),
-                "target": str(session_key),
-                "prior_hash": state["prior_hash"],
-                "before": state["before"],
-                "after": state["after"],
-                **({} if state["changed"] else {
-                    "unavailability_reason": "this action is already active for the session"
-                }),
-            })
-        except corrective_retries.CorrectivePolicyError as exc:
-            scopes.append({"scope": "session", "available": False,
-                           "unavailability_reason": str(exc)})
-    else:
-        scopes.append({
-            "scope": "session",
-            "available": False,
-            "unavailability_reason": "the run has no exact opaque session association",
-        })
-
-    captured_profile = str((run.get("meta") or {}).get("active_profile") or "")
-    if not captured_profile:
-        scopes.append({
-            "scope": "profile",
-            "available": False,
-            "unavailability_reason": "the run did not capture an active profile",
-        })
-    elif captured_profile != str(active_profile or ""):
-        scopes.append({
-            "scope": "profile",
-            "available": False,
-            "target": captured_profile,
-            "unavailability_reason": (
-                "the profile that shaped this run is not currently active"
-            ),
-        })
-    else:
-        try:
-            state = corrective_retries.preview("profile", captured_profile, action_id)
-            scopes.append({
-                "scope": "profile",
-                "available": bool(state["changed"]),
-                "target": captured_profile,
-                "prior_hash": state["prior_hash"],
-                "before": state["before"],
-                "after": state["after"],
-                **({} if state["changed"] else {
-                    "unavailability_reason": "this action is already active in the profile"
-                }),
-            })
-        except corrective_retries.CorrectivePolicyError as exc:
-            scopes.append({"scope": "profile", "available": False,
-                           "target": captured_profile, "unavailability_reason": str(exc)})
-    return scopes
 
 
 def registry_for_run(run: Mapping, *, steer=None, active_profile: str | None = None) -> dict:
@@ -475,8 +426,11 @@ def keep_result(
     now: float | None = None,
 ) -> dict:
     key = _validate_key(idempotency_key)
-    if scope not in {"once", "session", "profile"}:
-        raise CorrectiveFlowError("scope must be once, session, or profile")
+    if scope != "once":
+        raise CorrectiveFlowError(
+            "scope must be once; durable session/profile corrections were retired -- "
+            "keeping a result only ever selects it as this run's own revision"
+        )
     clock = float(time.time() if now is None else now)
     with _LOCK:
         doc = _load(strict=True)
@@ -517,60 +471,38 @@ def keep_result(
         }
         _save(doc)
 
-        if scope == "once":
-            parent = get_run(result["parent_run_id"])
-            if parent is None:
-                doc["idempotency"].pop(key, None)
-                _save(doc)
-                raise CorrectiveFlowError("parent run is missing; refusing revision selection")
-            if _revision_hash(parent) != expected_prior_hash:
-                doc["idempotency"].pop(key, None)
-                _save(doc)
-                raise CorrectiveFlowError(
-                    "selected revision changed after preview; refusing stale apply"
-                )
-            before = deepcopy(parent.get("selected_revision"))
-            after = {
-                "result_id": result_id,
-                "child_run_id": str(corrected_id),
-                "action_id": result["action"]["id"],
-                "selected_ts": clock,
-            }
-            parent["selected_revision"] = after
-            if not replace_run(parent):
-                doc["idempotency"].pop(key, None)
-                _save(doc)
-                raise CorrectiveFlowError("failed to select corrected child revision")
-            transaction = {
-                "id": "revision_" + uuid.uuid4().hex[:20],
-                "scope": "once",
-                "target": result["parent_run_id"],
-                "before": before,
-                "after": after,
-                "created_ts": clock,
-                "undone_ts": None,
-            }
-        else:
-            try:
-                activated = corrective_retries.activate(
-                    scope,
-                    eligibility.get("target"),
-                    result["action"]["id"],
-                    now=clock,
-                    expected_prior_hash=expected_prior_hash,
-                )
-            except corrective_retries.CorrectivePolicyError as exc:
-                doc["idempotency"].pop(key, None)
-                _save(doc)
-                raise CorrectiveFlowError(str(exc)) from None
-            transaction = {
-                "id": str(activated.get("undo_id") or ""),
-                "scope": scope,
-                "target": eligibility.get("target"),
-                "created_ts": clock,
-                "undone_ts": None,
-                "policy": activated,
-            }
+        parent = get_run(result["parent_run_id"])
+        if parent is None:
+            doc["idempotency"].pop(key, None)
+            _save(doc)
+            raise CorrectiveFlowError("parent run is missing; refusing revision selection")
+        if _revision_hash(parent) != expected_prior_hash:
+            doc["idempotency"].pop(key, None)
+            _save(doc)
+            raise CorrectiveFlowError(
+                "selected revision changed after preview; refusing stale apply"
+            )
+        before = deepcopy(parent.get("selected_revision"))
+        after = {
+            "result_id": result_id,
+            "child_run_id": str(corrected_id),
+            "action_id": result["action"]["id"],
+            "selected_ts": clock,
+        }
+        parent["selected_revision"] = after
+        if not replace_run(parent):
+            doc["idempotency"].pop(key, None)
+            _save(doc)
+            raise CorrectiveFlowError("failed to select corrected child revision")
+        transaction = {
+            "id": "revision_" + uuid.uuid4().hex[:20],
+            "scope": "once",
+            "target": result["parent_run_id"],
+            "before": before,
+            "after": after,
+            "created_ts": clock,
+            "undone_ts": None,
+        }
         result["user_intent"]["kept_scope"] = scope
         result["transaction"] = transaction
         from clozn import schemas
@@ -602,25 +534,28 @@ def undo_keep(
             raise CorrectiveFlowError("unknown corrective action undo id")
         if tx.get("undone_ts") is not None:
             raise CorrectiveFlowError("corrective action was already undone")
-        if tx.get("scope") == "once":
-            parent = get_run(str(tx.get("target") or ""))
-            if parent is None:
-                raise CorrectiveFlowError("parent run is missing; refusing revision undo")
-            if parent.get("selected_revision") != tx.get("after"):
-                raise CorrectiveFlowError(
-                    "selected revision changed after this action; refusing stale undo"
-                )
-            if tx.get("before") is None:
-                parent.pop("selected_revision", None)
-            else:
-                parent["selected_revision"] = deepcopy(tx["before"])
-            if not replace_run(parent):
-                raise CorrectiveFlowError("failed to restore prior selected revision")
+        if tx.get("scope") != "once":
+            # A transaction from before durable session/profile keeps were retired. The module that
+            # could reverse it (clozn.behavior.corrective_retries) is gone; there is nothing left it
+            # could still be applying to a new generation (see generation_gateway.py), so refuse
+            # rather than guess at a mutation this build no longer knows how to perform.
+            raise CorrectiveFlowError(
+                "this transaction predates the retirement of durable session/profile corrections "
+                "and can no longer be undone through this API; it has no effect on new generations"
+            )
+        parent = get_run(str(tx.get("target") or ""))
+        if parent is None:
+            raise CorrectiveFlowError("parent run is missing; refusing revision undo")
+        if parent.get("selected_revision") != tx.get("after"):
+            raise CorrectiveFlowError(
+                "selected revision changed after this action; refusing stale undo"
+            )
+        if tx.get("before") is None:
+            parent.pop("selected_revision", None)
         else:
-            try:
-                corrective_retries.undo(str(transaction_id), now=clock)
-            except corrective_retries.CorrectivePolicyError as exc:
-                raise CorrectiveFlowError(str(exc)) from None
+            parent["selected_revision"] = deepcopy(tx["before"])
+        if not replace_run(parent):
+            raise CorrectiveFlowError("failed to restore prior selected revision")
         tx["undone_ts"] = clock
         result = doc["results"].get(str(tx.get("result_id") or ""))
         if isinstance(result, dict) and isinstance(result.get("transaction"), dict):

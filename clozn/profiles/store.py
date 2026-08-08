@@ -19,11 +19,15 @@ Bundle layout (~/.clozn/profiles/<name>.json), version-tagged for future migrati
   "version": 1, "name": "work", "description": "...",
   "cards":        [{"text": "...", "status": "active"}, ...],       # dispositions (say-it tier)
   "dials":        {"concise": 0.8, "warm": -0.2},                    # built-in dial settings
-  "response_policies": ["less-verbose"],                              # prompt-first retry defaults
   "custom_dials": [{"name","pos","neg","max"}, ...],                 # show-it recipes (recompilable)
   "facts":        [{"cue": "...", "answer": " ..."}, ...],           # slot-store sources (recompilable)
   "created_at": ..., "updated_at": ...
 }
+
+``response_policies`` is a RETIRED field: older bundles may still carry it (a durable, auto-applied
+correction preset list from the "Teach Once" personalization system -- see docs/CAPABILITIES.md for
+why it was removed). It is preserved verbatim on load/save so re-saving an old bundle never destroys
+that data, but nothing in this module -- or anywhere else -- reads it to shape a generation anymore.
 """
 from __future__ import annotations
 
@@ -54,7 +58,7 @@ def new_profile(name: str, description: str = "") -> dict:
         raise ValueError(f"profile name must match {_NAME_RE.pattern!r}, got {name!r}")
     return {"version": VERSION, "schema_version": SCHEMA_VERSION, "name": name,
             "description": description,
-            "cards": [], "dials": {}, "response_policies": [], "custom_dials": [], "facts": [],
+            "cards": [], "dials": {}, "custom_dials": [], "facts": [],
             "created_at": _now(), "updated_at": _now()}
 
 
@@ -92,12 +96,14 @@ def validate(p: dict) -> dict:
                 continue                       # a non-numeric dial value is dropped, not fatal
     p["dials"] = dials_out
 
-    from clozn.replay.corrective import CORRECTION_PRESETS
+    # Retired field (durable "Teach Once" correction presets -- see the module docstring). Preserved
+    # verbatim when an old bundle carries it, never invented for a bundle that lacks it, and never
+    # read anywhere to shape a generation.
     policies_in = p.get("response_policies")
-    policies_in = policies_in if isinstance(policies_in, list) else []
-    p["response_policies"] = list(dict.fromkeys(
-        str(value) for value in policies_in if str(value) in CORRECTION_PRESETS
-    ))
+    if isinstance(policies_in, list):
+        p["response_policies"] = [str(value) for value in policies_in]
+    else:
+        p.pop("response_policies", None)
 
     custom_in = p.get("custom_dials")
     custom_in = custom_in if isinstance(custom_in, list) else []

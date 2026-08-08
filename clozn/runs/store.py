@@ -395,16 +395,13 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
     exactly the schema it always got -- no `sections` key at all, not a null or empty list -- so this is
     purely additive and nothing downstream needs to special-case its absence.
 
-    `applied_corrections`/`correction_conflicts` (F5, "Teach Once" scoped correction store): the trimmed
-    output of `clozn.runs.corrections.resolve_corrections()`, attached ONCE, here, at run creation --
-    runs are immutable, so this is the only moment a run can ever carry which corrections shaped it.
-    Threaded straight through into `build_context_receipt()`, which folds the same lists into the run's
-    `context_receipt`, so the acceptance criterion "no correction applies without appearing in the
-    delivered-context receipt" is a property of this one code path, not something a caller has to
-    remember to duplicate. `clozn.runs.corrections.apply_and_record()` is the intended single entry point
-    that supplies both -- see that function's own docstring for the exact structural guarantee and its
-    honest limits. A caller that never passes either (every call site today) gets exactly the schema it
-    always got: no `applied_corrections` key at all."""
+    `applied_corrections`/`correction_conflicts` (F5, "Teach Once" scoped correction store): RETIRED --
+    the durable correction store that used to populate these (`clozn.runs.corrections`,
+    `clozn.runs.corrections.apply_and_record()`) was removed; see docs/CAPABILITIES.md. The parameters
+    stay only so an older run's already-persisted shape keeps validating/reading identically, and so any
+    caller that still passes them (none, in this build) degrades to exactly the schema it always got.
+    No production call site passes either anymore: every new run gets no `applied_corrections` key at
+    all, the same as a caller that never passed one."""
     try:
         _ensure()
         started = started if started is not None else time.time()

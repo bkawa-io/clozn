@@ -208,8 +208,9 @@ def _context_receipt_markdown(run: dict) -> str:
     elif not content_present:
         lines.append("_full assembled/rendered text not captured for this run._")
 
-    # F5 (Teach Once): every applied correction is rendered here unconditionally when present -- this is
-    # the acceptance-criterion surface restated in the human-readable export, not a separate opt-in.
+    # F5 (Teach Once, RETIRED -- docs/CAPABILITIES.md): a historical run may still carry these fields;
+    # rendered here unconditionally when present so an old export stays legible. No new run writes
+    # them anymore.
     applied = receipt.get("applied_corrections")
     if isinstance(applied, list) and applied:
         lines.append(f"\napplied corrections: {len(applied)}")

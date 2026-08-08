@@ -14,23 +14,24 @@ function json(body: unknown) {
 }
 
 describe("Behavior", () => {
-  test("opens the durable corrections surface by default while retaining one-shot retries as a module", async () => {
-    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+  test("opens the one-shot retry surface by default and has no durable Teach Once / Corrections module", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       switch (String(input)) {
-        case "/corrections": return json({ schema_version: "clozn.correction-list.v1", corrections: [] });
         case "/steer/axes": return json({ axes: [] });
         case "/sampling/mode": return json({ sampling: false });
         case "/guard/mode": return json({ enabled: false });
         case "/profiles/list": return json({ profiles: [] });
         default: throw new Error(`unexpected request ${String(input)}`);
       }
-    }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
 
     render(<Behavior runtime={runtime} inspectorOpen={false} />);
 
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Corrections" })).toBeInTheDocument());
-    expect(screen.getByRole("button", { name: /CORRECTIONS/ })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: /ONE-SHOT RETRIES/ })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Fix this answer" })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Fix this answer" })).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /ONE-SHOT RETRIES/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("button", { name: /CORRECTIONS/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Corrections" })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith("/corrections"))).toBe(false);
   });
 });

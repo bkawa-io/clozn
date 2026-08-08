@@ -90,14 +90,12 @@ export function correctiveRegistryBody(runId: string) {
         label: "More concise",
         description: "For this reply, answer concisely.",
         conflicts: [],
-        scopes: ["once", "session", "profile"],
+        scopes: ["once"],
         eligibility: { eligible: true },
         evaluation_metrics: [],
         backends: [{ type: "prompt_policy", available: true }],
         scope_eligibility: [
           { scope: "once", available: true, prior_hash: "hash-once" },
-          { scope: "session", available: false, unavailability_reason: "the run has no exact opaque session association" },
-          { scope: "profile", available: false, unavailability_reason: "the run did not capture an active profile" },
         ],
       },
       {
@@ -133,8 +131,6 @@ export function previewBody() {
     },
     scope_eligibility: [
       { scope: "once", available: true, prior_hash: "hash-once" },
-      { scope: "session", available: false, unavailability_reason: "no session" },
-      { scope: "profile", available: false, unavailability_reason: "no profile" },
     ],
     comparison_contract: {
       baseline: "matched greedy replay under the current runtime policy",

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from clozn.behavior import corrective_retries as policy
 from clozn.replay import corrective
 from clozn.server.routes import corrective_retries as route
 import clozn.runs.store as runlog
@@ -16,49 +15,47 @@ class Handler:
         self.status, self.body = status, body
 
 
-def comparison(scope="once"):
+def comparison():
     return {
-        "preset": "less-verbose", "scope": scope, "baseline_reply": "long",
+        "preset": "less-verbose", "baseline_reply": "long",
         "corrected_reply": "short", "changed": True, "coherence": {"degenerate": False},
         "intervention_observed": True,
     }
 
 
-def test_once_retry_returns_compare_with_automatic_undo(monkeypatch):
+def test_retry_returns_compare_with_automatic_undo(monkeypatch):
     monkeypatch.setattr(runlog, "get_run", lambda rid: {
         "id": rid, "messages": [{"role": "user", "content": "x"}], "identity": {},
     })
-    monkeypatch.setattr(policy, "effective_presets", lambda **_kwargs: [])
     monkeypatch.setattr(corrective, "retry_compare",
-                        lambda run, preset, sub, scope, active_presets, backend=None: comparison(scope))
+                        lambda run, preset, sub, backend=None: comparison())
     handler = Handler()
-    assert route.try_post(handler, "/runs/run_x/retry",
-                          {"preset": "less-verbose", "scope": "once"})
+    assert route.try_post(handler, "/runs/run_x/retry", {"preset": "less-verbose"})
     assert handler.status == 200
     assert handler.body["undo"]["status"] == "automatic_restored"
-    assert handler.body["policy"]["status"] == "request_local"
+    assert handler.body["policy"] == {
+        "status": "request_local", "scope": "once", "target": None, "presets": ["less-verbose"],
+    }
 
 
-def test_session_retry_activates_only_exact_run_session(monkeypatch):
+def test_retry_leaves_no_scope_option(monkeypatch):
+    """A request-local retry never has a scope to choose -- there is no --scope/session/profile
+    concept left in the wire request or the retry_compare call it drives."""
     monkeypatch.setattr(runlog, "get_run", lambda rid: {
         "id": rid, "messages": [], "identity": {}, "session_key": "session_exact",
     })
-    monkeypatch.setattr(policy, "effective_presets", lambda **_kwargs: [])
-    monkeypatch.setattr(corrective, "retry_compare",
-                        lambda run, preset, sub, scope, active_presets, backend=None: comparison(scope))
-    calls = []
-    monkeypatch.setattr(policy, "activate", lambda scope, target, preset: (
-        calls.append((scope, target, preset)) or {
-            "status": "activated", "scope": scope, "target": target,
-            "presets": [preset], "undo_id": "repair_x",
-        }
-    ))
+    seen = {}
+
+    def fake_retry_compare(run, preset, sub, backend=None):
+        seen["called_with"] = {"preset": preset, "backend": backend}
+        return comparison()
+    monkeypatch.setattr(corrective, "retry_compare", fake_retry_compare)
     handler = Handler()
-    route.try_post(handler, "/runs/run_x/retry",
-                   {"preset": "less-verbose", "scope": "session"})
+    # A caller-supplied "scope" is simply ignored -- the route has no scope parameter to read it into.
+    route.try_post(handler, "/runs/run_x/retry", {"preset": "less-verbose", "scope": "session"})
     assert handler.status == 200
-    assert calls == [("session", "session_exact", "less-verbose")]
-    assert handler.body["undo"] == {"status": "available", "available": True, "id": "repair_x"}
+    assert seen["called_with"] == {"preset": "less-verbose", "backend": None}
+    assert handler.body["policy"]["scope"] == "once"
 
 
 def test_bad_backend_value_is_a_clean_400(monkeypatch):
@@ -67,7 +64,7 @@ def test_bad_backend_value_is_a_clean_400(monkeypatch):
     })
     handler = Handler()
     route.try_post(handler, "/runs/run_x/retry",
-                   {"preset": "less-verbose", "scope": "once", "backend": "made_up"})
+                   {"preset": "less-verbose", "backend": "made_up"})
     assert handler.status == 400
     assert "backend" in handler.body["error"]
 
@@ -78,15 +75,14 @@ def test_omitted_backend_is_not_forwarded_as_a_string(monkeypatch):
     monkeypatch.setattr(runlog, "get_run", lambda rid: {
         "id": rid, "messages": [{"role": "user", "content": "x"}], "identity": {},
     })
-    monkeypatch.setattr(policy, "effective_presets", lambda **_kwargs: [])
     seen = {}
 
-    def fake_retry_compare(run, preset, sub, scope, active_presets, backend=None):
+    def fake_retry_compare(run, preset, sub, backend=None):
         seen["backend"] = backend
-        return comparison(scope)
+        return comparison()
     monkeypatch.setattr(corrective, "retry_compare", fake_retry_compare)
     handler = Handler()
-    route.try_post(handler, "/runs/run_x/retry", {"preset": "less-verbose", "scope": "once"})
+    route.try_post(handler, "/runs/run_x/retry", {"preset": "less-verbose"})
     assert handler.status == 200
     assert seen["backend"] is None
 
@@ -95,15 +91,21 @@ def test_explicit_control_vector_backend_is_forwarded(monkeypatch):
     monkeypatch.setattr(runlog, "get_run", lambda rid: {
         "id": rid, "messages": [{"role": "user", "content": "x"}], "identity": {},
     })
-    monkeypatch.setattr(policy, "effective_presets", lambda **_kwargs: [])
     seen = {}
 
-    def fake_retry_compare(run, preset, sub, scope, active_presets, backend=None):
+    def fake_retry_compare(run, preset, sub, backend=None):
         seen["backend"] = backend
-        return comparison(scope)
+        return comparison()
     monkeypatch.setattr(corrective, "retry_compare", fake_retry_compare)
     handler = Handler()
     route.try_post(handler, "/runs/run_x/retry",
-                   {"preset": "less-verbose", "scope": "once", "backend": "control_vector"})
+                   {"preset": "less-verbose", "backend": "control_vector"})
     assert handler.status == 200
     assert seen["backend"] == "control_vector"
+
+
+def test_no_undo_route_survives_for_persistent_activation():
+    """`/corrective-retries/<id>/undo` only ever existed to reverse a persistent session/profile
+    activation; with that gone, the route has nothing left to dispatch to."""
+    handler = Handler()
+    assert route.try_post(handler, "/corrective-retries/repair_x/undo", {}) is False

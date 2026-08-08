@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import type { RuntimeState } from "../../data/types";
-import { TeachOnce } from "./TeachOnce";
 import {
   applyAxis,
   applyConcept,
@@ -38,7 +37,7 @@ interface BehaviorProps {
   inspectorOpen: boolean;
 }
 
-type BehaviorView = "fixes" | "dials" | "concepts" | "runtime" | "profiles" | "teach";
+type BehaviorView = "fixes" | "dials" | "concepts" | "runtime" | "profiles";
 type LoadStatus = "loading" | "ready" | "error";
 type OperationStatus = "idle" | "draft" | "pending" | "applied" | "failed" | "reverted";
 
@@ -49,7 +48,6 @@ interface OperationState {
 }
 
 const modules: Array<{ id: BehaviorView; label: string }> = [
-  { id: "teach", label: "CORRECTIONS" },
   { id: "fixes", label: "ONE-SHOT RETRIES" },
   { id: "dials", label: "TONE DIALS" },
   { id: "concepts", label: "CONCEPT STEERING" },
@@ -94,7 +92,7 @@ function metricText(value: unknown) {
 }
 
 export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
-  const [view, setView] = useState<BehaviorView>("teach");
+  const [view, setView] = useState<BehaviorView>("fixes");
   const [loadStatus, setLoadStatus] = useState<LoadStatus>("loading");
   const [axes, setAxes] = useState<BehaviorAxis[]>([]);
   const [drafts, setDrafts] = useState<Record<string, number>>({});
@@ -649,7 +647,7 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
                   ? activeAxes.length
                   : module.id === "concepts"
                     ? Object.keys(activeConcepts).length
-                    : module.id === "profiles" ? profiles.length : module.id === "teach" ? "·" : sampling ? 1 : 0}
+                    : module.id === "profiles" ? profiles.length : sampling ? 1 : 0}
               </b>
             </button>
           ))}
@@ -1118,8 +1116,6 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
               </section>
             </div>
           </>
-        ) : view === "teach" ? (
-          <TeachOnce runs={runtime.runs} />
         ) : (
           <>
             <header className="instrument-head behavior-console-head">

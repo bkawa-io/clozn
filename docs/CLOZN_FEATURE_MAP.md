@@ -957,14 +957,14 @@ Profiles can contain:
 
 - Named dials
 - Custom dial values
-- Response policies
 - Profile-supplied facts
-- Named corrective actions
 - Active profile identity
 
-Profiles support save, switch, import, export, and delete.
+Profiles support save, switch, import, export, and delete. Older profile bundles may still carry a
+`response_policies` field from the retired durable-correction system below; it is preserved verbatim
+on load/save but never applied to a generation.
 
-### Corrective actions
+### Corrective actions (one-shot, request-local)
 
 Built-in actions include:
 
@@ -979,36 +979,31 @@ Actions have:
 
 - Label and description
 - Conflicts
-- Scope
+- Scope (always `once` -- see "Durable corrections were retired" below)
 - Available backend
 - Evaluation metrics
 - Fallback
 - Fingerprint
 - Expiration
 
-Scopes include:
+A preview/confirm generates a matched baseline and corrected child; "keeping" a result selects the
+corrected child as that one run's own revision. Nothing here persists beyond the run it was generated
+from -- see [CAPABILITIES.md](CAPABILITIES.md) for the request-local vs. durable distinction.
 
-- One run
-- Session
-- Profile
+### Durable corrections were retired
 
-A confirmation can generate a matched baseline and corrected child before the correction is retained.
+CLOZN used to let a correction be drafted, confirmed, scoped to a session/client/model/project, and
+then auto-applied to every future matching request until explicitly disabled or deleted -- "Teach
+Once." That entire durable, auto-applying lifecycle (draft/confirm/enable/disable/delete/undo/verify
+/export/applicability-resolution/event-ledger, plus session/profile-scoped corrective retries) was
+removed: see [CAPABILITIES.md](CAPABILITIES.md)'s Removed/Retired section for what changed and why.
 
-### Correction lifecycle
-
-Corrections support:
-
-- Draft
-- Preview
-- Confirm
-- Enable
-- Disable
-- Delete
-- Undo
-- Verify against a child run
-- Export
-- Applicability resolution
-- Event ledger
+`GET`/`POST /corrections` and `/corrections/*` now return a typed HTTP 410
+(`durable_corrections_retired`) rather than a plain 404, so an old caller can tell "this used to work
+and no longer applies" apart from a route miss. Studio no longer exposes a Corrections/Teach Once
+surface. Runs recorded before the retirement may still carry `applied_corrections`/
+`correction_conflicts` receipt fields or `corrective_retry.scope` metadata; those remain readable as
+historical evidence but are never produced by, or re-applied through, a new generation.
 
 ### Feedback and preferences
 
@@ -1023,8 +1018,7 @@ Feedback is aggregated into pending preference proposals. Proposals require expl
 dismissal.
 
 Primary implementations: [`registry.py`](../clozn/behavior/registry.py),
-[`corrections.py`](../clozn/runs/corrections.py), [`store.py`](../clozn/profiles/store.py), and
-[`preferences.py`](../clozn/behavior/preferences.py).
+[`store.py`](../clozn/profiles/store.py), and [`preferences.py`](../clozn/behavior/preferences.py).
 
 ## 17. Guarded generation
 

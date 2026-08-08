@@ -33,9 +33,7 @@
   "coherence": {"degenerate": false},
   "intervention_observed": true,
   "scope_eligibility": [
-    {"scope": "once", "available": true, "target": "run_parent", "prior_hash": "abc"},
-    {"scope": "session", "available": false, "unavailability_reason": "no session"},
-    {"scope": "profile", "available": false, "unavailability_reason": "no profile"}
+    {"scope": "once", "available": true, "target": "run_parent", "prior_hash": "abc"}
   ],
   "outcome": {"status": "succeeded"}
 }
