@@ -37,6 +37,8 @@ projection-file handoff are retired.
 | Performance diagnosis | Merged: versioned worker timings for load/startup, template, tokenize, context/KV creation, prefill, and decode; gateway timings for queue, dispatch, serialization, and stream flush; separate clock owners; known/unaccounted aggregation; evidence-gated regression attribution | `clozn diagnose --performance`; `GET /runs/<id>/performance` | Measured phase breakdown, known/unaccounted time, throughput provenance, and rule evidence | Model-free protocol/old-worker/cold-warm/long-prompt/cancellation/CPU-vs-GPU tests plus a clean CPU worker compile | Unreleased | Cross-process offsets are never aligned; overlapping and process-startup spans are shown but excluded from known in-request time. Live GGUF CPU/GPU runs are still required to qualify absolute timing accuracy and model/backend-specific thresholds |
 | J-lens readout | Merged apply path with artifact identity and checksum validation | `/jlens`, `/runs/<id>/jlens` | Lens layer view with provenance caption | Exact Qwen2.5-7B Q4_K_M row only | Unreleased | Fit per model; a linear readout is not a transcript of thought or causal proof |
 | OpenAI-compatible text API | Merged strict subset of models and Chat Completions | `/v1/models`, `/v1/chat/completions` | Runs recorded through the same gateway | Model-free SDK conformance plus real-runtime smoke gates | Unreleased | Text-only subset; legacy `/v1/completions` returns a typed HTTP 410 retirement response |
+| Explicit concept guard intervention | Merged: request-local, opt-in closed-loop disposition guardrail -- J-lens-based concept polling, per-model threshold calibration, fail-closed on an unresolvable calibrated concept, mid-generation counter-injection, and a per-request receipt. No persisted server-wide default; a request that omits `clozn_guard` is byte-identical to the ordinary path | `clozn_guard` request field on `/v1/chat/completions` | None (no persistent guard configuration surface) | Model-free control-loop, calibration-load, and server-wiring tests | Unreleased | Present-tense detect-and-correct only, never predictive/lead-time; incompatible with `stream: true` and with the other `clozn_*` extensions in v1; an uncalibrated concept degrades to annotate-only rather than firing |
+| Calibration-evidence annotation | Merged: always-on, metadata-only verdict (`clozn_policy`) reporting the calibrated risk band, score, and answer/ask/abstain thresholds for a completed reply against a saved `clozn eval --save` profile. Read-only -- never rewrites the reply text and never decides production behavior on the caller's behalf | `clozn_policy` response field; `clozn eval`, `clozn eval policy` | None (evidence only; no configuration surface) | Model-free verdict/signal/attachment tests | Unreleased | A calibrated band is a fitted threshold from a labeled set, not a per-answer correctness guarantee; absent when no calibration is saved for the exact model/task |
 | Managed multi-model runtime | Merged: qualified preload manifest, exact-identity worker registry/router, per-worker generation concurrency, in-process cold loading with single-flight coalescing, and verified-idle LRU eviction | `clozn serve --models-config`; `GET /readyz`, `GET /runtime/models` | None | Model-free routing/registry/cold-load/soak tests; live two-GGUF default battery plus twenty-cycle cold-load soak in `scripts/smoke/managed_runtime_smoke.py` | Unreleased | The Python gateway runs in the supervisor process; C++ workers remain private subprocesses. Receipt/replay/influence/legacy-fork routes fail closed under a managed gateway; SAE/J-lens cannot be enabled on a managed worker in v1; the resident-worker limit is a hard cap, not advisory |
 | Self-serve model qualification | Merged Q1/Q2 model-free plan plus Q3 core receipt and Q4-Q8 fail-closed orchestration primitives | `clozn qualify MODEL --plan`; `clozn qualify MODEL --run` | None | Versioned plan/run/lab-step schemas; exact identity and live Context Receipt smoke are opt-in; lab adapters, resumable batteries, and transactional artifact install/rollback are model-free tested | Unreleased | `--run` proves only core runtime evidence. Dial/J-lens fitting still runs in an explicit external lab command; a successful command is not accepted until its model-bound manifest validates. No Torch/Transformers import in product code |
 
@@ -87,6 +89,24 @@ projection-file handoff are retired.
   schema no longer declares that field, but validation stays permissive about unknown fields). Point an
   existing client at Clozn's OpenAI-compatible endpoint yourself -- see
   [CLIENT_CONFORMANCE.md](CLIENT_CONFORMANCE.md) for exact Aider/Open WebUI/SDK values.
+- **Broad assistant-behavior policy management** was retired: Clozn used to let a caller persist a
+  server-wide concept-guard default (`GET`/`POST /guard/mode`, a `generation_guard` setting read when a
+  request omitted `clozn_guard`) and a server-wide or per-request selective-generation ACTION
+  (`clozn_selective`, a `selective_generation` setting) that could silently replace a reply's actual
+  text with a clarify/abstain message when a calibrated band said not to just answer. Both were removed
+  -- Clozn is a causal debugger, not a production policy engine; see the positioning in
+  [README.md](../README.md). "Measurement and explicit intervention stay. Ambient policy goes." Kept,
+  unchanged: the request-local `clozn_guard` intervention and the always-on `clozn_policy` calibration
+  evidence (both rows above), and all guard-calibration/eval research tooling
+  (`scripts/calibration/guard_signal_calibrate.py`, `clozn/eval/policy.py`, `clozn eval`). `GET`/`POST
+  /guard/mode` no longer exist as routes at all (the module was deleted, not stubbed to 410) -- GET
+  falls through to the server's ordinary unknown-route 404, POST to the same generic
+  no-active-substrate 409 any other made-up write path gets. A stale `generation_guard` or
+  `selective_generation` key left in `studio_settings.json` by an older Clozn build is never read or
+  written and has no effect on any generation. A request that still sends `clozn_selective` gets an
+  honest HTTP 400 (`unsupported_parameter`) rather than a silent no-op. Runs recorded before the
+  retirement may still carry `meta.clozn_selective_action`; that remains readable as historical
+  evidence, but no new run writes it, and no new response carries the field.
 - Prompt-card and learned-prefix memory were removed from the product on 2026-07-27. Existing run
   readers may still tolerate old `memory` fields, but current runs do not apply or record cards.
 - The user-facing PyTorch workbench was retired with that memory path. Offline calibration and research

@@ -602,7 +602,6 @@ from clozn.server.routes import feedback as _feedback_routes          # noqa: E4
 from clozn.server.routes import ollama as _ollama_routes              # noqa: E402
 from clozn.server.routes import openai as _openai_routes              # noqa: E402
 from clozn.server.routes import engine as _engine_routes              # noqa: E402
-from clozn.server.routes import guard as _guard_routes                # noqa: E402 (persisted /guard/mode)
 from clozn.server.routes import models as _models_routes              # noqa: E402 (local GGUF inventory)
 from clozn.server.routes import readouts as _readouts_routes          # noqa: E402
 # Inspector route families: fork-at-token, journal actuary, model diff (F8).
@@ -629,7 +628,7 @@ _autoloaded_routes = _route_autoload.discover()
 # shadowed as a wrong-shaped 200 rather than a 404, which is far harder to spot. See _autoload.py.
 _GET_ROUTES = [_static_routes, _health_routes, _runs_routes, _receipts_routes,
               _timetravel_routes, _profiles_routes, _ollama_routes, _openai_routes, _engine_routes,
-              _guard_routes, _models_routes,
+              _models_routes,
               _journal_routes, _card_routes, _diff_routes, _receipt_link_routes,
               _influence_map_routes, _contracts_routes,
               *_route_autoload.with_try_get(_autoloaded_routes),
@@ -637,7 +636,7 @@ _GET_ROUTES = [_static_routes, _health_routes, _runs_routes, _receipts_routes,
 _POST_ROUTES = [_health_routes, _receipts_routes,
                _corrective_retry_routes, _replay_routes,
                _timetravel_routes, _profiles_routes, _preferences_routes, _feedback_routes,
-               _ollama_routes, _openai_routes, _engine_routes, _guard_routes, _readouts_routes,
+               _ollama_routes, _openai_routes, _engine_routes, _readouts_routes,
                _fork_routes, _journal_routes, _diff_routes,
                _receipt_link_routes, _influence_map_routes, _contracts_routes,
                _provenance_routes, _causal_trace_routes,

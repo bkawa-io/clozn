@@ -2,13 +2,17 @@
 
 This lived at `clozn/memory/mode.py` until the 2026-07-27 memory cut, which is why so much of the
 product reached into a module called "memory" to read things that have nothing to do with memory:
-`sampling` / `sample_top_k`, `generation_guard`, `timetravel_budget_mb` / `_cap` / enabled, the
-run-capture mode, the receipt-link setting, `memory_strength`. Memory cards are gone; the settings
-store they happened to share a file with is not, so it moved here under its real name.
+`sampling` / `sample_top_k`, `timetravel_budget_mb` / `_cap` / enabled, the run-capture mode, the
+receipt-link setting, `memory_strength`. Memory cards are gone; the settings store they happened to
+share a file with is not, so it moved here under its real name.
 
-`active_profile` (named behavior profiles, retired -- see docs/CAPABILITIES.md) is a RETIRED key: no
-code reads or writes it anymore, but this module never scrubs a key just because its feature retired,
-so a pre-retirement install may still carry it on disk, inertly, forever.
+`active_profile` (named behavior profiles, retired -- see docs/CAPABILITIES.md), `generation_guard`
+(a persisted server-wide guard default, retired -- Clozn's concept guard is now request-local only,
+via `clozn_guard`) and `selective_generation` (a persisted answer-rewriting default, retired --
+selective-generation is calibration evidence only now, see `clozn.server.generation_gateway.
+policy_signal`) are RETIRED keys: no code reads or writes any of them anymore, but this module never
+scrubs a key just because its feature retired, so a pre-retirement install may still carry them on
+disk, inertly, forever.
 
 Contract, inherited verbatim from the old module and depended on across the server:
   * IO NEVER RAISES. A missing, unreadable, or malformed settings file degrades to the default --

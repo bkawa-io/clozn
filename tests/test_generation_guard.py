@@ -26,8 +26,7 @@ from clozn.server import generation_guard as gg                  # noqa: E402
 
 # ================================================================================ opt-in spec parsing
 
-def test_parse_guard_spec_none_when_field_and_setting_absent(monkeypatch, tmp_path):
-    monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
+def test_parse_guard_spec_none_when_field_absent():
     assert gg.parse_guard_spec({}) is None
     assert gg.parse_guard_spec(None) is None
 
@@ -92,17 +91,14 @@ def test_parse_guard_spec_rejects_malformed_values(bad, why):
         gg.parse_guard_spec(bad)
 
 
-def test_parse_guard_spec_falls_back_to_server_setting_when_field_absent(monkeypatch, tmp_path):
+def test_parse_guard_spec_ignores_a_stale_persisted_setting(monkeypatch, tmp_path):
+    """Regression: Clozn no longer persists a server-wide guard default (retired -- see
+    docs/CAPABILITIES.md). A settings file left over from an old Clozn version that still carries the
+    retired `generation_guard` key must be completely inert -- a request that omits `clozn_guard` always
+    takes the ordinary, unguarded path, regardless of anything ever written to the settings store."""
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    clozn_settings.set_setting(gg.GUARD_SETTING, {"concepts": ["violence"]})
-    spec = gg.parse_guard_spec({})
-    assert spec is not None and spec["concepts"] == ["violence"]
-
-
-def test_parse_guard_spec_explicit_field_wins_over_server_setting(monkeypatch, tmp_path):
-    monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    clozn_settings.set_setting(gg.GUARD_SETTING, {"concepts": ["violence"]})
-    assert gg.parse_guard_spec({"clozn_guard": False}) is None
+    clozn_settings.set_setting("generation_guard", {"concepts": ["violence"]})
+    assert gg.parse_guard_spec({}) is None
     spec = gg.parse_guard_spec({"clozn_guard": {"concepts": ["self-harm"]}})
     assert spec["concepts"] == ["self-harm"]
 

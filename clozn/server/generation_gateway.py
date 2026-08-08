@@ -195,10 +195,10 @@ _POLICY_NOTES = {
 def _policy_verdict(trace_steps, model: str | None, task: str | None = None) -> dict:
     """The RAW clozn.eval.policy.classify_run verdict for one just-completed reply, doing the SAME saved-
     profile lookup policy_signal below has always used (exact model match, task-indexed when the store
-    supports it, the legacy single-report fallback otherwise). Shared by policy_signal (the always-on,
-    metadata-only ANNOTATE half) and selective_generation_action (the opt-in ACTION half, calibration
-    backlog #10) so both read the identical provenance gate -- a live band can never be stronger than what
-    the saved report actually backs up in either caller.
+    supports it, the legacy single-report fallback otherwise). Shared by policy_signal and
+    policy_meta_for_run (both read-only ANNOTATE views over the same verdict) so both read the identical
+    provenance gate -- a live band can never be stronger than what the saved report actually backs up in
+    either caller.
 
     Returns whatever eval_policy.classify_run returns ({"available": False, "reason": str} or
     {"available": True, "band", "score", "score_aggregate", "answer_at", "ask_at"}), plus
@@ -294,9 +294,9 @@ def policy_signal(trace_steps, model: str | None, task: str | None = None) -> di
     per-token step list (chat()'s trace_out, or chat_stream's last_stream_trace()) -- normalized here via
     clozn.runs.store.steps_to_trace, the same shape a stored run's trace carries. Never raises.
 
-    ALWAYS ON -- no opt-in gate. This is metadata only; the reply text itself is never touched. The
-    separate, opt-in ACTION that can replace the reply text is `selective_generation_action` below (BK
-    decision: abstain/ask may become an ACTION, but OPT-IN, DEFAULT OFF).
+    ALWAYS ON -- no opt-in gate. This is metadata only; the reply text itself is never touched, and Clozn
+    takes no action on the caller's behalf based on this verdict -- it is debugging evidence, not a
+    production policy decision.
 
     A caller that ALSO needs the all-bands persisted receipt for the same reply (see
     `policy_meta_for_run`) should call `policy_verdict_and_signal` instead of calling this and
@@ -349,126 +349,6 @@ def policy_verdict_and_signal(trace_steps, model: str | None,
     except Exception:
         return None, None
     return _signal_from_verdict(verdict), _meta_from_verdict(verdict)
-
-
-# =============================================================================================================
-# SELECTIVE-GENERATION ACTION (calibration backlog #10, action half) -- BK decision 2026-07-22: abstain/ask
-# may become an ACTION, but OPT-IN, DEFAULT OFF. `policy_signal` above remains the always-on, metadata-only
-# ANNOTATE half; everything below is the separate, explicitly-gated call that can actually replace the reply
-# text when the calibrated band says the model shouldn't just answer.
-
-# The request-body extension field name (mirrors clozn_trust/clozn_receipt/clozn_lens/clozn_task -- see
-# clozn.server.openai_compat.CHAT_SUPPORTED_FIELDS, where this is whitelisted as a plain boolean). Absent or
-# false -> OFF (byte-identical to policy_signal-only behavior). An explicit request value always wins over
-# the server-wide default below, so one caller can opt in/out regardless of the server's setting.
-SELECTIVE_FIELD = "clozn_selective"
-
-# The server-wide default (clozn.settings, the product's settings store -- the same mechanism
-# clozn.server.routes.receipt_link.RECEIPT_SETTING uses for the receipt-footer default), read only when the
-# request omits SELECTIVE_FIELD entirely. Off by default, exactly like the receipt-footer setting.
-SELECTIVE_SETTING = "selective_generation"
-
-# HONESTY LAW (docs/RESEARCH_ROADMAP.md's Killed "white-box risk controller advantage" entry): the deployed
-# selective-generation score is bit-identical to exp(min(logprob)) -- the same number any black-box
-# OpenAI-compatible API already exposes via logprobs. Printed on every fired action so this is never
-# mistaken for an internal/white-box advantage, and the known hard-tail failure mode is stated alongside it.
-_SELECTIVE_CAVEAT = (
-    "calibration-driven, not a live fact-check: the underlying score is TOKEN-PROBABILITY, bit-identical to "
-    "the per-token logprobs any black-box OpenAI-compatible API already returns -- never a white-box "
-    "advantage (docs/RESEARCH_ROADMAP.md's Killed 'white-box risk controller advantage' entry: the deployed "
-    "signal is bit-identical to exp(min(logprob)) across every item it was checked against). It is fit to a "
-    "labeled calibration set and known to fail on the hard tail (the confidently-wrong cases that set "
-    "under-samples); a calibrated band is a fitted threshold, not a per-answer correctness guarantee."
-)
-
-
-def selective_generation_enabled(body: Mapping | None) -> bool:
-    """Whether the OPT-IN selective-generation ACTION should even be attempted for this request -- DEFAULT
-    OFF (BK decision). True only when:
-      * the request body carries `clozn_selective` (SELECTIVE_FIELD) and it is truthy, OR
-      * the request omits that field entirely AND the server-wide `selective_generation` setting
-        (SELECTIVE_SETTING, clozn.settings, the product's settings store) is on.
-    An explicit `clozn_selective: false` on the request always wins over an ON server default (lets one
-    caller opt back out). Never raises -- a settings-store hiccup degrades to False (the safe default)."""
-    if isinstance(body, Mapping) and SELECTIVE_FIELD in body:
-        return bool(body.get(SELECTIVE_FIELD))
-    try:
-        import clozn.settings as settings
-        return bool(settings.get_setting(SELECTIVE_SETTING, False))
-    except Exception:
-        return False
-
-
-def _clarify_question() -> str:
-    """The 'a request to rephrase' half of the ask action (see the calibration backlog's own wording: 'the
-    model's own clarifying question OR a request to rephrase'). A fixed, honest clarifying request -- the
-    model's-own-question alternative would need a second inference round trip, which would make this action
-    non-deterministic and untestable without a live engine; this stays a pure, synchronous, model-free
-    transform of already-computed inputs (trace + saved profile), matching the rest of this module's
-    dependency-light style."""
-    return "Could you clarify or rephrase the question so I can answer with more confidence?"
-
-
-def selective_generation_action(raw_reply: str, trace_steps, model: str | None, task: str | None = None, *,
-                                opted_in: bool) -> dict:
-    """THE OPT-IN action half of calibration backlog #10. `opted_in` is the caller's already-resolved
-    decision (see `selective_generation_enabled`) -- this function reads no request body/server setting
-    itself, so its behavior is a pure function of its arguments (trivially testable with fakes).
-
-    Returns a plain dict, NEVER raising:
-      * `opted_in` is falsy -> {"applied": False, "reason": "...", "raw_reply": raw_reply}. Callers must
-        treat this exactly like policy_signal-only behavior -- no reply-text change, byte-identical to
-        today.
-      * `opted_in` is truthy but no calibrated profile is available for this exact model/task (or one is
-        available but its band is 'answer') -> {"applied": False, "reason": "...", "raw_reply": raw_reply}.
-        FAIL CLOSED: the action never fires just because it was requested -- `reason` always says why
-        (mirrors `_dial_calibration()`'s missing-file=no-op discipline, but here it names the reason
-        instead of silently doing nothing, since the caller explicitly opted in and deserves to know).
-      * `opted_in` is truthy AND the calibrated band is 'ask' or 'abstain' -> {"applied": True, "band":
-        "ask"|"abstain", "reply": <replacement text>, "raw_reply": raw_reply (NEVER discarded -- the
-        original model output always rides here), "verdict": {the same score/threshold/provenance fields
-        policy_signal exposes}, "caveat": _SELECTIVE_CAVEAT}.
-    """
-    if not opted_in:
-        return {"applied": False, "reason": "selective-generation action is opt-in and was not requested",
-                "raw_reply": raw_reply}
-    verdict = _policy_verdict(trace_steps, model, task)
-    if not verdict.get("available"):
-        reason = verdict.get("reason") or "no calibrated profile for this exact model/task"
-        return {"applied": False, "reason": f"fail-closed (annotate-only): {reason}", "raw_reply": raw_reply}
-    band = verdict.get("band")
-    if band == "answer":
-        return {"applied": False, "reason": "calibrated band is 'answer' -- no action needed",
-                "raw_reply": raw_reply}
-    model_label = verdict.get("calibration_model") or model
-    task_label = verdict.get("calibration_task")
-    provenance = f"{model_label}" + (f"/{task_label}" if task_label else "")
-    if band == "ask":
-        reply_text = (
-            f"I'm not confident enough to answer directly. {_clarify_question()} "
-            f"(calibration-driven: the 'ask' band for {provenance}. {_SELECTIVE_CAVEAT})"
-        )
-    else:  # abstain
-        reply_text = (
-            f"I can't confidently assert an answer here, so I won't. Treat this as unresolved rather than "
-            f"a fact. (calibration-driven: the 'abstain' band for {provenance}. {_SELECTIVE_CAVEAT})"
-        )
-    return {
-        "applied": True,
-        "band": band,
-        "reply": reply_text,
-        "raw_reply": raw_reply,
-        "verdict": {
-            "band": band,
-            "score": verdict.get("score"),
-            "score_aggregate": verdict.get("score_aggregate"),
-            "answer_at": verdict.get("answer_at"),
-            "ask_at": verdict.get("ask_at"),
-            "calibration_task": task_label,
-            "calibration_model": model_label,
-        },
-        "caveat": _SELECTIVE_CAVEAT,
-    }
 
 
 def _request(body: dict, handler=None):

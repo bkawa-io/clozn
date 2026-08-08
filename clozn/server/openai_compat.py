@@ -54,7 +54,7 @@ def _empty_sequence(value: Any) -> bool:
 
 CHAT_SUPPORTED_FIELDS = frozenset({
     "model", "messages", "max_tokens", "max_completion_tokens", "temperature", "top_p", "seed",
-    "stream", "top_k", "repeat_penalty", "clozn_trust", "clozn_receipt", "clozn_lens", "clozn_selective",
+    "stream", "top_k", "repeat_penalty", "clozn_trust", "clozn_receipt", "clozn_lens",
     "clozn_guard", "clozn_sources", "tools", "tool_choice", "parallel_tool_calls", "response_format",
 })
 
@@ -223,7 +223,7 @@ def normalize_chat_request(body: Mapping[str, Any]) -> dict[str, Any]:
 
     out = {key: value for key, value in body.items() if key in CHAT_SUPPORTED_FIELDS}
     for field in ("max_tokens", "max_completion_tokens", "temperature", "top_p", "seed", "stream",
-                  "top_k", "repeat_penalty", "clozn_trust", "clozn_receipt", "clozn_lens", "clozn_selective",
+                  "top_k", "repeat_penalty", "clozn_trust", "clozn_receipt", "clozn_lens",
                   "clozn_guard"):
         if out.get(field) is None:
             out.pop(field, None)
@@ -251,7 +251,7 @@ def normalize_chat_request(body: Mapping[str, Any]) -> dict[str, Any]:
         if sources:
             _fail("clozn_sources cannot be combined with structured I/O in v1", "clozn_sources",
                   code="unsupported_parameter")
-        for extension in ("clozn_trust", "clozn_receipt", "clozn_lens", "clozn_selective", "clozn_guard"):
+        for extension in ("clozn_trust", "clozn_receipt", "clozn_lens", "clozn_guard"):
             if body.get(extension):
                 _fail(f"{extension} cannot be combined with structured I/O in v1", extension,
                       code="unsupported_parameter")
@@ -291,15 +291,14 @@ def normalize_chat_request(body: Mapping[str, Any]) -> dict[str, Any]:
                 or float(out["repeat_penalty"]) <= 0):
             _fail("repeat_penalty must be a positive number", "repeat_penalty")
         out["repeat_penalty"] = float(out["repeat_penalty"])
-    for field in ("clozn_trust", "clozn_receipt", "clozn_selective"):
+    for field in ("clozn_trust", "clozn_receipt"):
         if field in out and not isinstance(out[field], bool):
             _fail(f"{field} must be a boolean", field)
     if "clozn_lens" in out and not isinstance(out["clozn_lens"], (bool, dict)):
         _fail("clozn_lens must be a boolean or object", "clozn_lens")
     # clozn_guard's own semantics (concepts/threshold/counter_strength/max_fires validation) are the
-    # generation_guard module's job (it needs to report which sub-field is wrong, and a server-wide
-    # default spec bypasses this normalizer entirely) -- this is only a wire-shape gate, matching
-    # clozn_lens's own boolean-or-object split.
+    # generation_guard module's job (it needs to report which sub-field is wrong) -- this is only a
+    # wire-shape gate, matching clozn_lens's own boolean-or-object split.
     if "clozn_guard" in out and not isinstance(out["clozn_guard"], (bool, dict)):
         _fail("clozn_guard must be an object", "clozn_guard")
     return out

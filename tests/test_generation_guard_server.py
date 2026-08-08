@@ -266,9 +266,9 @@ def test_field_explicitly_empty_is_also_off(iso, monkeypatch):
     assert "clozn_guard_receipt" not in out
 
 
-def test_server_setting_off_by_default(iso, monkeypatch):
-    """No server-wide default ever saved -> parse_guard_spec must read its documented default (off), not
-    silently opt in."""
+def test_guard_off_by_default(iso, monkeypatch):
+    """A request that omits `clozn_guard` always takes the ordinary, unguarded path -- there is no
+    persisted server-wide default that could opt it in (retired -- see docs/CAPABILITIES.md)."""
     monkeypatch.setattr(cs, "SUB", TraceSub())
     status, out = _post("/v1/chat/completions", _body())
     assert status == 200

@@ -118,8 +118,8 @@ read_disposition/build_counter are injected callables) -- fully unit-testable wi
 GPU. `guarded_chat_completion` is the thin production adapter that wires it to a real EngineSubstrate's
 engine client + a fresh concept_dir.ConceptSteer; it is exercised in tests/test_generation_guard_server.py
 via a fake substrate/engine (never a live engine), matching this codebase's "live path deferred, the
-pure/wiring logic is model-free tested" split (see clozn.server.generation_gateway's
-selective_generation_action, or scripts/calibration/concept_dial_autocalibrate.py's own sweep).
+pure/wiring logic is model-free tested" split (see scripts/calibration/concept_dial_autocalibrate.py's
+own sweep).
 
 ===============================================================================================
 RE-STEER CAP
@@ -138,10 +138,8 @@ unguarded reply, even flagged. Rationale: `clozn_guard` is a safety request ("pl
 away from X"); a caller who explicitly asked for that guarantee and silently got ordinary, unguarded
 generation back (even with a flag buried in the metadata) may never notice the flag and may treat the reply
 as guarded when it never was -- exactly the "silent pass" this feature exists to prevent. Refusing outright
-(a clear 4xx with a stated reason) is the safer default. This mirrors selective_generation_action's
-fail-closed pattern (calibration backlog #10) but goes one step further: there, the safe fallback
-(annotate-only) was itself harmless; here, the "fallback" would be exactly the ungated content the guard
-was supposed to prevent, so refusing is the only honest option.
+(a clear 4xx with a stated reason) is the safer default: the "fallback" here would be exactly the ungated
+content the guard was supposed to prevent, so refusing is the only honest option.
 
 An UNCALIBRATED concept that can't even be tokenized for annotation is NOT treated this strictly: since it
 was never going to fire a correction anyway (see UNCALIBRATED CONCEPTS DO NOT FIRE), a resolution failure
@@ -327,8 +325,9 @@ GUARD_TRACE_STEERING_NOTE = (
 )
 
 # -- opt-in wiring -----------------------------------------------------------------------------------
-GUARD_FIELD = "clozn_guard"                 # request-body extension field (an object, not a boolean)
-GUARD_SETTING = "generation_guard"          # server-wide default spec (clozn.settings, the product's settings store)
+GUARD_FIELD = "clozn_guard"                 # request-body extension field (an object, not a boolean) --
+                                            # the ONLY way a request is guarded; there is no persisted
+                                            # server-wide default (retired -- see docs/CAPABILITIES.md).
 
 # -- defaults, documented as placeholders where calibration doesn't exist yet ------------------------
 DEFAULT_COUNTER_STRENGTH = -0.5             # A1.1's own validated counter_strength (steers AWAY -- negative)
@@ -353,7 +352,7 @@ GUARD_CALIBRATION_SCHEMA = "clozn.guard_threshold_calibration.v1"
 
 
 # =================================================================================================
-# opt-in spec parsing (mirrors generation_gateway.selective_generation_enabled's precedence exactly)
+# opt-in spec parsing -- explicit per-request `clozn_guard` only, no ambient server-wide default
 # =================================================================================================
 
 def _normalize_guard_spec(raw: Any) -> Optional[dict]:
@@ -413,72 +412,17 @@ def _normalize_guard_spec(raw: Any) -> Optional[dict]:
 
 
 def parse_guard_spec(body: Any) -> Optional[dict]:
-    """The request's guard spec, or None (OFF -- byte-identical to today). An explicit `clozn_guard` on
-    the request always wins (including an explicit falsy value, which means "opted out" even when the
-    server default is on); only when the request omits the field entirely does the server-wide
-    `generation_guard` setting (GUARD_SETTING, clozn.settings, the product's settings store) apply. Raises
-    ValueError on a structurally malformed explicit value (see _normalize_guard_spec) -- callers should
-    turn that into an HTTP 400, never swallow it."""
-    if isinstance(body, Mapping) and GUARD_FIELD in body:
-        raw = body.get(GUARD_FIELD)
-        return _normalize_guard_spec(raw if raw else {})
-    try:
-        import clozn.settings as settings
-        saved = settings.get_setting(GUARD_SETTING, None)
-    except Exception:
-        saved = None
-    if not saved:
+    """The request's guard spec, or None (OFF) when the request says nothing about `clozn_guard` at all.
+    This is the ONLY input: Clozn does not persist a server-wide guard default, so a request that omits
+    `clozn_guard` always takes the ordinary, unguarded generation path -- nothing configured on a prior
+    request or through Studio can make an unrelated later request guarded. An explicit falsy value
+    (`false`, `{}`, or an empty `concepts` list) is accepted and also means OFF, for compatibility with a
+    caller that always sends the field. Raises ValueError on a structurally malformed explicit value (see
+    _normalize_guard_spec) -- callers should turn that into an HTTP 400, never swallow it."""
+    if not isinstance(body, Mapping) or GUARD_FIELD not in body:
         return None
-    return _normalize_guard_spec(saved)
-
-
-# =================================================================================================
-# PERSISTED SERVER-WIDE DEFAULT -- clozn.server.routes.guard's GET/POST /guard/mode reads and writes
-# through these two functions. Added so the guard has a toggle that STICKS (previously GUARD_SETTING was
-# only ever read here, never written by any HTTP route -- see the Behavior surface's "declared
-# skeleton" note). Nothing about parse_guard_spec's own precedence changes: an explicit per-request
-# `clozn_guard` field on /v1/chat/completions ALWAYS wins over whatever is persisted here, including an
-# explicit falsy value meaning "opted out this one call even though the server default is on" -- this
-# persisted default only ever governs a request that says nothing about clozn_guard at all.
-# =================================================================================================
-
-def get_persisted_guard_spec() -> Optional[dict]:
-    """The currently persisted server-wide guard default, fully normalized (same shape parse_guard_spec
-    returns for a request-level spec), or None when off/absent/corrupt. A corrupt or stale persisted value
-    (e.g. hand-edited settings file) degrades to None -- treated as off -- rather than raising, mirroring
-    clozn.settings' own never-raise-on-load discipline; the only place a malformed guard spec is ever
-    surfaced as an error is set_persisted_guard_spec, at the moment someone tries to WRITE it."""
-    try:
-        import clozn.settings as settings
-        saved = settings.get_setting(GUARD_SETTING, None)
-    except Exception:
-        saved = None
-    if not saved:
-        return None
-    try:
-        return _normalize_guard_spec(saved)
-    except ValueError:
-        return None
-
-
-def set_persisted_guard_spec(raw: Any) -> Optional[dict]:
-    """Validate and persist the server-wide guard default via clozn.settings.set_setting -- which
-    writes through clozn._io.atomic_write_json (temp-file-then-rename), never a bare open().write() that
-    could truncate the settings file on a bad value (see clozn._io's own module docstring for the bug this
-    closes). `raw` uses the exact same shape as a request's `clozn_guard` field (concepts + optional
-    threshold/counter_strength/max_fires/layer/chunk_tokens/topk) -- this function invents no new knobs,
-    it validates through the SAME _normalize_guard_spec every live per-request clozn_guard value goes
-    through. An empty/falsy `raw` (or one with no concepts) persists OFF (None), matching the opt-in
-    contract "empty is off, not an error" documented on _normalize_guard_spec.
-
-    Raises ValueError on a structurally malformed non-empty value (bad types, e.g. concepts not a list) --
-    the caller (clozn.server.routes.guard) must turn that into an HTTP 400, never swallow it, exactly like
-    parse_guard_spec's own contract for a live request. Returns the normalized spec that was persisted
-    (None when turned off)."""
-    import clozn.settings as settings
-    spec = _normalize_guard_spec(raw if raw else {})
-    settings.set_setting(GUARD_SETTING, spec)
-    return spec
+    raw = body.get(GUARD_FIELD)
+    return _normalize_guard_spec(raw if raw else {})
 
 
 # =================================================================================================

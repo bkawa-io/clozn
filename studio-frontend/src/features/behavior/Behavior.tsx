@@ -12,7 +12,6 @@ import {
   previewAxis,
   previewConcept,
   previewCorrectiveAction,
-  saveGuard,
   saveSampling,
   undoCorrectiveKeep,
   type AxisPreview,
@@ -24,7 +23,6 @@ import {
   type CorrectiveRegistry,
   type CorrectiveResult,
   type CorrectiveScope,
-  type GuardSettings,
   type SamplingSettings,
   type SourceUseComparison,
 } from "./api";
@@ -89,8 +87,6 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
   const [selectedAxisName, setSelectedAxisName] = useState("");
   const [sampling, setSampling] = useState<SamplingSettings>();
   const [samplingDraft, setSamplingDraft] = useState<SamplingSettings>();
-  const [guard, setGuard] = useState<GuardSettings>();
-  const [guardDraft, setGuardDraft] = useState<GuardSettings>();
   const [errors, setErrors] = useState<Awaited<ReturnType<typeof loadBehaviorWorkspace>>["errors"]>({});
   const [operation, setOperation] = useState<OperationState>({
     status: "idle",
@@ -121,8 +117,6 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
       next.axes.some((axis) => axis.name === current) ? current : next.axes[0]?.name ?? "");
     setSampling(next.sampling);
     setSamplingDraft(next.sampling);
-    setGuard(next.guard);
-    setGuardDraft(next.guard);
     setErrors(next.errors);
   }
 
@@ -177,8 +171,7 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
       || sampling.sample_repeat_penalty !== samplingDraft.sample_repeat_penalty
     ),
   );
-  const guardDirty = JSON.stringify(guard) !== JSON.stringify(guardDraft);
-  const pendingCount = dirtyAxes.length + Number(samplingDirty) + Number(guardDirty);
+  const pendingCount = dirtyAxes.length + Number(samplingDirty);
   const selectedDraft = selectedAxis ? drafts[selectedAxis.name] ?? selectedAxis.value : 0;
   const sortedActiveAxes = useMemo(
     () => [...activeAxes].sort((a, b) => Math.abs(b.value) - Math.abs(a.value)),
@@ -227,27 +220,6 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
     setOperation({
       status: "reverted",
       action: "DECODING DRAFT REVERTED",
-    });
-  }
-
-  function updateGuardDraft(
-    next: GuardSettings,
-    label: string,
-    value: string,
-  ) {
-    setGuardDraft(next);
-    setOperation({
-      status: "draft",
-      action: `DRAFT · ${label}`,
-      detail: value,
-    });
-  }
-
-  function revertGuardDraft() {
-    setGuardDraft(guard);
-    setOperation({
-      status: "reverted",
-      action: "GUARD DRAFT REVERTED",
     });
   }
 
@@ -395,19 +367,6 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
       setOperation({ status: "applied", action: "RUNTIME DEFAULTS APPLIED" });
     } catch (error) {
       setOperation({ status: "failed", action: "RUNTIME APPLY FAILED", detail: errorMessage(error) });
-    }
-  }
-
-  async function commitGuard() {
-    if (!guardDraft) return;
-    setOperation({ status: "pending", action: "APPLYING GUARD DEFAULT" });
-    try {
-      const next = await saveGuard(guardDraft);
-      setGuard(next);
-      setGuardDraft(next);
-      setOperation({ status: "applied", action: "GUARD DEFAULT APPLIED" });
-    } catch (error) {
-      setOperation({ status: "failed", action: "GUARD APPLY FAILED", detail: errorMessage(error) });
     }
   }
 
@@ -1028,46 +987,6 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
                     </div>
                   </div>
                 ) : <div className="behavior-unavailable">{errors.sampling || "SAMPLING ROUTE UNAVAILABLE"}</div>}
-              </section>
-              <section className="behavior-runtime-block">
-                <header><span>DISPOSITION GUARD DEFAULT</span><b>{guardDraft ? guardDirty ? "DRAFT" : guardDraft.enabled ? "ON" : "OFF" : "UNAVAILABLE"}</b></header>
-                {guardDraft ? (
-                  <div className="behavior-runtime-fields">
-                    <label className="behavior-toggle">
-                      <input
-                        type="checkbox"
-                        checked={guardDraft.enabled}
-                        onChange={(event) => updateGuardDraft(
-                          { ...guardDraft, enabled: event.target.checked },
-                          "GUARD",
-                          event.target.checked ? "ON" : "OFF",
-                        )}
-                      />
-                      <span>ENABLED</span>
-                    </label>
-                    <label className="is-wide">
-                      <span>CONCEPTS · COMMA SEPARATED</span>
-                      <input
-                        value={(guardDraft.guard?.concepts ?? []).join(", ")}
-                        onChange={(event) => updateGuardDraft(
-                          {
-                            ...guardDraft,
-                            guard: {
-                              ...(guardDraft.guard ?? {}),
-                              concepts: event.target.value.split(",").map((item) => item.trim()).filter(Boolean),
-                            },
-                          },
-                          "GUARD CONCEPTS",
-                          event.target.value,
-                        )}
-                      />
-                    </label>
-                    <div className="behavior-runtime-actions">
-                      <button type="button" disabled={!guardDirty || operation.status === "pending"} onClick={revertGuardDraft}>REVERT</button>
-                      <button type="button" className="is-primary" disabled={!guardDirty || operation.status === "pending"} onClick={() => void commitGuard()}>APPLY GUARD</button>
-                    </div>
-                  </div>
-                ) : <div className="behavior-unavailable">{errors.guard || "GUARD ROUTE UNAVAILABLE"}</div>}
               </section>
             </div>
           </>

@@ -16,22 +16,10 @@ export interface SamplingSettings {
   sample_repeat_penalty: number;
 }
 
-export interface GuardSettings {
-  enabled: boolean;
-  guard: {
-    concepts?: string[];
-    threshold?: number;
-    counter_strength?: number;
-    max_fires?: number;
-    layer?: number;
-  } | null;
-}
-
 export interface BehaviorWorkspaceData {
   axes: BehaviorAxis[];
   sampling?: SamplingSettings;
-  guard?: GuardSettings;
-  errors: Partial<Record<"axes" | "sampling" | "guard", string>>;
+  errors: Partial<Record<"axes" | "sampling", string>>;
 }
 
 export interface AxisPreview {
@@ -135,47 +123,21 @@ function samplingFromBody(body: JsonRecord): SamplingSettings {
   };
 }
 
-function guardFromBody(body: JsonRecord): GuardSettings {
-  const source = record(body.guard);
-  const concepts = Array.isArray(source.concepts)
-    ? source.concepts.map(String).filter(Boolean)
-    : undefined;
-  const numberOrUndefined = (value: unknown) => {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  };
-  return {
-    enabled: body.enabled === true,
-    guard: body.guard && typeof body.guard === "object"
-      ? {
-          concepts,
-          threshold: numberOrUndefined(source.threshold),
-          counter_strength: numberOrUndefined(source.counter_strength),
-          max_fires: numberOrUndefined(source.max_fires),
-          layer: numberOrUndefined(source.layer),
-        }
-      : null,
-  };
-}
-
 export async function loadBehaviorWorkspace(signal?: AbortSignal): Promise<BehaviorWorkspaceData> {
   const results = await Promise.allSettled([
     post("/steer/axes", {}, signal),
     get("/sampling/mode", signal),
-    get("/guard/mode", signal),
   ]);
-  const [axes, sampling, guard] = results;
+  const [axes, sampling] = results;
   const errors: BehaviorWorkspaceData["errors"] = {};
   if (axes.status === "rejected") errors.axes = axes.reason instanceof Error ? axes.reason.message : "Axes unavailable";
   if (sampling.status === "rejected") errors.sampling = sampling.reason instanceof Error ? sampling.reason.message : "Sampling unavailable";
-  if (guard.status === "rejected") errors.guard = guard.reason instanceof Error ? guard.reason.message : "Guard unavailable";
 
   return {
     axes: axes.status === "fulfilled"
       ? records(axes.value.axes).map(axisFromBody).filter((axis): axis is BehaviorAxis => axis !== null)
       : [],
     sampling: sampling.status === "fulfilled" ? samplingFromBody(sampling.value) : undefined,
-    guard: guard.status === "fulfilled" ? guardFromBody(guard.value) : undefined,
     errors,
   };
 }
@@ -235,17 +197,4 @@ export async function saveSampling(settings: SamplingSettings): Promise<Sampling
   return samplingFromBody(await post("/sampling/mode", settings as unknown as JsonRecord));
 }
 
-export async function saveGuard(settings: GuardSettings): Promise<GuardSettings> {
-  const body = await post("/guard/mode", {
-    enabled: settings.enabled,
-    concepts: settings.guard?.concepts ?? [],
-    ...(settings.guard?.threshold == null ? {} : { threshold: settings.guard.threshold }),
-    ...(settings.guard?.counter_strength == null
-      ? {}
-      : { counter_strength: settings.guard.counter_strength }),
-    ...(settings.guard?.max_fires == null ? {} : { max_fires: settings.guard.max_fires }),
-    ...(settings.guard?.layer == null ? {} : { layer: settings.guard.layer }),
-  });
-  return guardFromBody(body);
-}
 

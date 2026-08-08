@@ -437,15 +437,17 @@ def try_post(h, p, body):
         if source.get("label"):
             journal_delivered_messages[index]["source_label"] = source["label"]
 
-    # CLOSED-LOOP DISPOSITION GUARDRAILS (FRONTIER_BETS section 9.1 / experiment A1.1), opt-in, default
-    # off -- see generation_guard.py's own module docstring for the full honesty framing (present-tense
-    # detect-and-correct, NEVER predictive/lead-time/"acts on intent"). Parsed here, before the
-    # structured-output/streaming logic below, because a guarded generation bypasses ALL of that in
-    # this first cut (see the module docstring's SCOPE LIMITS section) -- composing the guard with prompt-
-    # card memory, tone dials, corrective retries, or structured output is deferred, not silently dropped.
-    # `guard_spec` is None whenever the request/server default is off; every line below this block then
-    # runs completely unchanged, so the byte-identical-when-off contract holds regardless of where the
-    # guard sits in this function.
+    # EXPLICIT, REQUEST-LOCAL CONCEPT GUARD INTERVENTION (FRONTIER_BETS section 9.1 / experiment A1.1),
+    # opt-in per request only -- see generation_guard.py's own module docstring for the full honesty
+    # framing (present-tense detect-and-correct, NEVER predictive/lead-time/"acts on intent") and
+    # docs/CAPABILITIES.md for why Clozn does not persist a server-wide guard default: a request that
+    # says nothing about `clozn_guard` always takes the ordinary generation path below, regardless of
+    # anything configured on any earlier request. Parsed here, before the structured-output/streaming
+    # logic below, because a guarded generation bypasses ALL of that in this first cut (see the module
+    # docstring's SCOPE LIMITS section) -- composing the guard with tone dials, corrective retries, or
+    # structured output is deferred, not silently dropped. `guard_spec` is None whenever the request
+    # omits `clozn_guard`; every line below this block then runs completely unchanged, so the
+    # byte-identical-when-absent contract holds regardless of where the guard sits in this function.
     from clozn.server import generation_guard
     try:
         guard_spec = generation_guard.parse_guard_spec(body)
@@ -683,18 +685,5 @@ def try_post(h, p, body):
             attach_policy_verdict(rid, policy_meta)
         except Exception:
             pass
-    # CALIBRATION BACKLOG #10 action half (BK decision 2026-07-22: abstain/ask may become an ACTION, but
-    # OPT-IN, DEFAULT OFF). `clozn_selective` on the request (or the server-wide `selective_generation`
-    # setting when the request omits the field) opts in; absent/false on both keeps this response
-    # BYTE-IDENTICAL to the annotate-only behavior above -- see
-    # generation_gateway.selective_generation_action's docstring for the full fail-closed contract (no
-    # calibrated profile -> the action never fires even when opted in, and says why).
-    from clozn.server.generation_gateway import selective_generation_action, selective_generation_enabled
-    if selective_generation_enabled(body):
-        action = selective_generation_action(reply, trace_steps, selected_model, calibration_task,
-                                             opted_in=True)
-        resp["clozn_selective_action"] = action
-        if action.get("applied"):
-            resp["choices"][0]["message"]["content"] = action["reply"]
     h._json(200, resp, extra_headers=extra_headers)
     return True
