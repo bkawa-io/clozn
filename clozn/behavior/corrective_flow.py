@@ -114,14 +114,8 @@ def _validate_key(value: str) -> str:
     return value
 
 
-def scope_eligibility(run: Mapping, action_id: str, *, active_profile: str | None) -> list[dict]:
-    """Return the (now singular) once-scoped keep eligibility for this run/action.
-
-    ``active_profile`` is accepted for call-signature stability with existing callers
-    (clozn.server.routes.corrective_actions) even though it no longer selects a scope -- durable
-    session/profile scoping was retired.
-    """
-    del active_profile
+def scope_eligibility(run: Mapping, action_id: str) -> list[dict]:
+    """Return the (now singular) once-scoped keep eligibility for this run/action."""
     return [{
         "scope": "once",
         "available": True,
@@ -131,12 +125,10 @@ def scope_eligibility(run: Mapping, action_id: str, *, active_profile: str | Non
     }]
 
 
-def registry_for_run(run: Mapping, *, steer=None, active_profile: str | None = None) -> dict:
+def registry_for_run(run: Mapping, *, steer=None) -> dict:
     doc = registry.build_registry(steer=steer)
     for action in doc["actions"]:
-        action["scope_eligibility"] = scope_eligibility(
-            run, action["id"], active_profile=active_profile
-        )
+        action["scope_eligibility"] = scope_eligibility(run, action["id"])
     doc["run_id"] = run.get("id")
     doc["run_fingerprint"] = run_fingerprint(run)
     return doc
@@ -191,12 +183,11 @@ def create_preview(
     requested_backend: str = "prompt_policy",
     *,
     steer=None,
-    active_profile: str | None = None,
     now: float | None = None,
 ) -> dict:
     if not isinstance(run, Mapping) or not run.get("id"):
         raise CorrectiveFlowError("run must be a stored run with an id")
-    actions = registry_for_run(run, steer=steer, active_profile=active_profile)
+    actions = registry_for_run(run, steer=steer)
     action = next((item for item in actions["actions"] if item["id"] == action_id), None)
     if action is None:
         raise CorrectiveFlowError(

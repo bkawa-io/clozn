@@ -319,8 +319,7 @@
   text-transform: uppercase;
 }
 
-.runtime-model-record header > strong,
-.runtime-profile-name {
+.runtime-model-record header > strong {
   overflow: hidden;
   color: var(--ink);
   font-family: var(--font-machine);

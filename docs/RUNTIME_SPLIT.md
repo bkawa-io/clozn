@@ -68,7 +68,6 @@ template · generate · sample · tap · score · steer · optional J-lens
 | model-scoped dial bundle | offline calibration | engine steering | checkpoint/substrate identity and safe ranges |
 | J-lens manifest and matrices | offline fit/export | engine `/jlens` | manifest, hashes, dimensions, exact qualified GGUF |
 | SAE bundle | external or offline export | engine readout | model/layer/dimension identity |
-| behavior profile | product import/export | gateway steering | versioned schema; legacy cards are carried but never applied |
 | run rows and trace blobs | gateway | CLI, Studio, receipts | transactional migrations and digest verification |
 | managed engine archive | release pipeline | setup installer | versioned manifest, checksum, embedded build identity |
 

@@ -27,19 +27,11 @@ export interface GuardSettings {
   } | null;
 }
 
-export interface BehaviorProfile {
-  name: string;
-  description: string;
-  dials: Record<string, number>;
-}
-
 export interface BehaviorWorkspaceData {
   axes: BehaviorAxis[];
   sampling?: SamplingSettings;
   guard?: GuardSettings;
-  profiles: BehaviorProfile[];
-  activeProfile?: string;
-  errors: Partial<Record<"axes" | "sampling" | "guard" | "profiles", string>>;
+  errors: Partial<Record<"axes" | "sampling" | "guard", string>>;
 }
 
 export interface AxisPreview {
@@ -166,43 +158,24 @@ function guardFromBody(body: JsonRecord): GuardSettings {
   };
 }
 
-function profilesFromBody(body: JsonRecord): BehaviorProfile[] {
-  return records(body.profiles).map((profile) => ({
-    name: String(profile.name || ""),
-    description: String(profile.description || ""),
-    dials: Object.fromEntries(
-      Object.entries(record(profile.dials))
-        .map(([name, value]) => [name, Number(value)])
-        .filter((entry) => Number.isFinite(entry[1])),
-    ),
-  })).filter((profile) => profile.name);
-}
-
 export async function loadBehaviorWorkspace(signal?: AbortSignal): Promise<BehaviorWorkspaceData> {
   const results = await Promise.allSettled([
     post("/steer/axes", {}, signal),
     get("/sampling/mode", signal),
     get("/guard/mode", signal),
-    get("/profiles/list", signal),
   ]);
-  const [axes, sampling, guard, profiles] = results;
+  const [axes, sampling, guard] = results;
   const errors: BehaviorWorkspaceData["errors"] = {};
   if (axes.status === "rejected") errors.axes = axes.reason instanceof Error ? axes.reason.message : "Axes unavailable";
   if (sampling.status === "rejected") errors.sampling = sampling.reason instanceof Error ? sampling.reason.message : "Sampling unavailable";
   if (guard.status === "rejected") errors.guard = guard.reason instanceof Error ? guard.reason.message : "Guard unavailable";
-  if (profiles.status === "rejected") {
-    errors.profiles = profiles.reason instanceof Error ? profiles.reason.message : "Profiles unavailable";
-  }
 
-  const profileBody = profiles.status === "fulfilled" ? profiles.value : {};
   return {
     axes: axes.status === "fulfilled"
       ? records(axes.value.axes).map(axisFromBody).filter((axis): axis is BehaviorAxis => axis !== null)
       : [],
     sampling: sampling.status === "fulfilled" ? samplingFromBody(sampling.value) : undefined,
     guard: guard.status === "fulfilled" ? guardFromBody(guard.value) : undefined,
-    profiles: profilesFromBody(profileBody),
-    activeProfile: typeof profileBody.active === "string" ? profileBody.active : undefined,
     errors,
   };
 }
@@ -276,20 +249,3 @@ export async function saveGuard(settings: GuardSettings): Promise<GuardSettings>
   return guardFromBody(body);
 }
 
-export async function saveProfile(
-  name: string,
-  description: string,
-  axes: BehaviorAxis[],
-) {
-  const body = await post("/profiles/save", {
-    version: 1,
-    name,
-    description,
-    dials: Object.fromEntries(axes.map((axis) => [axis.name, axis.value])),
-  });
-  return record(body.profile);
-}
-
-export async function switchProfile(name: string) {
-  return post("/profiles/switch", { name });
-}

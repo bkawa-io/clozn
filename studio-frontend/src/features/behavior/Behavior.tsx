@@ -13,13 +13,10 @@ import {
   previewConcept,
   previewCorrectiveAction,
   saveGuard,
-  saveProfile,
   saveSampling,
-  switchProfile,
   undoCorrectiveKeep,
   type AxisPreview,
   type BehaviorAxis,
-  type BehaviorProfile,
   type ConceptPreview,
   type CorrectiveAction,
   type CorrectiveBackend,
@@ -37,7 +34,7 @@ interface BehaviorProps {
   inspectorOpen: boolean;
 }
 
-type BehaviorView = "fixes" | "dials" | "concepts" | "runtime" | "profiles";
+type BehaviorView = "fixes" | "dials" | "concepts" | "runtime";
 type LoadStatus = "loading" | "ready" | "error";
 type OperationStatus = "idle" | "draft" | "pending" | "applied" | "failed" | "reverted";
 
@@ -52,7 +49,6 @@ const modules: Array<{ id: BehaviorView; label: string }> = [
   { id: "dials", label: "TONE DIALS" },
   { id: "concepts", label: "CONCEPT STEERING" },
   { id: "runtime", label: "RUNTIME DEFAULTS" },
-  { id: "profiles", label: "PROFILES" },
 ];
 
 const PREVIEW_PROMPT = "Tell me about your day.";
@@ -71,12 +67,6 @@ function basename(value?: string) {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error || "Operation failed");
-}
-
-function profileCounts(profile: BehaviorProfile) {
-  return {
-    dials: Object.keys(profile.dials).length,
-  };
 }
 
 function idempotencyKey(prefix: string) {
@@ -101,8 +91,6 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
   const [samplingDraft, setSamplingDraft] = useState<SamplingSettings>();
   const [guard, setGuard] = useState<GuardSettings>();
   const [guardDraft, setGuardDraft] = useState<GuardSettings>();
-  const [profiles, setProfiles] = useState<BehaviorProfile[]>([]);
-  const [activeProfile, setActiveProfile] = useState<string>();
   const [errors, setErrors] = useState<Awaited<ReturnType<typeof loadBehaviorWorkspace>>["errors"]>({});
   const [operation, setOperation] = useState<OperationState>({
     status: "idle",
@@ -114,8 +102,6 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
   const [concept, setConcept] = useState("");
   const [conceptStrength, setConceptStrength] = useState(1);
   const [activeConcepts, setActiveConcepts] = useState<Record<string, number>>({});
-  const [profileName, setProfileName] = useState("");
-  const [profileDescription, setProfileDescription] = useState("");
   const [fixRegistry, setFixRegistry] = useState<CorrectiveRegistry>();
   const [fixLoadError, setFixLoadError] = useState("");
   const [selectedRunId, setSelectedRunId] = useState(
@@ -137,8 +123,6 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
     setSamplingDraft(next.sampling);
     setGuard(next.guard);
     setGuardDraft(next.guard);
-    setProfiles(next.profiles);
-    setActiveProfile(next.activeProfile);
     setErrors(next.errors);
   }
 
@@ -427,34 +411,6 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
     }
   }
 
-  async function createProfile() {
-    const name = profileName.trim();
-    if (!name) return;
-    setOperation({ status: "pending", action: "SAVING PROFILE", detail: name });
-    try {
-      await saveProfile(name, profileDescription.trim(), axes);
-      const next = await loadBehaviorWorkspace();
-      installWorkspace(next);
-      setProfileName("");
-      setProfileDescription("");
-      setOperation({ status: "applied", action: "PROFILE SAVED", detail: name });
-    } catch (error) {
-      setOperation({ status: "failed", action: "PROFILE SAVE FAILED", detail: errorMessage(error) });
-    }
-  }
-
-  async function activateProfile(name: string) {
-    setOperation({ status: "pending", action: "SWITCHING PROFILE", detail: name });
-    try {
-      await switchProfile(name);
-      const next = await loadBehaviorWorkspace();
-      installWorkspace(next);
-      setOperation({ status: "applied", action: "PROFILE ACTIVE", detail: name });
-    } catch (error) {
-      setOperation({ status: "failed", action: "PROFILE SWITCH FAILED", detail: errorMessage(error) });
-    }
-  }
-
   function chooseFix(actionId: string) {
     setSelectedFixId(actionId);
     setFixPreview(undefined);
@@ -530,7 +486,7 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
       setOperation({
         status: "reverted",
         action: fixConfirming ? "CANCELLATION REQUESTED" : "PREVIEW CANCELLED",
-        detail: "No session or profile policy was changed.",
+        detail: "No future request is affected.",
       });
       if (!fixConfirming) setFixPreview(undefined);
     } catch (error) {
@@ -647,7 +603,7 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
                   ? activeAxes.length
                   : module.id === "concepts"
                     ? Object.keys(activeConcepts).length
-                    : module.id === "profiles" ? profiles.length : sampling ? 1 : 0}
+                    : sampling ? 1 : 0}
               </b>
             </button>
           ))}
@@ -658,7 +614,6 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
             <div><dt>Model</dt><dd>{basename(runtime.engine?.model)}</dd></div>
             <div><dt>Tone dials</dt><dd>{activeAxes.length}</dd></div>
             <div><dt>Concept dials</dt><dd>{Object.keys(activeConcepts).length}</dd></div>
-            <div><dt>Profile</dt><dd>{activeProfile || "—"}</dd></div>
           </dl>
           <div className="behavior-active-dials">
             {sortedActiveAxes.slice(0, 6).map((axis) => (
@@ -779,8 +734,8 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
                     <p>{fixPreview.execution.unavailability_reason}</p>
                   )}
                   <p>
-                    Confirm runs one matched greedy baseline and one corrected child. It does not
-                    change session or profile policy.
+                    Confirm runs one matched greedy baseline and one corrected child. It never
+                    changes behavior for a future, unrelated request.
                   </p>
                   <div>
                     <button type="button" onClick={() => void cancelFix()}>
@@ -1017,7 +972,7 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
               </section>
             </div>
           </>
-        ) : view === "runtime" ? (
+        ) : (
           <>
             <header className="instrument-head behavior-console-head">
               <div>
@@ -1116,50 +1071,6 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
               </section>
             </div>
           </>
-        ) : (
-          <>
-            <header className="instrument-head behavior-console-head">
-              <div>
-                <span className="eyebrow">PORTABLE BUNDLE</span>
-                <h1 id="behavior-console-title">Profiles</h1>
-              </div>
-              <div className="behavior-head-stats">
-                <span><b>SAVED</b>{profiles.length}</span>
-                <span><b>ACTIVE</b>{activeProfile ? 1 : 0}</span>
-              </div>
-            </header>
-            <div className="behavior-profile-stage">
-              <section className="behavior-profile-create">
-                <label><span>NAME</span><input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="profile-name" /></label>
-                <label><span>DESCRIPTION</span><input value={profileDescription} onChange={(event) => setProfileDescription(event.target.value)} /></label>
-                <div>
-                  <span>{axes.length} DIALS</span>
-                  <button type="button" className="is-primary" disabled={!profileName.trim() || operation.status === "pending"} onClick={() => void createProfile()}>SAVE CURRENT</button>
-                </div>
-              </section>
-              <section className="behavior-profile-list">
-                {profiles.map((profile) => {
-                  const counts = profileCounts(profile);
-                  const active = profile.name === activeProfile;
-                  return (
-                    <article className={active ? "is-active" : ""} key={profile.name}>
-                      <div>
-                        <strong>{profile.name}</strong>
-                        <span>{profile.description || "NO DESCRIPTION"}</span>
-                      </div>
-                      <dl>
-                        <div><dt>DIALS</dt><dd>{counts.dials}</dd></div>
-                      </dl>
-                      <button type="button" disabled={active || operation.status === "pending"} onClick={() => void activateProfile(profile.name)}>
-                        {active ? "ACTIVE" : "SWITCH"}
-                      </button>
-                    </article>
-                  );
-                })}
-                {!profiles.length && <div className="behavior-empty-row">0 SAVED PROFILES</div>}
-              </section>
-            </div>
-          </>
         )}
       </section>
 
@@ -1236,7 +1147,6 @@ export function Behavior({ runtime, inspectorOpen }: BehaviorProps) {
                 <div><dt>MODEL</dt><dd>{basename(runtime.engine?.model)}</dd></div>
                 <div><dt>PENDING DRAFTS</dt><dd>{pendingCount}</dd></div>
                 <div><dt>ACTIVE DIALS</dt><dd>{activeAxes.length}</dd></div>
-                <div><dt>ACTIVE PROFILE</dt><dd>{activeProfile || "—"}</dd></div>
               </dl>
             </section>
           )}

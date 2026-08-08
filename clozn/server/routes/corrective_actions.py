@@ -39,7 +39,6 @@ def try_get(h, p):
         h._json(200, corrective_flow.registry_for_run(
             run,
             steer=getattr(sub, "steer", None),
-            active_profile=ctx._active_profile_name(),
         ))
         return True
 
@@ -80,7 +79,6 @@ def try_post(h, p, body):
                 str(body.get("action_id") or ""),
                 str(body.get("requested_backend") or "prompt_policy"),
                 steer=getattr(sub, "steer", None),
-                active_profile=ctx._active_profile_name(),
             )
         except corrective_flow.CorrectiveFlowError as exc:
             return _error(h, exc, status=400)

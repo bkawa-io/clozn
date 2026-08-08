@@ -9,21 +9,19 @@ function pathOf(request: PendingFetch): string {
 }
 
 async function respondWithWorkspace(controller: ReturnType<typeof createFetchController>) {
-  const requests = await Promise.all(Array.from({ length: 5 }, () => controller.nextRequest()));
+  const requests = await Promise.all(Array.from({ length: 4 }, () => controller.nextRequest()));
   const byPath = new Map(requests.map((request) => [pathOf(request), request]));
 
   expect([...byPath.keys()].sort()).toEqual([
     "/engine/health",
     "/steer/axes",
     "/models/local",
-    "/profiles/list",
     "/snapshots",
   ].sort());
 
   const health = byPath.get("/engine/health")!;
   const axes = byPath.get("/steer/axes")!;
   const inventory = byPath.get("/models/local")!;
-  const profiles = byPath.get("/profiles/list")!;
   const snapshots = byPath.get("/snapshots")!;
 
   controller.respondJson(health, {
@@ -51,7 +49,6 @@ async function respondWithWorkspace(controller: ReturnType<typeof createFetchCon
       sha256: "0123456789abcdef0123456789abcdef",
     }],
   });
-  controller.respondJson(profiles, { active: "local-default" });
   controller.respondJson(snapshots, { schema_version: "clozn.pinned-checkpoint-list.v1", snapshots: [] });
 }
 

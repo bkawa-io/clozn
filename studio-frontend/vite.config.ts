@@ -19,7 +19,6 @@ export default defineConfig({
       "/steer": "http://127.0.0.1:8080",
       "/sampling": "http://127.0.0.1:8080",
       "/guard": "http://127.0.0.1:8080",
-      "/profiles": "http://127.0.0.1:8080",
       "/models": "http://127.0.0.1:8080",
     },
   },

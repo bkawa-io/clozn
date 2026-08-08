@@ -17,7 +17,7 @@ is:
 3. **Locate** the suspicious source, section, claim, span, token, event, or runtime phase.
 4. **Test** one bounded hypothesis through measurement, replay, or intervention.
 5. **Compare** the source run with the resulting child or reference run.
-6. **Generalize** a useful result into an evaluation case, regression suite, profile, or correction.
+6. **Generalize** a useful result into an evaluation case, regression suite, or correction.
 
 The selected run is the durable center of this loop. Evidence views change how the run is inspected; they
 do not silently replace it with another run.
@@ -230,7 +230,7 @@ Contains:
 - Qualification results
 - Capture tier and receipt privacy defaults
 - Engine install, upgrade, rollback, and smoke evidence
-- Behavior profiles and guard calibration
+- Steering (tone dials, concept steering) and guard calibration
 
 Runtime is a supporting utility area rather than another way of inspecting the selected run.
 
@@ -468,8 +468,8 @@ scrolling of the two primary reading surfaces.
 | Token workbench and causal receipts | Forensic | Debug inspector |
 | J-lens, mechanistic diff, trace, transplant, bisect | Forensic | Compare |
 | Experiment matrices, calibration, regression, CI | Evaluate | Compare promotion |
-| Models, workers, qualification, capture, guard/profile setup | Runtime | Run frame and inspector |
-| Corrections and bounded retries | Debug | Compare and Runtime profile setup |
+| Models, workers, qualification, capture, guard setup | Runtime | Run frame and inspector |
+| Corrections and bounded retries | Debug | Compare and Runtime |
 | Privacy, export, sharing | Object-level actions | Runtime defaults |
 
 ## 15. First prototype scope

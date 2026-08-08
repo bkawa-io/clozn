@@ -1,89 +1,32 @@
-"""Named persona bundles: list, save/update, switch, export/import, and delete inactive bundles.
+"""HTTP surface for the retired named-persona-bundle ("Profiles") feature.
 
-Switch applies a bundle's cards+dials to the live substrate. Delete deliberately refuses the active
-profile so its still-live persona can never outlast the bundle that explains where it came from.
--> clozn.profiles.
+Clozn is a debugger and Model CI system, not a persona manager. The useful primitive was always
+steering (`/steer/axes`, `/steer/set`, `/steer/check`), which is untouched by this retirement -- see
+docs/CAPABILITIES.md. Every request that used to list/save/switch/export/import/delete a named
+profile bundle now returns a typed HTTP 410 rather than silently doing nothing or 404ing.
 """
-from clozn.server import app as ctx
+from __future__ import annotations
+
+CLOZN_ROUTE_AUTOLOAD = True
+
+_MESSAGE = (
+    "named behavior profiles were retired -- configure steering directly through Clozn's tone-dial "
+    "controls (/steer/axes, /steer/set) instead of switching between saved persona bundles."
+)
+
+
+def _retired(h) -> bool:
+    h._json(410, {"error": _MESSAGE, "code": "profiles_retired"})
+    return True
 
 
 def try_get(h, p):
-    if p == "/profiles/list":         # every saved persona bundle + which one is active (masthead + Settings)
-        from clozn.profiles import store as profiles
-        h._json(200, {"profiles": profiles.ProfileStore().list(), "active": ctx._active_profile_name()})
-        return True
+    if p.startswith("/profiles/"):
+        return _retired(h)
     return False
 
 
 def try_post(h, p, body):
-    if p == "/profiles/save":        # create/update a named persona bundle (does NOT apply it -- see switch)
-        from clozn.profiles import store as profiles
-        try:
-            saved = profiles.ProfileStore().save(profiles.validate(dict(body)))
-        except (ValueError, KeyError, TypeError) as e:
-            h._json(400, {"error": f"bad profile: {e}"})
-            return True
-        h._json(200, {"ok": True, "path": saved, "profile": profiles.ProfileStore().load(body["name"])})
-        return True
-    if p == "/profiles/switch":      # THE persona switch: cards replace, dials replace, instant in prompt mode
-        from clozn.profiles import store as profiles
-        name = str(body.get("name", "")).strip()
-        if not name:
-            h._json(400, {"error": "need a profile name"})
-            return True
-        try:
-            prof = profiles.ProfileStore().load(name)
-        except (OSError, ValueError) as e:
-            h._json(404, {"error": f"no such profile '{name}': {e}"})
-            return True
-        if ctx.active_sub(h) is None:
-            h._json(503, {"error": "no substrate loaded"})
-            return True
-        h._json(200, {"ok": True, **ctx._profiles_switch(ctx.active_sub(h), prof)})
-        return True
-    if p == "/profiles/export":       # -> the bundle's own JSON (client downloads/saves it -- the portable artifact)
-        from clozn.profiles import store as profiles
-        name = str(body.get("name", "")).strip()
-        if not name:
-            h._json(400, {"error": "need a profile name"})
-            return True
-        try:
-            h._json(200, {"ok": True, "profile": profiles.ProfileStore().load(name)})
-        except (OSError, ValueError) as e:
-            h._json(404, {"error": f"no such profile '{name}': {e}"})
-        return True
-    if p == "/profiles/import":       # body IS the bundle JSON (as exported); optional {rename}
-        from clozn.profiles import store as profiles
-        try:
-            bundle = dict(body.get("profile", body))
-            rename = body.get("rename") or None
-            p2 = profiles.validate(bundle)
-            if rename:
-                p2["name"] = rename
-                p2 = profiles.validate(p2)
-            path = profiles.ProfileStore().save(p2)
-        except (ValueError, KeyError, TypeError) as e:
-            h._json(400, {"error": f"bad profile bundle: {e}"})
-            return True
-        h._json(200, {"ok": True, "path": path, "profile": p2})
-        return True
-    if p == "/profiles/delete":       # inactive bundles only; never leave a deleted persona applied live
-        from clozn.profiles import store as profiles
-        name = str(body.get("name") or "")
-        if not name:
-            h._json(400, {"error": "need a profile name"})
-            return True
-        if name == ctx._active_profile_name():
-            h._json(409, {"error": "cannot delete the active profile; switch to another profile first"})
-            return True
-        try:
-            deleted = profiles.ProfileStore().delete(name)
-        except ValueError as exc:
-            h._json(400, {"error": f"bad profile name: {exc}"})
-            return True
-        if not deleted:
-            h._json(404, {"error": f"no such profile '{name}'"})
-            return True
-        h._json(200, {"ok": True, "name": name})
-        return True
+    if p.startswith("/profiles/"):
+        return _retired(h)
     return False

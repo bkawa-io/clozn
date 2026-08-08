@@ -291,8 +291,6 @@ export function Model({ runtime, inspectorOpen }: ModelProps) {
     ?? "The /models/local response did not provide a model inventory record.";
   const axesReason = data.errors.axes
     ?? "The /steer/axes response did not include steering-axis records.";
-  const profileReason = data.errors.profiles
-    ?? "The /profiles/list response did not identify an active profile.";
 
   return (
     <>
@@ -311,7 +309,6 @@ export function Model({ runtime, inspectorOpen }: ModelProps) {
             <div><dt>Engine source</dt><dd>/engine/health</dd></div>
             <div><dt>Inventory source</dt><dd>/models/local</dd></div>
             <div><dt>Configuration</dt><dd>/steer/axes</dd></div>
-            <div><dt>Profiles</dt><dd>/profiles/list</dd></div>
           </dl>
         </div>
 
@@ -410,7 +407,7 @@ export function Model({ runtime, inspectorOpen }: ModelProps) {
             <header className="runtime-section-head">
               <div>
                 <span>Configuration evidence</span>
-                <h2 id="runtime-configuration-title">Profiles, axes, and omitted installation records</h2>
+                <h2 id="runtime-configuration-title">Axes and omitted installation records</h2>
               </div>
               <a href="#/behavior">OPEN BEHAVIOR</a>
             </header>
@@ -437,19 +434,6 @@ export function Model({ runtime, inspectorOpen }: ModelProps) {
                       </ul>
                     )}
                   </>
-                )}
-              </article>
-
-              <article className="runtime-configuration-record">
-                <span>Active profile</span>
-                {data.activeProfile ? (
-                  <strong className="runtime-profile-name">{data.activeProfile}</strong>
-                ) : (
-                  <RuntimeAbsence
-                    label={loading ? "Active profile pending" : "Active profile not measured"}
-                    state={loading || !data.errors.profiles ? "not_measured" : "unavailable"}
-                    reason={loading ? "The /profiles/list request has not completed." : profileReason}
-                  />
                 )}
               </article>
 
@@ -522,15 +506,6 @@ export function Model({ runtime, inspectorOpen }: ModelProps) {
               absence={!loading && !data.errors.axes && data.axes.length > 0 ? undefined : {
                 state: loading || !data.errors.axes ? "not_measured" : "unavailable",
                 reason: loading ? "The request has not completed." : axesReason,
-              }}
-            />
-            <SourceRow
-              label="Profiles"
-              endpoint="/profiles/list"
-              detail={data.activeProfile ? `Active profile: ${data.activeProfile}.` : undefined}
-              absence={data.activeProfile ? undefined : {
-                state: loading || !data.errors.profiles ? "not_measured" : "unavailable",
-                reason: loading ? "The request has not completed." : profileReason,
               }}
             />
           </ul>

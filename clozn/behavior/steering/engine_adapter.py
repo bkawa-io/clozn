@@ -262,7 +262,7 @@ class EngineSteer:
     def set(self, name, value):
         """Set a dial's strength (capped to the ceiling from ceiling_for()) and return a warning
         string (or None) -- the single choke point every caller (`/steer/set`, `/steer/check`,
-        profiles, replay nudges) goes through, so the message reaches all of them without duplication.
+        replay nudges) goes through, so the message reaches all of them without duplication.
 
         Clamping to the uncalibrated ceiling IS now this function's job. That was previously deferred
         as "a product-behavior call the user hasn't made"; the call has since been made -- fail

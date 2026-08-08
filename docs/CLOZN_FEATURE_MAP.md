@@ -16,7 +16,7 @@ CLOZN produces several fundamentally different kinds of information:
 - **Evaluated:** Produced by a diagnostic rule, evaluator, classifier, or calibration model.
 - **Generated:** Requires a new model execution.
 - **Operational:** Runtime, worker, queue, model-loading, storage, or checkpoint state.
-- **User-authored:** Feedback, annotations, corrections, profiles, experiment definitions, and decisions.
+- **User-authored:** Feedback, annotations, corrections, experiment definitions, and decisions.
 
 Unavailable evidence is represented explicitly. Missing measurement does not mean “no effect,” and a
 failed measurement does not become a zero.
@@ -951,18 +951,21 @@ Primary implementations: [`core.py`](../clozn/receipts/core.py),
 
 ## 16. Behavior controls, corrections, and feedback
 
-### Behavior profiles
+### Named behavior profiles were retired
 
-Profiles can contain:
+CLOZN used to let a user bundle steering state into a named persona (`work`, `friend`, ...) that could
+be saved, switched, exported, and imported, with the switched-to name recorded on every subsequent run
+as `meta.active_profile`. That whole persona lifecycle -- CRUD, switching, portability, and profile
+identity attached to new runs -- was removed: CLOZN is a debugger, not a persona manager. See
+[CAPABILITIES.md](CAPABILITIES.md)'s Removed/Retired section.
 
-- Named dials
-- Custom dial values
-- Profile-supplied facts
-- Active profile identity
-
-Profiles support save, switch, import, export, and delete. Older profile bundles may still carry a
-`response_policies` field from the retired durable-correction system below; it is preserved verbatim
-on load/save but never applied to a generation.
+The useful primitive underneath a profile switch was always steering itself: applying dial values and
+persisting them exactly like an ordinary `/steer/set` call. That primitive (`/steer/axes`, `/steer/set`,
+`/steer/check`, custom dials, concept steering) is untouched by this retirement.
+`GET`/`POST /profiles/*` now return a typed HTTP 410 (`profiles_retired`). Runs recorded
+before the retirement may still carry `meta.active_profile`; that remains readable as historical
+evidence, but no new run writes it and no live code path resolves "the active profile" anymore.
+Existing files under `~/.clozn/profiles/` are left on disk untouched and are never read by the product.
 
 ### Corrective actions (one-shot, request-local)
 
@@ -1017,8 +1020,8 @@ Run-linked feedback can record:
 Feedback is aggregated into pending preference proposals. Proposals require explicit approval or
 dismissal.
 
-Primary implementations: [`registry.py`](../clozn/behavior/registry.py),
-[`store.py`](../clozn/profiles/store.py), and [`preferences.py`](../clozn/behavior/preferences.py).
+Primary implementations: [`registry.py`](../clozn/behavior/registry.py) and
+[`preferences.py`](../clozn/behavior/preferences.py).
 
 ## 17. Guarded generation
 

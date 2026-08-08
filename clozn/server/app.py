@@ -544,70 +544,6 @@ from clozn.server.message_assembly import (                                     
     _last_user, _inject_block, _export_markdown,
 )
 
-# ------- profiles: named persona bundles -> cards + dials on the LIVE substrate ---------------------
-# profiles.py is the model-free CRUD + compile layer (source bundles: card texts, dial settings, custom-
-# dial recipes, fact pairs -- see its docstring). This is the thin wiring that hands it the live objects
-# a switch needs (SUB._mem for cards/rules, SUB.steer for dials) and reports what actually happened.
-
-def _active_profile_name():
-    """The name of the last-switched-to profile, or None (nothing switched yet this install). Persisted
-    in studio_settings.json alongside memory_mode -- one small settings file, not a new one."""
-    import clozn.settings as settings
-    return settings.get_setting("active_profile")
-
-
-def _profiles_switch(sub, p) -> dict:
-    """Apply profile bundle `p` to the live substrate `sub`.
-
-    A profile is a named DIAL bundle: dials replace via profiles.apply_dials (steer.clear() then set())
-    and persist exactly like /steer/set and /steer/custom already do, so the switched-to persona survives
-    a restart the same way a manually-set dial would.
-
-    Profiles used to carry memory cards too, and a switch REPLACED the global card set (a replacement,
-    never a merge, so disjoint personas could not bleed). Memory cards were cut on 2026-07-27; a
-    bundle's `cards` are no longer applied to anything. They still travel in the bundle so an
-    export/import round-trip stays lossless -- reported via `cards_note`, never silently dropped.
-
-    Facts: the slot-memory store (clozn/lab/slotmem_qwen) is a lab-only research module -- it was
-    never wired to change the product reply, and reorg Stage B removed the product-side facts surface
-    entirely. Same deal: carried in the bundle, compiled nowhere, reported via `facts_note`.
-    Returns {name, dials, cards_note, facts_note}."""
-    # 3) DIALS: replace via profiles.apply_dials (clear() then set(); custom-dial recipes recompute if
-    #    not already present) -- persist exactly like /steer/set and /steer/custom already do, so the
-    #    switched-to persona survives a restart the same way a manually-set dial would.
-    dials = {"applied": {}, "customs_added": []}
-    steer = getattr(sub, "steer", None)
-    if steer is not None:
-        from clozn.profiles import store as profiles
-        dials = profiles.apply_dials(p, steer)
-        try:
-            if hasattr(steer, "save_state"):
-                steer.save_state(getattr(sub, "_pers_steer", None) or
-                                 _model_scoped_path("studio_personality.json"))
-            if dials["customs_added"] and hasattr(steer, "save_custom"):
-                steer.save_custom(_pers(f"studio_custom_{getattr(sub, 'name', SUBNAME)}.json"))
-        except Exception:
-            pass
-
-    # 4) FACTS: reorg Stage B pulled the facts/slot-memory tier off the product surface entirely (it's a
-    #    lab-only research module now, clozn/lab/slotmem_qwen). A profile's fact pairs still travel in
-    #    the bundle (export/import stays lossless), but the product server never compiles them into a
-    #    live store -- facts_note says so honestly, always.
-    import clozn.settings as settings
-    settings.set_setting("active_profile", p["name"])
-
-    facts_note = None
-    if p.get("facts"):
-        facts_note = (f"{len(p['facts'])} fact(s) travel in the bundle but are not compiled anywhere -- "
-                      "the facts/slot-memory tier is a lab-only research module, not part of the product.")
-    cards_note = None
-    if p.get("cards"):
-        cards_note = (f"{len(p['cards'])} memory card(s) travel in the bundle but are not applied -- "
-                      "memory cards were removed from the product; steering is the personalization surface.")
-    return {"name": p["name"], "dials": dials,
-            "cards_note": cards_note, "facts_note": facts_note}
-
-
 SUB = None         # the active substrate object
 SUBNAME = "engine"  # product server has one substrate; PyTorch model work lives in the lab
 
@@ -984,9 +920,6 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 except Exception:
                     meta = None
                 meta = dict(meta or {})
-                active_profile = _active_profile_name()
-                if active_profile:
-                    meta.setdefault("active_profile", active_profile)
                 try:
                     prompt_tokens = (
                         request_sub.last_prompt_tokens()

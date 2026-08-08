@@ -54,7 +54,6 @@ def try_get(h, p):
     # peek_control_model_for_run for why this must not fail closed under a managed gateway, nor turn
     # "worker unavailable" into a hard refusal on a route that starts no measurement either way).
     related = list(runlog.iter_runs(limit=200))
-    from clozn.server import app as ctx
     from clozn.server.model_routing import peek_control_model_for_run
     sub = peek_control_model_for_run(h, run.get("model"), route="/runs/<id>/tokens/<index>/workbench")
     scoring_available = bool(sub and callable(getattr(sub, "score_tokens", None)))
@@ -66,8 +65,7 @@ def try_get(h, p):
     from clozn import schemas
 
     try:
-        registry = corrective_flow.registry_for_run(
-            run, steer=getattr(sub, "steer", None), active_profile=ctx._active_profile_name())
+        registry = corrective_flow.registry_for_run(run, steer=getattr(sub, "steer", None))
         investigation_doc = investigation.build(
             run, related_runs=related, corrective_registry=registry, scoring_available=scoring_available)
         schemas.validate(investigation_doc, "clozn.run-investigation.v1")

@@ -7,14 +7,11 @@ import pytest
 
 from clozn import schemas
 from clozn.behavior import corrective_flow as flow
-from clozn.profiles import store as profiles
 
 
 @pytest.fixture
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(flow, "_PATH", str(tmp_path / "flow.json"))
-    profile_store = profiles.ProfileStore(str(tmp_path / "profiles"))
-    return profile_store
 
 
 def _run(**changes):
@@ -53,10 +50,8 @@ def _success(preview):
     }
 
 
-def _confirmed(run, *, active_profile=None):
-    preview = flow.create_preview(
-        run, "less-verbose", active_profile=active_profile, now=100.0
-    )
+def _confirmed(run):
+    preview = flow.create_preview(run, "less-verbose", now=100.0)
     result = flow.confirm_preview(
         preview["preview_id"], "confirm-key-0001", run, _success, now=101.0
     )
@@ -64,7 +59,7 @@ def _confirmed(run, *, active_profile=None):
 
 
 def test_registry_for_run_discovers_exactly_six_actions_with_only_once_scope(isolated):
-    doc = flow.registry_for_run(_run(), active_profile=None)
+    doc = flow.registry_for_run(_run())
     assert len(doc["actions"]) == 6
     for action in doc["actions"]:
         # Durable session/profile scoping was retired -- a kept correction only ever selects
@@ -243,9 +238,11 @@ def test_keep_once_refuses_selected_revision_drift(isolated):
 
 def test_keep_result_refuses_durable_session_or_profile_scope(isolated):
     """Durable session/profile scoping (a kept correction silently shaping future, unrelated
-    requests) was retired -- `keep_result` only ever accepts `once` now."""
+    requests) was retired -- `keep_result` only ever accepts `once` now. `meta.active_profile`
+    is historical-only data here (Profiles were retired too); keep_result must not care either
+    way."""
     run = _run(meta={"active_profile": "work"})
-    preview, result = _confirmed(run, active_profile="work")
+    preview, result = _confirmed(run)
     prior = next(s for s in preview["scope_eligibility"] if s["scope"] == "once")
     for scope in ("session", "profile"):
         with pytest.raises(flow.CorrectiveFlowError, match="scope must be once"):

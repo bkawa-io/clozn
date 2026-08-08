@@ -7,12 +7,9 @@ the F5/F6 correction registry) was removed.
 """
 from __future__ import annotations
 
-import json
-
 import pytest
 
 import clozn.runs.store as runlog
-from clozn.profiles import store as profiles
 
 
 # ------------------------------------------------------------------ the persistent modules are gone
@@ -52,45 +49,6 @@ def test_generation_routes_no_longer_import_the_retired_correction_store():
         source = open(module.__file__, encoding="utf-8").read()
         assert "clozn.runs.corrections" not in source
         assert "_correction_resolution" not in source
-
-
-# ------------------------------------------------------------------------ legacy profile is inert
-
-def test_legacy_profile_response_policies_survives_load_without_crashing(tmp_path):
-    """A profile bundle saved before the retirement may still carry `response_policies`. Loading it
-    must not raise, and the field is preserved verbatim (never destructively rewritten) -- but it is
-    also never consulted anywhere in the product to shape a generation anymore."""
-    store = profiles.ProfileStore(str(tmp_path / "profiles"))
-    legacy = profiles.new_profile("legacy")
-    legacy["response_policies"] = ["less-verbose", "use-context"]
-    store.save(legacy)
-
-    loaded = store.load("legacy")
-    assert loaded["response_policies"] == ["less-verbose", "use-context"]
-
-    # Saving it again (e.g. the user tweaks a dial and re-saves) must not destroy the legacy field.
-    loaded["dials"]["warm"] = 0.3
-    store.save(loaded)
-    assert store.load("legacy")["response_policies"] == ["less-verbose", "use-context"]
-
-
-def test_new_profiles_never_carry_the_retired_field(tmp_path):
-    store = profiles.ProfileStore(str(tmp_path / "profiles"))
-    fresh = profiles.new_profile("fresh")
-    assert "response_policies" not in fresh
-    store.save(fresh)
-    assert "response_policies" not in store.load("fresh")
-
-
-def test_legacy_profile_with_junk_response_policies_does_not_crash(tmp_path):
-    """A hand-edited or corrupted legacy field degrades gracefully -- validate() must never raise
-    over data in a field nothing reads anymore."""
-    store = profiles.ProfileStore(str(tmp_path / "profiles"))
-    bundle = profiles.new_profile("junk")
-    bundle["response_policies"] = "not-a-list"
-    store.save(bundle)
-    loaded = store.load("junk")
-    assert "response_policies" not in loaded
 
 
 # ------------------------------------------------------------------- historical runs remain readable

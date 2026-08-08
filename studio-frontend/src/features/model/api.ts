@@ -33,8 +33,7 @@ export interface ModelWorkspaceData {
   engine?: EngineModel;
   axes: ModelAxis[];
   localModels?: LocalModel[];
-  activeProfile?: string;
-  errors: Partial<Record<"engine" | "axes" | "inventory" | "profiles", string>>;
+  errors: Partial<Record<"engine" | "axes" | "inventory", string>>;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -138,16 +137,13 @@ export async function loadModelWorkspace(signal?: AbortSignal): Promise<ModelWor
     get("/engine/health", signal),
     post("/steer/axes", {}, signal),
     get("/models/local", signal),
-    get("/profiles/list", signal),
   ]);
-  const [engine, axes, inventory, profiles] = results;
+  const [engine, axes, inventory] = results;
   const errors: ModelWorkspaceData["errors"] = {};
   if (engine.status === "rejected") errors.engine = message(engine.reason, "Engine health unavailable");
   if (axes.status === "rejected") errors.axes = message(axes.reason, "Steering axes unavailable");
   if (inventory.status === "rejected") errors.inventory = message(inventory.reason, "Model inventory unavailable");
-  if (profiles.status === "rejected") errors.profiles = message(profiles.reason, "Profiles unavailable");
 
-  const profileBody = profiles.status === "fulfilled" ? profiles.value : {};
   return {
     engine: engine.status === "fulfilled" ? engineFromBody(engine.value) : undefined,
     axes: axes.status === "fulfilled"
@@ -158,7 +154,6 @@ export async function loadModelWorkspace(signal?: AbortSignal): Promise<ModelWor
         })).filter((axis) => axis.name)
       : [],
     localModels: inventory.status === "fulfilled" ? localModelsFromBody(inventory.value) : undefined,
-    activeProfile: typeof profileBody.active === "string" ? profileBody.active : undefined,
     errors,
   };
 }

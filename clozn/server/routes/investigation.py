@@ -27,7 +27,6 @@ def try_get(h, p):
     # refusal here -- this route composes existing evidence and starts no measurement either way, so
     # an unresolvable worker degrades to scoring_available:false (still 200), exactly like legacy mode
     # already does when the one engine is down.
-    from clozn.server import app as ctx
     from clozn.server.model_routing import peek_control_model_for_run
     sub = peek_control_model_for_run(h, run.get("model"), route="/runs/<id>/investigation")
     scoring_available = bool(sub and callable(getattr(sub, "score_tokens", None)))
@@ -39,7 +38,6 @@ def try_get(h, p):
     registry = corrective_flow.registry_for_run(
         run,
         steer=getattr(sub, "steer", None),
-        active_profile=ctx._active_profile_name(),
     )
     try:
         document = build(

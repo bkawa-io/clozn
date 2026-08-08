@@ -55,8 +55,19 @@ projection-file handoff are retired.
   retry (row above) is unaffected. Runs recorded before the retirement may still carry
   `applied_corrections`/`correction_conflicts` receipt fields or a `corrective_retry.scope` of
   `session`/`profile`; those remain readable as historical evidence and validate against their
-  original schemas, but nothing in the product reads or re-applies them anymore. A profile bundle's
-  legacy `response_policies` field is preserved verbatim on load/save for the same reason.
+  original schemas, but nothing in the product reads or re-applies them anymore.
+- **Named behavior profiles** were retired: CLOZN used to let a user bundle steering state into a
+  saved persona (`work`, `friend`, ...) with save/switch/export/import/delete, and the switched-to
+  name was written onto every subsequent run as `meta.active_profile`. That whole persona lifecycle
+  was removed -- CLOZN is a causal debugger, not a persona manager; see the positioning in
+  [README.md](../README.md). The primitive underneath a profile switch was always steering itself
+  (`/steer/axes`, `/steer/set`, `/steer/check`, custom dials, concept steering), which is completely
+  untouched and persists exactly as it did before. `GET`/`POST /profiles/*` now return a typed HTTP
+  410 (`profiles_retired`). Existing files under `~/.clozn/profiles/` are left on disk untouched and
+  are never read by the product; a stale `active_profile` key in `studio_settings.json` is likewise
+  never read or written and has no effect on any generation. Runs recorded before the retirement may
+  still carry `meta.active_profile`; that remains readable as historical evidence, but no new run
+  writes it.
 - Prompt-card and learned-prefix memory were removed from the product on 2026-07-27. Existing run
   readers may still tolerate old `memory` fields, but current runs do not apply or record cards.
 - The user-facing PyTorch workbench was retired with that memory path. Offline calibration and research
