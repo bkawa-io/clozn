@@ -1,0 +1,24 @@
+{
+  "schema_version": "clozn.context-tension.v1",
+  "run_id": "run-fixture-3",
+  "privacy": "metadata_only",
+  "target": {
+    "scope": "whole_answer",
+    "basis": "recorded_answer",
+    "unit": "unicode_code_points",
+    "interval": "half_open",
+    "basis_sha256": "b52d9300f127346f4c257ecc25ea683f164e4e1306b98fa4a68f9dd2533600a5"
+  },
+  "measurement": {
+    "state": "not_measured",
+    "reason": "no_influence_map"
+  },
+  "tensions": [],
+  "summary": {
+    "answer_spans_examined": 0,
+    "answer_spans_with_tension": 0,
+    "tension_pairs": 0,
+    "returned_tension_pairs": 0,
+    "distinct_source_spans": 0
+  }
+}

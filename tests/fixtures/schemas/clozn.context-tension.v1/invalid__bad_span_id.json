@@ -1,0 +1,43 @@
+{
+  "schema_version": "clozn.context-tension.v1",
+  "run_id": "run-fixture-x",
+  "privacy": "metadata_only",
+  "target": {
+    "scope": "whole_answer",
+    "basis": "recorded_answer",
+    "unit": "unicode_code_points",
+    "interval": "half_open",
+    "basis_sha256": "b52d9300f127346f4c257ecc25ea683f164e4e1306b98fa4a68f9dd2533600a5"
+  },
+  "measurement": {
+    "state": "available",
+    "influence_schema": "clozn.context_answer_influence.v1"
+  },
+  "tensions": [
+    {
+      "tension_id": "tension_ecdcf1a9239e1ef5abec8be1",
+      "answer_span_id": "as-0",
+      "supporting": {
+        "source_span_id": "span_88b8090918e45fec591d0322",
+        "delta_nats": -3.0,
+        "abs_delta_nats": 3.0,
+        "effect": "supports",
+        "evidence_state": "causally_supported"
+      },
+      "suppressing": {
+        "source_span_id": "span_8b627222cd9c65ed25e241a4",
+        "delta_nats": 2.5,
+        "abs_delta_nats": 2.5,
+        "effect": "suppresses",
+        "evidence_state": "causally_supported"
+      }
+    }
+  ],
+  "summary": {
+    "answer_spans_examined": 1,
+    "answer_spans_with_tension": 1,
+    "tension_pairs": 1,
+    "returned_tension_pairs": 1,
+    "distinct_source_spans": 2
+  }
+}

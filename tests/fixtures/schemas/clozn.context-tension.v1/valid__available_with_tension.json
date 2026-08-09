@@ -1,0 +1,61 @@
+{
+  "schema_version": "clozn.context-tension.v1",
+  "run_id": "run-fixture-1",
+  "privacy": "metadata_only",
+  "target": {
+    "scope": "whole_answer",
+    "basis": "recorded_answer",
+    "unit": "unicode_code_points",
+    "interval": "half_open",
+    "basis_sha256": "b52d9300f127346f4c257ecc25ea683f164e4e1306b98fa4a68f9dd2533600a5"
+  },
+  "measurement": {
+    "state": "available",
+    "influence_schema": "clozn.context_answer_influence.v1",
+    "method": {
+      "name": "teacher_forced_matched_context_replacement",
+      "mode": "forced_score_intervention",
+      "claim_limit": "behavioral dependence under a controlled prompt intervention; not a percentage",
+      "caveat": "Influence means this context changed the measured output under this intervention. It does not prove the document is correct or reveal hidden reasoning."
+    },
+    "thresholds": {
+      "cell_abs_delta_nats": 0.5
+    },
+    "artifact_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "tensions": [
+    {
+      "tension_id": "tension_ecdcf1a9239e1ef5abec8be1",
+      "answer_span_id": "span_805a4d40c95d81f2492f49c0",
+      "supporting": {
+        "source_span_id": "span_88b8090918e45fec591d0322",
+        "delta_nats": -3.0,
+        "abs_delta_nats": 3.0,
+        "effect": "supports",
+        "evidence_state": "causally_supported"
+      },
+      "suppressing": {
+        "source_span_id": "span_8b627222cd9c65ed25e241a4",
+        "delta_nats": 2.5,
+        "abs_delta_nats": 2.5,
+        "effect": "suppresses",
+        "evidence_state": "causally_supported"
+      },
+      "native": {
+        "answer_span_id": "as-0",
+        "supporting_context_span_id": "ps-1",
+        "suppressing_context_span_id": "ps-2",
+        "supporting_context_index": 0,
+        "suppressing_context_index": 1,
+        "answer_index": 0
+      }
+    }
+  ],
+  "summary": {
+    "answer_spans_examined": 1,
+    "answer_spans_with_tension": 1,
+    "tension_pairs": 1,
+    "returned_tension_pairs": 1,
+    "distinct_source_spans": 2
+  }
+}

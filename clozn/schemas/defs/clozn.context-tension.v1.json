@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.context-tension.v1",
+  "title": "Context tension -- measured opposing-effect pairs over a run's persisted influence map",
+  "description": "A derived, read-only detector over one run's persisted clozn.context_answer_influence.v1 measurement (run['influence_map']). A tension record means exactly: two DISTINCT context spans each have a causally_supported link to the SAME answer span, and their measured effects are opposite (one supports, one suppresses). This is NOT a claim that the two source spans semantically contradict each other -- it is controlled intervention evidence that they pulled this one recorded answer span in opposite measured directions. Never 'conflict', never 'contradiction', never 'wrong_source'/'correct_source'. Only evidence_state=causally_supported links participate; neutral links and below-floor 'observed' links never produce a tension record, even when their signs would otherwise oppose. Absence of a detected tension is not proof the context was consistent -- it means no above-floor opposing pair was found for the examined answer span(s).",
+  "type": "object",
+  "required": ["schema_version", "run_id", "privacy", "target", "measurement", "tensions", "summary"],
+  "properties": {
+    "schema_version": {"const": "clozn.context-tension.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "privacy": {"const": "metadata_only"},
+    "target": {"$ref": "#/$defs/target"},
+    "measurement": {"$ref": "#/$defs/measurement"},
+    "tensions": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/tension"}
+    },
+    "summary": {"$ref": "#/$defs/summary"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "target": {
+      "type": "object",
+      "required": ["scope", "basis", "unit", "interval"],
+      "properties": {
+        "scope": {
+          "enum": ["whole_answer", "answer_range"],
+          "description": "'whole_answer': no range was supplied -- every resolvable answer span was examined. 'answer_range': start/end scoped the search to answer spans overlapping [start, end)."
+        },
+        "basis": {"const": "recorded_answer"},
+        "unit": {"const": "unicode_code_points"},
+        "interval": {"const": "half_open"},
+        "start": {"type": "integer", "minimum": 0},
+        "end": {"type": "integer", "minimum": 0},
+        "basis_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 of the exact recorded answer text (run['response']) this query was resolved against. Present whenever that text is known, even when measurement itself is unavailable -- absent only when the answer text could not be read at all (e.g. redacted)."
+        }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {
+            "scope": {"const": "whole_answer"},
+            "start": false,
+            "end": false
+          }
+        },
+        {
+          "required": ["start", "end"],
+          "properties": {
+            "scope": {"const": "answer_range"}
+          }
+        }
+      ]
+    },
+    "measurement": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {
+          "enum": ["available", "not_measured", "unavailable", "error"],
+          "description": "Identical vocabulary to clozn.influence-query.v1's measurement.state. 'not_measured': no influence map was ever attached, or it cannot be trusted at all. 'unavailable': a persisted artifact exists but it, or the recorded answer text needed to resolve the target, cannot honestly be used (status=unavailable, redacted text, or a stale/drifted answer hash). 'error': the persisted artifact itself recorded status=error. 'available': the measurement was consulted and reconciled with this run's CURRENT answer text -- tensions may still be empty, which is a distinct, honest finding from any non-available state, and is never narrated as 'the context was consistent'."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A stable, machine-readable reason, taken from the persisted artifact's own error code when one exists. Present on every non-available state; absent when state=available."
+        },
+        "influence_schema": {"const": "clozn.context_answer_influence.v1"},
+        "artifact_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "method": {
+          "type": "object",
+          "description": "An unchanged copy of the source artifact's method object, including its persistent honesty caveat. Never re-derived."
+        },
+        "thresholds": {
+          "type": "object",
+          "description": "An unchanged copy of the source artifact's thresholds object."
+        }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": ["state"],
+          "properties": {
+            "state": {"const": "available"},
+            "reason": false
+          }
+        },
+        {
+          "required": ["state", "reason"],
+          "properties": {
+            "state": {"enum": ["not_measured", "unavailable", "error"]},
+            "influence_schema": false,
+            "artifact_sha256": false,
+            "method": false,
+            "thresholds": false
+          }
+        }
+      ]
+    },
+    "supporting_side": {
+      "type": "object",
+      "required": ["source_span_id", "delta_nats", "abs_delta_nats", "effect", "evidence_state"],
+      "properties": {
+        "source_span_id": {
+          "type": "string",
+          "pattern": "^span_[0-9a-f]{24}$",
+          "description": "Real clozn.text-span-addresses.v1 address_id for this side's measured context span."
+        },
+        "delta_nats": {
+          "type": "number",
+          "description": "Copied verbatim from the source Link. Licenses a claim about this exact intervention on this exact recorded continuation only."
+        },
+        "abs_delta_nats": {"type": "number", "minimum": 0},
+        "effect": {"const": "supports"},
+        "evidence_state": {"const": "causally_supported"}
+      },
+      "additionalProperties": false
+    },
+    "suppressing_side": {
+      "type": "object",
+      "required": ["source_span_id", "delta_nats", "abs_delta_nats", "effect", "evidence_state"],
+      "properties": {
+        "source_span_id": {
+          "type": "string",
+          "pattern": "^span_[0-9a-f]{24}$",
+          "description": "Real clozn.text-span-addresses.v1 address_id for this side's measured context span."
+        },
+        "delta_nats": {
+          "type": "number",
+          "description": "Copied verbatim from the source Link. Licenses a claim about this exact intervention on this exact recorded continuation only."
+        },
+        "abs_delta_nats": {"type": "number", "minimum": 0},
+        "effect": {"const": "suppresses"},
+        "evidence_state": {"const": "causally_supported"}
+      },
+      "additionalProperties": false
+    },
+    "tension": {
+      "type": "object",
+      "required": ["tension_id", "answer_span_id", "supporting", "suppressing"],
+      "properties": {
+        "tension_id": {
+          "type": "string",
+          "pattern": "^tension_[0-9a-f]{24}$",
+          "description": "A stable digest of (run_id, answer_span_id, supporting.source_span_id, suppressing.source_span_id). The same measured evidence always yields the same ID -- never a random UUID."
+        },
+        "answer_span_id": {
+          "type": "string",
+          "pattern": "^span_[0-9a-f]{24}$",
+          "description": "Real clozn.text-span-addresses.v1 address_id for the SINGLE answer span both sides' links target."
+        },
+        "supporting": {"$ref": "#/$defs/supporting_side"},
+        "suppressing": {"$ref": "#/$defs/suppressing_side"},
+        "native": {
+          "type": "object",
+          "description": "Underlying influence-map native identifiers/indices, retained for traceability. Not the canonical public identity -- tension_id/answer_span_id/source_span_id are.",
+          "properties": {
+            "answer_span_id": {"type": "string"},
+            "supporting_context_span_id": {"type": "string"},
+            "suppressing_context_span_id": {"type": "string"},
+            "supporting_context_index": {"type": "integer", "minimum": 0},
+            "suppressing_context_index": {"type": "integer", "minimum": 0},
+            "answer_index": {"type": "integer", "minimum": 0}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "answer_spans_examined", "answer_spans_with_tension", "tension_pairs",
+        "returned_tension_pairs", "distinct_source_spans"
+      ],
+      "properties": {
+        "answer_spans_examined": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many measured, resolvable answer spans were in scope (the whole answer, or the overlapping subset when a range was supplied)."
+        },
+        "answer_spans_with_tension": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Distinct answer spans that produced at least one tension pair, before limit is applied."
+        },
+        "tension_pairs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total opposing pairs found, BEFORE limit is applied. May exceed len(tensions) when the result was truncated."
+        },
+        "returned_tension_pairs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "len(tensions) -- how many of tension_pairs this response actually carries after limit."
+        },
+        "distinct_source_spans": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Distinct source_span_id values appearing across all tension pairs found (both sides), before limit."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

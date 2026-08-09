@@ -1,0 +1,19 @@
+{
+  "schema_version": "clozn.context-tension.v1",
+  "run_id": "run-fixture-x",
+  "privacy": "metadata_only",
+  "target": {
+    "scope": "whole_answer",
+    "basis": "recorded_answer",
+    "unit": "unicode_code_points",
+    "interval": "half_open"
+  },
+  "tensions": [],
+  "summary": {
+    "answer_spans_examined": 0,
+    "answer_spans_with_tension": 0,
+    "tension_pairs": 0,
+    "returned_tension_pairs": 0,
+    "distinct_source_spans": 0
+  }
+}

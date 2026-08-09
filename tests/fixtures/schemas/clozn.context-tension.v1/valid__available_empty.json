@@ -1,0 +1,34 @@
+{
+  "schema_version": "clozn.context-tension.v1",
+  "run_id": "run-fixture-2",
+  "privacy": "metadata_only",
+  "target": {
+    "scope": "whole_answer",
+    "basis": "recorded_answer",
+    "unit": "unicode_code_points",
+    "interval": "half_open",
+    "basis_sha256": "b52d9300f127346f4c257ecc25ea683f164e4e1306b98fa4a68f9dd2533600a5"
+  },
+  "measurement": {
+    "state": "available",
+    "influence_schema": "clozn.context_answer_influence.v1",
+    "method": {
+      "name": "teacher_forced_matched_context_replacement",
+      "mode": "forced_score_intervention",
+      "claim_limit": "behavioral dependence under a controlled prompt intervention; not a percentage",
+      "caveat": "Influence means this context changed the measured output under this intervention. It does not prove the document is correct or reveal hidden reasoning."
+    },
+    "thresholds": {
+      "cell_abs_delta_nats": 0.5
+    },
+    "artifact_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "tensions": [],
+  "summary": {
+    "answer_spans_examined": 1,
+    "answer_spans_with_tension": 0,
+    "tension_pairs": 0,
+    "returned_tension_pairs": 0,
+    "distinct_source_spans": 0
+  }
+}
