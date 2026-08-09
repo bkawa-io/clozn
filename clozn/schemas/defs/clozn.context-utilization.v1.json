@@ -1,0 +1,190 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.context-utilization.v1",
+  "title": "Context utilization -- measurement/effect coverage of prompt sources over a run's persisted influence map",
+  "description": "A derived, read-only coverage view over one run's persisted clozn.context_answer_influence.v1 measurement (run['influence_map']), grouped by ORIGINAL PROMPT SOURCE using only its coarse (never fine/refined) measured spans. 'not_measured' means the bounded influence-measurement selection never scored this source at all -- no influence claim, positive or negative, is available for it, and it must never be described as low-effect. 'below_measured_floor' means the source's measurement completed and every measured coarse-span link stayed below the configured floor -- this means only 'no strong effect was detected under this intervention and measurement threshold for this recorded answer', never that the source was irrelevant, unused, or safe to remove. 'clear_measured_effect' means at least one measured coarse-span link cleared the floor. A below_measured_floor classification requires the underlying measurement to be COMPLETE (matrix_complete and selection.complete_for_selected_spans both true) -- an incomplete matrix degrades the whole response to measurement.state=unavailable rather than ever labeling a partially-measured source as low-effect.",
+  "type": "object",
+  "required": ["schema_version", "run_id", "privacy", "measurement", "sources", "summary"],
+  "properties": {
+    "schema_version": {"const": "clozn.context-utilization.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "privacy": {"const": "metadata_only"},
+    "measurement": {"$ref": "#/$defs/measurement"},
+    "sources": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/source"}
+    },
+    "summary": {"$ref": "#/$defs/summary"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "measurement": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {
+          "enum": ["available", "not_measured", "unavailable"],
+          "description": "'not_measured': no influence map was ever attached to this run, or it cannot be trusted at all. 'unavailable': a persisted artifact exists but cannot honestly be used right now -- status=unavailable, status=error, redacted/stale answer text, or an incomplete measurement matrix (reason=incomplete_influence_matrix). 'available': the measurement was consulted, is structurally complete, and was reconciled with this run's CURRENT answer text."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A stable, machine-readable reason. Present on every non-available state; absent when state=available."
+        },
+        "influence_schema": {"const": "clozn.context_answer_influence.v1"},
+        "artifact_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "matrix_complete": {"const": true},
+        "selection": {
+          "type": "object",
+          "required": ["selected_sources", "omitted_sources"],
+          "properties": {
+            "strategy": {"type": ["string", "null"]},
+            "max_context_spans": {"type": ["integer", "null"], "minimum": 0},
+            "selected_sources": {"type": "integer", "minimum": 0},
+            "omitted_sources": {"type": "integer", "minimum": 0}
+          },
+          "additionalProperties": false
+        },
+        "method": {
+          "type": "object",
+          "description": "An unchanged copy of the source artifact's method object, including its persistent honesty caveat. Never re-derived."
+        },
+        "thresholds": {
+          "type": "object",
+          "description": "An unchanged copy of the source artifact's thresholds object."
+        }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": ["state"],
+          "properties": {
+            "state": {"const": "available"},
+            "reason": false
+          }
+        },
+        {
+          "required": ["state", "reason"],
+          "properties": {
+            "state": {"enum": ["not_measured", "unavailable"]},
+            "influence_schema": false,
+            "artifact_sha256": false,
+            "matrix_complete": false,
+            "selection": false,
+            "method": false,
+            "thresholds": false
+          }
+        }
+      ]
+    },
+    "refinement": {
+      "type": "object",
+      "required": ["available", "fine_span_count"],
+      "properties": {
+        "available": {"const": true},
+        "fine_span_count": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Optional metadata only -- fine/refined spans never affect source-level classification."
+        }
+      },
+      "additionalProperties": false
+    },
+    "native": {
+      "type": "object",
+      "required": ["source_id"],
+      "properties": {
+        "source_id": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "required": ["source_span_id", "measurement_state"],
+      "properties": {
+        "source_span_id": {
+          "type": "string",
+          "pattern": "^span_[0-9a-f]{24}$",
+          "description": "Real clozn.text-span-addresses.v1 address_id for this prompt source. The primary public identity -- never a second addressing scheme."
+        },
+        "measurement_state": {"enum": ["measured", "not_measured"]},
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Present only when measurement_state=not_measured (e.g. omitted_by_measurement_selection)."
+        },
+        "effect_state": {
+          "enum": ["clear_measured_effect", "below_measured_floor"],
+          "description": "Present ONLY when measurement_state=measured. A source that was never measured structurally cannot carry an effect_state -- see this schema's oneOf below."
+        },
+        "coarse_span_count": {"type": "integer", "minimum": 1},
+        "coarse_spans_with_clear_effect": {"type": "integer", "minimum": 0},
+        "clear_link_count": {"type": "integer", "minimum": 0},
+        "observed_link_count": {"type": "integer", "minimum": 0},
+        "supporting_clear_links": {"type": "integer", "minimum": 0},
+        "suppressing_clear_links": {"type": "integer", "minimum": 0},
+        "neutral_clear_links": {"type": "integer", "minimum": 0},
+        "max_abs_delta_nats": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Descriptive measurement and deterministic sort key only -- never normalized or compared across differently-sized spans as an importance/utilization score."
+        },
+        "code_points": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Exact Unicode code-point length of this source's exact text, when resolvable. A plain integer count, never source text itself, and never a token estimate."
+        },
+        "refinement": {"$ref": "#/$defs/refinement"},
+        "native": {"$ref": "#/$defs/native"}
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "measurement_state", "effect_state", "coarse_span_count", "coarse_spans_with_clear_effect",
+            "clear_link_count", "observed_link_count", "supporting_clear_links", "suppressing_clear_links",
+            "neutral_clear_links", "max_abs_delta_nats"
+          ],
+          "properties": {
+            "measurement_state": {"const": "measured"},
+            "reason": false
+          }
+        },
+        {
+          "required": ["measurement_state", "reason"],
+          "properties": {
+            "measurement_state": {"const": "not_measured"},
+            "effect_state": false,
+            "coarse_span_count": false,
+            "coarse_spans_with_clear_effect": false,
+            "clear_link_count": false,
+            "observed_link_count": false,
+            "supporting_clear_links": false,
+            "suppressing_clear_links": false,
+            "neutral_clear_links": false,
+            "max_abs_delta_nats": false,
+            "refinement": false
+          }
+        }
+      ]
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "prompt_sources", "measured_sources", "sources_with_clear_measured_effect",
+        "sources_below_measured_floor", "sources_not_measured"
+      ],
+      "properties": {
+        "prompt_sources": {"type": "integer", "minimum": 0},
+        "measured_sources": {"type": "integer", "minimum": 0},
+        "sources_with_clear_measured_effect": {"type": "integer", "minimum": 0},
+        "sources_below_measured_floor": {"type": "integer", "minimum": 0},
+        "sources_not_measured": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,10 +1,10 @@
 """Shared, private geometry/gating primitives for Clozn's read-only, influence-derived debugger
-queries: `clozn.runs.influence_query` ("Why this?", E7) and `clozn.runs.context_tension` ("context
-tension", E8). NOT a public product surface by itself -- no schema, no route, no `schema_version` of its
-own. It exists so every feature built on top of `run["influence_map"]` validates the artifact, detects
-answer drift, resolves redaction, and projects stable span addresses through exactly ONE code path. Two
-subtly different implementations of influence-map validation is exactly the failure mode this module
-exists to prevent.
+queries: `clozn.runs.influence_query` ("Why this?", E7), `clozn.runs.context_tension` ("context
+tension", E8), and `clozn.runs.context_utilization` ("what mattered?", E9). NOT a public product surface
+by itself -- no schema, no route, no `schema_version` of its own. It exists so every feature built on top
+of `run["influence_map"]` validates the artifact, detects answer drift, resolves redaction, and projects
+stable span addresses through exactly ONE code path. Two subtly different implementations of
+influence-map validation is exactly the failure mode this module exists to prevent.
 
 Reuses `clozn.runs.text_span_addresses.project_influence_addresses` -- the SAME projection
 `clozn.runs.claim_support` uses -- so answer-span/context-span addressing and drift/redaction resolution
@@ -104,13 +104,18 @@ class Geometry:
     """Everything link selection needs, once the influence map has passed `gate` and the recorded
     answer text is known. Built once per call by `resolve_geometry` below."""
 
-    __slots__ = ("answer_offsets", "answer_address_by_id", "prompt_address_by_id", "links_by_answer_id")
+    __slots__ = (
+        "answer_offsets", "answer_address_by_id", "prompt_address_by_id",
+        "links_by_answer_id", "links_by_context_id",
+    )
 
-    def __init__(self, answer_offsets, answer_address_by_id, prompt_address_by_id, links_by_answer_id):
+    def __init__(self, answer_offsets, answer_address_by_id, prompt_address_by_id, links_by_answer_id,
+                links_by_context_id):
         self.answer_offsets = answer_offsets
         self.answer_address_by_id = answer_address_by_id
         self.prompt_address_by_id = prompt_address_by_id
         self.links_by_answer_id = links_by_answer_id
+        self.links_by_context_id = links_by_context_id
 
 
 def resolve_geometry(run_id: str, influence_map: dict, response: str) -> tuple[Geometry | None, str | None]:
@@ -159,12 +164,20 @@ def resolve_geometry(run_id: str, influence_map: dict, response: str) -> tuple[G
         return None, reason
 
     links_by_answer_id: dict[str, list[dict]] = {}
+    links_by_context_id: dict[str, list[dict]] = {}
     for link in influence_map.get("links") or []:
-        if isinstance(link, dict) and isinstance(link.get("answer_span_id"), str):
+        if not isinstance(link, dict):
+            continue
+        if isinstance(link.get("answer_span_id"), str):
             links_by_answer_id.setdefault(link["answer_span_id"], []).append(link)
+        if isinstance(link.get("context_span_id"), str):
+            links_by_context_id.setdefault(link["context_span_id"], []).append(link)
 
     return (
-        Geometry(answer_offsets, answer_address_by_id, prompt_address_by_id, links_by_answer_id),
+        Geometry(
+            answer_offsets, answer_address_by_id, prompt_address_by_id,
+            links_by_answer_id, links_by_context_id,
+        ),
         None,
     )
 

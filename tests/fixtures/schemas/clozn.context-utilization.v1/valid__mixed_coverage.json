@@ -1,0 +1,78 @@
+{
+  "schema_version": "clozn.context-utilization.v1",
+  "run_id": "run-fixture-1",
+  "privacy": "metadata_only",
+  "measurement": {
+    "state": "available",
+    "influence_schema": "clozn.context_answer_influence.v1",
+    "method": {
+      "name": "teacher_forced_matched_context_replacement",
+      "mode": "forced_score_intervention",
+      "claim_limit": "behavioral dependence under a controlled prompt intervention; not a percentage",
+      "caveat": "Influence means this context changed the measured output under this intervention. It does not prove the document is correct or reveal hidden reasoning."
+    },
+    "thresholds": {
+      "cell_abs_delta_nats": 0.5
+    },
+    "artifact_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "matrix_complete": true,
+    "selection": {
+      "strategy": "earliest_policy_then_recent_sources_proportional_chunks_v1",
+      "max_context_spans": 8,
+      "selected_sources": 2,
+      "omitted_sources": 1
+    }
+  },
+  "sources": [
+    {
+      "source_span_id": "span_00f2ea0f955754e5e4eb5480",
+      "measurement_state": "measured",
+      "effect_state": "clear_measured_effect",
+      "coarse_span_count": 1,
+      "coarse_spans_with_clear_effect": 1,
+      "clear_link_count": 1,
+      "observed_link_count": 0,
+      "supporting_clear_links": 1,
+      "suppressing_clear_links": 0,
+      "neutral_clear_links": 0,
+      "max_abs_delta_nats": 1.8,
+      "native": {
+        "source_id": "p.m000"
+      },
+      "code_points": 20
+    },
+    {
+      "source_span_id": "span_9c1db489a109f7d97949e33f",
+      "measurement_state": "measured",
+      "effect_state": "below_measured_floor",
+      "coarse_span_count": 1,
+      "coarse_spans_with_clear_effect": 0,
+      "clear_link_count": 0,
+      "observed_link_count": 1,
+      "supporting_clear_links": 0,
+      "suppressing_clear_links": 0,
+      "neutral_clear_links": 0,
+      "max_abs_delta_nats": 0.05,
+      "native": {
+        "source_id": "p.m001"
+      },
+      "code_points": 15
+    },
+    {
+      "source_span_id": "span_15707f128252d435072b1530",
+      "measurement_state": "not_measured",
+      "reason": "omitted_by_measurement_selection",
+      "native": {
+        "source_id": "p.m002"
+      },
+      "code_points": 30
+    }
+  ],
+  "summary": {
+    "prompt_sources": 3,
+    "measured_sources": 2,
+    "sources_with_clear_measured_effect": 1,
+    "sources_below_measured_floor": 1,
+    "sources_not_measured": 1
+  }
+}

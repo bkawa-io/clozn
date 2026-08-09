@@ -1,0 +1,30 @@
+{
+  "schema_version": "clozn.context-utilization.v1",
+  "run_id": "run-fixture-x",
+  "privacy": "metadata_only",
+  "measurement": {
+    "state": "available",
+    "influence_schema": "clozn.context_answer_influence.v1"
+  },
+  "sources": [
+    {
+      "measurement_state": "measured",
+      "effect_state": "clear_measured_effect",
+      "coarse_span_count": 1,
+      "coarse_spans_with_clear_effect": 1,
+      "clear_link_count": 1,
+      "observed_link_count": 0,
+      "supporting_clear_links": 1,
+      "suppressing_clear_links": 0,
+      "neutral_clear_links": 0,
+      "max_abs_delta_nats": 1.8
+    }
+  ],
+  "summary": {
+    "prompt_sources": 1,
+    "measured_sources": 1,
+    "sources_with_clear_measured_effect": 1,
+    "sources_below_measured_floor": 0,
+    "sources_not_measured": 0
+  }
+}

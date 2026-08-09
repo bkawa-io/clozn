@@ -1,0 +1,18 @@
+{
+  "schema_version": "clozn.context-utilization.v1",
+  "run_id": "run-fixture-x",
+  "privacy": "metadata_only",
+  "measurement": {
+    "state": "available",
+    "reason": "should_not_be_here",
+    "influence_schema": "clozn.context_answer_influence.v1"
+  },
+  "sources": [],
+  "summary": {
+    "prompt_sources": 0,
+    "measured_sources": 0,
+    "sources_with_clear_measured_effect": 0,
+    "sources_below_measured_floor": 0,
+    "sources_not_measured": 0
+  }
+}
