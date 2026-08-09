@@ -1,0 +1,49 @@
+{
+  "schema_version": "clozn.rewind-fidelity.v1",
+  "run_id": "run-fixture-2",
+  "recorded_capability": {
+    "state": "limited",
+    "reconstructed_replay": {
+      "state": "available",
+      "supported_change_types": [
+        "force_token",
+        "none"
+      ],
+      "unavoidable_differences": [
+        "kv_state_not_restored",
+        "sampler_state_reinitialized",
+        "prompt_prefix_retokenized",
+        "batch_shape_not_preserved"
+      ]
+    },
+    "exact_rewind": {
+      "state": "static_prerequisites_unavailable",
+      "static_prerequisites": {
+        "recorded_token_pieces": "available",
+        "recorded_token_ids": "available",
+        "token_alignment": "available",
+        "runtime_identity": "unavailable"
+      },
+      "reasons": [
+        "parent_runtime_identity_unavailable"
+      ]
+    }
+  },
+  "historical_proof": {
+    "state": "available",
+    "verified_boundaries": []
+  },
+  "live_execution": {
+    "state": "not_checked",
+    "reason": "read_only_projection",
+    "authority": "execution_fork_plan"
+  },
+  "privacy": "metadata_only",
+  "coordinates": {
+    "kind": "recorded_response_token_boundary",
+    "index_base": 0,
+    "start": 0,
+    "end_exclusive": 3,
+    "recorded_token_count": 3
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "schema_version": "clozn.rewind-fidelity.v1",
+  "run_id": "run-fixture-x",
+  "recorded_capability": {
+    "state": "available",
+    "reconstructed_replay": {
+      "state": "available",
+      "supported_change_types": ["none", "force_token"],
+      "unavoidable_differences": ["kv_state_not_restored"]
+    },
+    "exact_rewind": {
+      "state": "requires_live_plan",
+      "static_prerequisites": {
+        "recorded_token_pieces": "available",
+        "recorded_token_ids": "available",
+        "token_alignment": "available",
+        "runtime_identity": "available"
+      },
+      "supported_change_types_if_live_plan_succeeds": ["none", "force_token"],
+      "live_requirements": ["matching_runtime_identity"],
+      "authority": "execution_fork_plan"
+    }
+  },
+  "historical_proof": {
+    "state": "available",
+    "verified_boundaries": [
+      {
+        "position": 1,
+        "state": "historically_verified_exact",
+        "verified_execution_count": 1,
+        "latest_execution_id": "fork_exec_aaaaaaaaaaaaaaaaaaaa",
+        "parent_fingerprint_sha256": "8b966a272682d49f3fbd9dd69a5f4571788febda27942cf58be55d904ba6b239",
+        "regimes": ["generated_token_live_kv"]
+      }
+    ]
+  },
+  "live_execution": {
+    "state": "not_checked",
+    "reason": "read_only_projection",
+    "authority": "execution_fork_plan"
+  },
+  "privacy": "metadata_only"
+}

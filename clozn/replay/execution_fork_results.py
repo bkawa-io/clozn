@@ -78,3 +78,42 @@ def get(execution_id: str) -> dict | None:
         ).fetchone()
     return json.loads(row["payload_json"]) if row is not None else None
 
+
+def list_for_parent(parent_run_id: str) -> list[dict]:
+    """Every stored terminal execution-fork receipt for `parent_run_id`, in deterministic
+    (`execution_id` ascending) order.
+
+    A pure read: unlike `_connect()` (used by `save`/`get`), this NEVER calls `os.makedirs` or opens
+    the database in a mode that would create it -- `[]` on a fresh installation (no results directory,
+    no sqlite file) leaves the filesystem exactly as it found it. This is the property
+    `clozn.replay.rewind_fidelity`'s read-only projection depends on: asking about rewind fidelity on
+    a run that has never had an execution-fork attempt must never conjure `~/.clozn/execution-forks/`
+    into existence.
+
+    A row whose payload is not valid JSON, or decodes to something other than an object, is silently
+    skipped rather than raising -- "safely reject a malformed receipt" here means "do not let one
+    corrupt row take down every other read for this parent." Schema-conformance (whether a receipt
+    that DOES parse is trustworthy enough to count as exactness PROOF) is a policy decision left to the
+    caller, not this storage-layer helper. Never mutates a stored row.
+    """
+    if not isinstance(parent_run_id, str) or not parent_run_id:
+        return []
+    if not os.path.isfile(_path()):
+        return []
+    with closing(sqlite3.connect(_path(), timeout=30.0)) as db:
+        db.row_factory = sqlite3.Row
+        rows = db.execute(
+            "SELECT payload_json FROM execution_fork_results WHERE parent_run_id=? "
+            "ORDER BY execution_id ASC",
+            (parent_run_id,),
+        ).fetchall()
+    receipts: list[dict] = []
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"])
+        except (TypeError, ValueError):
+            continue
+        if isinstance(payload, dict):
+            receipts.append(payload)
+    return receipts
+

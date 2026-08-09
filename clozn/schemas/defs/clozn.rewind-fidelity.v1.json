@@ -1,0 +1,210 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.rewind-fidelity.v1",
+  "title": "Rewind Fidelity -- what rewind fidelity Clozn can truthfully promise for one recorded run",
+  "description": "A derived, read-only, offline-safe projection over one recorded run's own evidence plus its already-persisted terminal execution-fork receipts (clozn.execution-fork.v1). Three concepts, never collapsed: RECONSTRUCTED replay (rebuilds the prefix from recorded text/tokens; KV state, sampler state, and batch shape are not restored -- never 'exact'), EXACT rewind ELIGIBILITY (recorded_capability.exact_rewind.state=requires_live_plan -- the run carries the static evidence an exact fork MIGHT use, but live worker/checkpoint/runtime checks and the mandatory unchanged control were never performed by this projection), and historically VERIFIED exact rewind (historical_proof.verified_boundaries -- a prior exact execution's mandatory unchanged control actually matched the parent's recorded continuation). A verified boundary NEVER upgrades live_execution.state, which always reads not_checked here: the checkpoint or worker generation that made a past proof possible may no longer exist. The live authority for 'is an exact rewind executable right now' remains POST /runs/<id>/execution-fork/plan.",
+  "type": "object",
+  "required": ["schema_version", "run_id", "recorded_capability", "historical_proof", "live_execution", "privacy"],
+  "properties": {
+    "schema_version": {"const": "clozn.rewind-fidelity.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "privacy": {"const": "metadata_only"},
+    "coordinates": {"$ref": "#/$defs/coordinates"},
+    "recorded_capability": {"$ref": "#/$defs/recorded_capability"},
+    "historical_proof": {"$ref": "#/$defs/historical_proof"},
+    "live_execution": {"$ref": "#/$defs/live_execution"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "coordinates": {
+      "type": "object",
+      "required": ["kind", "index_base", "start", "end_exclusive", "recorded_token_count"],
+      "properties": {
+        "kind": {"const": "recorded_response_token_boundary"},
+        "index_base": {"const": 0},
+        "start": {"const": 0},
+        "end_exclusive": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Exclusive upper bound: the same 0 <= position < recorded_token_count range clozn.replay.execution_fork.plan_execution_fork itself enforces (its position_out_of_range check)."
+        },
+        "recorded_token_count": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "recorded_capability": {
+      "type": "object",
+      "required": ["state", "reconstructed_replay", "exact_rewind"],
+      "properties": {
+        "state": {
+          "enum": ["available", "limited", "unavailable"],
+          "description": "'available': reconstructed replay works AND exact static prerequisites are present. 'limited': reconstructed replay works but exact static prerequisites are missing. 'unavailable': the run lacks enough recorded material even for reconstructed replay. Never implies live exact executability."
+        },
+        "reconstructed_replay": {"$ref": "#/$defs/reconstructed_replay"},
+        "exact_rewind": {"$ref": "#/$defs/exact_rewind"}
+      },
+      "additionalProperties": false
+    },
+    "reconstructed_replay": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {"enum": ["available", "unavailable"]},
+        "supported_change_types": {
+          "type": "array",
+          "items": {"enum": ["none", "force_token", "sampling", "steer", "residual_write"]},
+          "description": "clozn.replay.execution_fork.RECONSTRUCTED_CHANGES, reused verbatim -- never a second, copied list."
+        },
+        "unavoidable_differences": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "kv_state_not_restored",
+              "sampler_state_reinitialized",
+              "prompt_prefix_retokenized",
+              "batch_shape_not_preserved"
+            ]
+          },
+          "description": "clozn.replay.execution_fork.RECONSTRUCTION_DIFFERENCES, reused verbatim."
+        },
+        "reasons": {
+          "type": "array",
+          "items": {"enum": ["recorded_response_token_trace_unavailable", "recorded_final_prompt_unavailable"]}
+        }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": ["supported_change_types", "unavoidable_differences"],
+          "properties": {"state": {"const": "available"}, "reasons": false}
+        },
+        {
+          "required": ["reasons"],
+          "properties": {
+            "state": {"const": "unavailable"},
+            "supported_change_types": false,
+            "unavoidable_differences": false
+          }
+        }
+      ]
+    },
+    "static_prerequisites": {
+      "type": "object",
+      "required": ["recorded_token_pieces", "recorded_token_ids", "token_alignment", "runtime_identity"],
+      "properties": {
+        "recorded_token_pieces": {"enum": ["available", "unavailable"]},
+        "recorded_token_ids": {"enum": ["available", "unavailable"]},
+        "token_alignment": {"enum": ["available", "unavailable"]},
+        "runtime_identity": {"enum": ["available", "unavailable"]}
+      },
+      "additionalProperties": false
+    },
+    "exact_rewind": {
+      "type": "object",
+      "required": ["state", "static_prerequisites"],
+      "properties": {
+        "state": {
+          "enum": ["requires_live_plan", "static_prerequisites_unavailable"],
+          "description": "NEVER exact_available -- even when static prerequisites are fully present, live worker/checkpoint/runtime/unchanged-control checks were not performed by this read-only projection."
+        },
+        "static_prerequisites": {"$ref": "#/$defs/static_prerequisites"},
+        "supported_change_types_if_live_plan_succeeds": {
+          "type": "array",
+          "items": {"enum": ["none", "force_token", "sampling", "steer", "residual_write"]},
+          "description": "clozn.replay.execution_fork.KNOWN_CHANGES, reused verbatim. Lists what exact execution COULD support if a live plan succeeds -- never a claim that any one of them is available now."
+        },
+        "live_requirements": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "authority": {"const": "execution_fork_plan"},
+        "reasons": {
+          "type": "array",
+          "items": {"enum": ["recorded_response_token_trace_unavailable", "parent_runtime_identity_unavailable"]}
+        }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": ["supported_change_types_if_live_plan_succeeds", "live_requirements", "authority"],
+          "properties": {"state": {"const": "requires_live_plan"}, "reasons": false}
+        },
+        {
+          "required": ["reasons"],
+          "properties": {
+            "state": {"const": "static_prerequisites_unavailable"},
+            "supported_change_types_if_live_plan_succeeds": false,
+            "live_requirements": false,
+            "authority": false
+          }
+        }
+      ]
+    },
+    "proof": {
+      "type": "object",
+      "required": ["proof_status", "unchanged_control_status", "exact_match"],
+      "properties": {
+        "proof_status": {"const": "confirmed"},
+        "unchanged_control_status": {"const": "matched"},
+        "exact_match": {"const": true}
+      },
+      "additionalProperties": false,
+      "description": "Structurally locked to the confirming values -- a verified_boundaries entry cannot be expressed without asserting all three, by construction of this schema."
+    },
+    "verified_boundary": {
+      "type": "object",
+      "required": [
+        "position", "state", "verified_execution_count", "latest_execution_id",
+        "parent_fingerprint_sha256", "regimes", "proof"
+      ],
+      "properties": {
+        "position": {"type": "integer", "minimum": 0},
+        "state": {"const": "historically_verified_exact"},
+        "verified_execution_count": {"type": "integer", "minimum": 1},
+        "latest_execution_id": {"type": "string", "pattern": "^fork_exec_[0-9a-f]{20}$"},
+        "parent_fingerprint_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "regimes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"enum": ["generated_token_live_kv", "prompt_boundary_reprefill"]}
+        },
+        "runtime_key_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "proof": {"$ref": "#/$defs/proof"}
+      },
+      "additionalProperties": false
+    },
+    "historical_proof": {
+      "type": "object",
+      "required": ["state", "verified_boundaries"],
+      "properties": {
+        "state": {
+          "enum": ["available", "partially_unavailable"],
+          "description": "'partially_unavailable' means one or more supplied historical receipts were malformed and were excluded rather than best-effort parsed into proof -- see malformed_receipt_count."
+        },
+        "verified_boundaries": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/verified_boundary"}
+        },
+        "malformed_receipt_count": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {"properties": {"state": {"const": "available"}, "malformed_receipt_count": false}},
+        {"required": ["malformed_receipt_count"], "properties": {"state": {"const": "partially_unavailable"}}}
+      ]
+    },
+    "live_execution": {
+      "type": "object",
+      "required": ["state", "reason", "authority"],
+      "properties": {
+        "state": {
+          "const": "not_checked",
+          "description": "Deliberately not a boolean 'available: false' -- false could mean 'checked and unavailable' or 'never checked'; this projection never checks."
+        },
+        "reason": {"const": "read_only_projection"},
+        "authority": {"const": "execution_fork_plan"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

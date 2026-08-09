@@ -29,9 +29,14 @@ CLASSIFICATIONS = (
     "reconstructed_replay",
     "unavailable",
 )
-_KNOWN_CHANGES = frozenset({"none", "force_token", "sampling", "steer", "residual_write"})
-_RECONSTRUCTED_CHANGES = frozenset({"none", "force_token"})
-_RECONSTRUCTION_DIFFERENCES = [
+# Public (no leading underscore, unlike the module's other internal projection helpers) because
+# clozn.replay.rewind_fidelity's read-only fidelity projection reuses these exact three definitions --
+# "expose those capabilities by importing/reusing the same definitions... never copy arrays into a
+# second module where they can drift" is the whole point of naming them for reuse rather than keeping
+# them a private implementation detail of the planner alone.
+KNOWN_CHANGES = frozenset({"none", "force_token", "sampling", "steer", "residual_write"})
+RECONSTRUCTED_CHANGES = frozenset({"none", "force_token"})
+RECONSTRUCTION_DIFFERENCES = [
     "kv_state_not_restored",
     "sampler_state_reinitialized",
     "prompt_prefix_retokenized",
@@ -360,6 +365,51 @@ def parent_runtime_projection(parent_run: Mapping) -> dict | None:
     return authoritative
 
 
+def recorded_fork_prerequisites(parent_run: Mapping) -> dict:
+    """The purely RECORDED-RUN facts execution-fork planning needs, decoupled from any live worker/
+    selected-runtime/checkpoint state. `plan_execution_fork` below reuses this verbatim for its own
+    response-token-boundary gate (`missing_response_token_boundary` / `position_out_of_range`) and for
+    the reconstruction path's `reconstruction_prompt_unavailable` gate, so there is exactly one
+    implementation of "does this run have complete, aligned recorded evidence" -- never a second,
+    subtly different one. `clozn.replay.rewind_fidelity.build_rewind_fidelity` (the read-only Rewind
+    Fidelity projection) is the other caller: tests in both `tests/test_execution_fork_planner.py` and
+    `tests/test_rewind_fidelity.py` cross-check against this same function so the live planner and the
+    offline projection can never drift apart.
+
+    Deliberately does NOT decide runtime-identity MATCH (there is no "selected" runtime without a live
+    caller to select one) -- only whether the PARENT's own recorded runtime identity resolves at all
+    (`parent_runtime_identity_available`, via the already-pure `parent_runtime_projection` above).
+
+    Never raises; a malformed or absent run degrades every field to its unavailable state.
+    """
+    parent_run = parent_run if isinstance(parent_run, Mapping) else {}
+    trace = parent_run.get("trace")
+    pieces = trace.get("tokens") if isinstance(trace, Mapping) else None
+    token_ids = trace.get("token_ids") if isinstance(trace, Mapping) else None
+
+    pieces_available = (
+        isinstance(pieces, list) and bool(pieces) and all(isinstance(piece, str) for piece in pieces)
+    )
+    ids_available = (
+        isinstance(token_ids, list) and bool(token_ids) and all(_is_int(tid) for tid in token_ids)
+    )
+    token_alignment_available = (
+        pieces_available and ids_available and len(pieces) == len(token_ids)
+    )
+
+    final_prompt = parent_run.get("final_prompt")
+    final_prompt_available = isinstance(final_prompt, str) and bool(final_prompt)
+
+    return {
+        "token_pieces_available": pieces_available,
+        "token_ids_available": ids_available,
+        "token_alignment_available": token_alignment_available,
+        "recorded_token_count": len(pieces) if token_alignment_available else None,
+        "final_prompt_available": final_prompt_available,
+        "parent_runtime_identity_available": parent_runtime_projection(parent_run) is not None,
+    }
+
+
 def _worker_projection(value: Any) -> dict | None:
     if not isinstance(value, Mapping):
         return None
@@ -383,7 +433,7 @@ def _normalize_change(change: Mapping) -> tuple[dict | None, dict | None]:
     """Return ``(exact_execution_shape, invalid_reason)`` for a known intervention."""
     raw = dict(change)
     kind = raw.get("type")
-    if kind not in _KNOWN_CHANGES:
+    if kind not in KNOWN_CHANGES:
         return None, _reason(
             "unsupported_intervention",
             f"intervention type {kind!r} is not supported by execution-fork v1",
@@ -604,25 +654,17 @@ def plan_execution_fork(
     if change_error is not None:
         return _finish(plan, change_error)
 
-    trace = parent_run.get("trace")
-    pieces = trace.get("tokens") if isinstance(trace, Mapping) else None
-    token_ids = trace.get("token_ids") if isinstance(trace, Mapping) else None
-    if not (
-        isinstance(pieces, list)
-        and pieces
-        and all(isinstance(piece, str) for piece in pieces)
-        and isinstance(token_ids, list)
-        and len(token_ids) == len(pieces)
-        and all(_is_int(token_id) for token_id in token_ids)
-    ):
+    prerequisites = recorded_fork_prerequisites(parent_run)
+    if not prerequisites["token_alignment_available"]:
         return _finish(plan, _reason(
             "missing_response_token_boundary",
             "the parent needs complete, aligned response token pieces and token ids",
         ))
-    if position >= len(pieces):
+    token_count = prerequisites["recorded_token_count"]
+    if position >= token_count:
         return _finish(plan, _reason(
             "position_out_of_range",
-            f"position {position} is outside the parent response's {len(pieces)} token boundaries",
+            f"position {position} is outside the parent response's {token_count} token boundaries",
         ))
 
     if parent_runtime is None or selected_runtime is None:
@@ -643,12 +685,12 @@ def plan_execution_fork(
         ))
 
     if not supplied_checkpoint:
-        if execution_change["type"] not in _RECONSTRUCTED_CHANGES:
+        if execution_change["type"] not in RECONSTRUCTED_CHANGES:
             return _finish(plan, _reason(
                 "reconstruction_unsupported_intervention",
                 f"{execution_change['type']} requires an exact execution checkpoint",
             ))
-        if not isinstance(parent_run.get("final_prompt"), str) or not parent_run["final_prompt"]:
+        if not prerequisites["final_prompt_available"]:
             return _finish(plan, _reason(
                 "reconstruction_prompt_unavailable",
                 "reconstructed replay needs the parent's exact rendered final_prompt",
@@ -665,7 +707,7 @@ def plan_execution_fork(
             "source": "text_retokenization",
             "proof_status": "not_applicable",
         }
-        plan["unavoidable_differences"] = list(_RECONSTRUCTION_DIFFERENCES)
+        plan["unavoidable_differences"] = list(RECONSTRUCTION_DIFFERENCES)
         plan["unchanged_control"] = {"required": True, "status": "required_not_run"}
         return _finish(plan, _reason(
             "checkpoint_not_supplied",
