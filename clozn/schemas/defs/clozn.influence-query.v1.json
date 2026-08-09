@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.influence-query.v1",
+  "title": "\"Why this?\" influence query -- measured context spans overlapping a selected answer range",
+  "description": "A derived, read-only projection over one run's persisted clozn.context_answer_influence.v1 measurement (run['influence_map']), scoped to a caller-selected half-open Unicode-code-point range of the recorded answer. Never starts a new measurement, never calls a model or engine, never mutates the run. Every link.effect / delta_nats / abs_delta_nats / clears_floor / evidence_state is copied UNCHANGED from the source artifact's own Link objects -- this projection reorders and filters, it never recomputes or reinterprets a measurement. A link with evidence_state=observed and clears_floor=false was measured, not irrelevant -- see clozn.context_answer_influence.v1's own caveat, which this projection does not weaken. measurement.state distinguishes 'no measurement was ever attempted' (not_measured) from 'a measurement exists but nothing in this range cleared the floor' (available with zero causally_supported_links) -- these must never collapse into the same shape. This is controlled intervention evidence over one recorded continuation: never a claim that a source caused the answer, was relevant, was correct, or that the model reasoned from it, and never a percentage attribution.",
+  "type": "object",
+  "required": ["schema_version", "run_id", "privacy", "target", "measurement", "links", "summary"],
+  "properties": {
+    "schema_version": {"const": "clozn.influence-query.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "privacy": {"const": "metadata_only"},
+    "target": {"$ref": "#/$defs/target"},
+    "measurement": {"$ref": "#/$defs/measurement"},
+    "links": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/link"}
+    },
+    "summary": {"$ref": "#/$defs/summary"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "target": {
+      "type": "object",
+      "required": ["basis", "unit", "interval", "start", "end"],
+      "properties": {
+        "basis": {"const": "recorded_answer"},
+        "unit": {"const": "unicode_code_points"},
+        "interval": {"const": "half_open"},
+        "start": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The requested range's start offset, echoed back unchanged."
+        },
+        "end": {"type": "integer", "minimum": 0},
+        "basis_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 of the exact recorded answer text (run['response']) this range was resolved against. Present whenever that text is known, even when measurement itself is unavailable -- absent only when the answer text could not be read at all (e.g. redacted)."
+        },
+        "answer_span_ids": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^span_[0-9a-f]{24}$"},
+          "description": "Real clozn.text-span-addresses.v1 address_id values for every measured answer span overlapping [start, end). Present only when measurement.state is 'available'."
+        }
+      },
+      "additionalProperties": false
+    },
+    "measurement": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {
+          "enum": ["available", "not_measured", "unavailable", "error"],
+          "description": "'not_measured': no influence map was ever attached to this run, or it cannot be trusted at all (wrong schema, or fails its own schema). 'unavailable': a persisted artifact exists but it, or the recorded answer text needed to resolve this range, cannot honestly be used right now (status=unavailable, redacted text, or a stale/drifted answer hash). 'error': the persisted artifact itself recorded status=error. 'available': the measurement was consulted and reconciled with this run's CURRENT answer text -- links may still be empty, which is a distinct, honest finding from any non-available state."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A stable, machine-readable reason, taken from the persisted artifact's own error code when one exists. Present on every non-available state; absent when state=available."
+        },
+        "influence_schema": {"const": "clozn.context_answer_influence.v1"},
+        "artifact_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "The source clozn.context_answer_influence.v1 artifact's own artifact_sha256, unchanged."
+        },
+        "method": {
+          "type": "object",
+          "description": "An unchanged copy of the source artifact's method object, including its persistent honesty caveat. Never re-derived."
+        },
+        "thresholds": {
+          "type": "object",
+          "description": "An unchanged copy of the source artifact's thresholds object (the floor a link's abs_delta_nats must clear to be evidence_state=causally_supported)."
+        }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": ["state"],
+          "properties": {
+            "state": {"const": "available"},
+            "reason": false
+          }
+        },
+        {
+          "required": ["state", "reason"],
+          "properties": {
+            "state": {"enum": ["not_measured", "unavailable", "error"]},
+            "influence_schema": false,
+            "artifact_sha256": false,
+            "method": false,
+            "thresholds": false
+          }
+        }
+      ]
+    },
+    "link": {
+      "type": "object",
+      "required": [
+        "source_span_id", "answer_span_id", "effect", "delta_nats", "abs_delta_nats",
+        "clears_floor", "evidence_state"
+      ],
+      "properties": {
+        "source_span_id": {
+          "type": "string",
+          "pattern": "^span_[0-9a-f]{24}$",
+          "description": "Real clozn.text-span-addresses.v1 address_id for the measured context span."
+        },
+        "answer_span_id": {
+          "type": "string",
+          "pattern": "^span_[0-9a-f]{24}$",
+          "description": "Real clozn.text-span-addresses.v1 address_id for the measured answer span this link scores."
+        },
+        "effect": {
+          "enum": ["supports", "suppresses", "neutral"],
+          "description": "Copied verbatim from the source Link -- never re-derived from the sign of delta_nats by this module."
+        },
+        "delta_nats": {
+          "type": "number",
+          "description": "Copied verbatim from the source Link. Licenses a claim about this exact intervention on this exact recorded continuation only."
+        },
+        "abs_delta_nats": {"type": "number", "minimum": 0},
+        "clears_floor": {
+          "type": "boolean",
+          "description": "Copied verbatim. False is NOT evidence the source was irrelevant -- see evidence_state."
+        },
+        "evidence_state": {
+          "enum": ["causally_supported", "observed"],
+          "description": "Copied verbatim from the source Link -- never reinterpreted."
+        },
+        "native": {
+          "type": "object",
+          "description": "The underlying influence-map native identifiers/indices, retained for traceability. Not the canonical public identity -- source_span_id/answer_span_id are.",
+          "properties": {
+            "context_span_id": {"type": "string"},
+            "answer_span_id": {"type": "string"},
+            "context_index": {"type": "integer", "minimum": 0},
+            "answer_index": {"type": "integer", "minimum": 0}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "selected_answer_spans", "measured_links", "returned_links", "causally_supported_links",
+        "observed_links", "supporting_links", "suppressing_links", "neutral_links"
+      ],
+      "properties": {
+        "selected_answer_spans": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many measured answer spans overlapped [start, end)."
+        },
+        "measured_links": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total links overlapping the selected range, BEFORE limit is applied. May exceed len(links) when the result was truncated."
+        },
+        "returned_links": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "len(links) -- how many of measured_links this response actually carries after limit."
+        },
+        "causally_supported_links": {"type": "integer", "minimum": 0},
+        "observed_links": {"type": "integer", "minimum": 0},
+        "supporting_links": {"type": "integer", "minimum": 0},
+        "suppressing_links": {"type": "integer", "minimum": 0},
+        "neutral_links": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    }
+  }
+}

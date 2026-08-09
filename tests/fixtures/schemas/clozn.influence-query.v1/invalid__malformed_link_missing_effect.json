@@ -1,0 +1,38 @@
+{
+  "schema_version": "clozn.influence-query.v1",
+  "run_id": "run-fixture-x",
+  "privacy": "metadata_only",
+  "target": {
+    "basis": "recorded_answer",
+    "unit": "unicode_code_points",
+    "interval": "half_open",
+    "start": 0,
+    "end": 39,
+    "basis_sha256": "82604b5ba87febf461c893913fabaffe6168e4208b80bfe11ce3221d665af08d",
+    "answer_span_ids": ["span_d5be9103cf8a0260a80a959a"]
+  },
+  "measurement": {
+    "state": "available",
+    "influence_schema": "clozn.context_answer_influence.v1"
+  },
+  "links": [
+    {
+      "source_span_id": "span_88b8090918e45fec591d0322",
+      "answer_span_id": "span_d5be9103cf8a0260a80a959a",
+      "delta_nats": -3.2,
+      "abs_delta_nats": 3.2,
+      "clears_floor": true,
+      "evidence_state": "causally_supported"
+    }
+  ],
+  "summary": {
+    "selected_answer_spans": 1,
+    "measured_links": 1,
+    "returned_links": 1,
+    "causally_supported_links": 1,
+    "observed_links": 0,
+    "supporting_links": 1,
+    "suppressing_links": 0,
+    "neutral_links": 0
+  }
+}

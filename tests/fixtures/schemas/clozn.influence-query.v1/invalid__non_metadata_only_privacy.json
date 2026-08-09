@@ -1,0 +1,27 @@
+{
+  "schema_version": "clozn.influence-query.v1",
+  "run_id": "run-fixture-x",
+  "privacy": "full",
+  "target": {
+    "basis": "recorded_answer",
+    "unit": "unicode_code_points",
+    "interval": "half_open",
+    "start": 0,
+    "end": 39
+  },
+  "measurement": {
+    "state": "not_measured",
+    "reason": "no_influence_map"
+  },
+  "links": [],
+  "summary": {
+    "selected_answer_spans": 0,
+    "measured_links": 0,
+    "returned_links": 0,
+    "causally_supported_links": 0,
+    "observed_links": 0,
+    "supporting_links": 0,
+    "suppressing_links": 0,
+    "neutral_links": 0
+  }
+}

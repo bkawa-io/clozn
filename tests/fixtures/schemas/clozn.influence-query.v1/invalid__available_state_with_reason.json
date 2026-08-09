@@ -1,0 +1,30 @@
+{
+  "schema_version": "clozn.influence-query.v1",
+  "run_id": "run-fixture-x",
+  "privacy": "metadata_only",
+  "target": {
+    "basis": "recorded_answer",
+    "unit": "unicode_code_points",
+    "interval": "half_open",
+    "start": 0,
+    "end": 39,
+    "basis_sha256": "82604b5ba87febf461c893913fabaffe6168e4208b80bfe11ce3221d665af08d",
+    "answer_span_ids": []
+  },
+  "measurement": {
+    "state": "available",
+    "reason": "should_not_be_here",
+    "influence_schema": "clozn.context_answer_influence.v1"
+  },
+  "links": [],
+  "summary": {
+    "selected_answer_spans": 0,
+    "measured_links": 0,
+    "returned_links": 0,
+    "causally_supported_links": 0,
+    "observed_links": 0,
+    "supporting_links": 0,
+    "suppressing_links": 0,
+    "neutral_links": 0
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "schema_version": "clozn.influence-query.v1",
+  "run_id": "run-fixture-1",
+  "privacy": "metadata_only",
+  "target": {
+    "basis": "recorded_answer",
+    "unit": "unicode_code_points",
+    "interval": "half_open",
+    "start": 0,
+    "end": 39,
+    "basis_sha256": "82604b5ba87febf461c893913fabaffe6168e4208b80bfe11ce3221d665af08d",
+    "answer_span_ids": [
+      "span_d5be9103cf8a0260a80a959a"
+    ]
+  },
+  "measurement": {
+    "state": "available",
+    "influence_schema": "clozn.context_answer_influence.v1",
+    "method": {
+      "name": "teacher_forced_matched_context_replacement",
+      "mode": "forced_score_intervention",
+      "claim_limit": "behavioral dependence under a controlled prompt intervention; not a percentage",
+      "caveat": "Influence means this context changed the measured output under this intervention. It does not prove the document is correct or reveal hidden reasoning."
+    },
+    "thresholds": {
+      "cell_abs_delta_nats": 0.5,
+      "source_clear_rule": "abs delta >= floor"
+    },
+    "artifact_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "links": [
+    {
+      "source_span_id": "span_88b8090918e45fec591d0322",
+      "answer_span_id": "span_d5be9103cf8a0260a80a959a",
+      "effect": "supports",
+      "delta_nats": -3.2,
+      "abs_delta_nats": 3.2,
+      "clears_floor": true,
+      "evidence_state": "causally_supported",
+      "native": {
+        "context_span_id": "ps-1",
+        "answer_span_id": "as-1",
+        "context_index": 0,
+        "answer_index": 0
+      }
+    }
+  ],
+  "summary": {
+    "selected_answer_spans": 1,
+    "measured_links": 1,
+    "returned_links": 1,
+    "causally_supported_links": 1,
+    "observed_links": 0,
+    "supporting_links": 1,
+    "suppressing_links": 0,
+    "neutral_links": 0
+  }
+}
