@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.first-divergence-view.v1",
+  "title": "First-divergence view -- a compact projection of clozn.analysis.model_diff.diff_runs onto where two recorded token streams first stopped being identical",
+  "description": "Nested at `first_divergence_view` on every successful clozn.analysis.model_diff.diff_runs() result (POST /diff/runs). Never a second diff algorithm: `divergence`/`common_prefix` are read from that SAME comparison's own `first_divergence`/`common_prefix_len` (computed on the full recorded traces, never the 200-position display cap), so the two can never structurally disagree. This is an exact, OBSERVATIONAL split between two independently-generated runs -- 'controlled' means only that the user-side prompt sequence matched under the diff's own contract; it never explains why a model/config change produced the divergent token. state=trace_unavailable: one or both runs carry no usable per-token trace, so no token-level claim (not even 'identical') can be made. state=identical: the recorded token streams matched all the way through -- never inferred from character/formatting equality after token equality already settled it. state=available: a real divergence exists in trace space, with symmetric 'almost said' evidence in both directions and exact recorded-answer-string offsets only when each side's own recorded trace pieces reconstruct that side's own recorded response character for character.",
+  "type": "object",
+  "required": ["schema_version", "state", "a_run_id", "b_run_id", "comparison", "caveat", "divergence"],
+  "properties": {
+    "schema_version": {"const": "clozn.first-divergence-view.v1"},
+    "state": {"enum": ["available", "identical", "trace_unavailable"]},
+    "a_run_id": {"type": ["string", "null"]},
+    "b_run_id": {"type": ["string", "null"]},
+    "comparison": {"$ref": "#/$defs/comparison"},
+    "caveat": {"type": "string", "minLength": 1},
+    "trace_missing": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Present only when state=trace_unavailable -- which run(s) ('a'/'b') carry no usable per-token trace."
+    },
+    "common_prefix": {"$ref": "#/$defs/prefix_boundary"},
+    "divergence": {"type": ["object", "null"]},
+    "alternatives": {"$ref": "#/$defs/alternatives"},
+    "window": {"$ref": "#/$defs/window"},
+    "recorded_answer_location": {"$ref": "#/$defs/recorded_answer_location"}
+  },
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "required": ["common_prefix", "divergence", "alternatives", "window", "recorded_answer_location"],
+      "properties": {
+        "state": {"const": "available"},
+        "divergence": {"$ref": "#/$defs/divergence"},
+        "trace_missing": false
+      }
+    },
+    {
+      "required": ["common_prefix", "divergence"],
+      "properties": {
+        "state": {"const": "identical"},
+        "divergence": {"type": "null"},
+        "trace_missing": false,
+        "alternatives": false,
+        "window": false,
+        "recorded_answer_location": false
+      }
+    },
+    {
+      "required": ["trace_missing", "divergence"],
+      "properties": {
+        "state": {"const": "trace_unavailable"},
+        "divergence": {"type": "null"},
+        "common_prefix": false,
+        "alternatives": false,
+        "window": false,
+        "recorded_answer_location": false
+      }
+    }
+  ],
+  "$defs": {
+    "comparison": {
+      "type": "object",
+      "required": ["prompts_match", "controlled"],
+      "properties": {
+        "prompts_match": {"type": "boolean"},
+        "controlled": {
+          "type": "boolean",
+          "description": "Exactly prompts_match -- 'the user-side prompt sequence matched under this diff's own contract', never a causal claim about what produced the divergent token."
+        }
+      },
+      "additionalProperties": false
+    },
+    "prefix_boundary": {
+      "type": "object",
+      "required": ["token_count", "last_shared_index"],
+      "properties": {
+        "token_count": {"type": "integer", "minimum": 0},
+        "last_shared_index": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "token_count - 1, or null when the streams diverged at token zero (nothing shared yet)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "divergence_side": {
+      "type": "object",
+      "required": ["piece", "token_id", "confidence"],
+      "properties": {
+        "piece": {
+          "type": ["string", "null"],
+          "description": "The recorded token piece text. null only for the exhausted side of a length_mismatch divergence."
+        },
+        "token_id": {
+          "type": ["integer", "null"],
+          "description": "The recorded token id when this run's trace captured one -- never retokenized to recover a missing id."
+        },
+        "confidence": {"type": ["number", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "divergence": {
+      "type": "object",
+      "required": ["index", "kind", "a", "b"],
+      "properties": {
+        "index": {"type": "integer", "minimum": 0},
+        "kind": {"enum": ["token_mismatch", "length_mismatch"]},
+        "a": {"$ref": "#/$defs/divergence_side"},
+        "b": {"$ref": "#/$defs/divergence_side"}
+      },
+      "additionalProperties": false
+    },
+    "alternative_lookup": {
+      "type": "object",
+      "required": ["checked", "found", "rank", "prob"],
+      "properties": {
+        "checked": {"type": "boolean"},
+        "found": {
+          "type": ["boolean", "null"],
+          "description": "null (UNKNOWN) when checked=false -- never collapsed into false. The target run recorded no alternatives at all at this position, which is a different honest state from 'checked and not found'."
+        },
+        "rank": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "0-based rank within the target's RECORDED alternatives list only -- not a full-vocabulary rank."
+        },
+        "prob": {"type": ["number", "null"]},
+        "matched_by": {"enum": ["token_id", "piece"]},
+        "note": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "alternatives": {
+      "type": "object",
+      "required": ["a_considered_b", "b_considered_a"],
+      "properties": {
+        "a_considered_b": {
+          "$ref": "#/$defs/alternative_lookup",
+          "description": "Was b's committed divergent token present in a's recorded alternatives?"
+        },
+        "b_considered_a": {
+          "$ref": "#/$defs/alternative_lookup",
+          "description": "Was a's committed divergent token present in b's recorded alternatives? (the symmetric reverse lookup)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "window_token": {
+      "type": "object",
+      "required": ["index", "piece"],
+      "properties": {
+        "index": {"type": "integer", "minimum": 0},
+        "piece": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "window": {
+      "type": "object",
+      "required": ["basis", "start_index", "divergence_index", "common_prefix", "a", "b"],
+      "properties": {
+        "basis": {
+          "const": "recorded_trace_tokens",
+          "description": "Sliced from the full recorded per-token trace arrays -- never a re-tokenization of response text, and never the capped `positions` list."
+        },
+        "start_index": {"type": "integer", "minimum": 0},
+        "divergence_index": {"type": "integer", "minimum": 0},
+        "common_prefix": {"type": "array", "items": {"$ref": "#/$defs/window_token"}},
+        "a": {"type": "array", "items": {"$ref": "#/$defs/window_token"}},
+        "b": {"type": "array", "items": {"$ref": "#/$defs/window_token"}}
+      },
+      "additionalProperties": false
+    },
+    "location_side": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {"enum": ["exact", "unavailable"]},
+        "unit": {"const": "unicode_code_points"},
+        "interval": {"const": "half_open"},
+        "start": {"type": "integer", "minimum": 0},
+        "end": {"type": "integer", "minimum": 0},
+        "reason": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": ["state", "unit", "interval", "start", "end"],
+          "properties": {"state": {"const": "exact"}, "reason": false}
+        },
+        {
+          "required": ["state", "reason"],
+          "properties": {"state": {"const": "unavailable"}, "unit": false, "interval": false,
+                        "start": false, "end": false}
+        }
+      ]
+    },
+    "recorded_answer_location": {
+      "type": "object",
+      "required": ["a", "b"],
+      "properties": {
+        "a": {"$ref": "#/$defs/location_side"},
+        "b": {"$ref": "#/$defs/location_side"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

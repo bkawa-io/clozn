@@ -1,0 +1,102 @@
+{
+  "schema_version": "clozn.first-divergence-view.v1",
+  "state": "available",
+  "a_run_id": "run_a",
+  "b_run_id": "run_b",
+  "comparison": {
+    "prompts_match": true,
+    "controlled": true
+  },
+  "caveat": "This is an exact, observational split between two independently-generated recorded runs. 'controlled' means only that the user-side prompt sequence matched under this diff's own contract -- it is never a causal claim that a model/config change caused this specific token. The window shown around the divergence point is for orientation only: once two runs diverge they are continuing from different prefixes, so positions after the split are not independent comparisons.",
+  "common_prefix": {
+    "token_count": 3,
+    "last_shared_index": 2
+  },
+  "divergence": {
+    "index": 3,
+    "kind": "token_mismatch",
+    "a": {
+      "piece": " Paris",
+      "token_id": 18273,
+      "confidence": 0.44
+    },
+    "b": {
+      "piece": " Lyon",
+      "token_id": 77,
+      "confidence": 0.39
+    }
+  },
+  "alternatives": {
+    "a_considered_b": {
+      "checked": true,
+      "found": true,
+      "rank": 0,
+      "prob": 0.39,
+      "matched_by": "token_id",
+      "note": "rank is 0-based within the target run's RECORDED alternatives at this position (the capture-time top-k list, which excludes the target's own committed token) -- NOT a full-vocabulary rank; 'found: false' means 'not in the recorded list', which is weaker than 'not close'."
+    },
+    "b_considered_a": {
+      "checked": true,
+      "found": true,
+      "rank": 0,
+      "prob": 0.31,
+      "matched_by": "token_id",
+      "note": "rank is 0-based within the target run's RECORDED alternatives at this position (the capture-time top-k list, which excludes the target's own committed token) -- NOT a full-vocabulary rank; 'found: false' means 'not in the recorded list', which is weaker than 'not close'."
+    }
+  },
+  "window": {
+    "basis": "recorded_trace_tokens",
+    "start_index": 0,
+    "divergence_index": 3,
+    "common_prefix": [
+      {
+        "index": 0,
+        "piece": "The"
+      },
+      {
+        "index": 1,
+        "piece": " capital"
+      },
+      {
+        "index": 2,
+        "piece": " is"
+      }
+    ],
+    "a": [
+      {
+        "index": 3,
+        "piece": " Paris"
+      },
+      {
+        "index": 4,
+        "piece": "."
+      }
+    ],
+    "b": [
+      {
+        "index": 3,
+        "piece": " Lyon"
+      },
+      {
+        "index": 4,
+        "piece": "."
+      }
+    ]
+  },
+  "recorded_answer_location": {
+    "a": {
+      "state": "exact",
+      "unit": "unicode_code_points",
+      "interval": "half_open",
+      "start": 14,
+      "end": 20
+    },
+    "b": {
+      "state": "exact",
+      "unit": "unicode_code_points",
+      "interval": "half_open",
+      "start": 14,
+      "end": 19
+    }
+  }
+}

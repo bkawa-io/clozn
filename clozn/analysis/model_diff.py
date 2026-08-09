@@ -2,6 +2,14 @@
 config) diverge, token by token. The data layer of the model-diff atlas: records in, dict out -- pure,
 model-free, GPU-free, never raises. Served by clozn/server/routes/diff.py (POST /diff/runs).
 
+FIRST-DIVERGENCE VIEW (`clozn.first-divergence-view.v1`, nested at `first_divergence_view` on every
+`diff_runs()` result): a compact, debugger-oriented PROJECTION over the SAME comparison above -- never a
+second diff algorithm, never a second route. `diff["first_divergence"]` (computed on the FULL traces,
+independent of the `positions` cap) is the single canonical source; this view reads it, never re-derives
+it. See `build_first_divergence_view`'s own docstring for the three explicit states (`available` /
+`identical` / `trace_unavailable`), the symmetric "almost said" evidence in both directions, the compact
+token window, and the exact-recorded-answer-offset integrity rule.
+
 WHAT THIS IS (and honestly is not), relative to clozn/receipts/quant_receipts.py:
 
   * quant_receipts diffs two TEACHER-FORCED /score arrays of the SAME recorded continuation -- aligned by
@@ -49,14 +57,29 @@ _DIFF_CAVEAT = (
 )
 
 _ALT_RANK_NOTE = (
-    "rank is 0-based within a's RECORDED alternatives at the divergence point (the capture-time top-k "
-    "list, which excludes a's own committed token) -- NOT a full-vocabulary rank; 'found: false' means "
-    "'not in the recorded list', which is weaker than 'not close'."
+    "rank is 0-based within the target run's RECORDED alternatives at this position (the capture-time "
+    "top-k list, which excludes the target's own committed token) -- NOT a full-vocabulary rank; "
+    "'found: false' means 'not in the recorded list', which is weaker than 'not close'."
 )
 
 _ALT_UNKNOWN_NOTE = (
-    "a recorded no alternatives at the divergence point, so whether b's token was nearly said is "
-    "UNKNOWN -- counted as unknown, never folded into 'no' (mirrors quant_receipts' topk discipline)."
+    "the target run recorded no alternatives at this position, so whether the source run's token was "
+    "nearly said is UNKNOWN -- counted as unknown, never folded into 'no' (mirrors quant_receipts' topk "
+    "discipline)."
+)
+
+FIRST_DIVERGENCE_VIEW_SCHEMA = "clozn.first-divergence-view.v1"
+
+DEFAULT_CONTEXT_BEFORE = 4
+DEFAULT_CONTEXT_AFTER = 8
+
+_VIEW_CAVEAT = (
+    "This is an exact, observational split between two independently-generated recorded runs. "
+    "'controlled' means only that the user-side prompt sequence matched under this diff's own contract "
+    "-- it never explains WHY this specific token appeared, and it is not evidence that a model/config "
+    "change is what produced it. The window shown around the divergence point is for orientation only: "
+    "once two runs diverge they are continuing from different prefixes, so positions after the split "
+    "are not independent comparisons."
 )
 
 
@@ -151,45 +174,227 @@ def _identity(run: dict) -> dict:
 
 # ---------------------------------------------------------------------------------- the almost-said signal
 
-def _b_in_a_alternatives(run_a: dict, run_b: dict, index: int) -> dict:
-    """At the first token divergence, was b's committed token among a's RECORDED alternatives -- the
-    'did a almost say that' signal. Matches by token id when both sides carry one (exact), else by piece
-    string. Three honest outcomes, never conflated: found (with its recorded rank/prob -- _ALT_RANK_NOTE),
-    not-in-the-recorded-list, and UNKNOWN (a recorded no alternatives at all -- _ALT_UNKNOWN_NOTE)."""
-    b_tokens = _tokens(run_b) or []
-    if not (0 <= index < len(b_tokens)):
+def _committed_token_in_alternatives(source_run: dict, target_run: dict, index: int) -> dict:
+    """At token position `index`, was `source_run`'s COMMITTED token among `target_run`'s RECORDED
+    alternatives at that same position -- the 'did target almost say that' signal. A neutral, symmetric
+    helper: `_b_in_a_alternatives(run_a, run_b, i)` is exactly `_committed_token_in_alternatives(run_b,
+    run_a, i)`, and `build_first_divergence_view` calls this in BOTH directions -- there is exactly one
+    implementation of this lookup, never two subtly different ones.
+
+    Matches by token id when both sides carry one (exact), else by piece string. Three honest outcomes,
+    never conflated: found (with its recorded rank/prob -- _ALT_RANK_NOTE), not-in-the-recorded-list, and
+    UNKNOWN (target recorded no alternatives at all -- _ALT_UNKNOWN_NOTE)."""
+    source_tokens = _tokens(source_run) or []
+    if not (0 <= index < len(source_tokens)):
         return {"checked": False, "found": None, "rank": None, "prob": None,
-                "note": "b committed no token at the divergence point (a length divergence) -- "
-                        "nothing to look up in a's alternatives"}
-    b_piece, b_id = b_tokens[index], _token_id_at(run_b, index)
-    alts = _alts_at(run_a, index)
+                "note": "the source run committed no token at this position (a length divergence) -- "
+                        "nothing to look up in the target run's alternatives"}
+    source_piece, source_id = source_tokens[index], _token_id_at(source_run, index)
+    alts = _alts_at(target_run, index)
     if not alts:
         return {"checked": False, "found": None, "rank": None, "prob": None, "note": _ALT_UNKNOWN_NOTE}
     for rank, alt in enumerate(alts):
         if not isinstance(alt, dict):
             continue
         alt_id = _int_or_none(alt.get("token_id"))
-        id_hit = b_id is not None and alt_id is not None and alt_id == b_id
-        if id_hit or str(alt.get("piece", alt.get("text", ""))) == b_piece:
+        id_hit = source_id is not None and alt_id is not None and alt_id == source_id
+        if id_hit or str(alt.get("piece", alt.get("text", ""))) == source_piece:
             return {"checked": True, "found": True, "rank": rank,
                     "prob": _float_or_none(alt.get("prob")),
                     "matched_by": "token_id" if id_hit else "piece", "note": _ALT_RANK_NOTE}
     return {"checked": True, "found": False, "rank": None, "prob": None, "note": _ALT_RANK_NOTE}
 
 
+def _b_in_a_alternatives(run_a: dict, run_b: dict, index: int) -> dict:
+    """At the first token divergence, was b's committed token among a's RECORDED alternatives -- the
+    'did a almost say that' signal `summary.b_was_alternative_in_a` has always exposed. A thin,
+    behavior-preserving wrapper over the neutral `_committed_token_in_alternatives`."""
+    return _committed_token_in_alternatives(run_b, run_a, index)
+
+
+# ============================================================================ first-divergence view helpers
+
+def _prefix_boundary(common_prefix_len: int) -> dict:
+    return {
+        "token_count": common_prefix_len,
+        "last_shared_index": common_prefix_len - 1 if common_prefix_len > 0 else None,
+    }
+
+
+def _divergence_side(piece, token_id, confidence) -> dict:
+    return {"piece": piece, "token_id": token_id, "confidence": confidence}
+
+
+def _recorded_location_for_side(run: dict, tokens: list[str], index: int) -> dict:
+    """One side's answer-location resolution for token `index`, in THAT run's own recorded trace/
+    response space -- never borrowed from the other side. `state: "exact"` only when the exact
+    concatenation of this run's own recorded token pieces reproduces `run["response"]` character for
+    character; a mismatch (retokenization drift, a truncated/edited response, ...) degrades to
+    `state: "unavailable"` rather than publishing an offset that may not describe the recorded answer at
+    all. Offsets are Unicode code points, half-open -- the same convention
+    `clozn.text-span-addresses.v1` already established. `index >= len(tokens)` is the EXHAUSTED side of a
+    length-mismatch divergence: its answer ended exactly at the recorded response's end, represented as a
+    zero-width `start == end == len(response)` boundary rather than omitted."""
+    response = str(run.get("response") or "")
+    if "".join(tokens) != response:
+        return {"state": "unavailable", "reason": "trace_text_does_not_match_recorded_response"}
+    if index >= len(tokens):
+        end = len(response)
+        return {"state": "exact", "unit": "unicode_code_points", "interval": "half_open",
+                "start": end, "end": end}
+    start = len("".join(tokens[:index]))
+    end = start + len(tokens[index])
+    return {"state": "exact", "unit": "unicode_code_points", "interval": "half_open",
+            "start": start, "end": end}
+
+
+def _build_window(toks_a: list[str], toks_b: list[str], *, common_prefix_len: int, divergence_index: int,
+                  context_before: int, context_after: int) -> dict:
+    """A small, DETERMINISTIC slice of the full recorded trace token arrays around the divergence point --
+    never the capped `positions` list, and never a re-tokenization of response text (`basis:
+    "recorded_trace_tokens"`). `context_before` tokens strictly before the split (clipped at 0);
+    `context_after` tokens per side STARTING AT the divergence index itself (clipped to that side's own
+    trace length, which is naturally empty for the exhausted side of a length-mismatch divergence)."""
+    start_index = max(0, common_prefix_len - max(0, int(context_before)))
+    after = max(0, int(context_after))
+    return {
+        "basis": "recorded_trace_tokens",
+        "start_index": start_index,
+        "divergence_index": divergence_index,
+        "common_prefix": [
+            {"index": i, "piece": toks_a[i]} for i in range(start_index, common_prefix_len)
+        ],
+        "a": [
+            {"index": i, "piece": toks_a[i]}
+            for i in range(divergence_index, min(divergence_index + after, len(toks_a)))
+        ],
+        "b": [
+            {"index": i, "piece": toks_b[i]}
+            for i in range(divergence_index, min(divergence_index + after, len(toks_b)))
+        ],
+    }
+
+
+def _base_view(diff: dict, *, state: str) -> dict:
+    return {
+        "schema_version": FIRST_DIVERGENCE_VIEW_SCHEMA,
+        "state": state,
+        "a_run_id": diff["a"]["run_id"],
+        "b_run_id": diff["b"]["run_id"],
+        "comparison": {"prompts_match": diff["prompts_match"], "controlled": diff["prompts_match"]},
+        "caveat": _VIEW_CAVEAT,
+    }
+
+
+def build_first_divergence_view(run_a: dict, run_b: dict, diff: dict, *,
+                                context_before: int = DEFAULT_CONTEXT_BEFORE,
+                                context_after: int = DEFAULT_CONTEXT_AFTER) -> dict:
+    """The compact, debugger-oriented projection of an already-computed `diff` (a `diff_runs()` result
+    with `ok: True`) onto ONE question: where did these two recorded token streams first stop being
+    identical, and what does the evidence right around that split look like? `diff["first_divergence"]`
+    is the single canonical source -- this function never independently rescans the token arrays, so
+    `diff["first_divergence"]` and this view's own `divergence` field can never structurally disagree.
+
+    THREE STATES, NEVER COLLAPSED INTO A BARE null
+    --------------------------------------------------
+        trace_unavailable   one or both runs carry no usable per-token trace (`diff["trace_available"]
+                             is False`). No token-level claim of any kind -- not even "identical" --
+                             can honestly be made; `trace_missing` names which side(s).
+        identical            both recorded token streams matched all the way through
+                             (`diff["first_divergence"] is None`). Never inferred from character/
+                             formatting equality after token equality already settled the question.
+        available             a real divergence exists in trace space -- `divergence`, the symmetric
+                             `alternatives` "almost said" evidence, a compact `window`, and (when
+                             provable) exact `recorded_answer_location` offsets are all populated.
+
+    WORKS PAST THE 200-POSITION DISPLAY CAP, AND WITH max_positions=0
+    -----------------------------------------------------------------------
+    This function reads `diff["first_divergence"]`/`diff["common_prefix_len"]` (always computed on the
+    FULL traces) and re-fetches the full token arrays itself for the window -- it never reads
+    `diff["positions"]`, which `diff_runs()` truncates to `MAX_POSITIONS`. A divergence at token 350 with
+    `positions` capped at 200 (or even `max_positions=0`, an empty `positions` list) produces an
+    identical, fully-populated view.
+
+    OBSERVATIONAL, NEVER CAUSAL
+    -------------------------------
+    `comparison.controlled` is exactly `diff["prompts_match"]` -- "the user-side prompt sequence matched
+    under this diff's own contract", never a claim that a model/config change explains the divergent token.
+    The `window`'s post-divergence tokens are shown for orientation only: once two runs diverge they are
+    continuing from different prefixes, so this view never scores or counts later mismatches as
+    independent evidence (see `_VIEW_CAVEAT`, carried on every state).
+
+    Pure and side-effect-free: reads only `run_a`, `run_b`, and the already-computed `diff` dict; never
+    mutates any of the three, never calls a model/engine/worker, never starts a new measurement.
+    """
+    if diff.get("trace_available") is False:
+        view = _base_view(diff, state="trace_unavailable")
+        view["trace_missing"] = list(diff.get("trace_missing") or [])
+        view["divergence"] = None
+        return view
+
+    common = diff["common_prefix_len"]
+    fd = diff["first_divergence"]
+    if fd is None:
+        view = _base_view(diff, state="identical")
+        view["common_prefix"] = _prefix_boundary(common)
+        view["divergence"] = None
+        return view
+
+    index = fd["index"]
+    toks_a, toks_b = _tokens(run_a) or [], _tokens(run_b) or []
+
+    view = _base_view(diff, state="available")
+    view["common_prefix"] = _prefix_boundary(common)
+    view["divergence"] = {
+        "index": index,
+        "kind": fd["kind"],
+        "a": _divergence_side(
+            fd["a_piece"], _token_id_at(run_a, index) if fd["a_piece"] is not None else None, fd["a_conf"],
+        ),
+        "b": _divergence_side(
+            fd["b_piece"], _token_id_at(run_b, index) if fd["b_piece"] is not None else None, fd["b_conf"],
+        ),
+    }
+    view["alternatives"] = {
+        "a_considered_b": _committed_token_in_alternatives(run_b, run_a, index),
+        "b_considered_a": _committed_token_in_alternatives(run_a, run_b, index),
+    }
+    view["window"] = _build_window(
+        toks_a, toks_b, common_prefix_len=common, divergence_index=index,
+        context_before=context_before, context_after=context_after,
+    )
+    view["recorded_answer_location"] = {
+        "a": _recorded_location_for_side(run_a, toks_a, index),
+        "b": _recorded_location_for_side(run_b, toks_b, index),
+    }
+    return view
+
+
 # ==================================================================================== the public surface
 
-def diff_runs(run_a: dict, run_b: dict, *, max_positions: int = MAX_POSITIONS) -> dict:
+def diff_runs(run_a: dict, run_b: dict, *, max_positions: int = MAX_POSITIONS,
+              context_before: int = DEFAULT_CONTEXT_BEFORE,
+              context_after: int = DEFAULT_CONTEXT_AFTER) -> dict:
     """Compare two recorded runs token by token. Pure (records in, dict out) and never raises: a
     missing/malformed run yields {"ok": false, "error", "missing"} (the clean error shape); runs without
     usable traces degrade to a text-only diff ("trace_available": false). See the module docstring for
-    the full wire shape and the honesty contract."""
+    the full wire shape and the honesty contract.
+
+    Every `ok: True` result also carries `first_divergence_view` (`clozn.first-divergence-view.v1`) --
+    see `build_first_divergence_view`'s own docstring. It is a PROJECTION over this same comparison, not
+    a second diff: it reads `first_divergence`/`common_prefix_len` from the result already computed
+    below, never re-scanning the token arrays. `context_before`/`context_after` size that view's compact
+    token window only; they have no effect on `positions` or any other existing field."""
     missing = [name for name, r in (("a", run_a), ("b", run_b)) if not isinstance(r, dict) or not r]
     if missing:
         return {"mode": "model_diff", "ok": False, "missing": missing,
                 "error": "run " + " and ".join(missing) + " missing/unreadable -- nothing to diff"}
     try:
-        return _diff(run_a, run_b, max_positions=max_positions)
+        result = _diff(run_a, run_b, max_positions=max_positions)
+        result["first_divergence_view"] = build_first_divergence_view(
+            run_a, run_b, result, context_before=context_before, context_after=context_after,
+        )
+        return result
     except Exception as e:      # the never-raise discipline (mirrors quant_receipts), but with a reason
         return {"mode": "model_diff", "ok": False, "missing": [],
                 "error": f"diff failed: {type(e).__name__}: {e}"}
