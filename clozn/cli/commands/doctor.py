@@ -308,11 +308,12 @@ def _check_bind_loopback() -> dict:
         return _check("gateway/engine bind", _WARN,
                       f"could not statically verify loopback-only bind: {error}")
 
-    if gateway_default == "127.0.0.1" and not serve_has_host_override and engine_hardcodes_loopback:
+    if gateway_default == "127.0.0.1" and engine_hardcodes_loopback:
         return _check("gateway/engine bind", _OK,
-                      "loopback-only by construction: `clozn serve` exposes no --host override "
-                      "(RuntimeConfig.host defaults to 127.0.0.1) and the private engine worker's argv "
-                      "hardcodes --host 127.0.0.1 -- a code fact, not a live-process probe")
+                      "private engine loopback-only by construction: RuntimeConfig.host defaults to "
+                      "127.0.0.1, the public gateway may explicitly override --host, and the private "
+                      "engine worker's argv hardcodes --host 127.0.0.1 -- a code fact, not a live-process "
+                      "probe")
     return _check("gateway/engine bind", _WARN,
                   f"could not confirm loopback-only by construction (gateway default host="
                   f"{gateway_default!r}, `clozn serve --host` override present={serve_has_host_override}, "

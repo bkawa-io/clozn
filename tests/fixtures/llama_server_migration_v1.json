@@ -1,0 +1,38 @@
+[
+  {
+    "name": "basic_single_model",
+    "llama_server_argv": ["-m", "model.gguf", "-c", "8192", "--host", "127.0.0.1", "--port", "8080"],
+    "clozn_state": "supported",
+    "expected": {"model": "model.gguf", "ctx": 8192, "host": "127.0.0.1", "port": 8080}
+  },
+  {
+    "name": "explicit_cuda_subset",
+    "llama_server_argv": ["-m", "model.gguf", "-ngl", "99", "-np", "1"],
+    "clozn_state": "supported_subset",
+    "expected": {"model": "model.gguf", "gpu_layers": 99, "parallel": 1}
+  },
+  {
+    "name": "public_alias",
+    "llama_server_argv": ["-m", "model.gguf", "-a", "local-model"],
+    "clozn_state": "supported_subset",
+    "expected": {"model": "model.gguf", "alias": "local-model"}
+  },
+  {
+    "name": "parallel_slots_above_one",
+    "llama_server_argv": ["-m", "model.gguf", "-np", "2"],
+    "clozn_state": "unsupported",
+    "reason": "Clozn serializes generation per model to preserve debugger evidence"
+  },
+  {
+    "name": "automatic_gpu_layers",
+    "llama_server_argv": ["-m", "model.gguf", "-ngl", "auto"],
+    "clozn_state": "unsupported",
+    "reason": "Clozn accepts an explicit non-negative integer layer count only"
+  },
+  {
+    "name": "unknown_upstream_flag",
+    "llama_server_argv": ["-m", "model.gguf", "--slots-endpoint"],
+    "clozn_state": "unsupported",
+    "reason": "Clozn does not provide arbitrary argument passthrough"
+  }
+]

@@ -1,0 +1,245 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.turn-receipt.v1",
+  "title": "Turn Receipt -- compact read-side projection over recorded run evidence",
+  "description": "An opinionated metadata-oriented composition of the authoritative Context Receipt, Context Utilization, Context Tension, execution timing, first-divergence, and Rewind Fidelity evidence. This artifact never contains the full prompt or response and reading it never starts analysis, generation, a worker, a checkpoint, or a rewind.",
+  "type": "object",
+  "required": ["schema_version", "run_id", "outcome", "model", "context", "what_mattered", "context_tension", "signals", "performance", "comparison", "rewind", "technical"],
+  "properties": {
+    "schema_version": {"const": "clozn.turn-receipt.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "outcome": {"$ref": "#/$defs/outcome"},
+    "model": {"$ref": "#/$defs/model"},
+    "context": {"$ref": "#/$defs/context"},
+    "what_mattered": {"$ref": "#/$defs/what_mattered"},
+    "context_tension": {"$ref": "#/$defs/context_tension"},
+    "signals": {"type": "array", "items": {"$ref": "#/$defs/signal"}},
+    "performance": {"$ref": "#/$defs/performance"},
+    "comparison": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/comparison"}]},
+    "rewind": {"$ref": "#/$defs/rewind"},
+    "technical": {"$ref": "#/$defs/technical"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "outcome": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {"enum": ["completed", "truncated", "errored", "cancelled", "unknown"]},
+        "finish_reason": {"type": "string", "minLength": 1},
+        "generated_tokens": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "model": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "quant": {"type": "string", "minLength": 1},
+        "substrate": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "context_sources": {
+      "type": "object",
+      "properties": {
+        "delivered": {"type": "integer", "minimum": 0},
+        "assembled": {"type": "integer", "minimum": 0},
+        "omitted": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["segment_id"],
+      "properties": {
+        "segment_id": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "client_source_id": {"type": "string", "minLength": 1},
+        "included": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "context": {
+      "type": "object",
+      "required": ["privacy", "provenance_state"],
+      "properties": {
+        "prompt_tokens": {"type": "integer", "minimum": 0},
+        "context_window_tokens": {"type": "integer", "minimum": 0},
+        "window_occupancy": {"type": "number", "minimum": 0},
+        "privacy": {"enum": ["full", "metadata_only", "hashes_only", "off"]},
+        "provenance_state": {"enum": ["available", "unavailable"]},
+        "sources": {"$ref": "#/$defs/context_sources"},
+        "provenance": {"type": "array", "items": {"$ref": "#/$defs/provenance"}},
+        "transformations": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      },
+      "additionalProperties": false
+    },
+    "coverage": {
+      "type": "object",
+      "required": ["prompt_sources", "measured_sources", "not_measured_sources"],
+      "properties": {
+        "prompt_sources": {"type": "integer", "minimum": 0},
+        "measured_sources": {"type": "integer", "minimum": 0},
+        "not_measured_sources": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "effect_summary": {
+      "type": "object",
+      "required": ["sources_with_clear_measured_effect", "sources_below_measured_floor"],
+      "properties": {
+        "sources_with_clear_measured_effect": {"type": "integer", "minimum": 0},
+        "sources_below_measured_floor": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "notable_source": {
+      "type": "object",
+      "required": ["source_span_id", "effect"],
+      "properties": {
+        "source_span_id": {"type": "string", "minLength": 1},
+        "answer_span_id": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "effect": {"enum": ["supporting", "suppressing", "mixed", "supports", "suppresses", "neutral"]},
+        "delta_nats": {"type": "number"},
+        "abs_delta_nats": {"type": "number", "minimum": 0},
+        "evidence_state": {"type": "string", "minLength": 1},
+        "inspect": {"$ref": "#/$defs/inspect"}
+      },
+      "additionalProperties": false
+    },
+    "what_mattered": {
+      "type": "object",
+      "required": ["measurement_state"],
+      "properties": {
+        "measurement_state": {"enum": ["available", "not_measured", "unavailable"]},
+        "coverage": {"$ref": "#/$defs/coverage"},
+        "effect_summary": {"$ref": "#/$defs/effect_summary"},
+        "notable_sources": {"type": "array", "maxItems": 3, "items": {"$ref": "#/$defs/notable_source"}}
+      },
+      "additionalProperties": false
+    },
+    "context_tension": {
+      "type": "object",
+      "required": ["measurement_state"],
+      "properties": {
+        "measurement_state": {"enum": ["available", "not_measured", "unavailable"]},
+        "answer_spans_with_tension": {"type": "integer", "minimum": 0},
+        "tension_pairs": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "signal": {
+      "type": "object",
+      "required": ["code", "level", "summary", "evidence"],
+      "properties": {
+        "code": {"enum": [
+          "run_errored", "answer_truncated", "empty_reply", "repetition_detected",
+          "invalid_structured_output", "context_omitted", "context_window_pressure",
+          "context_tension_detected", "influence_coverage_partial", "measured_effect_sparse",
+          "first_divergence_available"
+        ]},
+        "level": {"enum": ["attention", "info"]},
+        "summary": {"type": "string", "minLength": 1},
+        "evidence": {"type": "string", "minLength": 1},
+        "occupancy": {"type": "number", "minimum": 0},
+        "percentage": {"type": "integer", "minimum": 0},
+        "inspect": {"$ref": "#/$defs/inspect"}
+      },
+      "additionalProperties": false
+    },
+    "performance": {
+      "type": "object",
+      "properties": {
+        "prompt_tokens": {"type": "integer", "minimum": 0},
+        "output_tokens": {"type": "integer", "minimum": 0},
+        "prefill_ms": {"type": "number", "minimum": 0},
+        "decode_ms": {"type": "number", "minimum": 0},
+        "prompt_tokens_per_second": {"type": "number", "minimum": 0},
+        "generation_tokens_per_second": {"type": "number", "minimum": 0},
+        "duration_ms": {"type": "number", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "first_divergence": {
+      "type": "object",
+      "required": ["index", "kind"],
+      "properties": {
+        "index": {"type": "integer", "minimum": 0},
+        "kind": {"type": "string", "minLength": 1},
+        "a_piece": {"type": "string"},
+        "b_piece": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "comparison": {
+      "type": "object",
+      "required": ["state", "parent_run_id", "first_divergence"],
+      "properties": {
+        "state": {"const": "available"},
+        "parent_run_id": {"type": "string", "minLength": 1},
+        "first_divergence": {"$ref": "#/$defs/first_divergence"},
+        "inspect": {"$ref": "#/$defs/inspect"}
+      },
+      "additionalProperties": false
+    },
+    "rewind": {
+      "type": "object",
+      "required": ["reconstructed_replay", "exact_rewind", "historically_verified_boundaries"],
+      "properties": {
+        "reconstructed_replay": {"enum": ["available", "unavailable"]},
+        "exact_rewind": {"enum": ["requires_live_plan", "static_prerequisites_unavailable"]},
+        "historically_verified_boundaries": {"type": "integer", "minimum": 0},
+        "position": {"type": "integer", "minimum": 0},
+        "inspect": {"$ref": "#/$defs/inspect"}
+      },
+      "additionalProperties": false
+    },
+    "technical": {
+      "type": "object",
+      "properties": {
+        "model_sha256": {"type": "string", "minLength": 1},
+        "template_fingerprint": {"type": "string", "minLength": 1},
+        "engine_build": {"type": "string", "minLength": 1},
+        "clozn_version": {"type": "string", "minLength": 1},
+        "backend": {"type": "string", "minLength": 1},
+        "device": {"type": "string", "minLength": 1},
+        "runtime_class": {"type": "string", "minLength": 1},
+        "engine": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "inspect": {
+      "type": "object",
+      "required": ["selection_ref", "selection", "api_href", "deep_link"],
+      "additionalProperties": false,
+      "properties": {
+        "selection_ref": {"type": "string", "pattern": "^sel1\\.[A-Za-z0-9_-]+\\.[0-9a-f]{24}$"},
+        "selection": {
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"enum": ["response_token", "answer_span", "context_span", "sampling"]},
+            "position": {"type": "integer", "minimum": 0},
+            "start": {"type": "integer", "minimum": 0},
+            "end": {"type": "integer", "minimum": 1},
+            "source_span_id": {"type": "string", "pattern": "^span_[0-9a-f]{24}$"},
+            "answer_span_id": {"type": "string", "pattern": "^span_[0-9a-f]{24}$"}
+          }
+        },
+        "api_href": {"type": "string", "minLength": 1},
+        "deep_link": {
+          "type": "object",
+          "required": ["run_id", "selection_ref"],
+          "additionalProperties": false,
+          "properties": {
+            "run_id": {"type": "string", "minLength": 1},
+            "selection_ref": {"type": "string", "pattern": "^sel1\\.[A-Za-z0-9_-]+\\.[0-9a-f]{24}$"}
+          }
+        }
+      }
+    }
+  }
+}

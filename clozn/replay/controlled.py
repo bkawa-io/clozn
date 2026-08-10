@@ -98,8 +98,14 @@ def match_run(run: dict, target: dict, criterion: str) -> dict:
     return {"available": True, "matched": actual == expected, "actual": actual, "expected": expected}
 
 
-def _sampling_config(run: dict):
-    """Exact behavior-bearing sampling config, or ``None`` when unrecoverable."""
+def recorded_sampling_config(run: dict):
+    """Return the behavior-bearing sampler recorded for ``run``.
+
+    ``False`` means the run was recorded greedily, a mapping means the complete sampled
+    configuration is recoverable, and ``None`` means the historical sampler provenance is
+    incomplete.  This is deliberately the single reader used by replay/checkpoint and the
+    sampler-sensitivity planner; callers must not fill in current server defaults.
+    """
     meta = _dict(run.get("meta"))
     decode = _dict(meta.get("decode"))
     source = {**meta, **decode}
@@ -130,6 +136,11 @@ def _sampling_config(run: dict):
             return None
         values[output] = value
     return values
+
+
+# Backward-compatible private spelling for existing callers.  New code should use the public helper
+# above so there is one definition of recorded sampler provenance.
+_sampling_config = recorded_sampling_config
 
 
 def _fixed_sampling(run: dict) -> bool:

@@ -86,6 +86,16 @@ class FakeSub:
         return dict(self._run_meta)
 
 
+class UsageSub(FakeSub):
+    def chat(self, messages, max_new=256, sample=True, trace_out=None, mem_out=None):
+        self._request = type("Request", (), {"prompt_tokens": 7, "completion_tokens": 3})()
+        return super().chat(messages, max_new, sample, trace_out, mem_out)
+
+    def chat_stream(self, messages, max_new=256, mem_out=None):
+        self._request = type("Request", (), {"prompt_tokens": 7, "completion_tokens": 3})()
+        yield from super().chat_stream(messages, max_new, mem_out)
+
+
 class NoFinishSub:
     name = "qwen"
 
@@ -232,6 +242,41 @@ def test_chat_completions_uses_real_length_finish_reason_end_to_end(iso, monkeyp
     assert "truncated" in logged["flags"]
     assert logged["meta"]["finish_reason_source"] == "substrate"
     assert logged["meta"]["max_tokens"] == 3
+
+
+def test_responses_text_subset_uses_one_instrumented_chat_run(iso):
+    out = _post("/v1/responses", {
+        "model": "clozn-qwen",
+        "instructions": "Be concise.",
+        "input": "Explain mutexes.",
+    })
+    assert out["object"] == "response"
+    assert out["status"] == "completed"
+    assert out["output_text"] == "A plain reply."
+    assert out["output"][0]["role"] == "assistant"
+    assert len(runlog.list_runs()) == 1
+    assert runlog.get_run(out["clozn_run_id"])["source"] == "openai_responses"
+
+
+def test_non_stream_usage_comes_from_worker_request_evidence(iso, monkeypatch):
+    monkeypatch.setattr(cs, "SUB", UsageSub())
+    out = _post("/v1/chat/completions", {"messages": [{"role": "user", "content": "hi"}]})
+    assert out["usage"] == {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}
+    assert runlog.get_run(out["clozn_run_id"])["meta"]["usage"] == out["usage"]
+
+
+def test_stream_include_usage_emits_terminal_choices_empty_chunk(iso, monkeypatch):
+    monkeypatch.setattr(cs, "SUB", UsageSub())
+    raw = _post_raw("/v1/chat/completions", {
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    })
+    frames = [json.loads(line[6:]) for line in raw.decode().splitlines()
+              if line.startswith("data: {")]
+    usage_frames = [frame for frame in frames if "usage" in frame]
+    assert usage_frames[-1]["choices"] == []
+    assert usage_frames[-1]["usage"] == {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}
 
 
 def test_chat_completions_length_sets_warning_header(iso, monkeypatch):

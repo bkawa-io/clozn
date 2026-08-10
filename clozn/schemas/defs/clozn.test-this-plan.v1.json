@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.test-this-plan.v1",
+  "title": "Clozn Test This plan",
+  "description": "A deterministic, read-only dispatch plan. It binds a user selection to one existing execution primitive without promising live exactness or performing model, worker, checkpoint, generation, or persistence work.",
+  "type": "object",
+  "required": ["schema_version", "run_id", "parent_fingerprint_sha256", "selection", "test", "resolution", "resolved_test", "execution"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.test-this-plan.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "parent_fingerprint_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "selection": {"$ref": "#/$defs/selection"},
+    "test": {"$ref": "#/$defs/test"},
+    "resolution": {"$ref": "#/$defs/resolution"},
+    "resolved_test": {"$ref": "#/$defs/resolved_test"},
+    "execution": {"$ref": "#/$defs/execution"}
+  },
+  "$defs": {
+    "selection": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {"enum": ["response_token", "sampling", "context_span"]},
+        "position": {"type": "integer", "minimum": 0},
+        "source_span_id": {"type": "string", "minLength": 1},
+        "answer_span_id": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "test": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {"enum": ["try_alternative", "fan_alternatives", "change_sampling", "probe_sensitivity", "neutralize", "remove", "bisect"]},
+        "alternative_rank": {"type": "integer", "minimum": 0},
+        "token_id": {"type": "integer", "minimum": 0},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 4},
+        "changes": {"$ref": "#/$defs/sampling_changes"},
+        "recipe": {"const": "nearby_v1"},
+        "seed_probes": {"type": "integer", "minimum": 0, "maximum": 2},
+        "max_depth": {"type": "integer", "minimum": 0, "maximum": 5},
+        "max_runs": {"type": "integer", "minimum": 2, "maximum": 12},
+        "max_seconds": {"type": "number", "minimum": 1, "maximum": 300},
+        "min_region_chars": {"type": "integer", "minimum": 8, "maximum": 256}
+      },
+      "additionalProperties": false
+    },
+    "sampling_changes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "temperature": {"type": "number", "minimum": 0},
+        "top_k": {"type": "integer", "minimum": 0},
+        "top_p": {"type": "number", "minimum": 0, "maximum": 1},
+        "seed": {"type": "integer", "minimum": 0},
+        "rep_penalty": {"type": "number", "minimum": 0}
+      }
+    },
+    "resolution": {
+      "type": "object",
+      "required": ["state", "operation"],
+      "additionalProperties": false,
+      "properties": {
+        "state": {"enum": ["ready", "unavailable"]},
+        "operation": {"enum": ["force_token", "branch_fan", "sampling_fork", "sampler_sensitivity", "influence_counterfactual", "context_bisect"]},
+        "reason": {"$ref": "#/$defs/reason"}
+      }
+    },
+    "reason": {
+      "type": "object",
+      "required": ["code", "message"],
+      "additionalProperties": false,
+      "properties": {"code": {"type": "string", "minLength": 1}, "message": {"type": "string", "minLength": 1}}
+    },
+    "recorded_alternative": {
+      "type": "object",
+      "required": ["rank"],
+      "additionalProperties": false,
+      "properties": {
+        "rank": {"type": "integer", "minimum": 0},
+        "token_id": {"type": "integer", "minimum": 0},
+        "probability": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "resolved_test": {
+      "type": "object",
+      "required": ["operation"],
+      "additionalProperties": false,
+      "properties": {
+        "operation": {"enum": ["force_token", "branch_fan", "sampling_fork", "sampler_sensitivity", "influence_counterfactual", "context_bisect"]},
+        "context_bisect_plan": {"type": "object", "additionalProperties": true},
+        "recorded_alternative": {"$ref": "#/$defs/recorded_alternative"},
+        "counterfactual_plan": {"type": "object", "additionalProperties": true},
+        "sampler_sensitivity_plan": {"type": "object", "additionalProperties": true},
+        "change": {"type": "object", "additionalProperties": false, "required": ["type"], "properties": {"type": {"const": "sampling"}, "temperature": {"type": "number"}, "top_k": {"type": "integer"}, "top_p": {"type": "number"}, "seed": {"type": "integer"}, "rep_penalty": {"type": "number"}}}
+      }
+    },
+    "execution": {
+      "type": "object",
+      "required": ["state", "backend", "fidelity_policy", "live_state"],
+      "additionalProperties": false,
+      "properties": {
+        "state": {"enum": ["ready", "unavailable"]},
+        "backend": {"enum": ["force_token_fork", "branch_fan", "execution_fork", "sampler_sensitivity", "influence_counterfactual", "context_bisect"]},
+        "fidelity_policy": {"enum": ["exact_first", "exact_required", "controlled_regeneration"]},
+        "live_state": {"const": "not_checked"},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

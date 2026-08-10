@@ -34,7 +34,8 @@ from clozn.server.http_policy import send_cors_headers
 
 
 def sse_chat(handler, messages, max_new, model, lens=None, receipt=False, sample=True,
-             journal_messages=None, corrective_evidence=None, task=None, sections=None):
+             journal_messages=None, corrective_evidence=None, task=None, sections=None,
+             receipt_mode=None, stop=None, include_usage=False):
     """Stream one /v1/chat/completions reply as OpenAI-style `chat.completion.chunk` frames over SSE,
     then log the run. `handler` is the live BaseHTTPRequestHandler (needs .wfile + ._log_run).
 
@@ -54,6 +55,9 @@ def sse_chat(handler, messages, max_new, model, lens=None, receipt=False, sample
     with the delta chunks. Only substrates whose chat_stream accepts (lens, on_frame) can serve it --
     currently the engine substrate; on any other, one honest error frame is sent and the chat proceeds
     without the lens (the reply must never be held hostage by a readout)."""
+    if receipt_mode not in {"off", "exceptions", "always"}:
+        receipt_mode = "exceptions" if receipt else "off"
+
     handler.send_response(200)
     handler.send_header("Content-Type", "text/event-stream")
     handler.send_header("Cache-Control", "no-cache")
@@ -63,9 +67,11 @@ def sse_chat(handler, messages, max_new, model, lens=None, receipt=False, sample
     stream_id = "chatcmpl-" + secrets.token_hex(8)
     created = int(time.time())
 
-    def chunk(delta, finish=None, extension=None):
+    def chunk(delta, finish=None, extension=None, usage=None):
         o = {"id": stream_id, "object": "chat.completion.chunk", "created": created, "model": model,
-             "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+             "choices": [] if usage is not None else [{"index": 0, "delta": delta, "finish_reason": finish}]}
+        if usage is not None:
+            o["usage"] = usage
         if extension:
             o.update(extension)
         flush_started_ns = time.monotonic_ns()
@@ -93,6 +99,8 @@ def sse_chat(handler, messages, max_new, model, lens=None, receipt=False, sample
     stream_kw = {}
     if "sample" in params:
         stream_kw["sample"] = sample
+    if stop is not None and "stop" in params:
+        stream_kw["stop"] = list(stop)
     if lens:
         if "lens" in params and "on_frame" in params:
             stream_kw.update(lens=(lens if isinstance(lens, dict) else {}), on_frame=side_frame)
@@ -164,16 +172,30 @@ def sse_chat(handler, messages, max_new, model, lens=None, receipt=False, sample
         openai_fr = ctx._openai_finish_reason(fr)
         # log the run FIRST (before the finish chunk) so the receipt footer can carry its /r/<id> link.
         trace = sub.last_stream_trace() if hasattr(sub, "last_stream_trace") else None
+        usage = None
+        req = getattr(sub, "_request", None)
+        prompt_count = getattr(req, "prompt_tokens", None)
+        completion_count = getattr(req, "completion_tokens", None)
+        if (isinstance(prompt_count, int) and not isinstance(prompt_count, bool)
+                and isinstance(completion_count, int) and not isinstance(completion_count, bool)):
+            usage = {"prompt_tokens": prompt_count,
+                     "completion_tokens": completion_count,
+                     "total_tokens": prompt_count + completion_count}
+        run_meta = dict(policy_meta)
+        if usage:
+            run_meta["usage"] = dict(usage)
         rid = handler._log_run("openai_api", logged_messages, "".join(acc), model, t0, trace=trace,
                                mem_out=memout, finish_reason=fr,
                                finish_reason_fallback=None if fr else openai_fr,
-                               extra_meta=policy_meta or None, sections=sections)
-        if receipt and rid:                       # the exception-only footer, as one final content chunk
+                               extra_meta=run_meta or None, sections=sections)
+        if receipt_mode != "off" and rid:        # the footer, as one final content chunk
             try:
                 import clozn.runs.store as _runlog
                 from clozn.runs import receipt_footer
                 host = handler.headers.get("Host") or "127.0.0.1"
-                foot = receipt_footer.footer(_runlog.get_run(rid), f"http://{host}/r/{rid}")
+                foot = receipt_footer.footer(
+                    _runlog.get_run(rid), f"http://{host}/r/{rid}", mode=receipt_mode,
+                )
                 if foot:
                     chunk({"content": foot})
             except Exception:
@@ -214,6 +236,8 @@ def sse_chat(handler, messages, max_new, model, lens=None, receipt=False, sample
         if rid:
             terminal["clozn_run_id"] = rid
         chunk({}, finish=openai_fr, extension=terminal or None)
+        if include_usage and usage is not None:
+            chunk({}, usage=usage)
         handler.wfile.write(b"data: [DONE]\n\n")
         handler.wfile.flush()
     except Exception as e:

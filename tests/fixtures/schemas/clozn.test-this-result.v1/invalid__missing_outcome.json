@@ -1,0 +1,10 @@
+{
+  "schema_version": "clozn.test-this-result.v1",
+  "run_id": "run_123",
+  "selection": {},
+  "test": {},
+  "operation": "force_token",
+  "result": {},
+  "artifact": null,
+  "comparison": null
+}

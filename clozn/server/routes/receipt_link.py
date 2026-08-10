@@ -17,10 +17,41 @@ import clozn.settings as settings
 from clozn.server.static import APP_INDEX
 
 RECEIPT_SETTING = "receipt_footer"
+RECEIPT_MODE_SETTING = "receipt_footer_mode"
+RECEIPT_MODES = ("off", "exceptions", "always")
 
 
 def receipt_enabled() -> bool:
     return bool(settings.get_setting(RECEIPT_SETTING, False))
+
+
+def receipt_mode() -> str:
+    """Return the persisted footer mode with legacy boolean compatibility."""
+    configured = settings.get_setting(RECEIPT_MODE_SETTING, None)
+    if configured not in RECEIPT_MODES:
+        return "exceptions" if receipt_enabled() else "off"
+    if configured == "off" or not receipt_enabled():
+        return "off"
+    return configured
+
+
+def request_receipt_mode(body: dict) -> str:
+    """Resolve one normalized request's footer mode without changing persisted settings.
+
+    ``clozn_receipt: true`` remains an opt-in even when the server-wide boolean is off, preserving the
+    original extension's behavior.  A per-request mode is narrow and explicit; a boolean never means
+    ``always``.
+    """
+    configured = receipt_mode()
+    requested_mode = body.get("clozn_receipt_mode") if isinstance(body, dict) else None
+    if requested_mode in RECEIPT_MODES:
+        return requested_mode
+    if isinstance(body, dict) and "clozn_receipt" in body:
+        if body.get("clozn_receipt") is False:
+            return "off"
+        if body.get("clozn_receipt") is True:
+            return configured if configured != "off" else "exceptions"
+    return configured
 
 
 def _safe_run_id(raw: str) -> str:
@@ -33,7 +64,8 @@ def _safe_run_id(raw: str) -> str:
 
 def try_get(h, p):
     if p == "/receipt/mode":
-        h._json(200, {"receipt_footer": receipt_enabled()})
+        h._json(200, {"receipt_footer": receipt_enabled(), "receipt_footer_mode": receipt_mode(),
+                      "modes": list(RECEIPT_MODES)})
         return True
     if p.startswith("/r/"):
         rid = _safe_run_id(p[len("/r/"):].strip("/"))
@@ -47,9 +79,20 @@ def try_get(h, p):
 
 def try_post(h, p, body):
     if p == "/receipt/mode":
-        changed = "receipt_footer" in body
-        if changed:
+        body = body if isinstance(body, dict) else {}
+        changed = False
+        requested_mode = body.get("receipt_footer_mode")
+        if requested_mode is not None:
+            if requested_mode not in RECEIPT_MODES:
+                h._json(400, {"error": "receipt_footer_mode must be off, exceptions, or always"})
+                return True
+            settings.set_setting(RECEIPT_MODE_SETTING, requested_mode)
+            settings.set_setting(RECEIPT_SETTING, requested_mode != "off")
+            changed = True
+        elif "receipt_footer" in body:
             settings.set_setting(RECEIPT_SETTING, bool(body.get("receipt_footer")))
-        h._json(200, {"receipt_footer": receipt_enabled(), "changed": changed})
+            changed = True
+        h._json(200, {"receipt_footer": receipt_enabled(), "receipt_footer_mode": receipt_mode(),
+                      "changed": changed})
         return True
     return False

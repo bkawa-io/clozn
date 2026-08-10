@@ -331,11 +331,17 @@ def fork(run: dict, sub, position, token=None, token_id=None, max_new: int = MAX
         applied_dials = steer_kw.pop("_dials", {})
         t0 = time.time()
         cont_steps = None
-        traced = _complete_traced(engine, forked_prompt, max_new, steer_kw)
-        if traced is not None:
-            continuation, cont_steps, finish = traced
+        # Branch Fan's reconstructed horizon is the parent's remaining recorded horizon.  A final
+        # response token therefore has a truthful zero-token continuation; do not turn that
+        # boundary case into an unrelated extra model generation.
+        if int(max_new) == 0:
+            continuation, finish = "", "branch_horizon_exhausted"
         else:
-            continuation, finish = _complete_greedy(engine, forked_prompt, max_new, steer_kw)
+            traced = _complete_traced(engine, forked_prompt, max_new, steer_kw)
+            if traced is not None:
+                continuation, cont_steps, finish = traced
+            else:
+                continuation, finish = _complete_greedy(engine, forked_prompt, max_new, steer_kw)
         if continuation is None:
             return None
         reply = prefix + forced_piece + continuation
@@ -429,6 +435,58 @@ def _exact_token_id(trace: dict, position: int, forced_piece: str, token_id_arg)
     return None
 
 
+def capture_exact_fork_context(run: dict, engine, *, runtime_identity: dict,
+                               worker_identity: dict) -> dict:
+    """Capture one exact-fork checkpoint context for reuse by one or more candidates.
+
+    This is the shared exact-first capture policy used by ``compat_fork`` and Branch Fan.  A capture
+    that never becomes available is an eligibility result, not an execution failure; callers may then
+    consult the existing reconstructed-replay policy.  Once a checkpoint is handed to a plan, later
+    exact execution failures must remain failures and must never be hidden behind reconstruction.
+    """
+    from clozn.replay.checkpoint_capture import CheckpointCaptureError, capture_parent_checkpoint
+
+    try:
+        capture = capture_parent_checkpoint(
+            run, engine, runtime_identity=runtime_identity, worker_identity=worker_identity)
+    except CheckpointCaptureError as exc:
+        return {"status": "ineligible",
+                "reason": _compat_reason("checkpoint_capture_request_invalid", str(exc))}
+    if capture.get("status") != "available":
+        reason = (capture.get("reasons") or [{}])[0]
+        return {"status": "ineligible", "reason": _compat_reason(
+            reason.get("code", "checkpoint_unavailable"),
+            reason.get("message", "no exact checkpoint could be captured"))}
+    return {
+        "status": "available",
+        "checkpoint_reference": deepcopy(capture["checkpoint_reference"]),
+        "capture": capture,
+    }
+
+
+def plan_exact_force_token(run: dict, request: dict, *, checkpoint_reference: dict,
+                           runtime_identity: dict, worker_identity: dict) -> dict:
+    """Plan one force-token candidate against an already captured exact checkpoint."""
+    from clozn.replay.execution_fork import plan_execution_fork
+
+    return plan_execution_fork(
+        run, request, checkpoint=checkpoint_reference,
+        runtime_identity=runtime_identity, worker_identity=worker_identity,
+    )
+
+
+def execute_exact_force_token(run: dict, plan: dict, engine, *, runtime_identity: dict,
+                              worker_identity: dict, reload_parent=None, cancel_check=None) -> dict:
+    """Execute one planned exact candidate using the canonical execution-fork executor."""
+    from clozn.replay.execution_fork_execute import execute_exact_fork
+
+    return execute_exact_fork(
+        run, plan, engine,
+        runtime_identity=runtime_identity, worker_identity=worker_identity,
+        reload_parent=reload_parent, cancel_check=cancel_check,
+    )
+
+
 def _try_exact(run: dict, engine, request: dict, runtime_identity: dict, worker_identity: dict) -> dict:
     """Attempt the exact path for one already-token-id-resolvable request: capture an ephemeral
     checkpoint of the immutable parent (clozn.replay.checkpoint_capture), plan against it
@@ -442,22 +500,13 @@ def _try_exact(run: dict, engine, request: dict, runtime_identity: dict, worker_
     checkpoint DID exist -- never masked behind reconstruction); or {"status": "ineligible",
     "reason": ...} when no exact state was honestly available at all (the caller falls through to the
     reconstructed-replay gate for that case)."""
-    from clozn.replay.checkpoint_capture import CheckpointCaptureError, capture_parent_checkpoint
-    try:
-        capture = capture_parent_checkpoint(
-            run, engine, runtime_identity=runtime_identity, worker_identity=worker_identity)
-    except CheckpointCaptureError as exc:
-        return {"status": "ineligible",
-                "reason": _compat_reason("checkpoint_capture_request_invalid", str(exc))}
+    capture = capture_exact_fork_context(
+        run, engine, runtime_identity=runtime_identity, worker_identity=worker_identity)
     if capture["status"] != "available":
-        reason = (capture.get("reasons") or [{}])[0]
-        return {"status": "ineligible", "reason": _compat_reason(
-            reason.get("code", "checkpoint_unavailable"),
-            reason.get("message", "no exact checkpoint could be captured"))}
+        return capture
 
-    from clozn.replay.execution_fork import plan_execution_fork
-    plan = plan_execution_fork(
-        run, request, checkpoint=capture["checkpoint_reference"],
+    plan = plan_exact_force_token(
+        run, request, checkpoint_reference=capture["checkpoint_reference"],
         runtime_identity=runtime_identity, worker_identity=worker_identity)
     if plan["classification"] != "exact_execution_fork":
         reason = (plan.get("reasons") or [{}])[0]
@@ -465,8 +514,7 @@ def _try_exact(run: dict, engine, request: dict, runtime_identity: dict, worker_
             reason.get("code", "exact_plan_unavailable"),
             reason.get("message", "the captured checkpoint did not plan as exact"))}
 
-    from clozn.replay.execution_fork_execute import execute_exact_fork
-    result = execute_exact_fork(
+    result = execute_exact_force_token(
         run, plan, engine,
         runtime_identity=runtime_identity, worker_identity=worker_identity,
         reload_parent=runlog.get_run)

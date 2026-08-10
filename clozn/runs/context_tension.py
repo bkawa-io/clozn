@@ -202,6 +202,111 @@ def _empty_result(run_id: str, *, scope: str, output_start: int | None, output_e
     }
 
 
+def collect_context_tension_evidence(run: dict, *, output_start: int | None = None,
+                                     output_end: int | None = None) -> dict:
+    """Collect the complete, pre-limit Context Tension evidence for read-side composition.
+
+    This is the one implementation of the Context Tension rule.  It returns metadata-only answer-span
+    intervals and every deterministically ranked opposing pair, before the public v1 route's display
+    limit is applied.  It is pure and does not validate or mutate a run, start a measurement, or call a
+    model/worker.  The returned dictionary is an internal composition seam, not a second public artifact.
+
+    ``output_start``/``output_end`` use the same optional Unicode-code-point range as
+    :func:`build_context_tension`; Suggested Breakpoints calls whole-answer mode so no public limit can
+    truncate the evidence it aggregates.
+    """
+    run = run if isinstance(run, dict) else {}
+    run_id = str(run.get("id") or "")
+    if not run_id:
+        raise ValueError("run.id must be a non-empty string")
+    if (output_start is None) != (output_end is None):
+        raise ValueError("output_start and output_end must both be provided or both omitted")
+    ranged = output_start is not None
+    if ranged:
+        if (not isinstance(output_start, int) or isinstance(output_start, bool)
+                or not isinstance(output_end, int) or isinstance(output_end, bool)):
+            raise ValueError("output_start and output_end must be integers")
+        if output_start < 0:
+            raise ValueError("output_start must be >= 0")
+        if output_end <= output_start:
+            raise ValueError("output_end must be greater than output_start")
+
+    response, unavailable_reason = geometry.resolve_answer_text(run)
+    if response is not None and ranged and output_end > len(response):
+        raise ValueError("output_end is beyond the recorded answer's length")
+
+    basis_sha256 = geometry.text_sha256(response) if response is not None else None
+    influence_map = run.get("influence_map")
+    gate_state, gate_reason = geometry.gate(influence_map)
+    if response is None:
+        return {
+            "state": "unavailable",
+            "reason": unavailable_reason,
+            "basis_sha256": basis_sha256,
+            "answer_spans": [],
+            "tensions": [],
+            "measurement": {"state": "unavailable", "reason": unavailable_reason},
+            "summary": _summary(0, [], []),
+        }
+    if gate_state is not None:
+        return {
+            "state": gate_state,
+            "reason": gate_reason,
+            "basis_sha256": basis_sha256,
+            "answer_spans": [],
+            "tensions": [],
+            "measurement": {"state": gate_state, "reason": gate_reason},
+            "summary": _summary(0, [], []),
+        }
+
+    geo, geo_reason = geometry.resolve_geometry(run_id, influence_map, response)
+    if geo is None:
+        return {
+            "state": "unavailable",
+            "reason": geo_reason,
+            "basis_sha256": basis_sha256,
+            "answer_spans": [],
+            "tensions": [],
+            "measurement": {"state": "unavailable", "reason": geo_reason},
+            "summary": _summary(0, [], []),
+        }
+
+    target_ids = geometry.overlapping_answer_ids(geo, output_start, output_end)
+    answer_spans = []
+    for native_id in target_ids:
+        answer_span_id = geo.answer_address_by_id.get(native_id)
+        interval = geo.answer_offsets.get(native_id)
+        if answer_span_id is None or not isinstance(interval, tuple) or len(interval) != 2:
+            continue
+        start, end = interval
+        if (not isinstance(start, int) or isinstance(start, bool)
+                or not isinstance(end, int) or isinstance(end, bool) or end < start):
+            continue
+        answer_spans.append({
+            "answer_span_id": answer_span_id,
+            "start": start,
+            "end": end,
+        })
+
+    all_tensions: list[dict] = []
+    for native_id in target_ids:
+        answer_span_id = geo.answer_address_by_id.get(native_id)
+        if answer_span_id is None:
+            continue
+        all_tensions.extend(_tensions_for_answer_span(run_id, geo, native_id, answer_span_id))
+    all_tensions.sort(key=_rank_strength)
+
+    measurement = geometry.available_measurement(influence_map)
+    return {
+        "state": "available",
+        "basis_sha256": basis_sha256,
+        "answer_spans": answer_spans,
+        "tensions": all_tensions,
+        "measurement": measurement,
+        "summary": _summary(len(target_ids), all_tensions, all_tensions),
+    }
+
+
 def build_context_tension(run: dict, *, output_start: int | None = None, output_end: int | None = None,
                           limit: int = DEFAULT_LIMIT, privacy: str = "metadata_only") -> dict:
     """Build and validate one derived `clozn.context-tension.v1` document.
@@ -240,46 +345,20 @@ def build_context_tension(run: dict, *, output_start: int | None = None, output_
         raise ValueError(f"limit must be between {MIN_LIMIT} and {MAX_LIMIT}")
 
     scope = "answer_range" if ranged else "whole_answer"
-    response, unavailable_reason = geometry.resolve_answer_text(run)
-    if response is not None and ranged and output_end > len(response):
-        raise ValueError("output_end is beyond the recorded answer's length")
-
-    if response is None:
+    evidence = collect_context_tension_evidence(
+        run, output_start=output_start, output_end=output_end,
+    )
+    if evidence["state"] != "available":
         return _empty_result(
             run_id, scope=scope, output_start=output_start, output_end=output_end,
-            state="unavailable", reason=unavailable_reason, basis_sha256=None,
+            state=evidence["state"], reason=evidence["reason"],
+            basis_sha256=evidence.get("basis_sha256"),
         )
-
-    basis_sha256 = geometry.text_sha256(response)
-    influence_map = run.get("influence_map")
-    gate_state, gate_reason = geometry.gate(influence_map)
-    if gate_state is not None:
-        return _empty_result(
-            run_id, scope=scope, output_start=output_start, output_end=output_end,
-            state=gate_state, reason=gate_reason, basis_sha256=basis_sha256,
-        )
-
-    geo, geo_reason = geometry.resolve_geometry(run_id, influence_map, response)
-    if geo is None:
-        return _empty_result(
-            run_id, scope=scope, output_start=output_start, output_end=output_end,
-            state="unavailable", reason=geo_reason, basis_sha256=basis_sha256,
-        )
-
-    target_ids = geometry.overlapping_answer_ids(geo, output_start, output_end)
-
-    all_tensions: list[dict] = []
-    for native_id in target_ids:
-        answer_span_id = geo.answer_address_by_id.get(native_id)
-        if answer_span_id is None:
-            continue
-        all_tensions.extend(_tensions_for_answer_span(run_id, geo, native_id, answer_span_id))
-
-    all_tensions.sort(key=_rank_strength)
+    all_tensions = evidence["tensions"]
     returned = all_tensions[:limit]
 
     target = {"scope": scope, "basis": "recorded_answer", "unit": "unicode_code_points",
-             "interval": "half_open", "basis_sha256": basis_sha256}
+             "interval": "half_open", "basis_sha256": evidence["basis_sha256"]}
     if ranged:
         target["start"] = output_start
         target["end"] = output_end
@@ -289,9 +368,9 @@ def build_context_tension(run: dict, *, output_start: int | None = None, output_
         "run_id": run_id,
         "privacy": "metadata_only",
         "target": target,
-        "measurement": geometry.available_measurement(influence_map),
+        "measurement": evidence["measurement"],
         "tensions": returned,
-        "summary": _summary(len(target_ids), all_tensions, returned),
+        "summary": _summary(evidence["summary"]["answer_spans_examined"], all_tensions, returned),
     }
     from clozn import schemas
     schemas.validate(document)
@@ -305,4 +384,5 @@ __all__ = [
     "SCHEMA_VERSION",
     "STATES",
     "build_context_tension",
+    "collect_context_tension_evidence",
 ]

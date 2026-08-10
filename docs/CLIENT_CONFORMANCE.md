@@ -128,8 +128,8 @@ There are two important boundaries:
    template fingerprint, exact native pipeline, schema subset, and evidence. No real model is prequalified,
    and the released Open WebUI two-request tool loop has not run successfully, so native-tool conformance
    remains open. Usage-enabled models can also make Open WebUI request
-   `stream_options.include_usage: true`, which Clozn rejects because it does not have honest usage
-   counts to return.
+   `stream_options.include_usage: true`; Clozn returns the worker-authoritative terminal usage chunk
+   when those counts are available.
 
 Cancellation through the Open WebUI browser-to-server-to-provider chain remains untested. The Ollama
 Python test is the current released-client cancellation evidence for Clozn itself.

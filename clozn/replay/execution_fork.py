@@ -404,7 +404,9 @@ def recorded_fork_prerequisites(parent_run: Mapping) -> dict:
         "token_pieces_available": pieces_available,
         "token_ids_available": ids_available,
         "token_alignment_available": token_alignment_available,
-        "recorded_token_count": len(pieces) if token_alignment_available else None,
+        # Reconstruction uses the response-piece coordinate even when a legacy run did not retain
+        # numeric ids.  Exact planning separately gates on token_alignment_available.
+        "recorded_token_count": len(pieces) if pieces_available else None,
         "final_prompt_available": final_prompt_available,
         "parent_runtime_identity_available": parent_runtime_projection(parent_run) is not None,
     }
@@ -519,6 +521,77 @@ def _normalize_change(change: Mapping) -> tuple[dict | None, dict | None]:
             "residual_write needs layer>=1, position>=0, and finite non-empty values",
         )
     return raw, None
+
+
+def normalize_intervention(change: Mapping) -> tuple[dict | None, dict | None]:
+    """Validate one execution-fork intervention using the canonical fork rules.
+
+    Test This is a dispatcher, not a second intervention validator.  Keep this small public seam
+    beside the existing private implementation so callers reuse the exact same allowed fields and
+    numeric ranges as ``plan_execution_fork``.
+    """
+    if not isinstance(change, Mapping):
+        return None, _reason("invalid_intervention", "intervention must be an object")
+    return _normalize_change(change)
+
+
+def sampling_intervention_contract() -> dict:
+    """Describe the sampler fields accepted by ``normalize_intervention``.
+
+    This is metadata for read-side affordances, not a second validator.  The executor/planner still
+    calls :func:`normalize_intervention`; keeping this description beside the canonical checks lets
+    Inspector clients render the same contract without maintaining a parallel range table elsewhere.
+    """
+    return {
+        "type": "object",
+        "properties": {
+            "temperature": {"type": "number", "minimum": 0},
+            "top_k": {"type": "integer", "minimum": 0},
+            "top_p": {"type": "number", "minimum": 0, "maximum": 1},
+            "seed": {"type": "integer", "minimum": 0},
+            "rep_penalty": {"type": "number", "exclusiveMinimum": 0},
+        },
+        "required": [],
+        "min_fields": 1,
+    }
+
+
+def recorded_sampling_state(parent_run: Mapping) -> dict | None:
+    """Return the parent's recorded sampler in Execution Fork field names, or ``None``.
+
+    This is only a read-side comparison aid for explicit sampler tests.  It does not infer a
+    sampler from a model default: an incomplete recorded state remains unavailable.  Greedy runs
+    use the worker wire's stable defaults so a requested ``temperature: 0`` can be recognized as
+    a no-op without starting an execution.
+    """
+    if not isinstance(parent_run, Mapping):
+        return None
+    # ``controlled.recorded_sampling_config`` is the existing behavior-bearing reader used by checkpoint
+    # and controlled replay code.  Import lazily to keep the planning module dependency-free at
+    # import time and avoid creating a new sampling-state interpretation here.
+    from clozn.replay.controlled import recorded_sampling_config
+
+    config = recorded_sampling_config(dict(parent_run))
+    if config is False:
+        return {
+            "temperature": 0.0,
+            "top_k": 0,
+            "top_p": 1.0,
+            "seed": 0,
+            "rep_penalty": 1.0,
+        }
+    if not isinstance(config, Mapping):
+        return None
+    return {
+        "temperature": config.get("temperature"),
+        "top_k": config.get("top_k"),
+        "top_p": config.get("top_p"),
+        "seed": config.get("seed"),
+        "rep_penalty": config.get("repeat_penalty", config.get("rep_penalty")),
+    } if all(config.get(name) is not None for name in
+             ("temperature", "top_k", "top_p", "seed")) and (
+                 config.get("repeat_penalty", config.get("rep_penalty")) is not None
+             ) else None
 
 
 def _checkpoint_projection(value: Any) -> dict | None:
@@ -655,10 +728,17 @@ def plan_execution_fork(
         return _finish(plan, change_error)
 
     prerequisites = recorded_fork_prerequisites(parent_run)
-    if not prerequisites["token_alignment_available"]:
+    # A reconstructed text replay only needs the recorded response pieces.  Exact execution still
+    # requires aligned numeric token ids, so the checkpoint path remains fail-closed below.
+    if not prerequisites["token_pieces_available"]:
         return _finish(plan, _reason(
             "missing_response_token_boundary",
-            "the parent needs complete, aligned response token pieces and token ids",
+            "the parent needs complete recorded response token pieces",
+        ))
+    if supplied_checkpoint and not prerequisites["token_alignment_available"]:
+        return _finish(plan, _reason(
+            "missing_response_token_boundary",
+            "exact execution needs complete, aligned response token pieces and token ids",
         ))
     token_count = prerequisites["recorded_token_count"]
     if position >= token_count:

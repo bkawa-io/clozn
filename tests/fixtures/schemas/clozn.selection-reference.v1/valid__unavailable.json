@@ -1,0 +1,18 @@
+{
+  "schema_version": "clozn.selection-reference.v1",
+  "state": "unavailable",
+  "reference": null,
+  "run_id": "run_fixture",
+  "selection": {"kind": "context_span", "source_span_id": "span_aaaaaaaaaaaaaaaaaaaaaaaa"},
+  "binding": null,
+  "integrity": {
+    "algorithm": "sha256",
+    "scope": "encoded_payload",
+    "checksum_hex_chars": 24,
+    "checksum": null,
+    "status": "unavailable"
+  },
+  "api_href": null,
+  "deep_link": {"run_id": "run_fixture", "selection_ref": null},
+  "reason": {"code": "source_span_unavailable", "message": "source span cannot be bound"}
+}

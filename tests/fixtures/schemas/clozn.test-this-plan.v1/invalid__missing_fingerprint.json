@@ -1,0 +1,9 @@
+{
+  "schema_version": "clozn.test-this-plan.v1",
+  "run_id": "run_123",
+  "selection": {"kind": "response_token", "position": 37},
+  "test": {"kind": "try_alternative", "alternative_rank": 0},
+  "resolution": {"state": "ready", "operation": "force_token"},
+  "resolved_test": {"operation": "force_token"},
+  "execution": {"state": "ready", "backend": "force_token_fork", "fidelity_policy": "exact_first", "live_state": "not_checked"}
+}

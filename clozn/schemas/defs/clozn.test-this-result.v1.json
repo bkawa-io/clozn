@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.test-this-result.v1",
+  "title": "Clozn Test This result",
+  "description": "A thin execution result over an ordinary child run or the existing Branch Fan artifact. Underlying execution-fork, Branch Fan, and model-diff evidence remains authoritative; this wrapper is not an experiment object or semantic explanation.",
+  "type": "object",
+  "required": ["schema_version", "run_id", "selection", "test", "operation", "outcome", "result", "artifact", "comparison"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.test-this-result.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "selection": {"type": "object", "additionalProperties": true},
+    "test": {"type": "object", "additionalProperties": true},
+    "operation": {"enum": ["force_token", "branch_fan", "sampling_fork", "sampler_sensitivity", "influence_counterfactual", "context_bisect"]},
+    "outcome": {"enum": ["completed", "partial", "unavailable", "cancelled", "failed"]},
+    "result": {"type": "object", "additionalProperties": true},
+    "artifact": {"type": ["object", "null"], "additionalProperties": true},
+    "comparison": {"type": ["object", "null"], "additionalProperties": true},
+    "child_run_id": {"type": "string", "minLength": 1}
+  }
+}

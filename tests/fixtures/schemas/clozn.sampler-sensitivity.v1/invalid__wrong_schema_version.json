@@ -1,0 +1,13 @@
+{
+  "schema_version": "clozn.sampler-sensitivity.v2",
+  "test_id": "sampler_sensitivity_aaaaaaaaaaaaaaaaaaaaaaaa",
+  "parent_run_id": "run_fixture",
+  "position": 0,
+  "baseline_sampler": {"mode": "sample"},
+  "recipe": {"id": "nearby_v1"},
+  "execution": {},
+  "probes": [],
+  "parameter_sensitivity": {},
+  "seed_sensitivity": {},
+  "summary": {}
+}

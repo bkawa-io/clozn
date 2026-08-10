@@ -701,6 +701,28 @@ int main(int argc, char** argv) {
                 return;
             }
         }
+        // Public OpenAI stop sequences use the same native additional-stop matcher as
+        // template-provided assistant terminators.  The Python gateway validates the public
+        // bounds; the worker validates the wire shape again because this is also a private
+        // protocol boundary.  Never trim a completed response in the gateway after the fact.
+        if (body.contains("stop") && !body["stop"].is_null()) {
+            if (!body["stop"].is_array() || body["stop"].empty()) {
+                res.status = 400;
+                res.set_content(json{{"error", "stop must be a non-empty array of strings"}}.dump(),
+                                "application/json");
+                return;
+            }
+            if (!chat_grammar) chat_grammar.emplace();
+            for (const json& value : body["stop"]) {
+                if (!value.is_string() || value.get<std::string>().empty()) {
+                    res.status = 400;
+                    res.set_content(json{{"error", "stop sequences must be non-empty strings"}}.dump(),
+                                    "application/json");
+                    return;
+                }
+                chat_grammar->additional_stops.push_back(value.get<std::string>());
+            }
+        }
         const GenerateConfig cfg = config_from(body);
         const SampleConfig sample = sample_from(body);
         const bool stream = body.value("stream", false);
@@ -1091,6 +1113,7 @@ int main(int argc, char** argv) {
                 throw;
             }
         };
+        const bool user_stop_active = body.contains("stop") && !body["stop"].is_null();
         const std::string id = make_id(is_infill ? "infill-" : "cmpl-");
         const char* object = is_infill ? "infill" : "text_completion";
 
@@ -1099,9 +1122,9 @@ int main(int argc, char** argv) {
             // SSE: each §5.1 event becomes a `data: <json>\n\n` frame — the native streaming wire.
             res.set_chunked_content_provider(
                 "text/event-stream",
-                [run, id, object, model, prompt_ids, suffix_ids, protocol, state_full, substrate, mask_token,
-                 &jlens, lens_on, lens_layer, lens_topk, lens_every, &cancel_registry, plane, ckpt_id_out,
-                 worker_generation_id]
+            [run, id, object, model, prompt_ids, suffix_ids, protocol, state_full, substrate, mask_token,
+             &jlens, lens_on, lens_layer, lens_topk, lens_every, &cancel_registry, plane, ckpt_id_out,
+                 worker_generation_id, user_stop_active]
                 (size_t, httplib::DataSink& sink) {
                     auto write = [&](const std::string& s) { return sink.write(s.data(), s.size()); };
                     StreamEnvelope env{id, write};        // stamps req + monotonic seq on every frame
@@ -1129,6 +1152,11 @@ int main(int argc, char** argv) {
                                             {"text", r.text}, {"finish_reason", finish_reason(r.reason)},
                                             {"board", r.board},
                                             {"layout", board_layout_json(*model, r.board, mask_token)}};
+                        final_frame["usage"] = {{"prompt_tokens", static_cast<int>(prompt_ids.size())},
+                                                 {"completion_tokens", r.new_tokens}};
+                        final_frame["termination"] = {{"kind", user_stop_active && r.reason == "stop"
+                                                               ? "user_stop_sequence"
+                                                               : (r.reason == "stop" ? "template_stop_sequence" : r.reason)}};
                         // checkpoint_on_finish + stream:true used to save a checkpoint the caller could
                         // never address (the id was only ever attached to the NON-streaming response) --
                         // an orphan checkpoint on every streamed generation that asked for one. Fixed by
@@ -1196,6 +1224,11 @@ int main(int argc, char** argv) {
                         final_frame["diverged"] = r.diverged;
                         final_frame["diverged_at"] = r.diverged_at;
                     }
+                    final_frame["usage"] = {{"prompt_tokens", static_cast<int>(prompt_ids.size())},
+                                             {"completion_tokens", r.new_tokens}};
+                    final_frame["termination"] = {{"kind", user_stop_active && r.reason == "stop"
+                                                           ? "user_stop_sequence"
+                                                           : (r.reason == "stop" ? "template_stop_sequence" : r.reason)}};
                     // See the protocol-frame branch above: checkpoint_on_finish + stream:true must not
                     // orphan the checkpoint it saves.
                     if (!ckpt_id_out->empty()) {
@@ -1248,6 +1281,9 @@ int main(int argc, char** argv) {
                 {"layout", board_layout_json(*model, r.board, mask_token)},
                 {"usage", {{"prompt_tokens", static_cast<int>(prompt_ids.size())},
                            {"completion_tokens", r.new_tokens}, {"steps_total", r.steps_total}}},
+                {"termination", {{"kind", user_stop_active && r.reason == "stop"
+                                      ? "user_stop_sequence"
+                                      : (r.reason == "stop" ? "template_stop_sequence" : r.reason)}}},
             };
             if (want_ckpt && !ckpt_id_out->empty()) {
                 resp["checkpoint_id"] = *ckpt_id_out;   // checkpoint_on_finish: the live-KV save

@@ -6,8 +6,8 @@ that Clozn cannot honor return an OpenAI-shaped HTTP 400 instead of being silent
 
 The field inventory was checked against OpenAI's official
 [Chat Completions](https://developers.openai.com/api/reference/resources/chat/methods/create) reference.
-OpenAI recommends the Responses API for new platform integrations; Clozn does not currently implement
-`/v1/responses`.
+OpenAI recommends the Responses API for new platform integrations; Clozn implements only the narrow
+non-streaming text subset documented below.
 
 ## Endpoint matrix
 
@@ -16,7 +16,7 @@ OpenAI recommends the Responses API for new platform integrations; Clozn does no
 | `GET /v1/models` | supported | one currently loaded local model |
 | `POST /v1/chat/completions` | supported subset | text, plus fail-closed qualified tools/structured output; one choice; streaming or non-streaming |
 | `POST /v1/completions` | retired | returns HTTP 410 with code `endpoint_retired`; use Chat Completions |
-| `POST /v1/responses` | unsupported | returns the normal route-level 404 |
+| `POST /v1/responses` | supported subset | non-streaming text `input` with optional `instructions`; uses the same instrumented chat path |
 | embeddings, audio, images, files, batches, fine-tuning | unsupported | no routes |
 | stored chat list/get/update/delete | unsupported | Clozn's local run journal is a different API |
 
@@ -32,10 +32,12 @@ Clozn state events never leak into a standard OpenAI stream.
 | `max_tokens` | supported | positive integer |
 | `max_completion_tokens` | supported alias | normalized to `max_tokens`; sending both is a 400 |
 | `stream` | supported | boolean; standard `chat.completion.chunk` SSE + `[DONE]` |
+| `stop` | supported subset | one string or 1--4 strings; native worker termination and cross-token matching |
+| `stream_options` | supported subset | only `include_usage` boolean; `true` adds an exact terminal usage chunk |
 | `temperature`, `top_p`, `seed` | supported | forwarded into the request's sampler; explicit fields override Studio's persisted sampling default |
 | `n` | one only | `1`/null accepted and stripped; any other value is a 400 |
 | `top_k`, `repeat_penalty` | Clozn extensions | forwarded to the engine sampler |
-| `clozn_trust`, `clozn_receipt`, `clozn_lens` | Clozn extensions | opt-in confidence spans, receipt delivery, and live J-lens readout |
+| `clozn_trust`, `clozn_receipt`, `clozn_receipt_mode`, `clozn_lens` | Clozn extensions | opt-in confidence spans, receipt delivery (`off`, `exceptions`, or `always`), and live J-lens readout |
 | `clozn_sources` | Clozn extension | optional list of `{message_index, source_id, label?}` records; IDs must be unique and are carried unchanged into Context Receipt/source evidence |
 | `tools` | qualified subset | up to 32 strict function definitions; Clozn returns at most one call and never executes it |
 | `tool_choice` | qualified subset | `"auto"` activates the one-tool contract; `"none"` is an explicit text bypass |
@@ -59,22 +61,30 @@ ignored for client interoperability:
 | `frequency_penalty`, `presence_penalty` | `0` or null |
 | `logprobs` | `false` or null |
 | `top_logprobs` | `0` or null |
-| `stop`, `audio`, `prediction` | null only |
+| `audio`, `prediction` | null only |
 | `logit_bias`, `metadata` | empty object or null |
 | deprecated `functions` | empty list or null |
 | deprecated `function_call` | `"none"` or null |
 | `modalities` | `["text"]` or null |
 | `store` | `false` or null |
 | `service_tier` | `"auto"`, `"default"`, or null |
-| `stream_options` | `{"include_usage":false}` or null |
+| `stream_options` | other fields are rejected; `include_usage` is supported |
 
-Any behavior-bearing value outside the supported subset—stop sequences, nonzero frequency/presence
-penalties, multiple choices, requested stream usage, and so on—is a 400 with that field in `error.param`.
+Any behavior-bearing value outside the supported subset—nonzero frequency/presence penalties, multiple
+choices, and so on—is a 400 with that field in `error.param`.
 Unknown top-level fields are also rejected.
 
 `clozn_sources` is journal metadata only: it does not alter the standard message list or prompt text.
 It is refused on request modes that cannot preserve the identity contract (currently structured-I/O
 qualification and guard-v1 transforms), rather than being silently dropped.
+
+## Responses subset
+
+`POST /v1/responses` accepts `model`, optional string `instructions`, required string `input` (and
+optionally a text-only message array), `temperature`, `top_p`, and `max_output_tokens`. It is
+`stream:false` only. Multimodal input, tools, and unknown behavior-bearing fields fail closed. The request
+is normalized into the same text-chat messages and instrumented substrate used by Chat Completions, so it
+creates exactly one ordinary Clozn run and uses the worker's authoritative usage counts.
 
 ## Qualified structured I/O (Phase 2.8)
 
@@ -91,7 +101,7 @@ The public contract is intentionally narrow:
 - Up to 32 strict function definitions and at most one returned call. `tool_choice` supports `"auto"` and
   `"none"`; tools and a non-text `response_format` are mutually exclusive. Clozn serializes the call for
   the client but never executes it. Active structured I/O cannot be combined with `clozn_trust`,
-  `clozn_receipt`, or `clozn_lens` in this slice.
+  `clozn_receipt`, `clozn_receipt_mode`, or `clozn_lens` in this slice.
 - A following request may carry the assistant's single `tool_calls` item and one immediately matching
   `role:"tool"` result. These are validated and sent as message history to the native template renderer
   without changing the journal's original OpenAI message history; the continuation may omit `tools` when it
@@ -120,9 +130,12 @@ ID/finish decision, and outcome in the run's `clozn.output_contract.v2` evidence
 returned unless this evidence persists; a journal failure is a typed 502. An unqualified request fails before
 generation and creates no run.
 
-This is a model-free-tested native/gateway contract, not a broad local-model compatibility claim. Real
-exact-model qualification artifacts from the live battery and a successful Open WebUI two-request tool loop
-remain acceptance work for Phase 2.8.
+This is a model-free-tested native/gateway contract, not a broad local-model compatibility claim. Exact
+qualification remains opt-in through the existing registry/artifact path. `clozn serve --structured auto`
+keeps the current fail-closed behavior, `--structured off` rejects active structured requests, and
+`--structured required` refuses startup unless all three supported structured modes are exactly qualified.
+The bounded real-model qualification battery and a successful Open WebUI two-request tool loop remain
+separate acceptance work.
 
 ## Retired legacy Completions
 
@@ -151,6 +164,9 @@ loopback-only protocol is not part of the public compatibility surface.
   finish/failure state.
 - Non-streaming chat responses may add `clozn_run_id` and `X-Clozn-Run-Id`; opt-in Clozn fields are additive.
 - Token usage is omitted when unknown. Clozn no longer fabricates zero prompt/completion token counts.
+- When available, usage comes from the executing worker's final rendered prompt and decoder accounting;
+  the gateway never re-tokenizes messages. `include_usage:true` is emitted as a final choices-empty SSE
+  chunk before `[DONE]`.
 - Finish reasons map worker EOS to `stop` and token limits to `length`. A worker failure is an error, never a
   successful `stop`.
 - A proven `length` stop also adds `clozn_warnings: [{"code":"output_truncated", ...}]` to non-stream

@@ -1,0 +1,13 @@
+{
+  "schema_version": "clozn.context-bisect-plan.v1",
+  "search_id": "context_bisect_0123456789abcdef01234567",
+  "parent_run_id": "run_123",
+  "parent_execution_fingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "influence": {"source_span_id": "span_source", "answer_span_id": "span_answer", "effect": "supports", "evidence_state": "observed"},
+  "intervention": {"kind": "neutralize", "recipe": "clozn.matched_length_neutral_filler.v1"},
+  "target": {"basis": "recorded_answer", "start": 0, "end": 8, "unit": "unicode_code_points", "interval": "half_open"},
+  "span_resolution": {"state": "available", "basis": "message", "length": 80},
+  "root_region": {"region_id": "bisect_region_0123456789abcdef01234567", "root_interval": {"start": 0, "end": 80}},
+  "search": {"algorithm": "bounded_binary_partition_v1", "order": "breadth_first", "max_depth": 3, "max_runs": 8, "max_seconds": 120, "min_region_chars": 32},
+  "execution": {"state": "ready", "requires_generation": true, "requires_full_reprefill": true, "fidelity": "controlled_regeneration", "live_state": "not_checked", "decode_regime": {"source": "recorded_greedy", "matches_recorded_decode": true}}
+}

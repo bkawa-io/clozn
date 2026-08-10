@@ -300,7 +300,8 @@ def _native_structured_processor(contract: dict, qualification: dict):
     return process
 
 
-def _buffered_structured_sse(h, parsed: dict, *, model: str, run_id: str | None) -> None:
+def _buffered_structured_sse(h, parsed: dict, *, model: str, run_id: str | None,
+                             usage: dict | None = None, include_usage: bool = False) -> None:
     """Emit protocol-valid SSE only after the complete model output has validated."""
     from clozn.server.http_policy import send_cors_headers
     from clozn.server.structured_io import openai_stream_deltas
@@ -316,14 +317,16 @@ def _buffered_structured_sse(h, parsed: dict, *, model: str, run_id: str | None)
     send_cors_headers(h)
     h.end_headers()
 
-    def write(delta, finish_reason=None, extension=None):
+    def write(delta, finish_reason=None, extension=None, usage_value=None):
         chunk = {
             "id": completion_id,
             "object": "chat.completion.chunk",
             "created": created,
             "model": model,
-            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+            "choices": [] if usage_value is not None else [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
         }
+        if usage_value is not None:
+            chunk["usage"] = usage_value
         if extension:
             chunk.update(extension)
         h.wfile.write(("data: " + json.dumps(chunk) + "\n\n").encode("utf-8"))
@@ -332,6 +335,8 @@ def _buffered_structured_sse(h, parsed: dict, *, model: str, run_id: str | None)
         for delta in stream["deltas"]:
             write(delta)
         write({}, stream["finish_reason"], {"clozn_run_id": run_id} if run_id else None)
+        if include_usage and usage is not None:
+            write({}, usage_value=usage)
         h.wfile.write(b"data: [DONE]\n\n")
         h.wfile.flush()
     except OSError:
@@ -369,23 +374,37 @@ def try_post(h, p, body):
         from clozn.server.generation_gateway import native_completion
         native_completion(h, body)
         return True
-    if p != "/v1/chat/completions":   # OpenAI-compatible: chat with memory prefix + tone steering applied
+    responses_mode = p == "/v1/responses"
+    if p not in {"/v1/chat/completions", "/v1/responses"}:
         return False
-    from clozn.server.openai_compat import CompatibilityError, normalize_chat_request
+    from clozn.server.openai_compat import (
+        CompatibilityError, normalize_chat_request, normalize_responses_request,
+    )
     try:
-        body, calibration_task = _calibration_task(body)
-        body = normalize_chat_request(body)
+        if responses_mode:
+            body = normalize_responses_request(body)
+            calibration_task = None
+        else:
+            body, calibration_task = _calibration_task(body)
+            body = normalize_chat_request(body)
     except CompatibilityError as exc:
         _api_error(h, 400, str(exc), param=exc.param, code=exc.code)
         return True
     except ValueError as exc:
         _api_error(h, 400, str(exc), param="clozn_task", code="invalid_parameter")
         return True
+    from clozn.server.routes.receipt_link import request_receipt_mode
+    footer_mode = request_receipt_mode(body)
     structured = body.pop("_structured_contract", None)
+    if structured and getattr(ctx, "STRUCTURED_MODE", "auto") == "off":
+        _api_error(h, 422, "structured I/O is disabled for this runtime",
+                   param="tools" if structured.get("mode") == "tools" else "response_format",
+                   code="structured_io_disabled")
+        return True
     source_metadata = body.pop("_clozn_sources", [])
     from clozn.server.model_routing import select_for_handler
     selection = select_for_handler(
-        h, body, surface="openai", route="/v1/chat/completions"
+        h, body, surface="openai", route=("/v1/responses" if responses_mode else "/v1/chat/completions")
     )
     if selection is None:
         return True
@@ -546,22 +565,28 @@ def try_post(h, p, body):
 
     if body.get("stream") and output_processor is None and getattr(sub, "chat_stream", None):
         from clozn.server import sse
-        from clozn.server.routes.receipt_link import receipt_enabled
         # F1 live lens: clozn_lens {layer?, topk?, every?} (or true) is a clozn extension -- absent for
         # standard OpenAI clients, so their streams stay byte-identical (same opt-in rule as clozn_trust).
         # receipt: the in-band footer as a final content chunk (the one ambient surface).
         sse.sse_chat(h, msgs, mx, selected_model, lens=body.get("clozn_lens"), sample=sample,
-                     receipt=body.get("clozn_receipt", receipt_enabled()),
+                     stop=body.get("stop"), include_usage=bool((body.get("stream_options") or {}).get("include_usage")),
+                     receipt_mode=footer_mode,
                      journal_messages=journal_messages,
                      task=calibration_task, sections=section_manifest)
         return True
     from clozn.server.generation_gateway import instrumented_chat
     run_meta = {}
+    if responses_mode:
+        run_meta["responses_api"] = {
+            "input_kind": body.get("_responses_input_kind", "string"),
+            "instructions": bool(body.get("_responses_instructions")),
+        }
     if calibration_task is not None:
         run_meta["clozn_task"] = calibration_task
     try:
         generated = instrumented_chat(h, msgs, model=selected_model, max_tokens=mx,
-                                      sample=sample, source="openai_api",
+                                      sample=sample, source=("openai_responses" if responses_mode else "openai_api"),
+                                      stop=body.get("stop"),
                                       journal_messages=journal_messages,
                                       extra_meta=run_meta or None,
                                       output_processor=output_processor,
@@ -591,6 +616,8 @@ def try_post(h, p, body):
         if body.get("stream"):
             _buffered_structured_sse(
                 h, parsed, model=selected_model, run_id=generated.run_id,
+                usage=generated.usage,
+                include_usage=bool((body.get("stream_options") or {}).get("include_usage")),
             )
             return True
         wire = serialize_openai_result(parsed)
@@ -603,6 +630,8 @@ def try_post(h, p, body):
         }
         if generated.run_id:
             resp["clozn_run_id"] = generated.run_id
+        if generated.usage:
+            resp["usage"] = generated.usage
         h._json(200, resp, extra_headers=(
             {"X-Clozn-Run-Id": generated.run_id} if generated.run_id else None
         ))
@@ -610,6 +639,29 @@ def try_post(h, p, body):
     reply = generated.reply
     trace_steps = generated.trace_steps
     rid = generated.run_id
+    if responses_mode:
+        response_id = "resp_" + secrets.token_hex(8)
+        response = {
+            "id": response_id,
+            "object": "response",
+            "created_at": int(time.time()),
+            "status": "completed",
+            "model": selected_model,
+            "output": [{
+                "id": "msg_" + secrets.token_hex(8),
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": reply, "annotations": []}],
+            }],
+            "output_text": reply,
+        }
+        if generated.usage:
+            response["usage"] = generated.usage
+        if rid:
+            response["clozn_run_id"] = rid
+        h._json(200, response, extra_headers={"X-Clozn-Run-Id": rid} if rid else None)
+        return True
     openai_fr = generated.public_finish_reason
     resp = {"id": "chatcmpl-clozn", "object": "chat.completion",
            "created": int(time.time()), "model": selected_model,
@@ -623,6 +675,8 @@ def try_post(h, p, body):
     extra_headers = {"X-Clozn-Run-Id": rid} if rid else None
     if rid:
         resp["clozn_run_id"] = rid
+    if generated.usage:
+        resp["usage"] = generated.usage
     if generated.warnings:
         resp["clozn_warnings"] = generated.warnings
         extra_headers = dict(extra_headers or {})
@@ -632,14 +686,13 @@ def try_post(h, p, body):
     # glass-box line + the /r/<id> permalink appended to the reply). Off by default; the logged run
     # stays the un-footered reply, only the returned content carries the footer. (Footers are the one
     # ambient surface; the earlier desktop-push path was dropped as unneeded complexity.)
-    from clozn.server.routes.receipt_link import receipt_enabled
-    if rid and body.get("clozn_receipt", receipt_enabled()):
+    if rid and footer_mode != "off":
         try:
             import clozn.runs.store as _runlog
             from clozn.runs import receipt_footer
             host = h.headers.get("Host") or "127.0.0.1"
             link = f"http://{host}/r/{rid}"
-            foot = receipt_footer.footer(_runlog.get_run(rid), link)
+            foot = receipt_footer.footer(_runlog.get_run(rid), link, mode=footer_mode)
             if foot:
                 resp["choices"][0]["message"]["content"] = reply + foot
                 resp["clozn_receipt_url"] = link

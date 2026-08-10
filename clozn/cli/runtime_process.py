@@ -134,6 +134,8 @@ class RuntimeConfig:
     flags: Mapping[str, object] = field(default_factory=dict)
     prefer_gpu: bool = True
     host: str = "127.0.0.1"
+    public_model_id: str | None = None
+    structured_mode: str = "auto"
     worker_port: int | None = None
     gateway_boot_timeout: float = 45.0
     worker_boot_timeout: float = 180.0
@@ -148,6 +150,10 @@ class RuntimeConfig:
         object.__setattr__(self, "flags", MappingProxyType(dict(self.flags)))
         definitions = tuple(self.worker_definitions)
         object.__setattr__(self, "worker_definitions", definitions)
+        if self.structured_mode not in {"auto", "off", "required"}:
+            raise WorkerRegistryConfigError(
+                "structured_mode must be auto, off, or required"
+            )
         object.__setattr__(
             self, "preload_model_ids", tuple(self.preload_model_ids)
         )
@@ -511,6 +517,8 @@ def _spawn_managed_runtime_inprocess(
             port=config.public_port,
             engine=control_engine,
             model_router=router,
+            public_model_id=config.public_model_id,
+            structured_mode=config.structured_mode,
         )
         gateway = InProcessGateway(server)
         gateway.start()
@@ -600,6 +608,8 @@ def _spawn_legacy_runtime_inprocess(
             port=config.public_port,
             engine=engine,
             sub=sub,
+            public_model_id=config.public_model_id,
+            structured_mode=config.structured_mode,
         )
         gateway = InProcessGateway(server)
         gateway.start()

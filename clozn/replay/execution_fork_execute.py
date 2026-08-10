@@ -35,6 +35,170 @@ def _text_sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _worker_generation_steps(reply: Mapping) -> list[dict] | None:
+    """Extract worker-supplied token evidence through the canonical trace normalizer.
+
+    Exact execution must never fabricate a child timeline by tokenizing its returned text.  Workers
+    that expose generation-time ``steps`` or folded autoregressive ``events`` can therefore hand us
+    an honest trace; older workers simply leave the comparison trace unavailable.
+    """
+    from clozn.runs.trace import accumulate_ar_events, normalize_trace
+
+    candidates = []
+    if isinstance(reply.get("steps"), list):
+        candidates.append(reply["steps"])
+    raw_trace = reply.get("trace")
+    if isinstance(raw_trace, (list, Mapping)):
+        candidates.append(raw_trace)
+    for key in ("events", "generation_events", "frames"):
+        if isinstance(reply.get(key), list):
+            candidates.append(accumulate_ar_events(reply[key]))
+    for raw in candidates:
+        normalized = normalize_trace(raw)
+        steps = normalized.get("steps")
+        if isinstance(steps, list) and steps:
+            return [deepcopy(step) for step in steps if isinstance(step, Mapping)]
+    return None
+
+
+def _recorded_forced_step(parent_steps: list[dict], position: int,
+                          execution_change: Mapping) -> dict | None:
+    """Build the forced boundary step from recorded evidence, never the committed probability."""
+    if position < 0 or position >= len(parent_steps):
+        return None
+    forced_piece = execution_change.get("token_piece")
+    forced_id = execution_change.get("token_id")
+    source = parent_steps[position]
+    if not isinstance(source, Mapping):
+        return None
+    chosen = {"index": position, "piece": forced_piece if isinstance(forced_piece, str) else ""}
+    if forced_id is not None:
+        chosen["token_id"] = forced_id
+    # The distribution before the intervention is unchanged.  Only copy distribution-level
+    # alternatives/entropy; the committed token's own probability is deliberately not copied.
+    if isinstance(source.get("alternatives"), list):
+        chosen["alternatives"] = deepcopy(source["alternatives"])
+    for key in ("topk_entropy", "entropy"):
+        if source.get(key) is not None:
+            chosen[key] = source[key]
+    for alt in source.get("alternatives") or []:
+        if not isinstance(alt, Mapping):
+            continue
+        alt_piece = alt.get("piece", alt.get("text"))
+        alt_id = alt.get("token_id", alt.get("id"))
+        same_piece = forced_piece is not None and alt_piece == forced_piece
+        same_id = forced_id is not None and alt_id == forced_id
+        if not (same_piece or same_id):
+            continue
+        if forced_id is None and isinstance(alt_id, int) and not isinstance(alt_id, bool):
+            chosen["token_id"] = alt_id
+        probability = alt.get("prob", alt.get("confidence", alt.get("conf")))
+        if isinstance(probability, (int, float)) and not isinstance(probability, bool):
+            if math.isfinite(float(probability)):
+                chosen["prob"] = probability
+        break
+    return chosen
+
+
+def _exact_child_trace(parent: Mapping, plan: Mapping, reply: Mapping) -> dict | None:
+    """Assemble an exact child's trace from parent + worker generation evidence only.
+
+    The worker may return the forced token as the first generated step, or may expose only the fresh
+    continuation after the forced intervention.  Both forms are joined using the recorded forced
+    piece.  Any mismatch is treated as unavailable comparison evidence rather than repaired by
+    retokenizing text.
+    """
+    from clozn.runs.trace import normalize_trace, steps_to_trace
+
+    worker_steps = _worker_generation_steps(reply)
+    if not worker_steps:
+        return None
+    parent_trace = normalize_trace(parent.get("trace") or {})
+    parent_steps = parent_trace.get("steps")
+    if not isinstance(parent_steps, list):
+        return None
+    position = plan["request"]["position"]
+    change = plan["request"].get("execution_change") or plan["request"].get("change") or {}
+    reply_text = reply.get("text")
+    if not isinstance(reply_text, str):
+        return None
+
+    worker_text = "".join(str(step.get("piece", "")) for step in worker_steps)
+    parent_prefix_text = "".join(
+        str(piece) for piece in (parent.get("trace", {}).get("tokens") or [])[:position]
+    )
+
+    # Sampling interventions do not have a forced boundary piece.  The worker's generation-time
+    # steps are therefore the complete changed suffix (or, on newer workers, the full generated
+    # child timeline).  Join that evidence with the immutable parent prefix without retokenizing
+    # the returned text.  This keeps exact sampler children comparable while preserving the same
+    # fail-closed behavior as the force-token path.
+    if change.get("type") == "sampling":
+        if worker_text == parent_prefix_text + reply_text:
+            worker_prefix_pieces = [str(step.get("piece", "")) for step in worker_steps[:position]]
+            parent_prefix_pieces = list((parent.get("trace", {}).get("tokens") or [])[:position])
+            if worker_prefix_pieces == parent_prefix_pieces:
+                worker_steps = worker_steps[position:]
+                worker_text = "".join(str(step.get("piece", "")) for step in worker_steps)
+        if worker_text != reply_text:
+            return None
+        combined = [deepcopy(step) for step in parent_steps[:position]] + [
+            deepcopy(step) for step in worker_steps
+        ]
+        for index, step in enumerate(combined):
+            step["index"] = index
+        trace = steps_to_trace(combined)
+        tokens = trace.get("tokens")
+        expected = parent_prefix_text + reply_text
+        if not isinstance(tokens, list) or "".join(tokens) != expected:
+            return None
+        return trace
+
+    forced_piece = change.get("token_piece")
+    if not isinstance(forced_piece, str) or not forced_piece:
+        return None
+    # A newer private worker may return the complete generated child timeline rather than only the
+    # post-boundary suffix.  Strip the already-recorded immutable prefix by token evidence, never by
+    # searching/fuzzy-matching response text.
+    if worker_text == parent_prefix_text + reply_text:
+        parent_prefix_pieces = list((parent.get("trace", {}).get("tokens") or [])[:position])
+        worker_prefix_pieces = [str(step.get("piece", "")) for step in worker_steps[:position]]
+        if worker_prefix_pieces == parent_prefix_pieces:
+            worker_steps = worker_steps[position:]
+            worker_text = "".join(str(step.get("piece", "")) for step in worker_steps)
+    prefix_steps = [deepcopy(step) for step in parent_steps[:position]]
+    suffix_steps = worker_steps
+    forced_step = _recorded_forced_step(parent_steps, position, change)
+
+    # Some execution workers report the whole child suffix, including the forced token.  If the
+    # worker omitted that intervention step, prepend only its recorded boundary evidence.
+    if worker_text == reply_text:
+        if worker_steps and worker_steps[0].get("piece") == forced_piece and forced_step is not None:
+            first = dict(worker_steps[0])
+            for key in ("token_id", "prob"):
+                if key not in first and key in forced_step:
+                    first[key] = forced_step[key]
+            suffix_steps = [first, *worker_steps[1:]]
+    elif forced_step is not None and reply_text.startswith(forced_piece) \
+            and worker_text == reply_text[len(forced_piece):]:
+        suffix_steps = [forced_step, *worker_steps]
+    else:
+        return None
+
+    # A full-suffix worker response is expected here.  Prefix it with the immutable parent's exact
+    # steps and reindex through the shared normalizer; no token IDs or pieces are guessed.
+    combined = prefix_steps + [deepcopy(step) for step in suffix_steps]
+    for index, step in enumerate(combined):
+        step["index"] = index
+    trace = steps_to_trace(combined)
+    tokens = trace.get("tokens")
+    expected = "".join(str(piece) for piece in parent.get("trace", {}).get("tokens", [])[:position]) \
+        + reply_text
+    if not isinstance(tokens, list) or "".join(tokens) != expected:
+        return None
+    return trace
+
+
 def _error(stage: str, code: str, message: str) -> dict:
     return {"stage": stage, "code": code, "message": message}
 
@@ -511,6 +675,9 @@ def _record_child(parent: Mapping, plan: Mapping, reply: Mapping, receipt: dict,
             "intervention": deepcopy(plan["request"]["execution_change"]),
         }
     }
+    # Trace evidence is additive comparison support.  Its absence must not downgrade the exact
+    # execution proof or prevent the child from being persisted.
+    child_trace = _exact_child_trace(parent, plan, reply)
     run_id = runlog.record(
         source="fork",
         client="studio",
@@ -521,7 +688,7 @@ def _record_child(parent: Mapping, plan: Mapping, reply: Mapping, receipt: dict,
         response=response,
         memory=deepcopy(parent.get("memory") or {}),
         behavior=behavior,
-        trace=None,
+        trace=child_trace,
         started=started,
         parent_run_id=parent["id"],
         changes_applied=changes,

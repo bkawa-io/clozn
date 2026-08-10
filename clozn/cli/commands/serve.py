@@ -5,6 +5,7 @@ import os
 import signal
 import sys
 import time
+import ipaddress
 
 from clozn.cli import formatting as fmt
 from clozn.cli.commands.models import _flags_for, _friendly, resolve_model
@@ -20,13 +21,32 @@ from clozn.cli.runtime_process import (
 def cmd_serve(args):
     from clozn.cli import main as ctx
 
+    positional_model = getattr(args, "model", None)
+    flagged_model = getattr(args, "model_flag", None)
+    if positional_model and flagged_model:
+        raise ctx.CloznError("model was specified both positionally and with -m/--model")
+    requested_model = positional_model or flagged_model
+    parallel = getattr(args, "parallel", 1)
+    if parallel != 1:
+        raise ctx.CloznError(
+            "Clozn currently serializes generation per model to preserve debugger evidence; "
+            "--parallel values above 1 are not supported"
+        )
+    gpu_layers = getattr(args, "gpu_layers", None)
+    if getattr(args, "cpu", False) and gpu_layers is not None and gpu_layers > 0:
+        raise ctx.CloznError("--cpu cannot be combined with a positive GPU-layer count")
+
     models_config_path = getattr(args, "models_config", None)
     managed = None
     if models_config_path:
-        if getattr(args, "model", None):
+        if requested_model:
             raise ctx.CloznError(
                 "MODEL and --models-config are mutually exclusive"
             )
+        if getattr(args, "alias", None):
+            raise ctx.CloznError("--alias is supported only for single-model serving")
+        if gpu_layers is not None:
+            raise ctx.CloznError("GPU-layer flags are per-model in --models-config")
         incompatible = [
             name for name, active in (
                 ("--ctx", getattr(args, "ctx", None) is not None),
@@ -75,7 +95,7 @@ def cmd_serve(args):
             flush=True,
         )
     else:
-        if not getattr(args, "model", None):
+        if not requested_model:
             raise ctx.CloznError(
                 "give MODEL, or use --models-config with a qualified manifest"
             )
@@ -87,7 +107,7 @@ def cmd_serve(args):
                 "--default-model/--preload/--max-loaded-models require "
                 "--models-config"
             )
-        model = resolve_model(args.model)
+        model = resolve_model(requested_model)
         print(
             f"{fmt.DIM}- model: {model}{fmt.RST}",
             file=sys.stderr,
@@ -100,6 +120,8 @@ def cmd_serve(args):
             flags["eos"] = args.eos
         if args.ctx is not None:
             flags["ctx"] = args.ctx
+        if gpu_layers is not None:
+            flags["gpu_layers"] = gpu_layers
         if args.sae is not None:
             flags["sae"] = args.sae
             if args.sae_k is not None:
@@ -127,6 +149,19 @@ def cmd_serve(args):
             )
 
     port = args.port or 8080
+    host = getattr(args, "host", "127.0.0.1") or "127.0.0.1"
+    alias = getattr(args, "alias", None)
+    try:
+        loopback = host.lower() == "localhost" or ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        loopback = False
+    if not loopback:
+        print(
+            "warning: Clozn is listening beyond localhost.\n"
+            "The gateway includes debugging/run APIs and has no network authentication.",
+            file=sys.stderr,
+            flush=True,
+        )
     os.makedirs(ctx.HOME, exist_ok=True)
     worker_log = open(os.path.join(ctx.HOME, "worker.log"), "w", encoding="utf-8")
     stack = None
@@ -148,6 +183,9 @@ def cmd_serve(args):
             runtime_config = RuntimeConfig(
                 model=model,
                 public_port=port,
+                host=host,
+                public_model_id=alias,
+                structured_mode=getattr(args, "structured", "auto"),
                 flags=flags,
                 prefer_gpu=not args.cpu,
                 worker_definitions=managed.definitions if managed else (),
@@ -175,6 +213,10 @@ def cmd_serve(args):
         registered = True
 
         base = f"http://127.0.0.1:{port}"
+        listening = f"{host}:{port}"
+        print(f"  Listening:                 {listening}")
+        if alias:
+            print(f"  Public model:              {alias}")
         if stack.worker_registry is not None:
             runtime_status = stack.worker_registry.status()
             resident = sum(
@@ -189,7 +231,7 @@ def cmd_serve(args):
             )
         else:
             print(
-                f"\n  {fmt.BOLD}{_friendly(model)}{fmt.RST} ready on "
+                f"\n  {fmt.BOLD}{alias or _friendly(model)}{fmt.RST} ready on "
                 f"{'GPU' if stack.gpu else 'CPU'} ({health.get('mode')}) "
                 f"in {time.time()-started:.1f}s"
         )

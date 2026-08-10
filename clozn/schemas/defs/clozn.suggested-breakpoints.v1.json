@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.suggested-breakpoints.v1",
+  "title": "Suggested Breakpoints -- metadata-only locations for controlled testing",
+  "description": "A deterministic, read-only composition of recorded Close Calls and complete Context Tension evidence. A breakpoint is a suggested test location, never a diagnosis, error point, fragility claim, or automatic action. rank_class is deterministic presentation priority only; it is not a confidence grade or causal-importance score. This artifact contains no prompt, answer, source, or token text.",
+  "type": "object",
+  "required": ["schema_version", "run_id", "privacy", "coordinates", "analysis", "evidence", "breakpoints", "summary"],
+  "properties": {
+    "schema_version": {"const": "clozn.suggested-breakpoints.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "privacy": {"const": "metadata_only"},
+    "coordinates": {"$ref": "#/$defs/coordinates"},
+    "analysis": {"$ref": "#/$defs/analysis"},
+    "evidence": {"$ref": "#/$defs/evidence"},
+    "breakpoints": {"type": "array", "items": {"$ref": "#/$defs/breakpoint"}},
+    "summary": {"$ref": "#/$defs/summary"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "coordinates": {
+      "type": "object",
+      "required": ["kind", "index_base"],
+      "properties": {
+        "kind": {"const": "recorded_response_token_boundary"},
+        "index_base": {"const": 0},
+        "start": {"type": "integer", "minimum": 0},
+        "end_exclusive": {"type": "integer", "minimum": 0},
+        "recorded_token_count": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "analysis": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {"enum": ["available", "partially_available", "unavailable"]},
+        "reason": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["close_calls", "context_tension", "answer_alignment"],
+      "properties": {
+        "close_calls": {"$ref": "#/$defs/close_call_evidence"},
+        "context_tension": {"$ref": "#/$defs/context_tension_evidence"},
+        "answer_alignment": {"$ref": "#/$defs/answer_alignment"}
+      },
+      "additionalProperties": false
+    },
+    "thresholds": {
+      "type": "object",
+      "required": ["margin", "min_runnerup"],
+      "properties": {
+        "margin": {"type": "number", "minimum": 0},
+        "min_runnerup": {"type": "number", "minimum": 0, "maximum": 1}
+      },
+      "additionalProperties": false
+    },
+    "close_call_evidence": {
+      "type": "object",
+      "required": ["state", "thresholds"],
+      "properties": {
+        "state": {"enum": ["available", "partial", "unavailable"]},
+        "reason": {"type": "string", "minLength": 1},
+        "recorded_tokens": {"type": "integer", "minimum": 0},
+        "analyzed_tokens": {"type": "integer", "minimum": 0},
+        "thresholds": {"$ref": "#/$defs/thresholds"}
+      },
+      "additionalProperties": false
+    },
+    "context_tension_evidence": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {"enum": ["available", "not_measured", "unavailable", "error"]},
+        "reason": {"type": "string", "minLength": 1},
+        "answer_spans_examined": {"type": "integer", "minimum": 0},
+        "answer_spans_with_tension": {"type": "integer", "minimum": 0},
+        "tension_pairs": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "answer_alignment": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {"enum": ["available", "unavailable"]},
+        "reason": {"type": "string", "minLength": 1},
+        "basis": {"const": "recorded_answer"},
+        "unit": {"const": "unicode_code_points"}
+      },
+      "additionalProperties": false
+    },
+    "token_interval": {
+      "type": "object",
+      "required": ["start", "end", "unit", "interval"],
+      "properties": {
+        "start": {"type": "integer", "minimum": 0},
+        "end": {"type": "integer", "minimum": 0},
+        "unit": {"const": "unicode_code_points"},
+        "interval": {"const": "half_open"}
+      },
+      "additionalProperties": false
+    },
+    "close_call_reason": {
+      "type": "object",
+      "required": ["type", "meaningful_heuristic"],
+      "properties": {
+        "type": {"const": "close_call"},
+        "emitted_token_id": {"type": "integer", "minimum": 0},
+        "rival_token_id": {"type": "integer", "minimum": 0},
+        "emitted_probability": {"type": "number", "minimum": 0, "maximum": 1},
+        "rival_probability": {"type": "number", "minimum": 0, "maximum": 1},
+        "margin": {"type": "number", "minimum": 0},
+        "meaningful_heuristic": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "strongest_pair": {
+      "type": "object",
+      "required": ["tension_id", "supporting_source_span_id", "suppressing_source_span_id", "supporting_abs_delta_nats", "suppressing_abs_delta_nats"],
+      "properties": {
+        "tension_id": {"type": "string", "pattern": "^tension_[0-9a-f]{24}$"},
+        "supporting_source_span_id": {"type": "string", "pattern": "^span_[0-9a-f]{24}$"},
+        "suppressing_source_span_id": {"type": "string", "pattern": "^span_[0-9a-f]{24}$"},
+        "supporting_abs_delta_nats": {"type": "number", "minimum": 0},
+        "suppressing_abs_delta_nats": {"type": "number", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "context_tension_reason": {
+      "type": "object",
+      "required": ["type", "answer_span_ids", "tension_pair_count", "distinct_source_span_count", "strongest_pair"],
+      "properties": {
+        "type": {"const": "context_tension"},
+        "answer_span_id": {"type": "string", "pattern": "^span_[0-9a-f]{24}$"},
+        "answer_span_ids": {
+          "type": "array", "minItems": 1,
+          "items": {"type": "string", "pattern": "^span_[0-9a-f]{24}$"}
+        },
+        "answer_interval": {"$ref": "#/$defs/token_interval"},
+        "tension_pair_count": {"type": "integer", "minimum": 1},
+        "distinct_source_span_count": {"type": "integer", "minimum": 2},
+        "strongest_pair": {"$ref": "#/$defs/strongest_pair"}
+      },
+      "additionalProperties": false
+    },
+    "breakpoint": {
+      "type": "object",
+      "required": ["breakpoint_id", "position", "placement", "rank_class", "reasons"],
+      "properties": {
+        "breakpoint_id": {"type": "string", "pattern": "^breakpoint_[0-9a-f]{24}$"},
+        "position": {"type": "integer", "minimum": 0},
+        "placement": {"enum": ["exact_token_decision", "answer_span_entry_proxy"]},
+        "rank_class": {"enum": ["combined", "meaningful_close_call", "context_tension", "close_call"]},
+        "token_interval": {"$ref": "#/$defs/token_interval"},
+        "reasons": {
+          "type": "array", "minItems": 1,
+          "items": {"oneOf": [{"$ref": "#/$defs/close_call_reason"}, {"$ref": "#/$defs/context_tension_reason"}]}
+        }
+      },
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "object",
+      "required": ["candidate_state", "suggested_breakpoints", "returned_breakpoints", "combined_breakpoints", "meaningful_close_call_breakpoints", "context_tension_breakpoints", "ordinary_close_call_breakpoints"],
+      "properties": {
+        "candidate_state": {"enum": ["detected", "none_detected", "unavailable"]},
+        "suggested_breakpoints": {"type": "integer", "minimum": 0},
+        "returned_breakpoints": {"type": "integer", "minimum": 0},
+        "combined_breakpoints": {"type": "integer", "minimum": 0},
+        "meaningful_close_call_breakpoints": {"type": "integer", "minimum": 0},
+        "context_tension_breakpoints": {"type": "integer", "minimum": 0},
+        "ordinary_close_call_breakpoints": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    }
+  }
+}

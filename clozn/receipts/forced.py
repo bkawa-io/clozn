@@ -78,10 +78,18 @@ _FILLER_TEXT = (
 )
 
 
-def _matched_length_filler(n_chars: int) -> str:
+MATCHED_LENGTH_NEUTRAL_FILLER_RECIPE = "clozn.matched_length_neutral_filler.v1"
+
+
+def matched_length_neutral_filler(n_chars: int) -> str:
     n = max(1, int(n_chars))
     reps = n // len(_FILLER_TEXT) + 1
     return (_FILLER_TEXT * reps)[:n]
+
+
+# Backward-compatible private name retained for existing receipt callers.  The public helper above
+# is the single recipe seam used by Influence Map and free-generation counterfactual confirmation.
+_matched_length_filler = matched_length_neutral_filler
 
 
 def _vector_norm(vec) -> float:

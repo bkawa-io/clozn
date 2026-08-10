@@ -1,0 +1,15 @@
+{
+  "schema_version": "clozn.selection-inspection.v1",
+  "privacy": "metadata_only",
+  "selection": {
+    "selection_id": "selection_0123456789abcdef01234567",
+    "kind": "response_token",
+    "position": 0,
+    "basis": {"type": "recorded_execution"}
+  },
+  "inspection": {"state": "available", "primary": {}, "evidence": []},
+  "measurements": [],
+  "tests": [],
+  "navigation": [],
+  "summary": {}
+}

@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.context-bisect-plan.v1",
+  "title": "Context Bisect plan",
+  "description": "A deterministic read-only bounded partition plan over one measured message-backed context span. It does not claim global minimality, contact a worker, generate, score, capture a checkpoint, or create a search session.",
+  "type": "object",
+  "required": ["schema_version", "search_id", "parent_run_id", "parent_execution_fingerprint", "influence", "intervention", "target", "span_resolution", "root_region", "search", "execution"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.context-bisect-plan.v1"},
+    "search_id": {"type": "string", "pattern": "^context_bisect_[0-9a-f]{24}$"},
+    "parent_run_id": {"type": "string", "minLength": 1},
+    "parent_execution_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "influence": {"$ref": "#/$defs/open_object"},
+    "intervention": {"$ref": "#/$defs/intervention"},
+    "target": {"$ref": "#/$defs/open_object"},
+    "span_resolution": {"$ref": "#/$defs/open_object"},
+    "root_basis_sha256": {"type": ["string", "null"]},
+    "root_span_sha256": {"type": ["string", "null"]},
+    "root_region": {"$ref": "#/$defs/open_object"},
+    "search": {"$ref": "#/$defs/open_object"},
+    "execution": {"$ref": "#/$defs/execution"}
+  },
+  "$defs": {
+    "open_object": {"type": "object", "additionalProperties": true},
+    "intervention": {
+      "type": "object",
+      "required": ["kind", "recipe"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"const": "neutralize"},
+        "recipe": {"const": "clozn.matched_length_neutral_filler.v1"}
+      }
+    },
+    "execution": {
+      "type": "object",
+      "required": ["state", "requires_generation", "requires_full_reprefill", "fidelity", "live_state", "decode_regime"],
+      "additionalProperties": true,
+      "properties": {
+        "state": {"enum": ["ready", "unavailable"]},
+        "requires_generation": {"const": true},
+        "requires_full_reprefill": {"const": true},
+        "fidelity": {"const": "controlled_regeneration"},
+        "live_state": {"const": "not_checked"},
+        "decode_regime": {"type": "object", "additionalProperties": true}
+      }
+    }
+  }
+}

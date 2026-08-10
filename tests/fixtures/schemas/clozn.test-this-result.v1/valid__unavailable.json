@@ -1,0 +1,11 @@
+{
+  "schema_version": "clozn.test-this-result.v1",
+  "run_id": "run_123",
+  "selection": {"kind": "sampling", "position": 0},
+  "test": {"kind": "change_sampling", "changes": {"temperature": 0}},
+  "operation": "sampling_fork",
+  "outcome": "unavailable",
+  "result": {"reasons": [{"code": "no_effective_change", "message": "no effective change"}]},
+  "artifact": null,
+  "comparison": null
+}

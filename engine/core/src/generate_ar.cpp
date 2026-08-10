@@ -312,6 +312,13 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
 
     std::vector<int> generated;
     generated.reserve(config.max_new);
+    struct PendingCommit { int t; CommitItem item; };
+    std::vector<PendingCommit> pending_stops;
+    auto flush_pending_stops = [&]() {
+        for (const PendingCommit& pending : pending_stops)
+            emit(TokensCommitted{pending.t, 0, {pending.item}});
+        pending_stops.clear();
+    };
     std::string reason = "length";
     std::string stopped_text;
 
@@ -376,18 +383,14 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
             conf = cand.confidence;
         }
 
-        // The commit + the logit-lens (what this slot is considering = the distribution we sampled).
-        emit(TokensCommitted{t, 0, {CommitItem{n_past, tok, conf}}});
-        if (auto sl = lens_from(fwd, want, 1, t, 0, 5)) emit(*sl);
-
         generated.push_back(tok);
         seq.push_back(tok);
         const bool is_eos = (eos >= 0 && tok == eos);
 
-        // llama.cpp chat templates may provide extra assistant terminators in addition to the
-        // model EOS token. Match them against the same special-token-aware byte stream returned
-        // to the parser. The matched terminator remains visible in board/events, but is not fed
-        // back into the KV or exposed in result.text.
+        // llama.cpp chat templates and the public OpenAI request may provide extra assistant
+        // terminators in addition to the model EOS token. Match them against the same
+        // special-token-aware byte stream returned to the parser. The matched terminator is not
+        // emitted, fed back into the KV, or exposed in result.text.
         bool hit_additional_stop = false;
         if (grammar != nullptr && !grammar->additional_stops.empty()) {
             const std::string decoded = grammar_constraint
@@ -402,6 +405,31 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
                 }
             }
         }
+
+        bool may_be_stop_prefix = false;
+        if (!hit_additional_stop && grammar != nullptr && !grammar->additional_stops.empty()) {
+            const std::string decoded = grammar_constraint
+                                            ? grammar_constraint->decode(generated)
+                                            : adapter.decode(generated);
+            for (const std::string& stop : grammar->additional_stops) {
+                if (stop.empty()) continue;
+                const size_t max_suffix = std::min(decoded.size(), stop.size() - 1);
+                for (size_t n = max_suffix; n > 0; --n) {
+                    if (decoded.compare(decoded.size() - n, n, stop, 0, n) == 0) {
+                        may_be_stop_prefix = true;
+                        break;
+                    }
+                }
+                if (may_be_stop_prefix) break;
+            }
+        }
+        const CommitItem committed{n_past, tok, conf};
+        if (may_be_stop_prefix) pending_stops.push_back(PendingCommit{t, committed});
+        else {
+            flush_pending_stops();
+            emit(TokensCommitted{t, 0, {committed}});
+        }
+        if (auto sl = lens_from(fwd, want, 1, t, 0, 5)) emit(*sl);
 
         // Early-stop on divergence from the reference (prove-all ablated arms): the just-committed token
         // is already in `generated`, so the partial reply is a bit-exact PREFIX of the full reply. We stop
@@ -433,6 +461,8 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
         if (is_eos) { reason = "eos"; break; }
     }
 
+    if (reason != "stop") flush_pending_stops();
+
     const clock::time_point decode_end = clock::now();
     const std::int64_t decode_loop_ns =
         std::chrono::duration_cast<std::chrono::nanoseconds>(decode_end - decode_start).count();
@@ -440,6 +470,15 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
 
     GenerateResult result;
     std::vector<int> kept = generated;
+    if (reason == "stop") {
+        for (size_t n = 0; n <= generated.size(); ++n) {
+            std::vector<int> prefix(generated.begin(), generated.begin() + static_cast<std::ptrdiff_t>(n));
+            if (adapter.decode(prefix) == stopped_text) {
+                kept = std::move(prefix);
+                break;
+            }
+        }
+    }
     if (reason == "eos" && !kept.empty()) kept.pop_back();  // drop the trailing EOS for the text
     result.new_tokens = static_cast<int>(kept.size());
     result.generated = kept;
@@ -455,7 +494,7 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
     // report the checkpoint's PAST-truncate_to tail as part of this run's board (that tail is being
     // regenerated, not replayed). Identical to `prompt_ids` whenever p == prompt_ids.size().
     result.board.assign(prompt_ids.begin(), prompt_ids.begin() + p);
-    result.board.insert(result.board.end(), generated.begin(), generated.end());
+    result.board.insert(result.board.end(), kept.begin(), kept.end());
 
     const double wall_ms = ms_since(t_start);
     const double decode_s = static_cast<double>(decode_ns) / 1e9;

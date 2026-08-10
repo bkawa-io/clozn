@@ -277,7 +277,10 @@ def _env_with_dlls(dll_dirs: list[str], gpu: bool) -> dict:
 
 def _launch_args(exe: str, model: str, port: int, flags: dict, gpu: bool) -> list[str]:
     args = [exe, model, "--port", str(port), "--host", "127.0.0.1"]
-    if gpu:
+    if "gpu_layers" in flags:
+        args += ["--gpu-layers", str(flags["gpu_layers"])]
+    elif gpu:
+        # Preserve Clozn's historical implicit GPU behavior when the compatibility flag is omitted.
         args += ["--gpu-layers", "99"]
     if flags.get("ctx") is not None:
         args += ["--ctx", str(flags["ctx"])]

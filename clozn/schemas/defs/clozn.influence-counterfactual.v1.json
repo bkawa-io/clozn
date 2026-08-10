@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.influence-counterfactual.v1",
+  "title": "Influence counterfactual confirmation result",
+  "description": "A compact orchestration result over ordinary direct child runs. It preserves the measured teacher-forced influence beside the free-generation counterfactual observation and never turns either into a semantic direction or source-necessity claim.",
+  "type": "object",
+  "required": ["schema_version", "test_id", "parent_run_id", "influence", "intervention", "execution", "arms", "control_reproduction", "comparison", "observation"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.influence-counterfactual.v1"},
+    "test_id": {"type": "string", "pattern": "^ict_[0-9a-f]{24}$"},
+    "parent_run_id": {"type": "string", "minLength": 1},
+    "influence": {"type": "object", "additionalProperties": true, "required": ["source_span_id", "answer_span_id", "measurement"], "properties": {"source_span_id": {"type": "string", "minLength": 1}, "answer_span_id": {"type": "string", "minLength": 1}, "measurement": {"type": "object", "additionalProperties": true}}},
+    "intervention": {"$ref": "#/$defs/intervention"},
+    "execution": {"type": "object", "additionalProperties": true, "required": ["runtime_identity_match", "decode_regime"]},
+    "arms": {"type": "object", "additionalProperties": false, "required": ["control", "treatment", "specificity_control"], "properties": {"control": {"$ref": "#/$defs/arm"}, "treatment": {"$ref": "#/$defs/arm"}, "specificity_control": {"$ref": "#/$defs/arm"}}},
+    "control_reproduction": {"type": "object", "additionalProperties": true, "required": ["state"]},
+    "comparison": {"type": "object", "additionalProperties": true, "required": ["control_vs_treatment", "control_vs_specificity"]},
+    "observation": {"type": "object", "additionalProperties": true, "required": ["state"]},
+    "cancellation": {"type": "object", "additionalProperties": true},
+    "reasons": {"type": "array", "items": {"$ref": "#/$defs/reason"}}
+  },
+  "$defs": {
+    "intervention": {
+      "type": "object",
+      "required": ["kind", "relation_to_measurement"],
+      "additionalProperties": false,
+      "properties": {"kind": {"enum": ["neutralize", "remove"]}, "relation_to_measurement": {"enum": ["same_intervention", "different_intervention"]}, "recipe": {"const": "clozn.matched_length_neutral_filler.v1"}}
+    },
+    "arm": {
+      "type": "object",
+      "required": ["state"],
+      "additionalProperties": true,
+      "properties": {"state": {"enum": ["completed", "unavailable", "not_attempted"]}, "run_id": {"type": "string", "minLength": 1}}
+    },
+    "reason": {"type": "object", "required": ["code", "message"], "additionalProperties": false, "properties": {"code": {"type": "string", "minLength": 1}, "message": {"type": "string"}}}
+  }
+}

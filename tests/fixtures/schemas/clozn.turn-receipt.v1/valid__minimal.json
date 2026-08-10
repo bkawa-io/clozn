@@ -1,0 +1,18 @@
+{
+  "schema_version": "clozn.turn-receipt.v1",
+  "run_id": "run_123",
+  "outcome": {"state": "unknown"},
+  "model": {},
+  "context": {"privacy": "off", "provenance_state": "unavailable"},
+  "what_mattered": {"measurement_state": "not_measured"},
+  "context_tension": {"measurement_state": "not_measured"},
+  "signals": [],
+  "performance": {},
+  "comparison": null,
+  "rewind": {
+    "reconstructed_replay": "unavailable",
+    "exact_rewind": "static_prerequisites_unavailable",
+    "historically_verified_boundaries": 0
+  },
+  "technical": {}
+}

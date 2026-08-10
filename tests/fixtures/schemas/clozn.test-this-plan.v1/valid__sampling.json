@@ -1,0 +1,10 @@
+{
+  "schema_version": "clozn.test-this-plan.v1",
+  "run_id": "run_123",
+  "parent_fingerprint_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "selection": {"kind": "sampling", "position": 0},
+  "test": {"kind": "change_sampling", "changes": {"temperature": 0.2, "top_p": 0.9}},
+  "resolution": {"state": "ready", "operation": "sampling_fork"},
+  "resolved_test": {"operation": "sampling_fork", "change": {"type": "sampling", "temperature": 0.2, "top_p": 0.9}},
+  "execution": {"state": "ready", "backend": "execution_fork", "fidelity_policy": "exact_required", "live_state": "not_checked"}
+}

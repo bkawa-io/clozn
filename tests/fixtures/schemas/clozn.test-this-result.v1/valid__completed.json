@@ -1,0 +1,12 @@
+{
+  "schema_version": "clozn.test-this-result.v1",
+  "run_id": "run_123",
+  "selection": {"kind": "response_token", "position": 37},
+  "test": {"kind": "try_alternative", "alternative_rank": 0},
+  "operation": "force_token",
+  "outcome": "completed",
+  "result": {"child_run_id": "run_child", "backend_outcome": "exact_execution_fork"},
+  "artifact": {"schema": "clozn.execution-fork.v1", "execution_id": "fork_exec_123"},
+  "comparison": {"state": "trace_unavailable"},
+  "child_run_id": "run_child"
+}

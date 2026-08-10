@@ -155,12 +155,53 @@ def _resolved_span_from_address(run: dict, address: dict, segment_index: dict) -
             "scope for a prompt-span ablation in this slice)")}
 
     native_ref = address.get("native_ref") if isinstance(address.get("native_ref"), dict) else {}
-    if native_ref.get("collection") not in ("run.messages", "context_receipt.delivered"):
+    collection = native_ref.get("collection")
+    message_index = None
+    if collection in ("influence.prompt_spans", "influence.prompt_sources"):
+        # Influence Query exposes projected IDs for measured fine/coarse source spans.  Those
+        # addresses are authored against the source text, while replay needs the corresponding
+        # message-list slot.  Resolve that slot only when the explicit source identity maps to one
+        # message whose current content hash is the same canonical basis hash; never guess by index.
+        source_id = native_ref.get("client_source_id")
+        if not isinstance(source_id, str) or not source_id:
+            influence = run.get("influence_map") if isinstance(run.get("influence_map"), dict) else {}
+            source_records = influence.get("prompt_sources") if isinstance(influence, dict) else []
+            source_keys = {native_ref.get("id"), native_ref.get("parent_id")}
+            for source in source_records if isinstance(source_records, list) else []:
+                if not isinstance(source, dict) or source.get("id") not in source_keys:
+                    continue
+                candidate = source.get("client_source_id")
+                if isinstance(candidate, str) and candidate:
+                    source_id = candidate
+                    break
+        messages = run.get("messages") if isinstance(run.get("messages"), list) else []
+        matches = [
+            index for index, message in enumerate(messages)
+            if isinstance(message, dict) and isinstance(source_id, str) and source_id
+            and message.get("source_id") == source_id
+        ]
+        if not matches:
+            resolution = address.get("resolution") if isinstance(address.get("resolution"), dict) else {}
+            canonical = resolution.get("canonical") if isinstance(resolution.get("canonical"), dict) else {}
+            basis_sha256 = canonical.get("basis_sha256")
+            if isinstance(basis_sha256, str) and basis_sha256:
+                matches = [
+                    index for index, message in enumerate(messages)
+                    if isinstance(message, dict)
+                    and isinstance(message.get("content"), str)
+                    and hashlib.sha256(message["content"].encode("utf-8")).hexdigest() == basis_sha256
+                ]
+        if len(matches) != 1:
+            return {"ok": False, "reason": _reason(
+                "span_message_index_unresolvable",
+                "the measured source span does not map to exactly one recorded message")}
+        message_index = matches[0]
+    elif collection not in ("run.messages", "context_receipt.delivered"):
         return {"ok": False, "reason": _reason(
             "span_basis_unsupported",
-            f"native_ref.collection {native_ref.get('collection')!r} is not an ordinary chat message")}
-
-    message_index = _parse_message_index(native_ref, segment_index)
+            f"native_ref.collection {collection!r} is not an ordinary chat message")}
+    else:
+        message_index = _parse_message_index(native_ref, segment_index)
     if message_index is None:
         return {"ok": False, "reason": _reason(
             "span_message_index_unresolvable",

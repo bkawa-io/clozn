@@ -24,7 +24,7 @@ import time
 import uuid
 
 from clozn import schemas
-from clozn.replay.controlled import _sampling_config
+from clozn.replay.controlled import recorded_sampling_config
 from clozn.replay.execution_fork import (
     _runtime_projection,
     _worker_projection,
@@ -103,7 +103,7 @@ def _trace_history(parent: Mapping) -> tuple[list[str], list[int]] | None:
 
 
 def _sampler(parent: Mapping, output_count: int) -> tuple[dict, dict | None] | None:
-    config = _sampling_config(dict(parent))
+    config = recorded_sampling_config(dict(parent))
     if config is None:
         return None
     if config is False:

@@ -1,0 +1,20 @@
+{
+  "schema_version": "clozn.selection-reference.v1",
+  "state": "resolved",
+  "reference": "sel1.eyJ2IjoxLCJydW5faWQiOiJydW4ifQ.0123456789abcdef01234567",
+  "run_id": "run_fixture",
+  "selection": {"kind": "response_token", "position": 0},
+  "binding": {"kind": "parent_execution", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "integrity": {
+    "algorithm": "sha256",
+    "scope": "encoded_payload",
+    "checksum_hex_chars": 24,
+    "checksum": "0123456789abcdef01234567",
+    "status": "matched"
+  },
+  "api_href": "/runs/run_fixture/selection/inspect?ref=sel1.eyJ2IjoxLCJydW5faWQiOiJydW4ifQ.0123456789abcdef01234567",
+  "deep_link": {
+    "run_id": "run_fixture",
+    "selection_ref": "sel1.eyJ2IjoxLCJydW5faWQiOiJydW4ifQ.0123456789abcdef01234567"
+  }
+}

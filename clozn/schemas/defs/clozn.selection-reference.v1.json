@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.selection-reference.v1",
+  "title": "Clozn stable selection reference",
+  "description": "A deterministic, metadata-only sel1 reference bound to immutable recorded run evidence. The checksum is an integrity check, not authentication.",
+  "type": "object",
+  "required": ["schema_version", "state", "reference", "run_id", "selection", "binding", "integrity", "api_href", "deep_link"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {"const": "clozn.selection-reference.v1"},
+    "state": {"enum": ["resolved", "stale", "unavailable"]},
+    "reference": {"type": ["string", "null"], "pattern": "^sel1\\.[A-Za-z0-9_-]+\\.[0-9a-f]{24}$"},
+    "run_id": {"type": "string", "minLength": 1},
+    "selection": {"type": ["object", "null"], "additionalProperties": true},
+    "binding": {"type": ["object", "null"], "additionalProperties": true},
+    "integrity": {
+      "type": "object",
+      "required": ["algorithm", "scope", "checksum_hex_chars", "checksum", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": {"const": "sha256"},
+        "scope": {"const": "encoded_payload"},
+        "checksum_hex_chars": {"const": 24},
+        "checksum": {"type": ["string", "null"], "pattern": "^[0-9a-f]{24}$"},
+        "status": {"enum": ["matched", "unavailable"]}
+      }
+    },
+    "api_href": {"type": ["string", "null"]},
+    "deep_link": {
+      "type": "object",
+      "required": ["run_id", "selection_ref"],
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {"type": "string", "minLength": 1},
+        "selection_ref": {"type": ["string", "null"], "pattern": "^sel1\\.[A-Za-z0-9_-]+\\.[0-9a-f]{24}$"}
+      }
+    },
+    "reason": {
+      "type": "object",
+      "required": ["code", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {"type": "string", "minLength": 1},
+        "message": {"type": "string", "minLength": 1}
+      }
+    },
+    "resolved_selection": {"type": "object", "additionalProperties": true}
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "schema_version": "clozn.sampler-sensitivity-plan.v1",
+  "test_id": "sampler_sensitivity_aaaaaaaaaaaaaaaaaaaaaaaa",
+  "run_id": "run_fixture",
+  "parent_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "position": 0,
+  "seed_probes": 0,
+  "baseline_sampler": {"mode": "sample"},
+  "recipe": {"id": "nearby_v2", "temperature_multiplier_down": 0.8, "temperature_multiplier_up": 1.2, "top_p_delta": 0.05},
+  "probes": [],
+  "execution": {"state": "ready", "fidelity": "exact_required", "live_state": "not_checked"}
+}

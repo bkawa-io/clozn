@@ -405,6 +405,16 @@ def _norm_trace(trace) -> dict:
     return {}
 
 
+def normalize_trace(trace) -> dict:
+    """Public read-only entry point for the canonical stored-trace normalizer.
+
+    Execution-time evidence producers use this small wrapper instead of interpreting worker
+    generation events themselves.  Keeping the wrapper next to ``_norm_trace`` ensures exact-fork
+    child traces and ordinary run traces continue to share one normalization contract.
+    """
+    return _norm_trace(trace)
+
+
 def _normalize_workspace_readouts(rid: str, readouts) -> list[dict]:
     """Keep explicit readouts, filling the run id when a provider leaves it blank."""
     out = []

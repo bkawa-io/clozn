@@ -1,0 +1,13 @@
+{
+  "schema_version": "clozn.context-bisect.v1",
+  "search_id": "context_bisect_0123456789abcdef01234567",
+  "parent_run_id": "run_123",
+  "influence": {},
+  "intervention": {"kind": "neutralize", "recipe": "clozn.matched_length_neutral_filler.v1"},
+  "target": {},
+  "control": {},
+  "search": {},
+  "regions": [],
+  "findings": [],
+  "summary": {}
+}

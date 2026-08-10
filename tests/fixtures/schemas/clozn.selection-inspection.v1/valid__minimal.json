@@ -1,0 +1,31 @@
+{
+  "schema_version": "clozn.selection-inspection.v1",
+  "run_id": "run_123",
+  "privacy": "metadata_only",
+  "selection": {
+    "selection_id": "selection_0123456789abcdef01234567",
+    "kind": "response_token",
+    "position": 0,
+    "basis": {
+      "type": "recorded_execution",
+      "parent_execution_fingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    }
+  },
+  "inspection": {
+    "state": "available",
+    "primary": {"kind": "response_token", "position": 0},
+    "evidence": []
+  },
+  "measurements": [],
+  "tests": [],
+  "navigation": [],
+  "summary": {
+    "evidence_available": 0,
+    "evidence_not_measured": 0,
+    "evidence_unavailable": 0,
+    "tests_ready_to_plan": 0,
+    "tests_requiring_input": 0,
+    "measurements_available": 0,
+    "navigation_ready": 0
+  }
+}

@@ -4,6 +4,7 @@ import pytest
 from clozn.server.openai_compat import (
     CompatibilityError,
     normalize_chat_request,
+    normalize_responses_request,
 )
 
 
@@ -27,16 +28,57 @@ def test_chat_normalizes_current_token_limit_and_developer_role():
 
 
 @pytest.mark.parametrize("field,value", [
-    ("stop", ["END"]),
     ("n", 2),
     ("frequency_penalty", 0.5),
-    ("stream_options", {"include_usage": True}),
 ])
 def test_chat_rejects_behavior_it_cannot_honor(field, value):
     with pytest.raises(CompatibilityError) as caught:
         normalize_chat_request({"messages": [{"role": "user", "content": "hi"}], field: value})
     assert caught.value.param == field
-    assert caught.value.code == "unsupported_parameter"
+
+
+def test_chat_normalizes_native_stop_and_stream_usage():
+    normalized = normalize_chat_request({
+        "messages": [{"role": "user", "content": "hi"}],
+        "stop": "END",
+        "stream_options": {"include_usage": True},
+    })
+    assert normalized["stop"] == ["END"]
+    assert normalized["stream_options"] == {"include_usage": True}
+
+
+def test_responses_normalizes_text_input_to_chat_messages():
+    out = normalize_responses_request({
+        "model": "local",
+        "instructions": "Be concise.",
+        "input": "Explain mutexes.",
+        "max_output_tokens": 12,
+    })
+    assert out["messages"] == [
+        {"role": "system", "content": "Be concise."},
+        {"role": "user", "content": "Explain mutexes."},
+    ]
+    assert out["max_tokens"] == 12
+    assert out["stream"] is False
+
+
+def test_responses_streaming_and_tools_fail_closed():
+    with pytest.raises(CompatibilityError) as stream_error:
+        normalize_responses_request({"input": "hi", "stream": True})
+    assert stream_error.value.code == "responses_streaming_not_supported"
+    with pytest.raises(CompatibilityError) as tools_error:
+        normalize_responses_request({"input": "hi", "tools": [{"type": "function"}]})
+    assert tools_error.value.code == "responses_tools_not_supported"
+
+
+@pytest.mark.parametrize("value", [[], [""], ["END"] * 5, ["END", "END"]])
+def test_chat_rejects_invalid_stop_shape(value):
+    with pytest.raises(CompatibilityError) as caught:
+        normalize_chat_request({
+            "messages": [{"role": "user", "content": "hi"}],
+            "stop": value,
+        })
+    assert caught.value.param.startswith("stop")
 
 
 def test_chat_rejects_unknown_field_instead_of_silently_dropping_it():

@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.selection-inspection.v1",
+  "title": "Clozn selection inspection",
+  "description": "A deterministic, metadata-only composition of native evidence and explicit affordances for one selected object in a recorded run. Inspection never executes or plans live work. Native artifacts remain authoritative; tests and measurements are descriptors, not results.",
+  "type": "object",
+  "required": ["schema_version", "run_id", "privacy", "selection", "inspection", "measurements", "tests", "navigation", "summary"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.selection-inspection.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "privacy": {"const": "metadata_only"},
+    "selection": {"$ref": "#/$defs/selection"},
+    "reference": {"$ref": "#/$defs/reference"},
+    "inspection": {"$ref": "#/$defs/inspection"},
+    "measurements": {"type": "array", "items": {"$ref": "#/$defs/descriptor"}},
+    "tests": {"type": "array", "items": {"$ref": "#/$defs/descriptor"}},
+    "navigation": {"type": "array", "items": {"$ref": "#/$defs/descriptor"}},
+    "summary": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}}
+  },
+  "$defs": {
+    "selection": {
+      "type": "object",
+      "required": ["selection_id", "kind", "basis"],
+      "additionalProperties": true,
+      "properties": {
+        "selection_id": {"type": "string", "pattern": "^selection_[0-9a-f]{24}$"},
+        "kind": {"enum": ["response_token", "answer_span", "context_span", "sampling"]},
+        "position": {"type": "integer", "minimum": 0},
+        "start": {"type": "integer", "minimum": 0},
+        "end": {"type": "integer", "minimum": 1},
+        "source_span_id": {"type": "string", "pattern": "^span_[0-9a-f]{24}$"},
+        "answer_span_id": {"type": "string", "pattern": "^span_[0-9a-f]{24}$"},
+        "basis": {"type": "object", "additionalProperties": true}
+      }
+    },
+    "inspection": {
+      "type": "object",
+      "required": ["state", "primary", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "state": {"enum": ["available", "partially_available", "unavailable"]},
+        "primary": {"type": "object", "additionalProperties": true},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["id", "state"],
+      "additionalProperties": true,
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "state": {"enum": ["available", "not_measured", "unavailable", "error", "not_applicable"]},
+        "artifact": {"type": "object", "additionalProperties": true},
+        "data": {"type": "object", "additionalProperties": true},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    },
+    "descriptor": {
+      "type": "object",
+      "required": ["id", "state"],
+      "additionalProperties": true,
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "state": {"type": "string", "minLength": 1}
+      }
+    },
+    "reference": {
+      "type": "object",
+      "required": [],
+      "additionalProperties": true,
+      "properties": {
+        "selection_ref": {"type": ["string", "null"], "pattern": "^sel1\\.[A-Za-z0-9_-]+\\.[0-9a-f]{24}$"},
+        "api_href": {"type": ["string", "null"]},
+        "deep_link": {
+          "type": "object",
+          "required": [],
+          "additionalProperties": false,
+          "properties": {
+            "run_id": {"type": "string", "minLength": 1},
+            "selection_ref": {"type": ["string", "null"], "pattern": "^sel1\\.[A-Za-z0-9_-]+\\.[0-9a-f]{24}$"}
+          }
+        }
+      }
+    }
+  }
+}

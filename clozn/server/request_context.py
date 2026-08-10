@@ -105,6 +105,8 @@ class RequestContext:
     diverged_at: int | None = None
     engine_req: str | None = None
     prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    termination: dict = field(default_factory=dict)
     cancelled: threading.Event = field(default_factory=threading.Event)
 
     def cancel(self) -> None:

@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.context-bisect.v1",
+  "title": "Context Bisect result",
+  "description": "A compact bounded search result over ordinary direct child replays. Retention means only that the tested neutralization satisfied the recorded token-trajectory criterion; it is not a claim of necessity or global minimality.",
+  "type": "object",
+  "required": ["schema_version", "search_id", "parent_run_id", "influence", "intervention", "target", "control", "search", "regions", "findings", "coverage", "summary"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.context-bisect.v1"},
+    "search_id": {"type": "string", "pattern": "^context_bisect_[0-9a-f]{24}$"},
+    "parent_run_id": {"type": "string", "minLength": 1},
+    "parent_execution_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "influence": {"$ref": "#/$defs/open_object"},
+    "intervention": {"$ref": "#/$defs/intervention"},
+    "target": {"$ref": "#/$defs/open_object"},
+    "span_resolution": {"$ref": "#/$defs/open_object"},
+    "root_basis_sha256": {"type": ["string", "null"]},
+    "root_span_sha256": {"type": ["string", "null"]},
+    "control": {"$ref": "#/$defs/open_object"},
+    "execution": {"$ref": "#/$defs/open_object"},
+    "search": {"$ref": "#/$defs/open_object"},
+    "regions": {"type": "array", "items": {"$ref": "#/$defs/region"}},
+    "findings": {"type": "array", "items": {"$ref": "#/$defs/open_object"}},
+    "coverage": {"$ref": "#/$defs/coverage"},
+    "summary": {"$ref": "#/$defs/open_object"},
+    "reasons": {"type": "array", "items": {"$ref": "#/$defs/reason"}}
+  },
+  "$defs": {
+    "open_object": {"type": "object", "additionalProperties": true},
+    "intervention": {
+      "type": "object",
+      "required": ["kind", "recipe"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"const": "neutralize"},
+        "recipe": {"const": "clozn.matched_length_neutral_filler.v1"}
+      }
+    },
+    "region": {
+      "type": "object",
+      "required": ["region_id", "depth", "root_interval", "message_interval", "code_points", "sha256", "state"],
+      "additionalProperties": true,
+      "properties": {
+        "region_id": {"type": "string", "pattern": "^bisect_region_[0-9a-f]{24}$"},
+        "parent_region_id": {"type": ["string", "null"]},
+        "depth": {"type": "integer", "minimum": 0},
+        "code_points": {"type": "integer", "minimum": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "state": {"enum": ["retained", "not_retained", "unavailable", "not_tested"]}
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "required": ["state"],
+      "additionalProperties": true,
+      "properties": {
+        "state": {"enum": ["complete_within_limits", "budget_limited", "time_limited", "inconclusive", "root_not_reproduced", "control_not_reproduced", "cancelled", "stale_parent"]}
+      }
+    },
+    "reason": {
+      "type": "object",
+      "required": ["code", "message"],
+      "additionalProperties": false,
+      "properties": {"code": {"type": "string", "minLength": 1}, "message": {"type": "string"}}
+    }
+  }
+}

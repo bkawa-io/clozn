@@ -1,0 +1,33 @@
+{
+  "schema_version": "clozn.branch-fan.v1",
+  "parent_run_id": "run_123",
+  "position": 37,
+  "selection": {
+    "source": "recorded_alternatives",
+    "state": "unavailable",
+    "recorded_alternatives": 0,
+    "selected_alternatives": 0,
+    "requested_limit": 3,
+    "reason": "no_recorded_alternatives"
+  },
+  "execution": {
+    "policy": "exact_first",
+    "order": "sequential",
+    "checkpoint_capture": {
+      "state": "not_attempted",
+      "reused_for_exact_candidates": false
+    },
+    "fidelity": "none_completed"
+  },
+  "branches": [],
+  "summary": {
+    "status": "unavailable",
+    "requested_branches": 0,
+    "attempted_branches": 0,
+    "children_created": 0,
+    "exact_children": 0,
+    "reconstructed_children": 0,
+    "unavailable_branches": 0,
+    "not_attempted_branches": 0
+  }
+}

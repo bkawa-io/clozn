@@ -42,6 +42,17 @@ def _positive_context(value: str) -> int:
     return parsed
 
 
+def _nonnegative_int(value: str) -> int:
+    """argparse type for compatibility flags whose zero value is meaningful."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError("value must be a non-negative integer") from None
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("value must be a non-negative integer")
+    return parsed
+
+
 # Imported after HOME/CloznError are defined: every module below reaches back into this one (`from
 # clozn.cli import main as ctx` for HOME, `from clozn.cli.main import CloznError`), so this file must
 # finish defining both before triggering those imports -- see engine_process.py's module docstring for the
@@ -110,6 +121,10 @@ def build_parser():
         "model", nargs="?",
         help="single GGUF name/path (omit only with --models-config)",
     )
+    ps.add_argument(
+        "-m", "--model", dest="model_flag", metavar="PATH",
+        help="single GGUF name/path (llama-server-compatible alias for MODEL)",
+    )
     ps.add_argument("--port", type=int, default=0)
     ps.add_argument(
         "--models-config", default=None, metavar="PATH",
@@ -127,8 +142,23 @@ def build_parser():
         "--max-loaded-models", type=_positive_context, default=None, metavar="N",
         help="maximum number of resident workers for the qualified config",
     )
-    ps.add_argument("--ctx", type=_positive_context, default=None,
+    ps.add_argument("-c", "--ctx", "--ctx-size", dest="ctx", type=_positive_context, default=None,
                     help="worker context window in tokens (default 4096; reduce on tight unified memory)")
+    ps.add_argument(
+        "-ngl", "--gpu-layers", "--n-gpu-layers", dest="gpu_layers",
+        type=_nonnegative_int, default=None, metavar="N",
+        help="explicitly offload N layers (integer subset; omitted keeps Clozn's current default)",
+    )
+    ps.add_argument(
+        "--host", default="127.0.0.1", metavar="HOST",
+        help="public gateway bind host (private model worker remains loopback-only)",
+    )
+    ps.add_argument("-a", "--alias", dest="alias", default=None, metavar="NAME",
+                    help="single-model public model presentation name")
+    ps.add_argument("-np", "--parallel", dest="parallel", type=_positive_context, default=1, metavar="N",
+                    help="generation slots (only 1 is supported by Clozn)")
+    ps.add_argument("--structured", choices=("auto", "off", "required"), default="auto",
+                    help="structured-I/O qualification policy (default: auto)")
     ps.add_argument("--cpu", action="store_true"); ps.add_argument("--mask", type=int, default=None)
     ps.add_argument("--eos", type=int, default=None)
     ps.add_argument("--sae", default=None, help="on-device SAE readout dir (dims must match the model; "

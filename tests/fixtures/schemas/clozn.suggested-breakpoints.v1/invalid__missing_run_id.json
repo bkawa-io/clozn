@@ -1,0 +1,24 @@
+{
+  "schema_version": "clozn.suggested-breakpoints.v1",
+  "privacy": "metadata_only",
+  "coordinates": {"kind": "recorded_response_token_boundary", "index_base": 0},
+  "analysis": {"state": "unavailable"},
+  "evidence": {
+    "close_calls": {
+      "state": "unavailable",
+      "thresholds": {"margin": 0.12, "min_runnerup": 0.3}
+    },
+    "context_tension": {"state": "not_measured"},
+    "answer_alignment": {"state": "unavailable"}
+  },
+  "breakpoints": [],
+  "summary": {
+    "candidate_state": "unavailable",
+    "suggested_breakpoints": 0,
+    "returned_breakpoints": 0,
+    "combined_breakpoints": 0,
+    "meaningful_close_call_breakpoints": 0,
+    "context_tension_breakpoints": 0,
+    "ordinary_close_call_breakpoints": 0
+  }
+}

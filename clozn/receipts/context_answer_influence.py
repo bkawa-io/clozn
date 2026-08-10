@@ -26,7 +26,7 @@ import re
 import time
 
 from . import rederive
-from .forced import _FORCED_MEAN_THRESHOLD, _forced_deltas, _matched_length_filler
+from .forced import _FORCED_MEAN_THRESHOLD, _forced_deltas, matched_length_neutral_filler
 
 
 SCHEMA = "clozn.context_answer_influence.v1"
@@ -571,7 +571,7 @@ def _receipt_sources(run: dict) -> dict[int, dict]:
 
 
 def _replace_span(messages: list, block: str | None, span: dict) -> tuple[list, str | None, dict]:
-    replacement = _matched_length_filler(span["end"] - span["start"])
+    replacement = matched_length_neutral_filler(span["end"] - span["start"])
     copied = [dict(message) if isinstance(message, dict) else message for message in messages]
     copied_block = block
     if span["target"] == "block":
@@ -651,7 +651,7 @@ def _replace_spans(messages: list, block: str | None, spans: list[dict]) -> tupl
 
     def _apply(text: str, group: list[dict]) -> str:
         for span in sorted(group, key=lambda item: -item["start"]):
-            replacement = _matched_length_filler(span["end"] - span["start"])
+            replacement = matched_length_neutral_filler(span["end"] - span["start"])
             text = text[:span["start"]] + replacement + text[span["end"]:]
             controls.append({
                 "context_span_id": span["id"],

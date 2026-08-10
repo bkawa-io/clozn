@@ -434,7 +434,7 @@ class EngineSubstrate(Substrate):
         return req.prompt_tokens if req is not None else None
 
     def chat(self, messages, max_new=256, sample=True, trace_out=None, mem_out=None,
-             reference_tokens=None):
+             reference_tokens=None, stop=None):
         """One stateless chat completion on the engine with memory (prompt-mode card block) + tone dials
         applied. Keeps the historical chat contract EXACTLY (same signature, same trace_out/mem_out
         fill) so the receipts/replay stack is backend-agnostic.
@@ -463,7 +463,7 @@ class EngineSubstrate(Substrate):
         req = self._new_request()
         samp = ctx._resolve_sampling(sample)
         req.sampling = samp
-        req.generation_meta = ctx._engine_generation_meta(max_new, stream=False, sample=samp)
+        req.generation_meta = ctx._engine_generation_meta(max_new, stream=False, sample=samp, stop=stop)
         # (A topic-gated memory-card block was composed and injected here until the 2026-07-27 cards cut.
         # Nothing prepends a system block on this path now, so the messages reach the template as given.)
         template_usage = {}
@@ -493,7 +493,7 @@ class EngineSubstrate(Substrate):
         if reference_tokens:                                # prove-all early-stop: halt when the answer changes
             kw["reference_tokens"] = [int(t) for t in reference_tokens if t is not None]
         usage = {}
-        traced_kw = {"sample": samp}
+        traced_kw = {"sample": samp, "stop": stop}
         try:
             import inspect
             params = inspect.signature(ctx._engine_complete_traced).parameters.values()
@@ -516,6 +516,10 @@ class EngineSubstrate(Substrate):
             req.gateway_timing = timing_document(gateway_phases)
         if isinstance(usage.get("prompt_tokens"), int):
             req.prompt_tokens = usage["prompt_tokens"]
+        if isinstance(usage.get("completion_tokens"), int):
+            req.completion_tokens = usage["completion_tokens"]
+        if isinstance(usage.get("termination"), dict):
+            req.termination = dict(usage["termination"])
         req.generation_timing = dict(usage.get("generation_timing") or {})
         raw_reason = usage.get("raw_finish_reason")
         req.finish_reason_raw = raw_reason if isinstance(raw_reason, str) else None
@@ -625,6 +629,11 @@ class EngineSubstrate(Substrate):
         prompt_tokens = usage.get("prompt_tokens")
         if isinstance(prompt_tokens, int) and not isinstance(prompt_tokens, bool):
             req.prompt_tokens = prompt_tokens
+        completion_tokens = usage.get("completion_tokens")
+        if isinstance(completion_tokens, int) and not isinstance(completion_tokens, bool):
+            req.completion_tokens = completion_tokens
+        if isinstance(usage.get("total_tokens"), int):
+            req.termination = dict(usage.get("termination") or {})
 
         native_events = chat_io.get("trace")
         if not isinstance(native_events, list):
@@ -892,6 +901,14 @@ class EngineSubstrate(Substrate):
         prompt_tokens = getattr(self, "_last_prompt_tokens", None)
         if isinstance(prompt_tokens, int):
             meta["prompt_tokens"] = prompt_tokens
+        completion_tokens = getattr(request, "completion_tokens", None)
+        if isinstance(completion_tokens, int):
+            meta["completion_tokens"] = completion_tokens
+            if isinstance(prompt_tokens, int):
+                meta["total_tokens"] = prompt_tokens + completion_tokens
+        termination = getattr(request, "termination", None)
+        if isinstance(termination, dict) and termination:
+            meta["termination"] = dict(termination)
         return dict(meta)
 
     def identity_meta(self) -> dict:
@@ -909,7 +926,7 @@ class EngineSubstrate(Substrate):
         return dict(getattr(self, "_identity_meta_val", None) or {})
 
     def chat_stream(self, messages, max_new=256, mem_out=None, lens=None, on_frame=None, sample=True,
-                    ):
+                    stop=None):
         """Streaming twin of chat(): the SAME memory-block + tone-dial construction
         (kept in lockstep -- see chat()'s comments; do not let this drift from that logic), but opens the engine's
         /v1/completions with stream:True (mirrors _engine_complete_traced's request) and yields text as
@@ -951,7 +968,7 @@ class EngineSubstrate(Substrate):
         req = self._new_request()
         samp = ctx._resolve_sampling(sample)
         req.sampling = samp
-        req.generation_meta = ctx._engine_generation_meta(max_new, stream=True, sample=samp)
+        req.generation_meta = ctx._engine_generation_meta(max_new, stream=True, sample=samp, stop=stop)
         # TONE: built EXACTLY as chat() builds it. (The memory-card block chat() used to compose here
         # went with the 2026-07-27 cards cut; the two paths stay in lockstep, both now block-free.)
         template_usage = {}
@@ -978,6 +995,8 @@ class EngineSubstrate(Substrate):
                 kw["steer"] = {"coef": 1.0, "layer": self.steer.layer}
         # (F6 anchored memory composed a gated steer_vec here; removed 2026-07-27.)
         body = dict(kw); body["prompt"] = prompt; body["max_tokens"] = int(max_new)
+        if stop:
+            body["stop"] = list(stop)
         if samp and samp.get("on"):     # S5: real sampling -- Ollama-style temperature/top_k/top_p/rep_penalty/seed
             body["temperature"] = float(samp["temperature"])
             body["rep_penalty"] = float(samp["repeat_penalty"])
@@ -1035,6 +1054,16 @@ class EngineSubstrate(Substrate):
                     prompt_tokens = obj.get("prompt_tokens")
                     if isinstance(prompt_tokens, int):
                         req.prompt_tokens = prompt_tokens
+                if isinstance(obj.get("completion_tokens"), int):
+                    req.completion_tokens = obj["completion_tokens"]
+                if obj.get("type") == "gen_finished" and isinstance(obj.get("new_tokens"), int):
+                    req.completion_tokens = obj["new_tokens"]
+                if isinstance((obj.get("usage") or {}).get("completion_tokens"), int):
+                    req.completion_tokens = obj["usage"]["completion_tokens"]
+                if isinstance((obj.get("usage") or {}).get("prompt_tokens"), int):
+                    req.prompt_tokens = obj["usage"]["prompt_tokens"]
+                if isinstance(obj.get("termination"), dict):
+                    req.termination = dict(obj["termination"])
                 if obj.get("type") == "jlens_live":     # F1: side-channel to the SSE relay, never yielded
                     if on_frame is not None:
                         try:
@@ -1151,7 +1180,7 @@ def _engine_model_info(name):
     return fam, dict(_ENGINE_MODELS.get(fam, _ENGINE_MODEL_DEFAULT))
 
 
-def _engine_complete_traced(engine, prompt, max_tokens, kw, sample=None, usage_out=None):
+def _engine_complete_traced(engine, prompt, max_tokens, kw, sample=None, usage_out=None, stop=None):
     """Generate on the engine and ALSO capture a per-token trace (issue B3), returning
     (reply, steps, finish, divinfo).
 
@@ -1184,6 +1213,8 @@ def _engine_complete_traced(engine, prompt, max_tokens, kw, sample=None, usage_o
     seed = int(sample["seed"]) if on else 0
     import urllib.request
     body = dict(kw); body["prompt"] = prompt; body["max_tokens"] = int(max_tokens)
+    if stop:
+        body["stop"] = list(stop)
     body["temperature"] = temperature; body["rep_penalty"] = rep_penalty; body["seed"] = seed
     body["top_k"] = top_k; body["top_p"] = top_p
     body["stream"] = True
@@ -1209,6 +1240,16 @@ def _engine_complete_traced(engine, prompt, max_tokens, kw, sample=None, usage_o
                 if (usage_out is not None and obj.get("type") == "gen_started"
                         and isinstance(obj.get("prompt_tokens"), int)):
                     usage_out["prompt_tokens"] = obj["prompt_tokens"]
+                if usage_out is not None and isinstance(obj.get("completion_tokens"), int):
+                    usage_out["completion_tokens"] = obj["completion_tokens"]
+                if usage_out is not None and isinstance((obj.get("usage") or {}).get("completion_tokens"), int):
+                    usage_out["completion_tokens"] = obj["usage"]["completion_tokens"]
+                if usage_out is not None and isinstance((obj.get("usage") or {}).get("prompt_tokens"), int):
+                    usage_out["prompt_tokens"] = obj["usage"]["prompt_tokens"]
+                if usage_out is not None and isinstance(obj.get("termination"), dict):
+                    usage_out["termination"] = dict(obj["termination"])
+                if usage_out is not None and obj.get("type") == "gen_finished" and isinstance(obj.get("new_tokens"), int):
+                    usage_out["completion_tokens"] = obj["new_tokens"]
                 ch = obj.get("choices")                     # the final OpenAI-style frame carries the full text
                 if ch and isinstance(ch, list) and ch[0].get("text"):
                     text = ch[0]["text"]
@@ -1236,10 +1277,13 @@ def _engine_complete_traced(engine, prompt, max_tokens, kw, sample=None, usage_o
     # temperature/rep_penalty/seed as the streaming attempt above -- the fallback must never silently
     # decode under a DIFFERENT regime than the one recorded in the run's meta.
     r = engine.complete(prompt, max_tokens=max_tokens, temperature=temperature, rep_penalty=rep_penalty,
-                        top_k=top_k, top_p=top_p, seed=seed, **kw)
+                        top_k=top_k, top_p=top_p, seed=seed, stop=stop, **kw)
     prompt_tokens = (r.get("usage") or {}).get("prompt_tokens") if isinstance(r, dict) else None
     if usage_out is not None and isinstance(prompt_tokens, int):
         usage_out["prompt_tokens"] = prompt_tokens
+    completion_tokens = (r.get("usage") or {}).get("completion_tokens") if isinstance(r, dict) else None
+    if usage_out is not None and isinstance(completion_tokens, int):
+        usage_out["completion_tokens"] = completion_tokens
     ch = r.get("choices") if isinstance(r, dict) else None
     finish = ch[0].get("finish_reason") if (ch and isinstance(ch[0], dict)) else None
     divinfo = (r.get("diverged"), r.get("diverged_at")) if isinstance(r, dict) else (None, None)

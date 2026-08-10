@@ -41,12 +41,30 @@ class InstrumentedChatResult:
     warnings: list[dict]
     reasoning: dict
     structured: Any = None
+    usage: dict | None = None
+
+
+def _request_usage(sub) -> dict | None:
+    request = getattr(sub, "_request", None)
+    if request is None:
+        return None
+    prompt = getattr(request, "prompt_tokens", None)
+    completion = getattr(request, "completion_tokens", None)
+    if not (isinstance(prompt, int) and not isinstance(prompt, bool)
+            and isinstance(completion, int) and not isinstance(completion, bool)):
+        return None
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": prompt + completion,
+    }
 
 
 
 
 def instrumented_chat(handler, messages: list, *, model: str, max_tokens: int = 256,
                       sample=True, source: str, extra_meta: dict | None = None,
+                      stop: list[str] | None = None,
                       journal_messages: list | None = None,
                       output_processor: Callable[[str, Any, str | None], Any] | None = None,
                       native_structured: Mapping[str, Any] | None = None,
@@ -97,6 +115,8 @@ def instrumented_chat(handler, messages: list, *, model: str, max_tokens: int = 
             )
             reply = native_result["raw_model_output"]
         else:
+            if stop is not None:
+                chat_kw["stop"] = list(stop)
             reply = sub.chat(messages, int(max_tokens), sample, **chat_kw)
     except Exception as exc:
         handler._log_run(source, logged_messages, "", model, started, error=str(exc),
@@ -104,6 +124,9 @@ def instrumented_chat(handler, messages: list, *, model: str, max_tokens: int = 
         raise
 
     raw_reply = str(reply)
+    usage = _request_usage(sub)
+    if usage:
+        memout["usage"] = dict(usage)
     from clozn.runs.think_tags import prompt_opens_think, sanitize_reply, sanitize_steps
     implicit_think = prompt_opens_think(memout.get("final_prompt"))
     think = sanitize_reply(raw_reply, implicit_open=implicit_think)
@@ -149,6 +172,8 @@ def instrumented_chat(handler, messages: list, *, model: str, max_tokens: int = 
                 raise persistence from exc
             raise
     success_meta = dict(extra_meta or {})
+    if usage:
+        success_meta["usage"] = dict(usage)
     rid = handler._log_run(source, logged_messages, raw_reply, model, started,
                            trace=trace_steps, mem_out=memout, finish_reason=finish,
                            finish_reason_fallback=None if finish else public_finish,
@@ -170,11 +195,14 @@ def instrumented_chat(handler, messages: list, *, model: str, max_tokens: int = 
         warnings=warnings_for(finish, {"max_tokens": int(max_tokens)}),
         reasoning=think.journal(reasoning_steps=reasoning_steps),
         structured=structured,
+        usage=usage,
     )
 
 
 def model_id() -> str:
     try:
+        if isinstance(getattr(ctx, "PUBLIC_MODEL_ID", None), str) and ctx.PUBLIC_MODEL_ID:
+            return ctx.PUBLIC_MODEL_ID
         model = str((ctx.ENGINE.health() or {}).get("model") or "clozn-local")
         name = os.path.basename(model).removesuffix(".gguf")
         return name or "clozn-local"

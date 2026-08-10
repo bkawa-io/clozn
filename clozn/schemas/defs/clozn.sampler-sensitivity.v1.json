@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.sampler-sensitivity.v1",
+  "title": "Clozn Sampler Sensitivity result",
+  "description": "A bounded exact-fork observation of nearby sampler variants. It reports measured trajectory evidence, not quality, semantic correctness, fragility, or robustness.",
+  "type": "object",
+  "required": ["schema_version", "test_id", "parent_run_id", "position", "baseline_sampler", "recipe", "execution", "probes", "parameter_sensitivity", "seed_sensitivity", "summary"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.sampler-sensitivity.v1"},
+    "test_id": {"type": "string", "pattern": "^sampler_sensitivity_[0-9a-f]{24}$"},
+    "parent_run_id": {"type": "string", "minLength": 1},
+    "position": {"type": "integer", "minimum": 0},
+    "baseline_sampler": {"type": "object", "additionalProperties": true},
+    "recipe": {"type": "object", "additionalProperties": true},
+    "execution": {"type": "object", "additionalProperties": true},
+    "probes": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+    "parameter_sensitivity": {"type": "object", "additionalProperties": true},
+    "seed_sensitivity": {"type": "object", "additionalProperties": true},
+    "summary": {"type": "object", "additionalProperties": true}
+  }
+}

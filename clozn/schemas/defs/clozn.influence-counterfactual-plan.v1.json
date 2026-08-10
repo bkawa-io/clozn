@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.influence-counterfactual-plan.v1",
+  "title": "Influence counterfactual confirmation plan",
+  "description": "A deterministic, read-only plan that binds one persisted measured influence link to a freshly resolved message-backed context span. It does not measure influence, contact a worker, capture a checkpoint, generate, or create children. Teacher-forced measured influence and free-generation counterfactual evidence remain distinct.",
+  "type": "object",
+  "required": ["schema_version", "run_id", "test_id", "parent_fingerprint_sha256", "influence", "intervention", "span_resolution", "execution", "specificity_control"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.influence-counterfactual-plan.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "test_id": {"type": "string", "pattern": "^ict_[0-9a-f]{24}$"},
+    "parent_fingerprint_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "influence": {"$ref": "#/$defs/influence"},
+    "intervention": {"$ref": "#/$defs/intervention"},
+    "span_resolution": {"$ref": "#/$defs/span_resolution"},
+    "answer_target": {"$ref": "#/$defs/interval"},
+    "expected_measurement_direction": {"enum": ["neutralizing_lowered_recorded_probability", "neutralizing_raised_recorded_probability", "no_directional_above_floor_expectation"]},
+    "specificity_control": {"$ref": "#/$defs/specificity"},
+    "execution": {"$ref": "#/$defs/execution"}
+  },
+  "$defs": {
+    "influence": {
+      "type": "object",
+      "required": ["source_span_id", "answer_span_id", "measurement_state"],
+      "additionalProperties": true,
+      "properties": {
+        "source_span_id": {"type": "string", "minLength": 1},
+        "answer_span_id": {"type": "string", "minLength": 1},
+        "measurement_state": {"enum": ["available", "not_measured", "unavailable", "error"]},
+        "measurement_reason": {"type": "string", "minLength": 1},
+        "effect": {"enum": ["supports", "suppresses", "neutral"]},
+        "evidence_state": {"enum": ["causally_supported", "observed"]},
+        "clears_floor": {"type": "boolean"},
+        "delta_nats": {"type": "number"},
+        "abs_delta_nats": {"type": "number", "minimum": 0},
+        "answer_interval": {"$ref": "#/$defs/interval"}
+      }
+    },
+    "intervention": {
+      "type": "object",
+      "required": ["kind", "relation_to_measurement"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"enum": ["neutralize", "remove"]},
+        "relation_to_measurement": {"enum": ["same_intervention", "different_intervention"]},
+        "recipe": {"const": "clozn.matched_length_neutral_filler.v1"}
+      }
+    },
+    "interval": {
+      "type": "object",
+      "required": ["start", "end", "unit", "interval"],
+      "additionalProperties": false,
+      "properties": {
+        "start": {"type": "integer", "minimum": 0},
+        "end": {"type": "integer", "minimum": 0},
+        "length": {"type": "integer", "minimum": 0},
+        "unit": {"const": "unicode_code_points"},
+        "interval": {"const": "half_open"}
+      }
+    },
+    "span_resolution": {
+      "type": "object",
+      "required": ["state"],
+      "additionalProperties": false,
+      "properties": {
+        "state": {"enum": ["available", "unavailable"]},
+        "reason": {"type": "string", "minLength": 1},
+        "basis": {"const": "message"},
+        "message_index": {"type": "integer", "minimum": 0},
+        "start": {"type": "integer", "minimum": 0},
+        "end": {"type": "integer", "minimum": 0},
+        "length": {"type": "integer", "minimum": 0},
+        "unit": {"const": "unicode_code_points"},
+        "interval": {"const": "half_open"}
+      }
+    },
+    "specificity": {
+      "type": "object",
+      "required": ["requested", "state"],
+      "additionalProperties": false,
+      "properties": {
+        "requested": {"type": "boolean"},
+        "state": {"enum": ["available", "unavailable", "not_requested"]},
+        "reason": {"type": "string", "minLength": 1},
+        "basis": {"const": "message"},
+        "message_index": {"type": "integer", "minimum": 0},
+        "start": {"type": "integer", "minimum": 0},
+        "end": {"type": "integer", "minimum": 0},
+        "length": {"type": "integer", "minimum": 0},
+        "unit": {"const": "unicode_code_points"},
+        "interval": {"const": "half_open"}
+      }
+    },
+    "execution": {
+      "type": "object",
+      "required": ["state", "requires_generation", "requires_full_reprefill", "live_runtime_state", "decode_regime", "steering"],
+      "additionalProperties": false,
+      "properties": {
+        "state": {"enum": ["ready", "unavailable"]},
+        "reason": {"type": "string", "minLength": 1},
+        "requires_generation": {"const": true},
+        "requires_full_reprefill": {"const": true},
+        "live_runtime_state": {"const": "not_checked"},
+        "decode_regime": {"type": "object", "additionalProperties": true, "required": ["source", "matches_recorded_decode"], "properties": {"source": {"enum": ["recorded_greedy", "recorded_fixed_sampling", "controlled_greedy_fallback"]}, "matches_recorded_decode": {"type": "boolean"}}},
+        "steering": {"type": "object", "additionalProperties": true, "required": ["state"]}
+      }
+    }
+  }
+}

@@ -73,6 +73,7 @@ _GATE_EXEMPT_POSTS = frozenset({"/capture/tier", "/substrate", "/cancel", "/v1/c
 _GENERATION_POST_PATHS = frozenset({
     "/api/clozn/generate",
     "/v1/chat/completions",
+    "/v1/responses",
     "/api/generate",
     "/api/chat",
 })
@@ -93,6 +94,8 @@ except Exception:
 # A configured PreloadedModelRouter applies a request-scoped substrate/engine
 # override before any generation path runs.
 MODEL_ROUTER = None
+PUBLIC_MODEL_ID = None
+STRUCTURED_MODE = "auto"
 
 
 class EngineUnavailable(RuntimeError):
@@ -255,7 +258,7 @@ def _sampling_settings():
     return {k: settings.get_setting(k, v) for k, v in _SAMPLING_DEFAULTS.items()}
 
 
-def _engine_generation_meta(max_new=None, stream=None, sample=None):
+def _engine_generation_meta(max_new=None, stream=None, sample=None, stop=None):
     """Reproducibility metadata for one engine generation (REPRODUCE_AND_PROVE_PLAN S2/S5).
 
     `sample`: None (the default) always yields the honest greedy regime -- byte-identical to every
@@ -281,6 +284,7 @@ def _engine_generation_meta(max_new=None, stream=None, sample=None):
         "decode": decode,
         "max_tokens": int(max_new) if max_new is not None else None,
         "stream": bool(stream) if stream is not None else None,
+        "stop": list(stop) if stop else None,
     })
 
 
@@ -1243,7 +1247,8 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
     return H
 
 
-def build_server(*, host: str, port: int, engine, model_router=None, sub=None):
+def build_server(*, host: str, port: int, engine, model_router=None, sub=None,
+                 public_model_id=None, structured_mode="auto"):
     """Build the public HTTP server for either gateway construction path.
 
     ``clozn serve`` supplies the already-owned worker/router objects directly,
@@ -1252,7 +1257,7 @@ def build_server(*, host: str, port: int, engine, model_router=None, sub=None):
     already resolve the active product substrate through this module, while the
     returned server owns only socket/thread lifetime.
     """
-    global SUB, SUBNAME, RUNTIME_KIND, ENGINE, MODEL_ROUTER
+    global SUB, SUBNAME, RUNTIME_KIND, ENGINE, MODEL_ROUTER, PUBLIC_MODEL_ID, STRUCTURED_MODE
     if engine is None:
         raise RuntimeError("the product gateway needs a private model worker")
     os.environ["CLOZN_RUNTIME_KIND"] = "product"
@@ -1260,12 +1265,39 @@ def build_server(*, host: str, port: int, engine, model_router=None, sub=None):
     SUBNAME = "engine"
     ENGINE = engine
     MODEL_ROUTER = model_router
+    PUBLIC_MODEL_ID = public_model_id or None
+    STRUCTURED_MODE = structured_mode
     if model_router is not None:
         SUB, managed_engine = model_router.control_pair()
         if managed_engine is not None:
             ENGINE = managed_engine
     else:
         SUB = sub if sub is not None else EngineSubstrate(engine=engine)
+    if structured_mode == "required":
+        from clozn.server import structured_io
+        identity = {}
+        try:
+            identity = dict(SUB.identity_meta() or {})
+        except Exception:
+            pass
+        health = {}
+        try:
+            health = dict(ENGINE.health() or {})
+        except Exception:
+            pass
+        native = health.get("native_chat_io") if isinstance(health, dict) else None
+        pipeline = {
+            key: native.get(key)
+            for key in ("executor_id", "renderer_id", "grammar_id", "parser_id")
+        } if isinstance(native, dict) else {}
+        registry = structured_io.resolve_qualification_registry(
+            identity,
+            artifact_root=(os.environ.get("CLOZN_ARTIFACTS_DIR") or os.path.join(CLOZN_DIR, "artifacts")),
+        )
+        for feature in ("tools", "json_object", "json_schema"):
+            structured_io.require_qualification(identity, feature,
+                                                 runtime_pipeline=pipeline,
+                                                 registry=registry)
     # RT-05: warm the run store's SQLite schema single-threaded, before
     # ThreadingHTTPServer starts dispatching request handler threads.
     try:
