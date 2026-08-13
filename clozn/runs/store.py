@@ -375,9 +375,7 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
            sections: list | None = None,
            execution_fork_receipt: dict | None = None,
            time_machine_continuation_receipt: dict | None = None,
-           _reserved_run_id: str | None = None,
-           applied_corrections: list | None = None,
-           correction_conflicts: list | None = None) -> str | None:
+           _reserved_run_id: str | None = None) -> str | None:
     """Persist a completed run and return its id. Logging failures remain non-fatal.
 
     `identity` (roadmap S4.3): the immutable reproduction-identity block from
@@ -395,13 +393,7 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
     exactly the schema it always got -- no `sections` key at all, not a null or empty list -- so this is
     purely additive and nothing downstream needs to special-case its absence.
 
-    `applied_corrections`/`correction_conflicts` (F5, "Teach Once" scoped correction store): RETIRED --
-    the durable correction store that used to populate these (`clozn.runs.corrections`,
-    `clozn.runs.corrections.apply_and_record()`) was removed; see docs/CAPABILITIES.md. The parameters
-    stay only so an older run's already-persisted shape keeps validating/reading identically, and so any
-    caller that still passes them (none, in this build) degrades to exactly the schema it always got.
-    No production call site passes either anymore: every new run gets no `applied_corrections` key at
-    all, the same as a caller that never passed one."""
+    """
     try:
         _ensure()
         started = started if started is not None else time.time()
@@ -455,8 +447,6 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
             run_id=rid,
             identity=identity,
             error=error,
-            applied_corrections=applied_corrections,
-            correction_conflicts=correction_conflicts,
         )
         rec = {
             "id": rid,
@@ -503,14 +493,6 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
         }
         if sections:
             rec["sections"] = list(sections)
-        if applied_corrections is not None:
-            # F5: attached exactly once, here, at creation -- runs are immutable, so this is the only
-            # place an "applied_correction_ids" fact can ever land on a run. The same list already went
-            # into context_receipt above; this top-level copy is what clozn.runs.corrections and any
-            # future run-detail surface reads without unpacking the receipt.
-            rec["applied_corrections"] = list(applied_corrections)
-        if correction_conflicts is not None:
-            rec["correction_conflicts"] = list(correction_conflicts)
         if execution_fork_receipt is not None:
             # FORK-01: the generated run id is allocated inside this transaction boundary, so only the
             # store can put that exact id into the immutable receipt before its first (and only) write.

@@ -116,10 +116,10 @@ def test_ledger_lying_about_an_applied_migration_is_caught_by_verify(tmp_path):
     try:
         report = migrations.status(db)
         assert report["up_to_date"] is False
-        assert [step["version"] for step in report["pending"]] == [1, 2, 3, 4, 5]
+        assert [step["version"] for step in report["pending"]] == [m.version for m in migrations.MIGRATIONS]
 
         applied = migrations.migrate(db)
-        assert applied == [1, 2, 3, 4, 5]
+        assert applied == [m.version for m in migrations.MIGRATIONS]
 
         tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "runs" in tables
@@ -186,7 +186,7 @@ def test_migrate_on_an_in_memory_db_nobody_has_touched(tmp_path):
     try:
         assert migrations.current_version(db) == 0
         applied = migrations.migrate(db)
-        assert applied == [1, 2, 3, 4, 5]
+        assert applied == [m.version for m in migrations.MIGRATIONS]
         assert migrations.current_version(db) == migrations.TARGET_VERSION
         assert migrations.migrate(db) == []       # already-latest: idempotent no-op
     finally:

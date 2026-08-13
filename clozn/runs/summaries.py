@@ -100,8 +100,6 @@ def _flags(rec: dict) -> list[str]:
         f.append("low-confidence")
     if len((rec.get("response") or "").split()) > 220:
         f.append("long")
-    if rec.get("applied_corrections"):
-        f.append("corrected")
     return f
 
 

@@ -16,20 +16,6 @@ def _api_error(h, status: int, message: str, *, param=None, kind="invalid_reques
     h._json(status, {"error": error})
 
 
-def _retired_legacy_completions(h) -> None:
-    """Return the migration response for the removed public legacy route.
-
-    The private worker still speaks its own ``/v1/completions`` protocol; this response is only for
-    callers reaching the public Python gateway. Keep it before model selection so a retired route
-    never loads a model, consumes a worker permit, or creates a run.
-    """
-    _api_error(
-        h, 410,
-        "POST /v1/completions was retired; use POST /v1/chat/completions instead",
-        code="endpoint_retired",
-    )
-
-
 def _calibration_task(body) -> tuple[dict | Any, str | None]:
     """Extract Clozn's task extension before standard OpenAI normalization.
 
@@ -361,9 +347,6 @@ def try_get(h, p):
 
 
 def try_post(h, p, body):
-    if p == "/v1/completions":
-        _retired_legacy_completions(h)
-        return True
     if p == "/api/clozn/generate":
         from clozn.server.model_routing import select_for_handler
         selection = select_for_handler(

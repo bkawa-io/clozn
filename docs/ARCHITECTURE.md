@@ -45,8 +45,7 @@ read-only run inspection remain concurrent.
 ## Public and native APIs
 
 - `/v1/models` and `/v1/chat/completions` form the strict client-facing OpenAI subset documented in
-  [OPENAI_COMPATIBILITY.md](OPENAI_COMPATIBILITY.md). The retired `/v1/completions` path returns a
-  typed HTTP 410 migration response.
+  [OPENAI_COMPATIBILITY.md](OPENAI_COMPATIBILITY.md).
 - `/api/clozn/generate` carries Clozn's typed native state stream. Native event frames never leak into
   an OpenAI completion stream.
 - `/runs/*`, `/experiment-results/*`, and other namespaced routes expose recorded evidence and derived

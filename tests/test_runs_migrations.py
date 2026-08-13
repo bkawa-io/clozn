@@ -109,8 +109,8 @@ def test_fresh_migration_matches_upgraded_legacy_schema(tmp_path):
     applied = migrations.migrate(fresh_db)
 
     try:
-        assert legacy_applied == [1, 2, 3, 4, 5]
-        assert applied == [1, 2, 3, 4, 5]
+        assert legacy_applied == [migration.version for migration in migrations.MIGRATIONS]
+        assert applied == [migration.version for migration in migrations.MIGRATIONS]
         assert _schema_dump(fresh_db) == _schema_dump(legacy_db)
     finally:
         legacy_db.close()
@@ -129,12 +129,105 @@ def test_fresh_migration_reaches_target_version(tmp_path):
         db.close()
 
 
+def test_scope_reset_drops_durable_correction_tables_from_existing_journals(tmp_path):
+    """Migration 6 removes F5/F6 storage from an install that previously reached version 5."""
+    db = sqlite3.connect(str(tmp_path / "retired-corrections.sqlite3"))
+    try:
+        v5 = tuple(migration for migration in migrations.MIGRATIONS if migration.version <= 5)
+        assert migrations.migrate(db, v5) == [migration.version for migration in v5]
+
+        assert migrations.migrate(db) == [6]
+        tables = {row[0] for row in db.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )}
+        assert "corrections" not in tables
+        assert "correction_events" not in tables
+    finally:
+        db.close()
+
+
+def test_claimed_superseder_suppresses_missing_superseded_migration(tmp_path):
+    """A cleanup ledger row prevents a missing predecessor from recreating retired tables."""
+    db = sqlite3.connect(str(tmp_path / "superseded-ledger-gap.sqlite3"))
+    try:
+        v4 = tuple(migration for migration in migrations.MIGRATIONS if migration.version <= 4)
+        assert migrations.migrate(db, v4) == [migration.version for migration in v4]
+
+        migration_6 = next(migration for migration in migrations.MIGRATIONS if migration.version == 6)
+        db.execute(
+            "INSERT INTO schema_meta(key, value) VALUES(?, ?)",
+            ("migration:6", migration_6.description),
+        )
+        db.commit()
+
+        assert 5 not in [migration.version for migration in migrations.pending(db)]
+        assert migrations.migrate(db) == []
+        tables = {row[0] for row in db.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )}
+        assert "corrections" not in tables
+        assert "correction_events" not in tables
+    finally:
+        db.close()
+
+
+def test_stale_pending_snapshot_cannot_reapply_a_superseded_migration(tmp_path, monkeypatch):
+    """A concurrent cleanup between planning and locking cannot let migration 5 recreate its tables."""
+    path = str(tmp_path / "stale-snapshot.sqlite3")
+    first = sqlite3.connect(path)
+    second = sqlite3.connect(path)
+    original_pending = migrations.pending
+    try:
+        v5 = tuple(migration for migration in migrations.MIGRATIONS if migration.version <= 5)
+        assert migrations.migrate(first, v5) == [migration.version for migration in v5]
+        first.execute("DROP TABLE correction_events")
+        first.execute("DROP TABLE corrections")
+        first.commit()
+
+        stale_pending = original_pending(first)
+        assert [migration.version for migration in stale_pending] == [5, 6]
+        interleaved = False
+
+        def _pending_after_concurrent_cleanup(db, migration_set=migrations.MIGRATIONS):
+            nonlocal interleaved
+            if db is first and not interleaved:
+                interleaved = True
+                assert migrations.migrate(second) == [5, 6]
+                return stale_pending
+            return original_pending(db, migration_set)
+
+        monkeypatch.setattr(migrations, "pending", _pending_after_concurrent_cleanup)
+        assert migrations.migrate(first) == []
+        assert interleaved is True
+        tables = {row[0] for row in first.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )}
+        assert "corrections" not in tables
+        assert "correction_events" not in tables
+    finally:
+        second.close()
+        first.close()
+
+
+def test_fresh_current_migration_has_no_durable_correction_tables(tmp_path):
+    db = sqlite3.connect(str(tmp_path / "fresh-current.sqlite3"))
+    try:
+        assert migrations.migrate(db) == [migration.version for migration in migrations.MIGRATIONS]
+        tables = {row[0] for row in db.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )}
+        assert "corrections" not in tables
+        assert "correction_events" not in tables
+    finally:
+        db.close()
+
+
 def test_migrate_is_idempotent_on_an_up_to_date_db(tmp_path):
     db = sqlite3.connect(str(tmp_path / "fresh.sqlite3"))
     try:
         first = migrations.migrate(db)
         second = migrations.migrate(db)
-        assert first == [1, 2, 3, 4, 5]
+        assert first == [migration.version for migration in migrations.MIGRATIONS]
         assert second == []                          # nothing pending -> no-op, not a re-apply
     finally:
         db.close()
@@ -174,7 +267,7 @@ def test_legacy_db_upgrades_in_place_losslessly(tmp_path):
 
         applied = migrations.migrate(db)
 
-        assert applied == [1, 2, 3, 4, 5]
+        assert applied == [migration.version for migration in migrations.MIGRATIONS]
         assert migrations.current_version(db) == migrations.TARGET_VERSION
         assert migrations.pending(db) == []
         assert _row_ids(db) == before                  # lossless: same rows, same ids, nothing dropped

@@ -1,7 +1,7 @@
 """Engine-backed chat + steering + model routing, and the studio chat surface that logs a run
 (POST /say for the HF/qwen memory model). `/engine/*` here covers WRITE/generation calls (as opposed to
-the pure readouts in routes/readouts.py): observe (edit a residual, watch the prediction move), deprecated
-tone-dial compatibility aliases, and native GGUF chat with prompt-card memory. `/say` dispatches to
+the pure readouts in routes/readouts.py): observe (edit a residual, watch the prediction move) and native
+GGUF chat with prompt-card memory. `/say` dispatches to
 whichever substrate is active (SUB.handle) and additionally logs the run -- unlike the fully generic
 SUB.handle(path, body) fallback (still in clozn.server.app's do_POST), this shapes a specific response AND
 captures a trace/memory record for the Run Inspector. Mechanical extraction of the matching branches out
@@ -110,39 +110,6 @@ def try_post(h, p, body):
                          "position": pos, "scale": scale})
         except Exception as e:
             h._json(502, {"error": f"engine: {e}"})
-        return True
-    if p == "/engine/steer/axes":   # deprecated alias; /steer/axes is the product contract
-        from clozn.behavior.steering.axes import AXES
-        es = ctx._engine_steer()
-        sub = ctx.active_sub(h)
-        # In the product process EngineSubstrate.steer IS ctx._engine_steer(). Delegate so the legacy
-        # URL cannot drift from live values, calibration bounds, or custom/library axes. A lab process
-        # may expose a different active substrate while an engine client exists; keep the old metadata
-        # fallback there rather than pretending those are the same state owner.
-        if sub is not None and getattr(sub, "steer", None) is es and hasattr(sub, "_steer"):
-            out = dict(sub._steer("/steer/axes", {}) or {})
-        else:
-            out = {"axes": [{"name": k, "poles": AXES[k]["poles"]} for k in AXES],
-                   "ready": bool(es and es.ready)}
-        out.update({"engine": bool(ctx.ENGINE), "deprecated": True, "canonical": "/steer/axes"})
-        h._json(200, out)
-        return True
-    if p == "/engine/steer/check":   # legacy body uses axis/max_tokens; canonical path is /steer/check
-        es = ctx._engine_steer()
-        if es is None:
-            h._json(502, {"error": "model worker unavailable (CLOZN_ENGINE_PORT)"})
-            return True
-        try:
-            prompt = str(body.get("prompt", "Tell me about the city at night."))[:300]
-            axis, val = str(body.get("axis", "warm")), float(body.get("value", 1.0))
-            mx = int(body.get("max_tokens", 60))
-            base = es.generate(prompt, strength={}, max_new=mx)            # no dial = the baseline
-            stee = es.generate(prompt, strength={axis: val}, max_new=mx)
-            h._json(200, {"prompt": prompt, "axis": axis, "value": val,
-                         "baseline": base.strip(), "steered": stee.strip(),
-                         "deprecated": True, "canonical": "/steer/check"})
-        except Exception as e:
-            h._json(502, {"error": f"engine-steer: {e}"})
         return True
     if p == "/engine/chat":   # Native chat alias: GGUF generation with prompt-card memory
         if ctx.ENGINE is None:

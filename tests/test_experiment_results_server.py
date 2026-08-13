@@ -4,7 +4,7 @@ Model-free: drives the REAL clozn_server do_GET handler (the object.__new__(H) n
 test_run_diagnosis_server.py / test_experiment_server.py / test_receipts_server.py) against a directory
 of hand-built clozn.experiment.result.v0 fixtures on disk. clozn.experiments.suite's own validation is
 exhaustively covered elsewhere (test_experiment_suite_cmd.py, clozn/experiments/test_stats.py); this file
-only proves the route wiring: list/detail/cells/artifacts shapes, pagination, thin-vs-full cell payloads,
+only proves the route wiring: list/detail/cells shapes, pagination, thin-vs-full cell payloads,
 a broken file staying visible rather than vanishing, and that the existing GET /experiments/types drawer
 catalog (clozn/server/routes/receipts.py) is untouched by the new /experiment-results namespace.
 """
@@ -207,19 +207,11 @@ def test_error_status_cell_is_visible_with_null_run(iso):
     assert cell["error"] == "RuntimeError: boom"
 
 
-# ----------------------------------------------------------------------------- GET /experiment-results/<id>/artifacts
-
-def test_artifacts_route_is_an_explicit_not_implemented_not_a_silent_pass(iso):
-    _write_result(iso, experiment_id="exp_art", name="art-check", created_at="2026-07-11T00:00:00Z")
-    head, body = _get("/experiment-results/exp_art/artifacts/whatever.json")
+def test_artifact_like_path_is_an_ordinary_route_miss(iso):
+    path = "/experiment-results/exp_art/artifacts/whatever.json"
+    head, body = _get(path)
     assert "404" in head
-    assert "no artifact bundle" in body["error"]
-
-
-def test_artifacts_route_missing_experiment_is_still_experiment_not_found(iso):
-    head, body = _get("/experiment-results/exp_nope/artifacts/whatever.json")
-    assert "404" in head
-    assert body == {"error": "no experiment result found for id 'exp_nope'"}
+    assert body == {"error": f"GET {path}"}
 
 
 # --------------------------------------------------------------------------- the existing drawer catalog is untouched

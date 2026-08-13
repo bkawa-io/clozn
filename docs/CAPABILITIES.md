@@ -41,7 +41,7 @@ projection-file handoff are retired.
 | Ollama model adoption | Merged: exact manifest-layer resolution, fidelity classification, dry-run/guided try, hard-link/copy, optional core smoke, and undo -- scoped entirely to Clozn's own model directory | `clozn adopt ollama --try --yes [--qualify]` | None | Model-free resolver/adoption/qualification tests; a live adopted model still determines whether `--qualify` passes | Unreleased | Does not mutate or stop Ollama; hard links require a compatible filesystem; does not configure any other application (see Removed/Retired) |
 | Performance diagnosis | Merged: versioned worker timings for load/startup, template, tokenize, context/KV creation, prefill, and decode; gateway timings for queue, dispatch, serialization, and stream flush; separate clock owners; known/unaccounted aggregation; evidence-gated regression attribution | `clozn diagnose --performance`; `GET /runs/<id>/performance` | Measured phase breakdown, known/unaccounted time, throughput provenance, and rule evidence | Model-free protocol/old-worker/cold-warm/long-prompt/cancellation/CPU-vs-GPU tests plus a clean CPU worker compile | Unreleased | Cross-process offsets are never aligned; overlapping and process-startup spans are shown but excluded from known in-request time. Live GGUF CPU/GPU runs are still required to qualify absolute timing accuracy and model/backend-specific thresholds |
 | J-lens readout | Merged apply path with artifact identity and checksum validation | `/jlens`, `/runs/<id>/jlens` | Lens layer view with provenance caption | Exact Qwen2.5-7B Q4_K_M row only | Unreleased | Fit per model; a linear readout is not a transcript of thought or causal proof |
-| OpenAI-compatible text API | Merged strict subset of models and Chat Completions | `/v1/models`, `/v1/chat/completions` | Runs recorded through the same gateway | Model-free SDK conformance plus real-runtime smoke gates | Unreleased | Text-only subset; legacy `/v1/completions` returns a typed HTTP 410 retirement response |
+| OpenAI-compatible text API | Merged strict subset of models and Chat Completions | `/v1/models`, `/v1/chat/completions` | Runs recorded through the same gateway | Model-free SDK conformance plus real-runtime smoke gates | Unreleased | Text-only subset |
 | Explicit concept guard intervention | Merged: request-local, opt-in closed-loop disposition guardrail -- J-lens-based concept polling, per-model threshold calibration, fail-closed on an unresolvable calibrated concept, mid-generation counter-injection, and a per-request receipt. No persisted server-wide default; a request that omits `clozn_guard` is byte-identical to the ordinary path | `clozn_guard` request field on `/v1/chat/completions` | None (no persistent guard configuration surface) | Model-free control-loop, calibration-load, and server-wiring tests | Unreleased | Present-tense detect-and-correct only, never predictive/lead-time; incompatible with `stream: true` and with the other `clozn_*` extensions in v1; an uncalibrated concept degrades to annotate-only rather than firing |
 | Calibration-evidence annotation | Merged: always-on, metadata-only verdict (`clozn_policy`) reporting the calibrated risk band, score, and answer/ask/abstain thresholds for a completed reply against a saved `clozn eval --save` profile. Read-only -- never rewrites the reply text and never decides production behavior on the caller's behalf | `clozn_policy` response field; `clozn eval`, `clozn eval policy` | None (evidence only; no configuration surface) | Model-free verdict/signal/attachment tests | Unreleased | A calibrated band is a fitted threshold from a labeled set, not a per-answer correctness guarantee; absent when no calibration is saved for the exact model/task |
 | Managed multi-model runtime | Merged: qualified preload manifest, exact-identity worker registry/router, per-worker generation concurrency, in-process cold loading with single-flight coalescing, and verified-idle LRU eviction | `clozn serve --models-config`; `GET /readyz`, `GET /runtime/models` | None | Model-free routing/registry/cold-load/soak tests; live two-GGUF default battery plus twenty-cycle cold-load soak in `scripts/smoke/managed_runtime_smoke.py` | Unreleased | The Python gateway runs in the supervisor process; C++ workers remain private subprocesses. Receipt/replay/influence/legacy-fork routes fail closed under a managed gateway; SAE/J-lens cannot be enabled on a managed worker in v1; the resident-worker limit is a hard cap, not advisory |
@@ -49,32 +49,6 @@ projection-file handoff are retired.
 
 ## Removed and research-only surfaces
 
-- **Durable scoped corrections / Teach Once** were retired: a correction could be drafted, confirmed,
-  scoped to a session/client/model/project, and then auto-applied to every future matching request
-  until explicitly disabled or deleted (F5/F6: `POST /corrections`, `POST /corrections/<id>/verify`,
-  `clozn corrections ...`), and the prompt-first retry route additionally supported persisting a preset
-  as a standing session/profile policy (`--scope session|profile`, `/corrective-retries/<id>/undo`).
-  Both were removed because Clozn does not own persistent behavioral policy that silently reshapes
-  unrelated future requests -- see the causal-debugger positioning in [README.md](../README.md).
-  `GET`/`POST /corrections` and `/corrections/*` now return a typed HTTP 410
-  (`durable_corrections_retired`) instead of a 404, so a caller can tell "this used to work and no
-  longer applies." Studio no longer exposes a Corrections/Teach Once surface; the one-shot corrective
-  retry (row above) is unaffected. Runs recorded before the retirement may still carry
-  `applied_corrections`/`correction_conflicts` receipt fields or a `corrective_retry.scope` of
-  `session`/`profile`; those remain readable as historical evidence and validate against their
-  original schemas, but nothing in the product reads or re-applies them anymore.
-- **Named behavior profiles** were retired: CLOZN used to let a user bundle steering state into a
-  saved persona (`work`, `friend`, ...) with save/switch/export/import/delete, and the switched-to
-  name was written onto every subsequent run as `meta.active_profile`. That whole persona lifecycle
-  was removed -- CLOZN is a causal debugger, not a persona manager; see the positioning in
-  [README.md](../README.md). The primitive underneath a profile switch was always steering itself
-  (`/steer/axes`, `/steer/set`, `/steer/check`, custom dials, concept steering), which is completely
-  untouched and persists exactly as it did before. `GET`/`POST /profiles/*` now return a typed HTTP
-  410 (`profiles_retired`). Existing files under `~/.clozn/profiles/` are left on disk untouched and
-  are never read by the product; a stale `active_profile` key in `studio_settings.json` is likewise
-  never read or written and has no effect on any generation. Runs recorded before the retirement may
-  still carry `meta.active_profile`; that remains readable as historical evidence, but no new run
-  writes it.
 - **Downstream client configuration management** was retired: `clozn connect` used to safely patch a
   third-party application's config file -- Aider's YAML, Open WebUI's environment, a generic OpenAI
   client's `.env`, an Ollama SDK environment -- with a pre-write backup, sha256-based drift detection,

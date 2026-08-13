@@ -340,22 +340,6 @@ def test_omitted_model_selects_configured_default_without_fabricating_request(
     assert routed["beta_sub"].calls == []
 
 
-def test_retired_legacy_completion_does_not_select_or_load_a_worker(routed):
-    raw, handler = _dispatch("POST", "/v1/completions", {
-        "model": "beta",
-        "prompt": "legacy route",
-        "max_tokens": 4,
-    })
-    status, payload, _headers = _response(raw)
-    assert status == 410
-    assert payload["error"]["code"] == "endpoint_retired"
-    assert "chat/completions" in payload["error"]["message"]
-    assert routed["alpha_sub"].calls == []
-    assert routed["beta_sub"].calls == []
-    assert runlog.list_runs(5) == []
-    _assert_clean(handler)
-
-
 def test_ollama_chat_uses_same_exact_worker_and_receipt(routed):
     raw, handler = _dispatch("POST", "/api/chat", {
         "model": "beta",

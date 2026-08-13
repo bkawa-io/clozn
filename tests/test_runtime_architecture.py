@@ -497,10 +497,9 @@ class RuntimeBoundaryTests(unittest.TestCase):
         self.assertEqual(len(calls), 3)
         self.assertEqual(handle.restart_times, [111.0])
 
-    def test_product_substrate_switch_is_gone(self):
+    def test_product_substrate_switch_is_not_a_health_route(self):
         handler = CaptureHandler()
-        self.assertTrue(health.try_post(handler, "/substrate", {"name": "qwen"}))
-        self.assertEqual(handler.code, 410)
+        self.assertFalse(health.try_post(handler, "/substrate", {"name": "qwen"}))
 
 
 
@@ -645,7 +644,7 @@ class PostGateScopeTests(unittest.TestCase):
         self.assertEqual(json.loads(payload.decode("utf-8")), {"ok": True, "tier": "deep"})
         self.assertEqual(calls, [])                 # the gate was never even asked
 
-    def test_substrate_post_bypasses_the_gate_entirely(self):
+    def test_removed_substrate_post_uses_the_normal_gate_and_fallback(self):
         calls = []
         original = app.POST_GATE.acquire
         app.POST_GATE.acquire = lambda *a, **kw: calls.append(1) or original()
@@ -653,8 +652,19 @@ class PostGateScopeTests(unittest.TestCase):
             head, _, _ = raw_gateway_request("POST", path="/substrate", body=b'{}')
         finally:
             app.POST_GATE.acquire = original
-        self.assertIn(" 410 ", head)                 # health.py's fixed response, reached either way
-        self.assertEqual(calls, [])
+        self.assertIn(" 409 ", head)                 # ordinary unserved POST fallback
+        self.assertEqual(calls, [1])
+
+    def test_removed_tombstones_are_ordinary_unserved_routes(self):
+        for path in ("/profiles/list", "/corrections"):
+            head, _, _ = raw_gateway_request("GET", path=path)
+            self.assertIn(" 404 ", head)
+        for path in (
+            "/profiles/switch", "/corrections", "/v1/completions",
+            "/engine/steer/axes", "/engine/steer/check",
+        ):
+            head, _, _ = raw_gateway_request("POST", path=path, body=b"{}")
+            self.assertIn(" 409 ", head)
 
     def test_a_non_exempt_post_still_goes_through_the_gate(self):
         calls = []

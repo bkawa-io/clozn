@@ -116,7 +116,7 @@ def test_ensure_concurrent_threads_do_not_corrupt_the_migration_ledger(isolated)
     try:
         rows = db.execute("SELECT key FROM schema_meta WHERE key LIKE 'migration:%'").fetchall()
         versions = sorted(int(k[0].split(":")[1]) for k in rows)
-        assert versions == list(range(1, migrations.TARGET_VERSION + 1)), versions
+        assert versions == [migration.version for migration in migrations.MIGRATIONS], versions
     finally:
         db.close()
 

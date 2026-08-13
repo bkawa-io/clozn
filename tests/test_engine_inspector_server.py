@@ -1,8 +1,7 @@
-"""Model-free contracts for raw engine harvest/observe and steering compatibility aliases.
+"""Model-free contracts for raw engine harvest/observe.
 
 The real gateway handler is driven without a socket. Fake numpy activations prove the transform is
-applied at the selected position, while fake steering objects prove `/engine/steer/*` and `/steer/*`
-share the same product state owner. No worker, model, Torch forward, or GPU is involved.
+applied at the selected position. No worker, model, Torch forward, or GPU is involved.
 """
 from __future__ import annotations
 
@@ -51,28 +50,6 @@ class FakeEngine:
         return before, FakeObservation()
 
 
-class FakeEngineSteer:
-    ready = True
-
-    def generate(self, prompt, strength=None, max_new=70):
-        return " baseline " if strength == {} else " steered "
-
-
-class FakeCanonicalSub:
-    name = "engine"
-
-    def __init__(self, steer):
-        self.steer = steer
-        self.axes_calls = 0
-
-    def _steer(self, path, body):
-        assert path == "/steer/axes"
-        self.axes_calls += 1
-        return {"axes": [{"name": "warm", "value": 0.4, "custom": True,
-                           "calibrated": True, "usable_range": [0.1, 0.5]}],
-                "ready": True, "substrate": "engine"}
-
-
 def _dispatch(path, body=None):
     raw = json.dumps(body or {}).encode("utf-8")
     H = cs.make_handler()
@@ -91,17 +68,12 @@ def _dispatch(path, body=None):
 @pytest.fixture()
 def fake_runtime(monkeypatch):
     engine = FakeEngine()
-    steer = FakeEngineSteer()
-    sub = FakeCanonicalSub(steer)
     monkeypatch.setattr(cs, "ENGINE", engine)
-    monkeypatch.setattr(cs, "SUB", sub)
-    monkeypatch.setattr(cs, "SUBNAME", "engine")
-    monkeypatch.setattr(cs, "_engine_steer", lambda: steer)
-    return engine, steer, sub
+    return engine
 
 
 def test_engine_harvest_returns_raw_norms_and_metadata(fake_runtime):
-    engine, _, _ = fake_runtime
+    engine = fake_runtime
 
     status, out = _dispatch("/engine/harvest", {"text": "The capital is"})
 
@@ -112,7 +84,7 @@ def test_engine_harvest_returns_raw_norms_and_metadata(fake_runtime):
 
 
 def test_engine_observe_scales_only_the_selected_position(fake_runtime):
-    engine, _, _ = fake_runtime
+    engine = fake_runtime
 
     status, out = _dispatch("/engine/observe", {"text": "The capital is", "position": 1, "scale": 3})
 
@@ -127,27 +99,11 @@ def test_engine_observe_scales_only_the_selected_position(fake_runtime):
     assert out["edited_top"][0]["token"] == " Rome"
 
 
-def test_legacy_engine_axes_delegates_to_canonical_live_state(fake_runtime):
-    _, _, sub = fake_runtime
+def test_engine_steering_aliases_are_not_engine_routes():
+    from clozn.server.routes import engine
 
-    status, out = _dispatch("/engine/steer/axes", {})
-
-    assert status == 200 and sub.axes_calls == 1
-    assert out["axes"][0]["value"] == 0.4
-    assert out["axes"][0]["calibrated"] is True
-    assert out["deprecated"] is True
-    assert out["canonical"] == "/steer/axes"
-    assert out["engine"] is True
-
-
-def test_legacy_engine_check_names_the_canonical_route(fake_runtime):
-    status, out = _dispatch("/engine/steer/check",
-                            {"prompt": "night", "axis": "warm", "value": 0.6, "max_tokens": 12})
-
-    assert status == 200
-    assert out["baseline"] == "baseline" and out["steered"] == "steered"
-    assert out["deprecated"] is True
-    assert out["canonical"] == "/steer/check"
+    assert engine.try_post(None, "/engine/steer/axes", {}) is False
+    assert engine.try_post(None, "/engine/steer/check", {}) is False
 
 
 class CheckSteer:

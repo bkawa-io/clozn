@@ -18,8 +18,7 @@ single-model aliases and per-model GPU-layer flags are not accepted there.
 
 Not covered by this compatibility surface include arbitrary argument
 passthrough, parallel slots greater than one, multimodal serving, embeddings,
-router/preset parity, native llama.cpp endpoints, TLS, authentication, and the
-legacy `/v1/completions` API, which remains retired.
+router/preset parity, native llama.cpp endpoints, TLS, and authentication.
 
 Compatibility claims should be dated with the upstream llama.cpp revision,
 Clozn revision, model identity, and client versions used for the test.

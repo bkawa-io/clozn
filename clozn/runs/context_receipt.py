@@ -334,8 +334,7 @@ def _apply_privacy(doc: dict, tier: str) -> dict:
 
 def build_context_receipt(*, messages=None, assembled_messages=None, final_prompt=None,
                           finish_reason=None, meta=None, trace=None, run_id=None, identity=None,
-                          error=None, privacy=None, applied_corrections=None,
-                          correction_conflicts=None) -> dict:
+                          error=None, privacy=None) -> dict:
     """Build a no-inference receipt from the evidence captured for one run.
 
     Never raises: a schema-validation failure (a builder bug, or a genuinely missing `run_id`) is caught,
@@ -344,15 +343,6 @@ def build_context_receipt(*, messages=None, assembled_messages=None, final_promp
     otherwise silently drop the ENTIRE run over a receipt-only defect. A broken receipt must cost its own
     field, never the run (same principle clozn.runs.identity_providers states for identity facets).
 
-    `applied_corrections`/`correction_conflicts` (F5, "Teach Once"): RETIRED -- the durable correction
-    store that used to compute these (`clozn.runs.corrections.resolve_corrections()`) is gone; see
-    docs/CAPABILITIES.md. The parameters stay only so an older run's already-persisted receipt shape
-    keeps reading identically. No production caller passes either anymore. Historically: only present
-    on the built document when the caller actually passed a (possibly empty) list -- an absent key
-    meant "no correction evidence was computed for this run" and a `[]` meant "corrections were
-    resolved and none matched," a distinction the schema's own field descriptions still state. This
-    function never resolved corrections itself and never read message content to decide what belongs
-    here; it only carried whatever the caller had already resolved.
     """
     meta = meta if isinstance(meta, dict) else {}
     trace = trace if isinstance(trace, dict) else {}
@@ -427,11 +417,6 @@ def build_context_receipt(*, messages=None, assembled_messages=None, final_promp
 
     doc["omissions"] = omissions
     doc["transformations"] = transformations
-
-    if applied_corrections is not None:
-        doc["applied_corrections"] = list(applied_corrections)
-    if correction_conflicts is not None:
-        doc["correction_conflicts"] = list(correction_conflicts)
 
     termination = normalize_termination(finish_reason, error, meta, limits)
     if termination is not None:

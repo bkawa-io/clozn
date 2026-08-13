@@ -100,9 +100,8 @@ for an interactive chat (multi-turn; `/reset` clears, `/bye` quits).
 gateway/worker pair and tears it down after. Product commands never bypass the gateway to call a warm
 worker directly. `clozn serve` supervises the private worker and restarts it after an unexpected exit.
 
-OpenAI clients use the documented subset of `/v1/chat/completions` and `/v1/models`; the retired
-`/v1/completions` path returns a typed HTTP 410 migration response. Unsupported behavior-bearing fields
-return a typed 400 instead of being silently ignored. See the exact
+OpenAI clients use the documented subset of `/v1/chat/completions` and `/v1/models`. Unsupported
+behavior-bearing fields return a typed 400 instead of being silently ignored. See the exact
 [endpoint/field matrix](docs/OPENAI_COMPATIBILITY.md). Clozn's CLI and Studio instrumentation use
 `/api/clozn/generate`, which preserves the native state-event stream. Native event frames never leak into
 an OpenAI completion stream.

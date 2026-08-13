@@ -50,6 +50,7 @@ class Migration:
     description: str
     apply: Callable[[sqlite3.Connection], None]
     verify: Callable[[sqlite3.Connection], bool] | None = None
+    supersedes: frozenset[int] = frozenset()
 
 
 def _migration_0001_initial_schema(db: sqlite3.Connection) -> None:
@@ -343,6 +344,17 @@ def _verify_0005(db: sqlite3.Connection) -> bool:
     )
 
 
+def _migration_0006_remove_retired_corrections(db: sqlite3.Connection) -> None:
+    """Remove the unused durable-correction store and its event ledger.
+
+    The F5/F6 domain, CLI, and HTTP surface have all been removed.  Keeping tables that no supported
+    code can read or write leaves stale behavioral-policy data in every new run journal, so this cleanup
+    drops both tables for existing installs as well as keeping them out of fresh databases.
+    """
+    db.execute("DROP TABLE IF EXISTS correction_events")
+    db.execute("DROP TABLE IF EXISTS corrections")
+
+
 # The shipped, ordered migration set. Append-only: once released, a migration's `apply` must never be
 # edited (a DB that already applied it would silently diverge from one that applies the edited version) --
 # ship a NEW migration with a higher version instead.
@@ -357,6 +369,8 @@ MIGRATIONS: tuple[Migration, ...] = (
               _migration_0004_sessions, verify=_verify_0004),
     Migration(5, "F5: scoped correction store (corrections + correction_events tables)",
               _migration_0005_corrections, verify=_verify_0005),
+    Migration(6, "scope reset: remove retired durable-correction storage",
+              _migration_0006_remove_retired_corrections, supersedes=frozenset({5})),
 )
 
 TARGET_VERSION = max(m.version for m in MIGRATIONS)
@@ -383,18 +397,59 @@ def current_version(db: sqlite3.Connection) -> int:
     return max(versions, default=0)
 
 
-def pending(db: sqlite3.Connection, migrations: Sequence[Migration] = MIGRATIONS) -> list[Migration]:
-    """Migrations not yet applied to `db`, in ascending version order. A migration is pending if its
-    ledger row is absent OR its verify callback reports the schema is inconsistent."""
-    _ensure_ledger_table(db)
+def _claimed_versions(db: sqlite3.Connection) -> set[int]:
+    """Return the migration versions recorded in the ledger.
+
+    Callers use this both while planning and after acquiring a migration transaction's write lock.  The
+    latter re-read is important: another process may have completed a cleanup migration after this process
+    took its initial pending snapshot.
+    """
     rows = db.execute("SELECT key FROM schema_meta WHERE key LIKE 'migration:%'").fetchall()
     claimed: set[int] = set()
     for row in rows:
-        m = _MIGRATION_KEY_RE.match(row[0])
-        if m:
-            claimed.add(int(m.group(1)))
+        match = _MIGRATION_KEY_RE.match(row[0])
+        if match:
+            claimed.add(int(match.group(1)))
+    return claimed
+
+
+def _superseded_versions(migrations: Sequence[Migration], claimed: set[int]) -> set[int]:
+    """Versions made permanently inapplicable by claimed cleanup migrations.
+
+    Supersession is transitive.  If a claimed migration supersedes a predecessor which itself supersedes
+    another migration, neither predecessor may be repaired or re-applied.  This keeps an old verifier from
+    recreating schema intentionally removed by a later migration.
+    """
+    superseded: set[int] = set()
+    frontier = set(claimed)
+    while frontier:
+        newly_superseded = {
+            version
+            for migration in migrations
+            if migration.version in frontier
+            for version in migration.supersedes
+        } - superseded
+        if not newly_superseded:
+            break
+        superseded.update(newly_superseded)
+        frontier = newly_superseded
+    return superseded
+
+
+def pending(db: sqlite3.Connection, migrations: Sequence[Migration] = MIGRATIONS) -> list[Migration]:
+    """Migrations not yet applied to `db`, in ascending version order.
+
+    A migration is pending if its ledger row is absent or its verifier reports an inconsistent schema,
+    except when a claimed later migration supersedes it.  A superseded step must never repair its old
+    schema, even if its own ledger row is missing or its verifier now fails by design.
+    """
+    _ensure_ledger_table(db)
+    claimed = _claimed_versions(db)
+    superseded = _superseded_versions(migrations, claimed)
     result = []
     for m in sorted(migrations, key=lambda x: x.version):
+        if m.version in superseded:
+            continue
         if m.version not in claimed:
             result.append(m)
         elif m.verify is not None and not m.verify(db):
@@ -421,9 +476,14 @@ def migrate(db: sqlite3.Connection, migrations: Sequence[Migration] = MIGRATIONS
         for m in pending(db, migrations):
             db.execute("BEGIN IMMEDIATE")
             try:
-                already = db.execute(
-                    "SELECT 1 FROM schema_meta WHERE key = ?", (f"migration:{m.version}",)
-                ).fetchone()
+                # `pending()` was a snapshot taken before this transaction acquired its write lock.  A
+                # different process can have applied a later cleanup migration in between; re-read the
+                # ledger under the lock so a stale predecessor can never recreate retired schema.
+                claimed = _claimed_versions(db)
+                if m.version in _superseded_versions(migrations, claimed):
+                    db.execute("ROLLBACK")
+                    continue
+                already = m.version in claimed
                 if already and (m.verify is None or m.verify(db)):
                     db.execute("ROLLBACK")
                     continue

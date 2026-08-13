@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import pytest
 
-import clozn.runs.store as runlog
 
 
 # ------------------------------------------------------------------ the persistent modules are gone
@@ -49,96 +48,6 @@ def test_generation_routes_no_longer_import_the_retired_correction_store():
         source = open(module.__file__, encoding="utf-8").read()
         assert "clozn.runs.corrections" not in source
         assert "_correction_resolution" not in source
-
-
-# ------------------------------------------------------------------- historical runs remain readable
-
-def test_historical_correction_bearing_run_remains_readable(tmp_path, monkeypatch):
-    """A run recorded before the retirement may carry applied_corrections/correction_conflicts
-    (F5 receipt fields) and a corrective_retry.scope of "session"/"profile" inside its behavior
-    metadata. Reading it back today must not crash and must preserve that historical evidence."""
-    monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    run_id = runlog.record(
-        source="engine_chat", client="studio", model="alpha", substrate="engine",
-        messages=[{"role": "user", "content": "hi"}], response="hello there",
-        final_prompt="<user>hi</user>",
-        applied_corrections=[{
-            "correction_id": "corr_" + "a" * 24, "type": "style",
-            "scope": {"kind": "session"}, "content_hash": "deadbeef",
-        }],
-        correction_conflicts=[],
-    )
-    assert run_id
-    run = runlog.get_run(run_id)
-    assert run is not None
-    assert run["applied_corrections"][0]["correction_id"] == "corr_" + "a" * 24
-    assert run["context_receipt"]["applied_corrections"][0]["type"] == "style"
-
-
-def test_historical_run_with_legacy_corrective_retry_scope_remains_readable(tmp_path, monkeypatch):
-    """Old runs from the session/profile-scoped one-shot retry route recorded
-    `behavior_intervention`-shaped identity/metadata with a "scope" of "session"/"profile". A new
-    build must still be able to read that run back; it just never writes that shape again."""
-    monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    run_id = runlog.record(
-        source="engine_chat", client="studio", model="alpha", substrate="engine",
-        messages=[{"role": "user", "content": "hi"}], response="short reply",
-        final_prompt="<user>hi</user>",
-        meta={"corrective_retry": {"arm": "corrected", "preset": "less-verbose", "scope": "session"}},
-    )
-    assert run_id
-    run = runlog.get_run(run_id)
-    assert run["meta"]["corrective_retry"]["scope"] == "session"
-
-
-# ------------------------------------------------------------------------- retired /corrections route
-
-class _Handler:
-    def __init__(self):
-        self.status = None
-        self.body = None
-
-    def _json(self, status, body, **_kwargs):
-        self.status, self.body = status, body
-
-
-def test_corrections_get_route_returns_typed_410():
-    from clozn.server.routes import corrections as route
-    handler = _Handler()
-    assert route.try_get(handler, "/corrections") is True
-    assert handler.status == 410
-    assert handler.body["code"] == "durable_corrections_retired"
-
-    handler = _Handler()
-    assert route.try_get(handler, "/corrections/corr_" + "a" * 24) is True
-    assert handler.status == 410
-    assert handler.body["code"] == "durable_corrections_retired"
-
-
-def test_corrections_post_route_returns_typed_410_for_every_lifecycle_action():
-    from clozn.server.routes import corrections as route
-    for path, body in (
-        ("/corrections", {"scope_kind": "session", "type": "style", "content": "x"}),
-        ("/corrections/corr_" + "a" * 24 + "/confirm", {}),
-        ("/corrections/corr_" + "a" * 24 + "/enable", {}),
-        ("/corrections/corr_" + "a" * 24 + "/disable", {}),
-        ("/corrections/corr_" + "a" * 24 + "/delete", {}),
-        ("/corrections/corr_" + "a" * 24 + "/undo", {}),
-        ("/corrections/corr_" + "a" * 24 + "/verify", {}),
-        ("/corrections/resolve", {}),
-    ):
-        handler = _Handler()
-        assert route.try_post(handler, path, body) is True
-        assert handler.status == 410, path
-        assert handler.body["code"] == "durable_corrections_retired", path
-
-
-def test_corrections_route_never_returns_a_success_status():
-    """Never leave an endpoint that appears successful but no longer applies the correction."""
-    from clozn.server.routes import corrections as route
-    handler = _Handler()
-    route.try_post(handler, "/corrections", {"scope_kind": "session", "type": "style", "content": "x"})
-    assert handler.status is not None and handler.status >= 400
 
 
 def test_corrections_cli_command_no_longer_registered():

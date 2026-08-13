@@ -33,10 +33,6 @@ without downloading complete receipts... fetch a receipt only when the cell is o
     GET /experiment-results/<id>/cells          FULL matching cells (response/receipts/run included),
                                                  filtered by ?suite=&case=&variant=&seed= so a client
                                                  fetches exactly the cell it opened
-    GET /experiment-results/<id>/artifacts/...  reserved (spec's backend contract names it); v1 has no
-                                                 separate artifact-bundle concept, so this always 404s
-                                                 with an explicit, honest reason rather than pretending
-
 NO CACHING (v1, DELIBERATE)
 ------------------------------------------------
 Every request under this family re-reads and re-validates every *.json file in the results directory
@@ -204,17 +200,6 @@ def try_get(h, p):
         payload["experiment_id"] = experiment_id
         payload["broken"] = [{"path": path, "error": error} for path, error in broken]
         h._json(200, payload)
-        return True
-
-    if "/artifacts/" in rest:
-        experiment_id, _, name = rest.partition("/artifacts/")
-        result = _find(experiment_id)
-        if result is None:
-            _not_found(h, experiment_id)
-            return True
-        h._json(404, {"error": f"no artifact bundle named {name!r} is stored for this experiment -- "
-                                f"v1 has no separate artifact-bundle concept; result content is served "
-                                f"inline via GET {_PREFIX}/<id> and .../cells"})
         return True
 
     if rest and "/" not in rest:   # the bare GET /experiment-results/<id> detail route

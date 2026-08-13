@@ -451,7 +451,7 @@ def test_engine_steer_generate_gates_dials_on_engage_disengage():
 
 
 def test_engine_steer_generate_explicit_strength_is_unaffected_by_engage():
-    """An explicit `strength=` kwarg (how /engine/steer/check already calls generate()) bypasses the
+    """An explicit `strength=` kwarg bypasses the
     engage gate entirely -- CHANGE 1 only touches the strength=None DEFAULT path."""
     ec = _FakeEC()
     es = EngineSteer(ec)

@@ -951,22 +951,6 @@ Primary implementations: [`core.py`](../clozn/receipts/core.py),
 
 ## 16. Behavior controls, corrections, and feedback
 
-### Named behavior profiles were retired
-
-CLOZN used to let a user bundle steering state into a named persona (`work`, `friend`, ...) that could
-be saved, switched, exported, and imported, with the switched-to name recorded on every subsequent run
-as `meta.active_profile`. That whole persona lifecycle -- CRUD, switching, portability, and profile
-identity attached to new runs -- was removed: CLOZN is a debugger, not a persona manager. See
-[CAPABILITIES.md](CAPABILITIES.md)'s Removed/Retired section.
-
-The useful primitive underneath a profile switch was always steering itself: applying dial values and
-persisting them exactly like an ordinary `/steer/set` call. That primitive (`/steer/axes`, `/steer/set`,
-`/steer/check`, custom dials, concept steering) is untouched by this retirement.
-`GET`/`POST /profiles/*` now return a typed HTTP 410 (`profiles_retired`). Runs recorded
-before the retirement may still carry `meta.active_profile`; that remains readable as historical
-evidence, but no new run writes it and no live code path resolves "the active profile" anymore.
-Existing files under `~/.clozn/profiles/` are left on disk untouched and are never read by the product.
-
 ### Corrective actions (one-shot, request-local)
 
 Built-in actions include:
@@ -982,7 +966,7 @@ Actions have:
 
 - Label and description
 - Conflicts
-- Scope (always `once` -- see "Durable corrections were retired" below)
+- Scope (always `once`)
 - Available backend
 - Evaluation metrics
 - Fallback
@@ -992,21 +976,6 @@ Actions have:
 A preview/confirm generates a matched baseline and corrected child; "keeping" a result selects the
 corrected child as that one run's own revision. Nothing here persists beyond the run it was generated
 from -- see [CAPABILITIES.md](CAPABILITIES.md) for the request-local vs. durable distinction.
-
-### Durable corrections were retired
-
-CLOZN used to let a correction be drafted, confirmed, scoped to a session/client/model/project, and
-then auto-applied to every future matching request until explicitly disabled or deleted -- "Teach
-Once." That entire durable, auto-applying lifecycle (draft/confirm/enable/disable/delete/undo/verify
-/export/applicability-resolution/event-ledger, plus session/profile-scoped corrective retries) was
-removed: see [CAPABILITIES.md](CAPABILITIES.md)'s Removed/Retired section for what changed and why.
-
-`GET`/`POST /corrections` and `/corrections/*` now return a typed HTTP 410
-(`durable_corrections_retired`) rather than a plain 404, so an old caller can tell "this used to work
-and no longer applies" apart from a route miss. Studio no longer exposes a Corrections/Teach Once
-surface. Runs recorded before the retirement may still carry `applied_corrections`/
-`correction_conflicts` receipt fields or `corrective_retry.scope` metadata; those remain readable as
-historical evidence but are never produced by, or re-applied through, a new generation.
 
 ### Feedback and preferences
 

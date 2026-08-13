@@ -15,7 +15,6 @@ non-streaming text subset documented below.
 |---|---|---|
 | `GET /v1/models` | supported | one currently loaded local model |
 | `POST /v1/chat/completions` | supported subset | text, plus fail-closed qualified tools/structured output; one choice; streaming or non-streaming |
-| `POST /v1/completions` | retired | returns HTTP 410 with code `endpoint_retired`; use Chat Completions |
 | `POST /v1/responses` | supported subset | non-streaming text `input` with optional `instructions`; uses the same instrumented chat path |
 | embeddings, audio, images, files, batches, fine-tuning | unsupported | no routes |
 | stored chat list/get/update/delete | unsupported | Clozn's local run journal is a different API |
@@ -136,25 +135,6 @@ keeps the current fail-closed behavior, `--structured off` rejects active struct
 `--structured required` refuses startup unless all three supported structured modes are exactly qualified.
 The bounded real-model qualification battery and a successful Open WebUI two-request tool loop remain
 separate acceptance work.
-
-## Retired legacy Completions
-
-The public `POST /v1/completions` route was retired on 2026-07-31. It returns a stable HTTP 410 response:
-
-```json
-{
-  "error": {
-    "message": "POST /v1/completions was retired; use POST /v1/chat/completions instead",
-    "type": "invalid_request_error",
-    "param": null,
-    "code": "endpoint_retired"
-  }
-}
-```
-
-This retirement applies only to the public Python gateway. The private C++ worker still uses its internal
-`/v1/completions` protocol underneath Chat Completions, native generation, and offline research tools; that
-loopback-only protocol is not part of the public compatibility surface.
 
 ## Response boundary
 

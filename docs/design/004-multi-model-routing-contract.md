@@ -130,9 +130,6 @@ All generation surfaces resolve the model before generation and use this same co
 | OpenAI | `/v1/chat/completions` | Standard `model`; omitted remains accepted for Clozn compatibility. |
 | Ollama | `/api/chat`, `/api/generate` | Standard `model`; omitted means configured default. `keep_alive` is not repurposed as routing policy. |
 
-The retired public `/v1/completions` path returns its typed HTTP 410 migration response before routing;
-the private worker's same-named loopback protocol remains an internal generation primitive.
-
 OpenAI errors keep the OpenAI error envelope with `type: "model_routing_error"` and `param: "model"`.
 Ollama keeps its string `error` plus the stable `code`. Native returns the common structured error.
 All expose the same code, message, retryability, phase, and privacy-safe attempt receipt. Streaming does

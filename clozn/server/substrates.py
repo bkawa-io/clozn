@@ -157,7 +157,7 @@ class Substrate:
             # The check is diagnostic, not a settings mutation. Preserve every pre-existing value (including
             # explicit zeros used by the UI) and the engagement state. The old implementation cleared the
             # whole live persona after every A/B check, so merely inspecting one dial silently erased all
-            # persisted in-process tone settings until the next restart/profile switch.
+            # persisted in-process tone settings until the next restart.
             prior = dict(getattr(self.steer, "strength", {}) or {})
             was_engaged = bool(getattr(self.steer, "_engaged", False))
             self.steer.clear()

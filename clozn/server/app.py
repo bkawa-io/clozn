@@ -42,15 +42,13 @@ POST_GATE = RequestGate.from_env()
 # an in-flight generation read. So the gate stays broad by default; this is a DELIBERATELY SMALL allowlist
 # of POST paths audited to touch NEITHER the substrate's generation state NOR steer/memory:
 #   /capture/tier -- a bare settings-file flag (clozn.runs.capture_mode), unrelated to SUB entirely.
-#   /substrate    -- POST always 410s (routes/health.py); it never reaches the substrate at all.
 #   /cancel       -- cancellation control does not select a worker or start generation.
-#   /v1/completions -- the retired public route returns a typed 410 before routing.
 # Every other POST -- every /memory/* and /steer/* mutation, plus fork/checkpoint/replay/journal and
 # everything else NOT in _GENERATION_POST_PATHS below -- still reads or writes worker-shaped state and
 # stays fully serialized through POST_GATE. The risk of a wrong "this is safe" call here is a corrupted
 # run record or a torn dial read, so the bar is "audited to touch nothing substrate-shaped", not a coarse
 # heuristic like "looks read-only".
-_GATE_EXEMPT_POSTS = frozenset({"/capture/tier", "/substrate", "/cancel", "/v1/completions"})
+_GATE_EXEMPT_POSTS = frozenset({"/capture/tier", "/cancel"})
 
 # RT-05: the closed set of routes that resolve a model through
 # clozn.server.model_routing.select_for_handler (ADR 004's native/OpenAI/
@@ -600,7 +598,6 @@ from clozn.server.routes import receipts as _receipts_routes          # noqa: E4
 from clozn.server.routes import replay as _replay_routes              # noqa: E402
 from clozn.server.routes import corrective_retries as _corrective_retry_routes  # noqa: E402
 from clozn.server.routes import timetravel as _timetravel_routes      # noqa: E402
-from clozn.server.routes import profiles as _profiles_routes          # noqa: E402
 from clozn.server.routes import preferences as _preferences_routes    # noqa: E402
 from clozn.server.routes import feedback as _feedback_routes          # noqa: E402
 from clozn.server.routes import ollama as _ollama_routes              # noqa: E402
@@ -631,7 +628,7 @@ _autoloaded_routes = _route_autoload.discover()
 # fallback matches the whole "/runs/" prefix, so anything landing behind it would be shadowed -- and
 # shadowed as a wrong-shaped 200 rather than a 404, which is far harder to spot. See _autoload.py.
 _GET_ROUTES = [_static_routes, _health_routes, _runs_routes, _receipts_routes,
-              _timetravel_routes, _profiles_routes, _ollama_routes, _openai_routes, _engine_routes,
+              _timetravel_routes, _ollama_routes, _openai_routes, _engine_routes,
               _models_routes,
               _journal_routes, _card_routes, _diff_routes, _receipt_link_routes,
               _influence_map_routes, _contracts_routes,
@@ -639,7 +636,7 @@ _GET_ROUTES = [_static_routes, _health_routes, _runs_routes, _receipts_routes,
               _runs_fallback_routes]
 _POST_ROUTES = [_health_routes, _receipts_routes,
                _corrective_retry_routes, _replay_routes,
-               _timetravel_routes, _profiles_routes, _preferences_routes, _feedback_routes,
+               _timetravel_routes, _preferences_routes, _feedback_routes,
                _ollama_routes, _openai_routes, _engine_routes, _readouts_routes,
                _fork_routes, _journal_routes, _diff_routes,
                _receipt_link_routes, _influence_map_routes, _contracts_routes,
@@ -1110,7 +1107,7 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 return
             p = self.path.split("?")[0].rstrip("/") or "/"
             if p in _GATE_EXEMPT_POSTS:
-                # See _GATE_EXEMPT_POSTS' module-level comment: these two paths are audited to touch
+                # See _GATE_EXEMPT_POSTS' module-level comment: these paths are audited to touch
                 # nothing the gate protects, so they run uncontended -- notably, they never sit in the
                 # bounded queue behind a slow generation request either.
                 try:

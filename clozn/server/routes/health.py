@@ -126,10 +126,6 @@ def try_get(h, p):
 
 
 def try_post(h, p, body):
-    if p == "/substrate":
-        h._json(410, {"error": "the product runtime no longer switches serving engines",
-                      "active": "engine", "hint": "run training and calibration as lab jobs"})
-        return True
     if p == "/capture/tier":
         from clozn.runs import capture_mode
         name = str(body.get("tier", "")).strip().lower()
