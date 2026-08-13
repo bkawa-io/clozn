@@ -72,8 +72,7 @@ inline std::optional<StepActivations> activations_from(const ForwardResult& fwd,
 
 // Logit-lens for one pass: top-k token candidates per requested slot, from the host logits. Rows
 // [0, count) of fwd are the positions of interest (diffusion: the masked slots, want = masked ++
-// committed-if-revising; AR: the single next-token slot), so we read those rows directly. Returns
-// nullopt when there are no host logits (the zero-copy device path).
+// committed-if-revising; AR: the single next-token slot), so we read those rows directly.
 inline std::optional<StepLens> lens_from(const ForwardResult& fwd, const std::vector<int>& want,
                                          int count, int t, int block, int k) {
     if (fwd.logits.empty() || fwd.vocab <= 0 || count <= 0) return std::nullopt;

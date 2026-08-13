@@ -1212,7 +1212,7 @@ public:
     // --no-flash-attn rather than the default.
     ContextPool(std::shared_ptr<GgmlModel> model, int workers, int n_ctx, bool flash_attn = true) {
         for (int i = 0; i < workers; ++i) {
-            adapters_.push_back(std::make_unique<GgmlAdapter>(model, n_ctx, false, flash_attn));
+            adapters_.push_back(std::make_unique<GgmlAdapter>(model, n_ctx, flash_attn));
             free_.push(adapters_.back().get());
         }
     }

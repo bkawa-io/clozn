@@ -266,19 +266,14 @@ public:
     const std::vector<bool>& ffn_write_landed() const { return ffn_write_landed_; }
 
     // Standalone: load a fresh model + create a context over it (the original API).
-    // device_logits_passthrough: when set AND the active-block logits land in a device buffer
-    // AND no frozen boundary row is needed this pass, forward() returns the device-resident
-    // logits tensor (DESIGN §4.3 zero-copy) and SKIPS the host D2H copy; otherwise it falls back
-    // to the host path. Requires a GGML_CUDA llama + n_gpu_layers offload to actually trigger.
     GgmlAdapter(const std::string& model_path, int mask_token_id,
                 int eos_token_id = -1, int n_ctx = 4096,
-                int n_gpu_layers = 0, bool device_logits_passthrough = false,
-                bool flash_attn = true);
+                int n_gpu_layers = 0, bool flash_attn = true);
     // Shared model: create a private context over an already-loaded GgmlModel (for a server pool
     // of concurrent contexts that share one copy of the weights). flash_attn=false materializes
     // the attention weights so knockout works (costs some decode speed).
     explicit GgmlAdapter(std::shared_ptr<GgmlModel> model, int n_ctx = 4096,
-                         bool device_logits_passthrough = false, bool flash_attn = true);
+                         bool flash_attn = true);
     ~GgmlAdapter() override;
 
     GgmlAdapter(const GgmlAdapter&) = delete;
@@ -304,12 +299,10 @@ public:
     long long decoded_tokens() const { return decoded_tokens_; }
     void reset_decoded_tokens() { decoded_tokens_ = 0; }
 
-    // Toggle the §4.3 zero-copy device-logits path at runtime (vs the constructor default).
-    void set_device_passthrough(bool on) { device_passthrough_ = on; }
     // White-box activation tap (Tier 2): when on, forward() fills ForwardResult.activations with the
-    // per-position hidden state (llama_get_embeddings_ith) for the active block and takes the host
-    // path (no device-logits passthrough). Default off => empty activations, zero overhead, the 8
-    // scheduler goldens untouched. The white-box projection (concept probes) is a separate consumer.
+    // per-position hidden state (llama_get_embeddings_ith) for the active block. Default off => empty
+    // activations, zero overhead, the 8 scheduler goldens untouched. The white-box projection (concept
+    // probes) is a separate consumer.
     void set_emit_activations(bool on);
     bool emit_activations() const { return emit_activations_; }
     int tap_layer() const { return tap_layer_; }  // residual layer the white-box tap reads (0 = final via embeddings)
@@ -428,11 +421,6 @@ public:
     // at each layer — the depth x position map, in ONE forward (vs n_layer separate harvests). Caller sets
     // set_causal(true) first (as /harvest does); the read/steer tap state is left untouched.
     LayerSummary layer_summary(const std::vector<int>& tokens);
-    // Number of forwards that actually took the device path (host D2H skipped) — lets a test
-    // prove the zero-copy path was exercised rather than silently falling back to host.
-    long long device_forwards() const { return device_forwards_; }
-    void reset_device_forwards() { device_forwards_ = 0; }
-
     // --- Checkpointing + branching (Phase 2.1) -----------------------------------------------
     // Save the current KV cache state for seq 0 as a serializable blob. `tokens` is the full
     // sequence fed so far (prompt + generated); `n_past` is how many positions the KV covers.
@@ -488,9 +476,8 @@ public:
     const std::vector<int>& capture_layers() const { return capture_layers_; }
     void set_capture_sink(std::function<void(CaptureFrame&&)> sink);
 
-    // Logits floats that crossed PCIe device->host (llama's decode-time D2H). The §4.3 metric:
-    // the zero-copy path drives this toward zero (only the kernel's ~2*n_masked outputs cross),
-    // vs n_outputs*vocab per pass on the host path. Structural data movement, not wall-clock.
+    // Logits floats copied into the host logits buffer during forward(). Structural data movement,
+    // not wall-clock.
     long long logits_d2h_floats() const { return logits_d2h_floats_; }
     void reset_logits_d2h_floats() { logits_d2h_floats_ = 0; }
 
@@ -502,9 +489,8 @@ public:
 
 private:
     // Decode board[from, to) at absolute positions [from, to), reusing whatever KV currently
-    // covers [0, from). decode_only just runs llama_decode (no logits extract — leaves them on
-    // the backend for the zero-copy path). decode_segment additionally returns the HOST logits
-    // (triggering the D2H copy): row j == position from+j, valid until the next decode.
+    // covers [0, from). decode_only just runs llama_decode; decode_segment additionally returns
+    // the host logits: row j == position from+j, valid until the next decode.
     void decode_only(const std::vector<int>& board, int from, int to);
     const float* decode_segment(const std::vector<int>& board, int from, int to);
     void decode_prefix_embd();   // lay the diffusion soft prefix as embd at [0, diff_m_) (frozen context)
@@ -524,8 +510,6 @@ private:
     const llama_vocab* vocab_ = nullptr;
     ModelConfig cfg_{};
     int n_ctx_ = 0;
-    bool device_passthrough_ = false;
-    bool device_confirmed_ = false;  // device residency proven by a prior probe (then safe to skip D2H)
     bool emit_activations_ = false;  // white-box tap: fill ForwardResult.activations (forces host path)
     bool causal_ = false;            // attention mode: false = diffusion (bidirectional), true = AR (causal)
     int n_embd_ = 0;                 // hidden size, cached from the model for the activation tap
@@ -600,8 +584,7 @@ private:
     int frozen_end_ = 0;
     std::vector<float> boundary_row_;  // logits for position frozen_end_-1 (empty if none)
     long long decoded_tokens_ = 0;     // token-positions sent through llama_decode
-    long long device_forwards_ = 0;    // forwards that took the zero-copy device path
-    long long logits_d2h_floats_ = 0;  // logits floats copied device->host (the D2H the skip avoids)
+    long long logits_d2h_floats_ = 0;  // logits floats copied into the host logits buffer
 };
 
 }  // namespace clozn

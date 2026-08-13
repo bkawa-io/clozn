@@ -247,11 +247,6 @@ if(CLOZN_BUILD_GGML)
     add_executable(clozn-ar tools/clozn_ar.cpp)
     target_link_libraries(clozn-ar PRIVATE clozn_ggml)
 
-    # Resolving experiment for the zero-copy §4.3 path: does llama_get_logits_tensor (the CLOZN
-    # PATCH accessor) return a DEVICE-resident tensor that byte-matches the host logits? Needs a
-    # CUDA-capable llama (configure with -DGGML_CUDA=ON) and runs with all layers offloaded.
-    add_executable(test_device_logits tests/test_device_logits.cpp)
-    target_link_libraries(test_device_logits PRIVATE llama)
 endif()
 
 # --- L2 serving layer (HTTP, needs CLOZN_BUILD_GGML) ---

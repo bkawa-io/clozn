@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ggml-backend.h"  // ggml_backend_buffer_is_host (device-residency guard)
+#include "ggml-backend.h"
 
 namespace clozn {
 
@@ -23,7 +23,7 @@ GgmlModel::GgmlModel(const std::string& model_path, int mask_token_id,
         g_backend_inited = true;
     }
     llama_model_params mp = llama_model_default_params();
-    mp.n_gpu_layers = n_gpu_layers;  // > 0 offloads weights to GPU so logits can be device-resident
+    mp.n_gpu_layers = n_gpu_layers;  // > 0 offloads model layers to the GPU
     model_ = llama_model_load_from_file(model_path.c_str(), mp);
     if (!model_) throw std::runtime_error("failed to load model: " + model_path);
 
@@ -88,16 +88,14 @@ void GgmlAdapter::init_context(int n_ctx) {
 
 GgmlAdapter::GgmlAdapter(const std::string& model_path, int mask_token_id,
                          int eos_token_id, int n_ctx,
-                         int n_gpu_layers, bool device_logits_passthrough, bool flash_attn)
+                         int n_gpu_layers, bool flash_attn)
     : model_owner_(std::make_shared<GgmlModel>(model_path, mask_token_id, eos_token_id, n_gpu_layers)),
-      device_passthrough_(device_logits_passthrough), flash_attn_(flash_attn) {
+      flash_attn_(flash_attn) {
     init_context(n_ctx);
 }
 
-GgmlAdapter::GgmlAdapter(std::shared_ptr<GgmlModel> model, int n_ctx, bool device_logits_passthrough,
-                         bool flash_attn)
-    : model_owner_(std::move(model)), device_passthrough_(device_logits_passthrough),
-      flash_attn_(flash_attn) {
+GgmlAdapter::GgmlAdapter(std::shared_ptr<GgmlModel> model, int n_ctx, bool flash_attn)
+    : model_owner_(std::move(model)), flash_attn_(flash_attn) {
     if (!model_owner_) throw std::invalid_argument("GgmlAdapter: null GgmlModel");
     init_context(n_ctx);
 }
@@ -1020,27 +1018,14 @@ ForwardResult GgmlAdapter::forward(const std::vector<int>& board,
     // own row 0 as filler, matching the lab's max(m-1, 0) — needed for suffix-only infill). A row
     // is in the active decode iff its source row >= active_start; source == active_start-1 is the
     // frozen boundary row, served from the host boundary_row_ (one row, at most one per pass).
-    // Decide the device path BEFORE decoding so we can suppress llama's decode-time D2H when we
-    // will read on-device — but only once residency is proven (the first probe pass never skips).
     const bool shift = model_owner_->shift_logits();  // GGUF diffusion.shift_logits: Dream=true, LLaDA=false (in-place)
     auto src_of = [shift](int m) { return shift ? (m >= 1 ? m - 1 : 0) : m; };
-    bool boundary_needed = false;
     for (int m : logits_for) {
         if (m < 0 || m >= n) throw std::invalid_argument("logits_for position out of range");
-        if (src_of(m) < active_start) boundary_needed = true;
     }
-    // A device path that needs the boundary row requires it to have been captured (frozen prefix).
-    // The white-box tap reads HOST embeddings, so it always takes the host path (never the zero-copy
-    // device-logits passthrough), which keeps logits + activations both on the host this pass.
-    const bool want_device = device_passthrough_ && !emit_activations_ &&
-                             (!boundary_needed || !boundary_row_.empty());
-    const bool skip_d2h = want_device && device_confirmed_;
-
-    if (skip_d2h) llama_set_skip_raw_logits(ctx_, true);  // CLOZN PATCH: no full-vocab D2H this decode
     decode_only(board, active_start, n);
-    if (skip_d2h) llama_set_skip_raw_logits(ctx_, false);
-    // When not skipped, llama copied n_outputs*vocab logits floats to host during decode.
-    if (!skip_d2h) logits_d2h_floats_ += static_cast<long long>(n - active_start) * vocab;
+    // llama copied every active output row to the host during decode.
+    logits_d2h_floats_ += static_cast<long long>(n - active_start) * vocab;
 
     // White-box activation tap (Tier 2): pull the per-position hidden state for the active block.
     // Embeddings were enabled in set_emit_activations(); decode_only set logits=1 for every active
@@ -1064,36 +1049,7 @@ ForwardResult GgmlAdapter::forward(const std::vector<int>& board,
         }
     }
 
-    // Zero-copy device path (DESIGN §4.3): hand back the device tensor + per-position source rows
-    // (a boundary row, if any, as the single host row in out.boundary_row); the host `logits` stays
-    // empty. (Pairs with KernelCommitSelector; a host selector needs the host path.)
-    if (want_device) {
-        ggml_tensor* t = llama_get_logits_tensor(ctx_);  // synchronizes; raw graph output (batch order)
-        if (t && t->buffer && !ggml_backend_buffer_is_host(t->buffer)) {
-            device_confirmed_ = true;  // proven device-resident -> future passes may skip the D2H
-            out.device_resident = true;
-            out.device_logits = static_cast<const float*>(t->data);
-            out.device_n_rows = static_cast<int>(t->ne[1]);
-            out.device_src_rows.reserve(out.n_requested);
-            for (int m : logits_for) {
-                const int src = src_of(m);
-                if (src >= active_start) {
-                    out.device_src_rows.push_back(src - active_start);  // in the device tensor
-                } else {  // the frozen boundary row (host)
-                    out.device_src_rows.push_back(-1);
-                    out.boundary_row = boundary_row_;  // one row; selector H2D's it into its slot
-                }
-            }
-            ++device_forwards_;
-            return out;  // host `logits` left empty: the full-vocab D2H is skipped
-        }
-        if (skip_d2h)
-            throw std::runtime_error("GgmlAdapter: skipped the logits D2H but logits are not "
-                                     "device-resident (residency changed after confirmation)");
-        // else: first probe on a host-resident build — fall through to the host path (D2H ran).
-    }
-
-    // Host path (fallback / non-CUDA build): pull the host logits, apply the shift.
+    // Pull the host logits and apply the model's head shift.
     const float* rows = llama_get_logits(ctx_);  // row j == position active_start+j
     out.logits.resize(static_cast<size_t>(out.n_requested) * vocab);
     for (int r = 0; r < out.n_requested; ++r) {

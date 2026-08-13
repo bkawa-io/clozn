@@ -22,29 +22,11 @@ struct ModelConfig {
 
 // Logits for the requested positions, row-major [n_requested, vocab], plus the KV the
 // scheduler threads back on the next forward (invariant 4: model writes KV).
-//
-// Zero-copy device path (DESIGN §4.3): when an adapter can keep the logits on the GPU, it sets
-// device_resident=true and leaves the host `logits` vector EMPTY (skipping the full-vocab D2H).
-// `device_logits` is the device-resident logits tensor base (row r at device_logits + r*vocab,
-// r in [0, device_n_rows)); `device_src_rows[i]` is the tensor row to read for requested
-// position i (the model's head shift already applied). A device-side selector (the kernel)
-// reads those rows in place; a host selector requires the host `logits` path (device_resident
-// false). The const float* carries no CUDA types, so the seam header stays backend-free — only
-// the CUDA selector TU dereferences it on-device.
 struct ForwardResult {
     std::vector<float> logits;  // size == n_requested * vocab, row r = positions[r] (host path)
     int n_requested = 0;
     int vocab = 0;
     std::shared_ptr<KVState> kv;
-
-    bool device_resident = false;
-    const float * device_logits = nullptr;   // device tensor base; null unless device_resident
-    int device_n_rows = 0;                    // rows in the device tensor
-    std::vector<int> device_src_rows;         // [n_requested] source row per requested position;
-                                              // -1 => the row is `boundary_row` (host), not in the
-                                              // device tensor (a block's first slot under the shift)
-    std::vector<float> boundary_row;          // the one frozen boundary row (vocab floats) for a
-                                              // device_src_rows == -1 entry; empty if none needed
 
     // White-box activation tap (Tier 2): the hidden state per active-block position, filled only when
     // the adapter has emit_activations on (default off => empty, zero overhead). A model OUTPUT like
@@ -80,8 +62,8 @@ public:
     // the NEXT forward. This is the missing half of the read -> inspect -> edit -> write -> observe loop:
     // ForwardResult::activations reads state OUT; write_state writes edited state back IN. Default is a
     // no-op returning false, so existing adapters are unaffected and opt in explicitly; the ggml L0
-    // adapter implements it against the live llama context (a thin additive llama patch, like the
-    // device-logits accessor). Returns true if applied.
+    // adapter implements it against the live llama context through its eval callback. Returns true
+    // if applied.
     virtual bool write_state(int /*layer*/, const std::vector<int> & /*positions*/,
                              const std::vector<float> & /*values*/) { return false; }
 };

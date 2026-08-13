@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
-"""Reproducibly reconstruct the vendored llama.cpp from a PINNED upstream commit + the local CLOZN patches.
+"""Reproducibly reconstruct a pristine checkout of pinned upstream llama.cpp.
 
-`third_party/llama.cpp` is a build dependency that is GITIGNORED (local-only) -- it is NOT committed. Only
-this script, PATCHES.md, and patches/*.patch are tracked, so the whole ~340k-line upstream tree stays out
-of the repo while the build remains exactly reproducible: this script shallow-clones the pinned tag and
-applies our patches on top. Git long-path support is enabled per command on Windows so the same pin can
-be reconstructed below an ordinary user workspace without changing global Git configuration.
+`third_party/llama.cpp` is a build dependency that is GITIGNORED (local-only) -- it is NOT committed. The
+whole upstream tree stays out of the repo while the build remains exactly reproducible: this script
+shallow-clones the pinned tag and verifies that the checkout remains pristine. Git long-path support is
+enabled per command on Windows so the same pin can be reconstructed below an ordinary user workspace
+without changing global Git configuration.
 
-    python engine/core/third_party/bootstrap_llama.py            # clone + patch if missing
+    python engine/core/third_party/bootstrap_llama.py            # clone/verify the pinned checkout
     python engine/core/third_party/bootstrap_llama.py --force    # wipe + redo (e.g. after re-pinning)
 
-Re-pinning to a newer llama.cpp: bump COMMIT/TAG below, run with --force, and if a patch no longer applies,
-regenerate it (`git -C llama.cpp diff > patches/0001-...patch`) against the new base. See PATCHES.md.
+Re-pinning to a newer llama.cpp: update TAG/COMMIT below, run with --force, and rebuild the engine.
 """
 from __future__ import annotations
 
@@ -24,12 +23,9 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEST = os.path.join(HERE, "llama.cpp")
-PATCH_DIR = os.path.join(HERE, "patches")
 
 REPO = "https://github.com/ggml-org/llama.cpp.git"
-# Pinned base. Recovered 2026-07-13 by matching the patch's pre-image blob hashes against upstream trees
-# (the original checkout kept no .git, so the SHA was reconstructed, not read) and verified with
-# `git apply --check`. GGML 0.15.0.
+# Pinned upstream base. GGML 0.15.0.
 TAG = "b9606"
 COMMIT = "88a39274ecf88ba11686acd357b59685b1cbf03d"
 
@@ -58,12 +54,8 @@ def _remove_tree(path: str) -> None:
     shutil.rmtree(path, onerror=_make_writable_and_retry)
 
 
-def _patches() -> list[str]:
-    return sorted(f for f in os.listdir(PATCH_DIR) if f.endswith(".patch"))
-
-
 def _verify() -> bool:
-    """Verify that DEST is the pinned checkout with every tracked patch applied."""
+    """Verify that DEST is a clean checkout at the pinned upstream commit."""
     git_dir = os.path.join(DEST, ".git")
     if not os.path.isdir(git_dir):
         print(
@@ -73,9 +65,17 @@ def _verify() -> bool:
         )
         return False
 
-    head = subprocess.run(
-        _git("rev-parse", "HEAD"), cwd=DEST, check=True, capture_output=True, text=True
-    ).stdout.strip()
+    head_result = subprocess.run(
+        _git("rev-parse", "HEAD"), cwd=DEST, check=False, capture_output=True, text=True
+    )
+    if head_result.returncode != 0:
+        print(
+            f"ERROR: {DEST} has invalid Git metadata and its pinned source revision cannot be verified. "
+            "Run with --force to reconstruct it.",
+            file=sys.stderr,
+        )
+        return False
+    head = head_result.stdout.strip()
     if head != COMMIT:
         print(
             f"ERROR: llama.cpp HEAD is {head[:12]}, expected {COMMIT[:12]}. "
@@ -84,33 +84,33 @@ def _verify() -> bool:
         )
         return False
 
-    for patch in _patches():
-        path = os.path.join(PATCH_DIR, patch)
-        checked = subprocess.run(
-            _git("apply", "--check", "--reverse", path),
-            cwd=DEST,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
+    status = subprocess.run(
+        _git("status", "--porcelain", "--untracked-files=all"),
+        cwd=DEST,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if status.returncode != 0:
+        print(
+            "ERROR: could not inspect the llama.cpp worktree. Run with --force to reconstruct it.",
+            file=sys.stderr,
         )
-        if checked.returncode != 0:
-            print(
-                f"ERROR: tracked patch is not applied cleanly: {patch}\n{checked.stderr.strip()}",
-                file=sys.stderr,
-            )
-            return False
-
-    checked = subprocess.run(_git("diff", "--check"), cwd=DEST)
-    if checked.returncode != 0:
-        print("ERROR: patched llama.cpp tree fails git diff --check", file=sys.stderr)
+        return False
+    if status.stdout:
+        print(
+            "ERROR: llama.cpp checkout is modified, deleted, or contains untracked files. "
+            "Run with --force to reconstruct the pristine dependency.",
+            file=sys.stderr,
+        )
         return False
 
-    print(f"verified llama.cpp @ {TAG} ({COMMIT[:12]}) + {len(_patches())} tracked patch(es)")
+    print(f"verified pristine llama.cpp @ {TAG} ({COMMIT})")
     return True
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Reconstruct vendored llama.cpp @ pinned commit + CLOZN patches.")
+    ap = argparse.ArgumentParser(description="Clone or verify pristine upstream llama.cpp at the pinned commit.")
     ap.add_argument("--force", action="store_true", help="remove any existing llama.cpp and re-clone")
     args = ap.parse_args(argv)
 
@@ -129,26 +129,8 @@ def main(argv=None) -> int:
               f"re-pin COMMIT before trusting the build.", file=sys.stderr)
         return 1
 
-    patches = _patches()
-    for p in patches:
-        path = os.path.join(PATCH_DIR, p)
-        _run(_git("apply", "--check", path), cwd=DEST)      # fail loudly if the base drifted
-        _run(_git("apply", path), cwd=DEST)
-        print(f"  applied {p}")
-
     if not _verify():
         return 1
-
-    # Security hardening: upstream llama.cpp ships a root CLAUDE.md that instructs coding agents to
-    # "review AGENTS.md before beginning any work" -- third-party agent directives that Claude Code and
-    # similar tools AUTO-READ from a dependency tree. Strip these agent-instruction files so no agent
-    # working in THIS repo can be steered by upstream's directives. Neither is build-relevant, so this
-    # is safe and reproducible (re-applied on every bootstrap). See docs/RUNTIME_SPLIT.md.
-    for _name in ("CLAUDE.md", "AGENTS.md"):
-        _p = os.path.join(DEST, _name)
-        if os.path.isfile(_p):
-            os.remove(_p)
-            print(f"  stripped upstream {_name} (agent-instruction file)")
 
     print(f"\nOK: llama.cpp ready at {DEST}")
     return 0

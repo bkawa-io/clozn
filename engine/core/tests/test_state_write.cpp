@@ -7,8 +7,8 @@
 // Also asserts the seam DEFAULT is a safe no-op: a non-writable adapter (the existing FakeAdapter)
 // returns false from write_state and never mutates — so adding the seam method breaks nothing.
 //
-// The ggml L0 adapter implements write_state against the live llama context (a later slice + a thin
-// additive llama patch, like the device-logits accessor); this CPU test fixes the contract first.
+// The ggml L0 adapter implements write_state against the live llama context through its eval
+// callback; this CPU test fixes the contract first.
 #include <cassert>
 #include <cstdio>
 #include <map>

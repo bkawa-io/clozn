@@ -23,7 +23,7 @@ void register_state_routes(httplib::Server& svr, ServerContext& ctx) {
     // POST /state — GAP #1 (task #43): the WRITE-and-observe inverse of /harvest, over HTTP. Body
     // {text, layer, positions:[int], values:[float] = positions.size()*n_embd (the EDITED residual rows a
     // client read via /harvest and changed)}: run a baseline causal forward, OVERWRITE those positions'
-    // residual at `layer` (GgmlAdapter::write_state — the patch-free eval-callback activation patch), run
+    // residual at `layer` (GgmlAdapter::write_state — the eval-callback activation override), run
     // again, then clear — and report how the model's next-token prediction moved. /harvest (read) + this
     // (write) close the read->edit->write->observe loop on the LIVE model over HTTP. Leak-free: the write
     // is cleared before the pooled context is released.
