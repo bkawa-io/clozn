@@ -1,0 +1,334 @@
+/* Stable instrument chassis. Spectral casting is intentionally limited to the shell edge. */
+.studio-shell {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  grid-template-rows: 56px minmax(0, 1fr);
+  min-height: 100dvh;
+  overflow: clip;
+  background: var(--surface-shell);
+}
+
+.studio-topbar {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--clozn-space-3);
+  min-height: 56px;
+  border-bottom: 1px solid var(--border-etched);
+  background: var(--surface-shell-transition);
+  box-shadow: inset 0 -1px 0 var(--shell-highlight);
+  padding: 0 var(--clozn-space-4);
+}
+
+.studio-topbar::after {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background: var(--shell-cast);
+  content: "";
+  pointer-events: none;
+}
+
+.studio-brand {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.studio-brand strong {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.studio-brand span,
+.eyebrow {
+  color: var(--text-secondary);
+  font-family: var(--clozn-font-mono);
+  font-size: 10px;
+  font-variant-ligatures: none;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  line-height: 1.2;
+}
+
+.studio-thesis {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-chip,
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--clozn-control-compact);
+  border: 1px solid var(--border-etched);
+  border-radius: var(--clozn-radius-control);
+  background: var(--surface-workspace);
+  color: var(--text-secondary);
+  font-family: var(--clozn-font-mono);
+  font-size: 10px;
+  font-variant-ligatures: none;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  padding: 0 var(--clozn-space-2);
+  transition: border-color var(--clozn-duration-press) var(--clozn-ease-standard), background-color var(--clozn-duration-press) var(--clozn-ease-standard), color var(--clozn-duration-press) var(--clozn-ease-standard);
+}
+
+.runtime-chip:hover,
+.theme-toggle:hover {
+  border-color: var(--action-primary);
+  color: var(--text-primary);
+}
+
+.runtime-chip i {
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--status-unknown);
+}
+
+.runtime-chip.is-ready i { background: var(--status-success); }
+.runtime-chip.is-degraded i { background: var(--status-warning); }
+.runtime-chip.is-not-ready i { background: var(--status-warning); }
+.runtime-chip.is-unreachable i { background: var(--status-danger); }
+.runtime-chip.is-checking i { background: var(--status-info); }
+
+.theme-toggle:active {
+  border-color: var(--action-primary-pressed);
+  background: var(--surface-inset);
+}
+
+.studio-rail {
+  display: flex;
+  grid-row: 2;
+  flex-direction: column;
+  gap: var(--clozn-space-1);
+  min-height: 0;
+  border-right: 1px solid var(--border-etched);
+  background: var(--surface-shell-transition);
+  box-shadow: inset -1px 0 0 var(--shell-highlight);
+  padding: var(--clozn-space-2);
+}
+
+.studio-rail a {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid transparent;
+  border-radius: var(--clozn-radius-control);
+  color: var(--icon-default);
+  transition: border-color var(--clozn-duration-state) var(--clozn-ease-standard), background-color var(--clozn-duration-state) var(--clozn-ease-standard), color var(--clozn-duration-state) var(--clozn-ease-standard);
+}
+
+.studio-rail a span {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  font-family: var(--clozn-font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.studio-rail a b {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.studio-rail a:hover {
+  border-color: var(--border-etched);
+  background: var(--surface-secondary);
+  color: var(--text-primary);
+}
+
+.studio-rail a.is-active {
+  border-color: var(--action-primary);
+  background: var(--action-primary-tint);
+  color: var(--action-primary);
+}
+
+.studio-rail a.is-active::after {
+  position: absolute;
+  bottom: 5px;
+  width: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: currentColor;
+  content: "";
+}
+
+.studio-workspace {
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: var(--surface-workspace);
+  padding: var(--clozn-space-4);
+}
+
+.surface-placeholder {
+  max-width: 680px;
+  min-height: 220px;
+  border: 1px solid var(--border-etched);
+  border-radius: var(--clozn-radius-panel);
+  background: var(--surface-workspace);
+  box-shadow: inset 0 1px 0 var(--shell-highlight);
+  padding: var(--clozn-space-5);
+}
+
+.surface-placeholder h1 {
+  margin: var(--clozn-space-2) 0;
+  color: var(--text-primary);
+  font-size: clamp(20px, 2vw, 24px);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+
+.surface-placeholder p {
+  max-width: 50ch;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 15px;
+}
+
+/* Shared CSS vocabulary for feature surfaces: joined panes share a single seam. */
+.instrument-layout {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--border-etched);
+  border-radius: var(--clozn-radius-panel);
+  background: var(--surface-workspace);
+  overflow: clip;
+}
+
+.instrument-layout--two {
+  grid-template-columns: minmax(240px, 0.8fr) minmax(0, 1.2fr);
+}
+
+.instrument-layout--three {
+  grid-template-columns: minmax(208px, 0.7fr) minmax(0, 1.3fr) minmax(240px, 0.8fr);
+}
+
+.instrument-pane {
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface-workspace);
+}
+
+.instrument-pane + .instrument-pane {
+  border-left: 1px solid var(--border-etched);
+}
+
+.instrument-pane--secondary { background: var(--surface-secondary); }
+.instrument-pane--inset { background: var(--surface-inset); }
+
+.instrument-pane__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--clozn-space-2);
+  min-height: 44px;
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 0 var(--clozn-space-3);
+}
+
+.instrument-pane__title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.instrument-pane__body { padding: var(--clozn-space-4); }
+
+.instrument-well {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--clozn-radius-data);
+  background: var(--surface-inset);
+}
+
+.instrument-overlay {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--clozn-radius-panel);
+  background: var(--surface-overlay);
+  box-shadow: var(--shadow-raised);
+}
+
+/* A datum chamfer is opt-in for primary commands and movable modules only. */
+.datum-chamfer {
+  clip-path: polygon(var(--clozn-chamfer-md) 0, 100% 0, 100% 100%, 0 100%, 0 var(--clozn-chamfer-md));
+}
+
+.registration-mark {
+  position: relative;
+}
+
+.registration-mark::before,
+.registration-mark::after {
+  position: absolute;
+  width: 5px;
+  height: 1px;
+  background: var(--action-primary);
+  content: "";
+  pointer-events: none;
+}
+
+.registration-mark::before { top: -1px; left: var(--clozn-space-2); }
+.registration-mark::after { right: var(--clozn-space-2); bottom: -1px; }
+
+@media (max-width: 760px) {
+  .studio-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    overflow: visible;
+  }
+
+  .studio-topbar {
+    grid-column: 1;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    padding: var(--clozn-space-2) var(--clozn-space-3);
+  }
+
+  .studio-thesis { display: none; }
+  .theme-toggle { font-size: 0; width: var(--clozn-control-compact); padding: 0; }
+  .theme-toggle::after { color: var(--text-secondary); content: "◐"; font-size: 14px; }
+  .runtime-chip { justify-self: end; }
+
+  .studio-rail {
+    grid-row: 3;
+    flex-direction: row;
+    justify-content: space-between;
+    min-height: 56px;
+    border-top: 1px solid var(--border-etched);
+    border-right: 0;
+    box-shadow: inset 0 1px 0 var(--shell-highlight);
+    overflow-x: auto;
+    padding: var(--clozn-space-1) var(--clozn-space-2);
+  }
+
+  .studio-rail a { flex: 0 0 48px; }
+  .studio-workspace { grid-column: 1; grid-row: 2; padding: var(--clozn-space-3); }
+  .instrument-layout--two,
+  .instrument-layout--three { grid-template-columns: minmax(0, 1fr); }
+  .instrument-pane + .instrument-pane { border-top: 1px solid var(--border-etched); border-left: 0; }
+}

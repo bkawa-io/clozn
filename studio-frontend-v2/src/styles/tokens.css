@@ -1,0 +1,186 @@
+/*
+ * CLOZN token layers
+ * 1. --clozn-* reference values never change.
+ * 2. semantic tokens below swap by material/theme.
+ * 3. component CSS should consume semantic tokens only.
+ */
+:root {
+  color-scheme: light;
+
+  /* Lunar Nacre material */
+  --clozn-lunar-000: #ffffff;
+  --clozn-lunar-050: #fbfcff;
+  --clozn-lunar-100: #f4f6ff;
+  --clozn-lunar-150: #f4fbff;
+  --clozn-lunar-200: #eaedf8;
+  --clozn-lunar-well: #eaf7fb;
+  --clozn-ink-900: #151725;
+  --clozn-ink-600: #697086;
+
+  /* Black Pearl material */
+  --clozn-pearl-000: #03050a;
+  --clozn-pearl-050: #06080d;
+  --clozn-pearl-100: #0a0d14;
+  --clozn-pearl-200: #10131a;
+  --clozn-pearl-250: #151a21;
+  --clozn-pearl-well: #090d12;
+  --clozn-pearl-ink: #f5f4fa;
+  --clozn-pearl-muted: #999dab;
+
+  /* Interaction, evidence, and measurement references */
+  --clozn-blue-ion-300: #3bc7d8;
+  --clozn-blue-ion-500: #087f92;
+  --clozn-blue-ion-700: #075e6d;
+  --clozn-mineral-mint-500: #2f9e78;
+  --clozn-amber-500: #b97922;
+  --clozn-magenta-500: #c13f7a;
+  --clozn-crimson-500: #c44354;
+  --clozn-silver-blue-500: #747d96;
+  --clozn-cryogenic-cyan-500: #4bb9c7;
+  --clozn-lunar-violet-500: #7775b5;
+  --clozn-series-silver-blue: #7890a8;
+
+  /* Geometry */
+  --clozn-space-1: 4px;
+  --clozn-space-2: 8px;
+  --clozn-space-3: 12px;
+  --clozn-space-4: 16px;
+  --clozn-space-5: 24px;
+  --clozn-space-6: 32px;
+  --clozn-space-7: 48px;
+  --clozn-radius-data: 4px;
+  --clozn-radius-control: 7px;
+  --clozn-radius-panel: 10px;
+  --clozn-radius-shell: 16px;
+  --clozn-chamfer-sm: 4px;
+  --clozn-chamfer-md: 6px;
+  --clozn-chamfer-lg: 8px;
+  --clozn-control-compact: 30px;
+  --clozn-control-standard: 36px;
+  --clozn-control-prominent: 40px;
+  --clozn-target-min: 32px;
+
+  /* Motion remains measured and non-bouncy. */
+  --clozn-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --clozn-duration-press: 100ms;
+  --clozn-duration-state: 160ms;
+  --clozn-duration-panel: 220ms;
+  --clozn-duration-view: 280ms;
+
+  /* Self-hosting ready: place Spline font files in an app font face if supplied. */
+  --clozn-font-sans: "Spline Sans", "Avenir Next", Avenir, "Segoe UI", sans-serif;
+  --clozn-font-mono: "Spline Sans Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+[data-theme="lunar"],
+:root:not([data-theme]) {
+  color-scheme: light;
+  --surface-shell: var(--clozn-lunar-050);
+  --surface-shell-transition: var(--clozn-lunar-100);
+  --surface-shell-edge: var(--clozn-lunar-200);
+  --surface-workspace: var(--clozn-lunar-000);
+  --surface-secondary: var(--clozn-lunar-150);
+  --surface-inset: var(--clozn-lunar-well);
+  --surface-raised: var(--clozn-lunar-000);
+  --surface-overlay: rgb(255 255 255 / 96%);
+  --surface-selection: rgb(8 127 146 / 10%);
+
+  --text-primary: var(--clozn-ink-900);
+  --text-secondary: var(--clozn-ink-600);
+  --text-tertiary: var(--clozn-silver-blue-500);
+  --text-inverse: var(--clozn-lunar-000);
+  --icon-default: var(--clozn-ink-600);
+
+  --border-etched: rgb(64 74 124 / 29%);
+  --border-subtle: rgb(70 80 132 / 16%);
+  --border-strong: rgb(49 61 111 / 42%);
+  --border-focus-outer: var(--clozn-lunar-000);
+  --shadow-raised: 0 12px 30px rgb(31 41 78 / 14%), 0 2px 6px rgb(31 41 78 / 8%);
+  --shell-cast: linear-gradient(115deg, rgb(75 185 199 / 8%), transparent 28%, rgb(119 117 181 / 6%) 64%, transparent 85%);
+  --shell-highlight: rgb(255 255 255 / 88%);
+
+  --action-primary: var(--clozn-blue-ion-500);
+  --action-primary-hover: var(--clozn-blue-ion-700);
+  --action-primary-pressed: var(--clozn-blue-ion-700);
+  --action-primary-bright: var(--clozn-blue-ion-300);
+  --action-primary-tint: rgb(8 127 146 / 10%);
+  --focus-inner: var(--clozn-blue-ion-500);
+  --focus-outer: var(--clozn-lunar-000);
+}
+
+[data-theme="pearl"] {
+  color-scheme: dark;
+  --surface-shell: var(--clozn-pearl-050);
+  --surface-shell-transition: var(--clozn-pearl-100);
+  --surface-shell-edge: var(--clozn-pearl-000);
+  --surface-workspace: var(--clozn-pearl-200);
+  --surface-secondary: var(--clozn-pearl-250);
+  --surface-inset: var(--clozn-pearl-well);
+  --surface-raised: var(--clozn-pearl-250);
+  --surface-overlay: rgb(21 26 33 / 96%);
+  --surface-selection: rgb(59 199 216 / 13%);
+
+  --text-primary: var(--clozn-pearl-ink);
+  --text-secondary: var(--clozn-pearl-muted);
+  --text-tertiary: var(--clozn-silver-blue-500);
+  --text-inverse: var(--clozn-pearl-000);
+  --icon-default: var(--clozn-pearl-muted);
+
+  --border-etched: rgb(177 190 223 / 30%);
+  --border-subtle: rgb(177 190 223 / 15%);
+  --border-strong: rgb(196 208 238 / 44%);
+  --border-focus-outer: var(--clozn-pearl-000);
+  --shadow-raised: 0 16px 40px rgb(0 0 0 / 42%), 0 2px 8px rgb(0 0 0 / 28%);
+  --shell-cast: linear-gradient(110deg, rgb(75 185 199 / 8%), transparent 28%, rgb(119 117 181 / 10%) 62%, rgb(193 63 122 / 4%) 100%);
+  --shell-highlight: rgb(245 244 250 / 7%);
+
+  --action-primary: var(--clozn-blue-ion-300);
+  --action-primary-hover: var(--clozn-blue-ion-300);
+  --action-primary-pressed: var(--clozn-blue-ion-500);
+  --action-primary-bright: var(--clozn-blue-ion-300);
+  --action-primary-tint: rgb(59 199 216 / 13%);
+  --focus-inner: var(--clozn-blue-ion-300);
+  --focus-outer: var(--clozn-pearl-000);
+}
+
+/* Status is semantic: anomaly is not failure. */
+:root {
+  --status-info: var(--clozn-blue-ion-500);
+  --status-success: var(--clozn-mineral-mint-500);
+  --status-warning: var(--clozn-amber-500);
+  --status-anomaly: var(--clozn-magenta-500);
+  --status-danger: var(--clozn-crimson-500);
+  --status-unknown: var(--clozn-silver-blue-500);
+  --viz-primary: var(--clozn-blue-ion-500);
+  --viz-secondary: var(--clozn-cryogenic-cyan-500);
+  --viz-tertiary: var(--clozn-lunar-violet-500);
+  --viz-neutral: var(--clozn-series-silver-blue);
+  --viz-stable: var(--clozn-mineral-mint-500);
+  --viz-anomaly: var(--clozn-magenta-500);
+
+  /* Product-facing aliases keep feature CSS semantic and decoupled from the reference scale. */
+  --font-sans: var(--clozn-font-sans);
+  --font-mono: var(--clozn-font-mono);
+  --space-micro: var(--clozn-space-1);
+  --space-tight: var(--clozn-space-2);
+  --space-control: var(--clozn-space-3);
+  --space-component: var(--clozn-space-4);
+  --space-group: var(--clozn-space-5);
+  --space-section: var(--clozn-space-6);
+  --space-major: var(--clozn-space-7);
+  --radius-data: var(--clozn-radius-data);
+  --radius-control: var(--clozn-radius-control);
+  --radius-panel: var(--clozn-radius-panel);
+  --status-failure: var(--status-danger);
+  --status-success-tint: color-mix(in srgb, var(--status-success) 11%, transparent);
+  --status-warning-tint: color-mix(in srgb, var(--status-warning) 11%, transparent);
+  --status-failure-tint: color-mix(in srgb, var(--status-danger) 11%, transparent);
+  --status-unknown-tint: color-mix(in srgb, var(--status-unknown) 11%, transparent);
+  --evidence-support: var(--clozn-mineral-mint-500);
+  --evidence-support-tint: color-mix(in srgb, var(--evidence-support) 13%, transparent);
+  --evidence-suppress: var(--clozn-magenta-500);
+  --evidence-suppress-tint: color-mix(in srgb, var(--evidence-suppress) 11%, transparent);
+  --evidence-observed: var(--clozn-silver-blue-500);
+  --evidence-observed-tint: color-mix(in srgb, var(--evidence-observed) 10%, transparent);
+  --text-on-action: #ffffff;
+}
