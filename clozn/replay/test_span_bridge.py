@@ -9,8 +9,10 @@ segment_id-unresolvable bug this file's segment_id-anchored tests otherwise cove
 """
 from __future__ import annotations
 
+import pytest
+
 from clozn.replay import span_bridge
-from clozn.runs.context_receipt import _content_hash
+from clozn.runs.context_receipt import _content_hash, build_context_receipt
 from clozn.runs.text_span_addresses import build_persisted_text_span_addresses
 
 RUN = {
@@ -218,6 +220,53 @@ def test_resolve_source_spans_not_found():
     result = span_bridge.resolve_source_spans(RUN, "no-such-source")
     assert result["ok"] is False
     assert result["reason"]["code"] == "source_not_found"
+
+
+# ==================================================================== canonical Context Receipt set deletion
+
+def _strict_receipt_run():
+    messages = [
+        {"role": "system", "content": "system stays"},
+        {"role": "user", "content": "remove A"},
+        {"role": "user", "content": "keep B"},
+        {"role": "user", "content": "remove C"},
+    ]
+    receipt = build_context_receipt(
+        messages=messages, assembled_messages=messages, final_prompt="exact prompt",
+        run_id="run_strict_receipt_set", privacy="full",
+    )
+    return {
+        "id": "run_strict_receipt_set",
+        "messages": messages,
+        "assembled_messages": [dict(message) for message in messages],
+        "context_receipt": receipt,
+    }
+
+
+def test_canonical_receipt_set_deletion_is_whole_message_and_preserves_remaining_order():
+    run = _strict_receipt_run()
+    ids = [segment["segment_id"] for segment in run["context_receipt"]["assembled"]]
+    # Deliberately provide input in reverse order.  IDs are canonicalized for
+    # provenance while the untouched messages retain original prompt order.
+    result = span_bridge.delete_context_receipt_sources(run, [ids[3], ids[1]])
+
+    assert result["canonical_source_ids"] == sorted([ids[1], ids[3]])
+    assert [message["content"] for message in result["messages"]] == ["system stays", "keep B"]
+    assert [item["message_index"] for item in result["exact_removed_ranges"]] == [1, 3]
+    assert len(result["basis_digest"]) == len(result["intervened_context_digest"]) == 64
+    assert run["messages"][1]["content"] == "remove A"  # no mutation
+
+
+def test_canonical_receipt_set_deletion_refuses_nontrivial_assembly_and_unknown_ids():
+    run = _strict_receipt_run()
+    ids = [segment["segment_id"] for segment in run["context_receipt"]["assembled"]]
+    run["assembled_messages"] = list(reversed(run["assembled_messages"]))
+    with pytest.raises(span_bridge.ContextReceiptSourceResolutionError, match="assembled"):
+        span_bridge.delete_context_receipt_sources(run, [ids[1]])
+
+    fresh = _strict_receipt_run()
+    with pytest.raises(span_bridge.ContextReceiptSourceResolutionError, match="unknown canonical"):
+        span_bridge.delete_context_receipt_sources(fresh, ["seg_unknown"])
 
 
 # ========================================================================================= excise_spans

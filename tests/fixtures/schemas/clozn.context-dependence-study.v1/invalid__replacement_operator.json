@@ -1,0 +1,36 @@
+{
+  "schema_version": "clozn.context-dependence-study.v1",
+  "study_id": "cds_0123456789abcdef01234567",
+  "run_id": "run_cd_1",
+  "context_model_identity": {},
+  "source_identity": {"kind": "context_receipt_segment_id", "view": "assembled", "sources": []},
+  "target": {
+    "unicode_range": [0, 1],
+    "recorded_token_range": [0, 1],
+    "recorded_prefix_range": [0, 0],
+    "unicode_offset_basis": "teacher_forced_scored_continuation"
+  },
+  "continuation": {"kind": "recorded_token_ids", "token_ids_exact": true, "retokenized": false, "recorded_text": "x"},
+  "baseline": {
+    "teacher_forced_logp": -0.1,
+    "context_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "scored_once": true,
+    "provenance": "measured"
+  },
+  "experiments": [
+    {
+      "experiment_id": "cdx_0123456789abcdef01234567",
+      "intervention_operator": "matched_length_neutral_replacement",
+      "removed_source_ids": ["seg_0123456789abcdef"],
+      "exact_removed_ranges": [{"source_id": "seg_0123456789abcdef", "message_index": 0, "unicode_range": [0, 1], "byte_range": [0, 1]}],
+      "context_hash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "target_logp": -1.1,
+      "baseline_target_logp": -0.1,
+      "delta_nats": 1.0,
+      "per_target_token_delta_nats": [1.0],
+      "target_token_indices": [0],
+      "provenance": "measured"
+    }
+  ],
+  "budget": {"passes_requested": 2, "passes_consumed": 2}
+}

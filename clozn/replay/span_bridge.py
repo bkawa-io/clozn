@@ -70,7 +70,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from copy import deepcopy
+from typing import Any, Iterable
 
 
 def _reason(code: str, message: str) -> dict:
@@ -78,6 +79,216 @@ def _reason(code: str, message: str) -> dict:
 
 
 _ID_MESSAGE_RE_PREFIX = "message-"
+
+
+class ContextReceiptSourceResolutionError(ValueError):
+    """A canonical Context Receipt source set cannot be deleted faithfully.
+
+    This is intentionally separate from the older span/source bridge below.
+    ``resolve_source_spans`` is a best-effort bridge for legacy client source
+    IDs and may return the subset of occurrences it can splice.  Context
+    Dependence source deletion has the opposite contract: it either proves the
+    complete canonical receipt-to-message correspondence and deletes whole
+    messages, or it refuses before handing anything to replay.
+    """
+
+
+def _canonical_json_digest(value: Any) -> str:
+    return hashlib.sha256(json.dumps(
+        value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")).hexdigest()
+
+
+def _strict_message_list(value: Any, *, name: str) -> list[dict]:
+    """A message-list basis we can prove against a Context Receipt.
+
+    A partial message list is not a harmless degradation for a whole-message
+    source deletion: it would make the source set look complete while deleting
+    it from a different prompt.  Require every entry and both template-visible
+    fields to be explicit.
+    """
+    if not isinstance(value, list) or not value:
+        raise ContextReceiptSourceResolutionError(f"{name} must be a non-empty message list")
+    copied: list[dict] = []
+    for index, message in enumerate(value):
+        if not isinstance(message, dict):
+            raise ContextReceiptSourceResolutionError(f"{name}[{index}] is not a message object")
+        role, content = message.get("role"), message.get("content")
+        if not isinstance(role, str) or not role:
+            raise ContextReceiptSourceResolutionError(f"{name}[{index}].role is not a non-empty string")
+        if not isinstance(content, str):
+            raise ContextReceiptSourceResolutionError(f"{name}[{index}].content is not a string")
+        copied.append(deepcopy(message))
+    return copied
+
+
+def _validated_receipt_segments(*, segments: Any, messages: list[dict], label: str) -> list[dict]:
+    """Validate one receipt segment list against its exact message-list basis.
+
+    ``original_order`` is never a hint here.  It must be the complete identity
+    mapping ``0..N-1`` and every position must agree on both the receipt's
+    stable segment ID and content hash.  This catches stale order metadata,
+    duplicate IDs, malformed receipt rows, and prompt drift before deletion.
+    """
+    from clozn.runs.context_receipt import _content_hash, segment_id
+
+    if not isinstance(segments, list) or len(segments) != len(messages):
+        raise ContextReceiptSourceResolutionError(
+            f"Context Receipt {label} segments do not completely match the message basis")
+    seen_ids: set[str] = set()
+    seen_occurrences: dict[tuple[str, str], int] = {}
+    out: list[dict] = []
+    for expected_index, (segment, message) in enumerate(zip(segments, messages)):
+        if not isinstance(segment, dict):
+            raise ContextReceiptSourceResolutionError(
+                f"Context Receipt {label}[{expected_index}] is malformed")
+        if segment.get("source_type") != "message":
+            raise ContextReceiptSourceResolutionError(
+                f"Context Receipt {label}[{expected_index}] is not a message segment")
+        if segment.get("original_order") != expected_index:
+            raise ContextReceiptSourceResolutionError(
+                f"Context Receipt {label} original_order is incomplete, stale, or reordered")
+        role, content = message["role"], message["content"]
+        key = (role, content)
+        occurrence = seen_occurrences.get(key, 0)
+        seen_occurrences[key] = occurrence + 1
+        expected_id = segment_id(role, content, occurrence=occurrence)
+        source_id = segment.get("segment_id")
+        if not isinstance(source_id, str) or not source_id or source_id != expected_id:
+            raise ContextReceiptSourceResolutionError(
+                f"Context Receipt {label}[{expected_index}] segment_id does not match its message")
+        if source_id in seen_ids:
+            raise ContextReceiptSourceResolutionError(
+                f"Context Receipt {label} has duplicate segment_id {source_id!r}")
+        seen_ids.add(source_id)
+        if segment.get("content_hash") != _content_hash(content):
+            raise ContextReceiptSourceResolutionError(
+                f"Context Receipt {label}[{expected_index}] content_hash does not match its message")
+        out.append(deepcopy(segment))
+    return out
+
+
+def _canonical_removed_ids(source_ids: Iterable[str]) -> list[str]:
+    if isinstance(source_ids, (str, bytes)):
+        raise ContextReceiptSourceResolutionError(
+            "removed_source_ids must be an iterable of canonical Context Receipt segment IDs")
+    try:
+        result = list(source_ids)
+    except TypeError as exc:
+        raise ContextReceiptSourceResolutionError(
+            "removed_source_ids must be an iterable of canonical Context Receipt segment IDs") from exc
+    if not result or any(not isinstance(value, str) or not value for value in result):
+        raise ContextReceiptSourceResolutionError(
+            "removed_source_ids must contain at least one non-empty canonical segment ID")
+    if len(set(result)) != len(result):
+        raise ContextReceiptSourceResolutionError("removed_source_ids must not contain duplicate segment IDs")
+    return sorted(result)
+
+
+def resolve_context_receipt_source_set(run: dict, removed_source_ids: Iterable[str]) -> dict:
+    """Resolve a canonical Context Receipt segment-ID set for whole-message deletion.
+
+    This is the strict Context Dependence/regeneration seam.  It only accepts a
+    current, new-shape receipt whose delivered list completely verifies the raw
+    messages.  When a run records an assembled message basis (the prompt that
+    generation actually received), that list and its receipt projection must
+    be a trivial, one-to-one, same-order correspondence with delivery.  A
+    transformed/inserted/omitted assembly is deliberately refused rather than
+    translating IDs through text similarity or stale positions.
+
+    The return includes a detached ``messages`` override with selected whole
+    messages absent, exact ranges, and deterministic digest evidence.  No
+    caller may receive a partial deletion.
+    """
+    if not isinstance(run, dict) or not isinstance(run.get("id"), str) or not run["id"]:
+        raise ContextReceiptSourceResolutionError("a stored run with a non-empty id is required")
+    from clozn.runs.context_receipt import read_receipt
+
+    receipt_view = read_receipt(run)
+    if receipt_view.get("shape") != "new":
+        raise ContextReceiptSourceResolutionError("a current schema-backed Context Receipt is required")
+    receipt = receipt_view.get("receipt")
+    if not isinstance(receipt, dict) or receipt.get("schema_validation_error"):
+        raise ContextReceiptSourceResolutionError("the Context Receipt is malformed or failed validation")
+    if receipt.get("run_id") != run["id"]:
+        raise ContextReceiptSourceResolutionError("the Context Receipt does not belong to this run")
+
+    raw_messages = _strict_message_list(run.get("messages"), name="run.messages")
+    delivered = _validated_receipt_segments(
+        segments=receipt.get("delivered"), messages=raw_messages, label="delivered")
+
+    assembled_value = run.get("assembled_messages")
+    if assembled_value is None:
+        if "assembled" in receipt:
+            raise ContextReceiptSourceResolutionError(
+                "the receipt has an assembled projection but the run has no assembled message basis")
+        basis_name, basis_messages, basis_segments = "messages", raw_messages, delivered
+    else:
+        assembled_messages = _strict_message_list(assembled_value, name="run.assembled_messages")
+        assembled = _validated_receipt_segments(
+            segments=receipt.get("assembled"), messages=assembled_messages, label="assembled")
+        if len(assembled) != len(delivered):  # redundant, but protects a future relaxation above
+            raise ContextReceiptSourceResolutionError("assembled Context Receipt mapping is nontrivial")
+        for index, (raw, assembled_segment, delivered_segment) in enumerate(
+            zip(raw_messages, assembled, delivered)
+        ):
+            assembled_message = assembled_messages[index]
+            if (
+                assembled_segment.get("segment_id") != delivered_segment.get("segment_id")
+                or assembled_segment.get("content_hash") != delivered_segment.get("content_hash")
+                or raw["role"] != assembled_message["role"]
+                or raw["content"] != assembled_message["content"]
+                or delivered_segment.get("included") is not True
+            ):
+                raise ContextReceiptSourceResolutionError(
+                    "the assembled prompt is not a trivial verified delivery correspondence")
+        basis_name, basis_messages, basis_segments = "assembled_messages", assembled_messages, assembled
+
+    requested = _canonical_removed_ids(removed_source_ids)
+    by_id = {str(segment["segment_id"]): index for index, segment in enumerate(basis_segments)}
+    unknown = [source_id for source_id in requested if source_id not in by_id]
+    if unknown:
+        raise ContextReceiptSourceResolutionError(
+            "unknown canonical Context Receipt source ID(s): " + ", ".join(unknown))
+
+    removed_indices = {by_id[source_id] for source_id in requested}
+    exact_removed_ranges = []
+    # Source-set identity/provenance is lexically canonical; ranges retain
+    # their prompt-basis order so a reviewer can inspect the actual deletion
+    # surgery without mentally re-sorting opaque IDs.  This also matches the
+    # direct teacher-forced Context Dependence experiment record.
+    for source_id in sorted(requested, key=lambda value: (by_id[value], value)):
+        index = by_id[source_id]
+        content = basis_messages[index]["content"]
+        exact_removed_ranges.append({
+            "source_id": source_id,
+            "message_index": index,
+            "unicode_range": [0, len(content)],
+            "byte_range": [0, len(content.encode("utf-8"))],
+        })
+    remaining = [deepcopy(message) for index, message in enumerate(basis_messages)
+                 if index not in removed_indices]
+    basis_digest = _canonical_json_digest({"basis": basis_name, "messages": basis_messages})
+    intervened_digest = _canonical_json_digest({"basis": basis_name, "messages": remaining})
+    return {
+        "basis": basis_name,
+        "available_source_ids": [str(segment["segment_id"]) for segment in basis_segments],
+        "canonical_source_ids": requested,
+        "messages": remaining,
+        "exact_removed_ranges": exact_removed_ranges,
+        "basis_digest": basis_digest,
+        "intervened_context_digest": intervened_digest,
+    }
+
+
+def delete_context_receipt_sources(run: dict, removed_source_ids: Iterable[str]) -> dict:
+    """Alias naming the operation performed by :func:`resolve_context_receipt_source_set`.
+
+    Keeping this public verb makes callers choose the strict whole-message
+    path instead of mistaking the legacy span bridge for canonical source-set
+    deletion.
+    """
+    return resolve_context_receipt_source_set(run, removed_source_ids)
 
 
 def _segment_id_index(run: dict) -> dict:
@@ -430,9 +641,12 @@ def derive_seed(run: dict, *, purpose: str) -> int:
 
 
 __all__ = [
+    "ContextReceiptSourceResolutionError",
+    "delete_context_receipt_sources",
     "derive_seed",
     "excise_spans",
     "pick_random_control_span",
+    "resolve_context_receipt_source_set",
     "resolve_source_spans",
     "resolve_span_address",
 ]
