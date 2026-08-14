@@ -134,21 +134,118 @@ def planned_universe(run: Mapping[str, Any], request: Mapping[str, Any]) -> dict
         ) from exc
 
 
-def _runtime_identity(run: Mapping[str, Any], sub: Any) -> dict:
-    current: dict[str, Any] = {}
-    for name in ("identity_meta", "run_meta"):
-        fn = getattr(sub, name, None)
-        if callable(fn):
-            try:
-                current[name] = deepcopy(dict(fn() or {}))
-            except Exception:
-                current[name] = {"unavailable": True}
-    return {
-        "recorded_model": run.get("model"),
-        "recorded_substrate": run.get("substrate"),
-        "recorded_identity": deepcopy(run.get("identity") if isinstance(run.get("identity"), Mapping) else {}),
-        "current_worker": current,
+def _prior_support_documents(run: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    support = run.get("minimal_context_support")
+    if not isinstance(support, Mapping) or "unavailable" in support:
+        return []
+    return [value for value in support.values() if isinstance(value, Mapping)]
+
+
+def _load_exact_support(study: ExactAnswerPreservationStudy, run: Mapping[str, Any]) -> None:
+    from clozn.runs.answer_preservation import ExactSupportIncompatible, STUDY_SCHEMA as EXACT_STUDY_SCHEMA
+
+    for document in _prior_support_documents(run):
+        if document.get("schema_version") != EXACT_STUDY_SCHEMA:
+            continue
+        try:
+            study.load_existing(document)
+            return
+        except ExactSupportIncompatible:
+            continue
+
+
+def _load_likelihood_support(study: ContextDependenceStudy, run: Mapping[str, Any]) -> None:
+    from clozn.receipts.context_dependence import (
+        ContextDependenceSupportIncompatible,
+        SCHEMA as LIKELIHOOD_STUDY_SCHEMA,
+    )
+
+    for document in _prior_support_documents(run):
+        if document.get("schema_version") != LIKELIHOOD_STUDY_SCHEMA:
+            continue
+        try:
+            study.load_existing(document)
+            return
+        except ContextDependenceSupportIncompatible:
+            continue
+
+
+_STABLE_RUNTIME_META_FIELDS = frozenset({
+    "backend",
+    "clozn_version",
+    "context_size",
+    "device",
+    "engine_build",
+    "family",
+    "gguf_artifact_sha256",
+    "gpu_layers",
+    "key_sha256",
+    "mode",
+    "model_file",
+    "model_id",
+    "model_sha256",
+    "n_ctx",
+    "quant",
+    "runtime_key_sha256",
+    "template_fingerprint",
+    "tokenizer_fingerprint",
+    "tokenizer_sha256",
+    "white_box_flags",
+    "adapter",
+})
+
+
+def minimal_context_runtime_identity(run: Mapping[str, Any], sub: Any, *, preservation_kind: str | None = None) -> dict:
+    """Return the immutable runtime projection used by likelihood cache identity.
+
+    The execution-fork projection is the canonical strict identity when the
+    worker exposes all reproducibility facets.  The fallback intentionally
+    keeps only stable identity/runtime fields; request-local timing, finish,
+    token-count, and wall-clock metadata from ``run_meta`` are never included.
+    """
+    identity: dict[str, Any] = {}
+    meta: dict[str, Any] = {}
+    identity_fn = getattr(sub, "identity_meta", None)
+    meta_fn = getattr(sub, "run_meta", None)
+    if callable(identity_fn):
+        try:
+            identity = deepcopy(dict(identity_fn() or {}))
+        except Exception:
+            identity = {}
+    if callable(meta_fn):
+        try:
+            meta = deepcopy(dict(meta_fn() or {}))
+        except Exception:
+            meta = {}
+
+    try:
+        from clozn.replay.execution_fork import parent_runtime_projection
+        canonical = parent_runtime_projection({
+            "id": run.get("id", "current"),
+            "model": run.get("model"),
+            "identity": identity,
+            "meta": meta,
+        })
+    except Exception:
+        canonical = None
+    if canonical is not None:
+        return deepcopy(canonical)
+
+    identity.pop("captured_at", None)
+    stable_meta = {
+        key: deepcopy(value)
+        for key, value in meta.items()
+        if key in _STABLE_RUNTIME_META_FIELDS
     }
+    return {
+        "identity": identity,
+        "runtime": stable_meta,
+    }
+
+
+def _runtime_identity(run: Mapping[str, Any], sub: Any) -> dict:
+    """Backward-compatible private alias for the stable cache projection."""
+    return minimal_context_runtime_identity(run, sub)
 
 
 def cache_binding(run: Mapping[str, Any], request: Mapping[str, Any], universe: Mapping[str, Any], sub: Any) -> dict:
@@ -172,7 +269,10 @@ def cache_binding(run: Mapping[str, Any], request: Mapping[str, Any], universe: 
         "search_universe_id": universe.get("universe_id"),
         "continuation_identity": _digest(continuation),
         "runtime_generation_contract_identity": _digest({
-            "runtime": (eligibility or {}).get("recorded_runtime") if eligibility else _runtime_identity(run, sub),
+            "runtime": (eligibility or {}).get("recorded_runtime")
+            if eligibility else minimal_context_runtime_identity(
+                run, sub, preservation_kind=request["preservation"]["kind"]
+            ),
             "generation_contract": (eligibility or {}).get("generation_contract") if eligibility else None,
         }),
         "preservation": deepcopy(request["preservation"]),
@@ -215,12 +315,21 @@ def execute_minimal_context(
     binding: Mapping[str, Any],
     *,
     checkpoint: Callable[..., Any],
+    cancel: Callable[[], bool] | None = None,
 ) -> tuple[dict, dict]:
     """Run one immutable study and return result plus separately persisted support evidence."""
     source_ids = list(universe["source_ids"])
     manifest = run.get("context_units")
     kind = request["preservation"]["kind"]
     exact = kind == EXACT_PRESERVATION_KIND
+    from clozn.server.influence_jobs import JobCancelled
+    from clozn.runs.multi_arm import BatchCancelled
+
+    def check_cancel() -> None:
+        if callable(cancel) and cancel():
+            raise JobCancelled("minimal-context job cancelled")
+
+    check_cancel()
     if exact:
         eligibility = assess_exact_eligibility(run, sub)
         if not eligibility.get("eligible"):
@@ -233,7 +342,13 @@ def execute_minimal_context(
                 "exact_recorded_output requires direct generation probes",
                 code="minimal_context_exact_capability_unavailable", status=503,
             )
-        study = ExactAnswerPreservationStudy(run, sub, source_ids=source_ids)
+        study = ExactAnswerPreservationStudy(
+            run,
+            sub,
+            source_ids=source_ids,
+            search_universe_id=universe["universe_id"],
+        )
+        _load_exact_support(study, run)
         study_id = study.study_id
     else:
         if not callable(getattr(sub, "score_tokens", None)):
@@ -241,7 +356,15 @@ def execute_minimal_context(
                 "teacher_forced_likelihood requires token scoring",
                 code="minimal_context_likelihood_capability_unavailable", status=503,
             )
-        study = ContextDependenceStudy(dict(run), sub)
+        study = ContextDependenceStudy(
+            dict(run),
+            sub,
+            search_universe_id=universe["universe_id"],
+            runtime_identity=minimal_context_runtime_identity(
+                run, sub, preservation_kind=kind,
+            ),
+        )
+        _load_likelihood_support(study, run)
         study_id = None
         if set(source_ids).difference(study.source_ids):
             raise MinimalContextExecutionError(
@@ -251,6 +374,7 @@ def execute_minimal_context(
 
     checkpoint(phase="unchanged_control", completed=0, total=1)
     if exact:
+        check_cancel()
         control = study.ensure_unchanged_control()
         if control.get("status") != "matched":
             raise MinimalContextExecutionError(
@@ -259,6 +383,7 @@ def execute_minimal_context(
             )
     else:
         try:
+            check_cancel()
             study._ensure_baseline()  # the study owns the exact score contract and evidence validation
             study_id = study.document().get("study_id")
         except Exception as exc:
@@ -284,6 +409,7 @@ def execute_minimal_context(
         # This is the cancellation boundary immediately before every direct
         # deletion/generation probe.  Existing cached evidence never enters it.
         checkpoint(phase=phase_name, completed=probe_count, total=total)
+        check_cancel()
         if exact:
             observation = study.probe_removed_sources(removed)
         else:
@@ -300,11 +426,16 @@ def execute_minimal_context(
         checkpoint(phase=phase_name, completed=probe_count, total=total)
         try:
             if exact:
-                observations = study.probe_removed_sources_many(requested)
+                observations = study.probe_removed_sources_many(requested, cancel=cancel)
             else:
-                observations = study.measure_removal_effect_many(requested)
+                observations = study.measure_removal_effect_many(requested, cancel=cancel)
+        except BatchCancelled as exc:
+            raise JobCancelled(str(exc)) from exc
         except AttributeError:
-            observations = [measure(removed) for removed in requested]
+            observations = []
+            for removed in requested:
+                check_cancel()
+                observations.append(measure(removed))
         probe_count += len(observations)
         return observations
 
@@ -316,6 +447,7 @@ def execute_minimal_context(
             tolerance_nats=preservation.get("tolerance_nats", 0.0),
             search_probe_budget=request["search_probe_budget"],
             certification_probe_budget=request["certification_probe_budget"],
+            existing_experiments=study.direct_evidence(),
             search_seed=request["search_seed"],
             run_id=run["id"],
             context_unit_manifest=manifest,
@@ -346,6 +478,7 @@ __all__ = [
     "cache_binding",
     "cache_matches",
     "execute_minimal_context",
+    "minimal_context_runtime_identity",
     "normalize_request",
     "planned_universe",
     "result_summary",

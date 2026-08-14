@@ -162,6 +162,66 @@ def test_same_seed_and_world_are_deterministic():
     assert first_calls == second_calls
 
 
+def test_large_lower_cardinality_layers_are_consumed_in_budget_bounded_chunks():
+    source_ids = tuple(f"s{index:03d}" for index in range(100))
+    candidate = source_ids[:3]
+    existing = {
+        "experiment_id": "exp_candidate",
+        "removed_source_ids": [source_id for source_id in source_ids if source_id not in candidate],
+        "delta_nats": 0.0,
+        "provenance": "measured",
+    }
+    batches: list[tuple[tuple[str, ...], ...]] = []
+
+    def measure_many(removed_sets):
+        batch = tuple(tuple(removed) for removed in removed_sets)
+        assert len(batch) <= 17
+        batches.append(batch)
+        return [
+            {
+                "experiment_id": "exp_" + str(index),
+                "removed_source_ids": list(removed),
+                "delta_nats": 0.0 if tuple(
+                    source_id for source_id in source_ids if source_id not in set(removed)
+                ) == candidate else 1.0,
+                "provenance": "measured",
+            }
+            for index, removed in enumerate(batch)
+        ]
+
+    result = run_minimal_context_search(
+        source_ids,
+        None,
+        tolerance_nats=0.0,
+        search_probe_budget=0,
+        certification_probe_budget=17,
+        existing_experiments=[existing],
+        measure_removed_many=measure_many,
+    )
+
+    assert result["certificate"]["kind"] == "inclusion_minimum"
+    assert result["budget"]["certification_new_probes"] <= 17
+    assert result["coverage"]["smaller_remaining_count"] > 0
+    assert batches and max(len(batch) for batch in batches) <= 17
+
+
+def test_certification_progress_reports_actual_cardinality():
+    phases: list[str] = []
+    world = MeasuredWorld(("a", "b", "c", "d", "e"), [{"e"}])
+    result = run_minimal_context_search(
+        world.source_ids,
+        world.measure,
+        tolerance_nats=0.0,
+        search_probe_budget=30,
+        certification_probe_budget=30,
+        candidate_retained_source_sets=[["a", "b", "c", "d"]],
+        phase_callback=lambda phase, _completed, _total: phases.append(phase),
+    )
+
+    assert result["certificate"]["kind"] == "exact_minimum"
+    assert "certifying_cardinality_3" in phases
+
+
 def test_conflicting_direct_evidence_fails_closed():
     world = MeasuredWorld(("A", "B"), [{"A"}])
     first = world.measure(("B",))

@@ -8,6 +8,7 @@ import pytest
 from clozn import schemas
 from clozn.receipts.context_dependence import (
     ContextDependenceError,
+    ContextDependenceSupportIncompatible,
     ContextDependenceStudy,
     INTERVENTION_OPERATOR,
     NEUTRALIZATION_OPERATOR,
@@ -330,3 +331,44 @@ def test_identical_source_set_reuses_experiment_without_another_arm_or_duplicate
     assert len(sub.calls) == 2  # one baseline + one unique deletion arm
     assert len(document["experiments"]) == 1
     assert document["budget"] == {"passes_requested": 2, "passes_consumed": 2}
+
+
+def test_compatible_persisted_support_hydrates_baseline_and_experiments_without_scoring_again():
+    run = _run()
+    source_a, _source_b, _source_c = _source_ids(run)
+    first_sub = FakeScoreSub()
+    first = ContextDependenceStudy(run, first_sub, clock=StepClock())
+    original = first.measure_removal_effect([source_a])
+    document = first.document()
+
+    second_sub = FakeScoreSub()
+    second = ContextDependenceStudy(run, second_sub, existing_document=document, clock=StepClock())
+    reused = second.measure_removal_effect([source_a])
+
+    assert reused == original
+    assert second_sub.calls == []
+    assert second.direct_evidence() == [original]
+
+
+def test_support_bound_to_one_search_universe_is_not_reused_for_another():
+    run = _run()
+    source_a, _source_b, _source_c = _source_ids(run)
+    first = ContextDependenceStudy(
+        run,
+        FakeScoreSub(),
+        search_universe_id="mcu_one",
+        runtime_identity={"runtime_key_sha256": "a" * 64},
+        clock=StepClock(),
+    )
+    first.measure_removal_effect([source_a])
+    document = first.document()
+
+    with pytest.raises(ContextDependenceSupportIncompatible, match="search universe"):
+        ContextDependenceStudy(
+            run,
+            FakeScoreSub(),
+            search_universe_id="mcu_two",
+            runtime_identity={"runtime_key_sha256": "a" * 64},
+            existing_document=document,
+            clock=StepClock(),
+        )

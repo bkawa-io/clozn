@@ -15,6 +15,7 @@
     "eligibility": {"$ref": "#/$defs/eligibility"},
     "unchanged_control": {"$ref": "#/$defs/control"},
     "probes": {"type": "array", "items": {"$ref": "#/$defs/probe"}},
+    "search_universe_id": {"type": "string", "minLength": 1},
     "provenance": {"const": "direct_generation_probe"}
   },
   "additionalProperties": false,

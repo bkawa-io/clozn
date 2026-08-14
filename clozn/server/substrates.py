@@ -46,6 +46,15 @@ def _load_calibration_file(path: str) -> dict:
     return out
 from clozn.server.request_context import RequestContext   # backlog #2: per-request isolation (see EngineSubstrate)
 
+
+def _minimal_context_batch_workers() -> int:
+    """Bounded opt-in concurrency for independent engine context slots."""
+    raw = os.environ.get("CLOZN_MINIMAL_CONTEXT_BATCH_WORKERS", "2")
+    try:
+        return max(1, min(8, int(raw)))
+    except (TypeError, ValueError):
+        return 2
+
 class Substrate:
     """Shared studio surface for any substrate: the /memory/* trait cards and the /steer/* tone dials, on
     whatever model the subclass loads. A subclass sets self.steer, self._mem (a memory object exposing
@@ -735,9 +744,12 @@ class EngineSubstrate(Substrate):
         method without changing Minimal Context scheduling or proof logic;
         today this is an explicit, cancellation-aware serial fallback.
         """
-        from clozn.runs.multi_arm import serial_many
+        from clozn.runs.multi_arm import concurrent_many, serial_many
 
-        return serial_many(self.score_tokens, arms, cancel=cancel)
+        workers = _minimal_context_batch_workers()
+        if workers <= 1:
+            return serial_many(self.score_tokens, arms, cancel=cancel)
+        return concurrent_many(self.score_tokens, arms, cancel=cancel, max_workers=workers)
 
     def probe_reference_match(self, messages, reference_token_ids, *, generation_contract,
                               explicit_conditions=None):
@@ -851,9 +863,12 @@ class EngineSubstrate(Substrate):
         ``chat`` or publishes a RequestContext.  A native engine adapter may
         implement this method later with different active sequence lengths.
         """
-        from clozn.runs.multi_arm import serial_many
+        from clozn.runs.multi_arm import concurrent_many, serial_many
 
-        return serial_many(self.probe_reference_match, arms, cancel=cancel)
+        workers = _minimal_context_batch_workers()
+        if workers <= 1:
+            return serial_many(self.probe_reference_match, arms, cancel=cancel)
+        return concurrent_many(self.probe_reference_match, arms, cancel=cancel, max_workers=workers)
 
     def score_prompt_tokens(self, prompt, continuation_ids=None, *, continuation=None, topk=0):
         """score_tokens' RAW-PROMPT sibling: teacher-forced per-token logprob of a continuation against a

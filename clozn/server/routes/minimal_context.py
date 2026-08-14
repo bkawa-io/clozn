@@ -23,6 +23,7 @@ def _job_worker(run: dict, sub, request: dict, universe: dict, binding: dict):
         from clozn import schemas
         from clozn.runs.minimal_context_execution import (
             MinimalContextExecutionError,
+            cache_binding,
             execute_minimal_context,
             planned_universe,
         )
@@ -42,12 +43,18 @@ def _job_worker(run: dict, sub, request: dict, universe: dict, binding: dict):
                     "code": "minimal_context_run_changed",
                     "message": "recorded run or Context Search Universe changed while the job was queued",
                 }}
+            if cache_binding(latest, request, current_universe, sub) != binding:
+                return {"state": "failed", "error": {
+                    "code": "minimal_context_run_changed",
+                    "message": "recorded run or runtime identity changed while the job was queued",
+                }}
             control.checkpoint(phase="planning_context", completed=1, total=1)
             if request["preservation"]["kind"] == "exact_recorded_output":
                 control.checkpoint(phase="checking_exact_eligibility", completed=0, total=1)
                 control.checkpoint(phase="checking_exact_eligibility", completed=1, total=1)
             result, support = execute_minimal_context(
                 latest, sub, request, universe, binding, checkpoint=control.checkpoint,
+                cancel=control.cancel_requested,
             )
             candidate = result.get("candidate") if isinstance(result.get("candidate"), dict) else {}
             certificate = result.get("certificate") if isinstance(result.get("certificate"), dict) else {}
@@ -79,6 +86,8 @@ def _job_worker(run: dict, sub, request: dict, universe: dict, binding: dict):
             current["minimal_context_results"] = results
             studies = current.get("minimal_context_support")
             studies = dict(studies) if isinstance(studies, dict) else {}
+            if "unavailable" in studies:
+                studies = {}
             support_id = support.get("study_id") if isinstance(support, dict) else None
             if isinstance(support_id, str):
                 studies[support_id] = support

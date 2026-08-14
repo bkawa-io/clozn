@@ -7,13 +7,13 @@ truth.  A substrate may implement a native ``*_many`` method; otherwise the
 helpers dispatch compatible arms serially and preserve input ordering.
 
 An arm is a mapping containing the keyword arguments for its scalar method.
-``block`` is the only mutable context field excluded from compatibility
-grouping.  Everything else is an immutable condition and is therefore never
-combined with a different model, continuation, contract, or steering setup.
+Prompt/context payload fields are excluded from compatibility grouping; explicit
+scoring and generation conditions remain part of the immutable contract.
 """
 from __future__ import annotations
 
 from copy import deepcopy
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import inspect
 import json
 from collections.abc import Callable, Iterable, Mapping
@@ -96,14 +96,34 @@ def _validate_arm(kind: str, index: int, raw: Any) -> dict[str, Any]:
     return arm
 
 
+_PER_ARM_INPUT_FIELDS = frozenset({
+    "messages",
+    "prompt",
+    "removed_source_ids",
+    "retained_source_ids",
+    "context_digest",
+    "intervened_context_digest",
+})
+
+
 def _compatibility_key(kind: str, arm: Mapping[str, Any]) -> str:
-    immutable = dict(arm)
-    immutable.pop("block", None)
+    """Project only immutable behavior conditions into the grouping key.
+
+    The prompt/context payload is deliberately per-arm: Minimal Context arms
+    differ there by construction.  ``block`` remains in the key because it is
+    prompt-bearing in the production substrate; native adapters may vary it
+    only after explicitly proving that contract themselves.
+    """
+    immutable = {
+        key: value for key, value in arm.items()
+        if key not in _PER_ARM_INPUT_FIELDS
+    }
     if kind == "probe_reference_match":
-        conditions = dict(immutable.get("explicit_conditions") or {})
-        conditions.pop("block", None)
-        if "explicit_conditions" in immutable:
-            immutable["explicit_conditions"] = conditions
+        # Exact source-deletion metadata is payload.  Explicit generation
+        # conditions, including block and steering, are behavior-bearing.
+        conditions = immutable.get("explicit_conditions")
+        if isinstance(conditions, Mapping):
+            immutable["explicit_conditions"] = dict(conditions)
     return _freeze(immutable)
 
 
@@ -236,10 +256,79 @@ def serial_many(method: Callable[..., Any], arms: Iterable[Mapping[str, Any]], *
     return _serial_results(method, normalised, cancel, [], 0)
 
 
+def concurrent_many(
+    method: Callable[..., Any],
+    arms: Iterable[Mapping[str, Any]],
+    *,
+    cancel: Any = None,
+    max_workers: int = 2,
+) -> list[Any]:
+    """Run scalar arms with bounded worker concurrency and stable ordering.
+
+    This is the production fallback for workers that expose independent
+    context slots but no wire-level ``*_many`` endpoint.  At most
+    ``max_workers`` calls are in flight; cancellation cancels not-yet-started
+    futures and returns completed evidence through ``BatchCancelled``.
+    """
+    normalised = [deepcopy(dict(arm)) for arm in arms]
+    workers = max(1, int(max_workers))
+    if workers == 1:
+        return _serial_results(method, normalised, cancel, [], 0)
+    if _cancelled(cancel):
+        raise BatchCancelled(completed=[], next_index=0)
+
+    executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="clozn-minimal-context")
+    futures: dict[Any, int] = {}
+    results: list[Any] = [None] * len(normalised)
+    next_index = 0
+
+    def fill() -> None:
+        nonlocal next_index
+        while next_index < len(normalised) and len(futures) < workers:
+            if _cancelled(cancel):
+                return
+            index = next_index
+            next_index += 1
+            futures[executor.submit(method, **normalised[index])] = index
+
+    try:
+        fill()
+        while futures:
+            done, _pending = wait(tuple(futures), return_when=FIRST_COMPLETED)
+            for future in done:
+                index = futures.pop(future)
+                try:
+                    results[index] = deepcopy(future.result())
+                except BatchCancelled:
+                    raise
+                except Exception as exc:
+                    completed = [result for result in results if result is not None]
+                    raise MultiArmError(
+                        f"concurrent multi-arm scalar dispatch failed for arm {index}: {exc}",
+                        arm_index=index,
+                        completed=completed,
+                    ) from exc
+            if _cancelled(cancel):
+                for future in futures:
+                    future.cancel()
+                completed = [result for result in results if result is not None]
+                executor.shutdown(wait=False, cancel_futures=True)
+                raise BatchCancelled(completed=completed, next_index=next_index)
+            fill()
+        executor.shutdown(wait=True)
+        return results
+    except BaseException:
+        # A cancellation/error path must not wait for already-running model
+        # calls.  Those calls were already dispatched before the boundary.
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+
+
 __all__ = [
     "BatchCancelled",
     "MultiArmError",
     "probe_reference_match_many",
     "score_tokens_many",
+    "concurrent_many",
     "serial_many",
 ]

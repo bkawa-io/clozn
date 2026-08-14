@@ -265,6 +265,14 @@ def _load_influence_map(ref) -> dict:
     return _load_blob(ref, kind="influence map")
 
 
+def _store_minimal_context_support(value: dict) -> dict:
+    return _store_blob(value, kind="minimal context support")
+
+
+def _load_minimal_context_support(ref) -> dict:
+    return _load_blob(ref, kind="minimal context support")
+
+
 def _mark_blob_write_failure(payload: dict, ref: dict, *, flag: str, meta_key: str) -> None:
     """Mirror a blob write failure onto the run's own flags/meta so it survives even though the
     underlying evidence file didn't. Used for both the trace blob and the influence-map blob."""
@@ -301,6 +309,20 @@ def _pack(rec: dict) -> tuple[str, dict]:
                                  meta_key="influence_evidence_write_failed")
         payload["influence_map_ref"] = influence_map_ref
 
+    # Minimal Context direct probes can be much larger than the queryable run
+    # metadata.  Keep the result/universe rows inline for lookup, but externalize
+    # the support corpus through the same content-addressed blob machinery.
+    minimal_context_support = payload.pop("minimal_context_support", None)
+    if isinstance(minimal_context_support, dict) and minimal_context_support:
+        support_ref = _store_minimal_context_support(minimal_context_support)
+        _mark_blob_write_failure(
+            payload,
+            support_ref,
+            flag="minimal-context-support-missing",
+            meta_key="minimal_context_support_write_failed",
+        )
+        payload["minimal_context_support_ref"] = support_ref
+
     serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     return serialized, payload
 
@@ -311,6 +333,9 @@ def _unpack(payload_json: str) -> dict:
     influence_map_ref = rec.pop("influence_map_ref", None)
     if influence_map_ref is not None:
         rec["influence_map"] = _load_influence_map(influence_map_ref)
+    minimal_context_support_ref = rec.pop("minimal_context_support_ref", None)
+    if minimal_context_support_ref is not None:
+        rec["minimal_context_support"] = _load_minimal_context_support(minimal_context_support_ref)
     return rec
 
 

@@ -30,6 +30,10 @@ class ExactAnswerPreservationError(ValueError):
     """Raised when exact preservation evidence cannot be constructed honestly."""
 
 
+class ExactSupportIncompatible(ExactAnswerPreservationError):
+    """A valid exact support document belongs to a different theorem identity."""
+
+
 def _sha256(value: Any) -> str:
     encoded = json.dumps(value, ensure_ascii=False, sort_keys=True,
                          separators=(",", ":"), allow_nan=False, default=str).encode("utf-8")
@@ -351,13 +355,22 @@ def classify_reference_match(reference_token_ids: Iterable[int], generated_token
 class ExactAnswerPreservationStudy:
     """One run-scoped exact preservation study."""
 
-    def __init__(self, run: Mapping[str, Any], sub: Any, *, source_ids: Iterable[str] | None = None):
+    def __init__(
+        self,
+        run: Mapping[str, Any],
+        sub: Any,
+        *,
+        source_ids: Iterable[str] | None = None,
+        existing_document: Mapping[str, Any] | None = None,
+        search_universe_id: str | None = None,
+    ):
         if not isinstance(run, Mapping) or not isinstance(run.get("id"), str) or not run["id"]:
             raise ExactAnswerPreservationError("a stored run with a non-empty id is required")
         self._source_run = run
         self._run_fingerprint = _sha256(dict(run))
         self.run = deepcopy(dict(run))
         self.sub = sub
+        self.search_universe_id = search_universe_id
         self.conditions = with_arm_conditions(dict(run))
         self.eligibility = assess_exact_eligibility(run, sub)
         self._probes: dict[frozenset[str], dict[str, Any]] = {}
@@ -377,12 +390,101 @@ class ExactAnswerPreservationStudy:
             raise ExactAnswerPreservationError("exact preservation source IDs must be unique")
         self.source_ids = tuple(source_ids)
         self._source_catalog: dict[str, Any] | None = None
-        self.study_id = "aps_" + _sha256({
+        study_binding = {
             "run_id": run["id"], "runtime": self.eligibility.get("recorded_runtime"),
             "contract": self.eligibility.get("generation_contract"),
             "reference": self.eligibility.get("reference_token_ids_sha256"),
             "source_ids": list(self.source_ids),
-        })[:24]
+        }
+        if search_universe_id is not None:
+            study_binding["search_universe_id"] = search_universe_id
+        self.study_id = "aps_" + _sha256(study_binding)[:24]
+        if existing_document is not None:
+            self.load_existing(existing_document)
+
+    def load_existing(self, document: Mapping[str, Any]) -> "ExactAnswerPreservationStudy":
+        """Validate and import compatible support into the normal probe cache."""
+        if not isinstance(document, Mapping):
+            raise ExactAnswerPreservationError("existing exact support must be an object")
+        candidate = deepcopy(dict(document))
+        try:
+            schemas.validate(candidate, STUDY_SCHEMA)
+        except Exception as exc:
+            raise ExactAnswerPreservationError(f"existing exact support is invalid: {exc}") from exc
+        if candidate.get("run_id") != self.run["id"]:
+            raise ExactSupportIncompatible("exact support belongs to a different run")
+        if candidate.get("study_id") != self.study_id:
+            raise ExactSupportIncompatible("exact support study identity does not match")
+        if candidate.get("search_universe_id") != self.search_universe_id:
+            raise ExactSupportIncompatible("exact support search universe does not match")
+        if candidate.get("preservation") != {
+            "kind": PRESERVATION_KIND,
+            "target": PRESERVATION_TARGET,
+        }:
+            raise ExactSupportIncompatible("exact support preservation protocol does not match")
+        if tuple(candidate.get("source_ids") or ()) != self.source_ids:
+            raise ExactSupportIncompatible("exact support source universe does not match")
+        existing_eligibility = candidate.get("eligibility")
+        if not isinstance(existing_eligibility, Mapping):
+            raise ExactAnswerPreservationError("existing exact support has no eligibility projection")
+        for field in (
+            "generation_contract",
+            "reference_token_ids_sha256",
+            "recorded_runtime",
+            "current_runtime",
+        ):
+            if existing_eligibility.get(field) != self.eligibility.get(field):
+                raise ExactSupportIncompatible(f"exact support {field} does not match")
+        if candidate.get("status") != ("eligible" if self.eligibility.get("eligible") else "unavailable"):
+            raise ExactSupportIncompatible("exact support eligibility status does not match")
+
+        control = candidate.get("unchanged_control")
+        if not isinstance(control, Mapping):
+            raise ExactAnswerPreservationError("existing exact support has no unchanged control")
+        self._control = deepcopy(dict(control))
+        ids = self.reference_token_ids or []
+        contract = self.eligibility.get("generation_contract")
+        seen: dict[frozenset[str], dict[str, Any]] = {}
+        for raw in candidate.get("probes") or []:
+            if not isinstance(raw, Mapping):
+                raise ExactAnswerPreservationError("existing exact support contains a malformed probe")
+            probe = deepcopy(dict(raw))
+            try:
+                schemas.validate(probe, PROBE_SCHEMA)
+            except Exception as exc:
+                raise ExactAnswerPreservationError(f"existing exact probe is invalid: {exc}") from exc
+            if probe.get("run_id") != self.run["id"]:
+                raise ExactAnswerPreservationError("existing exact probe belongs to a different run")
+            removed = tuple(sorted(probe.get("removed_source_ids") or ()))
+            if not removed or len(removed) != len(set(removed)) or any(
+                source_id not in self.source_ids for source_id in removed
+            ):
+                raise ExactAnswerPreservationError("existing exact probe has an invalid deletion set")
+            resolved = self._resolve(removed)
+            expected_id = "rmp_" + _sha256({
+                "study_id": self.study_id,
+                "removed_source_ids": list(removed),
+                "context_digest": resolved.get("intervened_context_digest"),
+            })[:24]
+            if probe.get("probe_id") != expected_id:
+                raise ExactAnswerPreservationError("existing exact probe identity does not match its deletion set")
+            for field, expected in (
+                ("exact_removed_ranges", resolved.get("exact_removed_ranges") or []),
+                ("basis_digest", resolved.get("basis_digest")),
+                ("intervened_context_digest", resolved.get("intervened_context_digest")),
+                ("reference_token_ids_sha256", _sha256(ids)),
+                ("reference_token_count", len(ids)),
+                ("generation_contract", contract),
+            ):
+                if probe.get(field) != expected:
+                    raise ExactAnswerPreservationError(f"existing exact probe {field} does not match current run")
+            key = frozenset(removed)
+            old = seen.get(key)
+            if old is not None and _sha256(old) != _sha256(probe):
+                raise ExactAnswerPreservationError("conflicting persisted exact evidence for one deletion set")
+            seen[key] = probe
+        self._probes = seen
+        return self
 
     def _assert_run_stable(self) -> None:
         try:
@@ -496,7 +598,12 @@ class ExactAnswerPreservationStudy:
         self._probes[key] = probe
         return deepcopy(probe)
 
-    def probe_removed_sources_many(self, removed_source_sets: Iterable[Iterable[str]]) -> list[dict[str, Any]]:
+    def probe_removed_sources_many(
+        self,
+        removed_source_sets: Iterable[Iterable[str]],
+        *,
+        cancel: Any = None,
+    ) -> list[dict[str, Any]]:
         """Probe independent exact arms through ``probe_reference_match_many``.
 
         The unchanged control, strict source resolution, reference contract,
@@ -534,7 +641,7 @@ class ExactAnswerPreservationStudy:
         if not pending:
             return [item for item in results if item is not None]
 
-        from clozn.runs.multi_arm import probe_reference_match_many
+        from clozn.runs.multi_arm import BatchCancelled, probe_reference_match_many
         arms = []
         for _index, _removed, resolved in pending:
             arms.append({
@@ -547,8 +654,13 @@ class ExactAnswerPreservationStudy:
                 },
             })
         try:
-            raw_results = probe_reference_match_many(self.sub, arms)
+            raw_results = probe_reference_match_many(self.sub, arms, cancel=cancel)
+        except BatchCancelled:
+            raise
         except Exception as exc:
+            from clozn.server.influence_jobs import JobCancelled
+            if isinstance(exc, JobCancelled):
+                raise
             return [{"status": "unavailable", "reason": "probe_failed", "error": str(exc),
                      "provenance": PROVENANCE} for _ in requested]
         for (index, removed, resolved), raw in zip(pending, raw_results):
@@ -595,5 +707,11 @@ class ExactAnswerPreservationStudy:
             "probes": [deepcopy(self._probes[key]) for key in sorted(self._probes, key=lambda item: tuple(sorted(item)))],
             "provenance": PROVENANCE,
         }
+        if self.search_universe_id is not None:
+            doc["search_universe_id"] = self.search_universe_id
         schemas.validate(doc, STUDY_SCHEMA)
         return doc
+
+    def direct_evidence(self) -> list[dict[str, Any]]:
+        """Return detached probes for the Minimal Context solver cache."""
+        return [deepcopy(self._probes[key]) for key in sorted(self._probes, key=lambda item: tuple(sorted(item)))]

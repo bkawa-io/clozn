@@ -8,6 +8,7 @@ from clozn.runs.minimal_context import run_minimal_context_search
 from clozn.runs.multi_arm import (
     BatchCancelled,
     MultiArmError,
+    concurrent_many,
     probe_reference_match_many,
     score_tokens_many,
 )
@@ -151,6 +152,86 @@ def test_batch_cancellation_returns_completed_results_and_does_not_dispatch_queu
         score_tokens_many(substrate, _score_arms(), cancel=cancel)
     assert len(raised.value.completed) == 1
     assert len(substrate.score_calls) == 1
+
+
+def test_different_messages_share_one_native_score_batch_when_contract_matches():
+    class GroupingSubstrate(ScalarSubstrate):
+        def __init__(self):
+            super().__init__()
+            self.batches = []
+
+        def score_tokens_many(self, arms, *, cancel=None):
+            self.batches.append(list(arms))
+            return [self.score_tokens(**arm) for arm in arms]
+
+    substrate = GroupingSubstrate()
+    arms = [
+        {"messages": [{"role": "user", "content": "minus A"}], "continuation_ids": [1, 2], "block": None},
+        {"messages": [{"role": "user", "content": "minus B"}], "continuation_ids": [1, 2], "block": None},
+        {"messages": [{"role": "user", "content": "minus C"}], "continuation_ids": [1, 2], "block": None},
+    ]
+    score_tokens_many(substrate, arms)
+    assert len(substrate.batches) == 1
+    assert [arm["messages"][0]["content"] for arm in substrate.batches[0]] == [
+        "minus A", "minus B", "minus C"
+    ]
+
+
+def test_different_messages_share_exact_batch_but_contract_changes_split_groups():
+    class GroupingSubstrate(ScalarSubstrate):
+        def __init__(self):
+            super().__init__()
+            self.batches = []
+
+        def probe_reference_match_many(self, arms, *, cancel=None):
+            self.batches.append(list(arms))
+            return [self.probe_reference_match(**arm) for arm in arms]
+
+    substrate = GroupingSubstrate()
+    arms = [
+        {"messages": [{"role": "user", "content": "minus A"}], "reference_token_ids": [1, 2],
+         "generation_contract": CONTRACT, "explicit_conditions": {"block": None}},
+        {"messages": [{"role": "user", "content": "minus B"}], "reference_token_ids": [1, 2],
+         "generation_contract": CONTRACT, "explicit_conditions": {"block": None}},
+        {"messages": [{"role": "user", "content": "different contract"}], "reference_token_ids": [1, 2],
+         "generation_contract": {**CONTRACT, "max_new": 5}, "explicit_conditions": {"block": None}},
+    ]
+    probe_reference_match_many(substrate, arms)
+    assert [len(batch) for batch in substrate.batches] == [2, 1]
+
+
+def test_different_messages_cancel_inside_one_scalar_group_without_unavailable_evidence():
+    substrate = ScalarSubstrate()
+    cancel = Event()
+    original = substrate.score_tokens
+
+    def score_and_cancel(*args, **kwargs):
+        result = original(*args, **kwargs)
+        if len(substrate.score_calls) == 3:
+            cancel.set()
+        return result
+
+    substrate.score_tokens = score_and_cancel
+    arms = [
+        {"messages": [{"role": "user", "content": f"minus {index}"}], "continuation_ids": [1, 2], "block": None}
+        for index in range(5)
+    ]
+    with pytest.raises(BatchCancelled) as raised:
+        score_tokens_many(substrate, arms, cancel=cancel)
+    assert len(substrate.score_calls) == 3
+    assert len(raised.value.completed) == 3
+
+
+def test_bounded_concurrent_many_preserves_scalar_result_order():
+    calls = []
+
+    def scalar(value):
+        calls.append(value)
+        return {"value": value}
+
+    result = concurrent_many(scalar, [{"value": 0}, {"value": 1}, {"value": 2}], max_workers=2)
+    assert result == [{"value": 0}, {"value": 1}, {"value": 2}]
+    assert sorted(calls) == [0, 1, 2]
 
 
 def test_malformed_arm_is_rejected_before_any_dispatch():

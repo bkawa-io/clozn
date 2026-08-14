@@ -8,11 +8,12 @@ small a preserving retained-source set was directly checked to be.
 from __future__ import annotations
 
 from copy import deepcopy
-from itertools import combinations
+from itertools import combinations, islice
 import hashlib
 import json
 import math
 from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Sequence
 from typing import Any
 
 from clozn import schemas
@@ -23,6 +24,7 @@ SEARCH_METHOD = "greedy_backward_elimination.v1"
 PRESERVATION_KIND = "teacher_forced_likelihood"
 PRESERVATION_TARGET = "whole_recorded_continuation"
 EXACT_PRESERVATION_KIND = "exact_recorded_output"
+DEFAULT_CERTIFICATION_BATCH_SIZE = 32
 
 
 class MinimalContextError(ValueError):
@@ -266,7 +268,7 @@ class _EvidenceEngine:
         self.touched_cardinalities.add(len(retained))
         return observation
 
-    def get_many(self, retained_sets: Iterable[tuple[str, ...]], phase: str) -> list[dict[str, Any] | None]:
+    def get_many(self, retained_sets: Sequence[tuple[str, ...]], phase: str) -> list[dict[str, Any] | None]:
         """Resolve a fixed set of independent arms through the optional batch seam.
 
         The returned list is aligned with ``retained_sets``.  Cache lookup,
@@ -275,7 +277,11 @@ class _EvidenceEngine:
         grouped.  A batch adapter is therefore an execution optimization,
         not a second proof path.
         """
-        requested = list(retained_sets)
+        if isinstance(retained_sets, (str, bytes)) or not isinstance(retained_sets, Sequence):
+            raise MinimalContextError(
+                "batched direct evidence requires a bounded sequence of retained source sets"
+            )
+        requested = [tuple(retained) for retained in retained_sets]
         results: list[dict[str, Any] | None] = [None] * len(requested)
         pending: list[tuple[int, tuple[str, ...], tuple[str, ...]]] = []
         for index, retained in enumerate(requested):
@@ -291,7 +297,10 @@ class _EvidenceEngine:
                 continue
             if self.new_probes[phase] + len(pending) >= self.budgets[phase]:
                 self.exhausted[phase] = True
-                break
+                # Continue scanning this bounded chunk so cached evidence later
+                # in the chunk is still reused.  Only uncached arms are held
+                # back by the remaining new-probe budget.
+                continue
             pending.append((index, tuple(retained), removed))
 
         if not pending:
@@ -920,27 +929,50 @@ def run_minimal_context_search(
         # preserving result; alternatives of the same cardinality are not needed.
         for cardinality in range(len(retained)):
             phase(
-                f"certifying_cardinality_{min(cardinality, 2)}",
+                f"certifying_cardinality_{cardinality}",
                 engine.new_probes["certification"],
                 certification_budget,
             )
             engine.touched_cardinalities.add(cardinality)
             cardinality_complete = True
             found_smaller: tuple[tuple[str, ...], dict[str, Any]] | None = None
-            candidates = list(combinations(universe, cardinality))
-            candidate_observations = engine.get_many(candidates, "certification")
-            for candidate, candidate_observation in zip(candidates, candidate_observations):
-                if candidate_observation is None:
+            candidates = combinations(universe, cardinality)
+            layer_complete = False
+            while True:
+                remaining_budget = certification_budget - engine.new_probes["certification"]
+                chunk_size = (
+                    min(DEFAULT_CERTIFICATION_BATCH_SIZE, remaining_budget)
+                    if remaining_budget > 0
+                    else DEFAULT_CERTIFICATION_BATCH_SIZE
+                )
+                chunk = tuple(islice(candidates, chunk_size))
+                if not chunk:
+                    layer_complete = True
+                    break
+                candidate_observations = engine.get_many(chunk, "certification")
+                chunk_missing = False
+                for candidate, candidate_observation in zip(chunk, candidate_observations):
+                    if candidate_observation is None:
+                        chunk_missing = True
+                        certification_stopped = engine.exhausted["certification"]
+                        continue
+                    if not engine.is_proofable(candidate_observation):
+                        cardinality_complete = False
+                        certification_stopped = True
+                        break
+                    if engine.is_preserving(candidate_observation):
+                        found_smaller = (candidate, candidate_observation)
+                        break
+                if found_smaller is not None or not cardinality_complete:
+                    break
+                if chunk_missing:
                     cardinality_complete = False
-                    certification_stopped = engine.exhausted["certification"]
                     break
-                if not engine.is_proofable(candidate_observation):
-                    cardinality_complete = False
-                    certification_stopped = True
+                if len(chunk) < chunk_size:
+                    layer_complete = True
                     break
-                if engine.is_preserving(candidate_observation):
-                    found_smaller = (candidate, candidate_observation)
-                    break
+            if found_smaller is None and (not cardinality_complete or not layer_complete):
+                cardinality_complete = False
             if not cardinality_complete:
                 break
             if found_smaller is not None:

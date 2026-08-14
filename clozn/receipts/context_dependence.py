@@ -52,6 +52,10 @@ class MeasurementUnavailableError(ContextDependenceError):
     """The recorded continuation could not be teacher-forced and scored."""
 
 
+class ContextDependenceSupportIncompatible(ContextDependenceError):
+    """A valid support document belongs to a different theorem identity."""
+
+
 def _canonical_digest(value: Any) -> str:
     encoded = json.dumps(
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str,
@@ -288,7 +292,17 @@ def _source_records(resolved: Mapping[str, Any], *, messages: list) -> list[dict
 class ContextDependenceStudy:
     """One cached run-level baseline plus directly measured source deletions."""
 
-    def __init__(self, run: dict, sub, *, target: dict | None = None, clock=time.perf_counter):
+    def __init__(
+        self,
+        run: dict,
+        sub,
+        *,
+        target: dict | None = None,
+        clock=time.perf_counter,
+        existing_document: Mapping[str, Any] | None = None,
+        search_universe_id: str | None = None,
+        runtime_identity: Mapping[str, Any] | None = None,
+    ):
         if not isinstance(run, dict) or not run:
             raise ContextDependenceError("a non-empty recorded run is required")
         if not isinstance(run.get("id"), str) or not run["id"]:
@@ -301,6 +315,10 @@ class ContextDependenceStudy:
         self._run = deepcopy(run)
         self._sub = sub
         self._clock = clock
+        self._search_universe_id = search_universe_id
+        self._runtime_identity_binding = (
+            deepcopy(dict(runtime_identity)) if isinstance(runtime_identity, Mapping) else None
+        )
         self._conditions = deepcopy(rederive.with_arm_conditions(self._run))
         self._messages = _copy_messages(self._conditions.get("messages"))
         self._block = deepcopy(self._conditions.get("block"))
@@ -359,10 +377,157 @@ class ContextDependenceStudy:
                 self._source_resolution_error = str(exc)
 
         self._source_by_id = {source["source_id"]: source for source in self._sources}
+        if existing_document is not None:
+            self.load_existing(existing_document)
 
     @property
     def source_ids(self) -> tuple[str, ...]:
         return tuple(source["source_id"] for source in self._sources)
+
+    def _source_identity_document(self) -> dict[str, Any]:
+        def is_span(source: Mapping[str, Any]) -> bool:
+            if source.get("source_kind") == "span" or str(source.get("source_id", "")).startswith("src_"):
+                return True
+            index, offsets = source.get("message_index"), source.get("unicode_range")
+            if not isinstance(index, int) or not isinstance(offsets, list) or len(offsets) != 2:
+                return False
+            if not (0 <= index < len(self._messages)) or not isinstance(self._messages[index], Mapping):
+                return False
+            content = self._messages[index].get("content")
+            return isinstance(content, str) and offsets != [0, len(content)]
+
+        source_kind = "context_receipt_source_span" if any(
+            is_span(source) for source in self._sources if isinstance(source, Mapping)
+        ) else "context_receipt_segment_id"
+        return {
+            "kind": source_kind,
+            "view": self._source_view,
+            "sources": deepcopy(self._sources),
+        }
+
+    def load_existing(self, document: Mapping[str, Any]) -> "ContextDependenceStudy":
+        """Validate and import compatible baseline/experiments into canonical caches."""
+        if not isinstance(document, Mapping):
+            raise ContextDependenceError("existing Context Dependence support must be an object")
+        candidate = deepcopy(dict(document))
+        try:
+            schemas.validate(candidate)
+        except Exception as exc:
+            raise ContextDependenceError(f"existing Context Dependence support is invalid: {exc}") from exc
+        if candidate.get("schema_version") != SCHEMA:
+            raise ContextDependenceError("existing Context Dependence support has the wrong schema")
+        if candidate.get("run_id") != self._run.get("id"):
+            raise ContextDependenceSupportIncompatible("Context Dependence support belongs to a different run")
+        if candidate.get("search_universe_id") != self._search_universe_id:
+            raise ContextDependenceSupportIncompatible("Context Dependence search universe does not match")
+        if candidate.get("runtime_identity") != self._runtime_identity_binding:
+            raise ContextDependenceSupportIncompatible("Context Dependence runtime identity does not match")
+        if candidate.get("context_model_identity") != self._context_identity:
+            raise ContextDependenceSupportIncompatible("Context Dependence model identity does not match")
+        if candidate.get("source_identity") != self._source_identity_document():
+            raise ContextDependenceSupportIncompatible("Context Dependence source catalog does not match")
+        if candidate.get("baseline", {}).get("context_hash") != self._full_context_hash:
+            raise ContextDependenceSupportIncompatible("Context Dependence full-context hash does not match")
+
+        continuation = candidate.get("continuation")
+        baseline = candidate.get("baseline")
+        if not isinstance(continuation, Mapping) or not isinstance(baseline, Mapping):
+            raise ContextDependenceError("existing Context Dependence support has no baseline contract")
+        current_ids = self._conditions.get("continuation_ids")
+        tokens = baseline.get("tokens")
+        if not isinstance(tokens, list) or not tokens:
+            raise ContextDependenceError("existing Context Dependence support has no baseline token evidence")
+        if isinstance(current_ids, list) and len(tokens) != len(current_ids):
+            raise ContextDependenceSupportIncompatible("Context Dependence continuation token count does not match")
+        validated_tokens: list[dict] = []
+        for index, token in enumerate(tokens):
+            if not isinstance(token, Mapping) or token.get("index") != index:
+                raise ContextDependenceError("existing baseline token indexes are not contiguous")
+            piece = token.get("piece")
+            logprob = token.get("logprob")
+            if not isinstance(piece, str) or isinstance(logprob, bool) or not isinstance(logprob, (int, float)) \
+                    or not math.isfinite(float(logprob)):
+                raise ContextDependenceError("existing baseline token evidence is malformed")
+            token_id = token.get("token_id")
+            if token_id is not None and (isinstance(token_id, bool) or not isinstance(token_id, int)):
+                raise ContextDependenceError("existing baseline token ID is malformed")
+            if isinstance(current_ids, list) and token_id != current_ids[index]:
+                raise ContextDependenceSupportIncompatible("Context Dependence continuation token identity does not match")
+            item = {"index": index, "piece": piece, "logprob": float(logprob)}
+            if token_id is not None:
+                item["token_id"] = token_id
+            validated_tokens.append(item)
+        if baseline.get("scored_once") is not True or baseline.get("provenance") != PROVENANCE:
+            raise ContextDependenceError("existing baseline is not direct measured evidence")
+        if not math.isclose(
+            float(baseline.get("teacher_forced_logp")),
+            sum(token["logprob"] for token in validated_tokens),
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ):
+            raise ContextDependenceError("existing baseline aggregate does not match token evidence")
+        if "recorded_text" not in continuation or "scored_text" not in continuation:
+            raise ContextDependenceError("existing continuation contract is incomplete")
+        recorded_text = self._conditions.get("response")
+        recorded_text = recorded_text if isinstance(recorded_text, str) else ""
+        scored_text = "".join(token["piece"] for token in validated_tokens)
+        if continuation.get("recorded_text") != recorded_text or continuation.get("scored_text") != scored_text:
+            raise ContextDependenceSupportIncompatible("Context Dependence continuation text does not match")
+        if isinstance(current_ids, list) and continuation.get("token_ids") != list(current_ids):
+            raise ContextDependenceSupportIncompatible("Context Dependence continuation token identity does not match")
+        self._continuation = deepcopy(dict(continuation))
+        self._baseline_tokens = validated_tokens
+        self._baseline_evidence = deepcopy(tokens)
+
+        seen: dict[str, dict] = {}
+        seen_sets: dict[frozenset[str], dict] = {}
+        for raw in candidate.get("experiments") or []:
+            if not isinstance(raw, Mapping):
+                raise ContextDependenceError("existing Context Dependence experiment is malformed")
+            experiment = deepcopy(dict(raw))
+            removed = _removed_source_set(experiment.get("removed_source_ids"))
+            if experiment.get("removed_source_ids") != removed or any(
+                source_id not in self._source_by_id for source_id in removed
+            ):
+                raise ContextDependenceError("existing experiment has an invalid deletion set")
+            resolved = self._resolve_arm(removed)
+            expected_id = self._experiment_identity(removed_ids=removed, continuation=self._continuation)
+            if experiment.get("experiment_id") != expected_id:
+                raise ContextDependenceError("existing experiment identity does not match its deletion set")
+            if experiment.get("exact_removed_ranges") != resolved.get("exact_removed_ranges"):
+                raise ContextDependenceError("existing experiment ranges do not match the source resolver")
+            expected_context_hash = _canonical_digest({"messages": resolved["messages"], "block": self._block})
+            if experiment.get("context_hash") != expected_context_hash:
+                raise ContextDependenceError("existing experiment context hash does not match")
+            if len(experiment.get("per_token_delta_nats") or []) != len(validated_tokens) \
+                    or experiment.get("token_indices") != list(range(len(validated_tokens))):
+                raise ContextDependenceError("existing experiment token evidence is incomplete")
+            key = frozenset(removed)
+            old = seen_sets.get(key)
+            if old is not None:
+                stable_old = {k: v for k, v in old.items() if k != "score_ms"}
+                stable_new = {k: v for k, v in experiment.items() if k != "score_ms"}
+                if _canonical_digest(stable_old) != _canonical_digest(stable_new):
+                    raise ContextDependenceError("conflicting persisted evidence for one deletion set")
+                continue
+            seen_sets[key] = experiment
+            seen[expected_id] = experiment
+        self._experiments = list(seen.values())
+        self._experiments_by_id = dict(seen)
+
+        controls = candidate.get("robustness_controls") or []
+        control_by_id: dict[str, dict] = {}
+        for raw in controls:
+            if not isinstance(raw, Mapping) or not isinstance(raw.get("control_id"), str):
+                raise ContextDependenceError("existing robustness control is malformed")
+            control = deepcopy(dict(raw))
+            old = control_by_id.get(control["control_id"])
+            if old is not None and _canonical_digest(old) != _canonical_digest(control):
+                raise ContextDependenceError("conflicting persisted robustness control evidence")
+            control_by_id[control["control_id"]] = control
+        self._robustness_controls_by_id = control_by_id
+        self._robustness_controls = list(control_by_id.values())
+        return self
 
     def _ensure_baseline(self) -> tuple[list[dict], list[dict], dict]:
         if self._baseline_tokens is not None and self._baseline_evidence is not None and self._continuation is not None:
@@ -416,6 +581,8 @@ class ContextDependenceStudy:
             "intervention_operator": INTERVENTION_OPERATOR,
             "removed_source_ids": removed_ids,
         }
+        if self._search_universe_id is not None:
+            binding["search_universe_id"] = self._search_universe_id
         return f"cdx_{_canonical_digest(binding)[:24]}"
 
     def _neutralization_control_identity(self, *, source_ids: list[str],
@@ -556,7 +723,12 @@ class ContextDependenceStudy:
         self._experiments_by_id[experiment_id] = stored
         return deepcopy(stored)
 
-    def measure_removal_effect_many(self, removed_source_sets: Iterable[Iterable[str]]) -> list[dict]:
+    def measure_removal_effect_many(
+        self,
+        removed_source_sets: Iterable[Iterable[str]],
+        *,
+        cancel: Any = None,
+    ) -> list[dict]:
         """Measure independent deletion arms through the explicit batch score seam.
 
         The source resolver and per-arm evidence construction remain scalar
@@ -588,7 +760,7 @@ class ContextDependenceStudy:
         if not pending:
             return [item for item in results if item is not None]
 
-        from clozn.runs.multi_arm import score_tokens_many
+        from clozn.runs.multi_arm import BatchCancelled, score_tokens_many
         conditions = {
             "block": deepcopy(self._block),
             "steer_strengths": deepcopy(self._conditions.get("steer_strengths") or {}),
@@ -605,8 +777,13 @@ class ContextDependenceStudy:
             arms.append(arm)
         started = self._clock()
         try:
-            token_results = score_tokens_many(self._sub, arms)
+            token_results = score_tokens_many(self._sub, arms, cancel=cancel)
+        except BatchCancelled:
+            raise
         except Exception as exc:
+            from clozn.server.influence_jobs import JobCancelled
+            if isinstance(exc, JobCancelled):
+                raise
             raise MeasurementUnavailableError(f"the batched intervened score call failed: {exc}") from exc
         elapsed_ms = max(0.0, (self._clock() - started) * 1000.0)
         score_ms = elapsed_ms / max(1, len(pending))
@@ -700,30 +877,17 @@ class ContextDependenceStudy:
             "continuation": continuation,
             "source_identity": self._sources,
         }
-        def is_span(source: Mapping[str, Any]) -> bool:
-            if source.get("source_kind") == "span" or str(source.get("source_id", "")).startswith("src_"):
-                return True
-            index, offsets = source.get("message_index"), source.get("unicode_range")
-            if not isinstance(index, int) or not isinstance(offsets, list) or len(offsets) != 2:
-                return False
-            if not (0 <= index < len(self._messages)) or not isinstance(self._messages[index], Mapping):
-                return False
-            content = self._messages[index].get("content")
-            return isinstance(content, str) and offsets != [0, len(content)]
-
-        source_kind = "context_receipt_source_span" if any(
-            is_span(source) for source in self._sources if isinstance(source, Mapping)
-        ) else "context_receipt_segment_id"
+        if self._search_universe_id is not None:
+            study_binding["search_universe_id"] = self._search_universe_id
+        if self._runtime_identity_binding is not None:
+            study_binding["runtime_identity"] = self._runtime_identity_binding
+        source_identity = self._source_identity_document()
         document = {
             "schema_version": SCHEMA,
             "study_id": f"cds_{_canonical_digest(study_binding)[:24]}",
             "run_id": str(self._run.get("id") or ""),
             "context_model_identity": deepcopy(self._context_identity),
-            "source_identity": {
-                "kind": source_kind,
-                "view": self._source_view,
-                "sources": deepcopy(self._sources),
-            },
+            "source_identity": source_identity,
             "continuation": deepcopy(continuation),
             "baseline": {
                 "teacher_forced_logp": sum(token["logprob"] for token in baseline),
@@ -739,8 +903,16 @@ class ContextDependenceStudy:
                 "passes_consumed": 1 + len(self._experiments) + len(self._robustness_controls),
             },
         }
+        if self._search_universe_id is not None:
+            document["search_universe_id"] = self._search_universe_id
+        if self._runtime_identity_binding is not None:
+            document["runtime_identity"] = deepcopy(self._runtime_identity_binding)
         schemas.validate(document)
         return document
+
+    def direct_evidence(self) -> list[dict]:
+        """Return detached delete-source experiments for the Minimal Context cache."""
+        return deepcopy(self._experiments)
 
 
 def measure_removal_effect(run: dict, sub, *, target: dict | None = None,
@@ -768,6 +940,7 @@ def measure_neutralization_control(run: dict, sub, *, source_ids: Iterable[str],
 
 __all__ = [
     "ContextDependenceError",
+    "ContextDependenceSupportIncompatible",
     "ContextDependenceStudy",
     "INTERVENTION_OPERATOR",
     "NEUTRALIZATION_OPERATOR",
