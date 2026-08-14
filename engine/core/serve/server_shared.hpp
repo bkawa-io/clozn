@@ -1210,9 +1210,11 @@ public:
     // flash_attn=false materializes the attention weights (kq_soft_max) so /score's attn_knockout
     // can cut individual query->key edges; costs some decode speed, hence opt-in via
     // --no-flash-attn rather than the default.
-    ContextPool(std::shared_ptr<GgmlModel> model, int workers, int n_ctx, bool flash_attn = true) {
+    ContextPool(std::shared_ptr<GgmlModel> model, int workers, int n_ctx, bool flash_attn = true,
+                int n_batch = 0, int n_ubatch = 0) {
         for (int i = 0; i < workers; ++i) {
-            adapters_.push_back(std::make_unique<GgmlAdapter>(model, n_ctx, flash_attn));
+            adapters_.push_back(std::make_unique<GgmlAdapter>(model, n_ctx, flash_attn,
+                                                               n_batch, n_ubatch));
             free_.push(adapters_.back().get());
         }
     }
@@ -1235,6 +1237,14 @@ public:
         return Lease(*this, a);
     }
     int size() const { return static_cast<int>(adapters_.size()); }
+    int n_ctx() const { return adapters_.empty() ? 0 : adapters_.front()->n_ctx(); }
+    int n_batch() const { return adapters_.empty() ? 0 : adapters_.front()->n_batch(); }
+    int n_ubatch() const { return adapters_.empty() ? 0 : adapters_.front()->n_ubatch(); }
+    std::map<std::string, std::size_t> memory_breakdown() {
+        if (adapters_.empty()) return {};
+        auto lease = acquire();
+        return (*lease).memory_breakdown();
+    }
 
     // Attach a fine-tune adapter to EVERY pooled context, or to none of them. All-or-nothing is the
     // whole point: a pool where only some contexts carry the LoRA would serve adapted or unadapted

@@ -144,8 +144,8 @@ void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx) {
             res.set_content(json{{"error", "text tokenized to zero tokens"}}.dump(), "application/json");
             return;
         }
-        // One forward decodes all tokens in a single ubatch (n_ubatch == n_ctx), so a passage longer
-        // than the context can't be harvested in one pass — reject it cleanly (400) BEFORE acquiring a
+        // One logical forward can be internally chunked at n_batch, but a passage longer than the
+        // context still cannot fit in one KV history — reject it cleanly (400) BEFORE acquiring a
         // context, so an over-length passage is a skippable client error, never a 500. The harvester
         // chunks its corpus under this; the explicit guard keeps the contract honest at the edge.
         if (static_cast<int>(tokens.size()) > n_ctx) {

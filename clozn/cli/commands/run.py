@@ -424,11 +424,17 @@ def cmd_run(args):
         flags["eos"] = args.eos
     if args.ctx is not None:
         flags["ctx"] = args.ctx
+    if getattr(args, "batch", None) is not None:
+        flags["batch"] = args.batch
+    if getattr(args, "ubatch", None) is not None:
+        flags["ubatch"] = args.ubatch
     fam = flags.get("tmpl", "qwen")
     # An explicit context window is part of the requested runtime shape. Reuse a warm server only when
     # its live /readyz worker reports the same n_ctx; silently borrowing a different context would make
     # --ctx look accepted while ignoring it.
-    warm = None if args.cpu else _find_warm(model, args.ctx)
+    warm = None if args.cpu else _find_warm(
+        model, args.ctx, getattr(args, "batch", None), getattr(args, "ubatch", None)
+    )
     stack = worker_log = None
     if warm:
         port, gpu, mode = warm

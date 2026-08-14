@@ -83,6 +83,16 @@ def test_cpp_health_exposes_additive_engine_build_identity():
     assert "json build = engine_build_info();" in src
 
 
+def test_cpp_health_exposes_context_batch_and_memory_regime():
+    src = CPP_HEALTH.read_text(encoding="utf-8")
+    block = re.search(r'json h\{\{"status", "ok"\},(.*?)\};', src, re.DOTALL)
+    assert block, "/health response literal not found in server_main.cpp"
+    keys = set(re.findall(r'\{"(\w+)",', block.group(1)))
+    assert {"n_ctx", "n_batch", "n_ubatch", "memory"}.issubset(keys)
+    assert "cp.n_batch = n_batch_;" in (ROOT / "engine/core/src/model_ggml.cpp").read_text(encoding="utf-8")
+    assert "cp.n_ubatch = n_ubatch_;" in (ROOT / "engine/core/src/model_ggml.cpp").read_text(encoding="utf-8")
+
+
 def test_checkpoint_reference_contract_is_generation_scoped(fixture):
     checkpoint_ref = fixture["checkpoint_reference"]
     assert checkpoint_ref["fields"] == ["checkpoint_id", "worker_generation_id"]

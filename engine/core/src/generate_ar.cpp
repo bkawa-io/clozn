@@ -760,7 +760,7 @@ ReferenceMatchBatchResult generate_ar_reference_match_batched(
         fwd = adapter.ar_forward_prefill_batch(prompts);
         metrics.prefill_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
             clock::now() - prefill_started).count();
-        metrics.model_forward_decode_calls = 1;
+        metrics.model_forward_decode_calls = adapter.last_decode_call_count();
         for (int i = 0; i < n; ++i)
             positions[static_cast<size_t>(i)] = static_cast<int>(prompts[static_cast<size_t>(i)].size());
 
@@ -828,7 +828,7 @@ ReferenceMatchBatchResult generate_ar_reference_match_batched(
             fwd = adapter.ar_forward_batch_at(next_tokens, next_positions, decode_active);
             metrics.decode_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
                 clock::now() - decode_started).count();
-            ++metrics.model_forward_decode_calls;
+            metrics.model_forward_decode_calls += adapter.last_decode_call_count();
             for (int i = 0; i < n; ++i)
                 if (decode_active[static_cast<size_t>(i)])
                     ++positions[static_cast<size_t>(i)];

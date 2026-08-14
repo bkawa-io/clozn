@@ -106,6 +106,10 @@ def build_parser():
     pr.add_argument("--max", type=int, default=256, help="max new tokens (default 256)")
     pr.add_argument("--ctx", type=_positive_context, default=None,
                     help="worker context window in tokens (default 4096; reduce on tight unified memory)")
+    pr.add_argument("--batch", type=_positive_context, default=None,
+                    help="maximum logical rows submitted per decode (default: --ctx)")
+    pr.add_argument("--ubatch", type=_positive_context, default=None,
+                    help="accelerator microbatch size (default: min(--batch, 512))")
     pr.add_argument("--cpu", action="store_true", help="force the CPU build")
     pr.add_argument("--port", type=int, default=0); pr.add_argument("--mask", type=int, default=None)
     pr.add_argument("--eos", type=int, default=None)
@@ -144,6 +148,10 @@ def build_parser():
     )
     ps.add_argument("-c", "--ctx", "--ctx-size", dest="ctx", type=_positive_context, default=None,
                     help="worker context window in tokens (default 4096; reduce on tight unified memory)")
+    ps.add_argument("--batch", type=_positive_context, default=None,
+                    help="maximum logical rows submitted per decode (default: --ctx)")
+    ps.add_argument("--ubatch", type=_positive_context, default=None,
+                    help="accelerator microbatch size (default: min(--batch, 512))")
     ps.add_argument(
         "-ngl", "--gpu-layers", "--n-gpu-layers", dest="gpu_layers",
         type=_nonnegative_int, default=None, metavar="N",

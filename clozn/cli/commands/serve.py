@@ -50,6 +50,8 @@ def cmd_serve(args):
         incompatible = [
             name for name, active in (
                 ("--ctx", getattr(args, "ctx", None) is not None),
+                ("--batch", getattr(args, "batch", None) is not None),
+                ("--ubatch", getattr(args, "ubatch", None) is not None),
                 ("--cpu", bool(getattr(args, "cpu", False))),
                 ("--mask", getattr(args, "mask", None) is not None),
                 ("--eos", getattr(args, "eos", None) is not None),
@@ -120,6 +122,10 @@ def cmd_serve(args):
             flags["eos"] = args.eos
         if args.ctx is not None:
             flags["ctx"] = args.ctx
+        if getattr(args, "batch", None) is not None:
+            flags["batch"] = args.batch
+        if getattr(args, "ubatch", None) is not None:
+            flags["ubatch"] = args.ubatch
         if gpu_layers is not None:
             flags["gpu_layers"] = gpu_layers
         if args.sae is not None:

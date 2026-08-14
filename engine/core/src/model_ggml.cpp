@@ -1,12 +1,14 @@
 #include "clozn/model_ggml.hpp"
 
 #include <cmath>
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <utility>
 
 #include "ggml-backend.h"
+#include "../third_party/llama.cpp/src/llama-ext.h"
 
 namespace clozn {
 
@@ -48,8 +50,15 @@ GgmlModel::~GgmlModel() {
     if (model_) llama_model_free(model_);
 }
 
-void GgmlAdapter::init_context(int n_ctx) {
+void GgmlAdapter::init_context(int n_ctx, int n_batch, int n_ubatch) {
+    if (n_ctx <= 0) throw std::invalid_argument("GgmlAdapter: n_ctx must be positive");
     n_ctx_ = n_ctx;
+    n_batch_ = n_batch > 0 ? n_batch : n_ctx_;
+    n_ubatch_ = n_ubatch > 0 ? n_ubatch : std::min(n_batch_, 512);
+    if (n_batch_ <= 0 || n_batch_ > n_ctx_)
+        throw std::invalid_argument("GgmlAdapter: n_batch must be in [1, n_ctx]");
+    if (n_ubatch_ <= 0 || n_ubatch_ > n_batch_)
+        throw std::invalid_argument("GgmlAdapter: n_ubatch must be in [1, n_batch]");
     model_ = model_owner_->handle();
     vocab_ = model_owner_->vocab();
     cfg_ = model_owner_->config();
@@ -61,8 +70,8 @@ void GgmlAdapter::init_context(int n_ctx) {
 
     llama_context_params cp = llama_context_default_params();
     cp.n_ctx = n_ctx_;
-    cp.n_batch = n_ctx_;
-    cp.n_ubatch = n_ctx_;  // single ubatch: a whole segment decodes in one pass
+    cp.n_batch = n_batch_;
+    cp.n_ubatch = n_ubatch_;
     cp.n_seq_max = 16;     // Phase 2.2: batched multi-sequence decode (up to 16 branches)
     // UNIFIED KV (2026-07-22, found by the 2.8 tool-loop repro): without this, llama.cpp SPLITS
     // n_ctx across n_seq_max -- 4096/16 = a 256-token cap PER SEQUENCE ("n_ctx_seq (256)" at
@@ -88,16 +97,31 @@ void GgmlAdapter::init_context(int n_ctx) {
 
 GgmlAdapter::GgmlAdapter(const std::string& model_path, int mask_token_id,
                          int eos_token_id, int n_ctx,
-                         int n_gpu_layers, bool flash_attn)
+                         int n_gpu_layers, bool flash_attn,
+                         int n_batch, int n_ubatch)
     : model_owner_(std::make_shared<GgmlModel>(model_path, mask_token_id, eos_token_id, n_gpu_layers)),
       flash_attn_(flash_attn) {
-    init_context(n_ctx);
+    init_context(n_ctx, n_batch, n_ubatch);
 }
 
-GgmlAdapter::GgmlAdapter(std::shared_ptr<GgmlModel> model, int n_ctx, bool flash_attn)
+GgmlAdapter::GgmlAdapter(std::shared_ptr<GgmlModel> model, int n_ctx, bool flash_attn,
+                         int n_batch, int n_ubatch)
     : model_owner_(std::move(model)), flash_attn_(flash_attn) {
     if (!model_owner_) throw std::invalid_argument("GgmlAdapter: null GgmlModel");
-    init_context(n_ctx);
+    init_context(n_ctx, n_batch, n_ubatch);
+}
+
+std::map<std::string, std::size_t> GgmlAdapter::memory_breakdown() const {
+    std::map<std::string, std::size_t> out{
+        {"model_bytes", 0}, {"context_bytes", 0}, {"compute_bytes", 0},
+    };
+    if (!ctx_) return out;
+    for (const auto& item : llama_get_memory_breakdown(ctx_)) {
+        out["model_bytes"] += item.second.model;
+        out["context_bytes"] += item.second.context;
+        out["compute_bytes"] += item.second.compute;
+    }
+    return out;
 }
 
 void GgmlAdapter::set_attn_knockouts(const std::vector<AttnKnockout>& ks) {
@@ -431,15 +455,18 @@ bool GgmlAdapter::eval_cb(struct ggml_tensor* t, bool ask) {
     const int ne0 = static_cast<int>(t->ne[0]);  // n_embd
     const int ne1 = static_cast<int>(t->ne[1]);  // token rows (the decode segment)
     if (read) {
-        tap_rows_ = ne1;
-        tap_buf_.resize(static_cast<size_t>(ne0) * ne1);
-        ggml_backend_tensor_get(t, tap_buf_.data(), 0, tap_buf_.size() * sizeof(float));
+        std::vector<float> rows(static_cast<size_t>(ne0) * ne1);
+        ggml_backend_tensor_get(t, rows.data(), 0, rows.size() * sizeof(float));
+        tap_buf_.insert(tap_buf_.end(), rows.begin(), rows.end());
+        tap_rows_ += ne1;
     }
     if (cap_il >= 0 && ne0 == n_embd_ && ne1 > 0) {
         std::vector<float>& buf = cap_bufs_[cap_il];
-        buf.resize(static_cast<size_t>(ne0) * ne1);
-        ggml_backend_tensor_get(t, buf.data(), 0, buf.size() * sizeof(float));
-        cap_rows_ = ne1;
+        const size_t old = buf.size();
+        buf.resize(old + static_cast<size_t>(ne0) * ne1);
+        ggml_backend_tensor_get(t, buf.data() + old, 0,
+                                static_cast<size_t>(ne0) * ne1 * sizeof(float));
+        cap_rows_ += ne1;
     }
     if (summary && ne0 == n_embd_ && ne1 > 0) {
         const int il = std::atoi(nm + 6);                    // "l_out-<il>" -> il
@@ -447,12 +474,13 @@ bool GgmlAdapter::eval_cb(struct ggml_tensor* t, bool ask) {
             std::vector<float> rows(static_cast<size_t>(ne0) * ne1);
             ggml_backend_tensor_get(t, rows.data(), 0, rows.size() * sizeof(float));
             std::vector<float>& dst = layer_norms_[il];
-            dst.assign(ne1, 0.0f);
+            const size_t old = dst.size();
+            dst.resize(old + static_cast<size_t>(ne1), 0.0f);
             for (int r = 0; r < ne1; ++r) {
                 const float* h = rows.data() + static_cast<size_t>(r) * ne0;
                 double ss = 0.0;
                 for (int i = 0; i < ne0; ++i) ss += static_cast<double>(h[i]) * h[i];
-                dst[r] = static_cast<float>(std::sqrt(ss));
+                dst[old + static_cast<size_t>(r)] = static_cast<float>(std::sqrt(ss));
             }
         }
     }
@@ -591,24 +619,60 @@ ForwardResult GgmlAdapter::ar_forward(const std::vector<int>& tokens, int n_past
     if (len <= 0) throw std::invalid_argument("ar_forward: empty tokens");
     if (n_past < 0) throw std::invalid_argument("ar_forward: n_past < 0");
     if (n_past + len > n_ctx_) throw std::invalid_argument("ar_forward: exceeds n_ctx");
-    write_from_ = n_past;   // board position -> tensor row mapping for the white-box state-WRITE (eval_cb)
-
     // Incremental causal decode: place `tokens` at absolute positions [n_past, n_past+len),
-    // reusing whatever KV already covers [0, n_past). Only the LAST row is an output (the
-    // next-token distribution we sample); the mid-layer tap (eval_cb) captures every row anyway.
+    // reusing whatever KV already covers [0, n_past). The logical batch may be smaller than this
+    // request, so each chunk keeps its absolute positions and the same sequence id.
     decoded_tokens_ += len;
-    llama_batch batch = llama_batch_init(len, 0, 1);
-    batch.n_tokens = len;
-    for (int i = 0; i < len; ++i) {
-        batch.token[i] = static_cast<llama_token>(tokens[i]);
-        batch.pos[i] = n_past + i;          // absolute position: RoPE + KV slot
-        batch.n_seq_id[i] = 1;
-        batch.seq_id[i][0] = 0;
-        batch.logits[i] = (i == len - 1) ? 1 : 0;
+    const bool aggregate_capture = capture_sink_ && !capture_layers_.empty();
+    std::map<int, std::vector<float>> captured;
+    if (aggregate_capture) cap_bufs_.clear();
+    last_decode_call_count_ = 0;
+    int last_chunk_rows = 0;
+    const bool callback_sensitive = (emit_activations_ && tap_layer_ > 0) ||
+        aggregate_capture || !capture_layers_.empty() || !writes_.empty() || !knockouts_.empty() ||
+        attn_capture_query_ >= 0 || !head_writes_.empty() || !head_cap_layers_.empty() ||
+        !ffn_writes_.empty() || !ffn_cap_layers_.empty();
+    const int decode_limit = callback_sensitive ? std::min(n_batch_, n_ubatch_) : n_batch_;
+    for (int chunk_from = n_past; chunk_from < n_past + len; chunk_from += decode_limit) {
+        const int chunk_rows = std::min(decode_limit, n_past + len - chunk_from);
+        last_chunk_rows = chunk_rows;
+        write_from_ = chunk_from;
+        tap_buf_.clear();
+        tap_rows_ = 0;
+        if (aggregate_capture) {
+            cap_bufs_.clear();
+            cap_rows_ = 0;
+        }
+        llama_batch batch = llama_batch_init(chunk_rows, 0, 1);
+        batch.n_tokens = chunk_rows;
+        for (int i = 0; i < chunk_rows; ++i) {
+            batch.token[i] = static_cast<llama_token>(tokens[chunk_from - n_past + i]);
+            batch.pos[i] = chunk_from + i;          // absolute position: RoPE + KV slot
+            batch.n_seq_id[i] = 1;
+            batch.seq_id[i][0] = 0;
+            batch.logits[i] = (chunk_from + i == n_past + len - 1) ? 1 : 0;
+        }
+        const int rc = llama_decode(ctx_, batch);
+        llama_batch_free(batch);
+        if (rc != 0) throw std::runtime_error("ar_forward: llama_decode failed");
+        ++last_decode_call_count_;
+        if (aggregate_capture) {
+            for (int il : capture_layers_) {
+                auto it = cap_bufs_.find(il);
+                if (it == cap_bufs_.end() ||
+                    it->second.size() != static_cast<size_t>(chunk_rows) * n_embd_)
+                    continue;
+                auto& dst = captured[il];
+                dst.insert(dst.end(), it->second.begin(), it->second.end());
+                it->second.clear();
+            }
+        }
     }
-    const int rc = llama_decode(ctx_, batch);
-    llama_batch_free(batch);
-    if (rc != 0) throw std::runtime_error("ar_forward: llama_decode failed");
+    if (aggregate_capture) {
+        cap_bufs_ = std::move(captured);
+        cap_rows_ = len;
+        fire_capture(n_past, len);
+    }
 
     const int vocab = cfg_.vocab_size;
     ForwardResult out;
@@ -627,11 +691,11 @@ ForwardResult GgmlAdapter::ar_forward(const std::vector<int>& tokens, int n_past
         out.n_embd = n_embd_;
         out.act_rows = {n_past + len - 1};
         out.activations.assign(static_cast<size_t>(n_embd_), 0.0f);
-        if (tap_layer_ > 0 && tap_rows_ == len &&
-            tap_buf_.size() == static_cast<size_t>(len) * n_embd_) {
+        if (tap_layer_ > 0 && tap_rows_ == last_chunk_rows &&
+            tap_buf_.size() == static_cast<size_t>(last_chunk_rows) * n_embd_) {
             // mid-layer residual l_out-<tap_layer_>: last row = last token
             std::memcpy(out.activations.data(),
-                        tap_buf_.data() + static_cast<size_t>(len - 1) * n_embd_,
+                        tap_buf_.data() + static_cast<size_t>(last_chunk_rows - 1) * n_embd_,
                         static_cast<size_t>(n_embd_) * sizeof(float));
         } else {
             // final-layer fallback: the single output row (logits set only on the last token) is index 0
@@ -639,10 +703,6 @@ ForwardResult GgmlAdapter::ar_forward(const std::vector<int>& tokens, int n_past
             if (e) std::memcpy(out.activations.data(), e, static_cast<size_t>(n_embd_) * sizeof(float));
         }
     }
-    // Capture plane (Phase 2.3): hand this decode's multi-layer snapshot to the sink. The sink only
-    // queues (the ReadoutPlane worker does the observer math), so the decode thread's cost here is a
-    // move + a queue push.
-    fire_capture(n_past, len);
     return out;
 }
 
@@ -653,26 +713,27 @@ ForwardResult GgmlAdapter::ar_forward_embd(const std::vector<float>& embd, int n
         throw std::invalid_argument("ar_forward_embd: embd size != n_rows*n_embd");
     if (n_past < 0) throw std::invalid_argument("ar_forward_embd: n_past < 0");
     if (n_past + n_rows > n_ctx_) throw std::invalid_argument("ar_forward_embd: exceeds n_ctx");
-    write_from_ = n_past;
     decoded_tokens_ += n_rows;
-
-    // Splice RAW input embeddings (not token ids) at positions [n_past, n_past+n_rows): the llama_batch
-    // carries `embd` instead of `token` — the same path multimodal models use to inject image vectors.
-    // This is the bridge that lets a PyTorch-trained soft prefix ride into the ggml runtime.
-    llama_batch batch = llama_batch_init(n_rows, n_embd_, 1);
-    batch.n_tokens = n_rows;
-    for (int i = 0; i < n_rows; ++i) {
-        std::memcpy(batch.embd + static_cast<size_t>(i) * n_embd_,
-                    embd.data() + static_cast<size_t>(i) * n_embd_,
-                    static_cast<size_t>(n_embd_) * sizeof(float));
-        batch.pos[i] = n_past + i;          // absolute position: RoPE + KV slot
-        batch.n_seq_id[i] = 1;
-        batch.seq_id[i][0] = 0;
-        batch.logits[i] = (i == n_rows - 1) ? 1 : 0;
+    last_decode_call_count_ = 0;
+    for (int chunk_from = 0; chunk_from < n_rows; chunk_from += n_batch_) {
+        const int chunk_rows = std::min(n_batch_, n_rows - chunk_from);
+        write_from_ = n_past + chunk_from;
+        llama_batch batch = llama_batch_init(chunk_rows, n_embd_, 1);
+        batch.n_tokens = chunk_rows;
+        for (int i = 0; i < chunk_rows; ++i) {
+            std::memcpy(batch.embd + static_cast<size_t>(i) * n_embd_,
+                        embd.data() + static_cast<size_t>(chunk_from + i) * n_embd_,
+                        static_cast<size_t>(n_embd_) * sizeof(float));
+            batch.pos[i] = n_past + chunk_from + i;  // absolute position: RoPE + KV slot
+            batch.n_seq_id[i] = 1;
+            batch.seq_id[i][0] = 0;
+            batch.logits[i] = (chunk_from + i == n_rows - 1) ? 1 : 0;
+        }
+        const int rc = llama_decode(ctx_, batch);
+        llama_batch_free(batch);
+        if (rc != 0) throw std::runtime_error("ar_forward_embd: llama_decode failed");
+        ++last_decode_call_count_;
     }
-    const int rc = llama_decode(ctx_, batch);
-    llama_batch_free(batch);
-    if (rc != 0) throw std::runtime_error("ar_forward_embd: llama_decode failed");
 
     const int vocab = cfg_.vocab_size;
     ForwardResult out;
@@ -706,37 +767,71 @@ ForwardResult GgmlAdapter::ar_forward_score(const std::vector<int>& tokens,
     std::vector<char> want(static_cast<size_t>(len), 0);
     for (int p : logits_for) want[static_cast<size_t>(p)] = 1;
 
-    llama_batch batch = llama_batch_init(len, 0, 1);
-    batch.n_tokens = len;
-    for (int i = 0; i < len; ++i) {
-        batch.token[i] = static_cast<llama_token>(tokens[i]);
-        batch.pos[i] = i;                 // absolute positions from a clean cache: pos == index
-        batch.n_seq_id[i] = 1;
-        batch.seq_id[i][0] = 0;
-        batch.logits[i] = want[static_cast<size_t>(i)];
-    }
-    const int rc = llama_decode(ctx_, batch);
-    llama_batch_free(batch);
-    if (rc != 0) throw std::runtime_error("ar_forward_score: llama_decode failed");
-
     const int vocab = cfg_.vocab_size;
     ForwardResult out;
     out.n_requested = static_cast<int>(logits_for.size());
     out.vocab = vocab;
     out.kv = std::make_shared<GgmlKV>(len);
     out.logits.resize(static_cast<size_t>(out.n_requested) * vocab);
-    for (int r = 0; r < out.n_requested; ++r) {
-        // logits_for[r] is the BATCH token index (position in `tokens`); llama_get_logits_ith resolves
-        // it to the compacted output row via output_ids (valid for any i with batch.logits[i] set).
-        const float* row = llama_get_logits_ith(ctx_, logits_for[r]);
-        if (!row) throw std::runtime_error("ar_forward_score: missing logits row");
-        std::memcpy(out.logits.data() + static_cast<size_t>(r) * vocab, row,
-                    static_cast<size_t>(vocab) * sizeof(float));
+    const bool aggregate_capture = capture_sink_ && !capture_layers_.empty();
+    std::map<int, std::vector<float>> captured;
+    if (aggregate_capture) cap_bufs_.clear();
+    last_decode_call_count_ = 0;
+    const bool callback_sensitive = aggregate_capture || !capture_layers_.empty() || !writes_.empty() || !knockouts_.empty() ||
+        attn_capture_query_ >= 0 || !head_writes_.empty() || !head_cap_layers_.empty() ||
+        !ffn_writes_.empty() || !ffn_cap_layers_.empty();
+    const int decode_limit = callback_sensitive ? std::min(n_batch_, n_ubatch_) : n_batch_;
+    for (int chunk_from = 0; chunk_from < len; chunk_from += decode_limit) {
+        const int chunk_rows = std::min(decode_limit, len - chunk_from);
+        write_from_ = chunk_from;
+        tap_buf_.clear();
+        tap_rows_ = 0;
+        if (aggregate_capture) {
+            cap_bufs_.clear();
+            cap_rows_ = 0;
+        }
+        llama_batch batch = llama_batch_init(chunk_rows, 0, 1);
+        batch.n_tokens = chunk_rows;
+        for (int i = 0; i < chunk_rows; ++i) {
+            const int pos = chunk_from + i;
+            batch.token[i] = static_cast<llama_token>(tokens[pos]);
+            batch.pos[i] = pos;                 // absolute positions from a clean cache: pos == index
+            batch.n_seq_id[i] = 1;
+            batch.seq_id[i][0] = 0;
+            batch.logits[i] = want[static_cast<size_t>(pos)];
+        }
+        const int rc = llama_decode(ctx_, batch);
+        llama_batch_free(batch);
+        if (rc != 0) throw std::runtime_error("ar_forward_score: llama_decode failed");
+        ++last_decode_call_count_;
+
+        // Copy requested rows before the next chunk replaces llama.cpp's output buffer. The
+        // public order remains logits_for order, even when positions are scattered.
+        for (int r = 0; r < out.n_requested; ++r) {
+            const int pos = logits_for[static_cast<size_t>(r)];
+            if (pos < chunk_from || pos >= chunk_from + chunk_rows) continue;
+            const float* row = llama_get_logits_ith(ctx_, pos - chunk_from);
+            if (!row) throw std::runtime_error("ar_forward_score: missing logits row");
+            std::memcpy(out.logits.data() + static_cast<size_t>(r) * vocab, row,
+                        static_cast<size_t>(vocab) * sizeof(float));
+        }
+        if (aggregate_capture) {
+            for (int il : capture_layers_) {
+                auto it = cap_bufs_.find(il);
+                if (it == cap_bufs_.end() ||
+                    it->second.size() != static_cast<size_t>(chunk_rows) * n_embd_)
+                    continue;
+                auto& dst = captured[il];
+                dst.insert(dst.end(), it->second.begin(), it->second.end());
+                it->second.clear();
+            }
+        }
     }
-    // Capture plane: the score decode is ONE batch over [0, len) (n_ubatch == n_ctx), so a captured
-    // frame carries every position's residual at each armed layer — the tracer's S0 screen and its
-    // "patch A, capture at B" path-patching read both ride this. Synchronous sink, same as ar_forward.
-    fire_capture(0, len);
+    if (aggregate_capture) {
+        cap_bufs_ = std::move(captured);
+        cap_rows_ = len;
+        fire_capture(0, len);
+    }
     return out;
 }
 
@@ -757,34 +852,15 @@ ForwardResult GgmlAdapter::ar_forward_score_arms(const std::vector<int>& tokens,
     if (!capture_layers_.empty() || !knockouts_.empty() || attn_capture_query_ >= 0)
         throw std::invalid_argument("score_arms: capture/knockout/attn_capture cannot be armed "
                                     "alongside batched arms (unvalidated under multi-seq layout)");
+    if (!head_writes_.empty() || !ffn_writes_.empty() || !head_cap_layers_.empty() ||
+        !ffn_cap_layers_.empty())
+        throw std::invalid_argument("score_arms: head/ffn hooks cannot be armed alongside batched arms");
 
     llama_memory_clear(llama_get_memory(ctx_), true);
     frozen_end_ = 0;
     boundary_row_.clear();
     write_from_ = 0;                          // batch rows ARE the write positions (pre-translated)
     decoded_tokens_ += n_arms * len;
-
-    std::vector<char> want(static_cast<size_t>(len), 0);
-    for (int p : logits_for) want[static_cast<size_t>(p)] = 1;
-
-    const int total = n_arms * len;
-    llama_batch batch = llama_batch_init(total, 0, 1);
-    batch.n_tokens = total;
-    for (int a = 0; a < n_arms; ++a) {
-        for (int i = 0; i < len; ++i) {
-            const int r = a * len + i;
-            batch.token[r] = static_cast<llama_token>(tokens[i]);
-            batch.pos[r] = i;                 // per-seq absolute position
-            batch.n_seq_id[r] = 1;
-            batch.seq_id[r][0] = a;           // arm a = sequence a; attention never crosses arms
-            batch.logits[r] = want[static_cast<size_t>(i)];
-        }
-    }
-    const int rc = llama_decode(ctx_, batch);
-    llama_batch_free(batch);
-    // Leave no arm sequences behind for the next (single-seq) request.
-    cleanup_seqs(n_arms);
-    if (rc != 0) throw std::runtime_error("score_arms: llama_decode failed");
 
     const int vocab = cfg_.vocab_size;
     const int per_arm = static_cast<int>(logits_for.size());
@@ -793,14 +869,87 @@ ForwardResult GgmlAdapter::ar_forward_score_arms(const std::vector<int>& tokens,
     out.vocab = vocab;
     out.kv = std::make_shared<GgmlKV>(len);
     out.logits.resize(static_cast<size_t>(out.n_requested) * vocab);
-    for (int a = 0; a < n_arms; ++a) {
-        for (int r = 0; r < per_arm; ++r) {
-            const float* row = llama_get_logits_ith(ctx_, a * len + logits_for[r]);
-            if (!row) throw std::runtime_error("score_arms: missing logits row");
-            std::memcpy(out.logits.data() + (static_cast<size_t>(a) * per_arm + r) * vocab, row,
-                        static_cast<size_t>(vocab) * sizeof(float));
+    const std::vector<WriteSpec> original_writes = writes_;
+    last_decode_call_count_ = 0;
+    try {
+        // A chunk is a rectangular slice of a group of arms. Keeping each arm's positions
+        // contiguous makes the local row mapping explicit, while grouping arms also handles
+        // n_batch values smaller than n_arms.
+        const int score_limit = original_writes.empty() ? n_batch_ : std::min(n_batch_, n_ubatch_);
+        for (int arm_from = 0; arm_from < n_arms;) {
+            const int arm_count = std::min(n_arms - arm_from, score_limit);
+            const int rows_per_arm = std::max(1, score_limit / arm_count);
+            for (int pos_from = 0; pos_from < len; pos_from += rows_per_arm) {
+                const int pos_count = std::min(rows_per_arm, len - pos_from);
+                const int total = arm_count * pos_count;
+                write_from_ = 0;  // the temporary WriteSpec positions below are local batch rows
+                writes_.clear();
+                for (const WriteSpec& source : original_writes) {
+                    WriteSpec mapped;
+                    mapped.layer = source.layer;
+                    mapped.name = source.name;
+                    for (size_t pi = 0; pi < source.positions.size(); ++pi) {
+                        const int global = source.positions[pi];
+                        const int arm = global / len;
+                        const int pos = global % len;
+                        if (arm < arm_from || arm >= arm_from + arm_count ||
+                            pos < pos_from || pos >= pos_from + pos_count)
+                            continue;
+                        mapped.positions.push_back((arm - arm_from) * pos_count + (pos - pos_from));
+                        const size_t value_from = pi * static_cast<size_t>(n_embd_);
+                        mapped.buf.insert(mapped.buf.end(),
+                                          source.buf.begin() + static_cast<std::ptrdiff_t>(value_from),
+                                          source.buf.begin() + static_cast<std::ptrdiff_t>(value_from + n_embd_));
+                    }
+                    if (!mapped.positions.empty()) writes_.push_back(std::move(mapped));
+                }
+
+                llama_batch batch = llama_batch_init(total, 0, 1);
+                batch.n_tokens = total;
+                for (int a = 0; a < arm_count; ++a) {
+                    const int arm = arm_from + a;
+                    for (int i = 0; i < pos_count; ++i) {
+                        const int local = a * pos_count + i;
+                        const int pos = pos_from + i;
+                        batch.token[local] = static_cast<llama_token>(tokens[pos]);
+                        batch.pos[local] = pos;  // per-seq absolute position
+                        batch.n_seq_id[local] = 1;
+                        batch.seq_id[local][0] = arm;
+                        bool requested = false;
+                        for (int requested_pos : logits_for)
+                            if (requested_pos == pos) { requested = true; break; }
+                        batch.logits[local] = requested;
+                    }
+                }
+                const int rc = llama_decode(ctx_, batch);
+                llama_batch_free(batch);
+                if (rc != 0) throw std::runtime_error("score_arms: llama_decode failed");
+                ++last_decode_call_count_;
+
+                for (int a = 0; a < arm_count; ++a) {
+                    const int arm = arm_from + a;
+                    for (int r = 0; r < per_arm; ++r) {
+                        const int pos = logits_for[static_cast<size_t>(r)];
+                        if (pos < pos_from || pos >= pos_from + pos_count) continue;
+                        const int local = a * pos_count + (pos - pos_from);
+                        const float* row = llama_get_logits_ith(ctx_, local);
+                        if (!row) throw std::runtime_error("score_arms: missing logits row");
+                        std::memcpy(out.logits.data() +
+                                        (static_cast<size_t>(arm) * per_arm + r) * vocab,
+                                    row, static_cast<size_t>(vocab) * sizeof(float));
+                    }
+                }
+            }
+            arm_from += arm_count;
         }
+    } catch (...) {
+        writes_ = original_writes;
+        cleanup_seqs(n_arms);
+        throw;
     }
+    writes_ = original_writes;
+    // Leave no arm sequences behind for the next (single-seq) request.
+    cleanup_seqs(n_arms);
     return out;
 }
 
@@ -872,28 +1021,87 @@ LayerSummary GgmlAdapter::layer_summary(const std::vector<int>& tokens) {
     return out;
 }
 
-void GgmlAdapter::decode_only(const std::vector<int>& board, int from, int to) {
-    write_from_ = from;   // board position -> tensor row mapping for the white-box state-WRITE (eval_cb)
+void GgmlAdapter::decode_only(const std::vector<int>& board, int from, int to,
+                              std::vector<float>* logits_out) {
     const int len = to - from;
     if (len <= 0) throw std::invalid_argument("empty decode segment");
+    if (from < 0 || to > static_cast<int>(board.size()))
+        throw std::invalid_argument("decode segment outside board");
     decoded_tokens_ += len;
-    llama_batch batch = llama_batch_init(len, 0, 1);
-    batch.n_tokens = len;
-    for (int i = 0; i < len; ++i) {
-        batch.token[i] = static_cast<llama_token>(board[from + i]);
-        batch.pos[i] = pos_offset_ + from + i;   // physical position (shifted by a diffusion prefix, if any)
-        batch.n_seq_id[i] = 1;
-        batch.seq_id[i][0] = 0;
-        batch.logits[i] = 1;                // logits at every position of the segment
+    const int vocab = cfg_.vocab_size;
+    if (logits_out) logits_out->assign(static_cast<size_t>(len) * vocab, 0.0f);
+    const bool collect_tap = emit_activations_ && tap_layer_ > 0;
+    std::vector<float> all_tap;
+    if (collect_tap) {
+        all_tap.reserve(static_cast<size_t>(len) * n_embd_);
+        tap_buf_.clear();
+        tap_rows_ = 0;
     }
-    const int rc = llama_decode(ctx_, batch);
-    llama_batch_free(batch);
-    if (rc != 0) throw std::runtime_error("llama_decode failed");
+    std::vector<std::vector<float>> all_norms;
+    last_decode_call_count_ = 0;
+    if (emit_layer_summary_) {
+        all_norms.resize(static_cast<size_t>(n_layer_));
+        layer_norms_.assign(static_cast<size_t>(n_layer_), {});
+    }
+    // llama.cpp's non-causal graph requires one complete attention window in a physical ubatch.
+    // Causal decode may submit n_batch rows and let the scheduler split them into n_ubatch pieces;
+    // diffusion decode must keep each logical call within both limits.
+    const bool callback_sensitive = collect_tap || emit_layer_summary_ || !capture_layers_.empty() ||
+        !writes_.empty() || !knockouts_.empty() || attn_capture_query_ >= 0 || !head_writes_.empty() ||
+        !head_cap_layers_.empty() || !ffn_writes_.empty() || !ffn_cap_layers_.empty();
+    const int decode_limit = (!causal_ || callback_sensitive)
+        ? std::min(n_batch_, n_ubatch_) : n_batch_;
+    for (int chunk_from = from; chunk_from < to; chunk_from += decode_limit) {
+        const int chunk_rows = std::min(decode_limit, to - chunk_from);
+        write_from_ = chunk_from;   // board position -> tensor row mapping for the white-box state-WRITE
+        tap_buf_.clear();
+        tap_rows_ = 0;
+        if (emit_layer_summary_)
+            for (auto& rows : layer_norms_) rows.clear();
+        llama_batch batch = llama_batch_init(chunk_rows, 0, 1);
+        batch.n_tokens = chunk_rows;
+        for (int i = 0; i < chunk_rows; ++i) {
+            batch.token[i] = static_cast<llama_token>(board[chunk_from + i]);
+            batch.pos[i] = pos_offset_ + chunk_from + i;
+            batch.n_seq_id[i] = 1;
+            batch.seq_id[i][0] = 0;
+            batch.logits[i] = 1;                // logits at every position of the segment
+        }
+        const int rc = llama_decode(ctx_, batch);
+        if (rc == 0 && logits_out) {
+            for (int i = 0; i < chunk_rows; ++i) {
+                const float* row = llama_get_logits_ith(ctx_, i);
+                if (!row) { llama_batch_free(batch); throw std::runtime_error("llama_decode: missing logits row"); }
+                std::memcpy(logits_out->data() + static_cast<size_t>(chunk_from - from + i) * vocab,
+                            row, static_cast<size_t>(vocab) * sizeof(float));
+            }
+        }
+        llama_batch_free(batch);
+        if (rc != 0) throw std::runtime_error("llama_decode failed");
+        ++last_decode_call_count_;
+        if (collect_tap && tap_buf_.size() == static_cast<size_t>(chunk_rows) * n_embd_)
+            all_tap.insert(all_tap.end(), tap_buf_.begin(), tap_buf_.end());
+        if (emit_layer_summary_) {
+            for (int il = 0; il < n_layer_; ++il) {
+                const auto& rows = layer_norms_[static_cast<size_t>(il)];
+                if (rows.size() == static_cast<size_t>(chunk_rows)) {
+                    auto& dst = all_norms[static_cast<size_t>(il)];
+                    dst.insert(dst.end(), rows.begin(), rows.end());
+                }
+            }
+        }
+    }
+    if (collect_tap && all_tap.size() == static_cast<size_t>(len) * n_embd_) {
+        tap_buf_ = std::move(all_tap);
+        tap_rows_ = len;
+    }
+    if (emit_layer_summary_) layer_norms_ = std::move(all_norms);
 }
 
 const float* GgmlAdapter::decode_segment(const std::vector<int>& board, int from, int to) {
-    decode_only(board, from, to);
-    return llama_get_logits(ctx_);  // host copy; row j == position from+j, valid until next decode
+    segment_logits_.clear();
+    decode_only(board, from, to, &segment_logits_);
+    return segment_logits_.data();  // row j == position from+j, valid until next decode
 }
 
 void GgmlAdapter::freeze_segment(const std::vector<int>& board, int from, int to) {
@@ -914,20 +1122,28 @@ void GgmlAdapter::decode_prefix_embd() {
     // after it exists yet), so it's frozen-exact under the one-way law; the board then attends to it.
     if (diff_m_ <= 0 || n_embd_ <= 0) return;
     decoded_tokens_ += diff_m_;
-    llama_batch batch = llama_batch_init(diff_m_, n_embd_, 1);
-    batch.n_tokens = diff_m_;
-    for (int i = 0; i < diff_m_; ++i) {
-        std::memcpy(batch.embd + static_cast<size_t>(i) * n_embd_,
-                    diff_prefix_.data() + static_cast<size_t>(i) * n_embd_,
-                    static_cast<size_t>(n_embd_) * sizeof(float));
-        batch.pos[i] = i;                   // physical [0, diff_m_): the frozen prefix block
-        batch.n_seq_id[i] = 1;
-        batch.seq_id[i][0] = 0;
-        batch.logits[i] = (i == diff_m_ - 1) ? 1 : 0;
+    last_decode_call_count_ = 0;
+    const int decode_limit = std::min(n_batch_, n_ubatch_);
+    for (int chunk_from = 0; chunk_from < diff_m_; chunk_from += decode_limit) {
+        const int chunk_rows = std::min(decode_limit, diff_m_ - chunk_from);
+        write_from_ = chunk_from;
+        llama_batch batch = llama_batch_init(chunk_rows, n_embd_, 1);
+        batch.n_tokens = chunk_rows;
+        for (int i = 0; i < chunk_rows; ++i) {
+            const int pos = chunk_from + i;
+            std::memcpy(batch.embd + static_cast<size_t>(i) * n_embd_,
+                        diff_prefix_.data() + static_cast<size_t>(pos) * n_embd_,
+                        static_cast<size_t>(n_embd_) * sizeof(float));
+            batch.pos[i] = pos;                   // physical [0, diff_m_): the frozen prefix block
+            batch.n_seq_id[i] = 1;
+            batch.seq_id[i][0] = 0;
+            batch.logits[i] = (pos == diff_m_ - 1) ? 1 : 0;
+        }
+        const int rc = llama_decode(ctx_, batch);
+        llama_batch_free(batch);
+        if (rc != 0) throw std::runtime_error("decode_prefix_embd: llama_decode failed");
+        ++last_decode_call_count_;
     }
-    const int rc = llama_decode(ctx_, batch);
-    llama_batch_free(batch);
-    if (rc != 0) throw std::runtime_error("decode_prefix_embd: llama_decode failed");
 }
 
 void GgmlAdapter::set_diffusion_prefix(const std::vector<float>& embd, int m) {
@@ -1205,41 +1421,49 @@ std::vector<ForwardResult> GgmlAdapter::ar_forward_batch_at(
             throw std::invalid_argument("ar_forward_batch: position outside context window");
     }
 
-    // Native reference matching does not arm activation writes. Keep the
-    // callback in ordinary batch-row mode for any future observer caller.
-    write_from_ = 0;
-    llama_batch batch = llama_batch_init(n_active, 0, 1);
-    batch.n_tokens = n_active;
-    int slot = 0;
-    std::vector<int> batch_to_seq(n_active);
-    for (int i = 0; i < n; ++i) {
-        if (!active[i]) continue;
-        batch.token[slot] = static_cast<llama_token>(tokens_per_seq[i]);
-        batch.pos[slot] = positions[i];
-        batch.n_seq_id[slot] = 1;
-        batch.seq_id[slot][0] = static_cast<llama_seq_id>(i);
-        batch.logits[slot] = 1;
-        batch_to_seq[slot] = i;
-        ++slot;
-    }
     decoded_tokens_ += n_active;
-    const int rc = llama_decode(ctx_, batch);
-    llama_batch_free(batch);
-    if (rc != 0) throw std::runtime_error("ar_forward_batch: llama_decode failed (rc=" +
-                                          std::to_string(rc) + ")");
+    last_decode_call_count_ = 0;
 
     const int vocab = cfg_.vocab_size;
     std::vector<ForwardResult> results(n);
-    for (int s = 0; s < n_active; ++s) {
-        const float* logits = llama_get_logits_ith(ctx_, s);
-        if (!logits) throw std::runtime_error("ar_forward_batch: null logits for slot " +
-                                              std::to_string(s));
-        int seq_i = batch_to_seq[s];
-        ForwardResult& out = results[seq_i];
-        out.n_requested = 1;
-        out.vocab = vocab;
-        out.kv = std::make_shared<GgmlKV>(positions[seq_i] + 1);
-        out.logits.assign(logits, logits + vocab);
+    std::vector<int> active_indices;
+    active_indices.reserve(n_active);
+    for (int i = 0; i < n; ++i) if (active[i]) active_indices.push_back(i);
+    for (int begin = 0; begin < n_active; begin += n_batch_) {
+        const int chunk_rows = std::min(n_batch_, n_active - begin);
+        write_from_ = 0;
+        llama_batch batch = llama_batch_init(chunk_rows, 0, 1);
+        batch.n_tokens = chunk_rows;
+        for (int slot = 0; slot < chunk_rows; ++slot) {
+            const int seq_i = active_indices[static_cast<size_t>(begin + slot)];
+            batch.token[slot] = static_cast<llama_token>(tokens_per_seq[seq_i]);
+            batch.pos[slot] = positions[seq_i];
+            batch.n_seq_id[slot] = 1;
+            batch.seq_id[slot][0] = static_cast<llama_seq_id>(seq_i);
+            batch.logits[slot] = 1;
+        }
+        const int rc = llama_decode(ctx_, batch);
+        if (rc != 0) {
+            llama_batch_free(batch);
+            throw std::runtime_error("ar_forward_batch: llama_decode failed (rc=" +
+                                     std::to_string(rc) + ")");
+        }
+        ++last_decode_call_count_;
+        for (int slot = 0; slot < chunk_rows; ++slot) {
+            const float* logits = llama_get_logits_ith(ctx_, slot);
+            if (!logits) {
+                llama_batch_free(batch);
+                throw std::runtime_error("ar_forward_batch: null logits for slot " +
+                                         std::to_string(slot));
+            }
+            const int seq_i = active_indices[static_cast<size_t>(begin + slot)];
+            ForwardResult& out = results[seq_i];
+            out.n_requested = 1;
+            out.vocab = vocab;
+            out.kv = std::make_shared<GgmlKV>(positions[seq_i] + 1);
+            out.logits.assign(logits, logits + vocab);
+        }
+        llama_batch_free(batch);
     }
     return results;
 }
@@ -1267,40 +1491,69 @@ std::vector<ForwardResult> GgmlAdapter::ar_forward_prefill_batch(
     boundary_row_.clear();
     write_from_ = 0;
     decoded_tokens_ += total;
+    last_decode_call_count_ = 0;
 
-    llama_batch batch = llama_batch_init(total, 0, 1);
-    batch.n_tokens = total;
+    std::vector<int> flat_tokens;
+    std::vector<int> flat_arms;
+    std::vector<int> flat_positions;
+    flat_tokens.reserve(total);
+    flat_arms.reserve(total);
+    flat_positions.reserve(total);
     int row = 0;
     for (int arm = 0; arm < n; ++arm) {
         const auto& prompt = prompts[static_cast<size_t>(arm)];
         for (int pos = 0; pos < static_cast<int>(prompt.size()); ++pos) {
-            batch.token[row] = static_cast<llama_token>(prompt[static_cast<size_t>(pos)]);
-            batch.pos[row] = pos;
-            batch.n_seq_id[row] = 1;
-            batch.seq_id[row][0] = static_cast<llama_seq_id>(arm);
-            batch.logits[row] = (pos + 1 == static_cast<int>(prompt.size()));
-            if (batch.logits[row]) last_rows[static_cast<size_t>(arm)] = row;
+            flat_tokens.push_back(prompt[static_cast<size_t>(pos)]);
+            flat_arms.push_back(arm);
+            flat_positions.push_back(pos);
+            if (pos + 1 == static_cast<int>(prompt.size())) last_rows[static_cast<size_t>(arm)] = row;
             ++row;
         }
     }
-    const int rc = llama_decode(ctx_, batch);
-    llama_batch_free(batch);
-    if (rc != 0)
-        throw std::runtime_error("ar_forward_prefill_batch: llama_decode failed (rc=" +
-                                 std::to_string(rc) + ")");
 
     const int vocab = cfg_.vocab_size;
     std::vector<ForwardResult> results(static_cast<size_t>(n));
+    std::vector<std::vector<float>> final_logits(static_cast<size_t>(n));
+    for (int chunk_from = 0; chunk_from < total; chunk_from += n_batch_) {
+        const int chunk_rows = std::min(n_batch_, total - chunk_from);
+        write_from_ = chunk_from;
+        llama_batch batch = llama_batch_init(chunk_rows, 0, 1);
+        batch.n_tokens = chunk_rows;
+        for (int i = 0; i < chunk_rows; ++i) {
+            const int global = chunk_from + i;
+            batch.token[i] = static_cast<llama_token>(flat_tokens[static_cast<size_t>(global)]);
+            batch.pos[i] = flat_positions[static_cast<size_t>(global)];
+            batch.n_seq_id[i] = 1;
+            batch.seq_id[i][0] = static_cast<llama_seq_id>(flat_arms[static_cast<size_t>(global)]);
+            batch.logits[i] = (global == last_rows[static_cast<size_t>(flat_arms[static_cast<size_t>(global)])]);
+        }
+        const int rc = llama_decode(ctx_, batch);
+        if (rc != 0) {
+            llama_batch_free(batch);
+            throw std::runtime_error("ar_forward_prefill_batch: llama_decode failed (rc=" +
+                                     std::to_string(rc) + ")");
+        }
+        ++last_decode_call_count_;
+        for (int i = 0; i < chunk_rows; ++i) {
+            const int global = chunk_from + i;
+            const int arm = flat_arms[static_cast<size_t>(global)];
+            if (global != last_rows[static_cast<size_t>(arm)]) continue;
+            const float* logits = llama_get_logits_ith(ctx_, i);
+            if (!logits) {
+                llama_batch_free(batch);
+                throw std::runtime_error("ar_forward_prefill_batch: null logits for sequence " +
+                                         std::to_string(arm));
+            }
+            final_logits[static_cast<size_t>(arm)].assign(logits, logits + vocab);
+        }
+        llama_batch_free(batch);
+    }
     for (int arm = 0; arm < n; ++arm) {
-        const float* logits = llama_get_logits_ith(ctx_, last_rows[static_cast<size_t>(arm)]);
-        if (!logits)
-            throw std::runtime_error("ar_forward_prefill_batch: null logits for sequence " +
-                                     std::to_string(arm));
         ForwardResult& out = results[static_cast<size_t>(arm)];
         out.n_requested = 1;
         out.vocab = vocab;
         out.kv = std::make_shared<GgmlKV>(static_cast<int>(prompts[static_cast<size_t>(arm)].size()));
-        out.logits.assign(logits, logits + vocab);
+        out.logits = std::move(final_logits[static_cast<size_t>(arm)]);
     }
     return results;
 }

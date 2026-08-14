@@ -26,6 +26,18 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+MIN_PYTHON = (3, 11)
+
+
+def _require_supported_python() -> None:
+    """Fail before importing the product package on an unsupported interpreter."""
+    if sys.version_info[:2] < MIN_PYTHON:
+        raise RuntimeError(
+            "native_reference_match.py requires Python 3.11+; "
+            "use .venv/bin/python or python3.12 instead of the system python3"
+        )
+
+
 @dataclass(frozen=True)
 class Unit:
     index: int
@@ -192,6 +204,7 @@ def _evidence_projection(row: dict) -> dict:
 
 
 def run(args: argparse.Namespace) -> dict:
+    _require_supported_python()
     fixture = build_fixture()
     sets = certification_sets()
     requested = sets[:args.max_arms]
@@ -213,7 +226,8 @@ def run(args: argparse.Namespace) -> dict:
             "status": "fixture_only",
         }
 
-    from clozn.server.substrates import EngineSubstrate
+    from clozn.server import app as cs
+    EngineSubstrate = cs.EngineSubstrate
     from clozn.runs.multi_arm import probe_reference_match_many
     try:
         from clozn_engine import EngineClient
@@ -265,14 +279,17 @@ def run(args: argparse.Namespace) -> dict:
         )
         native_metrics = dict(sub.last_native_reference_match_metrics or {})
         if not parity_equal:
+            mismatch = next((i for i in range(len(parity_requested))
+                             if _evidence_projection(scalar[i]) !=
+                             _evidence_projection(native[i])), None)
             return {
                 "status": "parity_failed",
                 "proof_grade": False,
                 "parity_gate": False,
                 "parity_arms": len(parity_requested),
-                "first_mismatch": next((i for i in range(len(parity_requested))
-                                         if _evidence_projection(scalar[i]) !=
-                                         _evidence_projection(native[i])), None),
+                "first_mismatch": mismatch,
+                "scalar_evidence": scalar[mismatch] if mismatch is not None else None,
+                "native_evidence": native[mismatch] if mismatch is not None else None,
                 "execution_regime": "native_batched_non_proof_grade",
             }
 

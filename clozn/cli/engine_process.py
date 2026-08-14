@@ -284,6 +284,10 @@ def _launch_args(exe: str, model: str, port: int, flags: dict, gpu: bool) -> lis
         args += ["--gpu-layers", "99"]
     if flags.get("ctx") is not None:
         args += ["--ctx", str(flags["ctx"])]
+    if flags.get("batch") is not None:
+        args += ["--batch", str(flags["batch"])]
+    if flags.get("ubatch") is not None:
+        args += ["--ubatch", str(flags["ubatch"])]
     if "mask" in flags:
         args += ["--diffusion", "--mask-token", str(flags["mask"])]
     if "eos" in flags:
@@ -515,8 +519,9 @@ def _unregister(port: int):
         _reg_write(d)
 
 
-def _find_warm(model: str, n_ctx: int | None = None):
-    """A live product gateway for this exact model/context -> (public_port, gpu, mode), else None."""
+def _find_warm(model: str, n_ctx: int | None = None,
+               n_batch: int | None = None, n_ubatch: int | None = None):
+    """A live product gateway for this exact model/runtime shape -> (port, gpu, mode), else None."""
     from clozn.cli.runtime_process import gateway_health
 
     d = _reg_read(); hit = None; dirty = False
@@ -524,8 +529,12 @@ def _find_warm(model: str, n_ctx: int | None = None):
         h = gateway_health(int(port), timeout=1.0)
         if not h:
             d.pop(port, None); dirty = True; continue           # prune the dead
-        worker_ctx = ((h.get("worker") or {}).get("n_ctx") if isinstance(h, dict) else None)
-        context_matches = n_ctx is None or worker_ctx == n_ctx
+        worker = h.get("worker") or {} if isinstance(h, dict) else {}
+        context_matches = (
+            (n_ctx is None or worker.get("n_ctx") == n_ctx)
+            and (n_batch is None or worker.get("n_batch") == n_batch)
+            and (n_ubatch is None or worker.get("n_ubatch") == n_ubatch)
+        )
         if ent.get("model") == model and context_matches and hit is None:
             hit = (int(port), bool(ent.get("gpu")), ent.get("mode", h.get("mode", "?")))
     if dirty:

@@ -116,7 +116,8 @@ int main(int argc, char** argv) {
     }
     if (argc < 2) {
         std::fprintf(stderr, "usage: %s <model.gguf> [--port N] [--host H] [--gpu-layers N] "
-                             "[--ar | --diffusion] [--mask-token ID] [--eos ID] [--ctx N] [--workers N] "
+                             "[--ar | --diffusion] [--mask-token ID] [--eos ID] [--ctx N] "
+                             "[--batch N] [--ubatch N] [--workers N] "
                              "[--lora PATH] [--lora-scale F] "
                              "[--sae <dir>] [--sae-k N] [--jlens <dir>] [--model-sha256 HEX] "
                              "[--tokenizer-sha256 HEX] "
@@ -124,7 +125,8 @@ int main(int argc, char** argv) {
         return 1;
     }
     const std::string model_path = argv[1];
-    int port = 8080, gpu_layers = 0, mask_token = 151665, eos = -1, n_ctx = 4096, workers = 1;
+    int port = 8080, gpu_layers = 0, mask_token = 151665, eos = -1, n_ctx = 4096;
+    int n_batch = 0, n_ubatch = 0, workers = 1;
     std::string host = "127.0.0.1";
     std::string sae_dir;  // --sae: exported SAE weight dir (tools/export_sae_weights.py); off by default
     int sae_k = 16;
@@ -152,6 +154,8 @@ int main(int argc, char** argv) {
         else if (a == "--mask-token") { mask_token = std::atoi(next()); force_diffusion = true; }
         else if (a == "--eos") eos = std::atoi(next());
         else if (a == "--ctx") n_ctx = std::atoi(next());
+        else if (a == "--batch") n_batch = std::atoi(next());
+        else if (a == "--ubatch") n_ubatch = std::atoi(next());
         else if (a == "--workers") workers = std::atoi(next());
         else if (a == "--sae") sae_dir = next();
         else if (a == "--sae-k") sae_k = std::atoi(next());
@@ -185,7 +189,7 @@ int main(int argc, char** argv) {
         "model_load", "model_load", duration_ns(model_load_started), -1,
         "context_only", "process_startup"});
     const PerfClock::time_point context_create_started = PerfClock::now();
-    ContextPool pool(model, workers, n_ctx, flash_attn);
+    ContextPool pool(model, workers, n_ctx, flash_attn, n_batch, n_ubatch);
     startup_timing_phases.push_back(PerformancePhase{
         "context_create", "clozn_worker", duration_ns(context_create_started), -1,
         "context_only", "process_startup", {"kv_allocate"}});
@@ -392,7 +396,9 @@ int main(int argc, char** argv) {
         j["n_embd"] = model_n_embd;
         j["n_layer"] = model_n_layer;
         j["vocab_size"] = model->config().vocab_size;
-        j["n_ctx"] = n_ctx;
+        j["n_ctx"] = pool.n_ctx();
+        j["n_batch"] = pool.n_batch();
+        j["n_ubatch"] = pool.n_ubatch();
         j["worker_generation_id"] = worker_generation_id;
         return j;
     };
@@ -458,6 +464,7 @@ int main(int argc, char** argv) {
         // capability flags, so older supervisors can ignore them while newer exact-replay paths fail
         // closed when an older worker does not provide them.
         json build = engine_build_info();
+        const auto memory = pool.memory_breakdown();
         json h{{"status", "ok"},
                {"engine_version", build.value("engine_version", std::string())},
                {"build_id", build.value("build_id", std::string())},
@@ -474,7 +481,10 @@ int main(int argc, char** argv) {
                {"n_embd", model_n_embd},
                {"n_layer", model_n_layer},
                {"vocab_size", model->config().vocab_size},
-               {"n_ctx", n_ctx},                              // configured context window (repro metadata)
+               {"n_ctx", pool.n_ctx()},                        // history capacity
+               {"n_batch", pool.n_batch()},                    // maximum logical decode rows
+               {"n_ubatch", pool.n_ubatch()},                  // accelerator execution microbatch
+               {"memory", memory},                              // measured llama.cpp allocation breakdown
                {"gpu_layers", gpu_layers},                    // layers offloaded to the GPU (0 => CPU-resident)
                {"device", gpu_layers > 0 ? "cuda" : "cpu"}};  // CUDA build; device follows the offload setting
         // The ATTACHED adapter, present only when one actually is -- omitted, never null-padded, so a

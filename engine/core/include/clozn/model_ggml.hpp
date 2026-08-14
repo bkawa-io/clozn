@@ -268,12 +268,14 @@ public:
     // Standalone: load a fresh model + create a context over it (the original API).
     GgmlAdapter(const std::string& model_path, int mask_token_id,
                 int eos_token_id = -1, int n_ctx = 4096,
-                int n_gpu_layers = 0, bool flash_attn = true);
+                int n_gpu_layers = 0, bool flash_attn = true,
+                int n_batch = 0, int n_ubatch = 0);
     // Shared model: create a private context over an already-loaded GgmlModel (for a server pool
     // of concurrent contexts that share one copy of the weights). flash_attn=false materializes
     // the attention weights so knockout works (costs some decode speed).
     explicit GgmlAdapter(std::shared_ptr<GgmlModel> model, int n_ctx = 4096,
-                         bool flash_attn = true);
+                         bool flash_attn = true, int n_batch = 0,
+                         int n_ubatch = 0);
     ~GgmlAdapter() override;
 
     GgmlAdapter(const GgmlAdapter&) = delete;
@@ -298,6 +300,7 @@ public:
     // alongside it, never instead of it.
     long long decoded_tokens() const { return decoded_tokens_; }
     void reset_decoded_tokens() { decoded_tokens_ = 0; }
+    int last_decode_call_count() const { return last_decode_call_count_; }
 
     // White-box activation tap (Tier 2): when on, forward() fills ForwardResult.activations with the
     // per-position hidden state (llama_get_embeddings_ith) for the active block. Default off => empty
@@ -365,6 +368,9 @@ public:
     int n_layer() const { return n_layer_; }
     int n_embd() const { return n_embd_; }  // hidden size (e.g. the --sae dim check at startup)
     int n_ctx() const { return n_ctx_; }    // hard context window: absolute positions [0, n_ctx) fit the KV
+    int n_batch() const { return n_batch_; }  // maximum logical rows in one llama_decode call
+    int n_ubatch() const { return n_ubatch_; }  // accelerator execution microbatch
+    std::map<std::string, std::size_t> memory_breakdown() const;
 
     // Diffusion soft-PREFIX injection (train-on-HF / serve-on-engine hybrid, diffusion side): lay a
     // continuous prefix (m x n_embd, row-major) as a FROZEN block at positions [0,m) that the whole board
@@ -399,8 +405,8 @@ public:
     // context's output_ids, so scoring a scattered/non-contiguous set of positions is still correct
     // (though /score's own caller always requests a contiguous run). No head shift is applied (the
     // in-place causal head, same convention as ar_forward: row i's logits already predict token i+1).
-    // n_batch == n_ctx by construction (init_context), so any sequence that already passed the
-    // n_p+n_a <= n_ctx guard decodes in this ONE llama_decode call -- no extra chunking needed here.
+    // Long sequences are split into logical batches of at most n_batch rows. n_batch defaults to
+    // n_ctx for compatibility, but it is independent from n_ctx and n_ubatch when configured.
     // Always scores from a cold KV (never reuses another request's cache): teacher-forcing is a
     // one-shot, stateless read, and the pooled context is shared across requests.
     ForwardResult ar_forward_score(const std::vector<int>& tokens, const std::vector<int>& logits_for);
@@ -452,7 +458,8 @@ public:
     // for seq 0 first (via ar_forward). After this, each seq_id has an independent copy of the
     // KV entries and can diverge freely.
     void branch_kv(int n_branches);
-    // Decode one token per sequence in a single llama_decode call. `tokens_per_seq[i]` is the
+    // Decode one token per sequence, chunking active sequences when n_batch is smaller than the
+    // active set. `tokens_per_seq[i]` is the
     // token for seq i, decoded at position `n_past` with seq_id = i. Returns per-sequence logits
     // as a vector of ForwardResult (one per active sequence). The logits[i] field has the
     // next-token distribution for sequence i. `active` marks which sequences are still live
@@ -460,10 +467,10 @@ public:
     std::vector<ForwardResult> ar_forward_batch(
         const std::vector<int>& tokens_per_seq, int n_past,
         const std::vector<bool>& active);
-    // Prefill independent prompt token sequences in one llama_decode call. Each
-    // sequence has its own llama sequence id and only its final prompt row emits
-    // logits. The caller must keep the total physical rows within n_ctx and the
-    // number of resident sequences within the worker's sequence capacity.
+    // Prefill independent prompt token sequences, chunking flattened prompt rows at n_batch. Each
+    // sequence has its own llama sequence id and only its final prompt row emits logits. The caller
+    // must keep the total physical rows within n_ctx and the number of resident sequences within the
+    // worker's sequence capacity.
     std::vector<ForwardResult> ar_forward_prefill_batch(
         const std::vector<std::vector<int>>& prompts);
     // Decode one token per sequence at independently advancing positions. This
@@ -504,7 +511,8 @@ private:
     // Decode board[from, to) at absolute positions [from, to), reusing whatever KV currently
     // covers [0, from). decode_only just runs llama_decode; decode_segment additionally returns
     // the host logits: row j == position from+j, valid until the next decode.
-    void decode_only(const std::vector<int>& board, int from, int to);
+    void decode_only(const std::vector<int>& board, int from, int to,
+                     std::vector<float>* logits_out = nullptr);
     const float* decode_segment(const std::vector<int>& board, int from, int to);
     void decode_prefix_embd();   // lay the diffusion soft prefix as embd at [0, diff_m_) (frozen context)
 
@@ -515,7 +523,7 @@ private:
     // active_start = min{q : mask(q, n-1)}; 0 when the mask is fully bidirectional.
     static int active_start_from_mask(const Mask& mask, int n);
 
-    void init_context(int n_ctx);  // create + configure the llama context over model_
+    void init_context(int n_ctx, int n_batch, int n_ubatch);  // create + configure the llama context over model_
 
     std::shared_ptr<GgmlModel> model_owner_;  // keeps the (possibly shared) model alive
     llama_model* model_ = nullptr;            // == model_owner_->handle()
@@ -523,6 +531,8 @@ private:
     const llama_vocab* vocab_ = nullptr;
     ModelConfig cfg_{};
     int n_ctx_ = 0;
+    int n_batch_ = 0;
+    int n_ubatch_ = 0;
     bool emit_activations_ = false;  // white-box tap: fill ForwardResult.activations (forces host path)
     bool causal_ = false;            // attention mode: false = diffusion (bidirectional), true = AR (causal)
     int n_embd_ = 0;                 // hidden size, cached from the model for the activation tap
@@ -596,8 +606,10 @@ private:
     // KV reuse state. [0, frozen_end_) is laid into the llama cache and frozen-exact.
     int frozen_end_ = 0;
     std::vector<float> boundary_row_;  // logits for position frozen_end_-1 (empty if none)
+    std::vector<float> segment_logits_;  // host logits gathered across a chunked decode_segment call
     long long decoded_tokens_ = 0;     // token-positions sent through llama_decode
     long long logits_d2h_floats_ = 0;  // logits floats copied into the host logits buffer
+    int last_decode_call_count_ = 0;   // llama_decode calls made by the most recent public forward
 };
 
 }  // namespace clozn

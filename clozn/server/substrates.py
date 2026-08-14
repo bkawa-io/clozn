@@ -857,7 +857,11 @@ class EngineSubstrate(Substrate):
             traced_kwargs["usage_out"] = usage
         reply, steps, finish, divinfo = ctx._engine_complete_traced(
             self.engine, prompt, max_new, kw, **traced_kwargs)
-        generated_ids = [step.get("token_id") for step in steps if isinstance(step, dict)]
+        # ``accumulate_ar_events`` uses the normalized trace key ``id``; accept the older
+        # ``token_id`` spelling as well so the scalar exact-probe path does not discard a
+        # perfectly valid real-worker token trace.
+        generated_ids = [step.get("token_id", step.get("id"))
+                         for step in steps if isinstance(step, dict)]
         if not generated_ids or any(isinstance(value, bool) or not isinstance(value, int) for value in generated_ids):
             return {"status": "unavailable", "reason": "probe_token_trace_unavailable"}
         diverged, diverged_at = divinfo if isinstance(divinfo, tuple) else (None, None)
