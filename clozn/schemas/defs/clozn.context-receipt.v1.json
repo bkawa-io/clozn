@@ -43,9 +43,39 @@
         "delivered_tokens": {"type": "integer", "minimum": 0},
         "included": {"type": "boolean", "description": "Did this segment survive from delivered into assembled."},
         "content_hash": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+        "sources": {
+          "type": "array",
+          "description": "Exact canonical source spans within this message. Metadata only: offsets are against the corresponding run message text, never a separately rendered prompt.",
+          "items": {"$ref": "#/$defs/source_span"}
+        },
         "reason": {"$ref": "#/$defs/segment_reason"},
         "redaction_state": {"type": "string", "enum": ["full", "redacted", "hash_only"]}
       }
+    },
+    "source_span": {
+      "type": "object",
+      "required": ["source_id", "segment_id", "message_index", "unicode_range", "byte_range", "content_sha256", "provenance_kind"],
+      "properties": {
+        "source_id": {"type": "string", "pattern": "^src_[0-9a-f]{24}$"},
+        "segment_id": {"type": "string", "pattern": "^seg_[0-9a-f]{16}(_[0-9]+)?$"},
+        "message_index": {"type": "integer", "minimum": 0},
+        "unicode_range": {
+          "type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 2, "maxItems": 2,
+          "description": "Exact half-open Unicode-code-point range in the parent message. Ordering/bounds are proven at receipt capture and resolver time."
+        },
+        "byte_range": {
+          "type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 2, "maxItems": 2,
+          "description": "Exact half-open UTF-8 byte range derived from unicode_range."
+        },
+        "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "client_source_id": {"type": "string", "minLength": 1, "maxLength": 256},
+        "source_label": {"type": "string", "minLength": 1, "maxLength": 256},
+        "provenance_kind": {
+          "enum": ["message", "retrieved_document", "tool_result", "system_instruction", "conversation_turn", "client_supplied"]
+        },
+        "parent_source_id": {"type": "string", "pattern": "^src_[0-9a-f]{24}$"}
+      },
+      "additionalProperties": false
     },
     "transformation": {
       "type": "object",

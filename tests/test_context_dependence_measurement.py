@@ -7,14 +7,18 @@ import pytest
 
 from clozn import schemas
 from clozn.receipts.context_dependence import (
+    ContextDependenceError,
     ContextDependenceStudy,
     INTERVENTION_OPERATOR,
+    NEUTRALIZATION_OPERATOR,
+    NEUTRALIZATION_PROVENANCE,
     MeasurementUnavailableError,
     PROVENANCE,
     SCHEMA,
     UnknownSourceIdError,
     measure_removal_effect,
 )
+from clozn.receipts.forced import MATCHED_LENGTH_NEUTRAL_FILLER_RECIPE, matched_length_neutral_filler
 from clozn.runs.context_receipt import build_context_receipt
 
 
@@ -110,9 +114,17 @@ def test_single_source_deletion_is_a_direct_measured_set_experiment():
     assert experiment["intervention_operator"] == INTERVENTION_OPERATOR == "delete_source"
     assert experiment["removed_source_ids"] == [source_a]
     assert experiment["provenance"] == PROVENANCE == "measured"
-    assert experiment["delta_nats"] == sum(experiment["per_target_token_delta_nats"])
+    # v2 persists the evidence it actually scored: one delta for every token
+    # in the recorded continuation, not one caller-selected target range.
+    assert experiment["delta_nats"] == sum(experiment["per_token_delta_nats"])
+    assert experiment["token_indices"] == [0, 1, 2]
     assert experiment["delta_nats"] > 0
-    assert document["baseline"]["teacher_forced_logp"] == experiment["baseline_target_logp"]
+    assert document["baseline"]["teacher_forced_logp"] == experiment["baseline_logp"]
+    assert document["baseline"]["tokens"] == [
+        {"index": 0, "token_id": 11, "piece": "One", "unicode_range": [0, 3], "logprob": -0.10},
+        {"index": 1, "token_id": 12, "piece": " two", "unicode_range": [3, 7], "logprob": -0.20},
+        {"index": 2, "token_id": 13, "piece": " three", "unicode_range": [7, 13], "logprob": -0.30},
+    ]
     assert document["budget"] == {"passes_requested": 2, "passes_consumed": 2}
     # baseline then delete-source arm, never chat/generation.
     assert [call["contents"] for call in sub.calls] == [
@@ -143,6 +155,46 @@ def test_two_source_and_arbitrary_n_source_deletion_preserve_remaining_message_o
     ]
     assert all_three["removed_source_ids"] == sorted([source_a, source_b, source_c])
     assert len(all_three["exact_removed_ranges"]) == 3
+    assert document["budget"] == {"passes_requested": 3, "passes_consumed": 3}
+
+
+def test_matched_length_neutralization_is_a_separate_cached_robustness_control():
+    run = _run()
+    source_a, _source_b, _source_c = _source_ids(run)
+    sub = FakeScoreSub()
+    study = ContextDependenceStudy(run, sub, clock=StepClock())
+
+    deletion = study.measure_removal_effect([source_a])
+    control = study.measure_neutralization_control([source_a])
+    repeat = study.measure_neutralization_control([source_a])
+    document = study.document()
+
+    schemas.validate(document)
+    assert repeat == control and repeat is not control
+    assert len(document["experiments"]) == 1
+    assert document["experiments"][0] == deletion
+    assert len(document["robustness_controls"]) == 1
+    assert control["intervention_operator"] == NEUTRALIZATION_OPERATOR == "neutralize_source"
+    assert control["provenance"] == NEUTRALIZATION_PROVENANCE
+    assert control["neutralized_source_ids"] == [source_a]
+    assert control["neutralization"] == {
+        "operator": "neutralize_source",
+        "strategy": "matched_length_neutral_filler",
+        "recipe": MATCHED_LENGTH_NEUTRAL_FILLER_RECIPE,
+        "length_contract": "unicode_code_points_exact",
+        "utf8_byte_length_contract": "not_guaranteed",
+        "message_structure": "preserved",
+    }
+    exact = control["exact_neutralized_ranges"][0]
+    assert exact["original_unicode_code_points"] == exact["replacement_unicode_code_points"] == len("source A")
+    assert exact["replacement_content_sha256"]
+    # Baseline, canonical delete arm, and separately scored filler arm.  The
+    # duplicate control request reuses its control_id and consumes no pass.
+    assert [call["contents"] for call in sub.calls] == [
+        ["source A", "source B", "source C"],
+        ["source B", "source C"],
+        [matched_length_neutral_filler(len("source A")), "source B", "source C"],
+    ]
     assert document["budget"] == {"passes_requested": 3, "passes_consumed": 3}
 
 
@@ -199,26 +251,36 @@ def test_exact_token_measurement_fails_closed_when_scorer_text_is_not_recorded_r
     assert len(sub.calls) == 1
 
 
-def test_explicit_target_records_unicode_token_and_conditioned_prefix_ranges():
+def test_intervened_vector_refuses_a_different_continuation_tokenization():
+    class DriftingArmSub(FakeScoreSub):
+        def score_tokens(self, messages, continuation_ids, **kwargs):
+            tokens = super().score_tokens(messages, continuation_ids, **kwargs)
+            if len(self.calls) == 2:
+                tokens[1] = {**tokens[1], "piece": " TWO", "id": 999}
+            return tokens
+
+    run = _run(token_ids=False)
+    source_a, _source_b, _source_c = _source_ids(run)
+
+    with pytest.raises(MeasurementUnavailableError, match="token pieces"):
+        measure_removal_effect(
+            run, DriftingArmSub(), removed_source_ids=[source_a], clock=StepClock(),
+        )
+
+
+def test_target_is_rejected_so_it_cannot_bind_a_run_level_measurement_identity():
     run = _run()
     source_a, _source_b, _source_c = _source_ids(run)
 
-    document = measure_removal_effect(
-        run, FakeScoreSub(),
-        target={"recorded_token_range": [1, 3], "recorded_prefix_range": [0, 1]},
-        removed_source_ids=[source_a],
-        clock=StepClock(),
-    )
-    experiment = _experiment(document)
-
-    assert document["target"] == {
-        "unicode_range": [3, 13],
-        "recorded_token_range": [1, 3],
-        "recorded_prefix_range": [0, 1],
-        "unicode_offset_basis": "teacher_forced_scored_continuation",
-    }
-    assert experiment["target_token_indices"] == [1, 2]
-    assert experiment["delta_nats"] == sum(experiment["per_target_token_delta_nats"])
+    sub = FakeScoreSub()
+    with pytest.raises(ContextDependenceError, match="target is not accepted"):
+        measure_removal_effect(
+            run, sub,
+            target={"recorded_token_range": [1, 3], "recorded_prefix_range": [0, 1]},
+            removed_source_ids=[source_a],
+            clock=StepClock(),
+        )
+    assert sub.calls == []
 
 
 def test_recorded_text_fallback_is_explicitly_retokenized_and_approximate():
@@ -227,7 +289,10 @@ def test_recorded_text_fallback_is_explicitly_retokenized_and_approximate():
     document = measure_removal_effect(run, FakeScoreSub(), removed_source_ids=[source_a], clock=StepClock())
 
     assert document["continuation"] == {
-        "kind": "recorded_response_text_retokenized_approximate",
+        "fidelity": "recomputed_from_recorded_response_text",
+        "scored_text": "One two three",
+        "unicode_offset_basis": "recorded_response_unicode",
+        "kind": "recorded_response_text_retokenized",
         "token_ids_exact": False,
         "retokenized": True,
         "recorded_text": "One two three",

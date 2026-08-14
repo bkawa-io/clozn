@@ -37,7 +37,7 @@ Clozn state events never leak into a standard OpenAI stream.
 | `n` | one only | `1`/null accepted and stripped; any other value is a 400 |
 | `top_k`, `repeat_penalty` | Clozn extensions | forwarded to the engine sampler |
 | `clozn_trust`, `clozn_receipt`, `clozn_receipt_mode`, `clozn_lens` | Clozn extensions | opt-in confidence spans, receipt delivery (`off`, `exceptions`, or `always`), and live J-lens readout |
-| `clozn_sources` | Clozn extension | optional list of `{message_index, source_id, label?}` records; IDs must be unique and are carried unchanged into Context Receipt/source evidence |
+| `clozn_sources` | Clozn extension | optional source metadata; legacy `{message_index, source_id, label?}` records still address a whole message, while exact records may add `unicode_range`, verified `byte_range`, `provenance_kind`, and `parent_source_id` for multiple/nested sources in one message |
 | `tools` | qualified subset | up to 32 strict function definitions; Clozn returns at most one call and never executes it |
 | `tool_choice` | qualified subset | `"auto"` activates the one-tool contract; `"none"` is an explicit text bypass |
 | `parallel_tool_calls` | false for active tools | omitted/`false` accepted; `true` is rejected when the tool contract is active |
@@ -74,6 +74,11 @@ choices, and so on—is a 400 with that field in `error.param`.
 Unknown top-level fields are also rejected.
 
 `clozn_sources` is journal metadata only: it does not alter the standard message list or prompt text.
+Exact `unicode_range` values use half-open Unicode code-point coordinates in the named message;
+Clozn derives the corresponding UTF-8 `byte_range` and rejects a supplied byte range that disagrees.
+`source_id` is the optional client identity; the Context Receipt mints a content-bound canonical `src_`
+identity. Overlapping ranges must be explicitly nested with `parent_source_id`; unrelated overlaps and
+cycles are rejected.
 It is refused on request modes that cannot preserve the identity contract (currently structured-I/O
 qualification and guard-v1 transforms), rather than being silently dropped.
 

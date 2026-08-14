@@ -73,6 +73,11 @@ import json
 from copy import deepcopy
 from typing import Any, Iterable
 
+from clozn.receipts.forced import (
+    MATCHED_LENGTH_NEUTRAL_FILLER_RECIPE,
+    matched_length_neutral_filler,
+)
+
 
 def _reason(code: str, message: str) -> dict:
     return {"code": code, "message": message}
@@ -185,8 +190,136 @@ def _canonical_removed_ids(source_ids: Iterable[str]) -> list[str]:
     return sorted(result)
 
 
+def _strict_range(value: Any, *, upper: int, name: str) -> list[int]:
+    if not (isinstance(value, (list, tuple)) and len(value) == 2
+            and all(isinstance(item, int) and not isinstance(item, bool) for item in value)):
+        raise ContextReceiptSourceResolutionError(f"{name} must be a two-integer range")
+    start, end = int(value[0]), int(value[1])
+    if start < 0 or end <= start or end > upper:
+        raise ContextReceiptSourceResolutionError(f"{name} is empty or outside the current message")
+    return [start, end]
+
+
+def _receipt_source_catalog(segments: list[dict], messages: list[dict], *, label: str) -> list[dict]:
+    """Strictly prove every canonical root/span source against current bytes."""
+    from clozn.runs.context_receipt import _canonical_source_id, _content_sha256
+
+    catalog: list[dict] = []
+    for message_index, (segment, message) in enumerate(zip(segments, messages)):
+        content = message["content"]
+        segment_id = str(segment["segment_id"])
+        root = {
+            "source_id": segment_id, "segment_id": segment_id, "message_index": message_index,
+            "unicode_range": [0, len(content)], "byte_range": [0, len(content.encode("utf-8"))],
+            "content_sha256": _content_sha256(content), "role": message["role"],
+            "source_kind": "whole_message", "provenance_kind": "message",
+        }
+        for key in ("client_source_id", "source_label"):
+            if isinstance(segment.get(key), str) and segment[key]:
+                root[key] = segment[key]
+        catalog.append(root)
+        raw_spans = segment.get("sources")
+        if raw_spans is None:
+            continue
+        if not isinstance(raw_spans, list):
+            raise ContextReceiptSourceResolutionError(f"Context Receipt {label}.sources is malformed")
+        spans: dict[str, dict] = {}
+        for raw in raw_spans:
+            if not isinstance(raw, dict) or not isinstance(raw.get("source_id"), str):
+                raise ContextReceiptSourceResolutionError("Context Receipt span source is malformed")
+            source_id = raw["source_id"]
+            if not source_id.startswith("src_") or source_id in spans:
+                raise ContextReceiptSourceResolutionError("Context Receipt span source IDs are malformed or duplicate")
+            if raw.get("segment_id") != segment_id or raw.get("message_index") != message_index:
+                raise ContextReceiptSourceResolutionError("Context Receipt span source is partially mapped")
+            unicode_range = _strict_range(raw.get("unicode_range"), upper=len(content), name="span unicode_range")
+            byte_range = [len(content[:unicode_range[0]].encode("utf-8")),
+                          len(content[:unicode_range[1]].encode("utf-8"))]
+            if _strict_range(raw.get("byte_range"), upper=len(content.encode("utf-8")), name="span byte_range") != byte_range:
+                raise ContextReceiptSourceResolutionError("Context Receipt span byte range does not match UTF-8")
+            selected = content[unicode_range[0]:unicode_range[1]]
+            content_sha256 = _content_sha256(selected)
+            if raw.get("content_sha256") != content_sha256:
+                raise ContextReceiptSourceResolutionError("Context Receipt span does not match current message bytes")
+            provenance_kind = raw.get("provenance_kind")
+            if not isinstance(provenance_kind, str) or not provenance_kind:
+                raise ContextReceiptSourceResolutionError("Context Receipt span provenance_kind is malformed")
+            item = {
+                "source_id": source_id, "segment_id": segment_id, "message_index": message_index,
+                "unicode_range": unicode_range, "byte_range": byte_range,
+                "content_sha256": content_sha256, "role": message["role"],
+                "source_kind": "source_span", "provenance_kind": provenance_kind,
+            }
+            for key in ("client_source_id", "source_label", "parent_source_id"):
+                if raw.get(key) is not None:
+                    if not isinstance(raw[key], str) or not raw[key]:
+                        raise ContextReceiptSourceResolutionError(f"Context Receipt span {key} is malformed")
+                    item[key] = raw[key]
+            spans[source_id] = item
+
+        def verify(item: dict, active: set[str]) -> None:
+            if item.get("_verified"):
+                return
+            source_id = item["source_id"]
+            if source_id in active:
+                raise ContextReceiptSourceResolutionError("Context Receipt span hierarchy contains a cycle")
+            active.add(source_id)
+            parent_id = item.get("parent_source_id")
+            if parent_id is not None:
+                parent = spans.get(parent_id)
+                if parent is None:
+                    raise ContextReceiptSourceResolutionError("Context Receipt structural parent is unavailable")
+                verify(parent, active)
+                if not (parent["unicode_range"][0] <= item["unicode_range"][0]
+                        and item["unicode_range"][1] <= parent["unicode_range"][1]):
+                    raise ContextReceiptSourceResolutionError("Context Receipt structural child is outside parent")
+            expected_id = _canonical_source_id(
+                segment=segment_id, unicode_range=item["unicode_range"], byte_range=item["byte_range"],
+                content_sha256=item["content_sha256"], provenance_kind=item["provenance_kind"],
+                client_source_id=item.get("client_source_id"), parent_source_id=parent_id,
+            )
+            if source_id != expected_id:
+                raise ContextReceiptSourceResolutionError("Context Receipt source ID does not bind current bytes")
+            item["_verified"] = True
+            active.remove(source_id)
+
+        for item in spans.values():
+            verify(item, set())
+        source_values = list(spans.values())
+        for item in source_values:
+            item.pop("_verified", None)
+        def ancestor(ancestor_id: str, child: dict) -> bool:
+            parent_id = child.get("parent_source_id")
+            while isinstance(parent_id, str):
+                if parent_id == ancestor_id:
+                    return True
+                parent = spans.get(parent_id)
+                parent_id = parent.get("parent_source_id") if parent else None
+            return False
+        for left_index, left in enumerate(source_values):
+            for right in source_values[left_index + 1:]:
+                ls, le = left["unicode_range"]; rs, re = right["unicode_range"]
+                if max(ls, rs) < min(le, re):
+                    if not ((ls <= rs and re <= le and ancestor(left["source_id"], right))
+                            or (rs <= ls and le <= re and ancestor(right["source_id"], left))):
+                        raise ContextReceiptSourceResolutionError(
+                            "Context Receipt spans overlap without structural nesting")
+        catalog.extend(sorted(source_values, key=lambda x: (x["unicode_range"], x["source_id"])))
+    return catalog
+
+
+def _merged_ranges(ranges: list[list[int]]) -> list[list[int]]:
+    out: list[list[int]] = []
+    for start, end in sorted(ranges):
+        if out and start <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], end)
+        else:
+            out.append([start, end])
+    return out
+
+
 def resolve_context_receipt_source_set(run: dict, removed_source_ids: Iterable[str]) -> dict:
-    """Resolve a canonical Context Receipt segment-ID set for whole-message deletion.
+    """Strictly resolve canonical Context Receipt roots and exact span sources.
 
     This is the strict Context Dependence/regeneration seam.  It only accepts a
     current, new-shape receipt whose delivered list completely verifies the raw
@@ -196,9 +329,11 @@ def resolve_context_receipt_source_set(run: dict, removed_source_ids: Iterable[s
     transformed/inserted/omitted assembly is deliberately refused rather than
     translating IDs through text similarity or stale positions.
 
-    The return includes a detached ``messages`` override with selected whole
-    messages absent, exact ranges, and deterministic digest evidence.  No
-    caller may receive a partial deletion.
+    ``seg_`` roots retain their historical whole-message deletion semantics;
+    ``src_`` descriptors delete only their proved exact range, right-to-left.
+    The return includes a detached render-safe ``messages`` override, exact
+    ranges, source catalog, and deterministic digest evidence.  No caller may
+    receive a partially mapped deletion.
     """
     if not isinstance(run, dict) or not isinstance(run.get("id"), str) or not run["id"]:
         raise ContextReceiptSourceResolutionError("a stored run with a non-empty id is required")
@@ -244,36 +379,74 @@ def resolve_context_receipt_source_set(run: dict, removed_source_ids: Iterable[s
                     "the assembled prompt is not a trivial verified delivery correspondence")
         basis_name, basis_messages, basis_segments = "assembled_messages", assembled_messages, assembled
 
+    catalog = _receipt_source_catalog(
+        basis_segments, basis_messages,
+        label=("assembled" if basis_name == "assembled_messages" else "delivered"),
+    )
     requested = _canonical_removed_ids(removed_source_ids)
-    by_id = {str(segment["segment_id"]): index for index, segment in enumerate(basis_segments)}
+    by_id = {item["source_id"]: item for item in catalog}
     unknown = [source_id for source_id in requested if source_id not in by_id]
     if unknown:
         raise ContextReceiptSourceResolutionError(
             "unknown canonical Context Receipt source ID(s): " + ", ".join(unknown))
 
-    removed_indices = {by_id[source_id] for source_id in requested}
     exact_removed_ranges = []
     # Source-set identity/provenance is lexically canonical; ranges retain
     # their prompt-basis order so a reviewer can inspect the actual deletion
     # surgery without mentally re-sorting opaque IDs.  This also matches the
     # direct teacher-forced Context Dependence experiment record.
-    for source_id in sorted(requested, key=lambda value: (by_id[value], value)):
-        index = by_id[source_id]
-        content = basis_messages[index]["content"]
+    for source_id in sorted(requested, key=lambda value: (
+        by_id[value]["message_index"], by_id[value]["unicode_range"], value
+    )):
+        source = by_id[source_id]
         exact_removed_ranges.append({
             "source_id": source_id,
-            "message_index": index,
-            "unicode_range": [0, len(content)],
-            "byte_range": [0, len(content.encode("utf-8"))],
+            "message_index": source["message_index"],
+            "unicode_range": list(source["unicode_range"]),
+            "byte_range": list(source["byte_range"]),
+            "content_sha256": source["content_sha256"],
+            "source_kind": source["source_kind"],
         })
-    remaining = [deepcopy(message) for index, message in enumerate(basis_messages)
-                 if index not in removed_indices]
-    basis_digest = _canonical_json_digest({"basis": basis_name, "messages": basis_messages})
+    selected = [by_id[source_id] for source_id in requested]
+    whole_removed = {
+        item["message_index"] for item in selected if item["source_kind"] == "whole_message"
+    }
+    # Receipt/journal metadata must never ride into either the baseline score
+    # condition or an intervened replay.  Return the same clean basis callers
+    # need for their baseline, so the sole score mutation is exact source text.
+    clean_basis_messages = [deepcopy(message) for message in basis_messages]
+    for message in clean_basis_messages:
+        for key in ("_clozn_sources", "source_id", "source_label"):
+            message.pop(key, None)
+    remaining = [deepcopy(message) for message in clean_basis_messages]
+    ranges_by_message: dict[int, list[list[int]]] = {}
+    for source in selected:
+        if source["source_kind"] == "whole_message" or source["message_index"] in whole_removed:
+            continue
+        ranges_by_message.setdefault(source["message_index"], []).append(list(source["unicode_range"]))
+    # Delete a merged structural source union right-to-left.  Merging makes a
+    # selected parent+child one exact deletion, rather than applying stale
+    # child coordinates after the parent splice.
+    for message_index, ranges in ranges_by_message.items():
+        content = remaining[message_index]["content"]
+        for start, end in reversed(_merged_ranges(ranges)):
+            content = content[:start] + content[end:]
+        remaining[message_index]["content"] = content
+    remaining = [message for index, message in enumerate(remaining) if index not in whole_removed]
+    # These keys are durable journal/receipt evidence, never chat-template
+    # input.  A replay can therefore use the same exact mutation result as a
+    # score arm without accidentally rendering its source annotations.
+    for message in remaining:
+        for key in ("_clozn_sources", "source_id", "source_label"):
+            message.pop(key, None)
+    basis_digest = _canonical_json_digest({"basis": basis_name, "messages": clean_basis_messages})
     intervened_digest = _canonical_json_digest({"basis": basis_name, "messages": remaining})
     return {
         "basis": basis_name,
-        "available_source_ids": [str(segment["segment_id"]) for segment in basis_segments],
+        "available_source_ids": [item["source_id"] for item in catalog],
+        "sources": deepcopy(catalog),
         "canonical_source_ids": requested,
+        "basis_messages": clean_basis_messages,
         "messages": remaining,
         "exact_removed_ranges": exact_removed_ranges,
         "basis_digest": basis_digest,
@@ -289,6 +462,140 @@ def delete_context_receipt_sources(run: dict, removed_source_ids: Iterable[str])
     deletion.
     """
     return resolve_context_receipt_source_set(run, removed_source_ids)
+
+
+NEUTRALIZATION_OPERATOR = "neutralize_source"
+NEUTRALIZATION_STRATEGY = "matched_length_neutral_filler"
+NEUTRALIZATION_RECIPE = MATCHED_LENGTH_NEUTRAL_FILLER_RECIPE
+NEUTRALIZATION_LENGTH_CONTRACT = "unicode_code_points_exact"
+NEUTRALIZATION_UTF8_BYTE_LENGTH_CONTRACT = "not_guaranteed"
+
+
+def _neutral_fill(unicode_length: int) -> str:
+    """The canonical neutral payload for one exact Unicode source range.
+
+    The control preserves every message object, role, message-list position,
+    and Unicode-code-point offset by using the same public matched-length
+    recipe as the existing Influence controls.  It intentionally does *not*
+    claim to preserve UTF-8 byte length: the recipe's ASCII payload can change
+    byte count when the source range contains non-ASCII code points.  The
+    before/after byte counts are persisted for every exact effective range.
+    """
+    replacement = matched_length_neutral_filler(unicode_length)
+    if len(replacement) != unicode_length:
+        raise ContextReceiptSourceResolutionError(
+            "matched-length neutral filler did not preserve Unicode code-point length")
+    return replacement
+
+
+def neutralize_context_receipt_sources(run: dict, source_ids: Iterable[str]) -> dict:
+    """Strict matched-Unicode-length neutralization control for source spans.
+
+    This is deliberately a sibling of ``delete_context_receipt_sources``:
+    deletion remains the canonical Context Dependence intervention, while this
+    function records a separately named robustness control.  It reuses the
+    deletion resolver only for the source catalog/current-byte proof and never
+    uses its deleted messages.  Thus a parent/child source selection is merged
+    into one exact replacement union, while its complete requested-source
+    evidence remains available for audit.
+    """
+    resolved = resolve_context_receipt_source_set(run, source_ids)
+    basis_messages = resolved.get("basis_messages")
+    catalog = resolved.get("sources")
+    requested = resolved.get("canonical_source_ids")
+    if not (isinstance(basis_messages, list) and isinstance(catalog, list)
+            and isinstance(requested, list)):
+        raise ContextReceiptSourceResolutionError(
+            "canonical source resolver returned an incomplete neutralization basis")
+    by_id = {
+        item.get("source_id"): item for item in catalog
+        if isinstance(item, dict) and isinstance(item.get("source_id"), str)
+    }
+    selected: list[dict] = []
+    for source_id in requested:
+        item = by_id.get(source_id)
+        if item is None:
+            raise ContextReceiptSourceResolutionError(
+                "canonical source resolver omitted a requested neutralization source")
+        offsets = item.get("unicode_range")
+        if not isinstance(offsets, list) or len(offsets) != 2 or offsets[0] == offsets[1]:
+            # An empty whole-message root is meaningful for delete (role and
+            # template structure still change), but it has no source text for
+            # a neutralization control.  Refuse, never label a no-op as one.
+            raise ContextReceiptSourceResolutionError(
+                "matched-length neutralization requires non-empty source content")
+        selected.append(item)
+
+    messages = deepcopy(basis_messages)
+    requested_ranges: list[dict] = []
+    ranges_by_message: dict[int, list[list[int]]] = {}
+    for source in sorted(selected, key=lambda item: (
+        item["message_index"], item["unicode_range"], item["source_id"]
+    )):
+        start, end = source["unicode_range"]
+        replacement = _neutral_fill(end - start)
+        requested_ranges.append({
+            "source_id": source["source_id"],
+            "message_index": source["message_index"],
+            "unicode_range": [start, end],
+            "byte_range": list(source["byte_range"]),
+            "content_sha256": source["content_sha256"],
+            "source_kind": source["source_kind"],
+            "replacement_content_sha256": hashlib.sha256(replacement.encode("utf-8")).hexdigest(),
+            "original_unicode_code_points": end - start,
+            "replacement_unicode_code_points": len(replacement),
+            "original_utf8_bytes": source["byte_range"][1] - source["byte_range"][0],
+            "replacement_utf8_bytes": len(replacement.encode("utf-8")),
+        })
+        ranges_by_message.setdefault(source["message_index"], []).append([start, end])
+
+    effective_ranges: list[dict] = []
+    for message_index, ranges in ranges_by_message.items():
+        original = messages[message_index]["content"]
+        for start, end in reversed(_merged_ranges(ranges)):
+            selected_text = original[start:end]
+            replacement = _neutral_fill(end - start)
+            messages[message_index]["content"] = (
+                messages[message_index]["content"][:start]
+                + replacement
+                + messages[message_index]["content"][end:]
+            )
+            effective_ranges.append({
+                "message_index": message_index,
+                "unicode_range": [start, end],
+                "original_content_sha256": hashlib.sha256(selected_text.encode("utf-8")).hexdigest(),
+                "replacement_content_sha256": hashlib.sha256(replacement.encode("utf-8")).hexdigest(),
+                "original_unicode_code_points": end - start,
+                "replacement_unicode_code_points": len(replacement),
+                "original_utf8_bytes": len(selected_text.encode("utf-8")),
+                "replacement_utf8_bytes": len(replacement.encode("utf-8")),
+            })
+        if len(messages[message_index]["content"]) != len(original):
+            raise ContextReceiptSourceResolutionError(
+                "neutralization failed to preserve its Unicode length contract")
+
+    effective_ranges.sort(key=lambda item: (item["message_index"], item["unicode_range"]))
+    intervened_digest = _canonical_json_digest({"basis": resolved["basis"], "messages": messages})
+    return {
+        "basis": resolved["basis"],
+        "available_source_ids": deepcopy(resolved["available_source_ids"]),
+        "sources": deepcopy(catalog),
+        "canonical_source_ids": list(requested),
+        "basis_messages": deepcopy(basis_messages),
+        "messages": messages,
+        "exact_neutralized_ranges": requested_ranges,
+        "effective_neutralized_ranges": effective_ranges,
+        "neutralization": {
+            "operator": NEUTRALIZATION_OPERATOR,
+            "strategy": NEUTRALIZATION_STRATEGY,
+            "recipe": NEUTRALIZATION_RECIPE,
+            "length_contract": NEUTRALIZATION_LENGTH_CONTRACT,
+            "utf8_byte_length_contract": NEUTRALIZATION_UTF8_BYTE_LENGTH_CONTRACT,
+            "message_structure": "preserved",
+        },
+        "basis_digest": resolved["basis_digest"],
+        "intervened_context_digest": intervened_digest,
+    }
 
 
 def _segment_id_index(run: dict) -> dict:
@@ -645,6 +952,12 @@ __all__ = [
     "delete_context_receipt_sources",
     "derive_seed",
     "excise_spans",
+    "NEUTRALIZATION_LENGTH_CONTRACT",
+    "NEUTRALIZATION_OPERATOR",
+    "NEUTRALIZATION_RECIPE",
+    "NEUTRALIZATION_STRATEGY",
+    "NEUTRALIZATION_UTF8_BYTE_LENGTH_CONTRACT",
+    "neutralize_context_receipt_sources",
     "pick_random_control_span",
     "resolve_context_receipt_source_set",
     "resolve_source_spans",

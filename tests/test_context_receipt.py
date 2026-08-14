@@ -119,6 +119,43 @@ def test_explicit_client_source_identity_is_carried_and_never_regenerated():
     assert assembled["client_source_id"] == "doc-stable-7"
 
 
+def test_exact_source_spans_are_canonical_metadata_only_with_utf8_offsets_and_structural_parent():
+    content = "before 😀 [document α] after"
+    receipt = build_context_receipt(
+        messages=[{
+            "role": "user", "content": content,
+            "_clozn_sources": [
+                {"source_id": "document", "unicode_range": [9, 21],
+                 "provenance_kind": "retrieved_document", "label": "Handbook"},
+                {"source_id": "paragraph", "unicode_range": [10, 18],
+                 "parent_source_id": "document", "provenance_kind": "retrieved_document"},
+            ],
+        }],
+        assembled_messages=[{"role": "user", "content": content}],
+        run_id="run_span_capture",
+    )
+
+    delivered = receipt["delivered"][0]
+    parent, child = delivered["sources"]
+    assert parent["source_id"].startswith("src_")
+    assert parent["unicode_range"] == [9, 21]
+    assert parent["byte_range"] == [12, 25]
+    assert len(parent["content_sha256"]) == 64
+    assert child["parent_source_id"] == parent["source_id"]
+    assert receipt["assembled"][0]["sources"] == delivered["sources"]
+    assert "content" not in parent
+
+
+def test_legacy_message_source_identity_stays_a_single_segment_root_without_duplicate_span():
+    receipt = build_context_receipt(
+        messages=[{"role": "user", "content": "whole source", "source_id": "legacy-doc"}],
+        run_id="run_legacy_source",
+    )
+    segment = receipt["delivered"][0]
+    assert segment["client_source_id"] == "legacy-doc"
+    assert "sources" not in segment
+
+
 def test_repeated_identical_message_gets_disambiguated_id():
     receipt = build_context_receipt(
         messages=[{"role": "user", "content": "yes"}, {"role": "user", "content": "yes"}],

@@ -52,6 +52,21 @@ ESTIMATOR_NAME = "deterministic_additive_elastic_net"
 ESTIMATOR_VERSION = "v1"
 MASK_SAMPLER = "sha256_counter_subset_mask.v1"
 
+# Interaction nominations are deliberately a *separate* estimated search
+# product from additive coefficient qualification.  A poor additive fit is
+# often precisely the signal that a jointly-deleted set deserves a direct
+# experiment, so the nomination gate must not hide that information behind
+# the additive model's "coefficient interpretation" gate.
+INTERACTION_NOMINATOR = "residual_cooccurrence_enrichment.v1"
+MAX_RESIDUAL_CANDIDATE_SOURCE_SETS = 8
+MIN_RESIDUAL_OBSERVATIONS = 8
+MIN_HIGH_RESIDUAL_PAIR_SUPPORT = 2
+MIN_HIGH_RESIDUAL_HOLDOUT_SUPPORT = 1
+MIN_HIGH_RESIDUAL_PAIR_RATE = 0.50
+MIN_HIGH_RESIDUAL_RATE_ENRICHMENT = 0.25
+RESIDUAL_ABS_FLOOR_NATS = 0.50
+RESIDUAL_OUTLIER_QUANTILE = 0.75
+
 
 class ContextDependenceScreenError(ValueError):
     """A subset screen cannot safely be sampled, scored, or qualified."""
@@ -415,6 +430,183 @@ def _record_measurement(mask: dict[str, Any], measurement: Any, *, source_ids: t
     return record
 
 
+def _upper_quantile(values: Sequence[float], quantile: float) -> float:
+    """Return a deterministic nearest-rank upper quantile for non-empty data."""
+    if not values:
+        raise ContextDependenceScreenError("quantile requires at least one value")
+    ordered = sorted(float(value) for value in values)
+    # 0.75 means the smallest value with at least 75% of observations at or
+    # below it.  The no-interpolation rule keeps equal residuals and replay
+    # order from changing a nomination threshold.
+    index = min(len(ordered) - 1, max(0, math.ceil(quantile * len(ordered)) - 1))
+    return ordered[index]
+
+
+def _residual_nomination_thresholds(*, max_candidates: int) -> dict[str, int | float]:
+    """The stable, persisted conservative search gate for interaction hints."""
+    return {
+        "minimum_observation_count": MIN_RESIDUAL_OBSERVATIONS,
+        "absolute_residual_floor_nats": RESIDUAL_ABS_FLOOR_NATS,
+        "outlier_quantile": RESIDUAL_OUTLIER_QUANTILE,
+        "minimum_same_sign_pair_support": MIN_HIGH_RESIDUAL_PAIR_SUPPORT,
+        "minimum_heldout_same_sign_pair_support": MIN_HIGH_RESIDUAL_HOLDOUT_SUPPORT,
+        "minimum_pair_high_residual_rate": MIN_HIGH_RESIDUAL_PAIR_RATE,
+        "minimum_rate_enrichment_over_population": MIN_HIGH_RESIDUAL_RATE_ENRICHMENT,
+        "maximum_candidate_source_sets": max_candidates,
+    }
+
+
+def _residual_interaction_nominations(
+    source_ids: tuple[str, ...], observations: Sequence[Mapping[str, Any]], *,
+    max_candidates: int = MAX_RESIDUAL_CANDIDATE_SOURCE_SETS,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Nominate bounded pair deletions from recurring additive-residual outliers.
+
+    Each residual is ``directly measured mask delta - additive prediction``.
+    That makes a residual useful for *where to look next*, but never a source
+    or set effect.  To avoid a one-mask coincidence, a pair must occur in at
+    least two high-residual masks of the same sign, including one held-out
+    mask, and be substantially enriched relative to that sign's overall mask
+    prevalence.  Direct coalition verification is still the only path from
+    this estimated hint to a measured set effect.
+    """
+    if isinstance(max_candidates, bool) or not isinstance(max_candidates, int) or max_candidates < 1:
+        raise ContextDependenceScreenError("max residual candidate source sets must be a positive integer")
+    thresholds = _residual_nomination_thresholds(max_candidates=max_candidates)
+    base = {
+        "provenance": SCREEN_PROVENANCE,
+        "not_a_measured_effect": True,
+        "method": INTERACTION_NOMINATOR,
+        "residual_definition": "observed_delta_nats minus fitted_additive_prediction_nats",
+        "candidate_set_size": 2,
+        "thresholds": thresholds,
+    }
+    if len(observations) < MIN_RESIDUAL_OBSERVATIONS:
+        return ({
+            **base,
+            "state": "unavailable",
+            "reason": (
+                f"requires at least {MIN_RESIDUAL_OBSERVATIONS} directly observed subset masks; "
+                f"received {len(observations)}"
+            ),
+            "observation_count": len(observations),
+            "candidate_count": 0,
+        }, [])
+
+    residuals: list[float] = []
+    for observation in observations:
+        residual = _finite_number(
+            observation.get("additive_residual_nats"), name="additive residual",  # type: ignore[arg-type]
+        )
+        residuals.append(residual)
+    residual_threshold = max(
+        RESIDUAL_ABS_FLOOR_NATS,
+        _upper_quantile([abs(value) for value in residuals], RESIDUAL_OUTLIER_QUANTILE),
+    )
+
+    # For each source pair, retain how frequently it was observed at all and
+    # which direct masks gave a same-sign high residual.  We only enumerate
+    # pairs already co-occurring in a bounded number of scored masks; no
+    # all-pairs source-population expansion is performed for a large receipt.
+    pair_stats: dict[tuple[str, str], dict[str, Any]] = {}
+    high_masks_by_direction: dict[str, list[Mapping[str, Any]]] = {"positive": [], "negative": []}
+    source_positions = {source_id: index for index, source_id in enumerate(source_ids)}
+    for observation, residual in zip(observations, residuals):
+        removed = observation.get("removed_source_ids")
+        if not isinstance(removed, list):  # observations are internal, but fail closed if refactored
+            raise ContextDependenceScreenError("screen observation is missing canonical removed_source_ids")
+        removed_set = set(removed)
+        if len(removed_set) != len(removed) or not removed_set.issubset(source_positions):
+            raise ContextDependenceScreenError("screen observation has invalid canonical removed_source_ids")
+        ordered_removed = tuple(source_id for source_id in source_ids if source_id in removed_set)
+        is_high = abs(residual) >= residual_threshold
+        direction = "positive" if residual > 0 else "negative" if residual < 0 else None
+        if is_high and direction is not None:
+            high_masks_by_direction[direction].append(observation)
+        for left_index, left in enumerate(ordered_removed):
+            for right in ordered_removed[left_index + 1:]:
+                pair = (left, right)
+                stats = pair_stats.setdefault(pair, {
+                    "observation_count": 0,
+                    "positive": [],
+                    "negative": [],
+                })
+                stats["observation_count"] += 1
+                if is_high and direction is not None:
+                    stats[direction].append(observation)
+
+    candidates: list[dict[str, Any]] = []
+    population_rate = {
+        direction: len(masks) / len(observations)
+        for direction, masks in high_masks_by_direction.items()
+    }
+    for pair, stats in pair_stats.items():
+        observed_count = int(stats["observation_count"])
+        for direction in ("positive", "negative"):
+            support = list(stats[direction])
+            support_count = len(support)
+            if support_count < MIN_HIGH_RESIDUAL_PAIR_SUPPORT:
+                continue
+            heldout_support = [item for item in support if item.get("split") == "holdout"]
+            if len(heldout_support) < MIN_HIGH_RESIDUAL_HOLDOUT_SUPPORT:
+                continue
+            high_rate = support_count / observed_count
+            if high_rate < MIN_HIGH_RESIDUAL_PAIR_RATE:
+                continue
+            if high_rate < population_rate[direction] + MIN_HIGH_RESIDUAL_RATE_ENRICHMENT:
+                continue
+            support_ids = [str(item["mask_id"]) for item in support]
+            support_experiment_ids = [
+                str(item["measurement_experiment_id"])
+                for item in support if isinstance(item.get("measurement_experiment_id"), str)
+            ]
+            support_residuals = [float(item["additive_residual_nats"]) for item in support]
+            candidates.append({
+                "source_ids": list(pair),
+                # Keep the verifier's origin as ``screen:candidate_source_sets``
+                # (the common boundary for all estimated screen hints).  This
+                # more specific provenance remains audit metadata rather than
+                # replacing that route-level origin.
+                "nomination_origin": "screen_residual_cooccurrence",
+                "provenance": SCREEN_PROVENANCE,
+                "not_a_measured_effect": True,
+                "interaction_nominator": INTERACTION_NOMINATOR,
+                "residual_direction": direction,
+                "observed_pair_mask_count": observed_count,
+                "high_residual_mask_count": support_count,
+                "high_residual_holdout_mask_count": len(heldout_support),
+                "high_residual_rate": high_rate,
+                "population_high_residual_rate": population_rate[direction],
+                "rate_enrichment": high_rate - population_rate[direction],
+                "residual_threshold_abs_nats": residual_threshold,
+                "aggregate_abs_residual_nats": sum(abs(value) for value in support_residuals),
+                "minimum_abs_residual_nats": min(abs(value) for value in support_residuals),
+                "supporting_mask_ids": support_ids,
+                "supporting_measurement_experiment_ids": support_experiment_ids,
+                "supporting_splits": [str(item.get("split")) for item in support],
+            })
+
+    candidates.sort(key=lambda item: (
+        -float(item["aggregate_abs_residual_nats"]),
+        -int(item["high_residual_mask_count"]),
+        -float(item["rate_enrichment"]),
+        tuple(source_positions[source_id] for source_id in item["source_ids"]),
+    ))
+    candidates = candidates[:max_candidates]
+    high_masks = {
+        direction: [str(item["mask_id"]) for item in masks]
+        for direction, masks in high_masks_by_direction.items()
+    }
+    return ({
+        **base,
+        "state": "available",
+        "observation_count": len(observations),
+        "residual_threshold_abs_nats": residual_threshold,
+        "high_residual_mask_ids": high_masks,
+        "candidate_count": len(candidates),
+    }, candidates)
+
+
 def _empty_screen(
     source_ids: tuple[str, ...], *, sampling_seed: int, passes_requested: int,
     initial_passes_consumed: int, score_passes_per_mask: int, reason: str,
@@ -442,6 +634,20 @@ def _empty_screen(
         },
         "candidate_source_ids": [],
         "candidate_source_sets": [],
+        "interaction_nominations": {
+            "provenance": SCREEN_PROVENANCE,
+            "not_a_measured_effect": True,
+            "method": INTERACTION_NOMINATOR,
+            "residual_definition": "observed_delta_nats minus fitted_additive_prediction_nats",
+            "candidate_set_size": 2,
+            "thresholds": _residual_nomination_thresholds(
+                max_candidates=MAX_RESIDUAL_CANDIDATE_SOURCE_SETS,
+            ),
+            "state": "unavailable",
+            "reason": reason,
+            "observation_count": 0,
+            "candidate_count": 0,
+        },
         "budget": {
             "passes_requested": passes_requested,
             "initial_passes_consumed": initial_passes_consumed,
@@ -472,9 +678,11 @@ def run_subset_screen(
 
     A fitted model is considered qualified only when its fit design has full
     intercept-plus-source rank, it has genuine held-out observations, and its
-    held-out MAE is within the caller-visible threshold.  Any failure leaves
-    all actual observations and diagnostics in the result but empties the
-    candidate fields.
+    held-out MAE is within the caller-visible threshold.  Any failure empties
+    coefficient-derived ``candidate_source_ids``.  Separately, recurring
+    out-of-fit residual patterns can nominate bounded *sets* for direct
+    testing even when an additive fit is unqualified; those hints remain
+    explicitly estimated and are never reported as source effects.
     """
     ids = _source_ids(source_ids)
     if not callable(measure):
@@ -585,6 +793,10 @@ def run_subset_screen(
     )
     fit_predictions = [_predict(intercept, weights, row) for row in fit_features]
     holdout_predictions = [_predict(intercept, weights, row) for row in holdout_features]
+    all_predictions = [_predict(intercept, weights, record["mask_bits"]) for record in observations]
+    for record, prediction in zip(observations, all_predictions):
+        record["fitted_additive_prediction_nats"] = prediction
+        record["additive_residual_nats"] = record["observed_delta_nats"] - prediction
     fit_metrics = _regression_metrics(fit_effects, fit_predictions)
     holdout_metrics = (
         _regression_metrics(holdout_effects, holdout_predictions) if holdout_effects else None
@@ -640,6 +852,7 @@ def run_subset_screen(
         key=lambda record: (-abs(float(record["estimated_removal_coefficient_nats"])), ids.index(record["source_id"])),
     )
     candidates = [record["source_id"] for record in ranked_coefficients[:candidate_limit]] if qualified else []
+    interaction_nominations, candidate_source_sets = _residual_interaction_nominations(ids, observations)
 
     return {
         "provenance": SCREEN_PROVENANCE,
@@ -664,11 +877,14 @@ def run_subset_screen(
             "candidate_interpretation_available": qualified,
             "reasons": reasons,
         },
-        # These are *future direct-test nominations*.  No coefficient appears
-        # in a measured experiment, and the additive screen refuses to invent
-        # an interaction/coalition candidate from a coefficient alone.
+        # These are *future direct-test nominations*.  No coefficient or
+        # residual appears in a measured experiment.  The interaction
+        # candidates are pair sets selected from recurring residual structure,
+        # not inferred source effects; a coalition verifier must still score
+        # their direct delete-source experiment before reporting a set effect.
         "candidate_source_ids": candidates,
-        "candidate_source_sets": [],
+        "candidate_source_sets": candidate_source_sets,
+        "interaction_nominations": interaction_nominations,
         "budget": {
             "passes_requested": requested,
             "initial_passes_consumed": initial,

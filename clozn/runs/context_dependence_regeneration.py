@@ -31,7 +31,11 @@ from clozn.replay.span_bridge import (
 from clozn.replay.replay import replay as replay_run
 
 
-STUDY_SCHEMA_VERSION = "clozn.context-dependence-study.v1"
+# v1 remains readable for historical target-scoped studies.  v2 is the
+# canonical run-level artifact and has no target in its identity or records.
+STUDY_SCHEMA_VERSIONS = frozenset({
+    "clozn.context-dependence-study.v1", "clozn.context-dependence-study.v2",
+})
 RESULT_SCHEMA_VERSION = "clozn.context-dependence-regeneration.v1"
 INTERVENTION_OPERATOR = "delete_source"
 
@@ -42,6 +46,10 @@ class ContextDependenceRegenerationError(ValueError):
 
 class ContextDependenceRegenerationStaleError(ContextDependenceRegenerationError):
     """The parent changed after a model-free regeneration plan was made."""
+
+
+class ContextDependenceRegenerationExperimentNotFoundError(ContextDependenceRegenerationError):
+    """The requested experiment is absent from the recorded study."""
 
 
 def _digest(value: Any) -> str:
@@ -59,11 +67,15 @@ def _study_copy(study: Any) -> dict:
     if not isinstance(study, Mapping):
         raise ContextDependenceRegenerationError("study must be a Context Dependence study object")
     document = deepcopy(dict(study))
+    schema_version = document.get("schema_version")
+    if schema_version not in STUDY_SCHEMA_VERSIONS:
+        raise ContextDependenceRegenerationError(
+            "study must declare a supported Context Dependence schema version")
     try:
-        schemas.validate(document, STUDY_SCHEMA_VERSION)
+        schemas.validate(document, schema_version)
     except Exception as exc:  # schema failure is input evidence failure, never something to repair
         raise ContextDependenceRegenerationError(
-            f"study is not a valid {STUDY_SCHEMA_VERSION}: {type(exc).__name__}: {exc}") from exc
+            f"study is not a valid {schema_version}: {type(exc).__name__}: {exc}") from exc
     return document
 
 
@@ -86,11 +98,34 @@ def _exact_ranges(value: Any) -> list[dict]:
     return [deepcopy(dict(item)) for item in value]
 
 
+def _ranges_still_bind(expected: list[dict], resolved: list[dict]) -> bool:
+    """Compare legacy range evidence without pretending old records had new hashes.
+
+    v1 experiments recorded the four coordinate fields.  Span-aware studies
+    additionally carry the source-content hash and source kind.  The old
+    record remains valid when those coordinates re-resolve exactly; whenever a
+    newer field was recorded it must agree too.
+    """
+    if len(expected) != len(resolved):
+        return False
+    required = ("source_id", "message_index", "unicode_range", "byte_range")
+    for old, current in zip(expected, resolved):
+        if any(old.get(key) != current.get(key) for key in required):
+            return False
+        for key in ("content_sha256", "source_kind"):
+            if key in old and old.get(key) != current.get(key):
+                return False
+    return True
+
+
 def _find_experiment(study: Mapping, experiment_id: Any) -> dict:
     if not isinstance(experiment_id, str) or not experiment_id:
         raise ContextDependenceRegenerationError("experiment_id must be a non-empty string")
     matches = [item for item in study.get("experiments", [])
                if isinstance(item, Mapping) and item.get("experiment_id") == experiment_id]
+    if not matches:
+        raise ContextDependenceRegenerationExperimentNotFoundError(
+            "experiment_id does not identify an experiment in the supplied study")
     if len(matches) != 1:
         raise ContextDependenceRegenerationError(
             "experiment_id does not identify exactly one experiment in the supplied study")
@@ -115,10 +150,17 @@ def _find_experiment(study: Mapping, experiment_id: Any) -> dict:
 
 def _study_source_binding(study: Mapping, resolved: Mapping) -> None:
     identity = study.get("source_identity")
-    if not isinstance(identity, Mapping) or identity.get("kind") != "context_receipt_segment_id":
-        raise ContextDependenceRegenerationError("study is not bound to canonical Context Receipt segment IDs")
+    if not isinstance(identity, Mapping) or identity.get("kind") not in {
+        "context_receipt_segment_id", "context_receipt_source_span",
+    }:
+        raise ContextDependenceRegenerationError("study is not bound to canonical Context Receipt sources")
+    # v1 wrote assembled/delivered while v2 preserves the resolver's actual
+    # scoring basis spelling.  Both describe the same verified basis.
     expected_view = "assembled" if resolved.get("basis") == "assembled_messages" else "delivered"
-    if identity.get("view") != expected_view:
+    actual_view = identity.get("view")
+    if actual_view == resolved.get("basis"):
+        actual_view = expected_view
+    if actual_view != expected_view:
         raise ContextDependenceRegenerationError("study source basis does not match the exact replay basis")
     sources = identity.get("sources")
     if not isinstance(sources, list) or not all(isinstance(item, Mapping) for item in sources):
@@ -150,13 +192,7 @@ def _score_context_hash(parent: Mapping, resolved: Mapping) -> str:
 
 
 def _recorded_active_dials(parent: Mapping) -> dict[str, float]:
-    """The exact recorded steering state to reproduce for the one child.
-
-    Replay otherwise uses whatever happens to be live in Studio.  That is a
-    useful default for ordinary rerolls, but it would make this source deletion
-    vary two prompt conditions at once.  Empty/missing means known-neutral;
-    malformed recorded values fail closed rather than being dropped.
-    """
+    """Return the exact recorded steering state for the replay child."""
     behavior = parent.get("behavior")
     value = behavior.get("active_dials") if isinstance(behavior, Mapping) else {}
     if value is None:
@@ -177,16 +213,22 @@ def _recorded_active_dials(parent: Mapping) -> dict[str, float]:
 
 def _reference(experiment: Mapping) -> dict:
     """Small, structural teacher-forced reference; it is not a generated result."""
-    return {
+    result = {
         "measurement_mode": "teacher_forced",
         "provenance": "measured",
         "experiment_id": experiment["experiment_id"],
         "intervention_operator": experiment["intervention_operator"],
         "removed_source_ids": deepcopy(experiment["removed_source_ids"]),
         "delta_nats": deepcopy(experiment.get("delta_nats")),
-        "target_logp": deepcopy(experiment.get("target_logp")),
-        "baseline_target_logp": deepcopy(experiment.get("baseline_target_logp")),
     }
+    if "intervened_logp" in experiment or "baseline_logp" in experiment:
+        result["continuation_logp"] = deepcopy(experiment.get("intervened_logp"))
+        result["baseline_continuation_logp"] = deepcopy(experiment.get("baseline_logp"))
+    else:
+        # v1's target-scoped public shape remains exactly readable.
+        result["target_logp"] = deepcopy(experiment.get("target_logp"))
+        result["baseline_target_logp"] = deepcopy(experiment.get("baseline_target_logp"))
+    return result
 
 
 def plan_context_dependence_regeneration(parent_run: Mapping, study: Mapping, experiment_id: str) -> dict:
@@ -205,15 +247,20 @@ def plan_context_dependence_regeneration(parent_run: Mapping, study: Mapping, ex
     try:
         resolved = resolve_context_receipt_source_set(dict(parent_run), experiment["removed_source_ids"])
     except ContextReceiptSourceResolutionError as exc:
-        raise ContextDependenceRegenerationError(f"canonical receipt source deletion is unavailable: {exc}") from exc
-    _study_source_binding(document, resolved)
+        raise ContextDependenceRegenerationStaleError(
+            f"canonical receipt source deletion is unavailable: {exc}") from exc
+    try:
+        _study_source_binding(document, resolved)
+    except ContextDependenceRegenerationError as exc:
+        raise ContextDependenceRegenerationStaleError(str(exc)) from exc
     if resolved["canonical_source_ids"] != experiment["removed_source_ids"]:
-        raise ContextDependenceRegenerationError("experiment source set did not re-resolve exactly")
-    if resolved["exact_removed_ranges"] != _exact_ranges(experiment["exact_removed_ranges"]):
-        raise ContextDependenceRegenerationError(
+        raise ContextDependenceRegenerationStaleError("experiment source set did not re-resolve exactly")
+    expected_ranges = _exact_ranges(experiment["exact_removed_ranges"])
+    if not _ranges_still_bind(expected_ranges, resolved["exact_removed_ranges"]):
+        raise ContextDependenceRegenerationStaleError(
             "experiment exact_removed_ranges no longer match the current Context Receipt basis")
     if _score_context_hash(parent_run, resolved) != experiment["context_hash"]:
-        raise ContextDependenceRegenerationError(
+        raise ContextDependenceRegenerationStaleError(
             "experiment context_hash no longer matches the exact current score/replay basis")
     recorded_dials = _recorded_active_dials(parent_run)
     return {
@@ -225,7 +272,9 @@ def plan_context_dependence_regeneration(parent_run: Mapping, study: Mapping, ex
         "intervention": {
             "operator": INTERVENTION_OPERATOR,
             "removed_source_ids": deepcopy(resolved["canonical_source_ids"]),
-            "exact_removed_ranges": deepcopy(resolved["exact_removed_ranges"]),
+            # Retain v1's old coordinate-only public shape verbatim; v2
+            # retains its richer span evidence because it was recorded.
+            "exact_removed_ranges": deepcopy(expected_ranges),
             "source_basis": resolved["basis"],
             "basis_digest": resolved["basis_digest"],
             "intervened_context_digest": resolved["intervened_context_digest"],
@@ -244,9 +293,8 @@ def plan_context_dependence_regeneration(parent_run: Mapping, study: Mapping, ex
 def _changes_applied(plan: Mapping) -> dict:
     intervention = plan["intervention"]
     # ``greedy`` gives replay's generation seam an explicit deterministic
-    # decode request.  Clear the live controls and then put back the recorded
-    # active dials so the only planned prompt difference is canonical source
-    # deletion, never the caller's current Studio steering state.
+    # decode request. Clear live controls, then restore the recorded controls
+    # so canonical source deletion remains the only planned prompt difference.
     changes = {
         "greedy": True,
         "behavior_off": True,
@@ -256,7 +304,7 @@ def _changes_applied(plan: Mapping) -> dict:
             "intervention_operator": intervention["operator"],
             "intervention": {
                 "operator": intervention["operator"],
-                "scope": "canonical_context_receipt_whole_message_deletion",
+                "scope": "canonical_context_receipt_span_aware_deletion",
             },
             # Keep the compact conventional spelling alongside the more
             # explicit name below; both are sorted canonical segment IDs.
@@ -343,6 +391,7 @@ def execute_context_dependence_regeneration(
 
 __all__ = [
     "ContextDependenceRegenerationError",
+    "ContextDependenceRegenerationExperimentNotFoundError",
     "ContextDependenceRegenerationStaleError",
     "INTERVENTION_OPERATOR",
     "RESULT_SCHEMA_VERSION",

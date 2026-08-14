@@ -1,0 +1,48 @@
+{
+  "schema_version": "clozn.context-dependence-query.v1",
+  "run_id": "run_selection",
+  "selection": {
+    "unicode_range": [0, 2],
+    "text": "OK",
+    "registration": "exact",
+    "fidelity": "exact_recorded_token_ids",
+    "recorded_token_range": [0, 2],
+    "conditioned_prefix": {
+      "unicode_range": [0, 0],
+      "recorded_token_range": [0, 0],
+      "text": ""
+    }
+  },
+  "measurement": {
+    "state": "available",
+    "study_schema_version": "clozn.context-dependence-study.v2",
+    "intervention_operator": "delete_source",
+    "provenance": "measured"
+  },
+  "measured_removal_effects": [
+    {
+      "experiment_id": "cdx_selection",
+      "intervention_operator": "delete_source",
+      "provenance": "inferred",
+      "removed_source_ids": ["source_a"],
+      "sources": [
+        {
+          "source_id": "source_a",
+          "message_index": 0,
+          "unicode_range": [0, 1],
+          "byte_range": [0, 1]
+        }
+      ],
+      "exact_removed_ranges": [
+        {
+          "source_id": "source_a",
+          "message_index": 0,
+          "unicode_range": [0, 1],
+          "byte_range": [0, 1]
+        }
+      ],
+      "delta_nats": 0.75,
+      "full_continuation_delta_nats": 0.75
+    }
+  ]
+}

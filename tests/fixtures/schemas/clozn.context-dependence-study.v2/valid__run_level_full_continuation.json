@@ -1,0 +1,58 @@
+{
+  "schema_version": "clozn.context-dependence-study.v2",
+  "study_id": "cds_0123456789abcdef01234567",
+  "run_id": "run_fixture",
+  "context_model_identity": {},
+  "source_identity": {
+    "kind": "context_receipt_source_span",
+    "view": "assembled_messages",
+    "sources": [
+      {
+        "source_id": "src_fixture",
+        "segment_id": "seg_fixture",
+        "message_index": 0,
+        "unicode_range": [0, 1],
+        "byte_range": [0, 1],
+        "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ]
+  },
+  "continuation": {
+    "kind": "recorded_token_ids",
+    "fidelity": "exact_recorded_token_ids",
+    "token_ids_exact": true,
+    "retokenized": false,
+    "recorded_text": "OK",
+    "scored_text": "OK",
+    "unicode_offset_basis": "recorded_response_unicode",
+    "token_ids": [1, 2]
+  },
+  "baseline": {
+    "teacher_forced_logp": -0.3,
+    "context_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "scored_once": true,
+    "provenance": "measured",
+    "tokens": [
+      {"index": 0, "token_id": 1, "piece": "O", "unicode_range": [0, 1], "logprob": -0.1},
+      {"index": 1, "token_id": 2, "piece": "K", "unicode_range": [1, 2], "logprob": -0.2}
+    ]
+  },
+  "experiments": [
+    {
+      "experiment_id": "cdx_0123456789abcdef01234567",
+      "intervention_operator": "delete_source",
+      "removed_source_ids": ["src_fixture"],
+      "exact_removed_ranges": [
+        {"source_id": "src_fixture", "message_index": 0, "unicode_range": [0, 1], "byte_range": [0, 1]}
+      ],
+      "context_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "intervened_logp": -1.3,
+      "baseline_logp": -0.3,
+      "delta_nats": 1.0,
+      "per_token_delta_nats": [0.4, 0.6],
+      "token_indices": [0, 1],
+      "provenance": "measured"
+    }
+  ],
+  "budget": {"passes_requested": 2, "passes_consumed": 2}
+}

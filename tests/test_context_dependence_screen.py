@@ -17,6 +17,7 @@ from clozn.runs.context_dependence_search import (
     run_subset_screen,
     sample_subset_masks,
 )
+from clozn.runs.context_dependence_coalitions import verify_coalitions
 from tests.context_dependence_cases import SyntheticMeasurement, case_by_id
 
 
@@ -229,3 +230,96 @@ def test_existing_direct_mask_is_reused_without_another_pass():
     assert screen["masks"][0]["measurement_reused"] is True
     assert screen["budget"]["passes_consumed"] == 1
     assert screen["budget"]["measurements_reused"] == 1
+
+
+class LargeInteractionScorer:
+    """Twenty-source direct scorer with one non-additive deleted pair.
+
+    The interaction is intentionally visible only in actual measured mask
+    deltas.  The screen may use it to nominate a pair but must not label that
+    pair's 9 nats as a measured pair effect before the coalition verifier runs
+    its own direct deletion arm.
+    """
+
+    source_ids = tuple(f"source-{index:02d}" for index in range(20))
+    interaction = ("source-03", "source-14")
+
+    def __init__(self):
+        self.calls: list[tuple[str, ...]] = []
+
+    def measure(self, removed_source_ids):
+        removed = tuple(source_id for source_id in self.source_ids if source_id in set(removed_source_ids))
+        self.calls.append(removed)
+        return {
+            "experiment_id": f"mask_{len(self.calls):03d}",
+            "removed_source_ids": list(removed),
+            "delta_nats": 9.0 if set(self.interaction).issubset(removed) else 0.0,
+            "provenance": "measured",
+        }
+
+
+def test_large_context_residual_structure_nominates_a_bounded_pair_without_claiming_an_effect():
+    scorer = LargeInteractionScorer()
+    screen = run_subset_screen(
+        scorer.source_ids, scorer.measure, sampling_seed=5, passes_requested=48, mask_count=48,
+        holdout_fraction=0.25, min_holdout_observations=2, max_holdout_mae_nats=0.25,
+    )
+
+    # Twenty receipt siblings exceed the automatic structural-pair limit of
+    # eight.  This is a residual-screen nomination, not fallback enumeration.
+    nominated = next(
+        item for item in screen["candidate_source_sets"]
+        if item["source_ids"] == list(scorer.interaction)
+    )
+    assert len(scorer.calls) == 48
+    assert len(screen["candidate_source_sets"]) <= 8
+    assert screen["interaction_nominations"]["state"] == "available"
+    assert nominated["nomination_origin"] == "screen_residual_cooccurrence"
+    assert nominated["provenance"] == "estimated"
+    assert nominated["not_a_measured_effect"] is True
+    assert nominated["high_residual_mask_count"] >= 2
+    assert nominated["high_residual_holdout_mask_count"] >= 1
+    assert nominated["high_residual_rate"] >= 0.5
+    assert nominated["rate_enrichment"] >= 0.25
+    assert nominated["supporting_mask_ids"]
+    assert nominated["supporting_measurement_experiment_ids"]
+    # The direct scored masks are still distinct records.  No estimated
+    # candidate is slipped into the study experiment collection or relabeled.
+    assert all(mask["measurement_provenance"] == "measured" for mask in screen["masks"])
+    assert "experiments" not in screen
+
+
+def test_large_context_residual_nomination_reaches_direct_coalition_verification_before_full_pool():
+    scorer = LargeInteractionScorer()
+    screen = run_subset_screen(
+        scorer.source_ids, scorer.measure, sampling_seed=5, passes_requested=48, mask_count=48,
+        holdout_fraction=0.25, min_holdout_observations=2, max_holdout_mae_nats=0.25,
+    )
+    verification_calls: list[tuple[str, ...]] = []
+
+    def verify_measure(source_ids):
+        source_set = tuple(source_ids)
+        verification_calls.append(source_set)
+        return {
+            "experiment_id": "verified_" + "__".join(source_set),
+            "removed_source_ids": list(source_set),
+            "delta_nats": 9.0 if set(scorer.interaction).issubset(source_set) else 0.0,
+            "provenance": "measured",
+        }
+
+    result = verify_coalitions(
+        verify_measure, source_ids=scorer.source_ids, screen=screen, passes_requested=1,
+        max_structural_candidate_sources=8,
+    )
+
+    # With 20 sources the receipt fallback does not enumerate sibling pairs.
+    # The screen candidate gets the one available direct arm rather than an
+    # arbitrary full-context fallback deletion.
+    assert verification_calls == [scorer.interaction]
+    assert result["verified_sets"] == [{
+        "source_ids": list(scorer.interaction),
+        "experiment_id": "verified_source-03__source-14",
+    }]
+    assert result["measured_experiments"][0]["provenance"] == "measured"
+    assert result["measured_experiments"][0]["delta_nats"] == 9.0
+    assert result["selection"]["candidate_sets"][0]["origins"] == ["screen:candidate_source_sets"]

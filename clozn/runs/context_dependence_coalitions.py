@@ -223,7 +223,7 @@ def _screen_candidates(screen: Any, *, source_order: tuple[str, ...]) -> list[tu
     # It is still only a heuristic; bounded structural generation chooses the
     # actual groups to verify.
     candidate_ids = screen.get("candidate_source_ids")
-    if candidate_ids is not None:
+    if candidate_ids:
         result.extend(_structural_group_candidates(
             candidate_ids, source_order=source_order, origin="screen:candidate_source_ids",
         ))
@@ -357,10 +357,21 @@ def _candidate_records(
     origins_by_set: dict[tuple[str, ...], set[str]] = defaultdict(set)
     for source_set, origin in candidates:
         origins_by_set[source_set].add(origin)
-    ordered = sorted(
-        origins_by_set,
-        key=lambda source_set: (-len(source_set), tuple(source_order.index(item) for item in source_set)),
-    )[:max_candidates]
+    def priority(source_set: tuple[str, ...]) -> tuple[int, int, tuple[int, ...]]:
+        origins = origins_by_set[source_set]
+        # A residual/cohort screen set is a bounded interaction-search hint.
+        # Give it a chance to receive its direct verification arm before the
+        # fallback's enormous full-receipt deletion consumes a small budget.
+        # This changes no epistemic status: every selected item below still
+        # calls/uses only a measured delete-source experiment.
+        screen_set = any(origin.startswith("screen:candidate_source_sets") for origin in origins)
+        return (
+            0 if screen_set else 1,
+            -len(source_set),
+            tuple(source_order.index(item) for item in source_set),
+        )
+
+    ordered = sorted(origins_by_set, key=priority)[:max_candidates]
     return [{"source_ids": list(source_set), "origins": sorted(origins_by_set[source_set])}
             for source_set in ordered]
 

@@ -26,8 +26,8 @@ from clozn.runs.context_dependence_preserving import (
 from clozn.runs.context_dependence_search import run_subset_screen
 
 
-SCHEMA = "clozn.context-dependence-study.v1"
-EXECUTION_METHOD = "context_dependence_execution.v1"
+SCHEMA = "clozn.context-dependence-study.v2"
+EXECUTION_METHOD = "context_dependence_execution.v2"
 INTERVENTION_OPERATOR = "delete_source"
 
 
@@ -81,6 +81,77 @@ def _source_set(value: Any, *, name: str) -> list[str] | None:
     return values
 
 
+def _source_sets(value: Any, *, name: str) -> list[list[str]]:
+    """Validate requested control sets without inventing source identity.
+
+    Receipt-order normalization and unknown-ID rejection happen only after the
+    same strict source resolver used for measurement has supplied the current
+    source catalogue.  This parser deliberately preserves caller order so it
+    can never silently turn a malformed set into a different one.
+    """
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+        raise ContextDependenceExecutionError(f"{name} must be an array of canonical source-ID arrays")
+    sets: list[list[str]] = []
+    for index, source_ids in enumerate(value):
+        parsed = _source_set(source_ids, name=f"{name}[{index}]")
+        # ``_source_set`` returns None only for a direct None value, which is
+        # never a valid member of the outer control-set list.
+        if parsed is None:
+            raise ContextDependenceExecutionError(f"{name}[{index}] must be a canonical source-ID array")
+        sets.append(parsed)
+    return sets
+
+
+def _canonical_control_sets(
+    source_order: Iterable[str], requested_sets: Iterable[Iterable[str]], *, name: str,
+) -> tuple[tuple[str, ...], ...]:
+    """Canonicalize explicit control sets in the public source-set ID order.
+
+    This is intentionally stricter than a generic set conversion: requested
+    unknown IDs are typed failures, while duplicate *sets* are deduplicated in
+    their first requested order.  ``resolve_context_receipt_source_set`` has
+    always made set identity lexical by canonical ID, so controls use that
+    same order while their range evidence remains in prompt-basis order.  A caller consequently receives every
+    distinct control it asked for or a clear refusal before any score pass.
+    """
+    order = tuple(source_order)
+    available = set(order)
+    seen: set[tuple[str, ...]] = set()
+    result: list[tuple[str, ...]] = []
+    for index, raw_set in enumerate(requested_sets):
+        raw = tuple(raw_set)
+        unknown = set(raw).difference(available)
+        if unknown:
+            raise ContextDependenceExecutionError(
+                f"{name}[{index}] includes unknown canonical source IDs: "
+                + ", ".join(sorted(unknown))
+            )
+        canonical = tuple(sorted(raw))
+        if not canonical:
+            # The parser already rejects empty lists.  Keep this fail-closed
+            # guard adjacent to the receipt mapping in case it evolves.
+            raise ContextDependenceExecutionError(f"{name}[{index}] resolves to no current sources")
+        if canonical not in seen:
+            seen.add(canonical)
+            result.append(canonical)
+    return tuple(result)
+
+
+def _cache_control_sets(run: Mapping[str, Any], request: Mapping[str, Any]) -> list[list[str]]:
+    """Return strict canonical control identity without model scoring."""
+    requested = request.get("neutralization_source_sets")
+    if not requested:
+        return []
+    # Study construction only reads/strictly resolves the receipt; it does not
+    # invoke score_tokens until ``document``/an arm is requested.
+    source_order = ContextDependenceStudy(dict(run), None).source_ids
+    return [list(item) for item in _canonical_control_sets(
+        source_order, requested, name="neutralization_source_sets",
+    )]
+
+
 def normalize_request(body: Mapping[str, Any] | None) -> dict[str, Any]:
     """Strictly normalize the tiny public execution request.
 
@@ -94,7 +165,7 @@ def normalize_request(body: Mapping[str, Any] | None) -> dict[str, Any]:
         raise ContextDependenceExecutionError("request body must be an object")
     allowed = {
         "compute_level", "target", "root_source_ids", "method",
-        "sampling_seed", "tolerance_nats", "refresh",
+        "sampling_seed", "tolerance_nats", "neutralization_source_sets", "refresh",
     }
     unknown = set(body).difference(allowed)
     if unknown:
@@ -106,9 +177,11 @@ def normalize_request(body: Mapping[str, Any] | None) -> dict[str, Any]:
         policy = get_compute_level_policy(level)
     except ValueError as exc:
         raise ContextDependenceExecutionError(str(exc)) from None
-    target = body.get("target")
-    if target is not None and not isinstance(target, Mapping):
-        raise ContextDependenceExecutionError("target must be an object")
+    if "target" in body:
+        raise ContextDependenceExecutionError(
+            "target is not accepted by clozn.context-dependence-study.v2; "
+            "the study always measures the full recorded continuation and selections are projections"
+        )
     method = body.get("method", EXECUTION_METHOD)
     if not isinstance(method, str) or not method.strip():
         raise ContextDependenceExecutionError("method must be a non-empty string")
@@ -117,11 +190,13 @@ def normalize_request(body: Mapping[str, Any] | None) -> dict[str, Any]:
         raise ContextDependenceExecutionError("refresh must be a boolean")
     return {
         "compute_level": policy.name,
-        "target": deepcopy(dict(target)) if isinstance(target, Mapping) else None,
         "root_source_ids": _source_set(body.get("root_source_ids"), name="root_source_ids"),
         "method": method.strip(),
         "sampling_seed": _seed(body.get("sampling_seed", 0)),
         "tolerance_nats": _finite(body.get("tolerance_nats", 0.3), name="tolerance_nats", minimum=0.0),
+        "neutralization_source_sets": _source_sets(
+            body.get("neutralization_source_sets"), name="neutralization_source_sets",
+        ),
         "refresh": refresh,
     }
 
@@ -158,13 +233,17 @@ def cache_binding(run: Mapping[str, Any], request: Mapping[str, Any]) -> dict[st
         "schema_version": SCHEMA,
         "execution_method": EXECUTION_METHOD,
         "run_scoring_identity": _identity_run_view(run),
-        "target": deepcopy(request.get("target")),
         "requested_root_source_ids": deepcopy(request.get("root_source_ids")),
         "intervention_operator": INTERVENTION_OPERATOR,
         "compute_policy": request.get("compute_level"),
         "method": request.get("method"),
         "sampling_seed": request.get("sampling_seed"),
         "tolerance_nats": request.get("tolerance_nats"),
+        # Controls are a separate optional robustness collection, but their
+        # exact requested source sets still bind cache reuse.  Normalize with
+        # the strict resolver's canonical source-set ID order so caller set ordering cannot mint
+        # duplicate artifacts for the same control request.
+        "neutralization_source_sets": _cache_control_sets(run, request),
     }
 
 
@@ -173,11 +252,15 @@ def cache_identity(run: Mapping[str, Any], request: Mapping[str, Any]) -> str:
 
 
 def cache_matches(run: Mapping[str, Any], artifact: Any, request: Mapping[str, Any]) -> bool:
-    return (
-        isinstance(artifact, Mapping)
-        and artifact.get("schema_version") == SCHEMA
-        and artifact.get("cache_identity") == cache_identity(run, request)
-    )
+    if not isinstance(artifact, Mapping) or artifact.get("schema_version") != SCHEMA:
+        return False
+    try:
+        return artifact.get("cache_identity") == cache_identity(run, request)
+    except ContextDependenceExecutionError:
+        # A malformed/unknown control set must never be treated as a cache
+        # hit.  Execution will surface the typed request/receipt error before
+        # any score pass instead of leaking it from a read-only cache probe.
+        return False
 
 
 def _canonical_root(source_order: Iterable[str], requested: list[str] | None) -> tuple[str, ...]:
@@ -279,9 +362,22 @@ def run_context_dependence_execution(
     normalized = normalize_request(request)
     policy: ComputeLevelPolicy = get_compute_level_policy(normalized["compute_level"])
     identity = cache_identity(run, normalized)
-    measurement = ContextDependenceStudy(dict(run), sub, target=normalized["target"])
+    measurement = ContextDependenceStudy(dict(run), sub)
     source_order = tuple(measurement.source_ids)
     root_source_ids = _canonical_root(source_order, normalized["root_source_ids"])
+    neutralization_source_sets = _canonical_control_sets(
+        source_order, normalized["neutralization_source_sets"],
+        name="neutralization_source_sets",
+    )
+    # Baseline + the required canonical deletion root + every explicitly
+    # requested robustness control must fit before the first score.  Later
+    # optional layers merely consume the remaining shared policy budget.
+    minimum_required_passes = 2 + len(neutralization_source_sets)
+    if minimum_required_passes > policy.pass_budget:
+        raise ContextDependenceExecutionError(
+            "Context Dependence compute policy cannot score every requested neutralization control "
+            f"within its {policy.pass_budget}-pass budget"
+        )
 
     # Force/account for the shared baseline once, before reserving every
     # deletion arm.  The Task 1 document is the authority for consumed passes.
@@ -299,12 +395,27 @@ def run_context_dependence_execution(
         _checkpoint(checkpoint, phase=phase, completed=consumed(), total=policy.pass_budget)
         return result
 
+    def neutralize(source_ids: Iterable[str]) -> dict[str, Any]:
+        _checkpoint(checkpoint, phase="robustness_controls", completed=consumed(), total=policy.pass_budget)
+        if consumed() + 1 > policy.pass_budget:
+            # This should be impossible after ``minimum_required_passes``.
+            # Keep the invariant explicit rather than silently omitting a
+            # requested control if future orchestration changes consume early.
+            raise ContextDependenceExecutionError(
+                "Context Dependence compute policy exhausted before every requested neutralization control"
+            )
+        result = measurement.measure_neutralization_control(source_ids)
+        _checkpoint(checkpoint, phase="robustness_controls", completed=consumed(), total=policy.pass_budget)
+        return result
+
     # Layer 1/2. Quick measures the requested whole set; Standard additionally
     # measures receipt-native singleton units. Both share the exact baseline.
     measured_sets: set[tuple[str, ...]] = set()
     if consumed() + 1 <= policy.pass_budget:
         measured_sets.add(tuple(sorted(root_source_ids)))
         measure(root_source_ids, phase="direct_root")
+    for source_ids in neutralization_source_sets:
+        neutralize(source_ids)
     if policy.direct_source_work:
         for source_id in root_source_ids:
             source_set = (source_id,)
@@ -392,6 +503,7 @@ def run_context_dependence_execution(
         "sampling_seed": normalized["sampling_seed"],
         "tolerance_nats": normalized["tolerance_nats"],
         "requested_root_source_ids": list(root_source_ids),
+        "requested_neutralization_source_sets": [list(item) for item in neutralization_source_sets],
         "cache_binding": cache_binding(run, normalized),
     }
     schemas.validate(final, SCHEMA)

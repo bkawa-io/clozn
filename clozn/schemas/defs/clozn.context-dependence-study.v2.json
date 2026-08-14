@@ -1,0 +1,249 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.context-dependence-study.v2",
+  "title": "Run-level Context Dependence study",
+  "description": "A target-agnostic, set-valued, teacher-forced measurement of the full recorded continuation under canonical Context Receipt source deletions. `experiments` contains only canonical delete_source effects. Optional `robustness_controls` are separately named matched-Unicode-length neutralization observations; consumers must not blend their deltas into delete effects. A selected answer span is a read-only projection over persisted full-token evidence and is never part of this expensive study's identity.",
+  "type": "object",
+  "required": [
+    "schema_version", "study_id", "run_id", "context_model_identity", "source_identity",
+    "continuation", "baseline", "experiments", "budget"
+  ],
+  "properties": {
+    "schema_version": {"const": "clozn.context-dependence-study.v2"},
+    "study_id": {"type": "string", "pattern": "^cds_[0-9a-f]{24}$"},
+    "run_id": {"type": "string", "minLength": 1},
+    "target": false,
+    "context_model_identity": {"type": "object", "additionalProperties": true},
+    "source_identity": {"$ref": "#/$defs/source_identity"},
+    "continuation": {"$ref": "#/$defs/continuation"},
+    "baseline": {"$ref": "#/$defs/baseline"},
+    "experiments": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/experiment"},
+      "description": "Only directly scored delete-source interventions. Each has whole-continuation evidence."
+    },
+    "robustness_controls": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/robustness_control"},
+      "description": "Optional directly scored matched-length neutralization controls. They are separate from canonical delete-source experiments."
+    },
+    "screen": {"type": "object", "additionalProperties": true},
+    "hierarchy": {"type": "object", "additionalProperties": true},
+    "coalition_verification": {"type": "object", "additionalProperties": true},
+    "verified_sets": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+    "preserving_subsets": {"type": "object", "additionalProperties": true},
+    "budget": {"$ref": "#/$defs/budget"},
+    "cache_identity": {"type": "string", "pattern": "^cdcache_[0-9a-f]{32}$"},
+    "execution": {"type": "object", "additionalProperties": true}
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "range": {
+      "type": "array",
+      "items": {"type": "integer", "minimum": 0},
+      "minItems": 2,
+      "maxItems": 2,
+      "description": "Half-open [start, end) range. Producers additionally prove ordering and bounds."
+    },
+    "continuation": {
+      "type": "object",
+      "required": ["kind", "fidelity", "token_ids_exact", "retokenized", "recorded_text", "scored_text", "unicode_offset_basis"],
+      "properties": {
+        "kind": {"enum": ["recorded_token_ids", "recorded_response_text_retokenized"]},
+        "fidelity": {"enum": ["exact_recorded_token_ids", "recomputed_from_recorded_response_text"]},
+        "token_ids_exact": {"type": "boolean"},
+        "retokenized": {"type": "boolean"},
+        "recorded_text": {"type": "string"},
+        "scored_text": {"type": "string"},
+        "unicode_offset_basis": {"const": "recorded_response_unicode"},
+        "token_ids": {"type": "array", "items": {"type": "integer"}}
+      },
+      "additionalProperties": true
+    },
+    "source_identity": {
+      "type": "object",
+      "required": ["kind", "view", "sources"],
+      "properties": {
+        "kind": {"enum": ["context_receipt_segment_id", "context_receipt_source_span"]},
+        "view": {"type": "string", "minLength": 1},
+        "sources": {"type": "array", "items": {"$ref": "#/$defs/source"}}
+      },
+      "additionalProperties": true
+    },
+    "source": {
+      "type": "object",
+      "required": ["source_id", "message_index", "unicode_range", "byte_range"],
+      "properties": {
+        "source_id": {"type": "string", "minLength": 1},
+        "segment_id": {"type": "string", "minLength": 1},
+        "message_index": {"type": "integer", "minimum": 0},
+        "unicode_range": {"$ref": "#/$defs/range"},
+        "byte_range": {"$ref": "#/$defs/range"},
+        "role": {"type": "string"},
+        "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "client_source_id": {"type": "string", "minLength": 1},
+        "source_label": {"type": "string", "minLength": 1},
+        "provenance_kind": {"type": "string", "minLength": 1},
+        "source_kind": {"enum": ["whole_message", "source_span"]},
+        "parent_source_id": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": true
+    },
+    "baseline_token": {
+      "type": "object",
+      "required": ["index", "piece", "unicode_range", "logprob"],
+      "properties": {
+        "index": {"type": "integer", "minimum": 0},
+        "token_id": {"type": "integer"},
+        "piece": {"type": "string"},
+        "unicode_range": {"$ref": "#/$defs/range"},
+        "logprob": {"type": "number"}
+      },
+      "additionalProperties": true
+    },
+    "baseline": {
+      "type": "object",
+      "required": ["teacher_forced_logp", "context_hash", "scored_once", "provenance", "tokens"],
+      "properties": {
+        "teacher_forced_logp": {"type": "number", "description": "Whole recorded continuation log-probability."},
+        "context_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "scored_once": {"const": true},
+        "provenance": {"const": "measured"},
+        "tokens": {"type": "array", "items": {"$ref": "#/$defs/baseline_token"}, "minItems": 1}
+      },
+      "additionalProperties": true
+    },
+    "removed_range": {
+      "type": "object",
+      "required": ["source_id", "message_index", "unicode_range", "byte_range"],
+      "properties": {
+        "source_id": {"type": "string", "minLength": 1},
+        "message_index": {"type": "integer", "minimum": 0},
+        "unicode_range": {"$ref": "#/$defs/range"},
+        "byte_range": {"$ref": "#/$defs/range"}
+      },
+      "additionalProperties": true
+    },
+    "neutralized_range": {
+      "type": "object",
+      "required": [
+        "source_id", "message_index", "unicode_range", "byte_range", "content_sha256", "source_kind",
+        "replacement_content_sha256", "original_unicode_code_points", "replacement_unicode_code_points",
+        "original_utf8_bytes", "replacement_utf8_bytes"
+      ],
+      "properties": {
+        "source_id": {"type": "string", "minLength": 1},
+        "message_index": {"type": "integer", "minimum": 0},
+        "unicode_range": {"$ref": "#/$defs/range"},
+        "byte_range": {"$ref": "#/$defs/range"},
+        "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "source_kind": {"enum": ["whole_message", "source_span"]},
+        "replacement_content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "original_unicode_code_points": {"type": "integer", "minimum": 1},
+        "replacement_unicode_code_points": {"type": "integer", "minimum": 1},
+        "original_utf8_bytes": {"type": "integer", "minimum": 1},
+        "replacement_utf8_bytes": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": false
+    },
+    "effective_neutralized_range": {
+      "type": "object",
+      "required": [
+        "message_index", "unicode_range", "original_content_sha256", "replacement_content_sha256",
+        "original_unicode_code_points", "replacement_unicode_code_points",
+        "original_utf8_bytes", "replacement_utf8_bytes"
+      ],
+      "properties": {
+        "message_index": {"type": "integer", "minimum": 0},
+        "unicode_range": {"$ref": "#/$defs/range"},
+        "original_content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "replacement_content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "original_unicode_code_points": {"type": "integer", "minimum": 1},
+        "replacement_unicode_code_points": {"type": "integer", "minimum": 1},
+        "original_utf8_bytes": {"type": "integer", "minimum": 1},
+        "replacement_utf8_bytes": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": false
+    },
+    "neutralization": {
+      "type": "object",
+      "required": [
+        "operator", "strategy", "recipe", "length_contract", "utf8_byte_length_contract",
+        "message_structure"
+      ],
+      "properties": {
+        "operator": {"const": "neutralize_source"},
+        "strategy": {"const": "matched_length_neutral_filler"},
+        "recipe": {"const": "clozn.matched_length_neutral_filler.v1"},
+        "length_contract": {"const": "unicode_code_points_exact"},
+        "utf8_byte_length_contract": {"const": "not_guaranteed"},
+        "message_structure": {"const": "preserved"}
+      },
+      "additionalProperties": false
+    },
+    "robustness_control": {
+      "type": "object",
+      "required": [
+        "control_id", "intervention_operator", "provenance", "neutralized_source_ids",
+        "exact_neutralized_ranges", "effective_neutralized_ranges", "neutralization", "context_hash",
+        "intervened_logp", "baseline_logp", "delta_nats", "per_token_delta_nats", "token_indices",
+        "basis_digest", "intervened_context_digest", "score_ms"
+      ],
+      "properties": {
+        "control_id": {"type": "string", "pattern": "^cdrc_[0-9a-f]{24}$"},
+        "intervention_operator": {"const": "neutralize_source"},
+        "provenance": {"const": "measured_matched_length_neutralization_control"},
+        "neutralized_source_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+        "exact_neutralized_ranges": {"type": "array", "items": {"$ref": "#/$defs/neutralized_range"}, "minItems": 1},
+        "effective_neutralized_ranges": {"type": "array", "items": {"$ref": "#/$defs/effective_neutralized_range"}, "minItems": 1},
+        "neutralization": {"$ref": "#/$defs/neutralization"},
+        "context_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "intervened_logp": {"type": "number"},
+        "baseline_logp": {"type": "number"},
+        "delta_nats": {"type": "number"},
+        "per_token_delta_nats": {"type": "array", "items": {"type": "number"}, "minItems": 1},
+        "token_indices": {"type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 1},
+        "basis_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "intervened_context_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "score_ms": {"type": "number", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "experiment": {
+      "type": "object",
+      "required": [
+        "experiment_id", "intervention_operator", "removed_source_ids", "exact_removed_ranges",
+        "context_hash", "intervened_logp", "baseline_logp", "delta_nats",
+        "per_token_delta_nats", "token_indices", "provenance"
+      ],
+      "properties": {
+        "experiment_id": {"type": "string", "pattern": "^cdx_[0-9a-f]{24}$"},
+        "intervention_operator": {"const": "delete_source"},
+        "removed_source_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+        "exact_removed_ranges": {"type": "array", "items": {"$ref": "#/$defs/removed_range"}, "minItems": 1},
+        "context_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "intervened_logp": {"type": "number", "description": "Whole deleted-context continuation log-probability."},
+        "baseline_logp": {"type": "number", "description": "Whole full-context continuation log-probability."},
+        "delta_nats": {"type": "number", "description": "Whole-continuation baseline logp minus deleted-context logp; positive means deletion made the recorded continuation less likely."},
+        "per_token_delta_nats": {"type": "array", "items": {"type": "number"}, "minItems": 1},
+        "token_indices": {"type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 1},
+        "target_logp": false,
+        "baseline_target_logp": false,
+        "per_target_token_delta_nats": false,
+        "target_token_indices": false,
+        "provenance": {"const": "measured"},
+        "score_ms": {"type": "number", "minimum": 0}
+      },
+      "additionalProperties": true
+    },
+    "budget": {
+      "type": "object",
+      "required": ["passes_requested", "passes_consumed"],
+      "properties": {
+        "passes_requested": {"type": "integer", "minimum": 1},
+        "passes_consumed": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": true
+    }
+  }
+}

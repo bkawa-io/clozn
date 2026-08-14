@@ -433,11 +433,20 @@ def try_post(h, p, body):
 
     delivered_messages = msgs
     journal_delivered_messages = [dict(message) for message in delivered_messages]
+    sources_by_message: dict[int, list[dict]] = {}
     for source in source_metadata:
         index = source["message_index"]
-        journal_delivered_messages[index]["source_id"] = source["source_id"]
-        if source.get("label"):
-            journal_delivered_messages[index]["source_label"] = source["label"]
+        sources_by_message.setdefault(index, []).append(dict(source))
+    for index, sources in sources_by_message.items():
+        # Source metadata belongs only to the journal copy.  ``msgs`` remains
+        # exactly the client-visible message list handed to the chat template.
+        journal_delivered_messages[index]["_clozn_sources"] = sources
+        # Preserve the old message-level receipt fields when the request used
+        # the legacy one-source form.  Exact ``src_`` spans are additive.
+        if len(sources) == 1 and isinstance(sources[0].get("source_id"), str):
+            journal_delivered_messages[index]["source_id"] = sources[0]["source_id"]
+            if sources[0].get("label"):
+                journal_delivered_messages[index]["source_label"] = sources[0]["label"]
 
     # EXPLICIT, REQUEST-LOCAL CONCEPT GUARD INTERVENTION (FRONTIER_BETS section 9.1 / experiment A1.1),
     # opt-in per request only -- see generation_guard.py's own module docstring for the full honesty

@@ -9,9 +9,15 @@ segment_id-unresolvable bug this file's segment_id-anchored tests otherwise cove
 """
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
 from clozn.replay import span_bridge
+from clozn.receipts.forced import (
+    MATCHED_LENGTH_NEUTRAL_FILLER_RECIPE,
+    matched_length_neutral_filler,
+)
 from clozn.runs.context_receipt import _content_hash, build_context_receipt
 from clozn.runs.text_span_addresses import build_persisted_text_span_addresses
 
@@ -267,6 +273,127 @@ def test_canonical_receipt_set_deletion_refuses_nontrivial_assembly_and_unknown_
     fresh = _strict_receipt_run()
     with pytest.raises(span_bridge.ContextReceiptSourceResolutionError, match="unknown canonical"):
         span_bridge.delete_context_receipt_sources(fresh, ["seg_unknown"])
+
+
+def _span_receipt_run():
+    content = "Prefix 😀 [policy α] + [question?] suffix"
+    messages = [{
+        "role": "user", "content": content,
+        "_clozn_sources": [
+            {"source_id": "policy", "unicode_range": [9, 19],
+             "provenance_kind": "retrieved_document", "label": "Policy"},
+            {"source_id": "policy-detail", "unicode_range": [10, 17],
+             "parent_source_id": "policy", "provenance_kind": "retrieved_document"},
+            {"source_id": "question", "unicode_range": [22, 33],
+             "provenance_kind": "conversation_turn"},
+        ],
+    }]
+    receipt = build_context_receipt(
+        messages=messages, assembled_messages=messages, final_prompt="exact prompt",
+        run_id="run_span_receipt", privacy="full",
+    )
+    return {"id": "run_span_receipt", "messages": messages,
+            "assembled_messages": [dict(message) for message in messages],
+            "context_receipt": receipt}
+
+
+def test_canonical_receipt_span_deletion_handles_unicode_multiple_ranges_and_never_renders_metadata():
+    run = _span_receipt_run()
+    spans = run["context_receipt"]["assembled"][0]["sources"]
+    policy = next(item for item in spans if item.get("client_source_id") == "policy")
+    question = next(item for item in spans if item.get("client_source_id") == "question")
+
+    result = span_bridge.resolve_context_receipt_source_set(run, [question["source_id"], policy["source_id"]])
+
+    assert result["canonical_source_ids"] == sorted([policy["source_id"], question["source_id"]])
+    assert result["messages"] == [{"role": "user", "content": "Prefix 😀  +  suffix"}]
+    ranges = result["exact_removed_ranges"]
+    assert [item["unicode_range"] for item in ranges] == [[9, 19], [22, 33]]
+    assert ranges[0]["byte_range"] == [12, 23]  # 😀 consumes four UTF-8 bytes
+    assert all(item["source_kind"] == "source_span" and len(item["content_sha256"]) == 64
+               for item in ranges)
+    assert policy["source_id"] in result["available_source_ids"]
+    assert run["messages"][0]["content"] == "Prefix 😀 [policy α] + [question?] suffix"
+
+
+def test_canonical_receipt_span_deletion_allows_structural_nested_request_as_one_union():
+    run = _span_receipt_run()
+    spans = run["context_receipt"]["assembled"][0]["sources"]
+    parent = next(item for item in spans if item.get("client_source_id") == "policy")
+    child = next(item for item in spans if item.get("client_source_id") == "policy-detail")
+
+    result = span_bridge.delete_context_receipt_sources(run, [parent["source_id"], child["source_id"]])
+
+    assert result["messages"] == [{"role": "user", "content": "Prefix 😀  + [question?] suffix"}]
+    assert [item["source_id"] for item in result["exact_removed_ranges"]] == [
+        parent["source_id"], child["source_id"],
+    ]
+
+
+def test_canonical_receipt_span_deletion_refuses_byte_or_content_drift_and_malformed_overlap():
+    run = _span_receipt_run()
+    span = run["context_receipt"]["assembled"][0]["sources"][0]
+    run["messages"][0]["content"] = "changed " + run["messages"][0]["content"]
+    with pytest.raises(span_bridge.ContextReceiptSourceResolutionError, match="segment_id"):
+        span_bridge.delete_context_receipt_sources(run, [span["source_id"]])
+
+    run = _span_receipt_run()
+    source = run["context_receipt"]["assembled"][0]["sources"][0]
+    source["byte_range"] = [0, 1]
+    with pytest.raises(span_bridge.ContextReceiptSourceResolutionError, match="byte range"):
+        span_bridge.delete_context_receipt_sources(run, [source["source_id"]])
+
+    run = _span_receipt_run()
+    spans = run["context_receipt"]["assembled"][0]["sources"]
+    bad = next(item for item in spans if item.get("client_source_id") == "question")
+    content = run["messages"][0]["content"]
+    bad["unicode_range"] = [18, 33]  # overlaps policy but does not name it as a parent
+    bad["byte_range"] = [len(content[:18].encode("utf-8")), len(content[:33].encode("utf-8"))]
+    from clozn.runs.context_receipt import _canonical_source_id, _content_sha256
+    bad["content_sha256"] = _content_sha256(content[18:33])
+    bad["source_id"] = _canonical_source_id(
+        segment=bad["segment_id"], unicode_range=bad["unicode_range"], byte_range=bad["byte_range"],
+        content_sha256=bad["content_sha256"], provenance_kind=bad["provenance_kind"],
+        client_source_id=bad["client_source_id"], parent_source_id=None,
+    )
+    with pytest.raises(span_bridge.ContextReceiptSourceResolutionError, match="overlap"):
+        span_bridge.delete_context_receipt_sources(run, [bad["source_id"]])
+
+
+def test_matched_length_neutralization_is_unicode_exact_and_separate_from_deletion():
+    run = _span_receipt_run()
+    spans = run["context_receipt"]["assembled"][0]["sources"]
+    parent = next(item for item in spans if item.get("client_source_id") == "policy")
+    child = next(item for item in spans if item.get("client_source_id") == "policy-detail")
+
+    neutral = span_bridge.neutralize_context_receipt_sources(run, [child["source_id"], parent["source_id"]])
+    deleted = span_bridge.delete_context_receipt_sources(run, [parent["source_id"]])
+
+    original = run["messages"][0]["content"]
+    changed = neutral["messages"][0]["content"]
+    assert neutral["neutralization"] == {
+        "operator": "neutralize_source",
+        "strategy": "matched_length_neutral_filler",
+        "recipe": MATCHED_LENGTH_NEUTRAL_FILLER_RECIPE,
+        "length_contract": "unicode_code_points_exact",
+        "utf8_byte_length_contract": "not_guaranteed",
+        "message_structure": "preserved",
+    }
+    assert len(changed) == len(original)
+    assert len(changed.encode("utf-8")) < len(original.encode("utf-8"))  # α becomes recipe ASCII
+    filler = matched_length_neutral_filler(10)
+    assert changed == original[:9] + filler + original[19:]
+    assert len(neutral["exact_neutralized_ranges"]) == 2
+    assert neutral["effective_neutralized_ranges"] == [{
+        "message_index": 0, "unicode_range": [9, 19],
+        "original_content_sha256": parent["content_sha256"],
+        "replacement_content_sha256": hashlib.sha256(filler.encode("utf-8")).hexdigest(),
+        "original_unicode_code_points": 10, "replacement_unicode_code_points": 10,
+        "original_utf8_bytes": 11, "replacement_utf8_bytes": len(filler.encode("utf-8")),
+    }]
+    assert deleted["messages"][0]["content"] == "Prefix 😀  + [question?] suffix"
+    assert neutral["intervened_context_digest"] != deleted["intervened_context_digest"]
+    assert run["messages"][0]["content"] == original
 
 
 # ========================================================================================= excise_spans

@@ -264,11 +264,16 @@ class DirectContextDependenceStudy:
     ):
         if not _is_int(passes_requested) or passes_requested < 1:
             raise ContextDependenceStudyError("passes_requested must be a positive integer")
+        if target is not None:
+            raise ContextDependenceStudyError(
+                "target is not accepted by clozn.context-dependence-study.v2; "
+                "run-level studies score the whole continuation and selections are projections"
+            )
         if not isinstance(quick, bool):
             raise ContextDependenceStudyError("quick must be a boolean")
         if source_groups is not None and structural_groups is not None:
             raise ContextDependenceStudyError("supply source_groups or structural_groups, not both")
-        kwargs = {"target": target}
+        kwargs = {}
         if clock is not None:
             kwargs["clock"] = clock
         self._measurement = _MeasurementStudy(run, sub, **kwargs)

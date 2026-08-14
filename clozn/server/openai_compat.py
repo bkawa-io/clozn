@@ -159,54 +159,185 @@ def _normalize_messages(value: Any) -> list[dict[str, str]]:
     return out
 
 
-def _normalize_sources(value: Any, *, message_count: int) -> list[dict[str, Any]]:
-    """Validate the explicit source-identity extension without touching message content.
+def _source_range(value: Any, *, upper: int, param: str, label: str) -> list[int]:
+    if not (
+        isinstance(value, (list, tuple)) and len(value) == 2
+        and all(_is_int(item) for item in value)
+    ):
+        _fail(f"{label} must be a two-integer half-open range", param)
+    start, end = int(value[0]), int(value[1])
+    if start < 0 or end <= start or end > upper:
+        _fail(f"{label} must be non-empty, ordered, and within the message", param)
+    return [start, end]
 
-    The extension is a list of ``{message_index, source_id, label?}`` records.  It is deliberately
-    separate from OpenAI message objects so ordinary clients remain byte-for-byte compatible and
-    unsupported message fields still fail clearly.
+
+_SOURCE_PROVENANCE_KINDS = frozenset({
+    "message", "retrieved_document", "tool_result", "system_instruction",
+    "conversation_turn", "client_supplied",
+})
+
+
+def _normalize_sources(value: Any, *, messages: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """Validate exact, metadata-only source spans without changing messages.
+
+    Older callers may continue to send one ``{message_index, source_id,
+    label?}`` record: it becomes an exact whole-message span.  New callers can
+    attach many ranges to one message, with a client identity/label optional
+    and an explicit structural parent when ranges nest.  Canonical ``src_``
+    IDs are deliberately minted at receipt capture from the exact post-route
+    message bytes, never trusted from the client.
     """
     if value is None:
         return []
     if not isinstance(value, list):
         _fail("clozn_sources must be a list", "clozn_sources")
     normalized: list[dict[str, Any]] = []
-    seen_ids: set[str] = set()
-    seen_indexes: set[int] = set()
+    legacy_positions: set[int] = set()
+    seen_client_ids: set[str] = set()
     for position, raw in enumerate(value):
         param = f"clozn_sources[{position}]"
         if not isinstance(raw, Mapping):
             _fail("each clozn_sources entry must be an object", param)
-        extra = set(raw) - {"message_index", "source_id", "label"}
+        legacy_shape = set(raw).issubset({"message_index", "source_id", "label"})
+        extra = set(raw) - {
+            "message_index", "source_id", "client_source_id", "label", "unicode_range",
+            "byte_range", "provenance_kind", "parent_source_id",
+        }
         if extra:
             field = sorted(extra)[0]
             _fail(f"source metadata field '{field}' is unsupported", f"{param}.{field}")
         index = raw.get("message_index")
-        if not _is_int(index) or index < 0 or index >= message_count:
+        if not _is_int(index) or index < 0 or index >= len(messages):
             _fail(
-                f"message_index must identify one of the request's {message_count} messages",
+                f"message_index must identify one of the request's {len(messages)} messages",
                 f"{param}.message_index",
             )
-        source_id = raw.get("source_id")
-        if not isinstance(source_id, str) or not source_id.strip() or len(source_id) > 256:
-            _fail("source_id must be a non-empty string of at most 256 characters",
-                  f"{param}.source_id")
-        source_id = source_id.strip()
-        if source_id in seen_ids:
-            _fail("source_id values must be unique within a request", f"{param}.source_id")
-        if index in seen_indexes:
-            _fail("each message_index may have at most one source identity",
-                  f"{param}.message_index")
-        item: dict[str, Any] = {"message_index": int(index), "source_id": source_id}
+        if "source_id" in raw and "client_source_id" in raw:
+            _fail("source_id and client_source_id are aliases; provide only one", f"{param}.source_id")
+        client_source_id = raw.get("client_source_id", raw.get("source_id"))
+        if client_source_id is not None:
+            if not isinstance(client_source_id, str) or not client_source_id.strip() or len(client_source_id) > 256:
+                _fail("source_id must be a non-empty string of at most 256 characters",
+                      f"{param}.source_id")
+            client_source_id = client_source_id.strip()
+            if client_source_id in seen_client_ids:
+                _fail("source_id values must be unique within a request", f"{param}.source_id")
+            seen_client_ids.add(client_source_id)
+        content = messages[int(index)]["content"]
+        unicode_range = _source_range(
+            raw.get("unicode_range", [0, len(content)]), upper=len(content),
+            param=f"{param}.unicode_range", label="unicode_range",
+        )
+        byte_range = [
+            len(content[:unicode_range[0]].encode("utf-8")),
+            len(content[:unicode_range[1]].encode("utf-8")),
+        ]
+        if "byte_range" in raw:
+            supplied_bytes = _source_range(
+                raw["byte_range"], upper=len(content.encode("utf-8")),
+                param=f"{param}.byte_range", label="byte_range",
+            )
+            if supplied_bytes != byte_range:
+                _fail("byte_range must exactly equal the UTF-8 bytes of unicode_range", f"{param}.byte_range")
+        item: dict[str, Any] = {
+            "message_index": int(index),
+            "unicode_range": unicode_range,
+            "byte_range": byte_range,
+        }
+        if client_source_id is not None:
+            # Retain the established spelling in normalized output.  It is a
+            # client identity, not the canonical receipt ``src_`` identity.
+            item["source_id"] = client_source_id
         label = raw.get("label")
         if label is not None:
             if not isinstance(label, str) or not label.strip() or len(label) > 256:
                 _fail("label must be a non-empty string of at most 256 characters",
                       f"{param}.label")
             item["label"] = label.strip()
+        provenance_kind = raw.get("provenance_kind", "message")
+        if not isinstance(provenance_kind, str) or provenance_kind not in _SOURCE_PROVENANCE_KINDS:
+            _fail(
+                "provenance_kind must be one of message, retrieved_document, tool_result, "
+                "system_instruction, conversation_turn, or client_supplied",
+                f"{param}.provenance_kind",
+            )
+        item["provenance_kind"] = provenance_kind
+        parent_source_id = raw.get("parent_source_id")
+        if parent_source_id is not None:
+            if not isinstance(parent_source_id, str) or not parent_source_id.strip() or len(parent_source_id) > 256:
+                _fail("parent_source_id must be a non-empty client source ID", f"{param}.parent_source_id")
+            item["parent_source_id"] = parent_source_id.strip()
         normalized.append(item)
-        seen_ids.add(source_id)
-        seen_indexes.add(int(index))
+        if legacy_shape:
+            legacy_positions.add(len(normalized) - 1)
+
+    by_client_id = {item["source_id"]: item for item in normalized if item.get("source_id")}
+    for position, item in enumerate(normalized):
+        parent_client_id = item.get("parent_source_id")
+        if parent_client_id is None:
+            continue
+        parent = by_client_id.get(parent_client_id)
+        if parent is None:
+            _fail("parent_source_id must reference another source_id in this request",
+                  f"clozn_sources[{position}].parent_source_id")
+        if parent["message_index"] != item["message_index"]:
+            _fail("parent_source_id must name a source in the same message", f"clozn_sources[{position}].parent_source_id")
+        parent_start, parent_end = parent["unicode_range"]
+        child_start, child_end = item["unicode_range"]
+        if not (parent_start <= child_start and child_end <= parent_end):
+            _fail("a structural child unicode_range must be contained by its parent", f"clozn_sources[{position}].unicode_range")
+
+    # A structural graph must be a hierarchy, not merely a collection of
+    # range-containment claims. Catch self-parents and longer cycles at the
+    # public boundary; otherwise receipt capture would have to discard the
+    # supplied source metadata after generation already succeeded.
+    for position, item in enumerate(normalized):
+        source_id = item.get("source_id")
+        parent_id = item.get("parent_source_id")
+        seen: set[str] = set()
+        while isinstance(parent_id, str):
+            if parent_id == source_id or parent_id in seen:
+                _fail("source parent relationships must be acyclic",
+                      f"clozn_sources[{position}].parent_source_id")
+            seen.add(parent_id)
+            parent_item = by_client_id.get(parent_id)
+            parent_id = parent_item.get("parent_source_id") if parent_item else None
+
+    # Any shared bytes need an explicit ancestry edge (or chain), never an
+    # inferred "probably nested" relationship.
+    def is_ancestor(ancestor: dict, child: dict) -> bool:
+        parent_id = child.get("parent_source_id")
+        seen: set[str] = set()
+        while isinstance(parent_id, str) and parent_id not in seen:
+            if ancestor.get("source_id") == parent_id:
+                return True
+            seen.add(parent_id)
+            parent_item = by_client_id.get(parent_id)
+            parent_id = parent_item.get("parent_source_id") if parent_item else None
+        return False
+
+    for left_index, left in enumerate(normalized):
+        for right in normalized[left_index + 1:]:
+            if left["message_index"] != right["message_index"]:
+                continue
+            left_start, left_end = left["unicode_range"]
+            right_start, right_end = right["unicode_range"]
+            if max(left_start, right_start) >= min(left_end, right_end):
+                continue
+            left_contains_right = left_start <= right_start and right_end <= left_end
+            right_contains_left = right_start <= left_start and left_end <= right_end
+            if not (
+                (left_contains_right and is_ancestor(left, right))
+                or (right_contains_left and is_ancestor(right, left))
+            ):
+                _fail("overlapping source ranges must be structurally nested", "clozn_sources")
+    # The old normalized private shape is used by a few integrations and is
+    # intentionally preserved.  Receipt capture still derives its full exact
+    # range from this legacy whole-message record.
+    for position in legacy_positions:
+        normalized[position].pop("unicode_range", None)
+        normalized[position].pop("byte_range", None)
+        normalized[position].pop("provenance_kind", None)
     return normalized
 
 
@@ -275,7 +406,7 @@ def normalize_chat_request(body: Mapping[str, Any]) -> dict[str, Any]:
         out["_structured_contract"] = structured
     else:
         out["messages"] = _normalize_messages(body.get("messages"))
-    sources = _normalize_sources(body.get("clozn_sources"), message_count=len(out["messages"]))
+    sources = _normalize_sources(body.get("clozn_sources"), messages=out["messages"])
     out.pop("clozn_sources", None)
     if sources:
         out["_clozn_sources"] = sources
