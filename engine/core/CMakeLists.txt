@@ -267,6 +267,7 @@ if(CLOZN_BUILD_SERVE AND CLOZN_BUILD_GGML)
         serve/routes_jlens.cpp
         serve/routes_whitebox.cpp
         serve/routes_state.cpp
+        serve/routes_reference_match.cpp
         ${_vendor}/cpp-httplib/httplib.cpp)
     if(GGML_CUDA)
         set(_clozn_engine_backend "cuda")

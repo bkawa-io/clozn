@@ -139,7 +139,9 @@ def _groups(kind: str, arms: list[dict[str, Any]]) -> list[tuple[str, list[tuple
     return [(key, groups[key]) for key in order]
 
 
-def _invoke_batch(method: Callable[..., Any], arms: list[dict[str, Any]], cancel: Any) -> list[Any]:
+def _invoke_batch(method: Callable[..., Any], arms: list[dict[str, Any]], cancel: Any,
+                  proof_grade: bool = True) -> list[Any]:
+    signature = None
     try:
         signature = inspect.signature(method)
         accepts_cancel = "cancel" in signature.parameters or any(
@@ -148,7 +150,18 @@ def _invoke_batch(method: Callable[..., Any], arms: list[dict[str, Any]], cancel
         )
     except (TypeError, ValueError):
         accepts_cancel = True
-    raw = method(arms, cancel=cancel) if accepts_cancel else method(arms)
+    accepts_proof_grade = signature is not None and (
+        "proof_grade" in signature.parameters or any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        )
+    )
+    kwargs: dict[str, Any] = {}
+    if accepts_cancel:
+        kwargs["cancel"] = cancel
+    if accepts_proof_grade:
+        kwargs["proof_grade"] = bool(proof_grade)
+    raw = method(arms, **kwargs) if kwargs else method(arms)
     if isinstance(raw, Mapping) and isinstance(raw.get("results"), list):
         raw = raw["results"]
     if not isinstance(raw, (list, tuple)) or len(raw) != len(arms):
@@ -190,7 +203,8 @@ def _serial_results(method: Callable[..., Any], arms: list[dict[str, Any]], canc
     return results
 
 
-def _many(kind: str, substrate: Any, arms: Iterable[Mapping[str, Any]], *, cancel: Any = None) -> list[Any]:
+def _many(kind: str, substrate: Any, arms: Iterable[Mapping[str, Any]], *, cancel: Any = None,
+          proof_grade: bool = True) -> list[Any]:
     try:
         raw_arms = list(arms)
     except TypeError as exc:
@@ -220,7 +234,7 @@ def _many(kind: str, substrate: Any, arms: Iterable[Mapping[str, Any]], *, cance
             raise BatchCancelled(completed=completed, next_index=indices[0])
         try:
             if native is not None:
-                group_results = _invoke_batch(native, group_arms, cancel)
+                group_results = _invoke_batch(native, group_arms, cancel, proof_grade)
             else:
                 group_results = _serial_results(scalar, group_arms, cancel, completed, indices[0], indices)
         except BatchCancelled as exc:
@@ -245,9 +259,17 @@ def score_tokens_many(substrate: Any, arms: Iterable[Mapping[str, Any]], *, canc
     return _many("score_tokens", substrate, arms, cancel=cancel)
 
 
-def probe_reference_match_many(substrate: Any, arms: Iterable[Mapping[str, Any]], *, cancel: Any = None) -> list[Any]:
-    """Probe compatible exact-output arms, preserving input order."""
-    return _many("probe_reference_match", substrate, arms, cancel=cancel)
+def probe_reference_match_many(substrate: Any, arms: Iterable[Mapping[str, Any]], *, cancel: Any = None,
+                               proof_grade: bool = True) -> list[Any]:
+    """Probe compatible exact-output arms, preserving input order.
+
+    ``proof_grade`` is deliberately conservative: the default keeps certificate
+    evidence on the scalar semantic path.  Experimental native adapters may be
+    selected only by an explicit ``proof_grade=False`` caller after its parity
+    harness has been run.
+    """
+    return _many("probe_reference_match", substrate, arms, cancel=cancel,
+                 proof_grade=proof_grade)
 
 
 def serial_many(method: Callable[..., Any], arms: Iterable[Mapping[str, Any]], *, cancel: Any = None) -> list[Any]:

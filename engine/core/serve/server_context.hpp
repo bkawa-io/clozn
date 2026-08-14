@@ -36,5 +36,6 @@ struct ServerContext {
 void register_jlens_routes(httplib::Server& svr, ServerContext& ctx);
 void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx);  // /harvest, /harvest/layers, /score, /apply_template
 void register_state_routes(httplib::Server& svr, ServerContext& ctx);     // /state, /intervene
+void register_reference_match_routes(httplib::Server& svr, ServerContext& ctx); // private native-many probe
 
 }  // namespace clozn

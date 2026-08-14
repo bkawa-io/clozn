@@ -460,6 +460,19 @@ public:
     std::vector<ForwardResult> ar_forward_batch(
         const std::vector<int>& tokens_per_seq, int n_past,
         const std::vector<bool>& active);
+    // Prefill independent prompt token sequences in one llama_decode call. Each
+    // sequence has its own llama sequence id and only its final prompt row emits
+    // logits. The caller must keep the total physical rows within n_ctx and the
+    // number of resident sequences within the worker's sequence capacity.
+    std::vector<ForwardResult> ar_forward_prefill_batch(
+        const std::vector<std::vector<int>>& prompts);
+    // Decode one token per sequence at independently advancing positions. This
+    // is the survivor-only primitive used by native reference matching; inactive
+    // sequences are omitted from the physical batch and their logits stay empty.
+    std::vector<ForwardResult> ar_forward_batch_at(
+        const std::vector<int>& tokens_per_seq,
+        const std::vector<int>& positions,
+        const std::vector<bool>& active);
     // Remove seq 1..n-1 from the KV, keeping only seq 0. Call after batched decode is done to
     // return the context to single-sequence state.
     void cleanup_seqs(int n_branches);

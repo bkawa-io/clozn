@@ -639,6 +639,36 @@ class EngineClient:
         body["prompt"] = prompt
         return self._post("/v1/completions", body)
 
+    def reference_match_arms(
+        self,
+        arms: Sequence[Mapping[str, Any]],
+        *,
+        reference_token_ids: Sequence[int],
+        generation_contract: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """POST the private native exact-reference multi-arm probe.
+
+        This is an experiment-only wire primitive.  The worker returns one
+        detached result row per ``arm_id`` plus execution metrics; callers must
+        keep scalar evidence authoritative until their real-GGUF parity gate
+        passes.
+        """
+        if not isinstance(arms, Sequence) or isinstance(arms, (str, bytes, bytearray)) or not arms:
+            raise ValueError("arms must be a non-empty sequence")
+        if not isinstance(reference_token_ids, Sequence) or not reference_token_ids:
+            raise ValueError("reference_token_ids must be a non-empty sequence")
+        body = {
+            "arms": [dict(arm) for arm in arms],
+            "reference_token_ids": [int(token) for token in reference_token_ids],
+            "generation_contract": dict(generation_contract),
+        }
+        response = self._post("/v1/reference-match/arms", body)
+        if not isinstance(response, Mapping) or not isinstance(response.get("results"), list):
+            raise EngineError("POST /v1/reference-match/arms returned an invalid response")
+        if len(response["results"]) != len(arms):
+            raise EngineError("POST /v1/reference-match/arms returned the wrong arm count")
+        return dict(response)
+
     def complete_chat(
         self,
         messages: Sequence[Mapping[str, Any]],

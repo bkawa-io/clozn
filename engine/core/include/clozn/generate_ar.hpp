@@ -14,6 +14,8 @@
 #pragma once
 
 #include <functional>
+#include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -61,6 +63,31 @@ struct BranchResult {
     std::string text;
     std::string reason;  // "eos" | "length"
     int new_tokens = 0;
+};
+
+struct ReferenceMatchBatchMetrics {
+    std::int64_t prompt_tokenization_ns = 0;
+    std::int64_t prefill_ns = 0;
+    std::int64_t decode_ns = 0;
+    std::int64_t wall_ns = 0;
+    long long physical_prompt_rows = 0;
+    long long output_token_positions_evaluated = 0;
+    int model_forward_decode_calls = 0;
+    int max_live_sequences = 0;
+    long long decode_steps = 0;
+    double mean_live_sequences = 0.0;
+    int peak_resident_sequences = 0;
+    std::map<int, int> first_divergence_histogram;
+};
+
+struct ReferenceMatchBatchResult {
+    std::vector<GenerateResult> arms;
+    // The exact committed token stream, including a terminal EOS or a
+    // first-divergence token. GenerateResult.generated keeps its historical
+    // visible-text convention and may omit EOS; this field is the evidence
+    // stream consumed by the Python classifier.
+    std::vector<std::vector<int>> generated_token_ids;
+    ReferenceMatchBatchMetrics metrics;
 };
 
 // Greedy by default (SampleConfig: temperature 0). Stops at config.max_new tokens or EOS
@@ -151,5 +178,18 @@ std::vector<BranchResult> generate_ar_branched(
     int n_branches,
     int max_tokens,
     const SampleConfig& base_sample = {});
+
+// Native experiment-only exact reference matching. Candidate prompts are
+// independently prefetched into llama sequence ids, then survivor sequences
+// are decoded together at their own positions. The first implementation is
+// intentionally greedy-only and carries proof_grade=false at the wire layer;
+// the existing scalar probe remains the certificate authority until a real
+// GGUF parity suite qualifies this regime.
+ReferenceMatchBatchResult generate_ar_reference_match_batched(
+    GgmlAdapter& adapter,
+    const std::vector<std::vector<int>>& prompts,
+    const std::vector<int>& reference,
+    int max_tokens,
+    const std::vector<std::string>& stop_sequences = {});
 
 }  // namespace clozn

@@ -432,6 +432,8 @@ int main(int argc, char** argv) {
                                           // false would have meant "knows, and declines".
             {"score_arms", true},         // /score arms: batched multi-arm scoring -- APPROXIMATE
                                           // regime (screening only; response carries the label)
+            {"reference_match_arms", ar_mode}, // private greedy native-many exact-reference probe;
+                                                // experimental until real-GGUF parity is qualified
             {"checkpoint", true},          // POST /v1/checkpoint (save) + /v1/restore + /v1/branch
                                           // (KV-cache save/resume/fork)
             {"execution_fork", true},      // POST /v1/execution-fork: intervention forks from a
@@ -1338,6 +1340,8 @@ int main(int argc, char** argv) {
 
 
     register_state_routes(svr, ctx);
+
+    register_reference_match_routes(svr, ctx);
 
 
 

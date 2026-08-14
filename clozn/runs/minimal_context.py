@@ -21,6 +21,7 @@ from clozn import schemas
 
 SCHEMA = "clozn.minimal-context-result.v1"
 SEARCH_METHOD = "greedy_backward_elimination.v1"
+SEARCH_STRATEGY = "forward_reverse_intersection.v1"
 PRESERVATION_KIND = "teacher_forced_likelihood"
 PRESERVATION_TARGET = "whole_recorded_continuation"
 EXACT_PRESERVATION_KIND = "exact_recorded_output"
@@ -503,6 +504,8 @@ def _base_result(
         },
         "search": {
             "method": SEARCH_METHOD,
+            "strategy": SEARCH_STRATEGY,
+            "greedy_orders": ["source_order", "reverse_source_order"],
             "search_seed": search_seed,
             "stopped_reason": search_stopped_reason,
         },
@@ -552,6 +555,7 @@ def _bind_result_id(
         "search_universe_id": search_universe_id,
         "preservation": result["preservation"],
         "search_method": SEARCH_METHOD,
+        "search_strategy": SEARCH_STRATEGY,
         "search_seed": search_seed,
         "search_probe_budget": search_budget,
         "certification_probe_budget": certification_budget,
@@ -790,6 +794,7 @@ def run_minimal_context_search(
     if seed:
         orders.append(_seeded_order(universe, seed))
     search_exhausted = False
+    preserving_greedy_candidates: list[tuple[str, ...]] = []
     for order in orders:
         current = universe
         current_observation: dict[str, Any] | None = None
@@ -815,8 +820,17 @@ def run_minimal_context_search(
             break
         if current_observation is not None:
             offer(current, current_observation)
+            preserving_greedy_candidates.append(current)
     if not search_exhausted:
-        for retained in nominations:
+        # The intersection is only a nomination. It still goes through the
+        # direct experiment adapter below; set arithmetic is never evidence.
+        if len(preserving_greedy_candidates) >= 2:
+            first, second = preserving_greedy_candidates[0], preserving_greedy_candidates[1]
+            nominations = list(nominations) + [
+                tuple(source_id for source_id in universe
+                      if source_id in set(first) and source_id in set(second))
+            ]
+        for retained in _canonical_nominations(nominations, universe):
             observation = engine.get(retained, "search")
             if observation is None:
                 search_exhausted = engine.exhausted["search"]

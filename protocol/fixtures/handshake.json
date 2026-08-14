@@ -23,6 +23,7 @@
     "attn_knockout",
     "lora",
     "score_arms",
+    "reference_match_arms",
     "checkpoint",
     "execution_fork",
     "execution_fork_regimes",

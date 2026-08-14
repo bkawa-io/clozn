@@ -55,6 +55,18 @@ def _minimal_context_batch_workers() -> int:
     except (TypeError, ValueError):
         return 2
 
+
+def _experimental_native_reference_match_arms_enabled() -> bool:
+    """Opt into the native-many wire path only for explicit measurements.
+
+    The worker advertises the capability so benchmark tooling can discover it,
+    but the product proof path remains scalar until a real-GGUF parity suite
+    has qualified the execution regime.
+    """
+    return os.environ.get("CLOZN_ENABLE_NATIVE_REFERENCE_MATCH_ARMS", "").lower() in {
+        "1", "true", "yes", "on",
+    }
+
 class Substrate:
     """Shared studio surface for any substrate: the /memory/* trait cards and the /steer/* tone dials, on
     whatever model the subclass loads. A subclass sets self.steer, self._mem (a memory object exposing
@@ -293,6 +305,8 @@ class EngineSubstrate(Substrate):
         self._pers_steer_val = None
         self._identity_lock = threading.Lock()
         self._identity_last_attempt = 0.0
+        self._native_reference_match_arms = False
+        self.last_native_reference_match_metrics = None
         self._resolve_identity()
 
     def _resolve_identity(self):
@@ -305,6 +319,10 @@ class EngineSubstrate(Substrate):
         h = {}
         try:
             h = self.engine.health() if (self.engine and hasattr(self.engine, "health")) else {}
+            capabilities = (h or {}).get("capabilities") if isinstance(h, dict) else {}
+            self._native_reference_match_arms = bool(
+                isinstance(capabilities, dict) and capabilities.get("reference_match_arms") is True
+            )
             fam, _info = _engine_model_info((h or {}).get("model", ""))
             self._model_family_val = fam
             self._model_id_val = _info["model_id"]
@@ -745,6 +763,7 @@ class EngineSubstrate(Substrate):
         today this is an explicit, cancellation-aware serial fallback.
         """
         from clozn.runs.multi_arm import concurrent_many, serial_many
+        from clozn.runs.answer_preservation import classify_reference_match
 
         workers = _minimal_context_batch_workers()
         if workers <= 1:
@@ -855,20 +874,93 @@ class EngineSubstrate(Substrate):
         })
         return result
 
-    def probe_reference_match_many(self, arms, *, cancel=None):
+    def probe_reference_match_many(self, arms, *, cancel=None, proof_grade=True):
         """Batch seam for exact recorded-output probes.
 
         Exact probes retain the scalar early-stop and termination semantics;
-        the fallback merely schedules independent arms and never calls
-        ``chat`` or publishes a RequestContext.  A native engine adapter may
-        implement this method later with different active sequence lengths.
+        the default path merely schedules independent arms and never calls
+        ``chat`` or publishes a RequestContext.  The native engine adapter is
+        opt-in and explicitly non-proof-grade until real-GGUF parity is proven.
         """
         from clozn.runs.multi_arm import concurrent_many, serial_many
+        from clozn.runs.answer_preservation import classify_reference_match
+
+        self.last_native_reference_match_metrics = None
+        native_arms = [dict(arm) for arm in arms]
+        if (not proof_grade and _experimental_native_reference_match_arms_enabled()
+                and self._native_reference_match_arms
+                and native_arms
+                and callable(getattr(self.engine, "reference_match_arms", None))):
+            prepared = []
+            native_supported = True
+            render_started_ns = time.perf_counter_ns()
+            common_reference = native_arms[0].get("reference_token_ids") if native_arms else None
+            common_contract = native_arms[0].get("generation_contract") if native_arms else None
+            for arm in native_arms:
+                contract = arm.get("generation_contract")
+                conditions = arm.get("explicit_conditions") or {}
+                if (not isinstance(contract, dict) or contract.get("decode_mode") != "greedy"
+                        or arm.get("reference_token_ids") != common_reference
+                        or contract != common_contract
+                        or conditions.get("steer_vec") is not None
+                        or any((conditions.get("steer_strengths") or {}).values())):
+                    native_supported = False
+                    break
+                messages = list(arm.get("messages") or [])
+                block = conditions.get("block")
+                assembled = ctx._inject_block(messages, block) if block is not None else messages
+                prompt = ctx._engine_tmpl(self.engine, assembled)
+                prepared.append({"arm_id": len(prepared), "prompt": prompt})
+            if native_supported:
+                try:
+                    response = self.engine.reference_match_arms(
+                        prepared,
+                        reference_token_ids=list(native_arms[0]["reference_token_ids"]),
+                        generation_contract=dict(native_arms[0]["generation_contract"]),
+                    )
+                    rows = response.get("results") if isinstance(response, dict) else None
+                    if isinstance(rows, list) and len(rows) == len(prepared):
+                        self.last_native_reference_match_metrics = dict(response.get("metrics") or {})
+                        if not self.last_native_reference_match_metrics.get("prompt_rendering_time_ns"):
+                            self.last_native_reference_match_metrics[
+                                "prompt_rendering_time_ns"
+                            ] = max(0, time.perf_counter_ns() - render_started_ns)
+                        output = []
+                        for row in rows:
+                            raw = dict(row.get("result") or {})
+                            generated = raw.get("generated_token_ids")
+                            if not isinstance(generated, list) or any(
+                                    isinstance(token, bool) or not isinstance(token, int)
+                                    for token in generated):
+                                raise ValueError("native reference-match row has no integer token trace")
+                            expected = native_arms[int(row["arm_id"])].get("generation_contract", {}).get(
+                                "expected_termination")
+                            classified = classify_reference_match(
+                                list(native_arms[0]["reference_token_ids"]), generated,
+                                diverged=raw.get("diverged"),
+                                diverged_at=raw.get("diverged_at"),
+                                termination=raw.get("termination"),
+                                finish_reason=raw.get("finish_reason"),
+                                expected_termination=expected,
+                                max_new=native_arms[0]["generation_contract"]["max_new"],
+                            )
+                            classified.update({
+                                "generated_token_ids": list(generated),
+                                "finish_reason": raw.get("finish_reason"),
+                                "termination": dict(raw.get("termination") or {}),
+                                "reply": raw.get("reply", ""),
+                            })
+                            output.append({"arm_index": int(row["arm_id"]), "result": classified})
+                        return output
+                except Exception:
+                    # A stale/unsupported worker must degrade to the existing
+                    # scalar path rather than turning an experiment into proof.
+                    self.last_native_reference_match_metrics = None
 
         workers = _minimal_context_batch_workers()
         if workers <= 1:
-            return serial_many(self.probe_reference_match, arms, cancel=cancel)
-        return concurrent_many(self.probe_reference_match, arms, cancel=cancel, max_workers=workers)
+            return serial_many(self.probe_reference_match, native_arms, cancel=cancel)
+        return concurrent_many(self.probe_reference_match, native_arms, cancel=cancel, max_workers=workers)
 
     def score_prompt_tokens(self, prompt, continuation_ids=None, *, continuation=None, topk=0):
         """score_tokens' RAW-PROMPT sibling: teacher-forced per-token logprob of a continuation against a

@@ -160,6 +160,8 @@ def test_same_seed_and_world_are_deterministic():
     second, second_calls = run_once()
     assert first == second
     assert first_calls == second_calls
+    assert first["search"]["strategy"] == "forward_reverse_intersection.v1"
+    assert first["search"]["greedy_orders"] == ["source_order", "reverse_source_order"]
 
 
 def test_large_lower_cardinality_layers_are_consumed_in_budget_bounded_chunks():

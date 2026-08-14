@@ -708,4 +708,176 @@ std::vector<BranchResult> generate_ar_branched(
     return results;
 }
 
+ReferenceMatchBatchResult generate_ar_reference_match_batched(
+    GgmlAdapter& adapter,
+    const std::vector<std::vector<int>>& prompts,
+    const std::vector<int>& reference,
+    int max_tokens,
+    const std::vector<std::string>& stop_sequences) {
+    if (prompts.empty())
+        throw std::invalid_argument("reference-match arms must not be empty");
+    if (prompts.size() > 16)
+        throw std::invalid_argument("reference-match arms exceed the resident sequence capacity");
+    if (reference.empty())
+        throw std::invalid_argument("reference-match reference_token_ids must not be empty");
+    if (max_tokens < 1)
+        throw std::invalid_argument("reference-match max_tokens must be >= 1");
+
+    using clock = std::chrono::steady_clock;
+    const clock::time_point started = clock::now();
+    ReferenceMatchBatchResult batch_result;
+    const int n = static_cast<int>(prompts.size());
+    auto& metrics = batch_result.metrics;
+    metrics.peak_resident_sequences = n;
+    for (const auto& prompt : prompts)
+        metrics.physical_prompt_rows += static_cast<long long>(prompt.size());
+
+    std::vector<ForwardResult> fwd;
+    std::vector<std::vector<int>> generated(static_cast<size_t>(n));
+    std::vector<int> positions(static_cast<size_t>(n));
+    std::vector<bool> active(static_cast<size_t>(n), true);
+    std::vector<bool> diverged(static_cast<size_t>(n), false);
+    std::vector<int> diverged_at(static_cast<size_t>(n), -1);
+    std::vector<std::string> reasons(static_cast<size_t>(n), "length");
+    std::vector<std::string> stopped_text(static_cast<size_t>(n));
+
+    auto ends_with_stop = [&](const std::vector<int>& ids, std::string& visible) {
+        if (stop_sequences.empty()) return false;
+        const std::string decoded = adapter.decode(ids);
+        for (const std::string& stop : stop_sequences) {
+            if (!stop.empty() && decoded.size() >= stop.size() &&
+                decoded.compare(decoded.size() - stop.size(), stop.size(), stop) == 0) {
+                visible = decoded.substr(0, decoded.size() - stop.size());
+                return true;
+            }
+        }
+        return false;
+    };
+
+    try {
+        adapter.set_causal(true);
+        const clock::time_point prefill_started = clock::now();
+        fwd = adapter.ar_forward_prefill_batch(prompts);
+        metrics.prefill_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            clock::now() - prefill_started).count();
+        metrics.model_forward_decode_calls = 1;
+        for (int i = 0; i < n; ++i)
+            positions[static_cast<size_t>(i)] = static_cast<int>(prompts[static_cast<size_t>(i)].size());
+
+        long long live_sum = 0;
+        int live_steps = 0;
+        const int eos = adapter.config().eos_token_id;
+        for (int k = 0; k < max_tokens; ++k) {
+            // Match scalar generate_ar's graceful context boundary: the
+            // current logits may exist, but no token can be committed when
+            // the next position is already outside the worker window.
+            for (int i = 0; i < n; ++i) {
+                if (active[static_cast<size_t>(i)] &&
+                    positions[static_cast<size_t>(i)] >= adapter.n_ctx()) {
+                    active[static_cast<size_t>(i)] = false;
+                    reasons[static_cast<size_t>(i)] = "length";
+                }
+            }
+            int live = 0;
+            for (bool value : active) if (value) ++live;
+            if (live == 0) break;
+            live_sum += live;
+            ++live_steps;
+            metrics.max_live_sequences = std::max(metrics.max_live_sequences, live);
+
+            std::vector<int> next_tokens(static_cast<size_t>(n), 0);
+            std::vector<int> next_positions = positions;
+            std::vector<bool> decode_active(static_cast<size_t>(n), false);
+            for (int i = 0; i < n; ++i) {
+                if (!active[static_cast<size_t>(i)]) continue;
+                const Candidate candidate = sample_committed_candidate(
+                    fwd[static_cast<size_t>(i)], positions[static_cast<size_t>(i)]);
+                const int token = candidate.token_id;
+                generated[static_cast<size_t>(i)].push_back(token);
+                ++metrics.output_token_positions_evaluated;
+
+                if (k >= static_cast<int>(reference.size()) ||
+                    token != reference[static_cast<size_t>(k)]) {
+                    active[static_cast<size_t>(i)] = false;
+                    diverged[static_cast<size_t>(i)] = true;
+                    diverged_at[static_cast<size_t>(i)] = k;
+                    ++metrics.first_divergence_histogram[k];
+                    continue;
+                }
+
+                if (ends_with_stop(generated[static_cast<size_t>(i)],
+                                   stopped_text[static_cast<size_t>(i)])) {
+                    active[static_cast<size_t>(i)] = false;
+                    reasons[static_cast<size_t>(i)] = "stop";
+                    continue;
+                }
+                if (eos >= 0 && token == eos) {
+                    active[static_cast<size_t>(i)] = false;
+                    reasons[static_cast<size_t>(i)] = "eos";
+                    continue;
+                }
+
+                next_tokens[static_cast<size_t>(i)] = token;
+                decode_active[static_cast<size_t>(i)] = true;
+            }
+
+            bool any_decode = false;
+            for (bool value : decode_active) if (value) { any_decode = true; break; }
+            if (!any_decode) continue;
+            const clock::time_point decode_started = clock::now();
+            fwd = adapter.ar_forward_batch_at(next_tokens, next_positions, decode_active);
+            metrics.decode_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                clock::now() - decode_started).count();
+            ++metrics.model_forward_decode_calls;
+            for (int i = 0; i < n; ++i)
+                if (decode_active[static_cast<size_t>(i)])
+                    ++positions[static_cast<size_t>(i)];
+        }
+        metrics.mean_live_sequences = live_steps > 0
+            ? static_cast<double>(live_sum) / static_cast<double>(live_steps) : 0.0;
+        metrics.decode_steps = live_steps;
+
+        batch_result.arms.resize(static_cast<size_t>(n));
+        batch_result.generated_token_ids = generated;
+        for (int i = 0; i < n; ++i) {
+            GenerateResult& result = batch_result.arms[static_cast<size_t>(i)];
+            std::vector<int> visible = generated[static_cast<size_t>(i)];
+            if (reasons[static_cast<size_t>(i)] == "stop") {
+                result.text = stopped_text[static_cast<size_t>(i)];
+                // Keep the worker's visible board convention: remove the
+                // matched stop suffix from the board where possible.
+                for (size_t cut = 0; cut <= visible.size(); ++cut) {
+                    std::vector<int> prefix(visible.begin(), visible.begin() +
+                                            static_cast<std::ptrdiff_t>(cut));
+                    if (adapter.decode(prefix) == result.text) {
+                        visible = std::move(prefix);
+                        break;
+                    }
+                }
+            } else if (reasons[static_cast<size_t>(i)] == "eos" && !visible.empty()) {
+                visible.pop_back();
+                result.text = adapter.decode(visible);
+            } else {
+                result.text = adapter.decode(visible);
+            }
+            result.generated = visible;
+            result.new_tokens = static_cast<int>(visible.size());
+            result.reason = reasons[static_cast<size_t>(i)];
+            result.steps_total = static_cast<int>(generated[static_cast<size_t>(i)].size());
+            result.ref_active = true;
+            result.diverged = diverged[static_cast<size_t>(i)];
+            result.diverged_at = diverged_at[static_cast<size_t>(i)];
+            result.board = prompts[static_cast<size_t>(i)];
+            result.board.insert(result.board.end(), visible.begin(), visible.end());
+        }
+        adapter.cleanup_seqs(n);
+    } catch (...) {
+        adapter.cleanup_seqs(n);
+        throw;
+    }
+    metrics.wall_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        clock::now() - started).count();
+    return batch_result;
+}
+
 }  // namespace clozn

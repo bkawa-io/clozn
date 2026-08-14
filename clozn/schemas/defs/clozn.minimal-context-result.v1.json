@@ -192,6 +192,11 @@
       "required": ["method", "search_seed", "stopped_reason"],
       "properties": {
         "method": {"const": "greedy_backward_elimination.v1"},
+        "strategy": {"const": "forward_reverse_intersection.v1"},
+        "greedy_orders": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
         "search_seed": {"type": "integer", "minimum": 0},
         "stopped_reason": {"type": "string", "minLength": 1},
         "certification_lower_cardinality_candidate_count": {"type": "integer", "minimum": 0}

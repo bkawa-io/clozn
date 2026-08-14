@@ -1184,16 +1184,30 @@ void GgmlAdapter::branch_kv(int n_branches) {
 std::vector<ForwardResult> GgmlAdapter::ar_forward_batch(
         const std::vector<int>& tokens_per_seq, int n_past,
         const std::vector<bool>& active) {
+    std::vector<int> positions(tokens_per_seq.size(), n_past);
+    return ar_forward_batch_at(tokens_per_seq, positions, active);
+}
+
+std::vector<ForwardResult> GgmlAdapter::ar_forward_batch_at(
+        const std::vector<int>& tokens_per_seq,
+        const std::vector<int>& positions,
+        const std::vector<bool>& active) {
     const int n = static_cast<int>(tokens_per_seq.size());
     if (n <= 0) throw std::invalid_argument("ar_forward_batch: empty tokens_per_seq");
-    if (static_cast<int>(active.size()) != n)
+    if (static_cast<int>(positions.size()) != n || static_cast<int>(active.size()) != n)
         throw std::invalid_argument("ar_forward_batch: active size mismatch");
 
     int n_active = 0;
     for (int i = 0; i < n; ++i) if (active[i]) ++n_active;
     if (n_active == 0) return std::vector<ForwardResult>(n);
+    for (int i = 0; i < n; ++i) {
+        if (active[i] && (positions[i] < 0 || positions[i] >= n_ctx_))
+            throw std::invalid_argument("ar_forward_batch: position outside context window");
+    }
 
-    write_from_ = n_past;
+    // Native reference matching does not arm activation writes. Keep the
+    // callback in ordinary batch-row mode for any future observer caller.
+    write_from_ = 0;
     llama_batch batch = llama_batch_init(n_active, 0, 1);
     batch.n_tokens = n_active;
     int slot = 0;
@@ -1201,7 +1215,7 @@ std::vector<ForwardResult> GgmlAdapter::ar_forward_batch(
     for (int i = 0; i < n; ++i) {
         if (!active[i]) continue;
         batch.token[slot] = static_cast<llama_token>(tokens_per_seq[i]);
-        batch.pos[slot] = n_past;
+        batch.pos[slot] = positions[i];
         batch.n_seq_id[slot] = 1;
         batch.seq_id[slot][0] = static_cast<llama_seq_id>(i);
         batch.logits[slot] = 1;
@@ -1224,7 +1238,68 @@ std::vector<ForwardResult> GgmlAdapter::ar_forward_batch(
         ForwardResult& out = results[seq_i];
         out.n_requested = 1;
         out.vocab = vocab;
-        out.kv = std::make_shared<GgmlKV>(n_past + 1);
+        out.kv = std::make_shared<GgmlKV>(positions[seq_i] + 1);
+        out.logits.assign(logits, logits + vocab);
+    }
+    return results;
+}
+
+std::vector<ForwardResult> GgmlAdapter::ar_forward_prefill_batch(
+        const std::vector<std::vector<int>>& prompts) {
+    const int n = static_cast<int>(prompts.size());
+    if (n <= 0) throw std::invalid_argument("ar_forward_prefill_batch: empty prompts");
+    if (n > 16) throw std::invalid_argument("ar_forward_prefill_batch: too many sequences");
+
+    int total = 0;
+    std::vector<int> last_rows(static_cast<size_t>(n), -1);
+    for (int arm = 0; arm < n; ++arm) {
+        if (prompts[static_cast<size_t>(arm)].empty())
+            throw std::invalid_argument("ar_forward_prefill_batch: empty prompt");
+        if (static_cast<int>(prompts[static_cast<size_t>(arm)].size()) > n_ctx_)
+            throw std::invalid_argument("ar_forward_prefill_batch: prompt exceeds context window");
+        total += static_cast<int>(prompts[static_cast<size_t>(arm)].size());
+        if (total > n_ctx_)
+            throw std::invalid_argument("ar_forward_prefill_batch: physical prompt rows exceed n_ctx");
+    }
+
+    llama_memory_clear(llama_get_memory(ctx_), true);
+    frozen_end_ = 0;
+    boundary_row_.clear();
+    write_from_ = 0;
+    decoded_tokens_ += total;
+
+    llama_batch batch = llama_batch_init(total, 0, 1);
+    batch.n_tokens = total;
+    int row = 0;
+    for (int arm = 0; arm < n; ++arm) {
+        const auto& prompt = prompts[static_cast<size_t>(arm)];
+        for (int pos = 0; pos < static_cast<int>(prompt.size()); ++pos) {
+            batch.token[row] = static_cast<llama_token>(prompt[static_cast<size_t>(pos)]);
+            batch.pos[row] = pos;
+            batch.n_seq_id[row] = 1;
+            batch.seq_id[row][0] = static_cast<llama_seq_id>(arm);
+            batch.logits[row] = (pos + 1 == static_cast<int>(prompt.size()));
+            if (batch.logits[row]) last_rows[static_cast<size_t>(arm)] = row;
+            ++row;
+        }
+    }
+    const int rc = llama_decode(ctx_, batch);
+    llama_batch_free(batch);
+    if (rc != 0)
+        throw std::runtime_error("ar_forward_prefill_batch: llama_decode failed (rc=" +
+                                 std::to_string(rc) + ")");
+
+    const int vocab = cfg_.vocab_size;
+    std::vector<ForwardResult> results(static_cast<size_t>(n));
+    for (int arm = 0; arm < n; ++arm) {
+        const float* logits = llama_get_logits_ith(ctx_, last_rows[static_cast<size_t>(arm)]);
+        if (!logits)
+            throw std::runtime_error("ar_forward_prefill_batch: null logits for sequence " +
+                                     std::to_string(arm));
+        ForwardResult& out = results[static_cast<size_t>(arm)];
+        out.n_requested = 1;
+        out.vocab = vocab;
+        out.kv = std::make_shared<GgmlKV>(static_cast<int>(prompts[static_cast<size_t>(arm)].size()));
         out.logits.assign(logits, logits + vocab);
     }
     return results;
