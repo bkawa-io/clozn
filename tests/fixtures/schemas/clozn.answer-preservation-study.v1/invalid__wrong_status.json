@@ -1,0 +1,21 @@
+{
+  "schema_version": "clozn.answer-preservation-study.v1",
+  "study_id": "aps_0123456789abcdef01234567",
+  "run_id": "run-fixture",
+  "status": "pending",
+  "preservation": {"kind": "exact_recorded_output", "target": "whole_recorded_continuation"},
+  "source_ids": ["src_a"],
+  "eligibility": {
+    "eligible": false,
+    "reasons": [],
+    "reason": null,
+    "generation_contract": null,
+    "reference_token_count": null,
+    "reference_token_ids_sha256": null,
+    "recorded_runtime": null,
+    "current_runtime": null
+  },
+  "unchanged_control": {"status": "unavailable"},
+  "probes": [],
+  "provenance": "direct_generation_probe"
+}

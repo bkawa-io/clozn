@@ -105,13 +105,20 @@ class JobControl:
                 raise JobCancelled("job cancelled before its result was attached")
             self._job.result = dict(payload) if isinstance(payload, dict) else payload
 
-    def checkpoint(self, *, phase: str, completed: int, total: int) -> None:
+    def checkpoint(self, *, phase: str, completed: int, total: int,
+                   best_retained_source_count: int | None = None,
+                   certificate_candidate_kind: str | None = None) -> None:
         with self._job.lock:
             if self._job.cancel_event.is_set():
                 raise JobCancelled("influence-map job cancelled")
             if self._job.state not in TERMINAL_STATES:
                 self._job.state = "running"
-                self._job.progress = _progress(phase, completed, total)
+                progress = _progress(phase, completed, total)
+                if isinstance(best_retained_source_count, int) and best_retained_source_count >= 0:
+                    progress["best_retained_source_count"] = best_retained_source_count
+                if isinstance(certificate_candidate_kind, str) and certificate_candidate_kind:
+                    progress["certificate_candidate_kind"] = certificate_candidate_kind
+                self._job.progress = progress
                 self._job.updated_at = _now_iso()
 
     def commit(self, persist) -> None:
@@ -164,7 +171,8 @@ class InfluenceJobRegistry:
             if len(self._jobs) < self.max_jobs:
                 return
 
-    def start(self, run_id: str, worker=None, *, cached: bool = False, kind: str = "influence_map") -> dict:
+    def start(self, run_id: str, worker=None, *, cached: bool = False, kind: str = "influence_map",
+              cached_result: dict | None = None) -> dict:
         with self._lock:
             self._prune_locked()
             if len(self._jobs) >= self.max_jobs:
@@ -172,6 +180,8 @@ class InfluenceJobRegistry:
             job = _Job(
                 job_id=f"infjob_{uuid.uuid4().hex}", run_id=run_id, kind=str(kind or "influence_map"),
                 cached=bool(cached))
+            if isinstance(cached_result, dict):
+                job.result = dict(cached_result)
             self._jobs[job.job_id] = job
             if cached:
                 with job.lock:

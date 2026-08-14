@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.context-search-universe.v1",
+  "title": "Deterministic bounded Context Unit search universe",
+  "type": "object",
+  "required": [
+    "schema_version", "run_id", "universe_id", "basis_context_units_digest",
+    "policy", "source_ids", "source_count", "coverage", "status"
+  ],
+  "properties": {
+    "schema_version": {"const": "clozn.context-search-universe.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "universe_id": {"type": "string", "pattern": "^mcu_[0-9a-f]{24}$"},
+    "basis_context_units_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "policy": {
+      "type": "object",
+      "required": ["kind", "version", "max_units", "merge", "explicit_over_cap"],
+      "properties": {
+        "kind": {"const": "bounded_structural_partition"},
+        "version": {"const": "bounded_structural_partition.v1"},
+        "max_units": {"type": "integer", "minimum": 1},
+        "merge": {"const": "smallest_adjacent_auto_siblings_leftmost.v1"},
+        "explicit_over_cap": {"const": "typed_bound_exceeded"}
+      },
+      "additionalProperties": false
+    },
+    "source_ids": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^(?:seg_[0-9a-f]{16}(?:_[0-9]+)?|src_[0-9a-f]{24})$"}
+    },
+    "source_count": {"type": "integer", "minimum": 0},
+    "coverage": {
+      "type": "object",
+      "required": [
+        "protected_message_indices", "removable_message_indices", "removable_content_covered",
+        "partition_verified", "complete_catalog_source_count", "explicit_source_count"
+      ],
+      "properties": {
+        "protected_message_indices": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+        "removable_message_indices": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+        "removable_content_covered": {"const": true},
+        "partition_verified": {"const": true},
+        "complete_catalog_source_count": {"type": "integer", "minimum": 0},
+        "explicit_source_count": {"type": "integer", "minimum": 0},
+        "selected_source_count": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "status": {"enum": ["planned", "bound_exceeded"]},
+    "condition": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string", "minLength": 1},
+        "message": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

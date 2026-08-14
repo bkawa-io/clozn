@@ -329,6 +329,18 @@ def _chunk_text(text: str) -> list[tuple[int, int]]:
     return spans or [(0, len(text))]
 
 
+def structural_spans(text: str) -> list[tuple[int, int]]:
+    """Return the uncapped text-only structural decomposition used by the chunker.
+
+    This is intentionally a thin public seam over ``_chunk_text``.  It exposes
+    the deterministic semantic boundaries without exposing the legacy section
+    manifest's message filtering, global cap, IDs, or output shape.  In
+    particular, callers that need a complete partition must assign the
+    whitespace between these trimmed semantic spans themselves.
+    """
+    return _chunk_text(text) if isinstance(text, str) else []
+
+
 def _unit_chars(unit: dict) -> int:
     return sum(e - s for _, s, e in unit["parts"])
 

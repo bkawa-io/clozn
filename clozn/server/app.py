@@ -282,7 +282,10 @@ def _engine_generation_meta(max_new=None, stream=None, sample=None, stop=None):
         "decode": decode,
         "max_tokens": int(max_new) if max_new is not None else None,
         "stream": bool(stream) if stream is not None else None,
-        "stop": list(stop) if stop else None,
+        # An empty stop list is a resolved no-stop contract, not an unknown
+        # value.  Persisting it lets exact recorded-answer studies distinguish
+        # an intentional no-stop decode from a missing generation contract.
+        "stop": list(stop) if stop is not None else ([] if max_new is not None else None),
     })
 
 

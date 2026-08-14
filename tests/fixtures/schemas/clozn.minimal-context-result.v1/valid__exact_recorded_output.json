@@ -1,0 +1,76 @@
+{
+  "schema_version": "clozn.minimal-context-result.v1",
+  "run_id": "run-fixture",
+  "result_id": "mc_abcdefabcdefabcdefabcdef",
+  "status": "found",
+  "source_universe": {
+    "context_units_schema": "clozn.context-units.v1",
+    "source_ids": ["A", "B"],
+    "source_count": 2,
+    "cost_kind": "retained_source_count",
+    "context_units_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "preservation": {
+    "kind": "exact_recorded_output",
+    "target": "whole_recorded_continuation"
+  },
+  "candidate": {
+    "retained_source_ids": ["B"],
+    "removed_source_ids": ["A"],
+    "retained_source_count": 1,
+    "probe_id": "rmp_0123456789abcdef01234567",
+    "result_status": "matched",
+    "within_tolerance": true,
+    "provenance": "direct_generation_probe"
+  },
+  "certificate": {
+    "kind": "exact_minimum",
+    "candidate_probe_id": "rmp_0123456789abcdef01234567",
+    "candidate_retained_source_ids": ["B"],
+    "candidate_retained_source_count": 1,
+    "global_minimality": "proven",
+    "inclusion_minimality": "proven",
+    "local_checks": [{
+      "retained_source_ids": [],
+      "removed_source_ids": ["A", "B"],
+      "retained_source_count": 0,
+      "probe_id": "rmp_abcdefabcdefabcdefabcdef",
+      "result_status": "diverged",
+      "within_tolerance": false,
+      "provenance": "direct_generation_probe"
+    }],
+    "local_checks_complete": true,
+    "smaller_candidate_count": 1,
+    "smaller_tested_count": 1,
+    "smaller_remaining_count": 0
+  },
+  "coverage": {
+    "lower_cardinalities": [{
+      "retained_source_count": 0,
+      "candidate_count": 1,
+      "tested_count": 1,
+      "preserving_count": 0,
+      "complete": true
+    }],
+    "smaller_candidate_count": 1,
+    "smaller_tested_count": 1,
+    "smaller_remaining_count": 0
+  },
+  "budget": {
+    "search_probe_budget": 4,
+    "search_new_probes": 3,
+    "search_remaining": 1,
+    "certification_probe_budget": 4,
+    "certification_new_probes": 1,
+    "certification_remaining": 3,
+    "reused_experiments": 0,
+    "total_new_probes": 4,
+    "baseline_passes": 0,
+    "baseline_charged_as_deletion_probe": false
+  },
+  "search": {
+    "method": "greedy_backward_elimination.v1",
+    "search_seed": 0,
+    "stopped_reason": "search_complete"
+  }
+}

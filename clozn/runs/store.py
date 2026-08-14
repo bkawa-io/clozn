@@ -491,6 +491,14 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
             "context_receipt": context_receipt,
             "warnings": warnings_for(finish_reason, meta),
         }
+        # Construct the default source universe only after receipt capture has
+        # minted and persisted canonical seg_/src_ identities.  The manifest
+        # therefore contains IDs the strict Context Dependence path can consume
+        # directly; derivation failures produce an empty universe rather than a
+        # speculative coordinate mapping.
+        from . import context_units
+        context_unit_manifest = context_units.build_context_unit_manifest(rec)
+        rec["context_units"] = context_unit_manifest
         if sections:
             rec["sections"] = list(sections)
         if execution_fork_receipt is not None:

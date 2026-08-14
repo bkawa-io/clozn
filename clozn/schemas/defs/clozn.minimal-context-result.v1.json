@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.minimal-context-result.v1",
+  "title": "Bounded minimal Context Units search result",
+  "description": "A bounded, directly measured preserving-source search with an evidence-derived certificate. The result contains no prompt or source text.",
+  "type": "object",
+  "required": [
+    "schema_version", "run_id", "result_id", "status", "source_universe",
+    "preservation", "budget", "search"
+  ],
+  "properties": {
+    "schema_version": {"const": "clozn.minimal-context-result.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "result_id": {"type": "string", "pattern": "^mc_[0-9a-f]{24}$"},
+    "status": {"enum": ["found", "not_found_within_budget", "unavailable"]},
+    "source_universe": {"$ref": "#/$defs/source_universe"},
+    "preservation": {"$ref": "#/$defs/preservation"},
+    "candidate": {"$ref": "#/$defs/candidate"},
+    "certificate": {"$ref": "#/$defs/certificate"},
+    "coverage": {"$ref": "#/$defs/coverage"},
+    "budget": {"$ref": "#/$defs/budget"},
+    "search": {"$ref": "#/$defs/search"},
+    "context_dependence_study_id": {"type": "string", "pattern": "^cds_[0-9a-f]{24}$"},
+    "answer_preservation_study_id": {"type": "string", "pattern": "^aps_[0-9a-f]{24}$"},
+    "cache_binding": {"type": "object"},
+    "error": {"type": "string", "minLength": 1}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "source_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.:-]+$"},
+    "source_universe": {
+      "type": "object",
+      "required": [
+        "context_units_schema", "source_ids", "source_count", "cost_kind",
+        "context_units_manifest_sha256"
+      ],
+      "properties": {
+        "context_units_schema": {"const": "clozn.context-units.v1"},
+        "source_ids": {"type": "array", "items": {"$ref": "#/$defs/source_id"}},
+        "source_count": {"type": "integer", "minimum": 0},
+        "cost_kind": {"const": "retained_source_count"},
+        "context_units_manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "search_universe_id": {"type": "string", "pattern": "^mcu_[0-9a-f]{24}$"}
+      },
+      "additionalProperties": false
+    },
+    "preservation": {
+      "type": "object",
+      "required": ["kind", "target"],
+      "properties": {
+        "kind": {"enum": ["teacher_forced_likelihood", "exact_recorded_output"]},
+        "target": {"const": "whole_recorded_continuation"},
+        "tolerance_nats": {"type": "number", "minimum": 0}
+      },
+      "oneOf": [
+        {"required": ["tolerance_nats"], "properties": {"kind": {"const": "teacher_forced_likelihood"}}},
+        {"properties": {"kind": {"const": "exact_recorded_output"}}}
+      ],
+      "additionalProperties": false
+    },
+    "candidate": {
+      "type": "object",
+      "required": [
+        "retained_source_ids", "removed_source_ids", "retained_source_count",
+        "within_tolerance", "provenance"
+      ],
+      "properties": {
+        "retained_source_ids": {"type": "array", "items": {"$ref": "#/$defs/source_id"}},
+        "removed_source_ids": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/source_id"}},
+        "retained_source_count": {"type": "integer", "minimum": 0},
+        "experiment_id": {"type": "string", "minLength": 1},
+        "delta_nats": {"type": "number"},
+        "absolute_difference_nats": {"type": "number", "minimum": 0},
+        "within_tolerance": {"const": true},
+        "provenance": {"enum": ["measured", "direct_generation_probe"]},
+        "probe_id": {"type": "string", "minLength": 1},
+        "result_status": {"const": "matched"}
+      },
+      "oneOf": [
+        {"required": ["experiment_id", "delta_nats", "absolute_difference_nats"], "properties": {"provenance": {"const": "measured"}}},
+        {"required": ["probe_id", "result_status"], "properties": {"provenance": {"const": "direct_generation_probe"}}}
+      ],
+      "additionalProperties": false
+    },
+    "certificate": {
+      "type": "object",
+      "required": [
+        "kind", "candidate_retained_source_ids",
+        "candidate_retained_source_count", "global_minimality",
+        "inclusion_minimality", "smaller_candidate_count",
+        "smaller_tested_count", "smaller_remaining_count",
+        "local_checks", "local_checks_complete"
+      ],
+      "properties": {
+        "kind": {"enum": ["best_verified", "inclusion_minimum", "exact_minimum"]},
+        "candidate_probe_id": {"type": "string", "minLength": 1},
+        "candidate_experiment_id": {"type": "string", "minLength": 1},
+        "candidate_retained_source_ids": {"type": "array", "items": {"$ref": "#/$defs/source_id"}},
+        "candidate_retained_source_count": {"type": "integer", "minimum": 0},
+        "global_minimality": {"enum": ["proven", "not_proven"]},
+        "inclusion_minimality": {"enum": ["proven", "not_proven"]},
+        "local_checks": {"type": "array", "items": {"$ref": "#/$defs/local_check"}},
+        "local_checks_complete": {"type": "boolean"},
+        "smaller_candidate_count": {"type": "integer", "minimum": 0},
+        "smaller_tested_count": {"type": "integer", "minimum": 0},
+        "smaller_remaining_count": {"type": "integer", "minimum": 0}
+      },
+      "oneOf": [
+        {"required": ["candidate_experiment_id"]},
+        {"required": ["candidate_probe_id"]}
+      ],
+      "additionalProperties": false
+    },
+    "local_check": {
+      "type": "object",
+      "required": [
+        "retained_source_ids", "removed_source_ids", "retained_source_count",
+        "within_tolerance", "provenance"
+      ],
+      "properties": {
+        "retained_source_ids": {"type": "array", "items": {"$ref": "#/$defs/source_id"}},
+        "removed_source_ids": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/source_id"}},
+        "retained_source_count": {"type": "integer", "minimum": 0},
+        "experiment_id": {"type": "string", "minLength": 1},
+        "delta_nats": {"type": "number"},
+        "absolute_difference_nats": {"type": "number", "minimum": 0},
+        "within_tolerance": {"type": "boolean"},
+        "provenance": {"enum": ["measured", "direct_generation_probe"]},
+        "probe_id": {"type": "string", "minLength": 1},
+        "result_status": {"enum": ["diverged", "matched"]}
+      },
+      "oneOf": [
+        {"required": ["experiment_id", "delta_nats", "absolute_difference_nats"], "properties": {"provenance": {"const": "measured"}, "within_tolerance": {"const": false}}},
+        {"required": ["probe_id", "result_status"], "properties": {"provenance": {"const": "direct_generation_probe"}, "result_status": {"const": "diverged"}, "within_tolerance": {"const": false}}}
+      ],
+      "additionalProperties": false
+    },
+    "coverage_row": {
+      "type": "object",
+      "required": [
+        "retained_source_count", "candidate_count", "tested_count",
+        "preserving_count", "complete"
+      ],
+      "properties": {
+        "retained_source_count": {"type": "integer", "minimum": 0},
+        "candidate_count": {"type": "integer", "minimum": 0},
+        "tested_count": {"type": "integer", "minimum": 0},
+        "preserving_count": {"type": "integer", "minimum": 0},
+        "complete": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "coverage": {
+      "type": "object",
+      "required": [
+        "lower_cardinalities", "smaller_candidate_count",
+        "smaller_tested_count", "smaller_remaining_count"
+      ],
+      "properties": {
+        "lower_cardinalities": {"type": "array", "items": {"$ref": "#/$defs/coverage_row"}},
+        "smaller_candidate_count": {"type": "integer", "minimum": 0},
+        "smaller_tested_count": {"type": "integer", "minimum": 0},
+        "smaller_remaining_count": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "budget": {
+      "type": "object",
+      "required": [
+        "search_probe_budget", "search_new_probes", "search_remaining",
+        "certification_probe_budget", "certification_new_probes",
+        "certification_remaining", "reused_experiments", "total_new_probes",
+        "baseline_passes", "baseline_charged_as_deletion_probe"
+      ],
+      "properties": {
+        "search_probe_budget": {"type": "integer", "minimum": 0},
+        "search_new_probes": {"type": "integer", "minimum": 0},
+        "search_remaining": {"type": "integer", "minimum": 0},
+        "certification_probe_budget": {"type": "integer", "minimum": 0},
+        "certification_new_probes": {"type": "integer", "minimum": 0},
+        "certification_remaining": {"type": "integer", "minimum": 0},
+        "reused_experiments": {"type": "integer", "minimum": 0},
+        "total_new_probes": {"type": "integer", "minimum": 0},
+        "baseline_passes": {"type": "integer", "minimum": 0},
+        "baseline_charged_as_deletion_probe": {"const": false},
+        "certification_stopped_reason": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "search": {
+      "type": "object",
+      "required": ["method", "search_seed", "stopped_reason"],
+      "properties": {
+        "method": {"const": "greedy_backward_elimination.v1"},
+        "search_seed": {"type": "integer", "minimum": 0},
+        "stopped_reason": {"type": "string", "minLength": 1},
+        "certification_lower_cardinality_candidate_count": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    }
+  }
+}

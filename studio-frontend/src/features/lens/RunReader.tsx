@@ -15,6 +15,7 @@ import { ContextReceipt } from "./ContextReceipt";
 import { DiagnosisRepair } from "./DiagnosisRepair";
 import { InvestigationExperiment } from "./InvestigationExperiment";
 import { Lens } from "./Lens";
+import { MinimalContextStudio } from "./MinimalContextStudio";
 import { ReceivedContext } from "./ReceivedContext";
 import { RunEventRail, type RunEventRailEvent } from "./RunEventRail";
 import { SecondOpinion } from "./SecondOpinion";
@@ -29,6 +30,7 @@ export const RUN_READER_SECTION_IDS = [
   "what-received",
   "what-sent",
   "what-mattered",
+  "minimal-context",
   "why",
   "claims",
   "second-opinion",
@@ -92,6 +94,7 @@ const QUESTION_NAV_ORDER: InvestigationQuestionId[] = [
  */
 export const RUN_READER_SECTIONS: readonly RunReaderSection[] = [
   { id: "read", label: "Read" },
+  { id: "minimal-context", label: "Minimal context" },
   { id: "what-received", label: "What it received", questionId: "what_received" },
   { id: "what-sent", label: "What was sent" },
   ...INVESTIGATION_QUESTIONS
@@ -286,6 +289,8 @@ function SectionBody({
       return <ContextReceipt runId={runId} defaultDetailedOpen />;
     case "what-mattered":
       return <WhatMattered runId={runId} />;
+    case "minimal-context":
+      return <MinimalContextStudio runId={runId} />;
     case "why":
       return <DiagnosisRepair runId={runId} />;
     case "claims":
@@ -398,6 +403,7 @@ export function RunReader({ runtime, initialRunId, initialSection, mechanismStat
             {sessionLabel && <a href={`#/sessions/${encodeURIComponent(run.sessionKey!)}/investigate`}>{sessionLabel}</a>}
           </div>
         )}
+        {run && <button type="button" className="run-reader-reduce-context" onClick={() => selectSection("minimal-context")}>REDUCE CONTEXT</button>}
         {runtime.runs.length > 1 && (
           <label className="run-reader-picker">
             <span>RUN</span>

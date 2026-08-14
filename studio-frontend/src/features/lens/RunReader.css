@@ -81,6 +81,8 @@
 .run-reader-nav button small { color: var(--ink-faint); font-family: var(--font-machine); font-size: 9px; text-transform: uppercase; }
 
 .run-reader-route-question { display: grid; gap: 8px; padding: 13px; }
+.run-reader-reduce-context { border: 1px solid var(--signal-violet); padding: 9px 11px; color: var(--signal-violet); background: color-mix(in srgb, var(--signal-violet) 7%, var(--panel)); font-family: var(--font-machine); font-size: 10px; font-weight: 700; letter-spacing: .08em; }
+.run-reader-reduce-context:hover { color: var(--panel); background: var(--signal-violet); }
 .run-reader-route-question label { display: grid; gap: 5px; }
 .run-reader-route-question input { min-width: 0; border: 1px solid var(--line); padding: 8px; color: var(--ink); background: var(--panel-solid); font: inherit; font-size: 12px; }
 .run-reader-route-question button { border: 1px solid var(--line-strong); padding: 8px; color: var(--ink); background: var(--panel-raised); font: inherit; font-family: var(--font-machine); font-size: 11px; }

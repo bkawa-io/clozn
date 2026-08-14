@@ -1,20 +1,21 @@
 # Clozn
 
-**Model CI and an inspectable local runtime for the GGUFs you already use.** Compare a base model with a
-fine-tune or LoRA adapter, run target + guard experiments, and fail CI on regressions with per-token
-receipts. Then serve the model through familiar OpenAI/Ollama-compatible APIs: prompts, responses,
-steering, timings, and exact rendered context become inspectable runs without requiring every user to
-live in Studio.
+**Reduce an LLM's context to the smallest set that preserves its answer.** Clozn records an ordinary
+local-model run, derives canonical Context Units with zero prompt instrumentation, and lets you test a
+bounded reduction directly against the recorded continuation.
 
-For everyday debugging, Clozn shows what context was delivered and survived, compares any two recorded
-runs, measures source support when the required evidence is available, and offers one-shot corrective
-retries and controlled comparisons — try a correction, generate a matched candidate, and see whether it
-actually changed the output. Nothing persists past the run it was generated from. For deeper work, it
-can teacher-force a stored answer, capture token
-alternatives, apply qualified interventions, and attach model-specific J-lens readouts. These are
-evidence tools—not a claim to decode literal thought—and white-box capabilities fail closed unless the
-exact artifact is qualified. See the [capability matrix](docs/CAPABILITIES.md) and
-[model support](docs/MODEL_SUPPORT.md) for the boundaries.
+“Smallest” means the fewest retained canonical source units in the declared search universe. “Preserves”
+means either the recorded answer is reproduced token-for-token under the recorded generation contract,
+or the whole recorded continuation stays within an explicitly chosen teacher-forced likelihood tolerance.
+`EXACT MINIMUM` is reserved for the stronger case: every smaller cardinality was directly checked and
+ruled out under that same criterion. A partial search is shown as `BEST VERIFIED`, never as a hidden
+estimate.
+
+Clozn is zero-config for local OpenAI-compatible inference: run or serve the model, open the recorded
+Run, and choose **Reduce context**. The primary Studio path is Runs → Answer → Minimal Context →
+Context → Compare/Branch; detailed mechanism and diagnostic tools remain available as advanced evidence
+surfaces. See the [capability matrix](docs/CAPABILITIES.md) and [model support](docs/MODEL_SUPPORT.md)
+for boundaries.
 
 `clozn` = `cloze` (the engine inside) + *cozen* (to deceive — the illusion it reveals).
 

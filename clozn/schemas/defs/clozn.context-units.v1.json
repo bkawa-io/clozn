@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.context-units.v1",
+  "title": "Canonical zero-config context-unit manifest",
+  "description": "A deterministic journal-only default search universe over canonical Context Receipt roots and exact source spans. The manifest never changes the messages or rendered prompt sent to the model.",
+  "type": "object",
+  "required": [
+    "schema_version", "run_id", "basis", "protected_message_indices", "units", "default_source_ids"
+  ],
+  "properties": {
+    "schema_version": {"const": "clozn.context-units.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "basis": {"const": "messages"},
+    "protected_message_indices": {
+      "type": "array",
+      "items": {"type": "integer", "minimum": 0}
+    },
+    "units": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/unit"}
+    },
+    "default_source_ids": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^(?:seg_[0-9a-f]{16}(?:_[0-9]+)?|src_[0-9a-f]{24})$"}
+    },
+    "error": {"type": "string", "minLength": 1}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "range": {
+      "type": "array",
+      "items": {"type": "integer", "minimum": 0},
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "unit": {
+      "type": "object",
+      "required": [
+        "source_id", "message_index", "role", "unicode_range", "byte_range", "source_kind", "derivation"
+      ],
+      "properties": {
+        "source_id": {"type": "string", "pattern": "^(?:seg_[0-9a-f]{16}(?:_[0-9]+)?|src_[0-9a-f]{24})$"},
+        "segment_id": {"type": "string", "pattern": "^seg_[0-9a-f]{16}(?:_[0-9]+)?$"},
+        "message_index": {"type": "integer", "minimum": 0},
+        "role": {"type": "string"},
+        "unicode_range": {"$ref": "#/$defs/range"},
+        "byte_range": {"$ref": "#/$defs/range"},
+        "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "source_kind": {"enum": ["whole_message", "source_span"]},
+        "derivation": {"enum": ["message_root", "auto_structural", "caller_explicit", "caller_fallback_root"]},
+        "provenance_kind": {"type": "string", "minLength": 1},
+        "client_source_id": {"type": "string", "minLength": 1},
+        "source_label": {"type": "string", "minLength": 1},
+        "parent_source_id": {"type": "string", "pattern": "^src_[0-9a-f]{24}$"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

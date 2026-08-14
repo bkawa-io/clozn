@@ -571,6 +571,13 @@ def build_context_receipt(*, messages=None, assembled_messages=None, final_promp
     trace = trace if isinstance(trace, dict) else {}
     identity = identity if isinstance(identity, dict) else {}
     messages_list = messages if isinstance(messages, list) else []
+    # Automatic context-unit descriptors are added only to this detached
+    # journal/evidence view.  The caller's message list has already crossed
+    # the model boundary by the time receipt capture runs, and is never
+    # mutated.  Keeping this at the receipt seam also makes direct receipt
+    # construction and store-backed runs obey the same canonicalization path.
+    from . import context_units
+    receipt_messages = context_units.annotate_auto_sources(messages_list)
 
     # ---- legacy-shaped fields, unchanged behavior (see module docstring) ----
     survived = {
@@ -592,7 +599,7 @@ def build_context_receipt(*, messages=None, assembled_messages=None, final_promp
     warning = cutoff_warning(finish_reason, meta)
 
     # ---- new schema fields ----
-    delivered_segments = _delivered_segments(messages_list)
+    delivered_segments = _delivered_segments(receipt_messages)
     doc: dict = {"schema_version": SCHEMA_VERSION, "run_id": run_id if isinstance(run_id, str) else ""}
 
     template_fingerprint = identity.get("template_fingerprint")
@@ -609,7 +616,7 @@ def build_context_receipt(*, messages=None, assembled_messages=None, final_promp
     omissions: list[dict] = []
     if isinstance(assembled_messages, list):
         assembled_segments, matched_ids = _assembled_segments(
-            delivered_segments, messages_list, assembled_messages)
+            delivered_segments, receipt_messages, assembled_messages)
         for seg in delivered_segments:
             seg["included"] = seg["segment_id"] in matched_ids
         doc["assembled"] = assembled_segments

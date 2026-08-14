@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.answer-preservation-study.v1",
+  "title": "Exact recorded-answer preservation study",
+  "description": "Run-scoped eligibility, unchanged full-context control, and direct reference-match probes.",
+  "type": "object",
+  "required": ["schema_version", "study_id", "run_id", "status", "preservation", "source_ids", "eligibility", "unchanged_control", "probes", "provenance"],
+  "properties": {
+    "schema_version": {"const": "clozn.answer-preservation-study.v1"},
+    "study_id": {"type": "string", "pattern": "^aps_[0-9a-f]{24}$"},
+    "run_id": {"type": "string", "minLength": 1},
+    "status": {"enum": ["eligible", "unavailable"]},
+    "preservation": {"type": "object", "required": ["kind", "target"], "properties": {"kind": {"const": "exact_recorded_output"}, "target": {"const": "whole_recorded_continuation"}}, "additionalProperties": false},
+    "source_ids": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/source_id"}},
+    "eligibility": {"$ref": "#/$defs/eligibility"},
+    "unchanged_control": {"$ref": "#/$defs/control"},
+    "probes": {"type": "array", "items": {"$ref": "#/$defs/probe"}},
+    "provenance": {"const": "direct_generation_probe"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "source_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.:-]+$"},
+    "probe": {
+      "type": "object",
+      "required": ["schema_version", "probe_id", "run_id", "removed_source_ids", "exact_removed_ranges", "basis_digest", "intervened_context_digest", "reference_token_ids_sha256", "reference_token_count", "generation_contract", "result", "provenance"],
+      "properties": {
+        "schema_version": {"const": "clozn.reference-match-probe.v1"},
+        "probe_id": {"type": "string", "pattern": "^rmp_[0-9a-f]{24}$"},
+        "run_id": {"type": "string", "minLength": 1},
+        "removed_source_ids": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/source_id"}},
+        "exact_removed_ranges": {"type": "array"},
+        "basis_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "intervened_context_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "reference_token_ids_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "reference_token_count": {"type": "integer", "minimum": 1},
+        "generation_contract": {"type": "object"},
+        "result": {"type": "object", "required": ["status"], "properties": {"status": {"enum": ["matched", "diverged", "unavailable"]}}, "additionalProperties": true},
+        "provenance": {"const": "direct_generation_probe"}
+      },
+      "additionalProperties": false
+    },
+    "runtime": {"type": ["object", "null"]},
+    "generation_contract": {"type": ["object", "null"]},
+    "eligibility": {
+      "type": "object",
+      "required": ["eligible", "reasons", "reason", "generation_contract", "reference_token_count", "reference_token_ids_sha256", "recorded_runtime", "current_runtime"],
+      "properties": {
+        "eligible": {"type": "boolean"},
+        "reasons": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "reason": {"type": ["string", "null"]},
+        "generation_contract": {"$ref": "#/$defs/generation_contract"},
+        "reference_token_count": {"type": ["integer", "null"], "minimum": 0},
+        "reference_token_ids_sha256": {"type": ["string", "null"]},
+        "recorded_runtime": {"$ref": "#/$defs/runtime"},
+        "current_runtime": {"$ref": "#/$defs/runtime"}
+      },
+      "additionalProperties": false
+    },
+    "control": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": {"enum": ["matched", "diverged", "unavailable"]},
+        "reason": {"type": "string", "minLength": 1},
+        "provenance": {"const": "direct_generation_probe"},
+        "matched_token_count": {"type": "integer", "minimum": 0},
+        "first_divergence_index": {"type": ["integer", "null"], "minimum": 0},
+        "expected_token_id": {"type": ["integer", "null"]},
+        "actual_token_id": {"type": ["integer", "null"]},
+        "termination_match": {"type": "boolean"},
+        "divergence_kind": {"enum": ["token_mismatch", "early_termination", "extra_token_after_reference", "termination_mismatch", null]}
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -727,6 +727,134 @@ class EngineSubstrate(Substrate):
         r = self.engine.score(prompt=prompt, topk=int(topk), **kw)
         return r.get("tokens", [])
 
+    def score_tokens_many(self, arms, *, cancel=None):
+        """Batch seam for teacher-forced scoring.
+
+        The managed engine currently exposes only scalar ``/score``.  Keep the
+        public seam here so a future native implementation can replace this
+        method without changing Minimal Context scheduling or proof logic;
+        today this is an explicit, cancellation-aware serial fallback.
+        """
+        from clozn.runs.multi_arm import serial_many
+
+        return serial_many(self.score_tokens, arms, cancel=cancel)
+
+    def probe_reference_match(self, messages, reference_token_ids, *, generation_contract,
+                              explicit_conditions=None):
+        """Run one non-journaling exact recorded-answer probe.
+
+        This deliberately does not call :meth:`chat`: chat resolves live
+        sampling/settings and publishes request state.  Every decode and
+        steering condition here comes from the supplied contract/conditions,
+        while the worker's normal template and generation path remain the
+        source of truth.  The method returns a detached evidence dictionary;
+        it creates no child run and writes no runlog state.
+        """
+        from clozn.runs.answer_preservation import (
+            ExactAnswerPreservationError,
+            classify_reference_match,
+        )
+
+        if not isinstance(generation_contract, dict):
+            raise ExactAnswerPreservationError("generation_contract must be a mapping")
+        mode = generation_contract.get("decode_mode")
+        max_new = generation_contract.get("max_new")
+        stop = generation_contract.get("stop")
+        expected = generation_contract.get("expected_termination")
+        if (mode not in {"greedy", "sample"} or isinstance(max_new, bool)
+                or not isinstance(max_new, int) or max_new < 1):
+            raise ExactAnswerPreservationError("generation_contract is incomplete")
+        if not isinstance(stop, list) or any(not isinstance(item, str) for item in stop):
+            raise ExactAnswerPreservationError("generation_contract.stop must be a list of strings")
+        if (not isinstance(expected, dict) or not isinstance(expected.get("reason"), str)
+                or not isinstance(expected.get("reason_raw"), str)):
+            raise ExactAnswerPreservationError("generation_contract.expected_termination is incomplete")
+        if not isinstance(reference_token_ids, list) or not reference_token_ids or any(
+                isinstance(value, bool) or not isinstance(value, int) for value in reference_token_ids):
+            raise ExactAnswerPreservationError("reference_token_ids must be a non-empty integer list")
+
+        sampling = generation_contract.get("sampling")
+        if mode == "sample":
+            if not isinstance(sampling, dict):
+                raise ExactAnswerPreservationError("sampled exact probes require a complete sampler")
+            required = ("temperature", "top_p", "top_k", "repeat_penalty", "seed")
+            if any(key not in sampling for key in required):
+                raise ExactAnswerPreservationError("sampled exact probes require all sampler fields")
+            if (isinstance(sampling["temperature"], bool) or not isinstance(sampling["temperature"], (int, float))
+                    or isinstance(sampling["top_p"], bool) or not isinstance(sampling["top_p"], (int, float))
+                    or isinstance(sampling["repeat_penalty"], bool) or not isinstance(sampling["repeat_penalty"], (int, float))
+                    or isinstance(sampling["top_k"], bool) or not isinstance(sampling["top_k"], int)
+                    or isinstance(sampling["seed"], bool) or not isinstance(sampling["seed"], int)):
+                raise ExactAnswerPreservationError("sampled exact probes have invalid sampler fields")
+            sample = {
+                "on": True,
+                "temperature": float(sampling["temperature"]),
+                "top_p": float(sampling["top_p"]),
+                "top_k": int(sampling["top_k"]),
+                "repeat_penalty": float(sampling["repeat_penalty"]),
+                "seed": int(sampling["seed"]),
+            }
+        else:
+            sample = None
+
+        conditions = dict(explicit_conditions or {})
+        block = conditions.get("block")
+        assembled = ctx._inject_block(messages, block) if block is not None else list(messages)
+        template_usage = {}
+        try:
+            prompt = ctx._engine_tmpl(self.engine, assembled, usage_out=template_usage)
+        except TypeError:
+            prompt = ctx._engine_tmpl(self.engine, assembled)
+        kw = {"reference_tokens": [int(value) for value in reference_token_ids]}
+        steer_vec = conditions.get("steer_vec")
+        strengths = conditions.get("steer_strengths")
+        if self.steer is not None and isinstance(strengths, dict) and strengths and any(strengths.values()):
+            steer_vec = self.steer.steer_vector(strengths)
+        if steer_vec is not None:
+            kw["steer_vec"] = list(steer_vec)
+            kw["steer"] = {"coef": 1.0, "layer": self.steer.layer if self.steer is not None else 0}
+        usage = {}
+        traced_kwargs = {"sample": sample, "stop": stop}
+        try:
+            import inspect
+            signature = inspect.signature(ctx._engine_complete_traced)
+            if "usage_out" in signature.parameters or any(
+                    parameter.kind == inspect.Parameter.VAR_KEYWORD
+                    for parameter in signature.parameters.values()):
+                traced_kwargs["usage_out"] = usage
+        except Exception:
+            traced_kwargs["usage_out"] = usage
+        reply, steps, finish, divinfo = ctx._engine_complete_traced(
+            self.engine, prompt, max_new, kw, **traced_kwargs)
+        generated_ids = [step.get("token_id") for step in steps if isinstance(step, dict)]
+        if not generated_ids or any(isinstance(value, bool) or not isinstance(value, int) for value in generated_ids):
+            return {"status": "unavailable", "reason": "probe_token_trace_unavailable"}
+        diverged, diverged_at = divinfo if isinstance(divinfo, tuple) else (None, None)
+        result = classify_reference_match(
+            reference_token_ids, generated_ids, diverged=diverged, diverged_at=diverged_at,
+            termination=usage.get("termination"), finish_reason=finish,
+            expected_termination=expected, max_new=max_new,
+        )
+        result.update({
+            "generated_token_ids": list(generated_ids),
+            "finish_reason": finish,
+            "termination": dict(usage.get("termination") or {}),
+            "reply": reply,
+        })
+        return result
+
+    def probe_reference_match_many(self, arms, *, cancel=None):
+        """Batch seam for exact recorded-output probes.
+
+        Exact probes retain the scalar early-stop and termination semantics;
+        the fallback merely schedules independent arms and never calls
+        ``chat`` or publishes a RequestContext.  A native engine adapter may
+        implement this method later with different active sequence lengths.
+        """
+        from clozn.runs.multi_arm import serial_many
+
+        return serial_many(self.probe_reference_match, arms, cancel=cancel)
+
     def score_prompt_tokens(self, prompt, continuation_ids=None, *, continuation=None, topk=0):
         """score_tokens' RAW-PROMPT sibling: teacher-forced per-token logprob of a continuation against a
         PRE-BUILT prompt STRING, skipping the messages -> block -> template assembly entirely.
@@ -1284,6 +1412,8 @@ def _engine_complete_traced(engine, prompt, max_tokens, kw, sample=None, usage_o
     completion_tokens = (r.get("usage") or {}).get("completion_tokens") if isinstance(r, dict) else None
     if usage_out is not None and isinstance(completion_tokens, int):
         usage_out["completion_tokens"] = completion_tokens
+    if usage_out is not None and isinstance(r, dict) and isinstance(r.get("termination"), dict):
+        usage_out["termination"] = dict(r["termination"])
     ch = r.get("choices") if isinstance(r, dict) else None
     finish = ch[0].get("finish_reason") if (ch and isinstance(ch[0], dict)) else None
     divinfo = (r.get("diverged"), r.get("diverged_at")) if isinstance(r, dict) else (None, None)

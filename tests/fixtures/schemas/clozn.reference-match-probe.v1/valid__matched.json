@@ -1,0 +1,28 @@
+{
+  "schema_version": "clozn.reference-match-probe.v1",
+  "probe_id": "rmp_0123456789abcdef01234567",
+  "run_id": "run-fixture",
+  "removed_source_ids": ["src_a"],
+  "exact_removed_ranges": [],
+  "basis_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "intervened_context_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+  "reference_token_ids_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+  "reference_token_count": 3,
+  "generation_contract": {
+    "decode_mode": "greedy",
+    "sampling": null,
+    "max_new": 4,
+    "stop": [],
+    "expected_termination": {"reason": "eos", "reason_raw": "eos"}
+  },
+  "result": {
+    "status": "matched",
+    "matched_token_count": 3,
+    "first_divergence_index": null,
+    "expected_token_id": null,
+    "actual_token_id": null,
+    "termination_match": true,
+    "divergence_kind": null
+  },
+  "provenance": "direct_generation_probe"
+}

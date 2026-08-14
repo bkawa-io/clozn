@@ -481,6 +481,10 @@ class ContextDependenceStudy:
         score_ms = max(0.0, (self._clock() - arm_started) * 1000.0)
         if not arm_ok:
             raise MeasurementUnavailableError("the intervened teacher-forced score call did not complete")
+        arm = self._validate_intervened_tokens(arm_tokens, baseline)
+        return arm, score_ms
+
+    def _validate_intervened_tokens(self, arm_tokens: Any, baseline: list[dict]) -> list[dict]:
         arm = _validate_scored_tokens(arm_tokens, expected_ids=self._conditions.get("continuation_ids"))
         if len(arm) != len(baseline):
             raise MeasurementUnavailableError("the intervened score did not align with the baseline")
@@ -501,7 +505,7 @@ class ContextDependenceStudy:
                 raise MeasurementUnavailableError(
                     "the intervened score did not preserve baseline continuation token IDs"
                 )
-        return arm, score_ms
+        return arm
 
     def measure_removal_effect(self, removed_source_ids: Iterable[str]) -> dict:
         """Teacher-force one canonical deletion arm over the full continuation."""
@@ -551,6 +555,85 @@ class ContextDependenceStudy:
         self._experiments.append(stored)
         self._experiments_by_id[experiment_id] = stored
         return deepcopy(stored)
+
+    def measure_removal_effect_many(self, removed_source_sets: Iterable[Iterable[str]]) -> list[dict]:
+        """Measure independent deletion arms through the explicit batch score seam.
+
+        The source resolver and per-arm evidence construction remain scalar
+        semantics.  Only the teacher-forced substrate call is grouped; a
+        substrate without a native ``score_tokens_many`` transparently uses
+        the serial adapter.
+        """
+        self._assert_run_stable()
+        requested = [_removed_source_set(value) for value in removed_source_sets]
+        baseline, _evidence, continuation = self._ensure_baseline()
+        results: list[dict | None] = [None] * len(requested)
+        pending: list[tuple[int, list[str], str, Mapping[str, Any]]] = []
+        for index, removed_ids in enumerate(requested):
+            unknown = [source_id for source_id in removed_ids if source_id not in self._source_by_id]
+            if unknown:
+                available = ", ".join(self.source_ids) or "none"
+                detail = f" ({self._source_resolution_error})" if self._source_resolution_error else ""
+                raise UnknownSourceIdError(
+                    "unknown canonical Context Receipt source ID(s): "
+                    f"{', '.join(unknown)}; available: {available}{detail}"
+                )
+            experiment_id = self._experiment_identity(removed_ids=removed_ids, continuation=continuation)
+            cached = self._experiments_by_id.get(experiment_id)
+            if cached is not None:
+                results[index] = deepcopy(cached)
+                continue
+            resolved = self._resolve_arm(removed_ids)
+            pending.append((index, removed_ids, experiment_id, resolved))
+        if not pending:
+            return [item for item in results if item is not None]
+
+        from clozn.runs.multi_arm import score_tokens_many
+        conditions = {
+            "block": deepcopy(self._block),
+            "steer_strengths": deepcopy(self._conditions.get("steer_strengths") or {}),
+        }
+        arms = []
+        for _index, _removed, _experiment_id, resolved in pending:
+            arm = {
+                "messages": deepcopy(resolved["messages"]),
+                "continuation_ids": deepcopy(self._conditions.get("continuation_ids")),
+                **conditions,
+            }
+            if arm["continuation_ids"] is None:
+                arm["continuation"] = self._conditions.get("response") or ""
+            arms.append(arm)
+        started = self._clock()
+        try:
+            token_results = score_tokens_many(self._sub, arms)
+        except Exception as exc:
+            raise MeasurementUnavailableError(f"the batched intervened score call failed: {exc}") from exc
+        elapsed_ms = max(0.0, (self._clock() - started) * 1000.0)
+        score_ms = elapsed_ms / max(1, len(pending))
+        for (index, removed_ids, experiment_id, resolved), raw_tokens in zip(pending, token_results):
+            arm = self._validate_intervened_tokens(raw_tokens, baseline)
+            per_token = [base["logprob"] - intervened["logprob"] for base, intervened in zip(baseline, arm)]
+            baseline_logp = sum(token["logprob"] for token in baseline)
+            intervened_logp = sum(token["logprob"] for token in arm)
+            experiment = {
+                "experiment_id": experiment_id,
+                "intervention_operator": INTERVENTION_OPERATOR,
+                "removed_source_ids": removed_ids,
+                "exact_removed_ranges": deepcopy(resolved["exact_removed_ranges"]),
+                "context_hash": _canonical_digest({"messages": resolved["messages"], "block": self._block}),
+                "intervened_logp": intervened_logp,
+                "baseline_logp": baseline_logp,
+                "delta_nats": sum(per_token),
+                "per_token_delta_nats": per_token,
+                "token_indices": list(range(len(per_token))),
+                "provenance": PROVENANCE,
+                "score_ms": score_ms,
+            }
+            stored = deepcopy(experiment)
+            self._experiments.append(stored)
+            self._experiments_by_id[experiment_id] = stored
+            results[index] = deepcopy(stored)
+        return [item for item in results if item is not None]
 
     def measure_neutralization_control(self, source_ids: Iterable[str]) -> dict:
         """Score a separately-labelled matched-length neutralization control.

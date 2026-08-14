@@ -16,6 +16,11 @@ SQLite journal and become available in Studio.
 ## Current surfaces
 
 - **Runs** lists recorded requests and opens their response, trace, identity, and lineage.
+- **Minimal Context** is the primary run investigation: it reduces the declared Context Units under
+  an explicit exact-output or teacher-forced-likelihood criterion, shows retained versus omitted units,
+  exposes direct proof coverage, and offers explicit source-bound branch actions. `EXACT MINIMUM` is
+  shown only when every smaller cardinality is directly ruled out; `BEST VERIFIED` and unmeasured space
+  remain visibly incomplete.
 - **Lens** shows delivered-context receipts, measured source links, token confidence, model readouts,
   and performance evidence. Its Performance view separates measured phases from overlapping/context-only
   spans, shows known versus unaccounted wall time, names the phase clock owner, and labels derived
@@ -47,6 +52,18 @@ SQLite journal and become available in Studio.
   POST /runs/<id>/time-machine/branch is the explicit same-prompt exact-child action; it restores
   the source checkpoint, runs the unchanged control, and persists a child only after that control
   matches. It rejects alternate questions because changing the prompt is not exact.
+
+The run reader's default hierarchy is Answer → Minimal Context → Context. Compare/Branch is reached
+from an explicit Minimal Context source action and opens the existing parent/child comparison surface.
+Mechanism, claim, correction, time-machine, and other diagnostic instruments remain available under
+the reader as advanced evidence; they are not alternate interpretations of source importance.
+
+### Minimal Context failure states
+
+The product keeps these conditions distinct: exact mode unavailable, no preserving set within budget,
+best verified with incomplete coverage, certification budget exhausted, a search universe above its
+declared bound, stale run/runtime identity, unavailable worker, and cancellation. Likelihood is never a
+silent fallback for an exact request. Unmeasured candidates are not rendered as failed candidates.
 
 The panel registry is additive: a failed optional panel is reported without taking down the other
 surfaces.
