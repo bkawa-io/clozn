@@ -70,7 +70,9 @@ struct ReferenceMatchBatchMetrics {
     std::int64_t prefill_ns = 0;
     std::int64_t decode_ns = 0;
     std::int64_t wall_ns = 0;
+    long long logical_prompt_rows = 0;
     long long physical_prompt_rows = 0;
+    long long prefix_rows_reused = 0;
     long long output_token_positions_evaluated = 0;
     int model_forward_decode_calls = 0;
     int max_live_sequences = 0;

@@ -729,8 +729,6 @@ ReferenceMatchBatchResult generate_ar_reference_match_batched(
     const int n = static_cast<int>(prompts.size());
     auto& metrics = batch_result.metrics;
     metrics.peak_resident_sequences = n;
-    for (const auto& prompt : prompts)
-        metrics.physical_prompt_rows += static_cast<long long>(prompt.size());
 
     std::vector<ForwardResult> fwd;
     std::vector<std::vector<int>> generated(static_cast<size_t>(n));
@@ -761,6 +759,9 @@ ReferenceMatchBatchResult generate_ar_reference_match_batched(
         metrics.prefill_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
             clock::now() - prefill_started).count();
         metrics.model_forward_decode_calls = adapter.last_decode_call_count();
+        metrics.logical_prompt_rows = adapter.last_prefill_logical_rows();
+        metrics.physical_prompt_rows = adapter.last_prefill_physical_rows();
+        metrics.prefix_rows_reused = adapter.last_prefill_reused_rows();
         for (int i = 0; i < n; ++i)
             positions[static_cast<size_t>(i)] = static_cast<int>(prompts[static_cast<size_t>(i)].size());
 

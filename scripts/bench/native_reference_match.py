@@ -207,9 +207,11 @@ def run(args: argparse.Namespace) -> dict:
     _require_supported_python()
     fixture = build_fixture()
     sets = certification_sets()
-    requested = sets[:args.max_arms]
-    if args.max_arms > len(sets):
-        raise ValueError("max-arms exceeds the fixed 1,276-arm certification workload")
+    if args.arm_offset < 0 or args.arm_offset > len(sets):
+        raise ValueError("arm-offset must be within the fixed 1,276-arm certification workload")
+    if args.max_arms < 0 or args.arm_offset + args.max_arms > len(sets):
+        raise ValueError("arm-offset plus max-arms exceeds the fixed 1,276-arm certification workload")
+    requested = sets[args.arm_offset:args.arm_offset + args.max_arms]
     if not args.live:
         return {
             "fixture": {
@@ -219,10 +221,11 @@ def run(args: argparse.Namespace) -> dict:
             },
             "certification_workload": {
                 "retained_cardinality_0": 1,
-                "retained_cardinality_1": 50,
-                "retained_cardinality_2": 1225,
-                "total": len(sets),
-            },
+            "retained_cardinality_1": 50,
+            "retained_cardinality_2": 1225,
+            "total": len(sets),
+            "arm_offset": args.arm_offset,
+        },
             "status": "fixture_only",
         }
 
@@ -320,6 +323,7 @@ def run(args: argparse.Namespace) -> dict:
             "retained_cardinality_1": 50,
             "retained_cardinality_2": 1225,
             "total": len(sets),
+            "arm_offset": args.arm_offset,
             "measured": len(full_native) if full_native is not None else len(parity_requested),
         },
         "scalar": {
@@ -335,7 +339,7 @@ def run(args: argparse.Namespace) -> dict:
             "metrics": native_metrics,
             "execution_regime": "native_batched_non_proof_grade",
         },
-        "native_prefix_reuse": {"status": "not_implemented_in_this_wave", "proof_grade": False},
+        "native_prefix_reuse": {"status": "implemented", "proof_grade": False},
         "evidence_equal_on_parity_suite": True,
         "certificate_authority": "scalar_direct_reference_match",
     }
@@ -348,6 +352,8 @@ def parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--timeout", type=float, default=600.0)
     parser.add_argument("--max-new", type=int, default=64)
+    parser.add_argument("--arm-offset", type=int, default=0,
+                        help="starting index within the fixed certification workload")
     parser.add_argument("--max-arms", type=int, default=1276)
     parser.add_argument("--parity-arms", type=int, default=8)
     return parser

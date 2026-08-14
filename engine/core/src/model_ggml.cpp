@@ -16,6 +16,21 @@ namespace {
 // llama_backend_init/free are process-global and refcount-free; init once on first
 // adapter, never free (cheap, and freeing while another adapter lives would crash).
 bool g_backend_inited = false;
+
+struct PrefixTrieNode {
+    int token = -1;
+    int position = -1;
+    std::vector<int> seq_ids;
+    std::vector<int> terminal_arms;
+    std::map<int, std::unique_ptr<PrefixTrieNode>> children;
+};
+
+struct TriePrefillRow {
+    int token = -1;
+    int position = -1;
+    std::vector<int> seq_ids;
+    std::vector<int> terminal_arms;
+};
 }  // namespace
 
 GgmlModel::GgmlModel(const std::string& model_path, int mask_token_id,
@@ -1475,7 +1490,6 @@ std::vector<ForwardResult> GgmlAdapter::ar_forward_prefill_batch(
     if (n > 16) throw std::invalid_argument("ar_forward_prefill_batch: too many sequences");
 
     int total = 0;
-    std::vector<int> last_rows(static_cast<size_t>(n), -1);
     for (int arm = 0; arm < n; ++arm) {
         if (prompts[static_cast<size_t>(arm)].empty())
             throw std::invalid_argument("ar_forward_prefill_batch: empty prompt");
@@ -1490,65 +1504,92 @@ std::vector<ForwardResult> GgmlAdapter::ar_forward_prefill_batch(
     frozen_end_ = 0;
     boundary_row_.clear();
     write_from_ = 0;
-    decoded_tokens_ += total;
     last_decode_call_count_ = 0;
+    last_prefill_logical_rows_ = total;
+    last_prefill_physical_rows_ = 0;
+    last_prefill_reused_rows_ = 0;
 
-    std::vector<int> flat_tokens;
-    std::vector<int> flat_arms;
-    std::vector<int> flat_positions;
-    flat_tokens.reserve(total);
-    flat_arms.reserve(total);
-    flat_positions.reserve(total);
-    int row = 0;
+    PrefixTrieNode root;
     for (int arm = 0; arm < n; ++arm) {
+        PrefixTrieNode* node = &root;
         const auto& prompt = prompts[static_cast<size_t>(arm)];
         for (int pos = 0; pos < static_cast<int>(prompt.size()); ++pos) {
-            flat_tokens.push_back(prompt[static_cast<size_t>(pos)]);
-            flat_arms.push_back(arm);
-            flat_positions.push_back(pos);
-            if (pos + 1 == static_cast<int>(prompt.size())) last_rows[static_cast<size_t>(arm)] = row;
-            ++row;
+            const int token = prompt[static_cast<size_t>(pos)];
+            auto& child = node->children[token];
+            if (!child) {
+                child = std::make_unique<PrefixTrieNode>();
+                child->token = token;
+                child->position = pos;
+            }
+            node = child.get();
+            node->seq_ids.push_back(arm);
         }
+        node->terminal_arms.push_back(arm);
     }
 
+    std::vector<TriePrefillRow> rows;
+    rows.reserve(static_cast<size_t>(total));
+    auto emit_rows = [&](auto&& self, const PrefixTrieNode& node) -> void {
+        for (const auto& entry : node.children) {
+            const PrefixTrieNode& child = *entry.second;
+            rows.push_back(TriePrefillRow{
+                child.token, child.position, child.seq_ids, child.terminal_arms});
+            self(self, child);
+        }
+    };
+    emit_rows(emit_rows, root);
+    if (rows.empty())
+        throw std::runtime_error("ar_forward_prefill_batch: trie produced no rows");
+
+    const long long physical_rows = static_cast<long long>(rows.size());
+    last_prefill_physical_rows_ = 0;
+    last_prefill_reused_rows_ = last_prefill_logical_rows_ - physical_rows;
+    decoded_tokens_ += physical_rows;
+
     const int vocab = cfg_.vocab_size;
-    std::vector<ForwardResult> results(static_cast<size_t>(n));
     std::vector<std::vector<float>> final_logits(static_cast<size_t>(n));
-    for (int chunk_from = 0; chunk_from < total; chunk_from += n_batch_) {
-        const int chunk_rows = std::min(n_batch_, total - chunk_from);
-        write_from_ = chunk_from;
-        llama_batch batch = llama_batch_init(chunk_rows, 0, 1);
+    std::vector<ForwardResult> results(static_cast<size_t>(n));
+
+    for (int chunk_from = 0; chunk_from < static_cast<int>(rows.size()); chunk_from += n_batch_) {
+        const int chunk_rows = std::min(n_batch_, static_cast<int>(rows.size()) - chunk_from);
+        last_prefill_physical_rows_ += chunk_rows;
+        write_from_ = 0;
+        llama_batch batch = llama_batch_init(chunk_rows, 0, n);
         batch.n_tokens = chunk_rows;
         for (int i = 0; i < chunk_rows; ++i) {
-            const int global = chunk_from + i;
-            batch.token[i] = static_cast<llama_token>(flat_tokens[static_cast<size_t>(global)]);
-            batch.pos[i] = flat_positions[static_cast<size_t>(global)];
-            batch.n_seq_id[i] = 1;
-            batch.seq_id[i][0] = static_cast<llama_seq_id>(flat_arms[static_cast<size_t>(global)]);
-            batch.logits[i] = (global == last_rows[static_cast<size_t>(flat_arms[static_cast<size_t>(global)])]);
+            const TriePrefillRow& row = rows[static_cast<size_t>(chunk_from + i)];
+            batch.token[i] = static_cast<llama_token>(row.token);
+            batch.pos[i] = row.position;
+            batch.n_seq_id[i] = static_cast<int32_t>(row.seq_ids.size());
+            for (int j = 0; j < batch.n_seq_id[i]; ++j)
+                batch.seq_id[i][j] = static_cast<llama_seq_id>(row.seq_ids[static_cast<size_t>(j)]);
+            batch.logits[i] = row.terminal_arms.empty() ? 0 : 1;
         }
         const int rc = llama_decode(ctx_, batch);
         if (rc != 0) {
             llama_batch_free(batch);
-            throw std::runtime_error("ar_forward_prefill_batch: llama_decode failed (rc=" +
+            throw std::runtime_error("ar_forward_prefill_batch: trie llama_decode failed (rc=" +
                                      std::to_string(rc) + ")");
         }
         ++last_decode_call_count_;
         for (int i = 0; i < chunk_rows; ++i) {
-            const int global = chunk_from + i;
-            const int arm = flat_arms[static_cast<size_t>(global)];
-            if (global != last_rows[static_cast<size_t>(arm)]) continue;
+            const TriePrefillRow& row = rows[static_cast<size_t>(chunk_from + i)];
+            if (row.terminal_arms.empty()) continue;
             const float* logits = llama_get_logits_ith(ctx_, i);
             if (!logits) {
                 llama_batch_free(batch);
-                throw std::runtime_error("ar_forward_prefill_batch: null logits for sequence " +
-                                         std::to_string(arm));
+                throw std::runtime_error("ar_forward_prefill_batch: missing trie terminal logits");
             }
-            final_logits[static_cast<size_t>(arm)].assign(logits, logits + vocab);
+            for (int arm : row.terminal_arms)
+                final_logits[static_cast<size_t>(arm)].assign(logits, logits + vocab);
         }
         llama_batch_free(batch);
     }
+
     for (int arm = 0; arm < n; ++arm) {
+        if (final_logits[static_cast<size_t>(arm)].empty())
+            throw std::runtime_error("ar_forward_prefill_batch: missing terminal logits for sequence " +
+                                     std::to_string(arm));
         ForwardResult& out = results[static_cast<size_t>(arm)];
         out.n_requested = 1;
         out.vocab = vocab;

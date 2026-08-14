@@ -301,6 +301,9 @@ public:
     long long decoded_tokens() const { return decoded_tokens_; }
     void reset_decoded_tokens() { decoded_tokens_ = 0; }
     int last_decode_call_count() const { return last_decode_call_count_; }
+    long long last_prefill_logical_rows() const { return last_prefill_logical_rows_; }
+    long long last_prefill_physical_rows() const { return last_prefill_physical_rows_; }
+    long long last_prefill_reused_rows() const { return last_prefill_reused_rows_; }
 
     // White-box activation tap (Tier 2): when on, forward() fills ForwardResult.activations with the
     // per-position hidden state (llama_get_embeddings_ith) for the active block. Default off => empty
@@ -467,10 +470,11 @@ public:
     std::vector<ForwardResult> ar_forward_batch(
         const std::vector<int>& tokens_per_seq, int n_past,
         const std::vector<bool>& active);
-    // Prefill independent prompt token sequences, chunking flattened prompt rows at n_batch. Each
+    // Prefill independent prompt token sequences, reusing their literal common token prefix through
+    // a seq-0 KV fan-out, then chunking the remaining per-sequence suffix rows at n_batch. Each
     // sequence has its own llama sequence id and only its final prompt row emits logits. The caller
-    // must keep the total physical rows within n_ctx and the number of resident sequences within the
-    // worker's sequence capacity.
+    // must keep the logical prompt rows within the existing n_ctx admission rule and the number of
+    // resident sequences within the worker's sequence capacity.
     std::vector<ForwardResult> ar_forward_prefill_batch(
         const std::vector<std::vector<int>>& prompts);
     // Decode one token per sequence at independently advancing positions. This
@@ -610,6 +614,9 @@ private:
     long long decoded_tokens_ = 0;     // token-positions sent through llama_decode
     long long logits_d2h_floats_ = 0;  // logits floats copied into the host logits buffer
     int last_decode_call_count_ = 0;   // llama_decode calls made by the most recent public forward
+    long long last_prefill_logical_rows_ = 0;
+    long long last_prefill_physical_rows_ = 0;
+    long long last_prefill_reused_rows_ = 0;
 };
 
 }  // namespace clozn

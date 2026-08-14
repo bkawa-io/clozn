@@ -160,7 +160,9 @@ void register_reference_match_routes(httplib::Server& svr, ServerContext& ctx) {
                 const auto& m = measured.metrics;
                 total_metrics.prefill_ns += m.prefill_ns;
                 total_metrics.decode_ns += m.decode_ns;
+                total_metrics.logical_prompt_rows += m.logical_prompt_rows;
                 total_metrics.physical_prompt_rows += m.physical_prompt_rows;
+                total_metrics.prefix_rows_reused += m.prefix_rows_reused;
                 total_metrics.output_token_positions_evaluated += m.output_token_positions_evaluated;
                 total_metrics.model_forward_decode_calls += m.model_forward_decode_calls;
                 live_weight += static_cast<long long>(m.mean_live_sequences * m.decode_steps);
@@ -229,7 +231,9 @@ void register_reference_match_routes(httplib::Server& svr, ServerContext& ctx) {
                 {"n_ubatch", ctx.pool.n_ubatch()},
                 {"memory", ctx.pool.memory_breakdown()},
                 {"model_forward_decode_call_count", total_metrics.model_forward_decode_calls},
+                {"logical_prompt_rows", total_metrics.logical_prompt_rows},
                 {"physical_prompt_rows_submitted", total_metrics.physical_prompt_rows},
+                {"prefix_rows_reused", total_metrics.prefix_rows_reused},
                 {"output_token_positions_evaluated", total_metrics.output_token_positions_evaluated},
                 {"first_divergence_histogram", divergence},
                 {"max_live_sequences_per_decode_step", total_metrics.max_live_sequences},
@@ -237,7 +241,7 @@ void register_reference_match_routes(httplib::Server& svr, ServerContext& ctx) {
                 {"peak_resident_sequences", total_metrics.peak_resident_sequences},
                 {"peak_kv_usage", nullptr},
                 {"cancellation_point", nullptr},
-                {"prefix_reuse", false},
+                {"prefix_reuse", total_metrics.prefix_rows_reused > 0},
             }},
         }), "application/json");
     });
