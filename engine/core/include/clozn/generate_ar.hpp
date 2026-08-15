@@ -89,6 +89,15 @@ struct ReferenceMatchBatchMetrics {
     int duplicate_terminal_arms_reused = 0;
     int max_traversal_depth = 0;
     std::int64_t traversal_planning_ns = 0;
+    // Parent-anchored v0 diagnostics. These fields are populated only by the
+    // explicit experimental parent-anchor route; ordinary/native-many paths
+    // keep their historical zero/default values.
+    bool parent_anchor_reuse = false;
+    int parent_anchor_children = 0;
+    long long parent_anchor_prefix_rows = 0;
+    long long parent_anchor_prompt_rows = 0;
+    long long parent_anchor_logical_rows = 0;
+    long long parent_anchor_physical_rows = 0;
 };
 
 struct ReferenceMatchBatchResult {
@@ -209,6 +218,18 @@ ReferenceMatchBatchResult generate_ar_reference_match_batched(
 ReferenceMatchBatchResult generate_ar_reference_match_rollback(
     GgmlAdapter& adapter,
     const std::vector<std::vector<int>>& prompts,
+    const std::vector<int>& reference,
+    int max_tokens,
+    const std::vector<std::string>& stop_sequences = {});
+
+// Experimental parent-anchored exact-token traversal. The anchor is a
+// semantic reducer parent; each child is decoded after materializing only the
+// anchor/child shared prefix and its child suffix. Scalar evidence remains the
+// certificate authority for this non-proof-grade path.
+ReferenceMatchBatchResult generate_ar_reference_match_parent_anchor(
+    GgmlAdapter& adapter,
+    const std::vector<int>& parent_prompt,
+    const std::vector<std::vector<int>>& child_prompts,
     const std::vector<int>& reference,
     int max_tokens,
     const std::vector<std::string>& stop_sequences = {});

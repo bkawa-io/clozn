@@ -23,12 +23,15 @@ namespace {
 enum class ReferenceMatchExecutionStrategy {
     ResidentBatched,
     RequestWideRollback,
+    ParentAnchored,
 };
 
 ReferenceMatchExecutionStrategy reference_match_strategy() {
     const char* value = std::getenv("CLOZN_REFERENCE_MATCH_STRATEGY");
     if (value != nullptr && std::string(value) == "rollback")
         return ReferenceMatchExecutionStrategy::RequestWideRollback;
+    if (value != nullptr && std::string(value) == "parent_anchor")
+        return ReferenceMatchExecutionStrategy::ParentAnchored;
     return ReferenceMatchExecutionStrategy::ResidentBatched;
 }
 
@@ -106,6 +109,29 @@ void register_reference_match_routes(httplib::Server& svr, ServerContext& ctx) {
 
         std::vector<int> arm_ids;
         std::vector<std::vector<int>> prompt_ids;
+        std::vector<int> parent_anchor_prompt;
+        bool has_parent_anchor = false;
+        if (body.contains("parent_anchor_prompt")) {
+            if (!body["parent_anchor_prompt"].is_string()) {
+                fail("parent_anchor_prompt must be a string");
+                return;
+            }
+            try {
+                parent_anchor_prompt = ctx.model->encode(body["parent_anchor_prompt"].get<std::string>());
+            } catch (const std::exception& e) {
+                fail(std::string("parent anchor tokenization failed: ") + e.what());
+                return;
+            }
+            if (parent_anchor_prompt.empty()) {
+                fail("parent_anchor_prompt must tokenize to at least one token");
+                return;
+            }
+            if (static_cast<int>(parent_anchor_prompt.size()) > ctx.n_ctx) {
+                fail("parent_anchor_prompt exceeds the worker context window");
+                return;
+            }
+            has_parent_anchor = true;
+        }
         arm_ids.reserve(body["arms"].size());
         prompt_ids.reserve(body["arms"].size());
         std::map<int, bool> seen_ids;
@@ -157,10 +183,18 @@ void register_reference_match_routes(httplib::Server& svr, ServerContext& ctx) {
         const ReferenceMatchExecutionStrategy strategy = reference_match_strategy();
         const bool request_wide_rollback =
             strategy == ReferenceMatchExecutionStrategy::RequestWideRollback;
-        const std::string strategy_name = request_wide_rollback ? "rollback" : "resident";
-        const std::string execution_regime = request_wide_rollback
-                                                  ? "native_reference_match_rollback_experimental"
-                                                  : "native_batched_experimental";
+        // The parent-anchor field is itself the explicit wire opt-in. This
+        // keeps the worker default resident path unchanged and avoids
+        // requiring a process-wide environment toggle for per-request use.
+        const bool parent_anchored = has_parent_anchor;
+        const std::string strategy_name = parent_anchored
+                                              ? "parent_anchor"
+                                              : (request_wide_rollback ? "rollback" : "resident");
+        const std::string execution_regime = parent_anchored
+                                                  ? "native_reference_match_parent_anchor_experimental"
+                                                  : (request_wide_rollback
+                                                         ? "native_reference_match_rollback_experimental"
+                                                         : "native_batched_experimental");
 
         auto aggregate_metrics = [&](const ReferenceMatchBatchMetrics& m) {
             total_metrics.prefill_ns += m.prefill_ns;
@@ -181,6 +215,13 @@ void register_reference_match_routes(httplib::Server& svr, ServerContext& ctx) {
             total_metrics.max_traversal_depth = std::max(total_metrics.max_traversal_depth,
                                                          m.max_traversal_depth);
             total_metrics.traversal_planning_ns += m.traversal_planning_ns;
+            total_metrics.parent_anchor_reuse =
+                total_metrics.parent_anchor_reuse || m.parent_anchor_reuse;
+            total_metrics.parent_anchor_children += m.parent_anchor_children;
+            total_metrics.parent_anchor_prefix_rows += m.parent_anchor_prefix_rows;
+            total_metrics.parent_anchor_prompt_rows += m.parent_anchor_prompt_rows;
+            total_metrics.parent_anchor_logical_rows += m.parent_anchor_logical_rows;
+            total_metrics.parent_anchor_physical_rows += m.parent_anchor_physical_rows;
             live_weight += static_cast<long long>(m.mean_live_sequences * m.decode_steps);
             live_steps += m.decode_steps;
             total_metrics.max_live_sequences = std::max(total_metrics.max_live_sequences,
@@ -197,7 +238,14 @@ void register_reference_match_routes(httplib::Server& svr, ServerContext& ctx) {
         size_t cursor = 0;
         try {
             ContextPool::Lease lease = ctx.pool.acquire();
-            if (request_wide_rollback) {
+            if (parent_anchored) {
+                ReferenceMatchBatchResult measured = generate_ar_reference_match_parent_anchor(
+                    *lease, parent_anchor_prompt, prompt_ids, reference, max_tokens, stops);
+                aggregate_metrics(measured.metrics);
+                results = std::move(measured.arms);
+                raw_tokens = std::move(measured.generated_token_ids);
+                cursor = prompt_ids.size();
+            } else if (request_wide_rollback) {
                 ReferenceMatchBatchResult measured = generate_ar_reference_match_rollback(
                     *lease, prompt_ids, reference, max_tokens, stops);
                 aggregate_metrics(measured.metrics);
@@ -283,9 +331,13 @@ void register_reference_match_routes(httplib::Server& svr, ServerContext& ctx) {
                 {"logical_prompt_rows", total_metrics.logical_prompt_rows},
                 {"physical_prompt_rows_submitted", total_metrics.physical_prompt_rows},
                 {"prefix_rows_reused", total_metrics.prefix_rows_reused},
-                {"reuse_percent", total_metrics.logical_prompt_rows > 0
+                {"reuse_percent", (total_metrics.parent_anchor_reuse
+                                      ? total_metrics.parent_anchor_logical_rows
+                                      : total_metrics.logical_prompt_rows) > 0
                                       ? (100.0 * static_cast<double>(total_metrics.prefix_rows_reused) /
-                                         static_cast<double>(total_metrics.logical_prompt_rows))
+                                         static_cast<double>(total_metrics.parent_anchor_reuse
+                                             ? total_metrics.parent_anchor_logical_rows
+                                             : total_metrics.logical_prompt_rows))
                                       : 0.0},
                 {"traversal_decode_call_count", total_metrics.traversal_decode_call_count},
                 {"probe_decode_call_count", total_metrics.probe_decode_call_count},
@@ -295,6 +347,12 @@ void register_reference_match_routes(httplib::Server& svr, ServerContext& ctx) {
                 {"duplicate_terminal_arms_reused", total_metrics.duplicate_terminal_arms_reused},
                 {"max_traversal_depth", total_metrics.max_traversal_depth},
                 {"traversal_planning_time_ns", total_metrics.traversal_planning_ns},
+                {"parent_anchor_reuse", total_metrics.parent_anchor_reuse},
+                {"parent_anchor_children", total_metrics.parent_anchor_children},
+                {"parent_anchor_prefix_rows", total_metrics.parent_anchor_prefix_rows},
+                {"parent_anchor_prompt_rows", total_metrics.parent_anchor_prompt_rows},
+                {"parent_anchor_logical_rows", total_metrics.parent_anchor_logical_rows},
+                {"parent_anchor_physical_rows", total_metrics.parent_anchor_physical_rows},
                 {"output_token_positions_evaluated", total_metrics.output_token_positions_evaluated},
                 {"first_divergence_histogram", divergence},
                 {"max_live_sequences_per_decode_step", total_metrics.max_live_sequences},

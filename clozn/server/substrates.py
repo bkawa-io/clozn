@@ -67,6 +67,13 @@ def _experimental_native_reference_match_arms_enabled() -> bool:
         "1", "true", "yes", "on",
     }
 
+
+def _experimental_parent_anchor_enabled() -> bool:
+    """Opt into the Phase-B parent-anchor path; never enable it for proof arms."""
+    return os.environ.get("CLOZN_ENABLE_NATIVE_PARENT_ANCHOR", "").lower() in {
+        "1", "true", "yes", "on",
+    }
+
 class Substrate:
     """Shared studio surface for any substrate: the /memory/* trait cards and the /steer/* tone dials, on
     whatever model the subclass loads. A subclass sets self.steer, self._mem (a memory object exposing
@@ -891,7 +898,8 @@ class EngineSubstrate(Substrate):
 
         self.last_native_reference_match_metrics = None
         native_arms = [dict(arm) for arm in arms]
-        if (not proof_grade and _experimental_native_reference_match_arms_enabled()
+        if (not proof_grade and (_experimental_native_reference_match_arms_enabled()
+                                 or _experimental_parent_anchor_enabled())
                 and self._native_reference_match_arms
                 and native_arms
                 and callable(getattr(self.engine, "reference_match_arms", None))):
@@ -900,6 +908,17 @@ class EngineSubstrate(Substrate):
             render_started_ns = time.perf_counter_ns()
             common_reference = native_arms[0].get("reference_token_ids") if native_arms else None
             common_contract = native_arms[0].get("generation_contract") if native_arms else None
+            parent_anchor_prompts = {
+                arm.get("parent_anchor_prompt") for arm in native_arms
+                if isinstance(arm.get("parent_anchor_prompt"), str)
+            }
+            parent_anchor_prompt = (
+                next(iter(parent_anchor_prompts))
+                if len(parent_anchor_prompts) == 1 and _experimental_parent_anchor_enabled()
+                else None
+            )
+            if _experimental_parent_anchor_enabled() and len(parent_anchor_prompts) != 1:
+                native_supported = False
             for arm in native_arms:
                 contract = arm.get("generation_contract")
                 conditions = arm.get("explicit_conditions") or {}
@@ -917,14 +936,19 @@ class EngineSubstrate(Substrate):
                 prepared.append({"arm_id": len(prepared), "prompt": prompt})
             if native_supported:
                 try:
-                    response = self.engine.reference_match_arms(
-                        prepared,
-                        reference_token_ids=list(native_arms[0]["reference_token_ids"]),
-                        generation_contract=dict(native_arms[0]["generation_contract"]),
-                    )
+                    native_kwargs = {
+                        "reference_token_ids": list(native_arms[0]["reference_token_ids"]),
+                        "generation_contract": dict(native_arms[0]["generation_contract"]),
+                    }
+                    if parent_anchor_prompt is not None:
+                        native_kwargs["parent_anchor_prompt"] = parent_anchor_prompt
+                    response = self.engine.reference_match_arms(prepared, **native_kwargs)
                     rows = response.get("results") if isinstance(response, dict) else None
                     if isinstance(rows, list) and len(rows) == len(prepared):
                         self.last_native_reference_match_metrics = dict(response.get("metrics") or {})
+                        if parent_anchor_prompt is not None:
+                            self.last_native_reference_match_metrics["parent_anchor_enabled"] = True
+                            self.last_native_reference_match_metrics["proof_grade"] = False
                         if not self.last_native_reference_match_metrics.get("prompt_rendering_time_ns"):
                             self.last_native_reference_match_metrics[
                                 "prompt_rendering_time_ns"

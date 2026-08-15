@@ -19,8 +19,10 @@ class _NativeEngine:
     def __init__(self):
         self.native_calls = []
 
-    def reference_match_arms(self, arms, *, reference_token_ids, generation_contract):
-        self.native_calls.append((arms, list(reference_token_ids), dict(generation_contract)))
+    def reference_match_arms(self, arms, *, reference_token_ids, generation_contract,
+                             parent_anchor_prompt=None):
+        self.native_calls.append((arms, list(reference_token_ids), dict(generation_contract),
+                                  parent_anchor_prompt))
         # Deliberately return rows out of order: the Python seam must restore
         # the caller's arm order before evidence is exposed.
         return {
@@ -84,6 +86,21 @@ def test_native_many_is_explicitly_non_proof_grade_and_restores_order(monkeypatc
     assert sub.last_native_reference_match_metrics["native_prefill_time_ns"] == 7
 
 
+def test_parent_anchor_is_explicitly_forwarded_only_for_experimental_native(monkeypatch):
+    engine = _NativeEngine()
+    sub = _sub(monkeypatch, engine)
+    monkeypatch.setenv("CLOZN_ENABLE_NATIVE_PARENT_ANCHOR", "1")
+    arms = _arms()
+    for arm in arms:
+        arm["parent_anchor_prompt"] = "ANCHOR"
+
+    rows = probe_reference_match_many(sub, arms, proof_grade=False)
+
+    assert [row["status"] for row in rows] == ["matched", "diverged"]
+    assert engine.native_calls[0][3] == "ANCHOR"
+    assert sub.last_native_reference_match_metrics["parent_anchor_enabled"] is True
+
+
 def test_proof_grade_default_stays_on_scalar_even_when_native_is_enabled(monkeypatch):
     engine = _NativeEngine()
     sub = _sub(monkeypatch, engine)
@@ -112,9 +129,11 @@ def test_engine_client_reference_match_arms_wire_shape():
         [{"arm_id": 0, "prompt": "hello"}],
         reference_token_ids=[10, 11],
         generation_contract=CONTRACT,
+        parent_anchor_prompt="parent",
     )
 
     assert result["results"]
     assert client.seen[0] == "/v1/reference-match/arms"
     assert client.seen[1]["arms"] == [{"arm_id": 0, "prompt": "hello"}]
     assert client.seen[1]["reference_token_ids"] == [10, 11]
+    assert client.seen[1]["parent_anchor_prompt"] == "parent"

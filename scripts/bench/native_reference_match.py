@@ -38,6 +38,14 @@ def _require_supported_python() -> None:
         )
 
 
+def _progress(message: str, started: float, enabled: bool = True) -> None:
+    """Write human-readable progress to stderr without contaminating JSON stdout."""
+    if enabled:
+        elapsed = time.perf_counter() - started
+        print(f"[native-reference-match +{elapsed:7.1f}s] {message}",
+              file=sys.stderr, flush=True)
+
+
 @dataclass(frozen=True)
 class Unit:
     index: int
@@ -205,6 +213,8 @@ def _evidence_projection(row: dict) -> dict:
 
 def run(args: argparse.Namespace) -> dict:
     _require_supported_python()
+    run_started = time.perf_counter()
+    progress_enabled = not getattr(args, "quiet", False)
     fixture = build_fixture()
     sets = certification_sets()
     if args.arm_offset < 0 or args.arm_offset > len(sets):
@@ -212,6 +222,9 @@ def run(args: argparse.Namespace) -> dict:
     if args.max_arms < 0 or args.arm_offset + args.max_arms > len(sets):
         raise ValueError("arm-offset plus max-arms exceeds the fixed 1,276-arm certification workload")
     requested = sets[args.arm_offset:args.arm_offset + args.max_arms]
+    _progress(
+        f"fixture ready: selected {len(requested)} arms [{args.arm_offset}:{args.arm_offset + args.max_arms}), "
+        f"live={args.live}", run_started, progress_enabled)
     if not args.live:
         return {
             "fixture": {
@@ -239,12 +252,20 @@ def run(args: argparse.Namespace) -> dict:
         sys.path.insert(0, str(client_root))
         from clozn_engine import EngineClient
 
+    _progress(f"connecting to worker {args.host}:{args.port}", run_started, progress_enabled)
     engine = EngineClient(host=args.host, port=args.port, timeout=args.timeout)
     health = engine.health()
     if not health.get("capabilities", {}).get("reference_match_arms"):
         raise RuntimeError("worker does not advertise capabilities.reference_match_arms")
+    _progress(
+        "worker healthy: "
+        f"model={health.get('model', '<unknown>')} "
+        f"ctx={health.get('n_ctx', '?')} batch={health.get('n_batch', '?')} "
+        f"ubatch={health.get('n_ubatch', '?')}",
+        run_started, progress_enabled)
     sub = EngineSubstrate(engine=engine)
     full_messages = _arms(fixture, [tuple(range(len(fixture.units)))])[0]["messages"]
+    _progress("rendering baseline prompt and collecting reference tokens", run_started, progress_enabled)
     rendered = engine.apply_template_info(full_messages)
     baseline = engine.complete(rendered["prompt"], max_tokens=args.max_new,
                                temperature=0.0, rep_penalty=1.0, top_k=0, top_p=1.0, seed=0)
@@ -255,6 +276,9 @@ def run(args: argparse.Namespace) -> dict:
     reference = [int(token) for token in board[prompt_tokens:]]
     if not reference:
         raise RuntimeError("worker baseline generated no reference tokens")
+    _progress(
+        f"reference ready: prompt_tokens={prompt_tokens}, reference_tokens={len(reference)}",
+        run_started, progress_enabled)
     termination = dict(baseline.get("termination") or {})
     contract = _contract(len(reference) + 1, termination)
     arms = _arms(fixture, requested)
@@ -262,17 +286,26 @@ def run(args: argparse.Namespace) -> dict:
              "explicit_conditions": {}} for arm in arms]
 
     parity_requested = arms[:min(args.parity_arms, len(arms))]
+    _progress(
+        f"starting scalar probe: {len(arms)} arms "
+        f"({len(parity_requested)} parity arms)", run_started, progress_enabled)
     scalar_started = time.perf_counter_ns()
     # Use the existing public batch seam so this measurement includes the
     # production bounded concurrent scalar scheduler, not a special sequential
     # benchmark-only loop.
     scalar = probe_reference_match_many(sub, arms)
     scalar_wall = time.perf_counter_ns() - scalar_started
+    _progress(
+        f"scalar probe complete: {scalar_wall / 1e9:.1f}s",
+        run_started, progress_enabled)
 
     import os
     old_flag = os.environ.get("CLOZN_ENABLE_NATIVE_REFERENCE_MATCH_ARMS")
     os.environ["CLOZN_ENABLE_NATIVE_REFERENCE_MATCH_ARMS"] = "1"
     try:
+        _progress(
+            f"starting native parity probe: {len(parity_requested)} arms",
+            run_started, progress_enabled)
         native_started = time.perf_counter_ns()
         native = probe_reference_match_many(sub, parity_requested, proof_grade=False)
         native_wall = time.perf_counter_ns() - native_started
@@ -282,6 +315,10 @@ def run(args: argparse.Namespace) -> dict:
         )
         native_metrics = dict(sub.last_native_reference_match_metrics or {})
         native_strategy = native_metrics.get("strategy", "unknown")
+        _progress(
+            f"native parity complete: {'PASS' if parity_equal else 'FAIL'} "
+            f"({native_wall / 1e9:.1f}s, strategy={native_strategy})",
+            run_started, progress_enabled)
         if not parity_equal:
             mismatch = next((i for i in range(len(parity_requested))
                              if _evidence_projection(scalar[i]) !=
@@ -302,16 +339,27 @@ def run(args: argparse.Namespace) -> dict:
         full_native = None
         full_native_wall = None
         if args.max_arms > len(parity_requested):
+            _progress(
+                f"starting full native probe: {len(arms)} arms",
+                run_started, progress_enabled)
             full_started = time.perf_counter_ns()
             full_native = probe_reference_match_many(sub, arms, proof_grade=False)
             full_native_wall = time.perf_counter_ns() - full_started
             native_metrics = dict(sub.last_native_reference_match_metrics or native_metrics)
             native_strategy = native_metrics.get("strategy", native_strategy)
+            _progress(
+                f"full native probe complete: {full_native_wall / 1e9:.1f}s "
+                f"strategy={native_strategy} "
+                f"physical_rows={native_metrics.get('physical_prompt_rows_submitted', '?')} "
+                f"reused_rows={native_metrics.get('prefix_rows_reused', '?')}",
+                run_started, progress_enabled)
     finally:
         if old_flag is None:
             os.environ.pop("CLOZN_ENABLE_NATIVE_REFERENCE_MATCH_ARMS", None)
         else:
             os.environ["CLOZN_ENABLE_NATIVE_REFERENCE_MATCH_ARMS"] = old_flag
+
+    _progress("benchmark complete; emitting JSON result", run_started, progress_enabled)
 
     return {
         "status": "ok",
@@ -364,6 +412,8 @@ def parser() -> argparse.ArgumentParser:
                         help="starting index within the fixed certification workload")
     parser.add_argument("--max-arms", type=int, default=1276)
     parser.add_argument("--parity-arms", type=int, default=8)
+    parser.add_argument("--quiet", action="store_true",
+                        help="suppress progress logs (JSON output remains on stdout)")
     return parser
 
 

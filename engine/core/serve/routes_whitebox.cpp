@@ -1166,7 +1166,9 @@ void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx) {
     // fully concurrent with generation). No-embedded-template is surfaced as a clean 400, never silently
     // mis-formatted. The prompt is tokenized by the same GgmlModel::encode seam generation uses, so
     // prompt_tokens is exact worker-tokenizer evidence rather than a Python-side estimate. Body:
-    // {messages:[{role,content}], add_assistant?:bool=true} -> {prompt, prompt_tokens, template_source}.
+    // {messages:[{role,content}], add_assistant?:bool=true, include_token_ids?:bool=false} ->
+    // {prompt, prompt_tokens, template_source}; the opt-in token ID vector is diagnostic-only and
+    // deliberately absent from ordinary responses because it can be large.
     svr.Post("/apply_template", [&](const httplib::Request& req, httplib::Response& res) {
         json body = json::parse(req.body, nullptr, /*allow_exceptions=*/false);
         if (body.is_discarded()) {
@@ -1207,12 +1209,15 @@ void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx) {
             messages.emplace_back(role, m["content"].get<std::string>());
         }
         const bool add_assistant = body.value("add_assistant", true);
+        const bool include_token_ids = body.value("include_token_ids", false);
         try {
             const std::string prompt = ctx.chat_templates.apply(messages, add_assistant);
-            const int prompt_tokens = static_cast<int>(ctx.model->encode(prompt).size());
-            json resp = {{"prompt", prompt}, {"prompt_tokens", prompt_tokens},
+            const std::vector<int> prompt_token_ids = ctx.model->encode(prompt);
+            json resp = {{"prompt", prompt},
+                         {"prompt_tokens", static_cast<int>(prompt_token_ids.size())},
                          {"template_source", "model"},
                          {"renderer", "jinja"}};
+            if (include_token_ids) resp["prompt_token_ids"] = prompt_token_ids;
             res.set_content(dump_json(resp), "application/json");
         } catch (const std::exception& e) {
             res.status = 400;

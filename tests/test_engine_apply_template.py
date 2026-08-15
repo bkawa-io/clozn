@@ -83,6 +83,19 @@ def test_apply_template_info_rejects_a_malformed_worker_count(monkeypatch):
         ec.apply_template_info([{"role": "user", "content": "hi"}])
 
 
+def test_apply_template_info_can_opt_in_to_exact_token_ids(monkeypatch):
+    ec = EngineClient(port=1)
+    seen = {}
+    monkeypatch.setattr(ec, "_post", lambda path, body: seen.update(path=path, body=body) or {
+        "prompt": "rendered", "prompt_tokens": 3, "prompt_token_ids": [11, 22, 33],
+    })
+    assert ec.apply_template_info(
+        [{"role": "user", "content": "hi"}], include_token_ids=True) == {
+        "prompt": "rendered", "prompt_tokens": 3, "prompt_token_ids": [11, 22, 33],
+    }
+    assert seen["body"]["include_token_ids"] is True
+
+
 # ==================================================================================== _engine_tmpl helper
 
 class _RecordingEngine:

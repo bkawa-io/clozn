@@ -209,9 +209,13 @@ def assess_exact_eligibility(run: Mapping[str, Any], sub: Any = None,
     ids, token_reason = _trace_token_pieces(run)
     if token_reason:
         reasons.append(token_reason)
-    if (("output_contract" in run and run.get("output_contract") is not None)
+    # RunStore emits an empty output_contract object for ordinary text runs.
+    # That placeholder is not structured output; only a non-empty contract is
+    # an exact-replay exclusion.
+    if (("output_contract" in run and run.get("output_contract") not in (None, {}))
             or (isinstance(run.get("meta"), Mapping)
-                and "output_contract" in run["meta"] and run["meta"].get("output_contract") is not None)
+                and "output_contract" in run["meta"]
+                and run["meta"].get("output_contract") not in (None, {}))
             or not isinstance(run.get("response"), str)):
         reasons.append("unsupported_structured_output")
     if trace.get("retokenized") is True or trace.get("boundary_approximate") is True or run.get("retokenized") is True:
@@ -350,6 +354,21 @@ def classify_reference_match(reference_token_ids: Iterable[int], generated_token
         "first_divergence_index": None, "expected_token_id": None, "actual_token_id": None,
         "termination_match": True, "divergence_kind": None,
     }
+
+
+def is_reference_match_preserving(observation: Mapping[str, Any] | Any) -> bool:
+    """Return the canonical exact-reference preservation verdict.
+
+    Exact probes are preserving only when the shared classifier emits
+    ``status='matched'``.  Missing, unavailable, or malformed evidence never
+    becomes a preserving result by omission.
+    """
+    return isinstance(observation, Mapping) and observation.get("status") == "matched"
+
+
+def is_reference_match_failed(observation: Mapping[str, Any] | Any) -> bool:
+    """Return true only for a directly classified exact-reference divergence."""
+    return isinstance(observation, Mapping) and observation.get("status") == "diverged"
 
 
 class ExactAnswerPreservationStudy:

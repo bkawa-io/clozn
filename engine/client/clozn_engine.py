@@ -645,6 +645,7 @@ class EngineClient:
         *,
         reference_token_ids: Sequence[int],
         generation_contract: Mapping[str, Any],
+        parent_anchor_prompt: str | None = None,
     ) -> dict[str, Any]:
         """POST the private native exact-reference multi-arm probe.
 
@@ -662,6 +663,10 @@ class EngineClient:
             "reference_token_ids": [int(token) for token in reference_token_ids],
             "generation_contract": dict(generation_contract),
         }
+        if parent_anchor_prompt is not None:
+            if not isinstance(parent_anchor_prompt, str) or not parent_anchor_prompt:
+                raise ValueError("parent_anchor_prompt must be a non-empty string when provided")
+            body["parent_anchor_prompt"] = parent_anchor_prompt
         response = self._post("/v1/reference-match/arms", body)
         if not isinstance(response, Mapping) or not isinstance(response.get("results"), list):
             raise EngineError("POST /v1/reference-match/arms returned an invalid response")
@@ -727,17 +732,23 @@ class EngineClient:
         rendered prompt string."""
         return self.apply_template_info(messages, add_assistant=add_assistant)["prompt"]
 
-    def apply_template_info(self, messages: Sequence[dict], add_assistant: bool = True) -> dict[str, Any]:
+    def apply_template_info(self, messages: Sequence[dict], add_assistant: bool = True,
+                            include_token_ids: bool = False) -> dict[str, Any]:
         """Render with :meth:`apply_template` plus exact worker token-count evidence when available.
 
         New workers return ``prompt_tokens`` from the same tokenizer seam used for generation.  Older
         workers returned only ``prompt``; that response remains valid and simply omits the optional
-        count.  :meth:`apply_template` continues to return only the prompt string.
+        count.  ``include_token_ids`` is an opt-in diagnostic that returns the exact worker tokenizer
+        IDs; ordinary callers keep the compact response.  :meth:`apply_template` continues to return
+        only the prompt string.
         """
-        r = self._post("/apply_template", {
+        body = {
             "messages": list(messages),
             "add_assistant": bool(add_assistant),
-        })
+        }
+        if include_token_ids:
+            body["include_token_ids"] = True
+        r = self._post("/apply_template", body)
         info = {"prompt": r["prompt"]}
         if "prompt_tokens" in r:
             prompt_tokens = r["prompt_tokens"]
@@ -747,6 +758,14 @@ class EngineClient:
                     "POST /apply_template returned invalid 'prompt_tokens' "
                     "(expected non-negative int)")
             info["prompt_tokens"] = prompt_tokens
+        if include_token_ids:
+            token_ids = r.get("prompt_token_ids")
+            if (not isinstance(token_ids, list) or
+                    any(not isinstance(token, int) or isinstance(token, bool) for token in token_ids)):
+                raise EngineError(
+                    "POST /apply_template returned invalid 'prompt_token_ids' "
+                    "(expected an integer array)")
+            info["prompt_token_ids"] = token_ids
         return info
 
     def prepare_chat(

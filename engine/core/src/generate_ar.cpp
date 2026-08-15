@@ -1091,4 +1091,282 @@ ReferenceMatchBatchResult generate_ar_reference_match_rollback(
     return batch_result;
 }
 
+ReferenceMatchBatchResult generate_ar_reference_match_parent_anchor(
+    GgmlAdapter& adapter,
+    const std::vector<int>& parent_prompt,
+    const std::vector<std::vector<int>>& child_prompts,
+    const std::vector<int>& reference,
+    int max_tokens,
+    const std::vector<std::string>& stop_sequences) {
+    // Treat the immutable semantic parent as an additional terminal in the
+    // existing exact-token radix traversal. This prefills the parent path
+    // once per request, then visits each child branch from its exact LCP;
+    // traversal rollback prevents suffix remerge and cross-request state is
+    // cleared by the underlying primitive at both boundaries.
+    if (parent_prompt.empty() || child_prompts.empty())
+        throw std::invalid_argument("parent-anchor reference-match needs a parent and children");
+    std::vector<std::vector<int>> anchored_prompts;
+    anchored_prompts.reserve(child_prompts.size() + 1);
+    anchored_prompts.push_back(parent_prompt);
+    anchored_prompts.insert(anchored_prompts.end(), child_prompts.begin(), child_prompts.end());
+    ReferenceMatchBatchResult measured = generate_ar_reference_match_rollback(
+        adapter, anchored_prompts, reference, max_tokens, stop_sequences);
+    ReferenceMatchBatchResult result;
+    result.metrics = measured.metrics;
+    result.metrics.parent_anchor_reuse = true;
+    result.metrics.parent_anchor_children = static_cast<int>(child_prompts.size());
+    result.metrics.parent_anchor_prompt_rows = static_cast<long long>(parent_prompt.size());
+    result.metrics.parent_anchor_logical_rows = static_cast<long long>(parent_prompt.size());
+    result.metrics.logical_prompt_rows = 0;
+    for (const auto& child : child_prompts) {
+        result.metrics.logical_prompt_rows += static_cast<long long>(child.size());
+        result.metrics.parent_anchor_logical_rows += static_cast<long long>(child.size());
+        const int limit = static_cast<int>(std::min(parent_prompt.size(), child.size()));
+        int lcp = 0;
+        while (lcp < limit && parent_prompt[static_cast<size_t>(lcp)] == child[static_cast<size_t>(lcp)])
+            ++lcp;
+        result.metrics.parent_anchor_prefix_rows += lcp;
+    }
+    result.metrics.parent_anchor_physical_rows = measured.metrics.physical_prompt_rows;
+    result.metrics.prefix_rows_reused = result.metrics.parent_anchor_logical_rows -
+                                         result.metrics.parent_anchor_physical_rows;
+    result.metrics.unique_terminal_prompts = std::max(
+        0, measured.metrics.unique_terminal_prompts - 1);
+    result.arms.assign(measured.arms.begin() + 1, measured.arms.end());
+    result.generated_token_ids.assign(measured.generated_token_ids.begin() + 1,
+                                      measured.generated_token_ids.end());
+    return result;
+
+#if 0
+    if (parent_prompt.empty())
+        throw std::invalid_argument("parent-anchor reference-match parent prompt must not be empty");
+    if (child_prompts.empty())
+        throw std::invalid_argument("parent-anchor reference-match children must not be empty");
+    if (reference.empty())
+        throw std::invalid_argument("parent-anchor reference-match reference_token_ids must not be empty");
+    if (max_tokens < 1)
+        throw std::invalid_argument("parent-anchor reference-match max_tokens must be >= 1");
+    if (static_cast<int>(parent_prompt.size()) > adapter.n_ctx())
+        throw std::invalid_argument("parent-anchor reference-match parent exceeds context window");
+
+    using clock = std::chrono::steady_clock;
+    const clock::time_point started = clock::now();
+    struct Child {
+        int index = 0;
+        int lcp = 0;
+    };
+    std::vector<Child> order;
+    order.reserve(child_prompts.size());
+    ReferenceMatchBatchResult batch_result;
+    auto& metrics = batch_result.metrics;
+    metrics.parent_anchor_reuse = true;
+    metrics.parent_anchor_children = static_cast<int>(child_prompts.size());
+    metrics.logical_prompt_rows = 0;
+    metrics.peak_resident_sequences = 1;
+    metrics.max_live_sequences = 1;
+    for (size_t index = 0; index < child_prompts.size(); ++index) {
+        const auto& child = child_prompts[index];
+        if (child.empty())
+            throw std::invalid_argument("parent-anchor reference-match child prompt must not be empty");
+        if (static_cast<int>(child.size()) > adapter.n_ctx())
+            throw std::invalid_argument("parent-anchor reference-match child exceeds context window");
+        const int limit = std::min(parent_prompt.size(), child.size());
+        int lcp = 0;
+        while (lcp < limit && parent_prompt[static_cast<size_t>(lcp)] == child[static_cast<size_t>(lcp)])
+            ++lcp;
+        metrics.logical_prompt_rows += static_cast<long long>(child.size());
+        metrics.parent_anchor_prefix_rows += lcp;
+        order.push_back(Child{static_cast<int>(index), lcp});
+    }
+    // Descending LCP keeps the largest semantic parent prefix resident for as
+    // many sibling probes as possible. Stable ties preserve reducer arm order.
+    std::stable_sort(order.begin(), order.end(), [](const Child& left, const Child& right) {
+        return left.lcp > right.lcp;
+    });
+
+    std::vector<GenerateResult> arms(child_prompts.size());
+    std::vector<std::vector<int>> generated_token_ids(child_prompts.size());
+    auto ends_with_stop = [&](const std::vector<int>& ids, std::string& visible) {
+        if (stop_sequences.empty()) return false;
+        const std::string decoded = adapter.decode(ids);
+        for (const std::string& stop : stop_sequences) {
+            if (!stop.empty() && decoded.size() >= stop.size() &&
+                decoded.compare(decoded.size() - stop.size(), stop.size(), stop) == 0) {
+                visible = decoded.substr(0, decoded.size() - stop.size());
+                return true;
+            }
+        }
+        return false;
+    };
+
+    try {
+        adapter.reset_ar_kv();
+        adapter.set_causal(true);
+        int resident_depth = 0;
+        ForwardResult resident_prefix_logits;
+        bool resident_prefix_logits_valid = false;
+        long long decode_steps = 0;
+
+        for (const Child& item : order) {
+            const auto& child = child_prompts[static_cast<size_t>(item.index)];
+            if (resident_depth > item.lcp) {
+                adapter.evict_from(item.lcp);
+                resident_depth = item.lcp;
+                resident_prefix_logits_valid = false;
+                ++metrics.rollback_count;
+            }
+
+            if (resident_depth < item.lcp) {
+                const clock::time_point prefill_started = clock::now();
+                // Keep the terminal logits as a reusable anchor when the child
+                // has no changed suffix; otherwise they are merely a saved
+                // diagnostic state while the child suffix is materialized.
+                resident_prefix_logits = adapter.ar_forward_seq0_segment(
+                    parent_prompt, resident_depth, item.lcp, true);
+                metrics.prefill_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    clock::now() - prefill_started).count();
+                metrics.traversal_decode_call_count += adapter.last_decode_call_count();
+                metrics.model_forward_decode_calls += adapter.last_decode_call_count();
+                metrics.physical_prompt_rows += static_cast<long long>(item.lcp - resident_depth);
+                metrics.max_traversal_depth = std::max(metrics.max_traversal_depth, item.lcp);
+                resident_depth = item.lcp;
+                resident_prefix_logits_valid = true;
+            }
+
+            ForwardResult prompt_logits;
+            if (item.lcp < static_cast<int>(child.size())) {
+                const clock::time_point prefill_started = clock::now();
+                prompt_logits = adapter.ar_forward_seq0_segment(
+                    child, item.lcp, static_cast<int>(child.size()), true);
+                metrics.prefill_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    clock::now() - prefill_started).count();
+                metrics.traversal_decode_call_count += adapter.last_decode_call_count();
+                metrics.model_forward_decode_calls += adapter.last_decode_call_count();
+                metrics.physical_prompt_rows += static_cast<long long>(child.size() - item.lcp);
+                metrics.max_traversal_depth = std::max(metrics.max_traversal_depth,
+                                                       static_cast<int>(child.size()));
+            } else if (resident_prefix_logits_valid) {
+                prompt_logits = resident_prefix_logits;
+            } else {
+                if (item.lcp <= 0)
+                    throw std::runtime_error("parent-anchor child has no prompt logits");
+                adapter.evict_from(item.lcp - 1);
+                const clock::time_point prefill_started = clock::now();
+                prompt_logits = adapter.ar_forward_seq0_segment(
+                    child, item.lcp - 1, item.lcp, true);
+                metrics.prefill_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    clock::now() - prefill_started).count();
+                metrics.traversal_decode_call_count += adapter.last_decode_call_count();
+                metrics.model_forward_decode_calls += adapter.last_decode_call_count();
+                metrics.physical_prompt_rows += 1;
+            }
+
+            const int eos = adapter.config().eos_token_id;
+            ForwardResult fwd = prompt_logits;
+            std::vector<int> generated;
+            generated.reserve(static_cast<size_t>(max_tokens));
+            std::vector<int> probe_board = child;
+            probe_board.reserve(child.size() + static_cast<size_t>(max_tokens));
+            std::string reason = "length";
+            std::string stopped_text;
+            bool diverged = false;
+            int diverged_at = -1;
+            int position = static_cast<int>(child.size());
+            int probe_steps = 0;
+
+            try {
+                for (int k = 0; k < max_tokens; ++k) {
+                    if (position >= adapter.n_ctx()) break;
+                    ++probe_steps;
+                    const Candidate candidate = sample_committed_candidate(fwd, position);
+                    const int token = candidate.token_id;
+                    generated.push_back(token);
+                    if (k >= static_cast<int>(reference.size()) ||
+                        token != reference[static_cast<size_t>(k)]) {
+                        diverged = true;
+                        diverged_at = k;
+                        break;
+                    }
+                    if (ends_with_stop(generated, stopped_text)) {
+                        reason = "stop";
+                        break;
+                    }
+                    if (eos >= 0 && token == eos) {
+                        reason = "eos";
+                        break;
+                    }
+                    if (k + 1 >= max_tokens) break;
+                    probe_board.push_back(token);
+                    const clock::time_point decode_started = clock::now();
+                    fwd = adapter.ar_forward_seq0_segment(
+                        probe_board, position, position + 1, true);
+                    metrics.decode_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        clock::now() - decode_started).count();
+                    metrics.probe_decode_call_count += adapter.last_decode_call_count();
+                    metrics.model_forward_decode_calls += adapter.last_decode_call_count();
+                    ++position;
+                }
+            } catch (...) {
+                adapter.evict_from(item.lcp);
+                throw;
+            }
+
+            GenerateResult result;
+            std::vector<int> visible = generated;
+            if (reason == "stop") {
+                result.text = stopped_text;
+                for (size_t cut = 0; cut <= visible.size(); ++cut) {
+                    std::vector<int> prefix(visible.begin(), visible.begin() +
+                                            static_cast<std::ptrdiff_t>(cut));
+                    if (adapter.decode(prefix) == result.text) {
+                        visible = std::move(prefix);
+                        break;
+                    }
+                }
+            } else if (reason == "eos" && !visible.empty()) {
+                visible.pop_back();
+                result.text = adapter.decode(visible);
+            } else {
+                result.text = adapter.decode(visible);
+            }
+            result.generated = visible;
+            result.new_tokens = static_cast<int>(visible.size());
+            result.reason = reason;
+            result.steps_total = static_cast<int>(generated.size());
+            result.ref_active = true;
+            result.diverged = diverged;
+            result.diverged_at = diverged_at;
+            result.board = child;
+            result.board.insert(result.board.end(), visible.begin(), visible.end());
+            arms[static_cast<size_t>(item.index)] = std::move(result);
+            generated_token_ids[static_cast<size_t>(item.index)] = std::move(generated);
+            metrics.output_token_positions_evaluated += static_cast<long long>(probe_steps);
+            metrics.decode_steps += probe_steps;
+            metrics.unique_terminal_prompts += 1;
+            if (diverged)
+                ++metrics.first_divergence_histogram[diverged_at];
+
+            adapter.evict_from(item.lcp);
+            resident_depth = item.lcp;
+            resident_prefix_logits_valid = true;
+            ++metrics.rollback_count;
+        }
+
+        metrics.physical_prompt_rows = std::max(0LL, metrics.physical_prompt_rows);
+        metrics.prefix_rows_reused = metrics.logical_prompt_rows - metrics.physical_prompt_rows;
+        metrics.mean_live_sequences = metrics.decode_steps > 0 ? 1.0 : 0.0;
+        batch_result.arms = std::move(arms);
+        batch_result.generated_token_ids = std::move(generated_token_ids);
+        adapter.reset_ar_kv();
+    } catch (...) {
+        adapter.reset_ar_kv();
+        throw;
+    }
+
+    metrics.wall_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        clock::now() - started).count();
+    return batch_result;
+#endif
+}
+
 }  // namespace clozn

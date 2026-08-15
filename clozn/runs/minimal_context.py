@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from clozn import schemas
+from clozn.runs.answer_preservation import is_reference_match_preserving
 
 
 SCHEMA = "clozn.minimal-context-result.v1"
@@ -223,9 +224,10 @@ class _EvidenceEngine:
             if experiment["result_status"] == "unavailable":
                 reason = experiment.get("result", {}).get("reason")
                 self.unavailable_reasons.append(reason if isinstance(reason, str) and reason else "exact_probe_unavailable")
+            preserves = is_reference_match_preserving({"status": experiment["result_status"]})
             observation = {
                 "experiment": experiment,
-                "within_tolerance": experiment["result_status"] == "matched",
+                "within_tolerance": preserves,
                 "proofable": experiment["result_status"] in {"matched", "diverged"},
             }
         else:
