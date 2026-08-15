@@ -281,6 +281,7 @@ def run(args: argparse.Namespace) -> dict:
             for index in range(len(parity_requested))
         )
         native_metrics = dict(sub.last_native_reference_match_metrics or {})
+        native_strategy = native_metrics.get("strategy", "unknown")
         if not parity_equal:
             mismatch = next((i for i in range(len(parity_requested))
                              if _evidence_projection(scalar[i]) !=
@@ -293,7 +294,9 @@ def run(args: argparse.Namespace) -> dict:
                 "first_mismatch": mismatch,
                 "scalar_evidence": scalar[mismatch] if mismatch is not None else None,
                 "native_evidence": native[mismatch] if mismatch is not None else None,
-                "execution_regime": "native_batched_non_proof_grade",
+                "execution_regime": ("native_reference_match_rollback_experimental"
+                                      if native_strategy == "rollback"
+                                      else "native_batched_non_proof_grade"),
             }
 
         full_native = None
@@ -303,6 +306,7 @@ def run(args: argparse.Namespace) -> dict:
             full_native = probe_reference_match_many(sub, arms, proof_grade=False)
             full_native_wall = time.perf_counter_ns() - full_started
             native_metrics = dict(sub.last_native_reference_match_metrics or native_metrics)
+            native_strategy = native_metrics.get("strategy", native_strategy)
     finally:
         if old_flag is None:
             os.environ.pop("CLOZN_ENABLE_NATIVE_REFERENCE_MATCH_ARMS", None)
@@ -337,7 +341,11 @@ def run(args: argparse.Namespace) -> dict:
                                ((full_native_wall or native_wall) / 1e9)
                                if (full_native_wall or native_wall) else None,
             "metrics": native_metrics,
-            "execution_regime": "native_batched_non_proof_grade",
+            "execution_regime": ("native_reference_match_rollback_experimental"
+                                  if native_strategy == "rollback"
+                                  else "native_batched_non_proof_grade"),
+            "strategy": native_strategy,
+            "arms": len(full_native or parity_requested),
         },
         "native_prefix_reuse": {"status": "implemented", "proof_grade": False},
         "evidence_equal_on_parity_suite": True,

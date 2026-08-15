@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <string>
 #include <vector>
@@ -16,6 +17,22 @@
 namespace clozn {
 
 using json = nlohmann::json;
+
+namespace {
+
+enum class ReferenceMatchExecutionStrategy {
+    ResidentBatched,
+    RequestWideRollback,
+};
+
+ReferenceMatchExecutionStrategy reference_match_strategy() {
+    const char* value = std::getenv("CLOZN_REFERENCE_MATCH_STRATEGY");
+    if (value != nullptr && std::string(value) == "rollback")
+        return ReferenceMatchExecutionStrategy::RequestWideRollback;
+    return ReferenceMatchExecutionStrategy::ResidentBatched;
+}
+
+}  // namespace
 
 void register_reference_match_routes(httplib::Server& svr, ServerContext& ctx) {
     svr.Post("/v1/reference-match/arms", [&](const httplib::Request& req,
@@ -137,6 +154,42 @@ void register_reference_match_routes(httplib::Server& svr, ServerContext& ctx) {
         raw_tokens.reserve(prompt_ids.size());
         long long live_weight = 0;
         long long live_steps = 0;
+        const ReferenceMatchExecutionStrategy strategy = reference_match_strategy();
+        const bool request_wide_rollback =
+            strategy == ReferenceMatchExecutionStrategy::RequestWideRollback;
+        const std::string strategy_name = request_wide_rollback ? "rollback" : "resident";
+        const std::string execution_regime = request_wide_rollback
+                                                  ? "native_reference_match_rollback_experimental"
+                                                  : "native_batched_experimental";
+
+        auto aggregate_metrics = [&](const ReferenceMatchBatchMetrics& m) {
+            total_metrics.prefill_ns += m.prefill_ns;
+            total_metrics.decode_ns += m.decode_ns;
+            total_metrics.logical_prompt_rows += m.logical_prompt_rows;
+            total_metrics.physical_prompt_rows += m.physical_prompt_rows;
+            total_metrics.prefix_rows_reused += m.prefix_rows_reused;
+            total_metrics.output_token_positions_evaluated += m.output_token_positions_evaluated;
+            total_metrics.model_forward_decode_calls += m.model_forward_decode_calls;
+            total_metrics.request_wide_prefix_reuse =
+                total_metrics.request_wide_prefix_reuse || m.request_wide_prefix_reuse;
+            total_metrics.traversal_decode_call_count += m.traversal_decode_call_count;
+            total_metrics.probe_decode_call_count += m.probe_decode_call_count;
+            total_metrics.rollback_count += m.rollback_count;
+            total_metrics.rollback_prompt_rows += m.rollback_prompt_rows;
+            total_metrics.unique_terminal_prompts += m.unique_terminal_prompts;
+            total_metrics.duplicate_terminal_arms_reused += m.duplicate_terminal_arms_reused;
+            total_metrics.max_traversal_depth = std::max(total_metrics.max_traversal_depth,
+                                                         m.max_traversal_depth);
+            total_metrics.traversal_planning_ns += m.traversal_planning_ns;
+            live_weight += static_cast<long long>(m.mean_live_sequences * m.decode_steps);
+            live_steps += m.decode_steps;
+            total_metrics.max_live_sequences = std::max(total_metrics.max_live_sequences,
+                                                        m.max_live_sequences);
+            total_metrics.peak_resident_sequences = std::max(total_metrics.peak_resident_sequences,
+                                                              m.peak_resident_sequences);
+            for (const auto& item : m.first_divergence_histogram)
+                total_metrics.first_divergence_histogram[item.first] += item.second;
+        };
 
         // A single HTTP request is internally drained through bounded resident
         // batches. This keeps the native wire primitive one-call while honoring
@@ -144,7 +197,16 @@ void register_reference_match_routes(httplib::Server& svr, ServerContext& ctx) {
         size_t cursor = 0;
         try {
             ContextPool::Lease lease = ctx.pool.acquire();
-            while (cursor < prompt_ids.size()) {
+            if (request_wide_rollback) {
+                ReferenceMatchBatchResult measured = generate_ar_reference_match_rollback(
+                    *lease, prompt_ids, reference, max_tokens, stops);
+                aggregate_metrics(measured.metrics);
+                results.insert(results.end(), measured.arms.begin(), measured.arms.end());
+                raw_tokens.insert(raw_tokens.end(), measured.generated_token_ids.begin(),
+                                  measured.generated_token_ids.end());
+                cursor = prompt_ids.size();
+            }
+            while (!request_wide_rollback && cursor < prompt_ids.size()) {
                 std::vector<std::vector<int>> batch_prompts;
                 size_t end = cursor;
                 int physical_rows = 0;
@@ -157,22 +219,7 @@ void register_reference_match_routes(httplib::Server& svr, ServerContext& ctx) {
                 }
                 ReferenceMatchBatchResult measured = generate_ar_reference_match_batched(
                     *lease, batch_prompts, reference, max_tokens, stops);
-                const auto& m = measured.metrics;
-                total_metrics.prefill_ns += m.prefill_ns;
-                total_metrics.decode_ns += m.decode_ns;
-                total_metrics.logical_prompt_rows += m.logical_prompt_rows;
-                total_metrics.physical_prompt_rows += m.physical_prompt_rows;
-                total_metrics.prefix_rows_reused += m.prefix_rows_reused;
-                total_metrics.output_token_positions_evaluated += m.output_token_positions_evaluated;
-                total_metrics.model_forward_decode_calls += m.model_forward_decode_calls;
-                live_weight += static_cast<long long>(m.mean_live_sequences * m.decode_steps);
-                live_steps += m.decode_steps;
-                total_metrics.max_live_sequences = std::max(total_metrics.max_live_sequences,
-                                                            m.max_live_sequences);
-                total_metrics.peak_resident_sequences = std::max(total_metrics.peak_resident_sequences,
-                                                                  m.peak_resident_sequences);
-                for (const auto& item : m.first_divergence_histogram)
-                    total_metrics.first_divergence_histogram[item.first] += item.second;
+                aggregate_metrics(measured.metrics);
                 results.insert(results.end(), measured.arms.begin(), measured.arms.end());
                 raw_tokens.insert(raw_tokens.end(), measured.generated_token_ids.begin(),
                                   measured.generated_token_ids.end());
@@ -181,7 +228,7 @@ void register_reference_match_routes(httplib::Server& svr, ServerContext& ctx) {
         } catch (const std::exception& e) {
             res.status = 400;
             res.set_content(json{{"error", std::string("native reference-match failed: ") + e.what()},
-                                 {"execution_regime", "native_batched_experimental"},
+                                 {"execution_regime", execution_regime},
                                  {"proof_grade", false}}.dump(), "application/json");
             return;
         }
@@ -218,7 +265,7 @@ void register_reference_match_routes(httplib::Server& svr, ServerContext& ctx) {
             divergence[std::to_string(item.first)] = item.second;
         res.set_content(dump_json({
             {"results", rows},
-            {"execution_regime", "native_batched_experimental"},
+            {"execution_regime", execution_regime},
             {"proof_grade", false},
             {"metrics", {
                 {"total_wall_time_ns", total_metrics.wall_ns},
@@ -226,6 +273,8 @@ void register_reference_match_routes(httplib::Server& svr, ServerContext& ctx) {
                 {"prompt_tokenization_time_ns", total_metrics.prompt_tokenization_ns},
                 {"native_prefill_time_ns", total_metrics.prefill_ns},
                 {"native_decode_time_ns", total_metrics.decode_ns},
+                {"strategy", strategy_name},
+                {"request_wide_prefix_reuse", total_metrics.request_wide_prefix_reuse},
                 {"n_ctx", ctx.pool.n_ctx()},
                 {"n_batch", ctx.pool.n_batch()},
                 {"n_ubatch", ctx.pool.n_ubatch()},
@@ -234,6 +283,18 @@ void register_reference_match_routes(httplib::Server& svr, ServerContext& ctx) {
                 {"logical_prompt_rows", total_metrics.logical_prompt_rows},
                 {"physical_prompt_rows_submitted", total_metrics.physical_prompt_rows},
                 {"prefix_rows_reused", total_metrics.prefix_rows_reused},
+                {"reuse_percent", total_metrics.logical_prompt_rows > 0
+                                      ? (100.0 * static_cast<double>(total_metrics.prefix_rows_reused) /
+                                         static_cast<double>(total_metrics.logical_prompt_rows))
+                                      : 0.0},
+                {"traversal_decode_call_count", total_metrics.traversal_decode_call_count},
+                {"probe_decode_call_count", total_metrics.probe_decode_call_count},
+                {"rollback_count", total_metrics.rollback_count},
+                {"rollback_prompt_rows", total_metrics.rollback_prompt_rows},
+                {"unique_terminal_prompts", total_metrics.unique_terminal_prompts},
+                {"duplicate_terminal_arms_reused", total_metrics.duplicate_terminal_arms_reused},
+                {"max_traversal_depth", total_metrics.max_traversal_depth},
+                {"traversal_planning_time_ns", total_metrics.traversal_planning_ns},
                 {"output_token_positions_evaluated", total_metrics.output_token_positions_evaluated},
                 {"first_divergence_histogram", divergence},
                 {"max_live_sequences_per_decode_step", total_metrics.max_live_sequences},

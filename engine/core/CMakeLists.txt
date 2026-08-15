@@ -90,6 +90,13 @@ target_include_directories(test_time_machine_continuation_protocol PRIVATE
 target_link_libraries(test_time_machine_continuation_protocol PRIVATE clozn_sha256)
 add_test(NAME time_machine_continuation_protocol COMMAND test_time_machine_continuation_protocol)
 
+# Request-wide reference-match radix planning is model-free.  The fake traversal callbacks in this
+# test assert seq-0 depth restoration, duplicate-terminal collapse, and the no-remerge invariant
+# without starting llama.cpp or requiring a GGUF.
+add_executable(test_reference_match_plan tests/test_reference_match_plan.cpp)
+target_include_directories(test_reference_match_plan PRIVATE include)
+add_test(NAME reference_match_plan COMMAND test_reference_match_plan)
+
 # --- On-device SAE readout (ROADMAP 3.3 wired into the engine) ---
 # clozn_sae (src/sae_encoder.cu + clozn/sae.hpp): the JumpReLU SAE encoder GEMV + the vendored
 # sae_topk kernel, behind a CUDA-free pimpl header so clozn-server links it untouched by nvcc.

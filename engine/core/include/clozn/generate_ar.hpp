@@ -80,6 +80,15 @@ struct ReferenceMatchBatchMetrics {
     double mean_live_sequences = 0.0;
     int peak_resident_sequences = 0;
     std::map<int, int> first_divergence_histogram;
+    bool request_wide_prefix_reuse = false;
+    int traversal_decode_call_count = 0;
+    int probe_decode_call_count = 0;
+    int rollback_count = 0;
+    long long rollback_prompt_rows = 0;
+    int unique_terminal_prompts = 0;
+    int duplicate_terminal_arms_reused = 0;
+    int max_traversal_depth = 0;
+    std::int64_t traversal_planning_ns = 0;
 };
 
 struct ReferenceMatchBatchResult {
@@ -188,6 +197,16 @@ std::vector<BranchResult> generate_ar_branched(
 // the existing scalar probe remains the certificate authority until a real
 // GGUF parity suite qualifies this regime.
 ReferenceMatchBatchResult generate_ar_reference_match_batched(
+    GgmlAdapter& adapter,
+    const std::vector<std::vector<int>>& prompts,
+    const std::vector<int>& reference,
+    int max_tokens,
+    const std::vector<std::string>& stop_sequences = {});
+
+// Experimental request-wide exact-token radix traversal.  Every model row is decoded into seq 0;
+// prompt branches are restored with evict_from() before the next sibling is visited.  This has no
+// resident-arm or sum(prompt_lengths) admission limit beyond the route's per-prompt n_ctx check.
+ReferenceMatchBatchResult generate_ar_reference_match_rollback(
     GgmlAdapter& adapter,
     const std::vector<std::vector<int>>& prompts,
     const std::vector<int>& reference,

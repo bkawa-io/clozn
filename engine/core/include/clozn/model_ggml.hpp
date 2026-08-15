@@ -392,6 +392,10 @@ public:
     // (the AR head is in-place: row i predicts token i+1). Not a golden path (diffusion is the oracle).
     void set_causal(bool on);
     bool causal() const { return causal_; }
+    // Clear all request-local AR KV and bookkeeping.  The request-wide reference matcher uses this
+    // at both boundaries because its seq-0 traversal deliberately survives sibling probes only
+    // through explicit evict_from() calls.
+    void reset_ar_kv();
     ForwardResult ar_forward(const std::vector<int>& tokens, int n_past);
 
     // Like ar_forward, but the inputs are RAW embeddings (n_rows x n_embd, row-major) spliced in at
@@ -477,6 +481,10 @@ public:
     // resident sequences within the worker's sequence capacity.
     std::vector<ForwardResult> ar_forward_prefill_batch(
         const std::vector<std::vector<int>>& prompts);
+    // Decode board[from,to) into seq 0, preserving the caller's existing [0,from) KV.  Only the
+    // final row emits logits when requested; all rows use absolute positions and one sequence ID.
+    ForwardResult ar_forward_seq0_segment(const std::vector<int>& board,
+                                          int from, int to, bool need_last_logits);
     // Decode one token per sequence at independently advancing positions. This
     // is the survivor-only primitive used by native reference matching; inactive
     // sequences are omitted from the physical batch and their logits stay empty.

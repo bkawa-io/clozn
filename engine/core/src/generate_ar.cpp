@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <memory>
+#include <numeric>
 #include <random>
 #include <set>
 #include <stdexcept>
@@ -12,6 +13,7 @@
 #include <utility>
 
 #include "clozn/sample.hpp"
+#include "clozn/reference_match_plan.hpp"
 #include "clozn/whitebox.hpp"  // features_from / lens_from (shared with the diffusion loop)
 
 namespace clozn {
@@ -876,6 +878,214 @@ ReferenceMatchBatchResult generate_ar_reference_match_batched(
         adapter.cleanup_seqs(n);
         throw;
     }
+    metrics.wall_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        clock::now() - started).count();
+    return batch_result;
+}
+
+ReferenceMatchBatchResult generate_ar_reference_match_rollback(
+    GgmlAdapter& adapter,
+    const std::vector<std::vector<int>>& prompts,
+    const std::vector<int>& reference,
+    int max_tokens,
+    const std::vector<std::string>& stop_sequences) {
+    if (prompts.empty())
+        throw std::invalid_argument("reference-match arms must not be empty");
+    if (reference.empty())
+        throw std::invalid_argument("reference-match reference_token_ids must not be empty");
+    if (max_tokens < 1)
+        throw std::invalid_argument("reference-match max_tokens must be >= 1");
+
+    using clock = std::chrono::steady_clock;
+    const clock::time_point started = clock::now();
+    const int n = static_cast<int>(prompts.size());
+    long long logical_prompt_rows = 0;
+    for (const auto& prompt : prompts) {
+        if (prompt.empty())
+            throw std::invalid_argument("reference-match empty prompt");
+        if (static_cast<int>(prompt.size()) > adapter.n_ctx())
+            throw std::invalid_argument("reference-match prompt exceeds context window");
+        logical_prompt_rows += static_cast<long long>(prompt.size());
+    }
+
+    const clock::time_point planning_started = clock::now();
+    const ReferenceMatchTraversalPlan plan = make_reference_match_traversal_plan(prompts);
+    ReferenceMatchBatchResult batch_result;
+    auto& metrics = batch_result.metrics;
+    metrics.request_wide_prefix_reuse = true;
+    metrics.logical_prompt_rows = logical_prompt_rows;
+    metrics.peak_resident_sequences = 1;
+    metrics.max_live_sequences = 1;
+    metrics.traversal_planning_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        clock::now() - planning_started).count();
+
+    std::vector<GenerateResult> arms(static_cast<size_t>(n));
+    std::vector<std::vector<int>> generated_token_ids(static_cast<size_t>(n));
+    ForwardResult terminal_logits;
+
+    auto ends_with_stop = [&](const std::vector<int>& ids, std::string& visible) {
+        if (stop_sequences.empty()) return false;
+        const std::string decoded = adapter.decode(ids);
+        for (const std::string& stop : stop_sequences) {
+            if (!stop.empty() && decoded.size() >= stop.size() &&
+                decoded.compare(decoded.size() - stop.size(), stop.size(), stop) == 0) {
+                visible = decoded.substr(0, decoded.size() - stop.size());
+                return true;
+            }
+        }
+        return false;
+    };
+
+    try {
+        // The request-wide invariant starts cold and remains seq-0-only for the entire traversal.
+        // set_causal also resets, but the explicit reset makes the lifecycle visible and exception-safe.
+        adapter.reset_ar_kv();
+        adapter.set_causal(true);
+
+        auto probe_terminal = [&](int terminal_begin, int terminal_end, int prompt_end) {
+            if (terminal_logits.logits.empty())
+                throw std::runtime_error("reference-match terminal is missing prompt logits");
+            const int representative = plan.order[static_cast<size_t>(terminal_begin)];
+            const auto& prompt = prompts[static_cast<size_t>(representative)];
+            const int eos = adapter.config().eos_token_id;
+            ForwardResult fwd = terminal_logits;
+            std::vector<int> generated;
+            generated.reserve(static_cast<size_t>(max_tokens));
+            std::vector<int> probe_board = prompt;
+            probe_board.reserve(prompt.size() + static_cast<size_t>(max_tokens));
+            std::string reason = "length";
+            std::string stopped_text;
+            bool diverged = false;
+            int diverged_at = -1;
+            int position = prompt_end;
+            int probe_steps = 0;
+
+            try {
+                for (int k = 0; k < max_tokens; ++k) {
+                    if (position >= adapter.n_ctx()) break;
+                    ++probe_steps;
+                    const Candidate candidate = sample_committed_candidate(fwd, position);
+                    const int token = candidate.token_id;
+                    generated.push_back(token);
+
+                    if (k >= static_cast<int>(reference.size()) ||
+                        token != reference[static_cast<size_t>(k)]) {
+                        diverged = true;
+                        diverged_at = k;
+                        break;
+                    }
+                    if (ends_with_stop(generated, stopped_text)) {
+                        reason = "stop";
+                        break;
+                    }
+                    if (eos >= 0 && token == eos) {
+                        reason = "eos";
+                        break;
+                    }
+
+                    // The current batched matcher feeds a matched token back to obtain the next
+                    // logits.  Do the same only when another sampling step can actually consume it;
+                    // a mismatch is never decoded into KV.
+                    if (k + 1 >= max_tokens) break;
+                    probe_board.push_back(token);
+                    const clock::time_point decode_started = clock::now();
+                    fwd = adapter.ar_forward_seq0_segment(
+                        probe_board, position, position + 1, true);
+                    metrics.decode_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        clock::now() - decode_started).count();
+                    metrics.probe_decode_call_count += adapter.last_decode_call_count();
+                    metrics.model_forward_decode_calls += adapter.last_decode_call_count();
+                    ++position;
+                }
+            } catch (...) {
+                adapter.evict_from(prompt_end);
+                ++metrics.rollback_count;
+                throw;
+            }
+
+            // The probe's continuation is disposable even when it stopped at EOS, a stop sequence,
+            // the context boundary, or max_tokens.  The terminal prompt itself remains resident.
+            adapter.evict_from(prompt_end);
+            ++metrics.rollback_count;
+            metrics.decode_steps += probe_steps;
+
+            GenerateResult result;
+            std::vector<int> visible = generated;
+            if (reason == "stop") {
+                result.text = stopped_text;
+                for (size_t cut = 0; cut <= visible.size(); ++cut) {
+                    std::vector<int> prefix(visible.begin(), visible.begin() +
+                                            static_cast<std::ptrdiff_t>(cut));
+                    if (adapter.decode(prefix) == result.text) {
+                        visible = std::move(prefix);
+                        break;
+                    }
+                }
+            } else if (reason == "eos" && !visible.empty()) {
+                visible.pop_back();
+                result.text = adapter.decode(visible);
+            } else {
+                result.text = adapter.decode(visible);
+            }
+            result.generated = visible;
+            result.new_tokens = static_cast<int>(visible.size());
+            result.reason = reason;
+            result.steps_total = static_cast<int>(generated.size());
+            result.ref_active = true;
+            result.diverged = diverged;
+            result.diverged_at = diverged_at;
+            result.board = prompt;
+            result.board.insert(result.board.end(), visible.begin(), visible.end());
+
+            metrics.output_token_positions_evaluated += static_cast<long long>(generated.size());
+            metrics.unique_terminal_prompts += 1;
+            metrics.duplicate_terminal_arms_reused += (terminal_end - terminal_begin) - 1;
+            for (int sorted_index = terminal_begin; sorted_index < terminal_end; ++sorted_index) {
+                const int arm = plan.order[static_cast<size_t>(sorted_index)];
+                arms[static_cast<size_t>(arm)] = result;
+                generated_token_ids[static_cast<size_t>(arm)] = generated;
+                if (diverged)
+                    ++metrics.first_divergence_histogram[diverged_at];
+            }
+        };
+
+        walk_reference_match_traversal(
+            plan,
+            [&](int representative, int from, int to, bool need_last_logits) {
+                const clock::time_point prefill_started = clock::now();
+                terminal_logits = adapter.ar_forward_seq0_segment(
+                    prompts[static_cast<size_t>(representative)], from, to, need_last_logits);
+                const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    clock::now() - prefill_started).count();
+                metrics.prefill_ns += elapsed;
+                metrics.traversal_decode_call_count += adapter.last_decode_call_count();
+                metrics.model_forward_decode_calls += adapter.last_decode_call_count();
+                metrics.physical_prompt_rows += static_cast<long long>(to - from);
+                metrics.max_traversal_depth = std::max(metrics.max_traversal_depth, to);
+            },
+            [&](int terminal_begin, int terminal_end, int prompt_end) {
+                probe_terminal(terminal_begin, terminal_end, prompt_end);
+            },
+            [&](int depth, int rolled_rows) {
+                adapter.evict_from(depth);
+                ++metrics.rollback_count;
+                metrics.rollback_prompt_rows += static_cast<long long>(rolled_rows);
+            });
+
+        metrics.prefix_rows_reused = metrics.logical_prompt_rows - metrics.physical_prompt_rows;
+        if (metrics.prefix_rows_reused < 0 ||
+            metrics.physical_prompt_rows != reference_match_plan_physical_rows(plan)) {
+            throw std::runtime_error("reference-match rollback prompt-row invariant failed");
+        }
+        metrics.mean_live_sequences = metrics.decode_steps > 0 ? 1.0 : 0.0;
+        batch_result.arms = std::move(arms);
+        batch_result.generated_token_ids = std::move(generated_token_ids);
+        adapter.reset_ar_kv();
+    } catch (...) {
+        adapter.reset_ar_kv();
+        throw;
+    }
+
     metrics.wall_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
         clock::now() - started).count();
     return batch_result;

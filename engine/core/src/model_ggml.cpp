@@ -244,6 +244,22 @@ void GgmlAdapter::evict_from(int pos) {
     llama_memory_seq_rm(llama_get_memory(ctx_), 0, pos_offset_ + pos, -1);
 }
 
+void GgmlAdapter::reset_ar_kv() {
+    llama_memory_clear(llama_get_memory(ctx_), true);
+    frozen_end_ = 0;
+    boundary_row_.clear();
+    segment_logits_.clear();
+    write_from_ = 0;
+    tap_buf_.clear();
+    tap_rows_ = 0;
+    cap_bufs_.clear();
+    cap_rows_ = 0;
+    last_decode_call_count_ = 0;
+    last_prefill_logical_rows_ = 0;
+    last_prefill_physical_rows_ = 0;
+    last_prefill_reused_rows_ = 0;
+}
+
 void GgmlAdapter::set_emit_activations(bool on) {
     emit_activations_ = on;
     // Final-layer embeddings stay on as the fallback (cheap); the mid-layer tap_layer_ path is captured
@@ -624,9 +640,59 @@ void GgmlAdapter::set_causal(bool on) {
     llama_set_causal_attn(ctx_, on);
     // The attention mode changed, so any KV laid down under the other mode is now invalid
     // (a token's K/V depends on what it was allowed to attend to). Reset to a clean cache.
-    llama_memory_clear(llama_get_memory(ctx_), true);
-    frozen_end_ = 0;
-    boundary_row_.clear();
+    reset_ar_kv();
+}
+
+ForwardResult GgmlAdapter::ar_forward_seq0_segment(const std::vector<int>& board,
+                                                   int from, int to,
+                                                   bool need_last_logits) {
+    if (!causal_)
+        throw std::invalid_argument("ar_forward_seq0_segment requires causal attention");
+    if (from < 0 || to <= from || to > n_ctx_ || to > static_cast<int>(board.size()))
+        throw std::invalid_argument("ar_forward_seq0_segment: invalid segment");
+
+    // This is intentionally a narrow seq-0 primitive.  The caller owns the prefix invariant;
+    // unlike ar_forward_prefill_batch it never clears memory, creates additional sequence IDs, or
+    // requests logits for non-terminal rows.  n_ubatch remains the llama context's physical
+    // execution bound; n_batch_ is the logical batch size used for each submission here.
+    decoded_tokens_ += static_cast<long long>(to - from);
+    last_decode_call_count_ = 0;
+    const int vocab = cfg_.vocab_size;
+    const int decode_limit = n_batch_;
+    for (int chunk_from = from; chunk_from < to; chunk_from += decode_limit) {
+        const int chunk_rows = std::min(decode_limit, to - chunk_from);
+        write_from_ = chunk_from;
+        tap_buf_.clear();
+        tap_rows_ = 0;
+        llama_batch batch = llama_batch_init(chunk_rows, 0, 1);
+        batch.n_tokens = chunk_rows;
+        for (int i = 0; i < chunk_rows; ++i) {
+            const int position = chunk_from + i;
+            batch.token[i] = static_cast<llama_token>(board[static_cast<size_t>(position)]);
+            batch.pos[i] = position;
+            batch.n_seq_id[i] = 1;
+            batch.seq_id[i][0] = 0;
+            batch.logits[i] = (need_last_logits && position == to - 1) ? 1 : 0;
+        }
+        const int rc = llama_decode(ctx_, batch);
+        llama_batch_free(batch);
+        if (rc != 0)
+            throw std::runtime_error("ar_forward_seq0_segment: llama_decode failed (rc=" +
+                                     std::to_string(rc) + ")");
+        ++last_decode_call_count_;
+    }
+
+    ForwardResult out;
+    out.n_requested = need_last_logits ? 1 : 0;
+    out.vocab = vocab;
+    out.kv = std::make_shared<GgmlKV>(to);
+    if (need_last_logits) {
+        const float* logits = llama_get_logits_ith(ctx_, -1);
+        if (!logits)
+            throw std::runtime_error("ar_forward_seq0_segment: missing terminal logits");
+        out.logits.assign(logits, logits + vocab);
+    }
+    return out;
 }
 
 ForwardResult GgmlAdapter::ar_forward(const std::vector<int>& tokens, int n_past) {
