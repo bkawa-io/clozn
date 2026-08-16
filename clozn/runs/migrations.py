@@ -355,6 +355,94 @@ def _migration_0006_remove_retired_corrections(db: sqlite3.Connection) -> None:
     db.execute("DROP TABLE IF EXISTS corrections")
 
 
+def _migration_0007_durable_experiments(db: sqlite3.Connection) -> None:
+    """Durable new-kernel experiment plans, arm associations, and observations.
+
+    Large direct evidence remains in the existing content-addressed JSON blob
+    tree; these rows contain only identity, lifecycle, and searchable summary
+    metadata.  Observation rows intentionally have no foreign key to runs:
+    evidence remains inspectable if a separate run-retention policy removes its
+    parent later.
+    """
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS experiments (
+            id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            base_execution_fingerprint TEXT NOT NULL,
+            evaluator_kind TEXT NOT NULL,
+            state TEXT NOT NULL,
+            created_ts REAL NOT NULL,
+            updated_ts REAL NOT NULL,
+            plan_json TEXT NOT NULL,
+            diagnostics_json TEXT NOT NULL
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS experiment_arms (
+            experiment_id TEXT NOT NULL,
+            arm_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            is_control INTEGER NOT NULL,
+            intervention_json TEXT,
+            condition_json TEXT NOT NULL,
+            state TEXT NOT NULL,
+            observation_id TEXT,
+            error_json TEXT,
+            diagnostics_json TEXT NOT NULL,
+            PRIMARY KEY (experiment_id, arm_id),
+            UNIQUE (experiment_id, ordinal),
+            FOREIGN KEY (experiment_id) REFERENCES experiments(id) ON DELETE CASCADE
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS observations (
+            id TEXT PRIMARY KEY,
+            observation_key_sha256 TEXT NOT NULL UNIQUE,
+            run_id TEXT NOT NULL,
+            base_execution_fingerprint TEXT NOT NULL,
+            evaluator_kind TEXT NOT NULL,
+            condition_kind TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_ts REAL NOT NULL,
+            artifact_ref_json TEXT NOT NULL,
+            summary_json TEXT NOT NULL
+        )
+        """
+    )
+    db.execute("CREATE INDEX IF NOT EXISTS experiments_run_idx ON experiments(run_id, created_ts DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS experiment_arms_order_idx ON experiment_arms(experiment_id, ordinal ASC)")
+    db.execute("CREATE INDEX IF NOT EXISTS experiment_arms_observation_idx ON experiment_arms(observation_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS observations_run_idx ON observations(run_id, created_ts DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS observations_key_idx ON observations(observation_key_sha256)")
+
+
+def _verify_0007(db: sqlite3.Connection) -> bool:
+    required = {
+        "experiments": {"id", "run_id", "base_execution_fingerprint", "evaluator_kind", "state", "plan_json"},
+        "experiment_arms": {"experiment_id", "arm_id", "ordinal", "state", "observation_id"},
+        "observations": {"id", "observation_key_sha256", "run_id", "status", "artifact_ref_json"},
+    }
+    for table, columns in required.items():
+        actual = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+        if not columns.issubset(actual):
+            return False
+    indexes = {row[1] for row in db.execute("PRAGMA index_list(experiments)")}
+    arm_indexes = {row[1] for row in db.execute("PRAGMA index_list(experiment_arms)")}
+    observation_indexes = {row[1] for row in db.execute("PRAGMA index_list(observations)")}
+    return (
+        "experiments_run_idx" in indexes
+        and "experiment_arms_order_idx" in arm_indexes
+        and "experiment_arms_observation_idx" in arm_indexes
+        and "observations_run_idx" in observation_indexes
+        and "observations_key_idx" in observation_indexes
+    )
+
+
 # The shipped, ordered migration set. Append-only: once released, a migration's `apply` must never be
 # edited (a DB that already applied it would silently diverge from one that applies the edited version) --
 # ship a NEW migration with a higher version instead.
@@ -371,6 +459,8 @@ MIGRATIONS: tuple[Migration, ...] = (
               _migration_0005_corrections, verify=_verify_0005),
     Migration(6, "scope reset: remove retired durable-correction storage",
               _migration_0006_remove_retired_corrections, supersedes=frozenset({5})),
+    Migration(7, "durable experimental plans, arms, and observations",
+              _migration_0007_durable_experiments, verify=_verify_0007),
 )
 
 TARGET_VERSION = max(m.version for m in MIGRATIONS)

@@ -27,8 +27,16 @@ from .execution import (
 from .interventions import DeleteSource
 from .kernel import Experiment, ExperimentArm
 from .materialize import MaterializeBranch, materialize_arm
-from .observations import Observation
-from .observations import TokenScoreDelta, TokenScoreObservation
+from .observations import (
+    Observation, ObservationError, ObservationIntegrityError, TokenScoreDelta,
+    TokenScoreObservation, condition_for_intervention, execution_observation_identity,
+    observation_identity,
+)
+from .persistence import (
+    ARM_STATES, EXPERIMENT_STATES, EXPERIMENT_STORE_SCHEMA_VERSION,
+    ExperimentArmView, ExperimentPersistenceError, ExperimentView,
+    ObservationNotFound, ObservationPersistenceError, ObservationStore,
+)
 from .projection import AnswerSpanEffect, ProjectionError, project_answer_effects, project_answer_selection
 from .runner import ExperimentResult, run_experiment as experimental_run_experiment
 from .scoring import (
@@ -43,13 +51,20 @@ from .state import ExecutionState
 from .suite import (MANIFEST_SCHEMA, RESULT_SCHEMA, list_result_paths, load_manifest, load_result,
                     results_directory, run_manifest, select_cells, validate_manifest, validate_result)
 
+ExperimentStore = ObservationStore
+
 __all__ = ["REGISTRY", "catalog", "run_experiment", "substrate_ok", "MANIFEST_SCHEMA",
            "RESULT_SCHEMA", "list_result_paths", "load_manifest", "load_result", "results_directory",
            "run_manifest", "select_cells", "validate_manifest", "validate_result",
            "ExecutionState", "ContextSelection", "DeleteSource", "ExactReferenceMatch",
            "ScoreRecordedContinuation", "AnswerSelection", "ResolvedAnswerSelection",
            "AnswerSelectionUnavailable", "Experiment", "ExperimentArm", "Observation",
-           "TokenScoreObservation", "TokenScoreDelta", "AnswerSpanEffect", "ExperimentResult",
+           "ObservationError", "ObservationIntegrityError", "condition_for_intervention",
+           "execution_observation_identity", "observation_identity", "TokenScoreObservation",
+           "TokenScoreDelta", "AnswerSpanEffect", "ExperimentResult", "ExperimentArmView",
+           "ExperimentView", "ExperimentStore", "ObservationStore", "ObservationNotFound", "ObservationPersistenceError",
+           "ExperimentPersistenceError", "ARM_STATES", "EXPERIMENT_STATES",
+           "EXPERIMENT_STORE_SCHEMA_VERSION",
            "ProjectionError",
            "ExecutionAdapter", "DeleteSourceExactReferenceAdapter", "ExactReferenceMatchAdapter",
            "DeleteSourceRecordedContinuationScoreAdapter", "ScoreRecordedContinuationAdapter",

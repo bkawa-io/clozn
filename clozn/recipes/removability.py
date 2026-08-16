@@ -9,6 +9,7 @@ from clozn.experiments.execution import DeleteSourceExactReferenceAdapter
 from clozn.experiments.interventions import DeleteSource
 from clozn.experiments.kernel import Experiment
 from clozn.experiments.runner import ExperimentResult, run_experiment
+from clozn.experiments.persistence import ObservationStore
 from clozn.experiments.selections import ContextSelection
 from clozn.experiments.state import ExecutionState
 
@@ -21,6 +22,8 @@ def can_remove(
     substrate: Any | None = None,
     run_loader=None,
     include_control: bool = True,
+    observation_store: ObservationStore | None = None,
+    store: ObservationStore | None = None,
 ) -> ExperimentResult:
     """Measure whether deleting the requested canonical sources preserves the answer."""
     state = ExecutionState.from_run(run)
@@ -36,7 +39,11 @@ def can_remove(
         execution_adapter = DeleteSourceExactReferenceAdapter(
             substrate, run=run, run_loader=run_loader,
         )
-    return run_experiment(experiment, execution_adapter, include_control=include_control)
+    return run_experiment(
+        experiment, execution_adapter, include_control=include_control,
+        observation_store=observation_store, store=store,
+        requested_by={"recipe": "removability"},
+    )
 
 
 def removability_message(result: ExperimentResult, arm_id: str | None = None) -> str:

@@ -17,7 +17,7 @@ from clozn.receipts.rederive import score_arm, with_arm_conditions
 from clozn.replay.execution_fork import _runtime_projection, parent_runtime_projection
 
 from .evaluators import ScoreRecordedContinuation
-from .execution import ExecutionAdapterError, ExecutionStateStaleError, resolve_delete_source
+from .execution import ExecutionAdapterError, ExecutionStateStaleError, _identity_kwargs, resolve_delete_source
 from .interventions import DeleteSource
 from .observations import TokenScoreObservation
 from .selections import _recorded_answer_tokens
@@ -55,21 +55,23 @@ def _runtime_binding(run: Mapping[str, Any], substrate: Any) -> tuple[dict[str, 
     return recorded, None
 
 
-def _score_observation(*, arm_id: str, run: Mapping[str, Any], state: ExecutionState,
+def _score_observation(*, arm_id: str | None, run: Mapping[str, Any], state: ExecutionState,
+                       evaluator: ScoreRecordedContinuation, intervention: DeleteSource | None,
                        conditions: Mapping[str, Any], raw_tokens: Any,
                        provenance: Mapping[str, Any], diagnostics: Mapping[str, Any] | None = None) -> TokenScoreObservation:
+    identity = _identity_kwargs(state, evaluator, intervention)
     try:
         expected_ids, expected_pieces, response = _recorded_answer_tokens(run)
     except Exception as exc:
         return TokenScoreObservation(
-            arm_id=arm_id, status="unavailable", evaluator_provenance=provenance,
+            **identity, status="unavailable", evaluator_provenance=provenance,
             score_basis={"runtime_binding": _thaw(state.model_runtime_identity)},
             execution_provenance=provenance,
             diagnostics={"reason": "recorded_continuation_unavailable", "error": str(exc)},
         )
     if not isinstance(raw_tokens, list) or len(raw_tokens) != len(expected_ids):
         return TokenScoreObservation(
-            arm_id=arm_id, status="unavailable", evaluator_provenance=provenance,
+            **identity, status="unavailable", evaluator_provenance=provenance,
             score_basis={"runtime_binding": _thaw(state.model_runtime_identity)},
             execution_provenance=provenance,
             diagnostics={"reason": "score_token_count_mismatch", "expected": len(expected_ids),
@@ -79,7 +81,7 @@ def _score_observation(*, arm_id: str, run: Mapping[str, Any], state: ExecutionS
     for index, (expected_id, expected_piece, token) in enumerate(zip(expected_ids, expected_pieces, raw_tokens)):
         if not isinstance(token, Mapping):
             return TokenScoreObservation(
-                arm_id=arm_id, status="unavailable", evaluator_provenance=provenance,
+                **identity, status="unavailable", evaluator_provenance=provenance,
                 score_basis={"runtime_binding": _thaw(state.model_runtime_identity)},
                 execution_provenance=provenance,
                 diagnostics={"reason": "malformed_score_token", "index": index},
@@ -89,7 +91,7 @@ def _score_observation(*, arm_id: str, run: Mapping[str, Any], state: ExecutionS
         logprob = token.get("logprob")
         if actual_id != expected_id or actual_piece != expected_piece:
             return TokenScoreObservation(
-                arm_id=arm_id, status="unavailable", evaluator_provenance=provenance,
+                **identity, status="unavailable", evaluator_provenance=provenance,
                 score_basis={"runtime_binding": _thaw(state.model_runtime_identity)},
                 execution_provenance=provenance,
                 diagnostics={"reason": "score_token_alignment_mismatch", "index": index,
@@ -97,7 +99,7 @@ def _score_observation(*, arm_id: str, run: Mapping[str, Any], state: ExecutionS
             )
         if isinstance(logprob, bool) or not isinstance(logprob, (int, float)) or not math.isfinite(float(logprob)):
             return TokenScoreObservation(
-                arm_id=arm_id, status="unavailable", evaluator_provenance=provenance,
+                **identity, status="unavailable", evaluator_provenance=provenance,
                 score_basis={"runtime_binding": _thaw(state.model_runtime_identity)},
                 execution_provenance=provenance,
                 diagnostics={"reason": "score_logprob_unavailable", "index": index},
@@ -121,7 +123,7 @@ def _score_observation(*, arm_id: str, run: Mapping[str, Any], state: ExecutionS
         "continuation_basis": "recorded_token_ids",
     })
     return TokenScoreObservation(
-        arm_id=arm_id, status="completed", recorded_token_ids=expected_ids,
+        **identity, status="completed", recorded_token_ids=expected_ids,
         token_pieces=expected_pieces, token_spans=spans, token_logprobs=logprobs,
         total_continuation_logprob=sum(logprobs), evaluator_provenance=provenance,
         score_basis=basis, execution_provenance=provenance,
@@ -172,19 +174,20 @@ class DeleteSourceRecordedContinuationScoreAdapter:
 
     def execute(self, state: ExecutionState, intervention: DeleteSource | None = None, *,
                 evaluator: ScoreRecordedContinuation | None = None,
-                arm_id: str = "control") -> TokenScoreObservation:
+                arm_id: str | None = None) -> TokenScoreObservation:
         if not isinstance(state, ExecutionState):
             raise TypeError("execution state must be an ExecutionState")
         evaluator = evaluator or ScoreRecordedContinuation()
         if not isinstance(evaluator, ScoreRecordedContinuation):
             raise TypeError("score execution supports ScoreRecordedContinuation only")
+        identity = _identity_kwargs(state, evaluator, intervention)
         try:
             run = self._validated_run(state)
         except ExecutionStateStaleError:
             raise
         except ExecutionAdapterError as exc:
             return TokenScoreObservation(
-                arm_id=arm_id, status="unavailable",
+                **identity, status="unavailable",
                 evaluator_provenance={"evaluator": "score_recorded_continuation"},
                 execution_provenance={"adapter": "delete_source_recorded_continuation_score"},
                 diagnostics={"reason": "base_run_unavailable", "error": str(exc)},
@@ -193,14 +196,14 @@ class DeleteSourceRecordedContinuationScoreAdapter:
             expected_ids, _pieces, _response = _recorded_answer_tokens(run)
         except Exception as exc:
             return TokenScoreObservation(
-                arm_id=arm_id, status="unavailable",
+                **identity, status="unavailable",
                 evaluator_provenance={"evaluator": "score_recorded_continuation"},
                 execution_provenance={"adapter": "delete_source_recorded_continuation_score"},
                 diagnostics={"reason": "recorded_continuation_unavailable", "error": str(exc)},
             )
         if not expected_ids or state.recorded_answer_token_identity.get("token_ids_sha256") != digest(expected_ids):
             return TokenScoreObservation(
-                arm_id=arm_id, status="unavailable",
+                **identity, status="unavailable",
                 evaluator_provenance={"evaluator": "score_recorded_continuation"},
                 execution_provenance={"adapter": "delete_source_recorded_continuation_score"},
                 diagnostics={"reason": "recorded_continuation_identity_mismatch"},
@@ -217,14 +220,14 @@ class DeleteSourceRecordedContinuationScoreAdapter:
         }
         if runtime_reason:
             return TokenScoreObservation(
-                arm_id=arm_id, status="unavailable", evaluator_provenance=base_provenance,
+                **identity, status="unavailable", evaluator_provenance=base_provenance,
                 score_basis={"runtime_binding": runtime}, execution_provenance=base_provenance,
                 diagnostics={"reason": runtime_reason},
             )
         conditions = with_arm_conditions(dict(run))
         if conditions.get("continuation_ids") != expected_ids:
             return TokenScoreObservation(
-                arm_id=arm_id, status="unavailable", evaluator_provenance=base_provenance,
+                **identity, status="unavailable", evaluator_provenance=base_provenance,
                 score_basis={"runtime_binding": runtime}, execution_provenance=base_provenance,
                 diagnostics={"reason": "recorded_continuation_identity_mismatch"},
             )
@@ -238,7 +241,7 @@ class DeleteSourceRecordedContinuationScoreAdapter:
                 resolved = resolve_delete_source(run, intervention)
             except Exception as exc:
                 return TokenScoreObservation(
-                    arm_id=arm_id, status="unavailable", evaluator_provenance=provenance,
+                    **identity, status="unavailable", evaluator_provenance=provenance,
                     score_basis={"runtime_binding": runtime}, execution_provenance=provenance,
                     diagnostics={"reason": "intervention_unavailable", "error": str(exc)},
                 )
@@ -258,7 +261,7 @@ class DeleteSourceRecordedContinuationScoreAdapter:
         score_conditions["block"] = block
         if not callable(getattr(self.substrate, "score_tokens", None)):
             return TokenScoreObservation(
-                arm_id=arm_id, status="unavailable", evaluator_provenance=provenance,
+                **identity, status="unavailable", evaluator_provenance=provenance,
                 score_basis={"runtime_binding": runtime}, execution_provenance=provenance,
                 diagnostics={"reason": "scoring_substrate_unavailable"},
             )
@@ -268,12 +271,13 @@ class DeleteSourceRecordedContinuationScoreAdapter:
         )
         if not ok:
             return TokenScoreObservation(
-                arm_id=arm_id, status="failed", evaluator_provenance=provenance,
+                **identity, status="failed", evaluator_provenance=provenance,
                 score_basis={"runtime_binding": runtime}, execution_provenance=provenance,
                 diagnostics={"reason": "score_failed"},
             )
         return _score_observation(
-            arm_id=arm_id, run=run, state=state, conditions=score_conditions,
+            arm_id=arm_id, run=run, state=state, evaluator=evaluator, intervention=intervention,
+            conditions=score_conditions,
             raw_tokens=tokens, provenance=provenance,
         )
 

@@ -17,6 +17,7 @@ from .execution import (
     resolve_delete_source,
 )
 from .interventions import DeleteSource
+from .persistence import ExperimentArmView, ExperimentView, ObservationStore
 from .runner import ExperimentResult
 from .state import ExecutionState
 
@@ -32,20 +33,39 @@ class MaterializationStaleError(MaterializationError):
     """The parent or source binding changed after the experiment was run."""
 
 
-def _arm(result: ExperimentResult, arm_id: str) -> DeleteSource:
-    for observation, intervention in zip(result.arm_observations, result.arm_interventions):
-        if observation.arm_id == arm_id:
-            if observation.status not in {"exact_preserved", "diverged"}:
-                raise MaterializationError(
-                    f"arm {arm_id!r} has no completed exact-reference observation"
-                )
-            return intervention
-    raise MaterializationError(f"experiment result has no arm {arm_id!r}")
+def _arm(result: ExperimentResult | ExperimentView, arm_id: str) -> DeleteSource:
+    try:
+        arm = result.arm_for(arm_id)
+    except KeyError as exc:
+        raise MaterializationError(f"experiment result has no arm {arm_id!r}") from exc
+    if not isinstance(arm, ExperimentArmView):
+        raise MaterializationError("experiment result returned an invalid arm association")
+    if arm.state != "completed" or arm.observation is None:
+        raise MaterializationError(
+            f"arm {arm_id!r} has no completed exact-reference observation"
+        )
+    if arm.observation.status not in {"exact_preserved", "diverged"}:
+        raise MaterializationError(
+            f"arm {arm_id!r} has no completed exact-reference observation"
+        )
+    if not isinstance(arm.intervention, DeleteSource):
+        raise MaterializationError(f"arm {arm_id!r} has no materializable delete-source intervention")
+    return arm.intervention
+
+
+def _resolve_result(result: ExperimentResult | ExperimentView | str | None, *,
+                    experiment_id: str | None, observation_store: ObservationStore | None) -> ExperimentResult | ExperimentView:
+    if isinstance(result, (ExperimentResult, ExperimentView)):
+        return result
+    resolved_id = result if isinstance(result, str) else experiment_id
+    if resolved_id and observation_store is not None:
+        return observation_store.get_experiment(resolved_id)
+    raise TypeError("materialize_arm requires an ExperimentResult or a persisted experiment ID/store")
 
 
 def materialize_arm(
     base_run: Mapping[str, Any],
-    result: ExperimentResult,
+    result: ExperimentResult | ExperimentView | str | None,
     arm_id: str,
     *,
     substrate: Any | None = None,
@@ -53,6 +73,9 @@ def materialize_arm(
     reload_parent: Callable[[str], Mapping[str, Any] | None] | None = None,
     max_new: int | None = None,
     replay_fn: Callable[..., Mapping[str, Any] | None] = replay_run,
+    experiment_id: str | None = None,
+    observation_store: ObservationStore | None = None,
+    store: ObservationStore | None = None,
 ) -> dict[str, Any]:
     """Revalidate one arm and persist exactly one ordinary replay child.
 
@@ -61,10 +84,14 @@ def materialize_arm(
     """
     if not isinstance(base_run, Mapping) or not isinstance(base_run.get("id"), str) or not base_run["id"]:
         raise MaterializationError("base_run must carry a non-empty id")
-    if not isinstance(result, ExperimentResult):
-        raise TypeError("materialize_arm requires an ExperimentResult")
-    if result.state != "completed":
-        raise MaterializationError("only a completed ExperimentResult can be materialized")
+    if observation_store is not None and store is not None and observation_store is not store:
+        raise ValueError("pass only one observation store")
+    result = _resolve_result(
+        result, experiment_id=experiment_id,
+        observation_store=observation_store or store,
+    )
+    if result.state not in {"completed", "cancelled"}:
+        raise MaterializationError("only an experiment with a completed arm can be materialized")
     if result.base.run_id != base_run["id"]:
         raise MaterializationStaleError("experiment result is bound to another parent run")
 

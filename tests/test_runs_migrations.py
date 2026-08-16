@@ -136,12 +136,13 @@ def test_scope_reset_drops_durable_correction_tables_from_existing_journals(tmp_
         v5 = tuple(migration for migration in migrations.MIGRATIONS if migration.version <= 5)
         assert migrations.migrate(db, v5) == [migration.version for migration in v5]
 
-        assert migrations.migrate(db) == [6]
+        assert migrations.migrate(db) == [6, 7]
         tables = {row[0] for row in db.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         )}
         assert "corrections" not in tables
         assert "correction_events" not in tables
+        assert "experiments" in tables
     finally:
         db.close()
 
@@ -161,7 +162,7 @@ def test_claimed_superseder_suppresses_missing_superseded_migration(tmp_path):
         db.commit()
 
         assert 5 not in [migration.version for migration in migrations.pending(db)]
-        assert migrations.migrate(db) == []
+        assert migrations.migrate(db) == [7]
         tables = {row[0] for row in db.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         )}
@@ -185,14 +186,14 @@ def test_stale_pending_snapshot_cannot_reapply_a_superseded_migration(tmp_path, 
         first.commit()
 
         stale_pending = original_pending(first)
-        assert [migration.version for migration in stale_pending] == [5, 6]
+        assert [migration.version for migration in stale_pending] == [5, 6, 7]
         interleaved = False
 
         def _pending_after_concurrent_cleanup(db, migration_set=migrations.MIGRATIONS):
             nonlocal interleaved
             if db is first and not interleaved:
                 interleaved = True
-                assert migrations.migrate(second) == [5, 6]
+                assert migrations.migrate(second) == [5, 6, 7]
                 return stale_pending
             return original_pending(db, migration_set)
 

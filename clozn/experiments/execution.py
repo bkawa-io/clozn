@@ -1,4 +1,4 @@
-"""Execution seam for Batch 1 delete-source exact-reference experiments.
+"""Execution seam for delete-source exact-reference observations.
 
 Only this adapter knows how to turn a typed ``DeleteSource`` declaration into
 messages.  It delegates canonical source proof to the existing strict receipt
@@ -22,7 +22,7 @@ from clozn.runs.context_units import protected_message_indices
 from .evaluators import ExactReferenceMatch
 from .interventions import DeleteSource
 from .kernel import Experiment
-from .observations import Observation
+from .observations import Observation, execution_observation_identity
 from .state import ExecutionState, digest
 
 
@@ -48,7 +48,24 @@ def _diagnostics(raw: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _observation_from_probe(arm_id: str, raw: Mapping[str, Any], *, provenance: Mapping[str, Any]) -> Observation:
+def _identity_kwargs(state: ExecutionState, evaluator: Any, intervention: DeleteSource | None) -> dict[str, Any]:
+    identity = execution_observation_identity(state, evaluator, intervention)
+    key = identity["observation_key"]
+    return {
+        "observation_id": identity["observation_id"],
+        "observation_key_sha256": identity["observation_key_sha256"],
+        "observation_key": key,
+        "run_id": state.run_id,
+        "base_execution_fingerprint": state.execution_fingerprint,
+        "evaluator": key["evaluator"],
+        "condition": key["condition"],
+        "contract": key["contract"],
+    }
+
+
+def _observation_from_probe(state: ExecutionState, evaluator: ExactReferenceMatch,
+                            intervention: DeleteSource | None, raw: Mapping[str, Any], *,
+                            provenance: Mapping[str, Any]) -> Observation:
     status = raw.get("status")
     if status == "matched":
         observation_status = "exact_preserved"
@@ -63,7 +80,7 @@ def _observation_from_probe(arm_id: str, raw: Mapping[str, Any], *, provenance: 
         observation_status = "failed"
         proof_grade, trusted = "unavailable", False
     return Observation(
-        arm_id=arm_id,
+        **_identity_kwargs(state, evaluator, intervention),
         status=observation_status,
         matched_token_count=raw.get("matched_token_count"),
         first_divergence_index=raw.get("first_divergence_index"),
@@ -142,7 +159,7 @@ class DeleteSourceExactReferenceAdapter:
             return assess_exact_eligibility(run, self.substrate)
         return {"eligible": False, "reason": "runtime_identity_unavailable"}
 
-    def _run_probe(self, state: ExecutionState, run: Mapping[str, Any], *, arm_id: str,
+    def _run_probe(self, state: ExecutionState, run: Mapping[str, Any], *, arm_id: str | None,
                    intervention: DeleteSource | None, evaluator: ExactReferenceMatch) -> Observation:
         eligibility = self._eligibility(run, state)
         provenance: dict[str, Any] = {
@@ -153,7 +170,7 @@ class DeleteSourceExactReferenceAdapter:
         }
         if not eligibility.get("eligible"):
             return Observation(
-                arm_id=arm_id,
+                **_identity_kwargs(state, evaluator, intervention),
                 status="unavailable",
                 execution_provenance=provenance,
                 diagnostics={"reason": eligibility.get("reason", "exact_execution_unavailable")},
@@ -167,7 +184,7 @@ class DeleteSourceExactReferenceAdapter:
                 resolved = resolve_delete_source(run, intervention)
             except (ContextReceiptSourceResolutionError, ExecutionAdapterError) as exc:
                 return Observation(
-                    arm_id=arm_id,
+                    **_identity_kwargs(state, evaluator, intervention),
                     status="unavailable",
                     execution_provenance=provenance,
                     diagnostics={"reason": "intervention_unavailable", "error": str(exc)},
@@ -187,7 +204,7 @@ class DeleteSourceExactReferenceAdapter:
         probe = getattr(self.substrate, "probe_reference_match", None)
         if not callable(probe):
             return Observation(
-                arm_id=arm_id,
+                **_identity_kwargs(state, evaluator, intervention),
                 status="unavailable",
                 execution_provenance=provenance,
                 diagnostics={"reason": "exact_probe_unsupported"},
@@ -205,7 +222,7 @@ class DeleteSourceExactReferenceAdapter:
             )
         except Exception as exc:
             return Observation(
-                arm_id=arm_id,
+                **_identity_kwargs(state, evaluator, intervention),
                 status="failed",
                 execution_provenance=provenance,
                 proof_grade="unavailable",
@@ -213,15 +230,15 @@ class DeleteSourceExactReferenceAdapter:
             )
         if not isinstance(raw, Mapping):
             return Observation(
-                arm_id=arm_id,
+                **_identity_kwargs(state, evaluator, intervention),
                 status="failed",
                 execution_provenance=provenance,
                 diagnostics={"reason": "probe_malformed"},
             )
-        return _observation_from_probe(arm_id, raw, provenance=provenance)
+        return _observation_from_probe(state, evaluator, intervention, raw, provenance=provenance)
 
     def execute(self, state: ExecutionState, intervention: DeleteSource | None = None, *,
-                evaluator: ExactReferenceMatch | None = None, arm_id: str = "control") -> Observation:
+                evaluator: ExactReferenceMatch | None = None, arm_id: str | None = None) -> Observation:
         if not isinstance(state, ExecutionState):
             raise TypeError("execution state must be an ExecutionState")
         evaluator = evaluator or ExactReferenceMatch()
@@ -233,7 +250,7 @@ class DeleteSourceExactReferenceAdapter:
             raise
         except ExecutionAdapterError as exc:
             return Observation(
-                arm_id=arm_id,
+                **_identity_kwargs(state, evaluator, intervention),
                 status="unavailable",
                 execution_provenance={"adapter": "delete_source_exact_reference"},
                 diagnostics={"reason": "base_run_unavailable", "error": str(exc)},

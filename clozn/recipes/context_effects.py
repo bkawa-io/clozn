@@ -10,6 +10,7 @@ from clozn.experiments.interventions import DeleteSource
 from clozn.experiments.kernel import Experiment
 from clozn.experiments.projection import AnswerSpanEffect, project_answer_effects
 from clozn.experiments.runner import ExperimentResult, run_experiment
+from clozn.experiments.persistence import ObservationStore
 from clozn.experiments.scoring import DeleteSourceRecordedContinuationScoreAdapter
 from clozn.experiments.selections import AnswerSelection, ContextSelection
 from clozn.experiments.state import ExecutionState
@@ -77,7 +78,8 @@ def _source_universe(run: Mapping[str, Any], source_ids: Iterable[str] | None) -
 def measure_context_effects(run: Mapping[str, Any], source_ids: Iterable[str] | None = None, *,
                             execution_adapter: Any = None, substrate: Any = None,
                             run_loader: Any = None, answer_selection: AnswerSelection | None = None,
-                            include_control: bool = True) -> ExperimentResult:
+                            include_control: bool = True, observation_store: ObservationStore | None = None,
+                            store: ObservationStore | None = None) -> ExperimentResult:
     """Measure baseline plus direct leave-one-out deletion score arms.
 
     ``answer_selection`` is accepted as a convenience validation input but is
@@ -99,14 +101,17 @@ def measure_context_effects(run: Mapping[str, Any], source_ids: Iterable[str] | 
         adapter = DeleteSourceRecordedContinuationScoreAdapter(
             substrate, run=run, run_loader=run_loader,
         )
-    result = run_experiment(experiment, adapter, include_control=include_control)
-    result.diagnostics.update({
+    return run_experiment(
+        experiment, adapter, include_control=include_control,
+        observation_store=observation_store, store=store,
+        requested_by={"recipe": "context_effects"},
+        diagnostics={
         "recipe": "context_effects",
         "source_universe": list(universe),
         "source_universe_basis": universe_basis,
         "measurement": "direct_leave_one_out_delete_source",
-    })
-    return result
+        },
+    )
 
 
 def project_context_effects(result: ExperimentResult, answer_selection: AnswerSelection,

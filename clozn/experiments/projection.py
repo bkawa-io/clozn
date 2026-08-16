@@ -7,6 +7,7 @@ from typing import Any
 
 from .evaluators import ScoreRecordedContinuation
 from .observations import TokenScoreDelta, TokenScoreObservation
+from .persistence import ExperimentArmView, ExperimentView
 from .runner import ExperimentResult
 from .selections import (
     AnswerSelection,
@@ -150,29 +151,35 @@ def _resolved_selection(result: ExperimentResult, selection: AnswerSelection | R
     return resolved
 
 
-def _effect_for_arm(result: ExperimentResult, selection: AnswerSelection | ResolvedAnswerSelection,
+def _effect_for_arm(result: ExperimentResult | ExperimentView, selection: AnswerSelection | ResolvedAnswerSelection,
                     resolved: ResolvedAnswerSelection,
-                    intervention: Any, observation: TokenScoreObservation) -> AnswerSpanEffect:
+                    arm: ExperimentArmView) -> AnswerSpanEffect:
     baseline = result.control if isinstance(result.control, TokenScoreObservation) else None
-    delta = TokenScoreDelta.from_observations(baseline, observation) if baseline is not None else TokenScoreDelta(
-        arm_id=observation.arm_id, status="unavailable", diagnostics={"reason": "baseline_score_unavailable"},
-    )
+    observation = arm.observation if isinstance(arm.observation, TokenScoreObservation) else None
+    delta = TokenScoreDelta.from_observations(baseline, observation) if baseline is not None and observation is not None else None
     indices = resolved.token_indices
     baseline_sum = _selected_sum(baseline.token_logprobs, indices) if baseline and baseline.completed else None
-    intervened_sum = _selected_sum(observation.token_logprobs, indices) if observation.completed else None
-    selected_delta = _selected_sum(delta.deltas, indices) if delta.status == "completed" else None
-    status = delta.status
+    intervened_sum = _selected_sum(observation.token_logprobs, indices) if observation is not None and observation.completed else None
+    selected_delta = _selected_sum(delta.deltas, indices) if delta is not None and delta.status == "completed" else None
+    status = delta.status if delta is not None else "unavailable"
+    diagnostics = {} if status == "completed" else dict(
+        (delta.diagnostics if delta is not None else {}) or {}
+    )
+    if observation is None:
+        diagnostics.setdefault("reason", "intervention_observation_unavailable")
+    if baseline is None:
+        diagnostics.setdefault("baseline_status", "unavailable")
     return AnswerSpanEffect(
-        experiment_id=result.experiment_id, run_id=result.base.run_id, arm_id=observation.arm_id,
-        intervention=intervention.to_dict(), source_ids=tuple(intervention.source_ids),
+        experiment_id=result.experiment_id, run_id=result.base.run_id, arm_id=arm.arm_id,
+        intervention=arm.intervention.to_dict(), source_ids=tuple(arm.intervention.source_ids),
         selection=selection, resolved_selection=resolved, status=status, baseline_selected_logp=baseline_sum,
         intervened_selected_logp=intervened_sum, delta_nats=selected_delta,
         provenance={
             "run_id": result.base.run_id,
             "experiment_id": result.experiment_id,
-            "arm_id": observation.arm_id,
-            "source_ids": list(intervention.source_ids),
-            "intervention": intervention.to_dict(),
+            "arm_id": arm.arm_id,
+            "source_ids": list(arm.intervention.source_ids),
+            "intervention": arm.intervention.to_dict(),
             "evaluator": result.evaluator.to_dict(),
             "selected_answer": {
                 **resolved.to_dict(),
@@ -181,32 +188,32 @@ def _effect_for_arm(result: ExperimentResult, selection: AnswerSelection | Resol
             "measurement": {
                 "basis": "persisted_full_continuation_token_vectors",
                 "sign": "baseline_minus_intervention",
-                "baseline_observation_arm_id": baseline.arm_id if baseline else None,
-                "intervention_observation_arm_id": observation.arm_id,
-                "delta": delta.to_dict(),
+                "baseline_observation_id": baseline.observation_id if baseline else None,
+                "intervention_observation_id": observation.observation_id if observation else None,
+                "selected_baseline_logp": baseline_sum,
+                "selected_intervened_logp": intervened_sum,
+                "selected_delta_nats": selected_delta,
             },
         },
-        diagnostics={} if status == "completed" else dict(delta.diagnostics),
+        diagnostics=diagnostics,
     )
 
 
-def project_answer_effects(result: ExperimentResult, selection: AnswerSelection | ResolvedAnswerSelection,
+def project_answer_effects(result: ExperimentResult | ExperimentView, selection: AnswerSelection | ResolvedAnswerSelection,
                            *, ordering: str = "absolute") -> list[AnswerSpanEffect]:
     """Project every direct deletion arm without making model or substrate calls."""
-    if not isinstance(result, ExperimentResult):
-        raise TypeError("project_answer_effects requires an ExperimentResult")
+    if not isinstance(result, (ExperimentResult, ExperimentView)):
+        raise TypeError("project_answer_effects requires an experiment read model")
     if not isinstance(result.evaluator, ScoreRecordedContinuation):
         raise ProjectionError("answer-span effects require ScoreRecordedContinuation evidence")
     if ordering not in {"absolute", "source"}:
         raise ProjectionError("ordering must be 'absolute' or 'source'")
     resolved = _resolved_selection(result, selection)
-    if len(result.arm_observations) != len(result.arm_interventions):
-        raise ProjectionError("experiment result arm evidence is misaligned")
     effects: list[AnswerSpanEffect] = []
-    for observation, intervention in zip(result.arm_observations, result.arm_interventions):
-        if not isinstance(observation, TokenScoreObservation):
-            raise ProjectionError("score result contains a non-score observation")
-        effects.append(_effect_for_arm(result, selection, resolved, intervention, observation))
+    for arm in result.arms:
+        if not isinstance(arm, ExperimentArmView) or arm.intervention is None:
+            raise ProjectionError("score result contains an invalid arm association")
+        effects.append(_effect_for_arm(result, selection, resolved, arm))
     if ordering == "absolute":
         indexed = list(enumerate(effects))
         indexed.sort(key=lambda pair: (
@@ -218,7 +225,7 @@ def project_answer_effects(result: ExperimentResult, selection: AnswerSelection 
     return effects
 
 
-def project_answer_selection(result: ExperimentResult, selection: AnswerSelection | ResolvedAnswerSelection,
+def project_answer_selection(result: ExperimentResult | ExperimentView, selection: AnswerSelection | ResolvedAnswerSelection,
                              *, ordering: str = "absolute") -> list[AnswerSpanEffect]:
     return project_answer_effects(result, selection, ordering=ordering)
 
