@@ -1,0 +1,176 @@
+"""Explicit conversion of one completed ephemeral arm into one child Run."""
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from copy import deepcopy
+from typing import Any
+
+from clozn.analysis.model_diff import diff_runs
+from clozn.receipts.rederive import with_arm_conditions
+from clozn.replay.replay import replay as replay_run
+from clozn.replay.span_bridge import ContextReceiptSourceResolutionError
+
+from .execution import (
+    DeleteSourceExactReferenceAdapter,
+    ExecutionAdapterError,
+    ExecutionStateStaleError,
+    resolve_delete_source,
+)
+from .interventions import DeleteSource
+from .runner import ExperimentResult
+from .state import ExecutionState
+
+
+SCHEMA_VERSION = "clozn.experiment-materialization.v1"
+
+
+class MaterializationError(ValueError):
+    """The requested arm cannot become a faithful child run."""
+
+
+class MaterializationStaleError(MaterializationError):
+    """The parent or source binding changed after the experiment was run."""
+
+
+def _arm(result: ExperimentResult, arm_id: str) -> DeleteSource:
+    for observation, intervention in zip(result.arm_observations, result.arm_interventions):
+        if observation.arm_id == arm_id:
+            if observation.status not in {"exact_preserved", "diverged"}:
+                raise MaterializationError(
+                    f"arm {arm_id!r} has no completed exact-reference observation"
+                )
+            return intervention
+    raise MaterializationError(f"experiment result has no arm {arm_id!r}")
+
+
+def materialize_arm(
+    base_run: Mapping[str, Any],
+    result: ExperimentResult,
+    arm_id: str,
+    *,
+    substrate: Any | None = None,
+    execution_adapter: DeleteSourceExactReferenceAdapter | None = None,
+    reload_parent: Callable[[str], Mapping[str, Any] | None] | None = None,
+    max_new: int | None = None,
+    replay_fn: Callable[..., Mapping[str, Any] | None] = replay_run,
+) -> dict[str, Any]:
+    """Revalidate one arm and persist exactly one ordinary replay child.
+
+    Search/proof arms remain outside the run store.  Only this explicit call
+    invokes the existing replay persistence seam.
+    """
+    if not isinstance(base_run, Mapping) or not isinstance(base_run.get("id"), str) or not base_run["id"]:
+        raise MaterializationError("base_run must carry a non-empty id")
+    if not isinstance(result, ExperimentResult):
+        raise TypeError("materialize_arm requires an ExperimentResult")
+    if result.state != "completed":
+        raise MaterializationError("only a completed ExperimentResult can be materialized")
+    if result.base.run_id != base_run["id"]:
+        raise MaterializationStaleError("experiment result is bound to another parent run")
+
+    if callable(reload_parent):
+        current_parent = reload_parent(base_run["id"])
+    elif execution_adapter is not None and callable(getattr(execution_adapter, "load_run", None)):
+        current_parent = execution_adapter.load_run(result.base)
+    else:
+        current_parent = base_run
+    if not isinstance(current_parent, Mapping):
+        raise MaterializationStaleError("the parent could not be reloaded")
+    current_parent = dict(current_parent)
+    try:
+        current_state = ExecutionState.from_run(current_parent)
+    except Exception as exc:
+        raise MaterializationStaleError(f"the current parent has no valid execution state: {exc}") from exc
+    if current_state.execution_fingerprint != result.base.execution_fingerprint:
+        raise MaterializationStaleError("the parent execution fingerprint changed after the experiment")
+    if current_state.context_receipt_identity.get("digest") != result.base.context_receipt_identity.get("digest"):
+        raise MaterializationStaleError("the parent Context Receipt changed after the experiment")
+
+    intervention = _arm(result, arm_id)
+    try:
+        resolved = resolve_delete_source(current_parent, intervention)
+    except (ContextReceiptSourceResolutionError, ExecutionAdapterError) as exc:
+        raise MaterializationStaleError(f"canonical source binding is stale or unavailable: {exc}") from exc
+
+    conditions = with_arm_conditions(current_parent)
+    if resolved.get("basis") != "assembled_messages" and conditions.get("block") not in (None, ""):
+        raise MaterializationStaleError(
+            "the recorded prompt block cannot be faithfully reconstructed through replay"
+        )
+
+    adapter = execution_adapter
+    if adapter is None:
+        if substrate is None:
+            raise MaterializationError("materialization requires a substrate or execution_adapter")
+        adapter = DeleteSourceExactReferenceAdapter(substrate, run=current_parent)
+    if substrate is None:
+        substrate = getattr(adapter, "substrate", None)
+    if substrate is None:
+        raise MaterializationError("execution_adapter has no substrate for ordinary generation")
+
+    changes: dict[str, Any] = {
+        "experiment": {
+            "experiment_id": result.experiment_id,
+            "arm_id": arm_id,
+            "intervention": {
+                "kind": "delete_source",
+                "source_ids": list(intervention.source_ids),
+            },
+        },
+    }
+    behavior = current_parent.get("behavior")
+    active_dials = behavior.get("active_dials") if isinstance(behavior, Mapping) else None
+    if isinstance(active_dials, Mapping) and active_dials:
+        changes["behavior_off"] = True
+        changes["behavior_overrides"] = deepcopy(dict(active_dials))
+
+    contract = result.base.generation_contract or {}
+    decode_mode = contract.get("decode_mode") if isinstance(contract, Mapping) else None
+    if decode_mode == "greedy":
+        changes["greedy"] = True
+        sampling_override: bool | dict[str, Any] = False
+    elif decode_mode == "sample" and isinstance(contract.get("sampling"), Mapping):
+        sampling_override = deepcopy(dict(contract["sampling"]))
+    else:
+        raise MaterializationError("the parent generation contract cannot be faithfully replayed")
+
+    kwargs: dict[str, Any] = {
+        "messages_override": deepcopy(resolved.get("messages") or []),
+        "sampling_override": sampling_override,
+    }
+    if isinstance(max_new, int) and not isinstance(max_new, bool) and max_new > 0:
+        kwargs["max_new"] = max_new
+    child = replay_fn(current_parent, changes, substrate, **kwargs)
+    if not isinstance(child, Mapping) or not child.get("id"):
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "state": "failed",
+            "parent_run_id": current_parent["id"],
+            "experiment_id": result.experiment_id,
+            "arm_id": arm_id,
+            "intervention": deepcopy(changes["experiment"]["intervention"]),
+            "reason": "generation_failed",
+        }
+
+    child_copy = deepcopy(dict(child))
+    comparison = diff_runs(current_parent, child_copy)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "state": "completed",
+        "parent_run_id": current_parent["id"],
+        "child_run_id": child_copy["id"],
+        "experiment_id": result.experiment_id,
+        "arm_id": arm_id,
+        "intervention": deepcopy(changes["experiment"]["intervention"]),
+        "comparison": comparison,
+        "compare_path": f"#/compare/{current_parent['id']}/{child_copy['id']}",
+    }
+
+
+MaterializeBranch = materialize_arm
+
+
+__all__ = [
+    "MaterializationError", "MaterializationStaleError", "MaterializeBranch",
+    "SCHEMA_VERSION", "materialize_arm",
+]
