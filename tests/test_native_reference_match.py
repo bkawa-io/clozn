@@ -137,3 +137,45 @@ def test_engine_client_reference_match_arms_wire_shape():
     assert client.seen[1]["arms"] == [{"arm_id": 0, "prompt": "hello"}]
     assert client.seen[1]["reference_token_ids"] == [10, 11]
     assert client.seen[1]["parent_anchor_prompt"] == "parent"
+
+
+def test_engine_client_persistent_parent_wire_shapes():
+    from clozn_engine import EngineClient
+
+    class Client(EngineClient):
+        def __init__(self):
+            super().__init__(port=1)
+            self.seen = []
+
+        def _post(self, path, body):
+            self.seen.append((path, body))
+            if path.endswith("/create"):
+                return {
+                    "session_id": "s", "parent_version": 0,
+                    "parent_prompt_digest": "p", "runtime_identity": {},
+                }
+            if path.endswith("/probe"):
+                return {"results": [{"candidate_id": "c"}]}
+            if path.endswith("/promote"):
+                return {"parent_version": 1}
+            return {"closed": True}
+
+    client = Client()
+    client.reference_match_persistent_create(
+        "prompt", reference_token_ids=[1], generation_contract=CONTRACT,
+    )
+    client.reference_match_persistent_probe(
+        "s", expected_parent_version=0,
+        children=[{"candidate_id": "c", "candidate_rank": 0, "prompt": "child"}],
+    )
+    client.reference_match_persistent_promote(
+        "s", expected_parent_version=0, candidate_id="c",
+    )
+    client.reference_match_persistent_close("s")
+    assert [path for path, _body in client.seen] == [
+        "/v1/reference-match/persistent/create",
+        "/v1/reference-match/persistent/probe",
+        "/v1/reference-match/persistent/promote",
+        "/v1/reference-match/persistent/close",
+    ]
+    assert client.seen[1][1]["children"][0]["candidate_rank"] == 0

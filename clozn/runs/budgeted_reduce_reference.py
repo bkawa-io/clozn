@@ -10,6 +10,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from collections.abc import Callable, Iterable, Mapping, Sequence
 import os
+import time
 from typing import Any
 
 from clozn.runs.answer_preservation import (
@@ -23,6 +24,12 @@ from clozn.runs.budgeted_reduce import (
     run_budgeted_reduction,
 )
 from clozn.runs.multi_arm import probe_reference_match_many
+from clozn.runs.persistent_parent import (
+    PersistentParentSessionClient,
+    PersistentParentSessionError,
+    assert_scalar_parity,
+    candidate_id,
+)
 
 
 @dataclass
@@ -120,13 +127,176 @@ class EngineReferenceMatchAdapter:
         return is_reference_match_failed(evidence)
 
 
+class PersistentEngineReferenceMatchAdapter(EngineReferenceMatchAdapter):
+    """Opt-in reducer adapter using a worker persistent accepted-parent session.
+
+    Scalar probes are always run first and remain the returned evidence.  The native session is a
+    paired runtime diagnostic; a reducer adoption callback promotes only after scalar preservation
+    and native/scalar parity have both been established for that exact candidate.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        self.persistent_session = PersistentParentSessionClient(
+            self.engine,
+            tuple(self.reference_token_ids),
+            dict(self.generation_contract),
+        )
+        self.persistent_parent_metrics: list[dict[str, Any]] = []
+        self.persistent_parent_parity_mismatches: list[dict[str, Any]] = []
+        self.persistent_parent_promotion_metrics: list[dict[str, Any]] = []
+        self.persistent_parent_final_report: dict[str, Any] | None = None
+        self.persistent_parent_scalar_confirmation_wall_seconds = 0.0
+        self._last_native_by_candidate: dict[str, dict[str, Any]] = {}
+
+    def _prompt_for(self, prepared: PreparedCandidate) -> str:
+        return self.engine.apply_template(list(prepared.probe_payload.get("messages") or []))
+
+    def on_control_accepted(self, _candidate: Any, prepared: PreparedCandidate, _evidence: Any) -> None:
+        if self.persistent_session.session_id is None:
+            self.persistent_session.create(self._prompt_for(prepared))
+
+    def _classify_native_row(self, row: Mapping[str, Any]) -> dict[str, Any]:
+        from clozn.runs.answer_preservation import classify_reference_match
+
+        raw = dict(row.get("result") or {})
+        generated = raw.get("generated_token_ids")
+        if (not isinstance(generated, list) or any(isinstance(value, bool) or not isinstance(value, int)
+                                                    for value in generated)):
+            raise PersistentParentSessionError("persistent native row has no integer token trace",
+                                               code="malformed_native_result", status=502)
+        classified = classify_reference_match(
+            list(self.reference_token_ids), generated,
+            diverged=raw.get("diverged"), diverged_at=raw.get("diverged_at"),
+            termination=raw.get("termination"), finish_reason=raw.get("finish_reason"),
+            expected_termination=self.generation_contract.get("expected_termination"),
+            max_new=self.generation_contract["max_new"],
+        )
+        classified.update({
+            "generated_token_ids": list(generated),
+            "finish_reason": raw.get("finish_reason"),
+            "termination": dict(raw.get("termination") or {}),
+            "reply": raw.get("reply", ""),
+        })
+        return classified
+
+    def probe_many(self, prepared_candidates: Sequence[PreparedCandidate]) -> list[Any]:
+        arms = [dict(candidate.probe_payload) for candidate in prepared_candidates]
+        scalar_started = time.perf_counter()
+        scalar = probe_reference_match_many(self.substrate, arms, proof_grade=True)
+        self.persistent_parent_scalar_confirmation_wall_seconds += max(
+            0.0, time.perf_counter() - scalar_started
+        )
+        self._last_native_by_candidate = {}
+        if self.persistent_session.session_id is None:
+            return scalar
+
+        children = [
+            {
+                "candidate_id": candidate_id(candidate.retained_ids),
+                "candidate_rank": index,
+                "prompt": self._prompt_for(candidate),
+            }
+            for index, candidate in enumerate(prepared_candidates)
+        ]
+        response = self.persistent_session.probe_round(children)
+        by_id = {str(row["candidate_id"]): row for row in response["results"]}
+        native_rows = [self._classify_native_row(by_id[item["candidate_id"]]) for item in children]
+        try:
+            assert_scalar_parity(native_rows, scalar)
+        except Exception as exc:
+            mismatches = getattr(exc, "mismatches", [{"error": str(exc)}])
+            self.persistent_parent_parity_mismatches.extend(deepcopy(mismatches))
+            try:
+                self.persistent_session.close()
+            finally:
+                self.persistent_parent_final_report = self.persistent_session.report()
+                self.persistent_parent_final_report.setdefault("telemetry", {})[
+                    "total_scalar_confirmation_wall_seconds"
+                ] = round(self.persistent_parent_scalar_confirmation_wall_seconds, 6)
+            raise
+        self.persistent_parent_metrics.append(deepcopy(dict(response.get("round_metrics") or {})))
+        for child, native in zip(children, native_rows):
+            self._last_native_by_candidate[child["candidate_id"]] = {
+                "native": native,
+                "row": by_id[child["candidate_id"]],
+            }
+        return scalar
+
+    def _scalar_confirmation(self, prepared: PreparedCandidate) -> dict[str, Any]:
+        """Run the trusted scalar gate immediately before a persistent promotion."""
+        arms = [dict(prepared.probe_payload)]
+        scalar_started = time.perf_counter()
+        scalar = probe_reference_match_many(self.substrate, arms, proof_grade=True)
+        self.persistent_parent_scalar_confirmation_wall_seconds += max(
+            0.0, time.perf_counter() - scalar_started
+        )
+        if len(scalar) != 1:
+            raise PersistentParentSessionError(
+                "scalar confirmation returned the wrong child count",
+                code="malformed_scalar_confirmation", status=502,
+            )
+        return dict(scalar[0])
+
+    def _probe_uncached_accepted_candidate(self, candidate: Any, prepared: PreparedCandidate) -> dict[str, Any]:
+        """Re-run a cached reducer winner against the current parent before promotion."""
+        scalar = self._scalar_confirmation(prepared)
+        cid = candidate_id(candidate.retained_ids)
+        native_response = self.persistent_session.probe_round([{
+            "candidate_id": cid, "candidate_rank": 0, "prompt": self._prompt_for(prepared),
+        }])
+        native = [self._classify_native_row(native_response["results"][0])]
+        assert_scalar_parity(native, [scalar])
+        self.persistent_parent_metrics.append(deepcopy(dict(native_response.get("round_metrics") or {})))
+        self._last_native_by_candidate[cid] = {"native": native[0], "row": native_response["results"][0]}
+        return scalar
+
+    def on_candidate_accepted(self, candidate: Any, prepared: PreparedCandidate, evidence: Any) -> None:
+        cid = candidate_id(candidate.retained_ids)
+        record = self._last_native_by_candidate.get(cid)
+        if record is None:
+            confirmation = self._probe_uncached_accepted_candidate(candidate, prepared)
+            record = self._last_native_by_candidate[cid]
+        else:
+            confirmation = self._scalar_confirmation(prepared)
+            assert_scalar_parity([record["native"]], [confirmation])
+        if not self.is_preserving(confirmation):
+            raise PersistentParentSessionError(
+                "trusted scalar confirmation rejected persistent promotion",
+                code="scalar_confirmation_rejected_promotion", status=409,
+            )
+        if not self.is_preserving(evidence):
+            raise PersistentParentSessionError(
+                "reducer evidence rejected persistent promotion",
+                code="scalar_reducer_evidence_rejected_promotion", status=409,
+            )
+        promotion = self.persistent_session.promote(
+            cid,
+            scalar_preserves=True,
+            native_preserves=self.is_preserving(record["native"]),
+        )
+        self.persistent_parent_promotion_metrics.append(deepcopy(dict(promotion.get("telemetry") or {})))
+        self._last_native_by_candidate = {}
+
+    def close_persistent_session(self) -> None:
+        if self.persistent_session.session_id is not None and not self.persistent_session.closed:
+            try:
+                self.persistent_session.close()
+            finally:
+                self.persistent_parent_final_report = self.persistent_session.report()
+                telemetry = self.persistent_parent_final_report.setdefault("telemetry", {})
+                telemetry["total_scalar_confirmation_wall_seconds"] = round(
+                    self.persistent_parent_scalar_confirmation_wall_seconds, 6
+                )
+
+
 def run_engine_reference_match_reduction(
     adapter: EngineReferenceMatchAdapter,
     ordered_unit_ids: Iterable[UnitID],
     max_counterfactual_probes: int,
     *,
     attempt_inclusion_check: bool = True,
-) -> BudgetedReductionResult:
+    ) -> BudgetedReductionResult:
     """Run the model-free reducer through the conservative exact adapter."""
 
     return run_budgeted_reduction(
@@ -140,7 +310,31 @@ def run_engine_reference_match_reduction(
     )
 
 
+def run_engine_reference_match_persistent_reduction(
+    adapter: PersistentEngineReferenceMatchAdapter,
+    ordered_unit_ids: Iterable[UnitID],
+    max_counterfactual_probes: int,
+    *,
+    attempt_inclusion_check: bool = True,
+) -> BudgetedReductionResult:
+    """Run the bounded reducer with explicit persistent-session lifecycle cleanup."""
+    try:
+        return run_budgeted_reduction(
+            ordered_unit_ids,
+            max_counterfactual_probes,
+            adapter.prepare_candidate,
+            adapter.probe_many,
+            attempt_inclusion_check=attempt_inclusion_check,
+            is_preserving=adapter.is_preserving,
+            is_failed=adapter.is_failed,
+        )
+    finally:
+        adapter.close_persistent_session()
+
+
 __all__ = [
     "EngineReferenceMatchAdapter",
+    "PersistentEngineReferenceMatchAdapter",
     "run_engine_reference_match_reduction",
+    "run_engine_reference_match_persistent_reduction",
 ]

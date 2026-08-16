@@ -30,6 +30,11 @@ struct ServerContext {
     bool ar_mode;
     int gpu_layers;
     std::string model_path;
+    // Runtime identity copied from server_main after startup.  Persistent reference-match
+    // sessions are worker-local and bind to this generation; they never accept caller identities.
+    std::string worker_generation_id;
+    std::string model_sha256;
+    std::string tokenizer_sha256;
 };
 
 // Route-family registrars (one per routes_*.cpp). server_main.cpp calls each after building the context.

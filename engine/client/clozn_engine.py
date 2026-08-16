@@ -674,6 +674,82 @@ class EngineClient:
             raise EngineError("POST /v1/reference-match/arms returned the wrong arm count")
         return dict(response)
 
+    def reference_match_persistent_create(
+        self,
+        prompt: str,
+        *,
+        reference_token_ids: Sequence[int],
+        generation_contract: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Create the opt-in worker-local persistent exact-reference parent session.
+
+        The prompt must already be rendered through :meth:`apply_template`; the worker remains the
+        tokenizer/KV authority.  This is an experimental, non-proof-grade runtime primitive.
+        """
+        if not isinstance(prompt, str) or not prompt:
+            raise ValueError("prompt must be a non-empty canonical rendered prompt")
+        if not isinstance(reference_token_ids, Sequence) or not reference_token_ids:
+            raise ValueError("reference_token_ids must be a non-empty sequence")
+        response = self._post("/v1/reference-match/persistent/create", {
+            "prompt": prompt,
+            "reference_token_ids": [int(token) for token in reference_token_ids],
+            "generation_contract": dict(generation_contract),
+        })
+        if not isinstance(response, Mapping) or not isinstance(response.get("session_id"), str):
+            raise EngineError("persistent session create returned an invalid response")
+        return dict(response)
+
+    def reference_match_persistent_probe(
+        self,
+        session_id: str,
+        *,
+        expected_parent_version: int,
+        children: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        """Probe a bounded wave sequence against one persistent accepted parent."""
+        if not isinstance(session_id, str) or not session_id:
+            raise ValueError("session_id must be a non-empty string")
+        if not isinstance(expected_parent_version, int) or isinstance(expected_parent_version, bool):
+            raise ValueError("expected_parent_version must be an integer")
+        if not isinstance(children, Sequence) or not children:
+            raise ValueError("children must be a non-empty sequence")
+        response = self._post("/v1/reference-match/persistent/probe", {
+            "session_id": session_id,
+            "expected_parent_version": expected_parent_version,
+            "children": [dict(child) for child in children],
+        })
+        if not isinstance(response, Mapping) or not isinstance(response.get("results"), list):
+            raise EngineError("persistent session probe returned an invalid response")
+        if len(response["results"]) != len(children):
+            raise EngineError("persistent session probe returned the wrong child count")
+        return dict(response)
+
+    def reference_match_persistent_promote(
+        self,
+        session_id: str,
+        *,
+        expected_parent_version: int,
+        candidate_id: str,
+    ) -> dict[str, Any]:
+        """Promote the worker-retained clean child without re-prefilling it."""
+        response = self._post("/v1/reference-match/persistent/promote", {
+            "session_id": session_id,
+            "expected_parent_version": expected_parent_version,
+            "candidate_id": candidate_id,
+        })
+        if not isinstance(response, Mapping) or not isinstance(response.get("parent_version"), int):
+            raise EngineError("persistent session promotion returned an invalid response")
+        return dict(response)
+
+    def reference_match_persistent_close(self, session_id: str) -> dict[str, Any]:
+        """Close the worker-local persistent exact-reference session and release its KV lease."""
+        if not isinstance(session_id, str) or not session_id:
+            raise ValueError("session_id must be a non-empty string")
+        response = self._post("/v1/reference-match/persistent/close", {"session_id": session_id})
+        if not isinstance(response, Mapping) or response.get("closed") is not True:
+            raise EngineError("persistent session close returned an invalid response")
+        return dict(response)
+
     def complete_chat(
         self,
         messages: Sequence[Mapping[str, Any]],

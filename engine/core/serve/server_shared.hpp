@@ -1211,9 +1211,10 @@ public:
     // can cut individual query->key edges; costs some decode speed, hence opt-in via
     // --no-flash-attn rather than the default.
     ContextPool(std::shared_ptr<GgmlModel> model, int workers, int n_ctx, bool flash_attn = true,
-                int n_batch = 0, int n_ubatch = 0) {
+                int n_batch = 0, int n_ubatch = 0)
+        : model_(std::move(model)), flash_attn_(flash_attn) {
         for (int i = 0; i < workers; ++i) {
-            adapters_.push_back(std::make_unique<GgmlAdapter>(model, n_ctx, flash_attn,
+            adapters_.push_back(std::make_unique<GgmlAdapter>(model_, n_ctx, flash_attn,
                                                                n_batch, n_ubatch));
             free_.push(adapters_.back().get());
         }
@@ -1221,20 +1222,72 @@ public:
     class Lease {
     public:
         Lease(ContextPool& p, GgmlAdapter* a) : pool_(p), adapter_(a) {}
-        ~Lease() { pool_.release(adapter_); }
+        ~Lease() { if (adapter_ != nullptr) pool_.release(adapter_); }
         Lease(const Lease&) = delete;
         Lease& operator=(const Lease&) = delete;
+        Lease(Lease&& other) noexcept : pool_(other.pool_), adapter_(other.adapter_) {
+            other.adapter_ = nullptr;
+        }
+        Lease& operator=(Lease&&) = delete;
         GgmlAdapter& operator*() const { return *adapter_; }
     private:
         ContextPool& pool_;
         GgmlAdapter* adapter_;
     };
+
+    // Experimental persistent reference-match sessions own a dedicated context rather than holding
+    // one ordinary pooled lease forever.  This leaves the regular pool available for the trusted
+    // scalar confirmation path; the session registrar still enforces one active persistent context.
+    class PersistentLease {
+    public:
+        PersistentLease(ContextPool& p, std::unique_ptr<GgmlAdapter> a)
+            : pool_(p), adapter_(std::move(a)) {}
+        ~PersistentLease() {
+            if (adapter_ == nullptr) return;
+            // Destroy the dedicated context before making the slot available again.  Otherwise a
+            // new session could briefly construct a second extra context while this one is still
+            // tearing down its KV/state resources.
+            adapter_.reset();
+            pool_.release_persistent();
+        }
+        PersistentLease(const PersistentLease&) = delete;
+        PersistentLease& operator=(const PersistentLease&) = delete;
+        PersistentLease(PersistentLease&& other) noexcept
+            : pool_(other.pool_), adapter_(std::move(other.adapter_)) {}
+        PersistentLease& operator=(PersistentLease&&) = delete;
+        GgmlAdapter& operator*() const { return *adapter_; }
+    private:
+        ContextPool& pool_;
+        std::unique_ptr<GgmlAdapter> adapter_;
+    };
+
     Lease acquire() {
         std::unique_lock<std::mutex> lk(mtx_);
         cv_.wait(lk, [&] { return !free_.empty(); });
         GgmlAdapter* a = free_.front();
         free_.pop();
         return Lease(*this, a);
+    }
+    PersistentLease acquire_persistent() {
+        std::lock_guard<std::mutex> lk(persistent_mtx_);
+        if (persistent_active_)
+            throw std::runtime_error("persistent reference-match context is busy");
+        persistent_active_ = true;
+        try {
+            auto adapter = std::make_unique<GgmlAdapter>(
+                model_, n_ctx(), flash_attn_, n_batch(), n_ubatch());
+            if (lora_loaded()) {
+                std::string lora_err;
+                if (!adapter->set_lora(lora_path(), lora_scale(), &lora_err)) {
+                    throw std::runtime_error("persistent reference-match context LoRA attach failed: "
+                                             + lora_err);
+                }
+            }
+            return PersistentLease(*this, std::move(adapter));
+        } catch (...) {
+            persistent_active_ = false;
+            throw;
+        }
     }
     int size() const { return static_cast<int>(adapters_.size()); }
     int n_ctx() const { return adapters_.empty() ? 0 : adapters_.front()->n_ctx(); }
@@ -1276,10 +1329,18 @@ private:
         { std::lock_guard<std::mutex> lk(mtx_); free_.push(a); }
         cv_.notify_one();
     }
+    void release_persistent() {
+        std::lock_guard<std::mutex> lk(persistent_mtx_);
+        persistent_active_ = false;
+    }
+    std::shared_ptr<GgmlModel> model_;
     std::vector<std::unique_ptr<GgmlAdapter>> adapters_;
     std::queue<GgmlAdapter*> free_;
     std::mutex mtx_;
     std::condition_variable cv_;
+    bool persistent_active_ = false;
+    std::mutex persistent_mtx_;
+    bool flash_attn_ = true;
 };
 
 

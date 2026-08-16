@@ -119,7 +119,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         from clozn.server import app as cs
         from clozn.runs.budgeted_reduce_reference import (
             EngineReferenceMatchAdapter,
+            PersistentEngineReferenceMatchAdapter,
             run_engine_reference_match_reduction,
+            run_engine_reference_match_persistent_reduction,
         )
         EngineSubstrate = cs.EngineSubstrate
     except ImportError:
@@ -129,7 +131,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         from clozn.server import app as cs
         from clozn.runs.budgeted_reduce_reference import (
             EngineReferenceMatchAdapter,
+            PersistentEngineReferenceMatchAdapter,
             run_engine_reference_match_reduction,
+            run_engine_reference_match_persistent_reduction,
         )
         EngineSubstrate = cs.EngineSubstrate
     try:
@@ -185,7 +189,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             {"role": "user", "content": QUESTION},
         ]
 
-    adapter = EngineReferenceMatchAdapter(
+    adapter_type = (PersistentEngineReferenceMatchAdapter
+                    if args.experimental_persistent_parent else EngineReferenceMatchAdapter)
+    adapter = adapter_type(
         engine=engine,
         substrate=sub,
         render_messages=render_messages,
@@ -197,18 +203,33 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         started,
         not args.quiet,
     )
-    result = run_engine_reference_match_reduction(
-        adapter,
-        full_retained,
-        args.max_probes,
-        attempt_inclusion_check=not args.no_inclusion_check,
-    )
+    if args.experimental_persistent_parent:
+        result = run_engine_reference_match_persistent_reduction(
+            adapter, full_retained, args.max_probes,
+            attempt_inclusion_check=not args.no_inclusion_check,
+        )
+    else:
+        result = run_engine_reference_match_reduction(
+            adapter, full_retained, args.max_probes,
+            attempt_inclusion_check=not args.no_inclusion_check,
+        )
     report = _compact_report(result, fixture, args.max_probes)
     report["reference"] = {
         "prompt_tokens": prompt_tokens,
         "token_count": len(reference),
         "generation_contract": contract,
     }
+    report["execution_mode"] = (
+        "experimental_persistent_parent" if args.experimental_persistent_parent else "trusted_scalar"
+    )
+    if args.experimental_persistent_parent:
+        report["persistent_parent"] = {
+            "session": adapter.persistent_parent_final_report,
+            "round_metrics": adapter.persistent_parent_metrics,
+            "promotion_metrics": adapter.persistent_parent_promotion_metrics,
+            "parity_mismatches": adapter.persistent_parent_parity_mismatches,
+            "proof_grade": False,
+        }
     return report
 
 
@@ -221,6 +242,10 @@ def parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-new", type=int, default=64)
     parser.add_argument("--max-probes", type=int, default=100)
     parser.add_argument("--no-inclusion-check", action="store_true")
+    parser.add_argument(
+        "--experimental-persistent-parent", action="store_true",
+        help="use the opt-in persistent accepted-parent native session with scalar confirmation",
+    )
     parser.add_argument("--quiet", action="store_true", help="suppress progress logs on stderr")
     return parser
 

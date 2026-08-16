@@ -883,6 +883,128 @@ ReferenceMatchBatchResult generate_ar_reference_match_batched(
     return batch_result;
 }
 
+ReferenceMatchProbeResult generate_ar_reference_match_probe(
+    GgmlAdapter& adapter,
+    int seq_id,
+    const std::vector<int>& prompt,
+    const ForwardResult& prompt_logits,
+    const std::vector<int>& reference,
+    int max_tokens,
+    const std::vector<std::string>& stop_sequences) {
+    if (seq_id < 0)
+        throw std::invalid_argument("reference-match probe sequence ID must be non-negative");
+    if (prompt.empty())
+        throw std::invalid_argument("reference-match probe prompt must not be empty");
+    if (reference.empty())
+        throw std::invalid_argument("reference-match probe reference_token_ids must not be empty");
+    if (max_tokens < 1)
+        throw std::invalid_argument("reference-match probe max_tokens must be >= 1");
+    if (prompt_logits.logits.empty())
+        throw std::invalid_argument("reference-match probe is missing prompt logits");
+
+    using clock = std::chrono::steady_clock;
+    const int eos = adapter.config().eos_token_id;
+    ForwardResult fwd = prompt_logits;
+    std::vector<int> generated;
+    generated.reserve(static_cast<size_t>(max_tokens));
+    std::vector<int> probe_board = prompt;
+    probe_board.reserve(prompt.size() + static_cast<size_t>(max_tokens));
+    std::string reason = "length";
+    std::string stopped_text;
+    bool diverged = false;
+    int diverged_at = -1;
+    int position = static_cast<int>(prompt.size());
+    int probe_steps = 0;
+    std::int64_t decode_ns = 0;
+    int decode_call_count = 0;
+
+    auto ends_with_stop = [&](const std::vector<int>& ids, std::string& visible) {
+        if (stop_sequences.empty()) return false;
+        const std::string decoded = adapter.decode(ids);
+        for (const std::string& stop : stop_sequences) {
+            if (!stop.empty() && decoded.size() >= stop.size() &&
+                decoded.compare(decoded.size() - stop.size(), stop.size(), stop) == 0) {
+                visible = decoded.substr(0, decoded.size() - stop.size());
+                return true;
+            }
+        }
+        return false;
+    };
+
+    try {
+        for (int k = 0; k < max_tokens; ++k) {
+            if (position >= adapter.n_ctx()) break;
+            ++probe_steps;
+            const Candidate candidate = sample_committed_candidate(fwd, position);
+            const int token = candidate.token_id;
+            generated.push_back(token);
+
+            if (k >= static_cast<int>(reference.size()) ||
+                token != reference[static_cast<size_t>(k)]) {
+                diverged = true;
+                diverged_at = k;
+                break;
+            }
+            if (ends_with_stop(generated, stopped_text)) {
+                reason = "stop";
+                break;
+            }
+            if (eos >= 0 && token == eos) {
+                reason = "eos";
+                break;
+            }
+            if (k + 1 >= max_tokens) break;
+
+            probe_board.push_back(token);
+            const clock::time_point decode_started = clock::now();
+            fwd = adapter.ar_forward_seq_segment(
+                probe_board, position, position + 1, true, seq_id);
+            decode_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                clock::now() - decode_started).count();
+            decode_call_count += adapter.last_decode_call_count();
+            ++position;
+        }
+    } catch (...) {
+        adapter.evict_ar_seq_from(seq_id, static_cast<int>(prompt.size()));
+        throw;
+    }
+
+    // Generated continuations are disposable.  The clean prompt rows [0, prompt.size()) remain
+    // in the child sequence for an explicit later promotion.
+    adapter.evict_ar_seq_from(seq_id, static_cast<int>(prompt.size()));
+
+    std::vector<int> visible = generated;
+    GenerateResult result;
+    if (reason == "stop") {
+        result.text = stopped_text;
+        for (size_t cut = 0; cut <= visible.size(); ++cut) {
+            std::vector<int> prefix(visible.begin(), visible.begin() +
+                                    static_cast<std::ptrdiff_t>(cut));
+            if (adapter.decode(prefix) == result.text) {
+                visible = std::move(prefix);
+                break;
+            }
+        }
+    } else if (reason == "eos" && !visible.empty()) {
+        visible.pop_back();
+        result.text = adapter.decode(visible);
+    } else {
+        result.text = adapter.decode(visible);
+    }
+    result.generated = visible;
+    result.new_tokens = static_cast<int>(visible.size());
+    result.reason = reason;
+    result.steps_total = static_cast<int>(generated.size());
+    result.ref_active = true;
+    result.diverged = diverged;
+    result.diverged_at = diverged_at;
+    result.board = prompt;
+    result.board.insert(result.board.end(), visible.begin(), visible.end());
+
+    return ReferenceMatchProbeResult{
+        std::move(result), std::move(generated), decode_ns, decode_call_count, probe_steps};
+}
+
 ReferenceMatchBatchResult generate_ar_reference_match_rollback(
     GgmlAdapter& adapter,
     const std::vector<std::vector<int>>& prompts,

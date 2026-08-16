@@ -398,6 +398,16 @@ public:
     void reset_ar_kv();
     ForwardResult ar_forward(const std::vector<int>& tokens, int n_past);
 
+    // Experimental persistent-reference-match primitives.  These are deliberately sequence-scoped
+    // and do not form a general session API: callers own the parent sequence and use child sequence
+    // IDs only for exact-prefix counterfactuals.  The parent sequence is never implicitly cleared.
+    ForwardResult ar_forward_seq_segment(const std::vector<int>& board, int from, int to,
+                                         bool need_last_logits, int seq_id);
+    void clear_ar_seq(int seq_id);
+    void copy_ar_seq(int src_seq_id, int dst_seq_id, int from = 0, int to = -1);
+    void evict_ar_seq_from(int seq_id, int pos);
+    int ar_seq_size(int seq_id) const;
+
     // Like ar_forward, but the inputs are RAW embeddings (n_rows x n_embd, row-major) spliced in at
     // [n_past, n_past+n_rows) via the llama_batch.embd path (the same one multimodal models use to inject
     // image vectors) instead of token ids. The bridge that lets a PyTorch-trained soft prefix ride into

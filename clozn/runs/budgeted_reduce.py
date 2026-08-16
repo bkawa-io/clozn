@@ -362,6 +362,9 @@ def run_budgeted_reduction(
     used_probes = 0
     next_ordinal = 1
     next_batch_id = 1
+    dispatcher_owner = getattr(probe_many, "__self__", None)
+    on_control_accepted = getattr(dispatcher_owner, "on_control_accepted", None)
+    on_candidate_accepted = getattr(dispatcher_owner, "on_candidate_accepted", None)
 
     def prepare(retained_ids: tuple[UnitID, ...]) -> PreparedCandidate:
         cached = prepared_cache.get(retained_ids)
@@ -459,6 +462,9 @@ def run_budgeted_reduction(
             inclusion_check=inclusion,
         )
 
+    if callable(on_control_accepted):
+        on_control_accepted(full_candidate, full_prepared, control_evidence)
+
     best = full_candidate
     granularity = 2
     certificate = BEST_VERIFIED
@@ -482,6 +488,8 @@ def run_budgeted_reduction(
             retained_unit_count=len(best.retained_ids),
             stage=stage,
         ))
+        if callable(on_candidate_accepted):
+            on_candidate_accepted(candidate, observation.prepared, observation.evidence)
         return True
 
     budget_exhausted = False

@@ -24,6 +24,7 @@
     "lora",
     "score_arms",
     "reference_match_arms",
+    "persistent_parent_session",
     "checkpoint",
     "execution_fork",
     "execution_fork_regimes",

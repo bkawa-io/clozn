@@ -336,6 +336,9 @@ int main(int argc, char** argv) {
     // insertion-order FIFO (not std::map lexical order).
     static constexpr std::size_t kMaxCheckpoints = 16;
     const std::string worker_generation_id = make_worker_generation_id();
+    ctx.worker_generation_id = worker_generation_id;
+    ctx.model_sha256 = model_sha256;
+    ctx.tokenizer_sha256 = tokenizer_sha256;
     CheckpointStore<EngineCheckpoint> checkpoints(worker_generation_id, kMaxCheckpoints);
 
     // Existing in-process clients may continue sending only checkpoint_id because new ids already
@@ -440,6 +443,8 @@ int main(int argc, char** argv) {
                                           // regime (screening only; response carries the label)
             {"reference_match_arms", ar_mode}, // private greedy native-many exact-reference probe;
                                                 // experimental until real-GGUF parity is qualified
+            {"persistent_parent_session", ar_mode}, // private persistent exact-reference session;
+                                                      // experimental and non-proof-grade
             {"checkpoint", true},          // POST /v1/checkpoint (save) + /v1/restore + /v1/branch
                                           // (KV-cache save/resume/fork)
             {"execution_fork", true},      // POST /v1/execution-fork: intervention forks from a

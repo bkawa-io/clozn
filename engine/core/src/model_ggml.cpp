@@ -643,13 +643,15 @@ void GgmlAdapter::set_causal(bool on) {
     reset_ar_kv();
 }
 
-ForwardResult GgmlAdapter::ar_forward_seq0_segment(const std::vector<int>& board,
-                                                   int from, int to,
-                                                   bool need_last_logits) {
+ForwardResult GgmlAdapter::ar_forward_seq_segment(const std::vector<int>& board,
+                                                  int from, int to,
+                                                  bool need_last_logits, int seq_id) {
     if (!causal_)
-        throw std::invalid_argument("ar_forward_seq0_segment requires causal attention");
+        throw std::invalid_argument("ar_forward_seq_segment requires causal attention");
+    if (seq_id < 0)
+        throw std::invalid_argument("ar_forward_seq_segment: seq_id < 0");
     if (from < 0 || to <= from || to > n_ctx_ || to > static_cast<int>(board.size()))
-        throw std::invalid_argument("ar_forward_seq0_segment: invalid segment");
+        throw std::invalid_argument("ar_forward_seq_segment: invalid segment");
 
     // This is intentionally a narrow seq-0 primitive.  The caller owns the prefix invariant;
     // unlike ar_forward_prefill_batch it never clears memory, creates additional sequence IDs, or
@@ -671,13 +673,13 @@ ForwardResult GgmlAdapter::ar_forward_seq0_segment(const std::vector<int>& board
             batch.token[i] = static_cast<llama_token>(board[static_cast<size_t>(position)]);
             batch.pos[i] = position;
             batch.n_seq_id[i] = 1;
-            batch.seq_id[i][0] = 0;
+            batch.seq_id[i][0] = static_cast<llama_seq_id>(seq_id);
             batch.logits[i] = (need_last_logits && position == to - 1) ? 1 : 0;
         }
         const int rc = llama_decode(ctx_, batch);
         llama_batch_free(batch);
         if (rc != 0)
-            throw std::runtime_error("ar_forward_seq0_segment: llama_decode failed (rc=" +
+            throw std::runtime_error("ar_forward_seq_segment: llama_decode failed (rc=" +
                                      std::to_string(rc) + ")");
         ++last_decode_call_count_;
     }
@@ -689,10 +691,43 @@ ForwardResult GgmlAdapter::ar_forward_seq0_segment(const std::vector<int>& board
     if (need_last_logits) {
         const float* logits = llama_get_logits_ith(ctx_, -1);
         if (!logits)
-            throw std::runtime_error("ar_forward_seq0_segment: missing terminal logits");
+            throw std::runtime_error("ar_forward_seq_segment: missing terminal logits");
         out.logits.assign(logits, logits + vocab);
     }
     return out;
+}
+
+ForwardResult GgmlAdapter::ar_forward_seq0_segment(const std::vector<int>& board,
+                                                   int from, int to,
+                                                   bool need_last_logits) {
+    return ar_forward_seq_segment(board, from, to, need_last_logits, 0);
+}
+
+void GgmlAdapter::clear_ar_seq(int seq_id) {
+    if (seq_id < 0) throw std::invalid_argument("clear_ar_seq: seq_id < 0");
+    llama_memory_seq_rm(llama_get_memory(ctx_), static_cast<llama_seq_id>(seq_id), -1, -1);
+}
+
+void GgmlAdapter::copy_ar_seq(int src_seq_id, int dst_seq_id, int from, int to) {
+    if (src_seq_id < 0 || dst_seq_id < 0)
+        throw std::invalid_argument("copy_ar_seq: sequence IDs must be non-negative");
+    if (from < 0 || (to >= 0 && to < from))
+        throw std::invalid_argument("copy_ar_seq: invalid position range");
+    llama_memory_seq_cp(llama_get_memory(ctx_), static_cast<llama_seq_id>(src_seq_id),
+                        static_cast<llama_seq_id>(dst_seq_id), from, to);
+}
+
+void GgmlAdapter::evict_ar_seq_from(int seq_id, int pos) {
+    if (seq_id < 0 || pos < 0)
+        throw std::invalid_argument("evict_ar_seq_from: invalid sequence or position");
+    llama_memory_seq_rm(llama_get_memory(ctx_), static_cast<llama_seq_id>(seq_id), pos, -1);
+}
+
+int GgmlAdapter::ar_seq_size(int seq_id) const {
+    if (seq_id < 0) throw std::invalid_argument("ar_seq_size: seq_id < 0");
+    const llama_pos max_pos = llama_memory_seq_pos_max(
+        llama_get_memory(ctx_), static_cast<llama_seq_id>(seq_id));
+    return max_pos < 0 ? 0 : static_cast<int>(max_pos + 1);
 }
 
 ForwardResult GgmlAdapter::ar_forward(const std::vector<int>& tokens, int n_past) {

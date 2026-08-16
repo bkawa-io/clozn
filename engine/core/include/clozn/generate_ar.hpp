@@ -110,6 +110,26 @@ struct ReferenceMatchBatchResult {
     ReferenceMatchBatchMetrics metrics;
 };
 
+// One exact-reference probe over a caller-owned sequence.  The persistent-parent
+// experiment uses this after branching a clean child prompt; the continuation is
+// evicted before the function returns, so the sequence remains promotable.
+struct ReferenceMatchProbeResult {
+    GenerateResult result;
+    std::vector<int> generated_token_ids;
+    std::int64_t decode_ns = 0;
+    int decode_call_count = 0;
+    int decode_steps = 0;
+};
+
+ReferenceMatchProbeResult generate_ar_reference_match_probe(
+    GgmlAdapter& adapter,
+    int seq_id,
+    const std::vector<int>& prompt,
+    const ForwardResult& prompt_logits,
+    const std::vector<int>& reference,
+    int max_tokens,
+    const std::vector<std::string>& stop_sequences);
+
 // Greedy by default (SampleConfig: temperature 0). Stops at config.max_new tokens or EOS
 // (config.steps / block_len / topk are ignored — AR commits exactly one token per pass).
 // `read_probes` (optional) supplies the concept directions for the per-token StepFeatures; calibrate
