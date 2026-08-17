@@ -25,7 +25,7 @@ if str(ENGINE_CLIENT_ROOT) not in sys.path:
 
 from clozn.runs.answer_preservation import _generation_contract_from_run, classify_reference_match
 from clozn.runs.multi_arm import probe_reference_match_many
-from clozn.runs.realistic_minimal_context import _render_messages_for_retained
+from clozn.experiments.effective_prompt import render_effective_prompt_for_retained
 from clozn.runs.store import get_run
 
 
@@ -100,13 +100,13 @@ def _case(
     for batch in selected_batches:
         probe_rows = [by_ordinal[int(ordinal)] for ordinal in batch["probe_ordinals"]]
         parent_ids = tuple(batch["parent_source_ids"])
-        parent_messages = _render_messages_for_retained(run, universe_ids, parent_ids)
+        parent_messages = render_effective_prompt_for_retained(run, universe_ids, parent_ids)
         parent_prompt = engine.apply_template(parent_messages)
         native_arms = []
         scalar_arms = []
         for index, probe in enumerate(probe_rows):
             child_ids = tuple(probe["child_source_ids"])
-            messages = _render_messages_for_retained(run, universe_ids, child_ids)
+            messages = render_effective_prompt_for_retained(run, universe_ids, child_ids)
             prompt = engine.apply_template(messages)
             native_arms.append({"arm_id": index, "prompt": prompt})
             scalar_arms.append({

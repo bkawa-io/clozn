@@ -20,8 +20,8 @@ from clozn.runs.answer_preservation import assess_exact_eligibility
 from clozn.runs.context_units import protected_message_indices
 
 from .evaluators import ExactReferenceMatch
+from .effective_prompt import EffectivePromptUnavailable, resolve_effective_prompt
 from .interventions import DeleteSource
-from .kernel import Experiment
 from .observations import Observation, execution_observation_identity
 from .state import ExecutionState, digest
 
@@ -177,29 +177,24 @@ class DeleteSourceExactReferenceAdapter:
             )
 
         conditions = with_arm_conditions(dict(run))
-        messages = list(conditions.get("messages") or [])
-        block = conditions.get("block")
+        try:
+            prompt = resolve_effective_prompt(run, intervention)
+        except EffectivePromptUnavailable as exc:
+            return Observation(
+                **_identity_kwargs(state, evaluator, intervention),
+                status="unavailable",
+                execution_provenance=provenance,
+                diagnostics={"reason": exc.reason, "error": str(exc)},
+            )
+        messages = prompt.worker_messages()
+        block = prompt.block
+        provenance.update({"source_basis": prompt.basis})
         if intervention is not None:
-            try:
-                resolved = resolve_delete_source(run, intervention)
-            except (ContextReceiptSourceResolutionError, ExecutionAdapterError) as exc:
-                return Observation(
-                    **_identity_kwargs(state, evaluator, intervention),
-                    status="unavailable",
-                    execution_provenance=provenance,
-                    diagnostics={"reason": "intervention_unavailable", "error": str(exc)},
-                )
-            messages = list(resolved.get("messages") or [])
-            if resolved.get("basis") == "assembled_messages":
-                block = None
             provenance.update({
-                "source_basis": resolved.get("basis"),
-                "basis_digest": resolved.get("basis_digest"),
-                "intervened_context_digest": resolved.get("intervened_context_digest"),
+                "basis_digest": prompt.basis_digest,
+                "intervened_context_digest": prompt.intervened_context_digest,
                 "removed_source_ids": list(intervention.source_ids),
             })
-        else:
-            provenance["source_basis"] = conditions.get("block_source")
 
         probe = getattr(self.substrate, "probe_reference_match", None)
         if not callable(probe):

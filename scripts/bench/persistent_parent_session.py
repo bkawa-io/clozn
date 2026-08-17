@@ -28,7 +28,7 @@ if str(ENGINE_CLIENT_ROOT) not in sys.path:
 from clozn.runs.answer_preservation import _generation_contract_from_run, classify_reference_match
 from clozn.runs.multi_arm import probe_reference_match_many
 from clozn.runs.persistent_parent import PersistentParentSessionClient, assert_scalar_parity, candidate_id
-from clozn.runs.realistic_minimal_context import _render_messages_for_retained
+from clozn.experiments.effective_prompt import render_effective_prompt_for_retained
 from clozn.runs.store import get_run
 
 
@@ -89,7 +89,7 @@ def _case(case: Mapping[str, Any], geometry_case: Mapping[str, Any], *, engine: 
     universe_ids = tuple(case["trial_ledger"][0]["retained_source_ids"])
 
     def messages(retained_ids: tuple[str, ...]) -> list[dict[str, str]]:
-        return _render_messages_for_retained(run, universe_ids, retained_ids)
+        return render_effective_prompt_for_retained(run, universe_ids, retained_ids)
 
     initial_parent_ids = tuple(case["trial_ledger"][0]["retained_source_ids"])
     session = PersistentParentSessionClient(engine, tuple(reference), contract)

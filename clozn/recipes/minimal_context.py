@@ -13,10 +13,8 @@ from clozn.experiments.evaluators import ExactReferenceMatch
 from clozn.experiments.search import (
     BEST_VERIFIED,
     INCLUSION_MINIMUM,
-    SEARCH_POLICY_VERSION,
+    canonical_search_policy,
     SearchBudget,
-    SearchEvidenceRef,
-    SearchResult,
     SearchTrial,
     SearchTrajectoryEntry,
     run_adaptive_search,
@@ -87,6 +85,7 @@ class MinimalContextResult:
     trajectory: tuple[SearchTrajectoryEntry, ...]
     best: WinningCandidate | None
     certificate: str | None
+    policy: Mapping[str, Any]
     budget: SearchBudget
     inclusion_check: Mapping[str, Any]
     reason: str | None = None
@@ -125,6 +124,7 @@ class MinimalContextResult:
             "trajectory": [item.to_dict() for item in self.trajectory],
             "best": self.best.to_dict() if self.best else None,
             "certificate": self.certificate,
+            "policy": deepcopy(dict(self.policy)),
             "budget": self.budget.to_dict(),
             "inclusion_check": dict(self.inclusion_check),
         }
@@ -138,12 +138,13 @@ def _empty_budget(max_new: int) -> SearchBudget:
     return SearchBudget(max_new_executions=max_new, used_new_executions=0, exhausted=max_new == 0)
 
 
-def _identity(*, state: ExecutionState, universe: Mapping[str, Any], max_new: int) -> str:
+def _identity(*, state: ExecutionState, universe: Mapping[str, Any], max_new: int,
+              policy: Mapping[str, Any]) -> str:
     value = {
         "base_execution_fingerprint": state.execution_fingerprint,
         "universe_id": universe.get("universe_id"),
         "ordered_source_ids": list(universe.get("source_ids") or []),
-        "policy_version": SEARCH_POLICY_VERSION,
+        "policy": deepcopy(dict(policy)),
         "objective_version": OBJECTIVE_VERSION,
         "max_new_counterfactual_observations": max_new,
     }
@@ -151,7 +152,8 @@ def _identity(*, state: ExecutionState, universe: Mapping[str, Any], max_new: in
 
 
 def _unavailable(*, state: ExecutionState, universe: Mapping[str, Any], max_new: int,
-                 search_id: str, reason: str, reason_code: str = "minimal_context_unavailable",
+                 search_id: str, reason: str, policy: Mapping[str, Any],
+                 reason_code: str = "minimal_context_unavailable",
                  status: str = "unavailable") -> MinimalContextResult:
     objective = {"kind": "rendered_prompt_tokens", "version": OBJECTIVE_VERSION}
     return MinimalContextResult(
@@ -166,6 +168,7 @@ def _unavailable(*, state: ExecutionState, universe: Mapping[str, Any], max_new:
         trajectory=(),
         best=None,
         certificate=None,
+        policy=policy,
         budget=_empty_budget(max_new),
         inclusion_check={"attempted": False, "complete": False, "tested_child_count": 0,
                          "total_child_count": 0, "all_children_failed": False},
@@ -187,6 +190,7 @@ def run_minimal_context(
     render_messages: Callable[[tuple[str, ...]], Sequence[Mapping[str, Any]]] | None = None,
     max_units: int = 50,
     attempt_inclusion_check: bool = True,
+    cancel: Callable[[], bool] | None = None,
 ) -> MinimalContextResult:
     """Search directly observed exact preservation over a canonical universe."""
     if observation_store is not None and store is not None and observation_store is not store:
@@ -206,6 +210,10 @@ def run_minimal_context(
             or max_new_counterfactual_observations < 0):
         raise ValueError("max_new_counterfactual_observations must be a non-negative integer")
     try:
+        policy = canonical_search_policy(attempt_inclusion_check=attempt_inclusion_check)
+    except ValueError as exc:
+        raise MinimalContextUnavailable(str(exc), reason="invalid_search_policy") from exc
+    try:
         state = ExecutionState.from_run(run)
     except Exception as exc:
         raise MinimalContextUnavailable(
@@ -217,11 +225,14 @@ def run_minimal_context(
         universe = plan_context_search_universe(run, manifest, max_units=max_units)
     except Exception as exc:  # normalize planner failures at this recipe boundary
         raise MinimalContextUnavailable(f"context search universe unavailable: {exc}", reason="universe_unavailable") from exc
-    search_id = _identity(state=state, universe=universe, max_new=max_new_counterfactual_observations)
+    search_id = _identity(
+        state=state, universe=universe, max_new=max_new_counterfactual_observations,
+        policy=policy,
+    )
     if universe.get("status") != "planned":
         return _unavailable(
             state=state, universe=universe, max_new=max_new_counterfactual_observations,
-            search_id=search_id,
+            search_id=search_id, policy=policy,
             reason=(universe.get("condition") or {}).get("message", "context search universe unavailable"),
             reason_code=(universe.get("condition") or {}).get("code", "universe_unavailable"),
         )
@@ -231,7 +242,7 @@ def run_minimal_context(
             run, universe, substrate=substrate, engine=engine,
             observation_store=durable, execution_adapter=execution_adapter,
             evaluator=ExactReferenceMatch(), prompt_token_counter=prompt_token_counter,
-            render_messages=render_messages,
+            render_messages=render_messages, cancel=cancel,
         )
         searched = run_adaptive_search(
             tuple(universe["source_ids"]),
@@ -243,12 +254,13 @@ def run_minimal_context(
             search_id=search_id,
             base_execution_fingerprint=state.execution_fingerprint,
             universe_id=universe.get("universe_id"),
+            policy=policy,
             objective=objective,
         )
     except (ContextSearchUnavailable, ValueError, TypeError) as exc:
         return _unavailable(
             state=state, universe=universe, max_new=max_new_counterfactual_observations,
-            search_id=search_id, reason=str(exc),
+            search_id=search_id, policy=policy, reason=str(exc),
             reason_code=getattr(exc, "reason", "search_execution_unavailable"),
         )
 
@@ -260,7 +272,7 @@ def run_minimal_context(
             base_execution_fingerprint=state.execution_fingerprint, universe=universe,
             objective=objective, control_observation_id=control_id,
             trials=searched.trials, trajectory=searched.trajectory, best=None,
-            certificate=None, budget=searched.budget,
+            certificate=None, policy=policy, budget=searched.budget,
             inclusion_check=searched.inclusion_check.to_dict(),
             reason=(control_ref.observation_status if control_ref else "control_unavailable"),
             reason_code="exact_control_unavailable",
@@ -291,7 +303,7 @@ def run_minimal_context(
         base_execution_fingerprint=state.execution_fingerprint, universe=universe,
         objective=objective, control_observation_id=control_id,
         trials=searched.trials, trajectory=searched.trajectory, best=best,
-        certificate=searched.certificate, budget=searched.budget,
+        certificate=searched.certificate, policy=policy, budget=searched.budget,
         inclusion_check=searched.inclusion_check.to_dict(),
     )
 

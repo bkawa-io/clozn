@@ -5,16 +5,14 @@ from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
-from clozn.receipts.rederive import with_arm_conditions
-from clozn.replay.span_bridge import resolve_context_receipt_source_set
-
-from .execution import DeleteSourceExactReferenceAdapter, resolve_delete_source
+from .effective_prompt import EffectivePrompt, resolve_effective_prompt
+from .execution import DeleteSourceExactReferenceAdapter
 from .evaluators import ExactReferenceMatch
 from .interventions import DeleteSource
 from .kernel import Experiment
 from .persistence import ObservationStore
 from .runner import ExperimentResult, run_experiment
-from .search import PreparedCandidate, SearchEvidenceRef
+from .search import PreparedCandidate
 from .selections import ContextSelection
 from .state import ExecutionState
 
@@ -43,7 +41,8 @@ class ContextSearchDispatcher:
                  engine: Any = None, observation_store: ObservationStore | None = None,
                  execution_adapter: Any = None, evaluator: ExactReferenceMatch | None = None,
                  prompt_token_counter: Callable[[Sequence[Mapping[str, Any]]], int] | None = None,
-                 render_messages: Callable[[tuple[str, ...]], Sequence[Mapping[str, Any]]] | None = None):
+                 render_messages: Callable[[tuple[str, ...]], Sequence[Mapping[str, Any]]] | None = None,
+                 cancel: Callable[[], bool] | None = None):
         if not isinstance(run, Mapping) or not isinstance(run.get("id"), str) or not run["id"]:
             raise ValueError("ContextSearchDispatcher requires a recorded run")
         if not isinstance(universe, Mapping):
@@ -63,6 +62,8 @@ class ContextSearchDispatcher:
         self.substrate = substrate
         self.engine = engine
         self.prompt_token_counter = prompt_token_counter
+        self.cancel = cancel
+        self._uses_canonical_prompt = render_messages is None
         self._local_observations: dict[str, Any] = {}
         self._last_probe_context: dict[str, Any] = {}
         self.execution_adapter = execution_adapter or DeleteSourceExactReferenceAdapter(
@@ -74,14 +75,19 @@ class ContextSearchDispatcher:
             self._render_messages = render_messages
 
     def _default_render_messages(self, retained_ids: tuple[str, ...]) -> Sequence[Mapping[str, Any]]:
-        conditions = with_arm_conditions(dict(self.run))
-        removed = [source_id for source_id in self.source_ids if source_id not in set(retained_ids)]
-        if not removed:
-            return deepcopy(list(conditions.get("messages") or self.run.get("messages") or []))
-        resolved = resolve_context_receipt_source_set(self.run, removed)
-        return _as_messages(resolved.get("messages"))
+        return resolve_effective_prompt(self.run, self._intervention(tuple(retained_ids))).rendered_messages()
 
-    def _prompt_cost(self, messages: Sequence[Mapping[str, Any]]) -> int:
+    def _effective_prompt(self, retained_ids: tuple[str, ...]) -> EffectivePrompt:
+        if self._uses_canonical_prompt:
+            return resolve_effective_prompt(self.run, self._intervention(retained_ids))
+        return EffectivePrompt(
+            messages=tuple(_as_messages(self._render_messages(retained_ids))),
+            block=None,
+            basis="custom_renderer",
+        )
+
+    def _prompt_cost(self, prompt: EffectivePrompt) -> int:
+        messages = prompt.rendered_messages()
         try:
             if self.prompt_token_counter is not None:
                 value = self.prompt_token_counter(messages)
@@ -115,14 +121,15 @@ class ContextSearchDispatcher:
 
     def prepare_candidate(self, retained_ids: tuple[str, ...]) -> PreparedCandidate:
         retained = tuple(retained_ids)
-        messages = _as_messages(self._render_messages(retained))
+        prompt = self._effective_prompt(retained)
+        messages = prompt.rendered_messages()
         intervention = self._intervention(retained)
         payload = {
             "retained_ids": retained,
             "messages": messages,
             "intervention": intervention,
         }
-        return PreparedCandidate(retained, self._prompt_cost(messages), payload)
+        return PreparedCandidate(retained, self._prompt_cost(prompt), payload)
 
     def _known_observation(self, intervention: DeleteSource | None):
         from .observations import execution_observation_identity
@@ -148,11 +155,14 @@ class ContextSearchDispatcher:
         if arm_id == "control":
             observation = result.control
             status = observation.status if observation is not None else result.diagnostics.get("control_error", "unavailable")
+            disposition = result.control_disposition
         else:
             row = result.arm_for(arm_id)
             observation = row.observation
             status = observation.status if observation is not None else row.status
-        disposition = "reused" if reused else "executed" if observation is not None else "not_executed"
+            disposition = str(row.diagnostics.get("execution_disposition", "not_executed"))
+        if reused:
+            disposition = "reused"
         if observation is not None:
             key = observation.observation_id if observation.completed else None
             if observation.completed:
@@ -181,6 +191,7 @@ class ContextSearchDispatcher:
             result = run_experiment(
                 experiment, self.execution_adapter,
                 observation_store=self.observation_store,
+                cancel=self.cancel,
                 diagnostics={"context_search": True, "control": True},
             )
             reused = bool(result.diagnostics.get("control_reused"))
@@ -200,6 +211,7 @@ class ContextSearchDispatcher:
         result = run_experiment(
             experiment, self.execution_adapter,
             observation_store=self.observation_store,
+            cancel=self.cancel,
             diagnostics={"context_search": True, "candidate_count": len(interventions),
                          "probe_context": deepcopy(self._last_probe_context)},
         )

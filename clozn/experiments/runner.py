@@ -144,6 +144,18 @@ class ExperimentResult:
     def arms(self) -> tuple[ExperimentArmView, ...]:
         return self.arm_rows
 
+    @property
+    def arm_dispositions(self) -> tuple[str, ...]:
+        """How each arm was orchestrated, independent of evidence status."""
+        return tuple(
+            str(row.diagnostics.get("execution_disposition", "not_executed"))
+            for row in self.arm_rows
+        )
+
+    @property
+    def control_disposition(self) -> str:
+        return str(self.diagnostics.get("control_execution_disposition", "not_executed"))
+
     def arm_for(self, arm_id: str) -> ExperimentArmView:
         for row in self.arm_rows:
             if row.arm_id == arm_id:
@@ -282,13 +294,16 @@ def run_experiment(experiment: Experiment, execution_adapter: Any, *, include_co
     if cancelled:
         diagnostics["cancelled"] = True
     control_identity = _identity_for(experiment.base, experiment.evaluator, None)
+    control_disposition = "not_executed"
     if include_control and not cancelled:
         try:
             if durable is not None:
                 control = durable.find_observation(control_identity["observation_key_sha256"])
                 if control is not None:
                     diagnostics["control_reused"] = True
+                    control_disposition = "reused"
             if control is None:
+                control_disposition = "executed"
                 execute_control = getattr(execution_adapter, "execute_control", None)
                 if callable(execute_control):
                     control = execute_control(experiment.base, evaluator=experiment.evaluator)
@@ -299,23 +314,44 @@ def run_experiment(experiment: Experiment, execution_adapter: Any, *, include_co
                 )
                 if durable is not None and _reusable(control):
                     durable.associate_observation(experiment.experiment_id, "control", control)
+                    durable.update_arm(
+                        experiment.experiment_id, "control", state="completed",
+                        observation_id=control.observation_id,
+                        diagnostics={"execution_disposition": control_disposition},
+                    )
                 elif durable is not None:
                     durable.update_arm(
                         experiment.experiment_id, "control", state="failed",
-                        diagnostics={"observation_status": control.status, "diagnostics": control.diagnostics},
+                        diagnostics={"execution_disposition": control_disposition,
+                                     "observation_status": control.status, "diagnostics": control.diagnostics},
                     )
             elif durable is not None:
-                durable.update_arm(experiment.experiment_id, "control", state="completed", observation_id=control.observation_id)
+                durable.update_arm(
+                    experiment.experiment_id, "control", state="completed",
+                    observation_id=control.observation_id,
+                    diagnostics={"execution_disposition": control_disposition},
+                )
         except Exception as exc:
+            control_disposition = "executed"
             diagnostics["control_error"] = str(exc)
             if durable is not None:
-                durable.update_arm(experiment.experiment_id, "control", state="failed", error={"error": str(exc)})
+                durable.update_arm(
+                    experiment.experiment_id, "control", state="failed", error={"error": str(exc)},
+                    diagnostics={"execution_disposition": control_disposition},
+                )
     elif include_control and cancelled and prior_view is not None:
         control = prior_view.control
         if durable is not None and control is None:
-            durable.update_arm(experiment.experiment_id, "control", state="cancelled", diagnostics={"reason": "cancelled"})
+            durable.update_arm(
+                experiment.experiment_id, "control", state="cancelled",
+                diagnostics={"execution_disposition": control_disposition, "reason": "cancelled"},
+            )
     elif durable is not None:
-        durable.update_arm(experiment.experiment_id, "control", state="cancelled", diagnostics={"reason": "cancelled"})
+        durable.update_arm(
+            experiment.experiment_id, "control", state="cancelled",
+            diagnostics={"execution_disposition": control_disposition, "reason": "cancelled"},
+        )
+    diagnostics["control_execution_disposition"] = control_disposition
 
     blocked = include_control and not cancelled and not _allows_arms(experiment.evaluator, control)
     arm_observations: list[ObservationLike | None] = []
@@ -330,11 +366,13 @@ def run_experiment(experiment: Experiment, execution_adapter: Any, *, include_co
             if durable is not None:
                 durable.update_arm(experiment.experiment_id, arm.arm_id, state="blocked",
                                    diagnostics={
+                                       "execution_disposition": "not_executed",
                                        "reason": "control_observation_not_available",
                                        "observation_status": control.status if control is not None else "unavailable",
                                    })
             arm_observations.append(observation); arm_states.append(state); arm_observation_ids.append(observation_id); arm_errors.append({})
             arm_diagnostics.append({
+                "execution_disposition": "not_executed",
                 "reason": "control_observation_not_available",
                 "observation_status": control.status if control is not None else "unavailable",
             })
@@ -346,12 +384,15 @@ def run_experiment(experiment: Experiment, execution_adapter: Any, *, include_co
                 observation = prior_arm.observation
                 state, observation_id = prior_arm.state, prior_arm.observation_id
                 arm_observations.append(observation); arm_states.append(state); arm_observation_ids.append(observation_id); arm_errors.append(prior_arm.error)
-                arm_diagnostics.append(prior_arm.diagnostics)
+                arm_diagnostics.append({**prior_arm.diagnostics, "execution_disposition": "reused"})
                 continue
             if durable is not None:
-                durable.update_arm(experiment.experiment_id, arm.arm_id, state="cancelled", diagnostics={"reason": "cancelled"})
+                durable.update_arm(
+                    experiment.experiment_id, arm.arm_id, state="cancelled",
+                    diagnostics={"execution_disposition": "not_executed", "reason": "cancelled"},
+                )
             arm_observations.append(None); arm_states.append("cancelled"); arm_observation_ids.append(None); arm_errors.append({})
-            arm_diagnostics.append({"reason": "cancelled"})
+            arm_diagnostics.append({"execution_disposition": "not_executed", "reason": "cancelled"})
             continue
         identity = _identity_for(experiment.base, experiment.evaluator, arm.intervention)
         observation = (
@@ -360,13 +401,21 @@ def run_experiment(experiment: Experiment, execution_adapter: Any, *, include_co
         )
         error: dict[str, Any] = {}
         if observation is not None:
+            disposition = "reused"
             diagnostics["reused_observations"] = diagnostics.get("reused_observations", 0) + 1
             state, observation_id = "completed", observation.observation_id
             if durable is not None:
-                durable.update_arm(experiment.experiment_id, arm.arm_id, state=state, observation_id=observation_id)
+                durable.update_arm(
+                    experiment.experiment_id, arm.arm_id, state=state, observation_id=observation_id,
+                    diagnostics={"execution_disposition": disposition},
+                )
         else:
+            disposition = "executed"
             if durable is not None:
-                durable.update_arm(experiment.experiment_id, arm.arm_id, state="running")
+                durable.update_arm(
+                    experiment.experiment_id, arm.arm_id, state="running",
+                    diagnostics={"execution_disposition": disposition},
+                )
             try:
                 observation = _execute(execution_adapter, experiment.base, experiment.evaluator, arm.intervention,
                                        arm_id=arm.arm_id)
@@ -375,11 +424,17 @@ def run_experiment(experiment: Experiment, execution_adapter: Any, *, include_co
                 )
                 if durable is not None and _reusable(observation):
                     observation_id = durable.associate_observation(experiment.experiment_id, arm.arm_id, observation)
+                    durable.update_arm(
+                        experiment.experiment_id, arm.arm_id, state="completed",
+                        observation_id=observation_id,
+                        diagnostics={"execution_disposition": disposition},
+                    )
                 elif durable is not None:
                     observation_id = None
                     durable.update_arm(
                         experiment.experiment_id, arm.arm_id, state="failed",
-                        diagnostics={"observation_status": observation.status,
+                        diagnostics={"execution_disposition": disposition,
+                                     "observation_status": observation.status,
                                      "diagnostics": observation.diagnostics},
                     )
                 else:
@@ -391,10 +446,16 @@ def run_experiment(experiment: Experiment, execution_adapter: Any, *, include_co
                 error = {"error": str(exc)}
                 state, observation_id = "failed", None
                 if durable is not None:
-                    durable.update_arm(experiment.experiment_id, arm.arm_id, state="failed", error=error)
+                    durable.update_arm(
+                        experiment.experiment_id, arm.arm_id, state="failed", error=error,
+                        diagnostics={"execution_disposition": disposition},
+                    )
                 observation = None
         arm_observations.append(observation); arm_states.append(state); arm_observation_ids.append(observation_id); arm_errors.append(error)
-        arm_diagnostics.append(dict(getattr(observation, "diagnostics", {}) or {}))
+        arm_diagnostics.append({
+            "execution_disposition": disposition,
+            **dict(getattr(observation, "diagnostics", {}) or {}),
+        })
 
     if cancelled:
         final_state = "cancelled"

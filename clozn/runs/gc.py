@@ -1,8 +1,8 @@
 """Blob garbage collection for the SQLite run store (BACKLOG §2).
 
-Every blob (a run's trace, or its persisted Phase-3.7 context<->answer influence-map artifact) lives at
+Every blob (a run's trace, or its persisted context<->answer influence-map artifact) lives at
 `blobs/sha256/<xx>/<digest>.json`, content-addressed and referenced by exactly the `trace_ref.sha256`,
-`influence_map_ref.sha256`, or `minimal_context_support_ref.sha256` embedded in a run's `payload_json`.
+or `influence_map_ref.sha256` embedded in a run's `payload_json`.
 A blob becomes ORPHANED the moment its only
 referencing run row is gone -- pruned by `store._prune()` (KEEP=1000 rows), replaced by `replace_run()`
 with a different trace/map, or deleted by hand. Nothing has ever cleaned these up; they just accumulate.
@@ -39,7 +39,7 @@ from . import store
 _BLOB_REL_RE = re.compile(r"^([0-9a-f]{2})[/\\]([0-9a-f]{64})\.json$")
 
 
-_BLOB_REF_KEYS = ("trace_ref", "influence_map_ref", "minimal_context_support_ref")
+_BLOB_REF_KEYS = ("trace_ref", "influence_map_ref")
 
 
 def _referenced_digests(db) -> set[str]:
