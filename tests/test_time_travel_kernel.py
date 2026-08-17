@@ -258,6 +258,11 @@ def test_sampled_continue_and_force_token_share_fail_closed_readiness_without_wo
     assert exact_force.diagnostics["reason_code"] == STOCHASTIC_EXECUTION_UNBOUND
     assert exact_substrate.engine.calls == []
 
+    resolved_result = resolve_time_travel(
+        run, position=1, policy="reconstructed_only",
+    )
+    assert resolved_result.to_dict()["reason_code"] == STOCHASTIC_EXECUTION_UNBOUND
+
 
 def test_sampled_capabilities_and_recipe_reject_both_operations_without_model_calls():
     run = _sampled_run()
@@ -297,6 +302,7 @@ def test_run_time_travel_rejects_sampled_parent_before_experiment_or_model_call(
         runtime_identity=RUNTIME, worker_identity=WORKER, substrate=substrate,
     )
     assert result.status == "unavailable"
+    assert result.to_dict()["reason_code"] == STOCHASTIC_EXECUTION_UNBOUND
     assert result.diagnostics["operation_readiness"]["reason_code"] == STOCHASTIC_EXECUTION_UNBOUND
     assert substrate.engine.calls == []
 

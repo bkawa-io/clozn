@@ -270,6 +270,19 @@ def _readiness(resolved: ResolvedState, *, operation: Mapping[str, Any],
     )
 
 
+def _readiness_diagnostics(resolved: ResolvedState, readiness: Mapping[str, Any]) -> dict[str, Any]:
+    """Expose operation refusal as the result reason, not only as nested diagnostics."""
+    diagnostics = {**dict(resolved.diagnostics), "operation_readiness": deepcopy(dict(readiness))}
+    if not readiness.get("plannable", False):
+        reason_code = readiness.get("reason_code")
+        reason = readiness.get("reason")
+        if isinstance(reason_code, str) and reason_code:
+            diagnostics["reason_code"] = reason_code
+        if isinstance(reason, str) and reason:
+            diagnostics["message"] = reason
+    return diagnostics
+
+
 def _confirmed_readiness(value: Mapping[str, Any], observation: GeneratedObservation) -> dict[str, Any]:
     """Promote only the operation that produced completed direct evidence."""
     result = deepcopy(dict(value))
@@ -309,7 +322,7 @@ def resolve_time_travel(run: Mapping[str, Any], *, position: int, policy: str = 
         raise TimeTravelError(str(exc), code=code) from exc
     readiness = _readiness(resolved, operation=operation)
     status = "ready" if resolved.available and readiness.get("plannable", False) else "unavailable"
-    diagnostics = {**dict(resolved.diagnostics), "operation_readiness": readiness}
+    diagnostics = _readiness_diagnostics(resolved, readiness)
     return TimeTravelResult(
         run_id=state_ref.run_id, state_ref=state_ref, resolved_state=resolved, operation=operation,
         experiment_id=None, arm_id=None, observation_id=None, status=status, continuation={"status": status},
@@ -359,7 +372,7 @@ def run_time_travel(
         )
     readiness = _readiness(resolved, operation=operation, decode_mode=evaluator.decode_mode)
     if not readiness.get("plannable", False):
-        diagnostics = {**dict(resolved.diagnostics), "operation_readiness": readiness}
+        diagnostics = _readiness_diagnostics(resolved, readiness)
         return TimeTravelResult(
             run_id=state_ref.run_id, state_ref=state_ref, resolved_state=resolved, operation=operation,
             experiment_id=None, arm_id=None, observation_id=None, status="unavailable",

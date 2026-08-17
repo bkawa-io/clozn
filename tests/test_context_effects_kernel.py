@@ -16,6 +16,7 @@ from clozn.experiments.selections import (
     AnswerSelection, AnswerSelectionUnavailable, ContextSelection, resolve_answer_selection,
 )
 from clozn.experiments.state import ExecutionState
+import clozn.recipes.context_effects as context_effects_recipe
 from clozn.recipes.context_effects import measure_context_effects, project_context_effects
 from clozn.runs.context_receipt import build_context_receipt
 
@@ -171,6 +172,24 @@ def test_selection_does_not_change_experiment_identity_and_abs_order_is_stable()
     assert first.experiment_id == second.experiment_id
     effects = project_context_effects(first, AnswerSelection.from_range(0, len(run["response"])))
     assert abs(effects[0].delta_nats) >= abs(effects[1].delta_nats)
+
+
+def test_measurement_forwards_cancellation_to_generic_runner(monkeypatch):
+    run, source_ids = _run()
+    cancel = object()
+    observed = {}
+
+    def fake_run_experiment(*args, **kwargs):
+        observed["cancel"] = kwargs.get("cancel")
+        return "result"
+
+    monkeypatch.setattr(context_effects_recipe, "run_experiment", fake_run_experiment)
+    result = measure_context_effects(
+        run, source_ids=source_ids[:1], execution_adapter=object(), cancel=cancel,
+    )
+
+    assert result == "result"
+    assert observed["cancel"] is cancel
 
 
 def test_score_failure_is_typed_and_does_not_approximate_text():

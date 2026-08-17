@@ -172,7 +172,7 @@ def measure_context_effects(run: Mapping[str, Any], source_ids: Iterable[str] | 
                             execution_adapter: Any = None, substrate: Any = None,
                             run_loader: Any = None, answer_selection: AnswerSelection | None = None,
                             include_control: bool = True, observation_store: ObservationStore | None = None,
-                            store: ObservationStore | None = None) -> ExperimentResult:
+                            store: ObservationStore | None = None, cancel: Any = None) -> ExperimentResult:
     """Measure baseline plus direct leave-one-out deletion score arms.
 
     ``answer_selection`` is accepted as a convenience validation input but is
@@ -192,6 +192,7 @@ def measure_context_effects(run: Mapping[str, Any], source_ids: Iterable[str] | 
     return run_experiment(
         plan.experiment, adapter, include_control=include_control,
         observation_store=observation_store, store=store,
+        cancel=cancel,
         requested_by={"recipe": "context_effects"},
         diagnostics={
         "recipe": "context_effects",
