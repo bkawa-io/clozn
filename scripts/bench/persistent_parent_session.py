@@ -25,7 +25,7 @@ ENGINE_CLIENT_ROOT = ROOT / "engine" / "client"
 if str(ENGINE_CLIENT_ROOT) not in sys.path:
     sys.path.insert(0, str(ENGINE_CLIENT_ROOT))
 
-from clozn.runs.answer_preservation import _generation_contract_from_run, classify_reference_match
+from clozn.runs.answer_preservation import generation_contract_from_run, classify_reference_match
 from clozn.experiments.multi_arm import probe_reference_match_many
 from clozn.experiments.shared_parent import SharedParentSessionClient, assert_evidence_parity, condition_candidate_id
 from clozn.experiments.effective_prompt import render_effective_prompt_for_retained
@@ -82,7 +82,7 @@ def _case(case: Mapping[str, Any], geometry_case: Mapping[str, Any], *, engine: 
     if not isinstance(run, dict):
         raise ValueError(f"run {case['run_id']!r} is unavailable")
     conditions = __import__("clozn.receipts.rederive", fromlist=["with_arm_conditions"]).with_arm_conditions(run)
-    contract, reason = _generation_contract_from_run(run)
+    contract, reason = generation_contract_from_run(run)
     if not isinstance(contract, dict) or reason:
         raise ValueError(f"case {case['case_id']} has no exact generation contract: {reason}")
     reference = list(conditions["continuation_ids"])

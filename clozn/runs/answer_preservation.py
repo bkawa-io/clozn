@@ -66,8 +66,12 @@ def _termination_from_run(run: Mapping[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _generation_contract_from_run(run: Mapping[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
-    """Extract a complete canonical contract without inventing sampler values."""
+def generation_contract_from_run(run: Mapping[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+    """Extract the complete canonical recorded generation contract.
+
+    This is a pure read-side parser. It never fills sampler defaults: a sampled
+    run with missing or malformed sampler evidence remains unavailable.
+    """
     meta = run.get("meta") if isinstance(run.get("meta"), Mapping) else {}
     explicit = run.get("generation_contract")
     if not isinstance(explicit, Mapping):
@@ -190,7 +194,7 @@ def assess_exact_eligibility(run: Mapping[str, Any], sub: Any = None,
     if not isinstance(run, Mapping):
         reasons.append("invalid_run")
         return {"eligible": False, "reasons": reasons, "reason": reasons[0]}
-    contract, contract_reason = _generation_contract_from_run(run)
+    contract, contract_reason = generation_contract_from_run(run)
     trace = run.get("trace") if isinstance(run.get("trace"), Mapping) else {}
     ids, token_reason = _trace_token_pieces(run)
     if token_reason:

@@ -153,8 +153,8 @@ def _parent_generation_contract(run: Mapping[str, Any]) -> dict[str, Any]:
     # not let a sampled ``meta.decode`` be silently reinterpreted as greedy merely because the
     # recipe's historical projection did not look there.
     try:
-        from clozn.runs.answer_preservation import _generation_contract_from_run
-        canonical, _reason = _generation_contract_from_run(run)
+        from clozn.runs.answer_preservation import generation_contract_from_run
+        canonical, _reason = generation_contract_from_run(run)
         if isinstance(canonical, Mapping):
             return dict(canonical)
     except Exception:

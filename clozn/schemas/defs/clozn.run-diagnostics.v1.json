@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.run-diagnostics.v1",
+  "title": "Read-only diagnostics and debugger capabilities for one recorded Run",
+  "description": "A derived projection over recorded Run evidence. It never probes a worker, executes an experiment, or treats missing instrumentation as a clean result.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "model_runtime",
+    "input",
+    "generation_contract",
+    "output",
+    "execution_health",
+    "evidence",
+    "capabilities"
+  ],
+  "properties": {
+    "schema_version": {"const": "clozn.run-diagnostics.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "model_runtime": {"type": "object", "additionalProperties": true},
+    "input": {"type": "object", "additionalProperties": true},
+    "generation_contract": {"type": "object", "additionalProperties": true},
+    "output": {"type": "object", "additionalProperties": true},
+    "execution_health": {"type": "object", "additionalProperties": true},
+    "evidence": {"type": "object", "additionalProperties": true},
+    "capabilities": {"type": "object", "additionalProperties": true}
+  },
+  "additionalProperties": false
+}

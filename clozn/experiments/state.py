@@ -17,7 +17,7 @@ from typing import Any
 from clozn.receipts.rederive import with_arm_conditions
 from clozn.replay.execution_fork import parent_execution_fingerprint
 from clozn.runs.answer_preservation import (
-    _generation_contract_from_run,
+    generation_contract_from_run,
     _trace_token_pieces,
 )
 from clozn.runs.context_receipt import read_receipt
@@ -158,7 +158,7 @@ class ExecutionState:
     def from_run(cls, run: Mapping[str, Any]) -> "ExecutionState":
         if not isinstance(run, Mapping) or not isinstance(run.get("id"), str) or not run["id"]:
             raise ValueError("ExecutionState.from_run requires a stored run with a non-empty id")
-        contract, contract_reason = _generation_contract_from_run(run)
+        contract, contract_reason = generation_contract_from_run(run)
         conditions = with_arm_conditions(dict(run))
         condition_projection = {
             "messages": conditions.get("messages"),
