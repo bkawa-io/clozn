@@ -16,9 +16,11 @@ from typing import Any
 from clozn.receipts.rederive import score_arm, with_arm_conditions
 from clozn.replay.execution_fork import _runtime_projection, parent_runtime_projection
 
+from .batch import ArmExecutionOutcome, ArmExecutionRequest, BatchExecutionResult
 from .evaluators import ScoreRecordedContinuation
 from .execution import ExecutionAdapterError, ExecutionStateStaleError, _identity_kwargs, resolve_delete_source
 from .interventions import DeleteSource
+from .multi_arm import score_tokens_many
 from .observations import TokenScoreObservation
 from .selections import _recorded_answer_tokens
 from .state import ExecutionState, digest
@@ -26,6 +28,17 @@ from .state import ExecutionState, digest
 
 class ScoreExecutionError(ExecutionAdapterError):
     """The score adapter cannot prove or execute a recorded-token score."""
+
+
+def _cancelled(cancel: Any) -> bool:
+    if cancel is None:
+        return False
+    if callable(cancel):
+        return bool(cancel())
+    method = getattr(cancel, "is_set", None)
+    if callable(method):
+        return bool(method())
+    return bool(cancel)
 
 
 def _runtime_binding(run: Mapping[str, Any], substrate: Any) -> tuple[dict[str, Any] | None, str | None]:
@@ -284,6 +297,139 @@ class DeleteSourceRecordedContinuationScoreAdapter:
     def execute_control(self, state: ExecutionState, *,
                         evaluator: ScoreRecordedContinuation | None = None) -> TokenScoreObservation:
         return self.execute(state, None, evaluator=evaluator, arm_id="control")
+
+    def execute_many(self, requests: tuple[ArmExecutionRequest, ...] | list[ArmExecutionRequest], *,
+                     cancel: Any = None) -> BatchExecutionResult:
+        """Batch the substrate score calls while retaining one host validator."""
+        requests = tuple(requests)
+        if not requests:
+            return BatchExecutionResult((), {"execution_strategy": "none", "batch_count": 0})
+        first = requests[0]
+        if not isinstance(first.state, ExecutionState) or not isinstance(first.evaluator, ScoreRecordedContinuation):
+            raise TypeError("score batch requests require ExecutionState and ScoreRecordedContinuation")
+        try:
+            run = self._validated_run(first.state)
+        except ExecutionAdapterError as exc:
+            return BatchExecutionResult(tuple(
+                ArmExecutionOutcome(
+                    arm_id=request.arm_id, execution_disposition="not_executed", state="failed",
+                    diagnostics={"reason": "base_run_unavailable", "error": str(exc)},
+                ) for request in requests
+            ), {"execution_strategy": "preflight", "batch_count": 0})
+        prepared: list[tuple[ArmExecutionRequest, dict[str, Any]]] = []
+        outcomes: list[ArmExecutionOutcome] = []
+        for request in requests:
+            if request.state != first.state or not isinstance(request.evaluator, ScoreRecordedContinuation):
+                raise ScoreExecutionError("score batch requests must share one execution state/evaluator")
+            if _cancelled(cancel):
+                outcomes.append(ArmExecutionOutcome(
+                    arm_id=request.arm_id, execution_disposition="not_executed", state="cancelled",
+                    diagnostics={"reason": "cancelled_before_dispatch"},
+                ))
+                continue
+            try:
+                expected_ids, _pieces, _response = _recorded_answer_tokens(run)
+            except Exception as exc:
+                outcomes.append(ArmExecutionOutcome(
+                    arm_id=request.arm_id, execution_disposition="not_executed", state="failed",
+                    diagnostics={"reason": "recorded_continuation_unavailable", "error": str(exc)},
+                ))
+                continue
+            identity = _identity_kwargs(request.state, request.evaluator, request.intervention)
+            runtime, runtime_reason = _runtime_binding(run, self.substrate)
+            provenance: dict[str, Any] = {
+                "adapter": "delete_source_recorded_continuation_score",
+                "resolver": "resolve_context_receipt_source_set",
+                "scorer": "clozn.receipts.rederive.score_arm",
+                "evaluator": "score_recorded_continuation",
+                "method": "teacher_forced_score_tokens",
+                "proof_grade": "trusted",
+                "runtime_binding": runtime,
+            }
+            if runtime_reason or not expected_ids or request.state.recorded_answer_token_identity.get("token_ids_sha256") != digest(expected_ids):
+                outcomes.append(ArmExecutionOutcome(
+                    arm_id=request.arm_id,
+                    observation=TokenScoreObservation(
+                        **identity, status="unavailable", evaluator_provenance=provenance,
+                        score_basis={"runtime_binding": runtime}, execution_provenance=provenance,
+                        diagnostics={"reason": runtime_reason or "recorded_continuation_identity_mismatch"},
+                    ),
+                    execution_disposition="not_executed", state="failed",
+                ))
+                continue
+            conditions = with_arm_conditions(dict(run))
+            if conditions.get("continuation_ids") != expected_ids:
+                outcomes.append(ArmExecutionOutcome(
+                    arm_id=request.arm_id,
+                    observation=TokenScoreObservation(
+                        **identity, status="unavailable", evaluator_provenance=provenance,
+                        score_basis={"runtime_binding": runtime}, execution_provenance=provenance,
+                        diagnostics={"reason": "recorded_continuation_identity_mismatch"},
+                    ),
+                    execution_disposition="not_executed", state="failed",
+                ))
+                continue
+            messages = list(conditions.get("messages") or [])
+            block = conditions.get("block")
+            if request.intervention is not None:
+                if not isinstance(request.intervention, DeleteSource):
+                    raise ScoreExecutionError("score execution supports DeleteSource only")
+                try:
+                    resolved = resolve_delete_source(run, request.intervention)
+                except Exception as exc:
+                    outcomes.append(ArmExecutionOutcome(
+                        arm_id=request.arm_id,
+                        observation=TokenScoreObservation(
+                            **identity, status="unavailable", evaluator_provenance=provenance,
+                            score_basis={"runtime_binding": runtime}, execution_provenance=provenance,
+                            diagnostics={"reason": "intervention_unavailable", "error": str(exc)},
+                        ),
+                        execution_disposition="not_executed", state="failed",
+                    ))
+                    continue
+                messages = list(resolved.get("messages") or [])
+                if resolved.get("basis") == "assembled_messages":
+                    block = None
+                provenance.update({
+                    "source_basis": resolved.get("basis"),
+                    "basis_digest": resolved.get("basis_digest"),
+                    "intervened_context_digest": resolved.get("intervened_context_digest"),
+                    "canonical_source_ids": list(resolved.get("canonical_source_ids") or request.intervention.source_ids),
+                    "removed_ranges": deepcopy(resolved.get("exact_removed_ranges") or []),
+                    "removed_source_ids": list(request.intervention.source_ids),
+                })
+            prepared.append((request, {
+                "messages": messages,
+                "continuation_ids": list(expected_ids),
+                "block": block,
+                "steer_strengths": deepcopy(conditions.get("steer_strengths") or {}),
+                "provenance": provenance,
+            }))
+        if not prepared:
+            return BatchExecutionResult(tuple(outcomes), {"execution_strategy": "preflight", "batch_count": 0})
+        if not callable(getattr(self.substrate, "score_tokens", None)):
+            raise ScoreExecutionError("scoring_substrate_unavailable")
+        strategy = "native_many" if bool(getattr(self.substrate, "score_tokens_many_proof_grade", False)) else "scalar"
+        arms = [{key: deepcopy(value) for key, value in payload.items() if key != "provenance"}
+                for _request, payload in prepared]
+        raw_rows = list(score_tokens_many(self.substrate, arms, cancel=cancel, proof_grade=True))
+        if len(raw_rows) != len(prepared):
+            raise ScoreExecutionError("score batch returned the wrong arm count")
+        for (request, payload), raw_tokens in zip(prepared, raw_rows):
+            observation = _score_observation(
+                arm_id=request.arm_id, run=run, state=request.state, evaluator=request.evaluator,
+                intervention=request.intervention, conditions=payload, raw_tokens=raw_tokens,
+                provenance=payload["provenance"],
+            )
+            outcomes.append(ArmExecutionOutcome(
+                arm_id=request.arm_id, observation=observation,
+                execution_disposition="executed",
+                state="completed" if observation.completed else "failed",
+                diagnostics={"execution_strategy": strategy},
+            ))
+        return BatchExecutionResult(tuple(outcomes), {
+            "execution_strategy": strategy, "batch_count": 1, "batch_size": len(prepared),
+        })
 
 
 ScoreRecordedContinuationAdapter = DeleteSourceRecordedContinuationScoreAdapter

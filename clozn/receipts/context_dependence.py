@@ -760,7 +760,7 @@ class ContextDependenceStudy:
         if not pending:
             return [item for item in results if item is not None]
 
-        from clozn.runs.multi_arm import BatchCancelled, score_tokens_many
+        from clozn.experiments.multi_arm import BatchCancelled, score_tokens_many
         conditions = {
             "block": deepcopy(self._block),
             "steer_strengths": deepcopy(self._conditions.get("steer_strengths") or {}),

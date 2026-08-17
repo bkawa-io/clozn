@@ -191,6 +191,7 @@ def run_minimal_context(
     max_units: int = 50,
     attempt_inclusion_check: bool = True,
     cancel: Callable[[], bool] | None = None,
+    execution_strategy: str = "auto",
 ) -> MinimalContextResult:
     """Search directly observed exact preservation over a canonical universe."""
     if observation_store is not None and store is not None and observation_store is not store:
@@ -237,12 +238,13 @@ def run_minimal_context(
             reason_code=(universe.get("condition") or {}).get("code", "universe_unavailable"),
         )
     objective = {"kind": "rendered_prompt_tokens", "version": OBJECTIVE_VERSION}
+    dispatcher: ContextSearchDispatcher | None = None
     try:
         dispatcher = ContextSearchDispatcher(
             run, universe, substrate=substrate, engine=engine,
             observation_store=durable, execution_adapter=execution_adapter,
             evaluator=ExactReferenceMatch(), prompt_token_counter=prompt_token_counter,
-            render_messages=render_messages, cancel=cancel,
+            render_messages=render_messages, cancel=cancel, execution_strategy=execution_strategy,
         )
         searched = run_adaptive_search(
             tuple(universe["source_ids"]),
@@ -263,6 +265,14 @@ def run_minimal_context(
             search_id=search_id, policy=policy, reason=str(exc),
             reason_code=getattr(exc, "reason", "search_execution_unavailable"),
         )
+    finally:
+        if dispatcher is not None:
+            try:
+                dispatcher.close()
+            except Exception:
+                # Evidence already established remains valid; lifecycle cleanup
+                # is operational metadata and cannot rewrite the result.
+                pass
 
     control_ref = searched.control_evidence
     control_id = control_ref.observation_id if control_ref else None

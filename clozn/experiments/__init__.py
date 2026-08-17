@@ -18,6 +18,8 @@ def __getattr__(name):
 
 
 from .evaluators import ExactReferenceMatch, ScoreRecordedContinuation, Generate
+from .batch import ArmExecutionOutcome, ArmExecutionRequest, BatchExecutionError, BatchExecutionResult
+from .shared_parent import SharedParentSessionClient, SharedParentSessionError
 from .context_search import ContextSearchDispatcher, ContextSearchUnavailable
 from .execution import (
     DeleteSourceExactReferenceAdapter,
@@ -87,4 +89,6 @@ __all__ = ["REGISTRY", "catalog", "run_experiment", "substrate_ok", "MANIFEST_SC
            "materialize_generated_observation", "MaterializeBranch", "GenerateExecutionAdapter",
            "GenerateExecutionError", "BEST_VERIFIED", "INCLUSION_MINIMUM", "SearchBudget",
            "SearchEvidenceRef", "SearchResult", "SearchTrial", "SearchTrajectoryEntry",
-           "run_adaptive_search", "ContextSearchDispatcher", "ContextSearchUnavailable"]
+           "run_adaptive_search", "ContextSearchDispatcher", "ContextSearchUnavailable",
+           "ArmExecutionOutcome", "ArmExecutionRequest", "BatchExecutionError",
+           "BatchExecutionResult", "SharedParentSessionClient", "SharedParentSessionError"]

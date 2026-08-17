@@ -40,6 +40,7 @@ class ContextSearchDispatcher:
     def __init__(self, run: Mapping[str, Any], universe: Mapping[str, Any], *, substrate: Any = None,
                  engine: Any = None, observation_store: ObservationStore | None = None,
                  execution_adapter: Any = None, evaluator: ExactReferenceMatch | None = None,
+                 execution_strategy: str = "auto",
                  prompt_token_counter: Callable[[Sequence[Mapping[str, Any]]], int] | None = None,
                  render_messages: Callable[[tuple[str, ...]], Sequence[Mapping[str, Any]]] | None = None,
                  cancel: Callable[[], bool] | None = None):
@@ -67,7 +68,7 @@ class ContextSearchDispatcher:
         self._local_observations: dict[str, Any] = {}
         self._last_probe_context: dict[str, Any] = {}
         self.execution_adapter = execution_adapter or DeleteSourceExactReferenceAdapter(
-            substrate, run=self.run,
+            substrate, run=self.run, engine=engine, execution_strategy=execution_strategy,
         )
         if render_messages is None:
             self._render_messages = self._default_render_messages
@@ -149,6 +150,21 @@ class ContextSearchDispatcher:
             "stage": stage,
             "parent_retained_ids": tuple(parent_retained_ids),
         }
+
+    def on_control_accepted(self, candidate: Any, prepared: Any, evidence: Any) -> None:
+        hook = getattr(self.execution_adapter, "on_control_accepted", None)
+        if callable(hook):
+            hook(candidate=candidate, prepared=prepared, evidence=evidence, dispatcher=self)
+
+    def on_candidate_accepted(self, candidate: Any, prepared: Any, evidence: Any) -> None:
+        hook = getattr(self.execution_adapter, "on_candidate_accepted", None)
+        if callable(hook):
+            hook(candidate=candidate, prepared=prepared, evidence=evidence, dispatcher=self)
+
+    def close(self) -> None:
+        hook = getattr(self.execution_adapter, "close", None)
+        if callable(hook):
+            hook()
 
     def _one_ref(self, result: ExperimentResult, arm_id: str, intervention: DeleteSource | None,
                  *, reused: bool = False) -> dict[str, Any]:

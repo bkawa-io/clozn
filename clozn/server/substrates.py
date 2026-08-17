@@ -257,6 +257,10 @@ class EngineSubstrate(Substrate):
     dials apply via EngineSteer's steer_vec. See RUNTIME_SPLIT.md (the keystone)."""
 
     name = "engine"
+    # The score-many seam is a scheduling wrapper around the same scalar
+    # ``/score`` contract (including bounded concurrency), so its evidence is
+    # proof-grade even though the worker has no native score endpoint.
+    score_tokens_many_proof_grade = True
 
     # IDENTITY LAZY RE-RESOLUTION (engine-down pressure test finding #2): a down-at-startup engine pays
     # this ~2s connect-refused tax (this host's control fact) at most once per cooldown window on lazy
@@ -769,7 +773,7 @@ class EngineSubstrate(Substrate):
         method without changing Minimal Context scheduling or proof logic;
         today this is an explicit, cancellation-aware serial fallback.
         """
-        from clozn.runs.multi_arm import concurrent_many, serial_many
+        from clozn.experiments.multi_arm import concurrent_many, serial_many
         from clozn.runs.answer_preservation import classify_reference_match
 
         workers = _minimal_context_batch_workers()
@@ -893,7 +897,7 @@ class EngineSubstrate(Substrate):
         ``chat`` or publishes a RequestContext.  The native engine adapter is
         opt-in and explicitly non-proof-grade until real-GGUF parity is proven.
         """
-        from clozn.runs.multi_arm import concurrent_many, serial_many
+        from clozn.experiments.multi_arm import concurrent_many, serial_many
         from clozn.runs.answer_preservation import classify_reference_match
 
         self.last_native_reference_match_metrics = None

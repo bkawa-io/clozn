@@ -5,6 +5,10 @@ from collections.abc import Mapping
 from typing import Any, Union
 
 from .evaluators import Evaluator, ExactReferenceMatch, ScoreRecordedContinuation, Generate, evaluator_from_dict
+from .batch import (
+    ArmExecutionOutcome, ArmExecutionRequest, BatchExecutionError,
+    BatchExecutionResult, scalar_batch,
+)
 from .interventions import DeleteSource, ForceToken, Intervention, intervention_from_dict
 from .kernel import Experiment
 from .observations import (
@@ -261,6 +265,19 @@ def _execute(adapter: Any, state: ExecutionState | ResolvedState, evaluator: Eva
     return execute(state, intervention, evaluator=evaluator, arm_id=arm_id)
 
 
+def _execute_many(adapter: Any, requests: tuple[ArmExecutionRequest, ...], *, cancel: Any = None) -> BatchExecutionResult:
+    """Dispatch one semantic batch without hiding retries or extra probes."""
+    execute_many = getattr(adapter, "execute_many", None)
+    if not callable(execute_many):
+        return scalar_batch(adapter, requests, cancel=cancel)
+    # A batch adapter owns its dispatch boundary.  Do not retry after any
+    # exception: the worker may already have accepted part of the batch.
+    result = execute_many(requests, cancel=cancel)
+    if not isinstance(result, BatchExecutionResult):
+        raise TypeError("execute_many must return a BatchExecutionResult")
+    return result
+
+
 def run_experiment(experiment: Experiment, execution_adapter: Any, *, include_control: bool = True,
                    cancel: Any = None, observation_store: ObservationStore | None = None,
                    store: ObservationStore | None = None,
@@ -354,108 +371,221 @@ def run_experiment(experiment: Experiment, execution_adapter: Any, *, include_co
     diagnostics["control_execution_disposition"] = control_disposition
 
     blocked = include_control and not cancelled and not _allows_arms(experiment.evaluator, control)
-    arm_observations: list[ObservationLike | None] = []
-    arm_states: list[str] = []
-    arm_observation_ids: list[str | None] = []
-    arm_errors: list[Mapping[str, Any] | None] = []
-    arm_diagnostics: list[Mapping[str, Any] | None] = []
+    arm_count = len(experiment.arms)
+    records: list[dict[str, Any]] = [{} for _ in range(arm_count)]
+    missing: dict[str, tuple[int, ArmExecutionRequest]] = {}
     expected_type = _expected_type(experiment.evaluator)
-    for arm in experiment.arms:
+
+    # Preflight all arms before any counterfactual dispatch.  This is where
+    # durable/local reuse and same-condition deduplication happen.
+    for index, arm in enumerate(experiment.arms):
         if blocked:
-            state, observation, observation_id = "blocked", None, None
+            records[index] = {
+                "observation": None, "state": "blocked", "observation_id": None,
+                "error": {}, "disposition": "not_executed",
+                "diagnostics": {
+                    "reason": "control_observation_not_available",
+                    "observation_status": control.status if control is not None else "unavailable",
+                },
+            }
             if durable is not None:
-                durable.update_arm(experiment.experiment_id, arm.arm_id, state="blocked",
-                                   diagnostics={
-                                       "execution_disposition": "not_executed",
-                                       "reason": "control_observation_not_available",
-                                       "observation_status": control.status if control is not None else "unavailable",
-                                   })
-            arm_observations.append(observation); arm_states.append(state); arm_observation_ids.append(observation_id); arm_errors.append({})
-            arm_diagnostics.append({
-                "execution_disposition": "not_executed",
-                "reason": "control_observation_not_available",
-                "observation_status": control.status if control is not None else "unavailable",
-            })
+                durable.update_arm(
+                    experiment.experiment_id, arm.arm_id, state="blocked",
+                    diagnostics={"execution_disposition": "not_executed", **records[index]["diagnostics"]},
+                )
             continue
         if cancelled or (callable(cancel) and cancel()):
             cancelled = True
             prior_arm = prior_arms.get(arm.arm_id)
             if prior_arm is not None and prior_arm.observation is not None:
-                observation = prior_arm.observation
-                state, observation_id = prior_arm.state, prior_arm.observation_id
-                arm_observations.append(observation); arm_states.append(state); arm_observation_ids.append(observation_id); arm_errors.append(prior_arm.error)
-                arm_diagnostics.append({**prior_arm.diagnostics, "execution_disposition": "reused"})
-                continue
-            if durable is not None:
-                durable.update_arm(
-                    experiment.experiment_id, arm.arm_id, state="cancelled",
-                    diagnostics={"execution_disposition": "not_executed", "reason": "cancelled"},
-                )
-            arm_observations.append(None); arm_states.append("cancelled"); arm_observation_ids.append(None); arm_errors.append({})
-            arm_diagnostics.append({"execution_disposition": "not_executed", "reason": "cancelled"})
-            continue
-        identity = _identity_for(experiment.base, experiment.evaluator, arm.intervention)
-        observation = (
-            durable.find_observation(identity["observation_key_sha256"])
-            if durable is not None else observation_cache.get(identity["observation_key_sha256"])
-        )
-        error: dict[str, Any] = {}
-        if observation is not None:
-            disposition = "reused"
-            diagnostics["reused_observations"] = diagnostics.get("reused_observations", 0) + 1
-            state, observation_id = "completed", observation.observation_id
-            if durable is not None:
-                durable.update_arm(
-                    experiment.experiment_id, arm.arm_id, state=state, observation_id=observation_id,
-                    diagnostics={"execution_disposition": disposition},
-                )
-        else:
-            disposition = "executed"
-            if durable is not None:
-                durable.update_arm(
-                    experiment.experiment_id, arm.arm_id, state="running",
-                    diagnostics={"execution_disposition": disposition},
-                )
-            try:
-                observation = _execute(execution_adapter, experiment.base, experiment.evaluator, arm.intervention,
-                                       arm_id=arm.arm_id)
-                observation = _validate_returned_observation(
-                    observation, expected_type, experiment.base, experiment.evaluator, arm.intervention,
-                )
-                if durable is not None and _reusable(observation):
-                    observation_id = durable.associate_observation(experiment.experiment_id, arm.arm_id, observation)
-                    durable.update_arm(
-                        experiment.experiment_id, arm.arm_id, state="completed",
-                        observation_id=observation_id,
-                        diagnostics={"execution_disposition": disposition},
-                    )
-                elif durable is not None:
-                    observation_id = None
-                    durable.update_arm(
-                        experiment.experiment_id, arm.arm_id, state="failed",
-                        diagnostics={"execution_disposition": disposition,
-                                     "observation_status": observation.status,
-                                     "diagnostics": observation.diagnostics},
-                    )
-                else:
-                    observation_id = observation.observation_id if _reusable(observation) else None
-                    if _reusable(observation):
-                        observation_cache[identity["observation_key_sha256"]] = observation
-                state = "completed" if _reusable(observation) else "failed"
-            except Exception as exc:
-                error = {"error": str(exc)}
-                state, observation_id = "failed", None
+                records[index] = {
+                    "observation": prior_arm.observation, "state": prior_arm.state,
+                    "observation_id": prior_arm.observation_id, "error": prior_arm.error,
+                    "disposition": "reused", "diagnostics": dict(prior_arm.diagnostics),
+                }
+            else:
+                records[index] = {
+                    "observation": None, "state": "cancelled", "observation_id": None,
+                    "error": {}, "disposition": "not_executed", "diagnostics": {"reason": "cancelled"},
+                }
                 if durable is not None:
                     durable.update_arm(
-                        experiment.experiment_id, arm.arm_id, state="failed", error=error,
-                        diagnostics={"execution_disposition": disposition},
+                        experiment.experiment_id, arm.arm_id, state="cancelled",
+                        diagnostics={"execution_disposition": "not_executed", "reason": "cancelled"},
                     )
-                observation = None
-        arm_observations.append(observation); arm_states.append(state); arm_observation_ids.append(observation_id); arm_errors.append(error)
-        arm_diagnostics.append({
-            "execution_disposition": disposition,
-            **dict(getattr(observation, "diagnostics", {}) or {}),
-        })
+            continue
+        identity = _identity_for(experiment.base, experiment.evaluator, arm.intervention)
+        key = identity["observation_key_sha256"]
+        observation = durable.find_observation(key) if durable is not None else observation_cache.get(key)
+        if observation is not None:
+            diagnostics["reused_observations"] = diagnostics.get("reused_observations", 0) + 1
+            records[index] = {
+                "observation": observation, "state": "completed",
+                "observation_id": observation.observation_id, "error": {},
+                "disposition": "reused", "diagnostics": {}, "identity_key": key,
+            }
+            if durable is not None:
+                durable.update_arm(
+                    experiment.experiment_id, arm.arm_id, state="completed",
+                    observation_id=observation.observation_id,
+                    diagnostics={"execution_disposition": "reused"},
+                )
+            continue
+        if key not in missing:
+            missing[key] = (index, ArmExecutionRequest(
+                arm_id=arm.arm_id, state=experiment.base,
+                intervention=arm.intervention, evaluator=experiment.evaluator,
+            ))
+        else:
+            records[index] = {"alias_key": key, "alias_of": missing[key][0]}
+
+    diagnostics["duplicate_condition_count"] = sum(1 for item in records if "alias_of" in item)
+    diagnostics["unique_missing_condition_count"] = len(missing)
+    diagnostics.setdefault("batch_count", 0)
+    diagnostics.setdefault("batch_sizes", [])
+    # Conditions discovered before a later cancellation remain eligible for
+    # the already-formed dispatch.  A cancellation observed before any arm is
+    # queued still leaves ``missing`` empty and therefore dispatches nothing.
+    if missing and not blocked:
+        leaders = tuple(item[1] for item in missing.values())
+        for request in leaders:
+            if durable is not None:
+                durable.update_arm(
+                    experiment.experiment_id, request.arm_id, state="running",
+                    diagnostics={"execution_disposition": "executed"},
+                )
+        try:
+            batch_result = _execute_many(
+                execution_adapter, leaders, cancel=None if cancelled else cancel,
+            )
+            diagnostics.update({
+                "execution_strategy": batch_result.diagnostics.get("execution_strategy", "batch"),
+                "batch_count": diagnostics.get("batch_count", 0) + 1,
+                "batch_sizes": [len(leaders)],
+                **{key: value for key, value in batch_result.diagnostics.items()
+                   if key not in {"execution_strategy", "batch_count", "batch_sizes"}},
+            })
+            diagnostics["unique_executed_condition_count"] = sum(
+                1 for outcome in batch_result.outcomes
+                if outcome.execution_disposition == "executed"
+            )
+            outcomes = batch_result.by_arm_id
+        except BatchExecutionError as exc:
+            outcomes = {item.arm_id: item for item in exc.outcomes}
+            diagnostics.update(exc.diagnostics)
+            diagnostics["batch_error"] = str(exc)
+            diagnostics["unique_executed_condition_count"] = len(leaders) - sum(
+                1 for item in exc.outcomes if item.execution_disposition == "not_executed"
+            )
+        except Exception as exc:
+            # Once a batch adapter has been invoked, dispatch status is not
+            # knowable from a generic exception.  Conservatively charge every
+            # unique condition as executed and never retry it here.
+            outcomes = {}
+            diagnostics["batch_error"] = str(exc)
+            diagnostics["unique_executed_condition_count"] = len(leaders)
+        for key, (leader_index, request) in missing.items():
+            outcome = outcomes.get(request.arm_id)
+            if outcome is None:
+                outcome = ArmExecutionOutcome(
+                    arm_id=request.arm_id, execution_disposition="executed", state="failed",
+                    error={"error": diagnostics.get("batch_error", "batch execution failed")},
+                    diagnostics={"reason": "ambiguous_batch_failure"},
+                )
+            observation = outcome.observation
+            error = dict(outcome.error or {})
+            item_diagnostics = dict(outcome.diagnostics or {})
+            disposition = outcome.execution_disposition
+            state = outcome.state
+            observation_id: str | None = None
+            if observation is not None:
+                try:
+                    observation = _validate_returned_observation(
+                        observation, expected_type, experiment.base, experiment.evaluator, request.intervention,
+                    )
+                except Exception as exc:
+                    observation = None
+                    state = "failed"
+                    disposition = "executed" if disposition != "not_executed" else disposition
+                    error = {"error": str(exc)}
+                    item_diagnostics["reason"] = "observation_integrity_failure"
+            if observation is not None and _reusable(observation):
+                state = "completed"
+                observation_id = observation.observation_id
+                if durable is not None:
+                    durable.associate_observation(experiment.experiment_id, request.arm_id, observation)
+                else:
+                    observation_cache[key] = observation
+            elif observation is not None:
+                state = "failed"
+                item_diagnostics.setdefault("observation_status", observation.status)
+                item_diagnostics.setdefault("diagnostics", observation.diagnostics)
+            else:
+                state = "cancelled" if outcome.state == "cancelled" else "failed"
+            leader_record = {
+                "observation": observation, "state": state, "observation_id": observation_id,
+                "error": error, "disposition": disposition, "diagnostics": item_diagnostics,
+            }
+            records[leader_index] = leader_record
+            if durable is not None:
+                durable.update_arm(
+                    experiment.experiment_id, request.arm_id, state=state,
+                    observation_id=observation_id if observation_id is not None else None,
+                    error=error or None,
+                    diagnostics={"execution_disposition": disposition, **item_diagnostics},
+                )
+    elif missing:
+        for _key, (index, request) in missing.items():
+            records[index] = {
+                "observation": None, "state": "cancelled", "observation_id": None,
+                "error": {}, "disposition": "not_executed", "diagnostics": {"reason": "cancelled"},
+            }
+
+    # Duplicate arms alias the leader's result without a second model call.
+    for index, record in enumerate(records):
+        if "alias_of" not in record:
+            continue
+        leader = records[record["alias_of"]]
+        records[index] = {
+            **leader, "disposition": "reused",
+            "diagnostics": {**leader.get("diagnostics", {}), "duplicate_of_arm_id": experiment.arms[record["alias_of"]].arm_id},
+        }
+        if durable is not None:
+            leader_obs_id = leader.get("observation_id")
+            if leader_obs_id is not None:
+                durable.update_arm(
+                    experiment.experiment_id, experiment.arms[index].arm_id,
+                    state=leader["state"], observation_id=leader_obs_id,
+                    diagnostics={"execution_disposition": "reused", "duplicate_of_arm_id": experiment.arms[record["alias_of"]].arm_id},
+                )
+            else:
+                durable.update_arm(
+                    experiment.experiment_id, experiment.arms[index].arm_id,
+                    state=leader["state"],
+                    diagnostics={"execution_disposition": "reused", "duplicate_of_arm_id": experiment.arms[record["alias_of"]].arm_id},
+                )
+
+    # Every arm has now been resolved into a stable row in caller order.
+    for index, record in enumerate(records):
+        if not record:
+            record.update({
+                "observation": None, "state": "cancelled" if cancelled else "failed",
+                "observation_id": None, "error": {}, "disposition": "not_executed",
+                "diagnostics": {"reason": "not_executed"},
+            })
+    arm_observations = [record.get("observation") for record in records]
+    arm_states = [record.get("state", "failed") for record in records]
+    arm_observation_ids = [record.get("observation_id") for record in records]
+    arm_errors = [record.get("error", {}) for record in records]
+    arm_diagnostics = [
+        {"execution_disposition": record.get("disposition", "not_executed"),
+         **dict(record.get("diagnostics", {}) or {}),
+         **dict(getattr(record.get("observation"), "diagnostics", {}) or {})}
+        for record in records
+    ]
+    diagnostics["reused_count"] = sum(
+        1 for record in records if record.get("disposition") == "reused"
+    )
 
     if cancelled:
         final_state = "cancelled"
