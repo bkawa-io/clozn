@@ -64,7 +64,7 @@ from .selections import (
 from .state import ExecutionState
 from .state_ref import (
     AnswerTokenBoundary, RecordedAnswerBoundary, ResolvedState, StateRef, StateRefError,
-    enumerate_answer_boundaries, list_answer_token_boundaries, resolve_state,
+    enumerate_answer_boundaries, list_answer_token_boundaries, operation_readiness, resolve_state,
 )
 from .search import (
     BEST_VERIFIED, INCLUSION_MINIMUM, SearchBudget, SearchEvidenceRef, SearchResult,
@@ -79,7 +79,7 @@ __all__ = ["REGISTRY", "catalog", "run_experiment", "substrate_ok", "MANIFEST_SC
            "RESULT_SCHEMA", "list_result_paths", "load_manifest", "load_result", "results_directory",
            "run_manifest", "select_cells", "validate_manifest", "validate_result",
            "ExecutionState", "StateRef", "AnswerTokenBoundary", "RecordedAnswerBoundary", "ResolvedState", "StateRefError",
-           "enumerate_answer_boundaries", "list_answer_token_boundaries", "resolve_state", "ContextSelection", "DeleteSource", "ForceToken", "Intervention",
+           "enumerate_answer_boundaries", "list_answer_token_boundaries", "operation_readiness", "resolve_state", "ContextSelection", "DeleteSource", "ForceToken", "Intervention",
            "intervention_from_dict", "ExactReferenceMatch", "ScoreRecordedContinuation", "Generate",
            "AnswerSelection", "ResolvedAnswerSelection",
            "AnswerSelectionUnavailable", "Experiment", "ExperimentArm", "Observation",

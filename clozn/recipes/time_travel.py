@@ -19,7 +19,8 @@ from clozn.experiments.observations import GeneratedObservation
 from clozn.experiments.persistence import ObservationStore
 from clozn.experiments.runner import run_experiment
 from clozn.experiments.state_ref import (
-    ResolvedState, StateRef, StateRefError, enumerate_answer_boundaries, list_answer_token_boundaries, resolve_state,
+    ResolvedState, StateRef, StateRefError, enumerate_answer_boundaries, list_answer_token_boundaries,
+    operation_readiness, resolve_state,
 )
 
 TIME_TRAVEL_RESULT_SCHEMA_VERSION = "clozn.time-travel-result.v1"
@@ -79,6 +80,20 @@ class TimeTravelResult:
         return str(self.operation.get("kind") or "")
 
     def to_dict(self) -> dict[str, Any]:
+        operation_readiness_value = self.diagnostics.get("operation_readiness")
+        if not isinstance(operation_readiness_value, Mapping):
+            operation_readiness_value = operation_readiness(
+                self.resolved_state,
+                operation=self.operation_kind or "continue",
+                token_id=self.operation.get("token_id"),
+                token_piece=self.operation.get("token_piece"),
+            )
+        continue_readiness = operation_readiness_value if self.operation_kind == "continue" else operation_readiness(
+            self.resolved_state, operation="continue",
+        )
+        force_readiness = operation_readiness_value if self.operation_kind == "force_token" else operation_readiness(
+            self.resolved_state, operation="force_token",
+        )
         return {
             "schema_version": TIME_TRAVEL_RESULT_SCHEMA_VERSION,
             "run_id": self.run_id, "state_ref": self.state_ref.to_dict(),
@@ -87,8 +102,8 @@ class TimeTravelResult:
             "status": self.status, "resolution": self.resolution, "fidelity": self.fidelity,
             "operation_kind": self.operation_kind, "continuation": deepcopy(dict(self.continuation)),
             "available_operations": {
-                "continue": self.resolved_state.available,
-                "force_token": self.resolved_state.available,
+                "continue": deepcopy(dict(continue_readiness)),
+                "force_token": deepcopy(dict(force_readiness)),
             },
             "reason_code": self.diagnostics.get("reason_code"),
             "reason": self.diagnostics.get("message") or self.diagnostics.get("reason"),
@@ -144,6 +159,56 @@ def _parent_generation_contract(run: Mapping[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def checkpoint_reference_from_pin(pin_result: Mapping[str, Any], *, run_id: str) -> dict[str, Any] | None:
+    """Project a verified durable pin into the execution-fork planner's reference shape.
+
+    The pin store deliberately returns the complete export envelope because checkpoint hydration
+    needs its bytes.  State planning must not pass that envelope to ``plan_execution_fork`` as if it
+    were a live worker reference; this projection keeps the two contracts explicit and carries only
+    the immutable planner facts.  The execution seam remains responsible for importing/hydrating the
+    envelope when the selected worker needs it.
+    """
+    if not isinstance(pin_result, Mapping) or pin_result.get("ok") is not True:
+        return None
+    direct = pin_result.get("checkpoint_reference")
+    if isinstance(direct, Mapping):
+        return dict(direct)
+    manifest = pin_result.get("manifest")
+    envelope = pin_result.get("envelope")
+    if isinstance(envelope, Mapping) and all(name in envelope for name in
+                                             ("checkpoint_id", "worker_generation_id", "state", "parent_run_id")):
+        return dict(envelope)
+    source = manifest.get("source") if isinstance(manifest, Mapping) else None
+    state = envelope.get("state") if isinstance(envelope, Mapping) else None
+    if not isinstance(source, Mapping) or not isinstance(state, Mapping):
+        return None
+    checkpoint_id = source.get("checkpoint_id")
+    generation = source.get("worker_generation_id")
+    if not all(isinstance(value, str) and value for value in (checkpoint_id, generation)):
+        return None
+    parent_id = manifest.get("run_id") if isinstance(manifest, Mapping) else None
+    parent_id = parent_id if isinstance(parent_id, str) and parent_id else run_id
+    reference = {
+        "checkpoint_id": checkpoint_id,
+        "worker_generation_id": generation,
+        "state": "available",
+        "parent_run_id": parent_id,
+        "prompt_tokens": state.get("prompt_tokens"),
+        "n_past": state.get("n_past"),
+    }
+    return reference if all(reference.get(name) is not None for name in
+                            ("prompt_tokens", "n_past")) else None
+
+
+def checkpoint_reference(value: Mapping[str, Any] | None, *, run_id: str) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    required = ("checkpoint_id", "worker_generation_id", "state", "parent_run_id")
+    if all(name in value for name in required):
+        return dict(value)
+    return checkpoint_reference_from_pin(value, run_id=run_id)
+
+
 def _generate(run: Mapping[str, Any], *, max_new: int, decode_mode: str | None,
               sampling: Mapping[str, Any] | None, stop: list[str] | tuple[str, ...] | None) -> Generate:
     contract = _parent_generation_contract(run)
@@ -185,6 +250,34 @@ def _continuation(observation: GeneratedObservation | None, *, status: str = "un
     }
 
 
+def _readiness(resolved: ResolvedState, *, operation: Mapping[str, Any],
+               decode_mode: str | None = None) -> dict[str, Any]:
+    return operation_readiness(
+        resolved,
+        operation=str(operation.get("kind") or "continue"),
+        token_id=operation.get("token_id"), token_piece=operation.get("token_piece"),
+        decode_mode=decode_mode,
+    )
+
+
+def _confirmed_readiness(value: Mapping[str, Any], observation: GeneratedObservation) -> dict[str, Any]:
+    """Promote only the operation that produced completed direct evidence."""
+    result = deepcopy(dict(value))
+    result.update({
+        "available": True,
+        "plannable": True,
+        "state": "confirmed",
+        "proof_status": "confirmed" if observation.fidelity_classification == "exact_execution_fork" else "not_applicable",
+        "reason_code": "exact_confirmed" if observation.fidelity_classification == "exact_execution_fork" else "reconstructed_replay",
+    })
+    if isinstance(result.get("sampler"), Mapping):
+        sampler = dict(result["sampler"])
+        if observation.fidelity_classification == "exact_execution_fork":
+            sampler["status"] = "confirmed" if observation.fidelity.get("sampler_state") == "confirmed" else "not_required"
+        result["sampler"] = sampler
+    return result
+
+
 def resolve_time_travel(run: Mapping[str, Any], *, position: int, policy: str = "exact_preferred",
                         checkpoint: Mapping[str, Any] | None = None, runtime_identity: Mapping[str, Any] | None = None,
                         worker_identity: Mapping[str, Any] | None = None, token_id: int | None = None,
@@ -204,11 +297,13 @@ def resolve_time_travel(run: Mapping[str, Any], *, position: int, policy: str = 
     except StateRefError as exc:
         code = "invalid_resolution_policy" if "unsupported state resolution" in str(exc) else "exact_restore_unavailable"
         raise TimeTravelError(str(exc), code=code) from exc
-    status = "ready" if resolved.available else "unavailable"
+    readiness = _readiness(resolved, operation=operation)
+    status = "ready" if resolved.available and readiness.get("plannable", False) else "unavailable"
+    diagnostics = {**dict(resolved.diagnostics), "operation_readiness": readiness}
     return TimeTravelResult(
         run_id=state_ref.run_id, state_ref=state_ref, resolved_state=resolved, operation=operation,
         experiment_id=None, arm_id=None, observation_id=None, status=status, continuation={"status": status},
-        branch_point=_branch_point(run, state_ref), diagnostics=deepcopy(resolved.diagnostics),
+        branch_point=_branch_point(run, state_ref), diagnostics=deepcopy(diagnostics),
     )
 
 
@@ -252,6 +347,15 @@ def run_time_travel(
             continuation={"status": "unavailable", "diagnostics": {"reason_code": exc.code, "message": str(exc)}},
             branch_point=branch_point, diagnostics={"reason_code": exc.code, "message": str(exc)},
         )
+    readiness = _readiness(resolved, operation=operation, decode_mode=evaluator.decode_mode)
+    if not readiness.get("plannable", False):
+        diagnostics = {**dict(resolved.diagnostics), "operation_readiness": readiness}
+        return TimeTravelResult(
+            run_id=state_ref.run_id, state_ref=state_ref, resolved_state=resolved, operation=operation,
+            experiment_id=None, arm_id=None, observation_id=None, status="unavailable",
+            continuation={"status": "unavailable", "diagnostics": diagnostics},
+            branch_point=branch_point, diagnostics=diagnostics,
+        )
     experiment = Experiment(base=resolved, evaluator=evaluator, arms=[intervention])
     adapter = execution_adapter
     if adapter is None:
@@ -266,6 +370,7 @@ def run_time_travel(
     observation = arm.observation if arm is not None else None
     if isinstance(observation, GeneratedObservation) and observation.status == "completed":
         status = "completed"
+        readiness = _confirmed_readiness(readiness, observation)
     elif isinstance(observation, GeneratedObservation) and observation.status == "failed":
         status = "failed"
     elif arm is not None and (
@@ -276,7 +381,10 @@ def run_time_travel(
         status = "failed"
     else:
         status = "unavailable"
-    diagnostics = {**dict(result.diagnostics), **dict(arm.diagnostics if arm is not None else {})}
+    diagnostics = {
+        **dict(result.diagnostics), **dict(arm.diagnostics if arm is not None else {}),
+        "operation_readiness": readiness,
+    }
     return TimeTravelResult(
         run_id=state_ref.run_id, state_ref=state_ref, resolved_state=resolved, operation=operation,
         experiment_id=result.experiment_id, arm_id=arm.arm_id if arm is not None else None,
@@ -292,25 +400,137 @@ def time_travel_capabilities(run: Mapping[str, Any], *, checkpoint: Mapping[str,
     """Expose cheap Run-bound capabilities without trial execution."""
     try:
         boundaries = enumerate_answer_boundaries(run)
-        exact = reconstructed = False
-        if boundaries:
-            ref = StateRef.before_answer_token(run, boundaries[0].index)
-            reconstructed = resolve_state(ref, run=run, policy="reconstructed_only").available
-            exact = checkpoint is not None and resolve_state(
-                ref, run=run, policy="exact_required", checkpoint=checkpoint,
-                runtime_identity=runtime_identity, worker_identity=worker_identity).available
+        pin_status: dict[str, Any] = {"state": "not_requested"}
+        if checkpoint is None:
+            try:
+                from clozn.replay.checkpoint_pin_store import resolve_pin
+                pinned = resolve_pin(run.get("id"))
+            except Exception as exc:
+                pinned = {"unavailable": f"checkpoint pin lookup failed: {type(exc).__name__}"}
+            if isinstance(pinned, Mapping) and pinned.get("ok") is True and isinstance(pinned.get("envelope"), Mapping):
+                checkpoint = checkpoint_reference_from_pin(pinned, run_id=str(run.get("id") or ""))
+                if checkpoint is None:
+                    pin_status = {
+                        "state": "unavailable", "reason_code": "checkpoint_pin_unavailable",
+                        "reason": "the durable checkpoint pin has no valid planner reference",
+                    }
+                    checkpoint = None
+                else:
+                    pin_status = {
+                        "state": "stored", "pin_id": (pinned.get("manifest") or {}).get("pin_id"),
+                    }
+            else:
+                pin_reason = str((pinned or {}).get("unavailable") or "no durable checkpoint is pinned for this run")
+                pin_code = "checkpoint_missing" if "has no pinned checkpoint" in pin_reason else "checkpoint_pin_unavailable"
+                pin_status = {
+                    "state": "unavailable", "reason_code": pin_code, "reason": pin_reason,
+                }
+        else:
+            checkpoint = checkpoint_reference(checkpoint, run_id=str(run.get("id") or ""))
+
+        if not boundaries:
+            unavailable = {
+                "available": False, "state": "unavailable", "reason_code": "token_trace_unavailable",
+                "reason": "the run has no aligned recorded answer-token history",
+            }
+            return {
+                "answer_token_boundaries": {**unavailable, "count": 0},
+                "exact_checkpoint_restore": unavailable, "reconstructed_replay": unavailable,
+                "available_operations": {"continue": unavailable, "force_token": unavailable},
+                "generate": unavailable, "force_token": unavailable,
+                "sampler_restore": {**unavailable, "required": True}, "checkpoint": pin_status,
+            }
+
+        ref = StateRef.before_answer_token(run, boundaries[0].index)
+        # A capability read has no live worker selection.  The parent runtime is a static identity
+        # fact, and a durable pin supplies the worker generation needed to classify an exact plan.
+        # The synthetic worker label is explicitly planning-only and is never used for execution.
+        from clozn.replay.execution_fork import parent_runtime_projection
+        static_runtime = runtime_identity or parent_runtime_projection(run)
+        static_worker = worker_identity
+        if static_worker is None and isinstance(checkpoint, Mapping):
+            checkpoint_identity = checkpoint.get("identity")
+            generation = checkpoint.get("worker_generation_id")
+            if generation is None and isinstance(checkpoint_identity, Mapping):
+                generation = checkpoint_identity.get("worker_generation_id")
+            if isinstance(generation, str) and generation:
+                static_worker = {
+                    "worker_id": "planning-only:pinned-checkpoint",
+                    "worker_generation_id": generation,
+                    "protocol_version": "1.0",
+                }
+        reconstructed_state = resolve_state(
+            ref, run=run, policy="reconstructed_only",
+        )
+        exact_state = resolve_state(
+            ref, run=run, policy="exact_required", checkpoint=checkpoint,
+            runtime_identity=static_runtime, worker_identity=static_worker,
+        ) if checkpoint is not None else ResolvedState(
+            state_ref=ref, classification="unavailable", proof_status="not_available",
+            realization={"regime": "unavailable"},
+            diagnostics={"reason_code": "checkpoint_missing", "message": "exact resolution requires a checkpoint reference"},
+        )
+        continue_state = exact_state if exact_state.available else reconstructed_state
+        continue_ready = operation_readiness(continue_state, operation="continue")
+        force_ready = operation_readiness(continue_state, operation="force_token")
+        exact_projection = {
+            "available": exact_state.available,
+            "state": "planned" if exact_state.available else "unavailable",
+            "proof_status": exact_state.proof_status,
+            "reason_code": exact_state.diagnostics.get("reason_code"),
+            "reason": exact_state.diagnostics.get("message"),
+            "classification": exact_state.classification,
+        }
+        if pin_status.get("reason_code") == "checkpoint_pin_unavailable":
+            exact_projection.update({
+                "reason_code": pin_status["reason_code"], "reason": pin_status.get("reason"),
+            })
+        reconstructed_projection = {
+            "available": reconstructed_state.available,
+            "state": "available" if reconstructed_state.available else "unavailable",
+            "proof_status": reconstructed_state.proof_status,
+            "reason_code": reconstructed_state.diagnostics.get("reason_code"),
+            "reason": reconstructed_state.diagnostics.get("message"),
+            "classification": reconstructed_state.classification,
+            "unavoidable_differences": reconstructed_state.realization.get("unavoidable_differences", []),
+        }
         return {
-            "answer_token_boundaries": {"available": bool(boundaries), "count": len(boundaries)},
-            "exact_checkpoint_restore": {"available": exact}, "reconstructed_replay": {"available": reconstructed},
-            "generate": {"available": exact or reconstructed}, "force_token": {"available": exact or reconstructed},
-            "sampler_restore": {"available": exact},
+            "answer_token_boundaries": {"available": True, "state": "available", "count": len(boundaries)},
+            "exact_checkpoint_restore": exact_projection,
+            "reconstructed_replay": reconstructed_projection,
+            "available_operations": {"continue": continue_ready, "force_token": force_ready},
+            # Keep these names as projections for existing clients, but make them operation-aware
+            # instead of aliases of one global state boolean.
+            "generate": {**continue_ready, "operation": "continue"},
+            "force_token": {**force_ready, "operation": "force_token"},
+            "sampler_restore": {
+                # Planning an exact checkpoint is not sampler proof.  Only a completed execution
+                # receipt may ever turn this into available=true.
+                "available": continue_ready.get("sampler", {}).get("status") == "confirmed",
+                "state": (
+                    "unavailable" if continue_ready.get("sampler", {}).get("status") == "unbound"
+                    else "not_required" if continue_ready.get("sampler", {}).get("status") == "not_required"
+                    else "requires_verification" if exact_state.available
+                    else "unavailable"
+                ),
+                "required": bool(continue_ready.get("sampler", {}).get("required")),
+                "reason_code": (
+                    "stochastic_execution_unbound" if continue_ready.get("sampler", {}).get("status") == "unbound" else
+                    None if continue_ready.get("sampler", {}).get("status") == "not_required" else
+                    "sampler_state_requires_execution_proof" if exact_state.available else
+                    exact_state.diagnostics.get("reason_code")
+                ),
+            },
+            "checkpoint": pin_status,
         }
     except StateRefError as exc:
+        unavailable = {"available": False, "state": "unavailable", "reason_code": "token_trace_unavailable", "reason": str(exc)}
         return {
-            "answer_token_boundaries": {"available": False, "reason_code": "token_trace_unavailable"},
-            "exact_checkpoint_restore": {"available": False}, "reconstructed_replay": {"available": False},
-            "generate": {"available": False}, "force_token": {"available": False},
-            "sampler_restore": {"available": False}, "reason": str(exc),
+            "answer_token_boundaries": unavailable,
+            "exact_checkpoint_restore": unavailable, "reconstructed_replay": unavailable,
+            "available_operations": {"continue": unavailable, "force_token": unavailable},
+            "generate": unavailable, "force_token": unavailable,
+            "sampler_restore": {**unavailable, "required": True}, "reason": str(exc),
         }
 
 
@@ -341,5 +561,5 @@ time_travel = run_time_travel
 __all__ = [
     "TIME_TRAVEL_RESULT_SCHEMA_VERSION", "TimeTravelError", "TimeTravelResult", "continue_from_here",
     "enumerate_answer_boundaries", "list_answer_token_boundaries", "force_token_and_continue", "materialize_time_travel", "resolve_time_travel",
-    "run_time_travel", "time_travel", "time_travel_capabilities",
+    "run_time_travel", "time_travel", "time_travel_capabilities", "checkpoint_reference", "checkpoint_reference_from_pin",
 ]

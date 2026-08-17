@@ -466,11 +466,18 @@ def materialize_generated_observation(
             "observation_id": observation.observation_id,
             "base_state": {
                 "run_id": resolved.base.run_id,
+                "execution_fingerprint": resolved.base.execution_fingerprint,
+                "state_ref": resolved.base.state_ref.to_dict(),
                 "position": resolved.base.position.to_dict(),
+                "resolved_classification": resolved.base.classification,
+                "resolved_proof_status": resolved.base.proof_status,
+                "realization_fingerprint": resolved.base.realization_fingerprint,
                 "realized_fidelity": observation.fidelity_classification,
+                "fidelity": deepcopy(observation.fidelity),
             },
             "operation": "force_token" if arm.intervention is not None else "continue",
             "intervention": intervention,
+            "exact_control_proof": deepcopy(observation.exact_control_proof),
         },
     }
     child_id = run_store.record(
@@ -493,12 +500,16 @@ def materialize_generated_observation(
             "arm_id": arm_id, "observation_id": observation.observation_id,
             "reason": "run_persistence_failed",
         }
+    child = run_store.get_run(child_id)
+    comparison = diff_runs(current_parent, child) if isinstance(child, Mapping) else None
     return {
         "schema_version": SCHEMA_VERSION, "state": "completed", "child_run_id": child_id,
         "parent_run_id": current_parent["id"], "experiment_id": resolved.experiment_id,
         "arm_id": arm_id, "observation_id": observation.observation_id,
         "realized_fidelity": observation.fidelity_classification,
         "trace_state": "available" if child_trace is not None else "unavailable",
+        "comparison": comparison,
+        "compare_path": f"#/compare/{current_parent['id']}/{child_id}",
     }
 
 

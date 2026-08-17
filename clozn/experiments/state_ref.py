@@ -407,6 +407,140 @@ def _reconstructed(state_ref: StateRef, *, plan: Mapping[str, Any] | None = None
     )
 
 
+def _model_free_reconstruction_plan(state_ref: StateRef, source: Mapping[str, Any]) -> dict[str, Any]:
+    """Build the small reconstruction plan when no live identity is available.
+
+    ``plan_execution_fork`` deliberately requires a selected worker because its normal caller is
+    preparing a live fork.  A read-only capability request, and a reconstructed experiment, do not
+    need a worker identity: the replay path uses the recorded prompt and explicitly reports that KV,
+    sampler state, and batch shape are not restored.  Keep the plan's semantic fields aligned with
+    the execution-fork planner without manufacturing a live worker binding.
+    """
+    from clozn.replay.execution_fork import RECONSTRUCTION_DIFFERENCES
+
+    return {
+        "classification": "reconstructed_replay",
+        "parent_run_id": source.get("id"),
+        "request": {
+            "position": state_ref.position.index,
+            "change": {"type": "none"},
+            "execution_change": {"type": "none"},
+        },
+        "exactness": {
+            "regime": "reconstructed_text",
+            "source": "text_retokenization",
+            "proof_status": "not_applicable",
+        },
+        "unavoidable_differences": list(RECONSTRUCTION_DIFFERENCES),
+        "unchanged_control": {"required": True, "status": "required_not_run"},
+        "reasons": [{
+            "code": "checkpoint_not_supplied",
+            "message": "no exact checkpoint was supplied; the eligible path explicitly reconstructs text",
+        }],
+    }
+
+
+def operation_readiness(
+    resolved_state: "ResolvedState", *, operation: str,
+    token_id: int | None = None, token_piece: str | None = None,
+    decode_mode: str | None = None,
+) -> dict[str, Any]:
+    """Classify whether one Continue/ForceToken operation is requestable.
+
+    This is a planning projection only.  ``available`` means that the operation can be sent to the
+    execution seam without violating its input contract; it never means that an exact operation has
+    already established fidelity.  Exact operations therefore remain ``requires_verification``
+    until the unchanged control and worker receipt confirm them.
+    """
+    if not isinstance(resolved_state, ResolvedState):
+        raise TypeError("operation_readiness requires a ResolvedState")
+    if operation not in {"continue", "force_token"}:
+        raise StateRefError(f"unsupported time-travel operation: {operation!r}")
+
+    classification = resolved_state.classification
+    base: dict[str, Any] = {
+        "available": False,
+        "plannable": classification != "unavailable",
+        "state": "unavailable" if classification == "unavailable" else "requires_verification",
+        "resolution": classification,
+        "proof_status": resolved_state.proof_status,
+        "sampler": {
+            "required": classification == "exact_execution_fork",
+            "status": "not_required" if classification == "reconstructed_replay" else "requires_control_proof",
+        },
+    }
+    if classification == "unavailable":
+        base["reason_code"] = resolved_state.diagnostics.get("reason_code", "state_unavailable")
+        base["reason"] = resolved_state.diagnostics.get("message", "the resolved state is unavailable")
+        return base
+
+    contract = resolved_state.execution.generation_contract
+    recorded_mode = contract.get("decode_mode") if isinstance(contract, Mapping) else None
+    mode = decode_mode or recorded_mode or "greedy"
+    if mode not in {"greedy", "sample"}:
+        base.update({
+            "state": "unavailable", "plannable": False,
+            "reason_code": "generation_contract_incomplete",
+            "reason": "the recorded generation contract does not identify greedy or sampled decoding",
+        })
+        return base
+    base["sampler"] = {
+        "required": mode == "sample",
+        "mode": mode,
+        "status": (
+            "unbound" if mode == "sample"
+            else "not_required" if classification == "reconstructed_replay"
+            else "not_required" if mode == "greedy"
+            else "requires_control_proof"
+        ),
+    }
+    if mode == "sample":
+        base.update({
+            "state": "unavailable", "plannable": False,
+            "reason_code": "stochastic_execution_unbound",
+            "reason": "the current replay protocol does not bind the sampler/RNG state for a reusable continuation",
+        })
+        return base
+
+    if operation == "continue":
+        if classification == "reconstructed_replay":
+            base.update({"available": True, "state": "available", "proof_status": "not_applicable"})
+        else:
+            base.update({
+                "reason_code": "exact_control_required",
+                "reason": "exact Continue requires a matching unchanged control before fidelity is confirmed",
+            })
+        return base
+
+    # ForceToken owns the replacement token, while StateRef owns its location.  The missing-input
+    # branches are intentionally explicit so a capability client cannot mistake state availability
+    # for intervention readiness.
+    if classification == "exact_execution_fork" and token_id is None:
+        base.update({
+            "state": "requires_input", "plannable": False,
+            "required_inputs": ["token_id"],
+            "reason_code": "force_token_id_required",
+            "reason": "exact ForceToken execution requires a numeric token_id",
+        })
+        return base
+    if classification == "reconstructed_replay" and token_piece is None:
+        base.update({
+            "available": False, "state": "requires_input", "plannable": False,
+            "required_inputs": ["token_piece"],
+            "reason_code": "reconstruction_token_piece_unavailable",
+            "reason": "reconstructed ForceToken execution requires token_piece",
+        })
+        return base
+    if classification == "reconstructed_replay":
+        base.update({"available": True, "state": "available", "proof_status": "not_applicable"})
+    else:
+        base.update({
+            "reason_code": "exact_control_required",
+            "reason": "exact ForceToken execution requires a matching unchanged control before fidelity is confirmed",
+        })
+    return base
+
+
 def resolve_state(state_ref: StateRef, *, run: Mapping[str, Any] | None = None,
                   parent_run: Mapping[str, Any] | None = None,
                   policy: str = "exact_preferred", checkpoint: Mapping[str, Any] | None = None,
@@ -434,16 +568,23 @@ def resolve_state(state_ref: StateRef, *, run: Mapping[str, Any] | None = None,
         if not prerequisites["final_prompt_available"]:
             return _unavailable(state_ref, "reconstruction_prompt_unavailable",
                                 "the parent has no exact rendered prompt for reconstruction")
-        plan = plan_execution_fork(
-            source, {"position": state_ref.position.index, "change": {"type": "none"}},
-            checkpoint=None, worker_identity=worker_identity, runtime_identity=runtime_identity,
-        )
-        if plan.get("classification") != "reconstructed_replay":
-            reason = (plan.get("reasons") or [{}])[0]
-            return _unavailable(
-                state_ref, str(reason.get("code") or "reconstruction_unavailable"),
-                str(reason.get("message") or "reconstructed replay is unavailable"), plan=plan,
+        # Preserve exact parity with the trusted planner when live identities are supplied.  A
+        # model-free caller such as GET /capabilities is allowed to plan reconstructed replay from
+        # recorded evidence alone, so it uses the explicit model-free projection instead of
+        # manufacturing a worker identity.
+        if runtime_identity is not None or worker_identity is not None:
+            plan = plan_execution_fork(
+                source, {"position": state_ref.position.index, "change": {"type": "none"}},
+                checkpoint=None, worker_identity=worker_identity, runtime_identity=runtime_identity,
             )
+            if plan.get("classification") != "reconstructed_replay":
+                reason = (plan.get("reasons") or [{}])[0]
+                return _unavailable(
+                    state_ref, str(reason.get("code") or "reconstruction_unavailable"),
+                    str(reason.get("message") or "reconstructed replay is unavailable"), plan=plan,
+                )
+        else:
+            plan = _model_free_reconstruction_plan(state_ref, source)
         return _reconstructed(state_ref, plan=plan, reason_code="checkpoint_not_supplied")
     if checkpoint is None:
         return _unavailable(state_ref, "checkpoint_missing", "exact resolution requires a checkpoint reference")
@@ -480,5 +621,5 @@ __all__ = [
     "list_answer_token_boundaries",
     "RESOLUTION_POLICIES", "RESOLVED_STATE_SCHEMA_VERSION",
     "ResolvedState", "STATE_CLASSIFICATIONS", "STATE_REF_SCHEMA_VERSION", "StateRef",
-    "StateRefError", "resolve_state",
+    "StateRefError", "operation_readiness", "resolve_state",
 ]

@@ -17,7 +17,8 @@ from clozn.experiments.runner import run_experiment
 from clozn.experiments.state import ExecutionState
 from clozn.experiments.state_ref import StateRef, StateRefError, resolve_state
 from clozn.recipes.time_travel import (
-    enumerate_answer_boundaries, materialize_time_travel, run_time_travel,
+    enumerate_answer_boundaries, materialize_time_travel, resolve_time_travel,
+    run_time_travel, time_travel_capabilities,
 )
 from clozn.runs import store as run_store
 from clozn.replay.execution_fork import plan_execution_fork
@@ -161,6 +162,79 @@ def test_state_ref_rejects_stale_execution_and_exact_planning_is_not_confirmatio
     )
     assert resolved.plan["classification"] == oracle["classification"]
     assert resolved.plan["exactness"] == oracle["exactness"]
+
+
+def test_capabilities_are_model_free_pin_aware_and_do_not_claim_exact_proof(monkeypatch):
+    run = _run()
+    seen = []
+
+    def resolve_pin(run_id):
+        seen.append(run_id)
+        reference = _exact_checkpoint(run)
+        return {
+            "ok": True,
+            "manifest": {
+                "pin_id": "pin_fixture", "run_id": run_id,
+                "source": {
+                    "checkpoint_id": reference["checkpoint_id"],
+                    "worker_generation_id": reference["worker_generation_id"],
+                },
+            },
+            "envelope": {"state": {"prompt_tokens": reference["prompt_tokens"], "n_past": reference["n_past"]}},
+        }
+
+    monkeypatch.setattr("clozn.replay.checkpoint_pin_store.resolve_pin", resolve_pin)
+    capabilities = time_travel_capabilities(run)
+
+    assert seen == [run["id"]]
+    assert capabilities["answer_token_boundaries"]["available"] is True
+    assert capabilities["exact_checkpoint_restore"]["state"] == "planned"
+    assert capabilities["exact_checkpoint_restore"]["proof_status"] == "planned"
+    assert capabilities["sampler_restore"]["available"] is False
+    assert capabilities["sampler_restore"]["state"] == "not_required"
+    assert capabilities["available_operations"]["continue"]["reason_code"] == "exact_control_required"
+    assert capabilities["available_operations"]["force_token"]["reason_code"] == "force_token_id_required"
+
+
+def test_operation_readiness_distinguishes_reconstructed_continue_and_force_input():
+    run = _run()
+    resolved = resolve_time_travel(
+        run, position=1, policy="reconstructed_only", token_id=77,
+    )
+    operations = resolved.to_dict()["available_operations"]
+    assert operations["continue"]["available"] is True
+    assert operations["force_token"]["available"] is False
+    assert operations["force_token"]["reason_code"] == "reconstruction_token_piece_unavailable"
+
+
+def test_reopened_generated_evidence_materializes_without_touching_engine(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_store, "RUNS_DIR", str(tmp_path / "runs"))
+    run_store._schema_verified.clear()
+    run = _run()
+    substrate = ReconstructedSubstrate()
+    first_store = ObservationStore()
+    result = run_time_travel(
+        run, position=1, token_piece="ALT", max_new=2, policy="reconstructed_only", substrate=substrate,
+        observation_store=first_store, runtime_identity=RUNTIME, worker_identity=WORKER,
+    )
+    assert result.status == "completed"
+
+    reopened = ObservationStore()
+    calls = len(substrate.engine.calls)
+    materialized = materialize_time_travel(
+        run, result.experiment_id, arm_id=result.arm_id, observation_id=result.observation_id,
+        observation_store=reopened,
+    )
+    assert materialized["state"] == "completed"
+    assert len(substrate.engine.calls) == calls
+    child = run_store.get_run(materialized["child_run_id"])
+    lineage = child["changes_applied"]["experiment"]
+    assert lineage["base_state"]["execution_fingerprint"]
+    assert lineage["base_state"]["state_ref"]["position"]["index"] == 1
+    assert lineage["base_state"]["resolved_classification"] == "reconstructed_replay"
+    assert lineage["base_state"]["resolved_proof_status"] == "planned"
+    assert lineage["operation"] == "force_token"
+    assert lineage["intervention"] == {"kind": "force_token", "token_piece": "ALT"}
 
 
 def test_force_token_and_generate_identity_include_state_token_and_budget():

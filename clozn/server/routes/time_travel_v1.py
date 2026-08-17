@@ -35,18 +35,20 @@ def _run(h, run_id: str):
 
 
 def _checkpoint(run_id: str, body: Mapping[str, object] | None):
+    from clozn.recipes.time_travel import checkpoint_reference, checkpoint_reference_from_pin
     if isinstance(body, Mapping):
         for key in ("checkpoint_reference", "checkpoint"):
             value = body.get(key)
             if isinstance(value, Mapping):
-                return value
+                reference = checkpoint_reference(value, run_id=run_id)
+                if reference is not None:
+                    return reference
     try:
         from clozn.replay.checkpoint_pin_store import resolve_pin
         resolved = resolve_pin(run_id)
-        envelope = resolved.get("envelope") if isinstance(resolved, Mapping) and resolved.get("ok") is True else None
-        if isinstance(envelope, Mapping):
-            reference = envelope.get("checkpoint_reference")
-            return reference if isinstance(reference, Mapping) else envelope
+        reference = checkpoint_reference_from_pin(resolved, run_id=run_id)
+        if reference is not None:
+            return reference
     except Exception:
         pass
     return None
@@ -92,6 +94,8 @@ def try_get(h, path):
         return True
     if tail == "/capabilities":
         try:
+            # The recipe resolves the durable pin read-only.  No worker selection or model call is
+            # allowed on this GET; the pin is only a static input to exact state planning.
             h._json(200, {"run_id": run_id, "capabilities": time_travel_capabilities(run)})
         except Exception as exc:
             h._json(422, {"status": "unavailable", "error": str(exc), "code": "capabilities_unavailable"})
@@ -154,9 +158,9 @@ def try_post(h, path, body):
                 raise TimeTravelError("experiment_id, arm_id, and observation_id are required", code="materialization_failed")
             import clozn.runs.store as runlog
             from clozn.experiments.persistence import ObservationStore
-            from clozn.experiments.materialize import materialize_generated_observation
-            result = materialize_generated_observation(
-                run, str(experiment_id), str(arm_id), observation_id=str(observation_id),
+            from clozn.recipes.time_travel import materialize_time_travel
+            result = materialize_time_travel(
+                run, str(experiment_id), arm_id=str(arm_id), observation_id=str(observation_id),
                 observation_store=ObservationStore(), reload_parent=runlog.get_run,
             )
             h._json(201 if result.get("state") == "completed" else 409, result)

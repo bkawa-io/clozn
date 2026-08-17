@@ -26,7 +26,7 @@ from .effective_prompt import resolve_effective_prompt
 from .interventions import DeleteSource, ForceToken
 from .observations import GeneratedObservation, execution_observation_identity
 from .state import ExecutionState, digest
-from .state_ref import ResolvedState, StateRefError
+from .state_ref import ResolvedState, StateRefError, operation_readiness
 
 class GenerateExecutionError(ValueError):
     """A Generate arm cannot produce honest standalone evidence."""
@@ -258,7 +258,7 @@ class GenerateExecutionAdapter:
                 "the unchanged exact control diverged; exact intervention was not run",
                 diagnostics={"control_proof": deepcopy(proof)},
             )
-        if proof_receipt.get("sampler_state_preserved") is not True:
+        if evaluator.decode_mode == "sample" and proof_receipt.get("sampler_state_preserved") is not True:
             return _unavailable(
                 resolved, evaluator, None, "sampler_state_unavailable",
                 "exact Generate requires a captured and verified sampler state",
@@ -273,7 +273,8 @@ class GenerateExecutionAdapter:
             **_identity_kwargs(resolved, evaluator, None), status="completed", state_ref=resolved.state_ref,
             realization=resolved.realization,
             fidelity={"classification": "exact_execution_fork", "proof_status": "confirmed",
-                      "exact_match": True, "unchanged_control": "matched"},
+                      "exact_match": True, "unchanged_control": "matched",
+                      "sampler_state": "confirmed" if evaluator.decode_mode == "sample" else "not_required"},
             intervention=None, generated_suffix_text="".join(pieces[position:]),
             generated_token_ids=ids[position:], generated_steps=deepcopy(steps[position:]) if steps else None,
             finish_reason=run.get("finish_reason"), generation_contract=evaluator.to_dict(),
@@ -355,6 +356,12 @@ class GenerateExecutionAdapter:
         evaluator = evaluator or Generate(max_new=1)
         if not isinstance(state, ResolvedState) or not isinstance(evaluator, Generate):
             raise TypeError("Generate control requires ResolvedState and Generate")
+        readiness = operation_readiness(state, operation="continue", decode_mode=evaluator.decode_mode)
+        if not readiness.get("plannable", False):
+            return _unavailable(
+                state, evaluator, None, str(readiness.get("reason_code") or "generation_unavailable"),
+                str(readiness.get("reason") or "Continue is unavailable"),
+            )
         try:
             run = self._validated_run(state)
         except Exception as exc:
@@ -372,6 +379,18 @@ class GenerateExecutionAdapter:
             raise TypeError("Generate execution requires ResolvedState and Generate")
         if intervention is not None and not isinstance(intervention, ForceToken):
             raise TypeError("Generate arms require ForceToken or an unchanged condition")
+        readiness = operation_readiness(
+            state,
+            operation="force_token" if intervention is not None else "continue",
+            token_id=intervention.token_id if intervention is not None else None,
+            token_piece=intervention.token_piece if intervention is not None else None,
+            decode_mode=evaluator.decode_mode,
+        )
+        if not readiness.get("plannable", False):
+            return _unavailable(
+                state, evaluator, intervention, str(readiness.get("reason_code") or "generation_unavailable"),
+                str(readiness.get("reason") or "the requested Generate operation is unavailable"),
+            )
         try:
             run = self._validated_run(state)
         except Exception as exc:
@@ -389,12 +408,6 @@ class GenerateExecutionAdapter:
             # disabled the runner's separate control, this arm still needs
             # the same trusted exact-control proof and evidence.
             return self._control_exact(state, evaluator, run)
-        if intervention is not None and intervention.token_id is None:
-            return _unavailable(state, evaluator, intervention, "force_token_id_required",
-                                "exact ForceToken execution requires a numeric token_id")
-        if evaluator.decode_mode != "greedy":
-            return _unavailable(state, evaluator, intervention, "stochastic_execution_unbound",
-                                "exact Generate requires a verified sampler/RNG state")
         proof = self._control_proofs.get(state.state_fingerprint)
         if not isinstance(proof, Mapping) or proof.get("status") != "matched":
             control = self._control_exact(state, evaluator, run)
@@ -418,7 +431,7 @@ class GenerateExecutionAdapter:
                 intervention={"type": "force_token", "token_id": intervention.token_id},
             )
             receipt = _worker_receipt(reply, plan, {"type": "force_token", "token_id": intervention.token_id})
-            if not _sampler_preserved(reply):
+            if evaluator.decode_mode == "sample" and not _sampler_preserved(reply):
                 return _unavailable(state, evaluator, intervention, "sampler_state_unavailable",
                                     "worker did not verify sampler/RNG preservation")
             text, ids, steps, evidence_error = _worker_evidence(reply)
@@ -460,7 +473,8 @@ class GenerateExecutionAdapter:
             **_identity_kwargs(state, evaluator, intervention), status="completed", state_ref=state.state_ref,
             realization=state.realization,
             fidelity={"classification": "exact_execution_fork", "proof_status": "confirmed",
-                      "exact_match": True, "unchanged_control": "matched"},
+                      "exact_match": True, "unchanged_control": "matched",
+                      "sampler_state": "confirmed" if evaluator.decode_mode == "sample" else "not_required"},
             intervention=intervention, generated_suffix_text=text, generated_token_ids=ids,
             generated_steps=steps, finish_reason=reply.get("finish_reason"),
             generation_contract=evaluator.to_dict(), runtime_provenance={"worker_receipt": receipt},
