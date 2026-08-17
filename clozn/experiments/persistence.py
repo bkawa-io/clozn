@@ -11,13 +11,14 @@ from typing import Any
 from clozn.runs import store as run_store
 
 from .evaluators import Evaluator
-from .interventions import DeleteSource
+from .interventions import DeleteSource, ForceToken, Intervention, intervention_from_dict
 from .kernel import Experiment
 from .observations import (
     Observation, ObservationError, ObservationIntegrityError, TokenScoreObservation,
-    condition_for_intervention,
+    GeneratedObservation, observation_from_dict, condition_for_intervention,
 )
 from .state import ExecutionState, canonical_json
+from .state_ref import ResolvedState
 
 
 EXPERIMENT_STORE_SCHEMA_VERSION = "clozn.experiment-store.v1"
@@ -60,7 +61,7 @@ class ExperimentArmView:
     )
 
     def __init__(self, *, experiment_id: str, arm_id: str, ordinal: int,
-                 intervention: DeleteSource | None, condition: Mapping[str, Any], state: str,
+                 intervention: Intervention | None, condition: Mapping[str, Any], state: str,
                  observation_id: str | None, observation: Observation | None,
                  error: Mapping[str, Any] | None = None, diagnostics: Mapping[str, Any] | None = None):
         self.experiment_id = experiment_id
@@ -121,7 +122,7 @@ class ExperimentView:
         "created_ts", "updated_ts", "requested_by", "persisted",
     )
 
-    def __init__(self, *, experiment_id: str, base: ExecutionState, evaluator: Evaluator,
+    def __init__(self, *, experiment_id: str, base: ExecutionState | ResolvedState, evaluator: Evaluator,
                  control: Observation | None, arm_rows: tuple[ExperimentArmView, ...],
                  state: str, diagnostics: Mapping[str, Any] | None = None,
                  timing: Mapping[str, Any] | None = None,
@@ -252,10 +253,7 @@ class ObservationStore:
         if artifact.get("observation_id") != row["id"] or artifact.get("observation_key_sha256") != row["observation_key_sha256"]:
             raise ObservationIntegrityError("observation artifact identity disagrees with its SQLite row")
         try:
-            if artifact.get("schema_version") == "clozn.experiment-token-score-observation.v2":
-                observation = TokenScoreObservation.from_dict(artifact)
-            else:
-                observation = Observation.from_dict(artifact)
+            observation = observation_from_dict(artifact)
         except ObservationError as exc:
             raise ObservationIntegrityError("observation artifact failed validation") from exc
         if observation.observation_id != row["id"] or observation.observation_key_sha256 != row["observation_key_sha256"]:
@@ -280,9 +278,10 @@ class ObservationStore:
     def persist_observation(self, observation: Observation) -> str:
         if not isinstance(observation, Observation):
             raise TypeError("persist_observation requires an Observation")
-        # ``unavailable``/``failed`` observations are persisted when an adapter
-        # actually attempted execution and returned typed evidence.  The
-        # runner never constructs one for a cancelled or never-started arm.
+        if not observation.completed:
+            raise ObservationPersistenceError(
+                "unavailable or failed evidence is transient and cannot occupy a reusable observation identity"
+            )
         self._ensure()
         artifact_ref = self.runs_store._store_blob(observation.to_dict(), kind="experiment observation")
         if artifact_ref.get("write_failed"):

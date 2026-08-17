@@ -17,7 +17,7 @@ def __getattr__(name):
     raise AttributeError(name)
 
 
-from .evaluators import ExactReferenceMatch, ScoreRecordedContinuation
+from .evaluators import ExactReferenceMatch, ScoreRecordedContinuation, Generate
 from .execution import (
     DeleteSourceExactReferenceAdapter,
     ExecutionAdapter,
@@ -25,12 +25,14 @@ from .execution import (
     resolve_delete_source,
 )
 from .interventions import DeleteSource
+from .interventions import ForceToken, Intervention, intervention_from_dict
 from .kernel import Experiment, ExperimentArm
-from .materialize import MaterializeBranch, materialize_arm
+from .materialize import MaterializeBranch, materialize_arm, materialize_generated_observation
+from .generation import GenerateExecutionAdapter, GenerateExecutionError
 from .observations import (
-    Observation, ObservationError, ObservationIntegrityError, TokenScoreDelta,
+    Observation, ObservationError, ObservationIntegrityError, GeneratedObservation, TokenScoreDelta,
     TokenScoreObservation, condition_for_intervention, execution_observation_identity,
-    observation_identity,
+    observation_from_dict, observation_identity,
 )
 from .persistence import (
     ARM_STATES, EXPERIMENT_STATES, EXPERIMENT_STORE_SCHEMA_VERSION,
@@ -48,6 +50,10 @@ from .selections import (
     resolve_answer_selection,
 )
 from .state import ExecutionState
+from .state_ref import (
+    AnswerTokenBoundary, ResolvedState, StateRef, StateRefError,
+    resolve_state,
+)
 from .suite import (MANIFEST_SCHEMA, RESULT_SCHEMA, list_result_paths, load_manifest, load_result,
                     results_directory, run_manifest, select_cells, validate_manifest, validate_result)
 
@@ -56,11 +62,13 @@ ExperimentStore = ObservationStore
 __all__ = ["REGISTRY", "catalog", "run_experiment", "substrate_ok", "MANIFEST_SCHEMA",
            "RESULT_SCHEMA", "list_result_paths", "load_manifest", "load_result", "results_directory",
            "run_manifest", "select_cells", "validate_manifest", "validate_result",
-           "ExecutionState", "ContextSelection", "DeleteSource", "ExactReferenceMatch",
-           "ScoreRecordedContinuation", "AnswerSelection", "ResolvedAnswerSelection",
+           "ExecutionState", "StateRef", "AnswerTokenBoundary", "ResolvedState", "StateRefError",
+           "resolve_state", "ContextSelection", "DeleteSource", "ForceToken", "Intervention",
+           "intervention_from_dict", "ExactReferenceMatch", "ScoreRecordedContinuation", "Generate",
+           "AnswerSelection", "ResolvedAnswerSelection",
            "AnswerSelectionUnavailable", "Experiment", "ExperimentArm", "Observation",
-           "ObservationError", "ObservationIntegrityError", "condition_for_intervention",
-           "execution_observation_identity", "observation_identity", "TokenScoreObservation",
+           "ObservationError", "ObservationIntegrityError", "GeneratedObservation", "condition_for_intervention",
+           "execution_observation_identity", "observation_from_dict", "observation_identity", "TokenScoreObservation",
            "TokenScoreDelta", "AnswerSpanEffect", "ExperimentResult", "ExperimentArmView",
            "ExperimentView", "ExperimentStore", "ObservationStore", "ObservationNotFound", "ObservationPersistenceError",
            "ExperimentPersistenceError", "ARM_STATES", "EXPERIMENT_STATES",
@@ -71,4 +79,5 @@ __all__ = ["REGISTRY", "catalog", "run_experiment", "substrate_ok", "MANIFEST_SC
            "DeleteSourceScoreAdapter", "RecordedContinuationScoreAdapter",
            "resolve_delete_source", "resolve_answer_selection", "project_answer_effects",
            "project_answer_selection", "experimental_run_experiment", "materialize_arm",
-           "MaterializeBranch"]
+           "materialize_generated_observation", "MaterializeBranch", "GenerateExecutionAdapter",
+           "GenerateExecutionError"]

@@ -6,6 +6,7 @@ from copy import deepcopy
 from typing import Any
 
 from clozn.analysis.model_diff import diff_runs
+from clozn.runs import store as run_store
 from clozn.receipts.rederive import with_arm_conditions
 from clozn.replay.replay import replay as replay_run
 from clozn.replay.span_bridge import ContextReceiptSourceResolutionError
@@ -16,10 +17,12 @@ from .execution import (
     ExecutionStateStaleError,
     resolve_delete_source,
 )
-from .interventions import DeleteSource
+from .interventions import DeleteSource, ForceToken
+from .observations import GeneratedObservation, execution_observation_identity
 from .persistence import ExperimentArmView, ExperimentView, ObservationStore
 from .runner import ExperimentResult
 from .state import ExecutionState
+from .state_ref import ResolvedState
 
 
 SCHEMA_VERSION = "clozn.experiment-materialization.v1"
@@ -194,10 +197,131 @@ def materialize_arm(
     }
 
 
+def materialize_generated_observation(
+    base_run: Mapping[str, Any],
+    result: ExperimentResult | ExperimentView | str | None,
+    arm_id: str,
+    *,
+    experiment_id: str | None = None,
+    observation_store: ObservationStore | None = None,
+    store: ObservationStore | None = None,
+    reload_parent: Callable[[str], Mapping[str, Any] | None] | None = None,
+) -> dict[str, Any]:
+    """Promote one persisted GeneratedObservation to one child Run.
+
+    This function is intentionally a pure persistence promotion: it performs
+    no substrate/model work.  Repeated calls explicitly create another child
+    with the same immutable evidence and provenance.
+    """
+    if not isinstance(base_run, Mapping) or not isinstance(base_run.get("id"), str) or not base_run["id"]:
+        raise MaterializationError("base_run must carry a non-empty id")
+    if observation_store is not None and store is not None and observation_store is not store:
+        raise ValueError("pass only one observation store")
+    durable = observation_store or store
+    resolved = _resolve_result(result, experiment_id=experiment_id, observation_store=durable)
+    if not isinstance(resolved.base, ResolvedState):
+        raise MaterializationError("generated materialization requires a ResolvedState base")
+    try:
+        arm = resolved.arm_for(arm_id)
+    except KeyError as exc:
+        raise MaterializationError(f"experiment result has no arm {arm_id!r}") from exc
+    if arm.state != "completed" or not isinstance(arm.observation, GeneratedObservation):
+        raise MaterializationError("arm has no completed GeneratedObservation")
+    observation = arm.observation
+    if observation.status != "completed":
+        raise MaterializationError("unavailable or failed generation cannot be materialized")
+    if not isinstance(arm.intervention, ForceToken):
+        raise MaterializationError("generated materialization requires a ForceToken arm")
+    if resolved.base.run_id != base_run["id"]:
+        raise MaterializationStaleError("experiment result is bound to another parent run")
+    current_parent = reload_parent(base_run["id"]) if callable(reload_parent) else base_run
+    if not isinstance(current_parent, Mapping):
+        raise MaterializationStaleError("the parent could not be reloaded")
+    current_parent = dict(current_parent)
+    try:
+        current_state = observation.state_ref.assert_current(current_parent)
+    except Exception as exc:
+        raise MaterializationStaleError(f"StateRef is stale relative to the current parent: {exc}") from exc
+    if current_state.execution_fingerprint != resolved.base.execution_fingerprint:
+        raise MaterializationStaleError("the parent execution fingerprint changed after the experiment")
+    if observation.state_ref != resolved.base.state_ref:
+        raise MaterializationStaleError("GeneratedObservation StateRef does not match the experiment base")
+    expected = execution_observation_identity(resolved.base, resolved.evaluator, arm.intervention)
+    if observation.observation_id != expected["observation_id"] \
+            or observation.observation_key_sha256 != expected["observation_key_sha256"]:
+        raise MaterializationStaleError("GeneratedObservation identity does not match the persisted arm")
+
+    trace = current_parent.get("trace") if isinstance(current_parent.get("trace"), Mapping) else {}
+    pieces = trace.get("tokens") if isinstance(trace.get("tokens"), list) else []
+    position = resolved.base.position.index
+    if len(pieces) <= position:
+        raise MaterializationStaleError("the parent token boundary is no longer available")
+    prefix = "".join(str(piece) for piece in pieces[:position])
+    response = prefix + observation.generated_suffix_text
+    child_trace = None
+    if observation.fidelity_classification == "exact_execution_fork" and isinstance(observation.generated_steps, list):
+        parent_steps = trace.get("steps")
+        generated_steps = observation.generated_steps
+        if isinstance(parent_steps, list) and all(isinstance(step, Mapping) for step in generated_steps):
+            full_steps = [deepcopy(step) for step in parent_steps[:position]] + [deepcopy(step) for step in generated_steps]
+            valid_steps = all(
+                isinstance(step.get("piece"), str)
+                and isinstance(step.get("token_id"), int)
+                and not isinstance(step.get("token_id"), bool)
+                and step.get("token_id") >= 0
+                for step in full_steps
+            )
+            if valid_steps and "".join(step["piece"] for step in full_steps) == response:
+                from clozn.runs.trace import steps_to_trace
+                child_trace = steps_to_trace(full_steps)
+
+    intervention = arm.intervention.to_dict()
+    changes = {
+        "experiment": {
+            "experiment_id": resolved.experiment_id,
+            "arm_id": arm_id,
+            "observation_id": observation.observation_id,
+            "base_state": {
+                "run_id": resolved.base.run_id,
+                "position": resolved.base.position.to_dict(),
+                "realized_fidelity": observation.fidelity_classification,
+            },
+            "intervention": intervention,
+        },
+    }
+    child_id = run_store.record(
+        source="experiment", client="experimental_kernel",
+        model=current_parent.get("model", ""), substrate=current_parent.get("substrate", ""),
+        messages=deepcopy(current_parent.get("messages") or []), response=response,
+        memory=deepcopy(current_parent.get("memory") or {}),
+        behavior=deepcopy(current_parent.get("behavior") or {}), trace=child_trace,
+        final_prompt=current_parent.get("final_prompt"), finish_reason=observation.finish_reason,
+        parent_run_id=current_parent["id"], changes_applied=changes,
+        meta=deepcopy(current_parent.get("meta") or {}),
+        assembled_messages=deepcopy(current_parent.get("assembled_messages")),
+        identity=deepcopy(current_parent.get("identity") or {}),
+        output_contract=deepcopy(current_parent.get("output_contract") or {}),
+    )
+    if not child_id:
+        return {
+            "schema_version": SCHEMA_VERSION, "state": "failed",
+            "parent_run_id": current_parent["id"], "experiment_id": resolved.experiment_id,
+            "arm_id": arm_id, "observation_id": observation.observation_id,
+            "reason": "run_persistence_failed",
+        }
+    return {
+        "schema_version": SCHEMA_VERSION, "state": "completed", "child_run_id": child_id,
+        "parent_run_id": current_parent["id"], "experiment_id": resolved.experiment_id,
+        "arm_id": arm_id, "observation_id": observation.observation_id,
+        "realized_fidelity": observation.fidelity_classification,
+        "trace_state": "available" if child_trace is not None else "unavailable",
+    }
+
+
 MaterializeBranch = materialize_arm
 
 
 __all__ = [
     "MaterializationError", "MaterializationStaleError", "MaterializeBranch",
-    "SCHEMA_VERSION", "materialize_arm",
+    "SCHEMA_VERSION", "materialize_arm", "materialize_generated_observation",
 ]

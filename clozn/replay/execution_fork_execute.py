@@ -333,10 +333,15 @@ def _worker_receipt(reply, plan: Mapping, expected_intervention: Mapping) -> dic
         "intervention_type": intervention_type,
         "intervention_sha256": _sha(expected_intervention),
     }
-    for name in ("finish_reason", "sampler_source", "steer_source"):
+    for name in ("finish_reason", "sampler_source", "steer_source", "sampler_state_preserved",
+                 "rng_state_preserved", "sampler_state_sha256"):
         value = reply.get(name)
-        if isinstance(value, str) and value:
+        if isinstance(value, (str, bool)) and value:
             out[name] = value
+    sampler = reply.get("sampler")
+    if isinstance(sampler, Mapping):
+        if sampler.get("sampler_state_preserved") is True or sampler.get("state_preserved") is True:
+            out["sampler_state_preserved"] = True
     return out
 
 
