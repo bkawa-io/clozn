@@ -355,19 +355,28 @@ class GenerateExecutionAdapter:
         evaluator = evaluator or Generate(max_new=1)
         if not isinstance(state, ResolvedState) or not isinstance(evaluator, Generate):
             raise TypeError("Generate execution requires ResolvedState and Generate")
-        if not isinstance(intervention, ForceToken):
-            raise TypeError("Generate arms require ForceToken")
+        if intervention is not None and not isinstance(intervention, ForceToken):
+            raise TypeError("Generate arms require ForceToken or an unchanged condition")
         try:
             run = self._validated_run(state)
         except Exception as exc:
             return _unavailable(state, evaluator, intervention, "base_run_unavailable", str(exc))
-        disagreement = _validate_force_against_recorded(run, state.position.index, intervention)
-        if disagreement:
-            return _failed(state, evaluator, intervention, "force_token_mismatch", disagreement)
+        if intervention is not None:
+            disagreement = _validate_force_against_recorded(run, state.position.index, intervention)
+            if disagreement:
+                return _failed(state, evaluator, intervention, "force_token_mismatch", disagreement)
         if state.classification == "unavailable":
             return _unavailable(state, evaluator, intervention, "state_unavailable", "the resolved state is unavailable")
         if state.classification == "reconstructed_replay":
             return self._reconstructed(state, evaluator, intervention, run)
+        if intervention is None:
+            # Continue is the unchanged Generate condition. If the caller
+            # disabled the runner's separate control, this arm still needs
+            # the same trusted exact-control proof and evidence.
+            return self._control_exact(state, evaluator, run)
+        if intervention is not None and intervention.token_id is None:
+            return _unavailable(state, evaluator, intervention, "force_token_id_required",
+                                "exact ForceToken execution requires a numeric token_id")
         if evaluator.decode_mode != "greedy":
             return _unavailable(state, evaluator, intervention, "stochastic_execution_unbound",
                                 "exact Generate requires a verified sampler/RNG state")

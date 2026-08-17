@@ -26,8 +26,8 @@ if str(ENGINE_CLIENT_ROOT) not in sys.path:
     sys.path.insert(0, str(ENGINE_CLIENT_ROOT))
 
 from clozn.runs.answer_preservation import _generation_contract_from_run, classify_reference_match
-from clozn.runs.multi_arm import probe_reference_match_many
-from clozn.runs.persistent_parent import PersistentParentSessionClient, assert_scalar_parity, candidate_id
+from clozn.experiments.multi_arm import probe_reference_match_many
+from clozn.experiments.shared_parent import SharedParentSessionClient, assert_evidence_parity, condition_candidate_id
 from clozn.experiments.effective_prompt import render_effective_prompt_for_retained
 from clozn.runs.store import get_run
 
@@ -92,7 +92,7 @@ def _case(case: Mapping[str, Any], geometry_case: Mapping[str, Any], *, engine: 
         return render_effective_prompt_for_retained(run, universe_ids, retained_ids)
 
     initial_parent_ids = tuple(case["trial_ledger"][0]["retained_source_ids"])
-    session = PersistentParentSessionClient(engine, tuple(reference), contract)
+    session = SharedParentSessionClient(engine, tuple(reference), contract)
     session.create(engine.apply_template(messages(initial_parent_ids)))
     current_parent_ids = initial_parent_ids
     current_version = session.parent_version
@@ -137,7 +137,7 @@ def _case(case: Mapping[str, Any], geometry_case: Mapping[str, Any], *, engine: 
                     "explicit_conditions": {},
                 })
                 native_children.append({
-                    "candidate_id": candidate_id(child_ids),
+                    "candidate_id": condition_candidate_id({"retained_source_ids": list(child_ids)}),
                     "candidate_rank": rank,
                     "prompt": engine.apply_template(child_messages),
                 })
@@ -170,7 +170,7 @@ def _case(case: Mapping[str, Any], geometry_case: Mapping[str, Any], *, engine: 
             persistent_rows = [_classify_native(row, reference, contract)
                                for row in persistent_response["results"]]
             try:
-                assert_scalar_parity(persistent_rows, scalar)
+                assert_evidence_parity(persistent_rows, scalar)
             except Exception as exc:
                 mismatches = getattr(exc, "mismatches", [{"error": str(exc)}])
                 parity_mismatches.extend({
@@ -206,8 +206,7 @@ def _case(case: Mapping[str, Any], geometry_case: Mapping[str, Any], *, engine: 
                 if confirmation.get("status") != "matched":
                     raise ValueError(f"accepted frozen candidate was not scalar-preserving in batch {batch['batch_id']}")
                 promotion_response = session.promote(
-                    accepted_child["candidate_id"], scalar_preserves=True,
-                    native_preserves=bool(persistent_response["results"][accepted_index].get("native_preserves")),
+                    accepted_child["candidate_id"], exact_preserved=True,
                 )
                 promotions += 1
                 current_version = session.parent_version

@@ -21,6 +21,17 @@ class SharedParentSessionError(ValueError):
         self.status = status
 
 
+class SharedParentParityError(SharedParentSessionError):
+    """Native/shared evidence disagreed with a qualification reference."""
+
+    def __init__(self, mismatches: Sequence[Mapping[str, Any]]):
+        self.mismatches = [deepcopy(dict(item)) for item in mismatches]
+        super().__init__(
+            "shared-parent/scalar parity failure",
+            code="shared_parent_parity_failure", status=409,
+        )
+
+
 def condition_candidate_id(condition: Any) -> str:
     """Make an ephemeral worker ID from the full condition identity."""
     payload = json.dumps(condition, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
@@ -32,6 +43,29 @@ def evidence_projection(row: Mapping[str, Any]) -> dict[str, Any]:
         "status", "matched_token_count", "first_divergence_index", "divergence_kind",
         "termination_match", "finish_reason",
     )}
+
+
+def assert_evidence_parity(
+    shared_rows: Sequence[Mapping[str, Any]],
+    reference_rows: Sequence[Mapping[str, Any]],
+) -> None:
+    """Qualification-only comparison for semantic row projections."""
+    if len(shared_rows) != len(reference_rows):
+        raise SharedParentParityError([{
+            "kind": "row_count", "shared_count": len(shared_rows),
+            "reference_count": len(reference_rows),
+        }])
+    mismatches = []
+    for index, (shared, reference) in enumerate(zip(shared_rows, reference_rows)):
+        shared_projection = evidence_projection(shared)
+        reference_projection = evidence_projection(reference)
+        if shared_projection != reference_projection:
+            mismatches.append({
+                "arm_index": index, "shared": shared_projection,
+                "reference": reference_projection,
+            })
+    if mismatches:
+        raise SharedParentParityError(mismatches)
 
 
 @dataclass
@@ -143,6 +177,11 @@ class SharedParentSessionClient:
         self.telemetry = deepcopy(dict(response.get("telemetry") or self.telemetry))
         return deepcopy(response)
 
+    def cancel_round(self) -> None:
+        """Discard current worker nominations without changing the parent."""
+        self._require_created()
+        self._last_round = {}
+
     def close(self) -> dict[str, Any] | None:
         if self.closed:
             return None
@@ -166,4 +205,7 @@ class SharedParentSessionClient:
         }
 
 
-__all__ = ["SharedParentSessionClient", "SharedParentSessionError", "condition_candidate_id", "evidence_projection"]
+__all__ = [
+    "SharedParentParityError", "SharedParentSessionClient", "SharedParentSessionError",
+    "assert_evidence_parity", "condition_candidate_id", "evidence_projection",
+]

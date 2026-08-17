@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import io
+import json
 
 import pytest
 
@@ -14,6 +16,9 @@ from clozn.experiments.persistence import ObservationStore
 from clozn.experiments.runner import run_experiment
 from clozn.experiments.state import ExecutionState
 from clozn.experiments.state_ref import StateRef, StateRefError, resolve_state
+from clozn.recipes.time_travel import (
+    enumerate_answer_boundaries, materialize_time_travel, run_time_travel,
+)
 from clozn.runs import store as run_store
 from clozn.replay.execution_fork import plan_execution_fork
 
@@ -127,6 +132,18 @@ def test_state_ref_has_one_canonical_boundary_coordinate_and_stable_identity():
         StateRef.before_answer_token({**run, "trace": {"tokens": ["bad"], "token_ids": [1, 2]}}, 0)
 
 
+def test_time_travel_boundaries_are_model_free_and_trace_addressed():
+    run = _run()
+    boundaries = enumerate_answer_boundaries(run)
+    assert [item.index for item in boundaries] == [0, 1, 2]
+    assert boundaries[1].recorded_token_id == 11
+    assert boundaries[1].recorded_token_piece == " one"
+    assert boundaries[2].response_offset == len("zero one")
+    assert boundaries[0].state_fingerprint == StateRef.before_answer_token(run, 0).state_fingerprint
+    with pytest.raises(Exception, match="token history"):
+        enumerate_answer_boundaries({**run, "trace": {"tokens": ["bad"], "token_ids": [1, 2]}})
+
+
 def test_state_ref_rejects_stale_execution_and_exact_planning_is_not_confirmation():
     run = _run()
     ref = StateRef.before_answer_token(run, 1)
@@ -192,6 +209,38 @@ def test_reconstructed_generate_creates_no_runs_and_materialization_does_not_cal
     assert len(run_store.list_runs(20)) == 2
 
 
+def test_reconstructed_continue_is_an_unchanged_generate_condition_and_reloads(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_store, "RUNS_DIR", str(tmp_path / "runs"))
+    run_store._schema_verified.clear()
+    run = _run()
+    substrate = ReconstructedSubstrate()
+    store = ObservationStore()
+    result = run_time_travel(
+        run, position=1, max_new=2, policy="reconstructed_only", substrate=substrate,
+        observation_store=store, runtime_identity=RUNTIME, worker_identity=WORKER,
+    )
+    assert result.status == "completed"
+    assert result.operation == {"kind": "continue"}
+    assert result.fidelity == "RECONSTRUCTED"
+    assert result.experiment_id and result.arm_id and result.observation_id
+    assert len(substrate.engine.calls) == 1
+    assert run_store.list_runs(20) == []
+
+    reloaded = store.get_experiment(result.experiment_id)
+    arm = reloaded.arm_for(result.arm_id)
+    assert arm.intervention is None
+    assert arm.observation_id == result.observation_id
+    assert arm.observation.fidelity_classification == "reconstructed_replay"
+
+    materialized = materialize_time_travel(run, result, observation_store=store)
+    assert materialized["state"] == "completed"
+    assert len(substrate.engine.calls) == 1
+    child = run_store.get_run(materialized["child_run_id"])
+    assert child["parent_run_id"] == run["id"]
+    assert child["response"] == "zero tail"
+    assert child["changes_applied"]["experiment"]["operation"] == "continue"
+
+
 def test_exact_generate_confirms_control_creates_no_run_and_materializes_without_model_call(tmp_path, monkeypatch):
     monkeypatch.setattr(run_store, "RUNS_DIR", str(tmp_path / "runs"))
     run_store._schema_verified.clear()
@@ -239,6 +288,69 @@ def test_exact_control_mismatch_blocks_force_arm_and_persists_no_transient_obser
     assert result.arms[0].observation is None
     assert len(substrate.engine.calls) == 1
     assert run_store.list_runs(20) == []
+
+
+def test_time_travel_v1_routes_continue_and_materialize_without_regeneration(tmp_path, monkeypatch):
+    from clozn.server import app as server_app
+
+    monkeypatch.setattr(run_store, "RUNS_DIR", str(tmp_path / "runs"))
+    run_store._schema_verified.clear()
+
+    class RouteSubstrate:
+        def __init__(self):
+            self.engine = ReconstructedEngine()
+            self.runtime_identity = deepcopy(RUNTIME)
+            self.worker_identity = deepcopy(WORKER)
+
+    substrate = RouteSubstrate()
+    monkeypatch.setattr(server_app, "SUB", substrate)
+    run_id = run_store.record(
+        source="test", client="test", model="fixture-model", substrate="fixture",
+        messages=[{"role": "user", "content": "question"}],
+        assembled_messages=[{"role": "user", "content": "question"}],
+        final_prompt="<prompt>", response="zero one two", identity=deepcopy(RUNTIME),
+        trace={
+            "tokens": ["zero", " one", " two"], "token_ids": [10, 11, 12],
+            "steps": [
+                {"token_id": 10, "piece": "zero"},
+                {"token_id": 11, "piece": " one"},
+                {"token_id": 12, "piece": " two"},
+            ],
+        },
+    )
+
+    def dispatch(method, path, payload=None):
+        raw = json.dumps(payload or {}).encode("utf-8")
+        handler_type = server_app.make_handler()
+        handler = object.__new__(handler_type)
+        handler.path = path
+        handler.rfile = io.BytesIO(raw)
+        handler.wfile = io.BytesIO()
+        handler.headers = {"Content-Length": str(len(raw)), "User-Agent": "pytest"}
+        handler.requestline = f"{method} {path} HTTP/1.1"
+        handler.request_version = "HTTP/1.1"
+        handler.command = method
+        getattr(handler, f"do_{method}")()
+        return json.loads(handler.wfile.getvalue().partition(b"\r\n\r\n")[2])
+
+    result = dispatch(
+        "POST", f"/runs/{run_id}/time-travel/continue",
+        {"boundary": 1, "policy": "reconstructed_only", "max_new": 2},
+    )
+    assert result["status"] == "completed"
+    assert result["operation_kind"] == "continue"
+    assert result["fidelity"] == "RECONSTRUCTED"
+    calls = len(substrate.engine.calls)
+    materialized = dispatch(
+        "POST", f"/runs/{run_id}/time-travel/materialize",
+        {
+            "experiment_id": result["experiment_id"], "arm_id": result["arm_id"],
+            "observation_id": result["observation_id"],
+        },
+    )
+    assert materialized["state"] == "completed"
+    assert len(substrate.engine.calls) == calls
+    assert run_store.get_run(materialized["child_run_id"])["parent_run_id"] == run_id
 
 
 def test_unbound_stochastic_reconstruction_is_unavailable():

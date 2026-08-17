@@ -20,7 +20,7 @@ from .batch import ArmExecutionOutcome, ArmExecutionRequest, BatchExecutionResul
 from .evaluators import ScoreRecordedContinuation
 from .execution import ExecutionAdapterError, ExecutionStateStaleError, _identity_kwargs, resolve_delete_source
 from .interventions import DeleteSource
-from .multi_arm import score_tokens_many
+from .multi_arm import BatchCancelled, MultiArmError, score_tokens_many
 from .observations import TokenScoreObservation
 from .selections import _recorded_answer_tokens
 from .state import ExecutionState, digest
@@ -298,6 +298,59 @@ class DeleteSourceRecordedContinuationScoreAdapter:
                         evaluator: ScoreRecordedContinuation | None = None) -> TokenScoreObservation:
         return self.execute(state, None, evaluator=evaluator, arm_id="control")
 
+    def _partial_score_outcomes(
+        self,
+        prepared: list[tuple[ArmExecutionRequest, dict[str, Any]]],
+        run: Mapping[str, Any],
+        exc: BaseException,
+        *,
+        strategy: str,
+    ) -> tuple[ArmExecutionOutcome, ...]:
+        completed_rows = list(getattr(exc, "completed", ()) or ())
+        completed_indices = tuple(getattr(exc, "completed_indices", ()) or ())
+        if not completed_indices:
+            completed_indices = tuple(range(min(len(completed_rows), len(prepared))))
+        dispatched_indices = set(getattr(exc, "dispatched_indices", ()) or ())
+        if not dispatched_indices:
+            if isinstance(exc, BatchCancelled):
+                dispatched_indices.update(completed_indices)
+        completed_by_index = {
+            index: row for index, row in zip(completed_indices, completed_rows)
+            if 0 <= index < len(prepared)
+        }
+        cancellation = isinstance(exc, BatchCancelled)
+        outcomes: list[ArmExecutionOutcome] = []
+        for index, (request, payload) in enumerate(prepared):
+            if index in completed_by_index:
+                observation = _score_observation(
+                    arm_id=request.arm_id, run=run, state=request.state, evaluator=request.evaluator,
+                    intervention=request.intervention, conditions=payload,
+                    raw_tokens=completed_by_index[index], provenance=payload["provenance"],
+                    diagnostics={"partial_batch": True},
+                )
+                outcomes.append(ArmExecutionOutcome(
+                    arm_id=request.arm_id, observation=observation,
+                    execution_disposition="executed",
+                    state="completed" if observation.completed else "failed",
+                    diagnostics={"execution_strategy": strategy, "partial_batch": True},
+                ))
+            elif index in dispatched_indices:
+                outcomes.append(ArmExecutionOutcome(
+                    arm_id=request.arm_id, execution_disposition="executed", state="failed",
+                    error={"error": str(exc)},
+                    diagnostics={"execution_strategy": strategy, "partial_batch": True,
+                                 "reason": "batch_dispatch_failed"},
+                ))
+            else:
+                outcomes.append(ArmExecutionOutcome(
+                    arm_id=request.arm_id, execution_disposition="not_executed",
+                    state="cancelled" if cancellation else "not_executed",
+                    error={"error": str(exc)} if not cancellation else {},
+                    diagnostics={"execution_strategy": strategy, "partial_batch": True,
+                                 "reason": "cancelled_before_dispatch" if cancellation else "not_executed"},
+                ))
+        return tuple(outcomes)
+
     def execute_many(self, requests: tuple[ArmExecutionRequest, ...] | list[ArmExecutionRequest], *,
                      cancel: Any = None) -> BatchExecutionResult:
         """Batch the substrate score calls while retaining one host validator."""
@@ -412,7 +465,16 @@ class DeleteSourceRecordedContinuationScoreAdapter:
         strategy = "native_many" if bool(getattr(self.substrate, "score_tokens_many_proof_grade", False)) else "scalar"
         arms = [{key: deepcopy(value) for key, value in payload.items() if key != "provenance"}
                 for _request, payload in prepared]
-        raw_rows = list(score_tokens_many(self.substrate, arms, cancel=cancel, proof_grade=True))
+        try:
+            raw_rows = list(score_tokens_many(self.substrate, arms, cancel=cancel, proof_grade=True))
+        except (BatchCancelled, MultiArmError) as exc:
+            return BatchExecutionResult(
+                tuple(outcomes) + self._partial_score_outcomes(
+                    prepared, run, exc, strategy=strategy,
+                ),
+                {"execution_strategy": strategy, "batch_count": 1,
+                 "batch_size": len(prepared), "partial_failure": True},
+            )
         if len(raw_rows) != len(prepared):
             raise ScoreExecutionError("score batch returned the wrong arm count")
         for (request, payload), raw_tokens in zip(prepared, raw_rows):

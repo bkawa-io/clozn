@@ -23,7 +23,7 @@ from .state_ref import ResolvedState
 
 EXPERIMENT_STORE_SCHEMA_VERSION = "clozn.experiment-store.v1"
 EXPERIMENT_STATES = frozenset({"pending", "running", "completed", "cancelled", "failed", "blocked"})
-ARM_STATES = frozenset({"pending", "running", "completed", "cancelled", "failed", "blocked"})
+ARM_STATES = frozenset({"pending", "running", "completed", "cancelled", "failed", "blocked", "not_executed"})
 _UNSET = object()
 
 
@@ -230,7 +230,8 @@ class ObservationStore:
                 db.execute(
                     "INSERT INTO experiment_arms(experiment_id, arm_id, ordinal, is_control, intervention_json, condition_json, state, observation_id, error_json, diagnostics_json) "
                     "VALUES (?, ?, ?, 0, ?, ?, 'pending', NULL, NULL, ?)",
-                    (experiment.experiment_id, arm.arm_id, ordinal, _json(arm.intervention.to_dict()),
+                    (experiment.experiment_id, arm.arm_id, ordinal,
+                     _json(arm.intervention.to_dict() if arm.intervention is not None else None),
                      _json(condition), _json({})),
                 )
         return experiment.experiment_id

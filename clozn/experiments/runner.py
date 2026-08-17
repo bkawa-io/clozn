@@ -63,7 +63,7 @@ class ExperimentResult:
 
     def __init__(self, *, experiment_id: str, base: ExecutionState | ResolvedState, evaluator: Evaluator,
                  control: ObservationLike | None, arm_observations: list[ObservationLike | None] | tuple[ObservationLike | None, ...],
-                 arm_interventions: list[Intervention] | tuple[Intervention, ...],
+                 arm_interventions: list[Intervention | None] | tuple[Intervention | None, ...],
                  arm_ids: list[str] | tuple[str, ...] | None = None,
                  arm_states: list[str] | tuple[str, ...] | None = None,
                  observation_ids: list[str | None] | tuple[str | None, ...] | None = None,
@@ -87,8 +87,8 @@ class ExperimentResult:
         observations = tuple(arm_observations)
         if len(interventions) != len(observations):
             raise ValueError("ExperimentResult arm interventions must align with observations")
-        if any(not isinstance(item, (DeleteSource, ForceToken)) for item in interventions):
-            raise TypeError("ExperimentResult arm interventions must be typed interventions")
+        if any(item is not None and not isinstance(item, (DeleteSource, ForceToken)) for item in interventions):
+            raise TypeError("ExperimentResult arm interventions must be typed interventions or None")
         ids = tuple(arm_ids or [
             "arm_" + str(index) for index in range(len(interventions))
         ])
@@ -204,13 +204,16 @@ class ExperimentResult:
         control_value = value.get("control")
         control = _observation_from_dict(control_value) if isinstance(control_value, Mapping) else None
         rows: list[ExperimentArmView] = []
-        interventions: list[Intervention] = []
+        interventions: list[Intervention | None] = []
         observations: list[ObservationLike | None] = []
         states: list[str] = []
         ids: list[str] = []
         obs_ids: list[str | None] = []
         for raw in value.get("arms") or []:
-            intervention = intervention_from_dict(raw.get("intervention"))
+            intervention = (
+                intervention_from_dict(raw.get("intervention"))
+                if raw.get("intervention") is not None else None
+            )
             observation_value = raw.get("observation")
             observation = _observation_from_dict(observation_value) if isinstance(observation_value, Mapping) else None
             row = ExperimentArmView(
@@ -370,6 +373,13 @@ def run_experiment(experiment: Experiment, execution_adapter: Any, *, include_co
         )
     diagnostics["control_execution_disposition"] = control_disposition
 
+    # An unchanged Generate arm has the same semantic condition as its
+    # mandatory control.  Keep the control in the local cache too, so a
+    # non-durable Continue experiment does not execute the same condition a
+    # second time merely because there is no ObservationStore to query.
+    if control is not None and _reusable(control):
+        observation_cache[control_identity["observation_key_sha256"]] = control
+
     blocked = include_control and not cancelled and not _allows_arms(experiment.evaluator, control)
     arm_count = len(experiment.arms)
     records: list[dict[str, Any]] = [{} for _ in range(arm_count)]
@@ -521,7 +531,12 @@ def run_experiment(experiment: Experiment, execution_adapter: Any, *, include_co
                 item_diagnostics.setdefault("observation_status", observation.status)
                 item_diagnostics.setdefault("diagnostics", observation.diagnostics)
             else:
-                state = "cancelled" if outcome.state == "cancelled" else "failed"
+                if outcome.state == "cancelled":
+                    state = "cancelled"
+                elif outcome.state == "not_executed":
+                    state = "not_executed"
+                else:
+                    state = "failed"
             leader_record = {
                 "observation": observation, "state": state, "observation_id": observation_id,
                 "error": error, "disposition": disposition, "diagnostics": item_diagnostics,
@@ -587,11 +602,31 @@ def run_experiment(experiment: Experiment, execution_adapter: Any, *, include_co
         1 for record in records if record.get("disposition") == "reused"
     )
 
-    if cancelled:
+    cancellation_reasons = {
+        "cancelled", "cancelled_before_dispatch", "cancelled_during_dispatch",
+        "batch_cancelled", "cancellation",
+    }
+    arm_cancelled = any(
+        state == "cancelled"
+        or (
+            record.get("disposition") == "not_executed"
+            and record.get("diagnostics", {}).get("reason") in cancellation_reasons
+        )
+        for state, record in zip(arm_states, records)
+    )
+    arm_not_executed = any(record.get("disposition") == "not_executed" for record in records)
+    if cancelled or arm_cancelled:
         final_state = "cancelled"
     elif blocked:
         final_state = "blocked"
-    elif any(state == "failed" for state in arm_states) or (include_control and control is None):
+    elif (
+        any(state == "failed" for state in arm_states)
+        or arm_not_executed
+        or (include_control and control is None)
+    ):
+        # A dispatch that never produced reusable evidence is not a
+        # completed experiment.  Keep this separate from epistemic
+        # observation status: it is the aggregate orchestration state.
         final_state = "failed"
     else:
         final_state = "completed"

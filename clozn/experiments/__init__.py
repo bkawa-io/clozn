@@ -19,7 +19,10 @@ def __getattr__(name):
 
 from .evaluators import ExactReferenceMatch, ScoreRecordedContinuation, Generate
 from .batch import ArmExecutionOutcome, ArmExecutionRequest, BatchExecutionError, BatchExecutionResult
-from .shared_parent import SharedParentSessionClient, SharedParentSessionError
+from .shared_parent import (
+    SharedParentParityError, SharedParentSessionClient, SharedParentSessionError,
+    assert_evidence_parity,
+)
 from .context_search import ContextSearchDispatcher, ContextSearchUnavailable
 from .execution import (
     DeleteSourceExactReferenceAdapter,
@@ -54,8 +57,8 @@ from .selections import (
 )
 from .state import ExecutionState
 from .state_ref import (
-    AnswerTokenBoundary, ResolvedState, StateRef, StateRefError,
-    resolve_state,
+    AnswerTokenBoundary, RecordedAnswerBoundary, ResolvedState, StateRef, StateRefError,
+    enumerate_answer_boundaries, list_answer_token_boundaries, resolve_state,
 )
 from .search import (
     BEST_VERIFIED, INCLUSION_MINIMUM, SearchBudget, SearchEvidenceRef, SearchResult,
@@ -69,8 +72,8 @@ ExperimentStore = ObservationStore
 __all__ = ["REGISTRY", "catalog", "run_experiment", "substrate_ok", "MANIFEST_SCHEMA",
            "RESULT_SCHEMA", "list_result_paths", "load_manifest", "load_result", "results_directory",
            "run_manifest", "select_cells", "validate_manifest", "validate_result",
-           "ExecutionState", "StateRef", "AnswerTokenBoundary", "ResolvedState", "StateRefError",
-           "resolve_state", "ContextSelection", "DeleteSource", "ForceToken", "Intervention",
+           "ExecutionState", "StateRef", "AnswerTokenBoundary", "RecordedAnswerBoundary", "ResolvedState", "StateRefError",
+           "enumerate_answer_boundaries", "list_answer_token_boundaries", "resolve_state", "ContextSelection", "DeleteSource", "ForceToken", "Intervention",
            "intervention_from_dict", "ExactReferenceMatch", "ScoreRecordedContinuation", "Generate",
            "AnswerSelection", "ResolvedAnswerSelection",
            "AnswerSelectionUnavailable", "Experiment", "ExperimentArm", "Observation",

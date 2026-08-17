@@ -15,18 +15,26 @@ from typing import Any
 
 class MultiArmError(RuntimeError):
     def __init__(self, message: str, *, arm_index: int | None = None,
-                 completed: Iterable[Any] = ()):
+                 completed: Iterable[Any] = (),
+                 completed_indices: Iterable[int] = (),
+                 dispatched_indices: Iterable[int] = ()):
         super().__init__(message)
         self.arm_index = arm_index
         self.completed = list(completed)
+        self.completed_indices = tuple(int(index) for index in completed_indices)
+        self.dispatched_indices = tuple(int(index) for index in dispatched_indices)
 
 
 class BatchCancelled(RuntimeError):
     def __init__(self, message: str = "multi-arm dispatch cancelled", *,
-                 completed: Iterable[Any] = (), next_index: int | None = None):
+                 completed: Iterable[Any] = (), next_index: int | None = None,
+                 completed_indices: Iterable[int] = (),
+                 dispatched_indices: Iterable[int] = ()):
         super().__init__(message)
         self.completed = list(completed)
         self.next_index = next_index
+        self.completed_indices = tuple(int(index) for index in completed_indices)
+        self.dispatched_indices = tuple(int(index) for index in dispatched_indices)
 
 
 def _cancelled(cancel: Any) -> bool:
@@ -114,13 +122,23 @@ def _invoke_native(method: Callable[..., Any], arms: list[dict[str, Any]], *, ca
 def _scalar(method: Callable[..., Any], arms: list[dict[str, Any]], *, cancel: Any,
             base_index: int = 0) -> list[Any]:
     result: list[Any] = []
+    completed_indices: list[int] = []
     for offset, arm in enumerate(arms):
         if _cancelled(cancel):
-            raise BatchCancelled(completed=result, next_index=base_index + offset)
+            raise BatchCancelled(
+                completed=result, next_index=base_index + offset,
+                completed_indices=completed_indices,
+                dispatched_indices=completed_indices,
+            )
         try:
             result.append(deepcopy(method(**arm)))
+            completed_indices.append(base_index + offset)
         except Exception as exc:
-            raise MultiArmError(str(exc), arm_index=base_index + offset, completed=result) from exc
+            raise MultiArmError(
+                str(exc), arm_index=base_index + offset, completed=result,
+                completed_indices=completed_indices,
+                dispatched_indices=[*completed_indices, base_index + offset],
+            ) from exc
     return result
 
 
@@ -138,22 +156,64 @@ def _many(kind: str, substrate: Any, arms: Iterable[Mapping[str, Any]], *, cance
         return _scalar(scalar, normalised, cancel=cancel)
     ordered: list[Any] = [None] * len(normalised)
     completed: list[Any] = []
+    completed_indices: list[int] = []
     for group in _groups(kind, normalised):
         indexes = [index for index, _arm in group]
         group_arms = [arm for _index, arm in group]
         if _cancelled(cancel):
-            raise BatchCancelled(completed=completed, next_index=indexes[0])
+            raise BatchCancelled(
+                completed=completed, next_index=indexes[0],
+                completed_indices=completed_indices,
+                dispatched_indices=completed_indices,
+            )
         try:
             rows = _invoke_native(native, group_arms, cancel=cancel)
         except BatchCancelled as exc:
-            raise BatchCancelled(completed=completed + exc.completed, next_index=exc.next_index) from exc
-        except MultiArmError:
-            raise
+            local_completed = tuple(exc.completed_indices)
+            if not local_completed:
+                local_completed = tuple(range(min(len(exc.completed), len(indexes))))
+            local_dispatched = tuple(exc.dispatched_indices)
+            if not local_dispatched:
+                # The native call was accepted.  Unless its protocol names
+                # the unstarted children, conservatively count the whole
+                # submitted group as dispatched.
+                local_dispatched = tuple(range(len(indexes)))
+            group_completed_indices = [indexes[i] for i in local_completed if 0 <= i < len(indexes)]
+            group_dispatched_indices = [indexes[i] for i in local_dispatched if 0 <= i < len(indexes)]
+            group_completed_rows = list(exc.completed)
+            raise BatchCancelled(
+                completed=completed + group_completed_rows,
+                next_index=exc.next_index if exc.next_index is not None else indexes[0],
+                completed_indices=[*completed_indices, *group_completed_indices],
+                dispatched_indices=[*completed_indices, *group_dispatched_indices],
+            ) from exc
+        except MultiArmError as exc:
+            local_completed = tuple(exc.completed_indices)
+            if not local_completed:
+                local_completed = tuple(range(min(len(exc.completed), len(indexes))))
+            local_dispatched = tuple(exc.dispatched_indices)
+            if not local_dispatched:
+                local_dispatched = tuple(range(len(indexes)))
+            group_completed_indices = [indexes[i] for i in local_completed if 0 <= i < len(indexes)]
+            group_dispatched_indices = [indexes[i] for i in local_dispatched if 0 <= i < len(indexes)]
+            raise MultiArmError(
+                str(exc),
+                arm_index=(indexes[exc.arm_index] if isinstance(exc.arm_index, int)
+                           and 0 <= exc.arm_index < len(indexes) else indexes[0]),
+                completed=completed + list(exc.completed),
+                completed_indices=[*completed_indices, *group_completed_indices],
+                dispatched_indices=[*completed_indices, *group_dispatched_indices],
+            ) from exc
         except Exception as exc:
-            raise MultiArmError(str(exc), arm_index=indexes[0], completed=completed) from exc
+            raise MultiArmError(
+                str(exc), arm_index=indexes[0], completed=completed,
+                completed_indices=completed_indices,
+                dispatched_indices=[*completed_indices, *indexes],
+            ) from exc
         for index, row in zip(indexes, rows):
             ordered[index] = row
         completed.extend(rows)
+        completed_indices.extend(indexes)
     return ordered
 
 
@@ -190,11 +250,22 @@ def concurrent_many(method: Callable[..., Any], arms: Iterable[Mapping[str, Any]
                     results[index] = deepcopy(future.result())
                 except Exception as exc:
                     completed = [row for row in results if row is not None]
-                    raise MultiArmError(str(exc), arm_index=index, completed=completed) from exc
+                    completed_indices = [item for item, row in enumerate(results) if row is not None]
+                    dispatched_indices = list(futures.values()) + [index]
+                    raise MultiArmError(
+                        str(exc), arm_index=index, completed=completed,
+                        completed_indices=completed_indices,
+                        dispatched_indices=dispatched_indices,
+                    ) from exc
             if _cancelled(cancel):
                 for future in futures:
                     future.cancel()
-                raise BatchCancelled(completed=[row for row in results if row is not None], next_index=min(futures.values(), default=None))
+                raise BatchCancelled(
+                    completed=[row for row in results if row is not None],
+                    next_index=min(futures.values(), default=None),
+                    completed_indices=[item for item, row in enumerate(results) if row is not None],
+                    dispatched_indices=list(futures.values()),
+                )
         return results
     finally:
         executor.shutdown(wait=not _cancelled(cancel), cancel_futures=True)

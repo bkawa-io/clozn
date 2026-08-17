@@ -1,7 +1,7 @@
 """Model-free contracts for the experimental native reference-match-many seam."""
 from __future__ import annotations
 
-from clozn.runs.multi_arm import probe_reference_match_many
+from clozn.experiments.multi_arm import probe_reference_match_many
 from clozn.server import app as cs
 from clozn.server.substrates import EngineSubstrate
 
@@ -73,32 +73,36 @@ def _arms():
     ]
 
 
-def test_native_many_is_explicitly_non_proof_grade_and_restores_order(monkeypatch):
+def test_qualified_native_many_restores_order(monkeypatch):
+    class QualifiedSubstrate:
+        probe_reference_match_many_proof_grade = True
+
+        def probe_reference_match(self, messages, reference_token_ids, *, generation_contract,
+                                  explicit_conditions=None):
+            return {"status": "diverged", "matched_token_count": 0}
+
+        def probe_reference_match_many(self, arms, *, cancel=None):
+            return [
+                {"arm_index": index, "result": {
+                    "status": "matched" if index == 0 else "diverged",
+                    "matched_token_count": 2 if index == 0 else 1,
+                    "first_divergence_index": None if index == 0 else 1,
+                }}
+                for index in reversed(range(len(arms)))
+            ]
+
+    rows = probe_reference_match_many(QualifiedSubstrate(), _arms())
+    assert [row["status"] for row in rows] == ["matched", "diverged"]
+    assert rows[1]["first_divergence_index"] == 1
+
+
+def test_unqualified_native_many_stays_on_scalar_reference(monkeypatch):
     engine = _NativeEngine()
     sub = _sub(monkeypatch, engine)
     monkeypatch.setenv("CLOZN_ENABLE_NATIVE_REFERENCE_MATCH_ARMS", "1")
-
-    rows = probe_reference_match_many(sub, _arms(), proof_grade=False)
-
-    assert [row["status"] for row in rows] == ["matched", "diverged"]
-    assert rows[1]["first_divergence_index"] == 1
-    assert engine.native_calls and len(engine.native_calls) == 1
-    assert sub.last_native_reference_match_metrics["native_prefill_time_ns"] == 7
-
-
-def test_parent_anchor_is_explicitly_forwarded_only_for_experimental_native(monkeypatch):
-    engine = _NativeEngine()
-    sub = _sub(monkeypatch, engine)
-    monkeypatch.setenv("CLOZN_ENABLE_NATIVE_PARENT_ANCHOR", "1")
-    arms = _arms()
-    for arm in arms:
-        arm["parent_anchor_prompt"] = "ANCHOR"
-
-    rows = probe_reference_match_many(sub, arms, proof_grade=False)
-
-    assert [row["status"] for row in rows] == ["matched", "diverged"]
-    assert engine.native_calls[0][3] == "ANCHOR"
-    assert sub.last_native_reference_match_metrics["parent_anchor_enabled"] is True
+    rows = probe_reference_match_many(sub, _arms())
+    assert len(rows) == 2
+    assert engine.native_calls == []
 
 
 def test_proof_grade_default_stays_on_scalar_even_when_native_is_enabled(monkeypatch):

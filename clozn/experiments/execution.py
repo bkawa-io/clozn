@@ -23,7 +23,7 @@ from .evaluators import ExactReferenceMatch
 from .batch import ArmExecutionOutcome, ArmExecutionRequest, BatchExecutionResult
 from .effective_prompt import EffectivePromptUnavailable, resolve_effective_prompt
 from .interventions import DeleteSource
-from .multi_arm import probe_reference_match_many
+from .multi_arm import BatchCancelled, MultiArmError, probe_reference_match_many
 from .observations import Observation, execution_observation_identity
 from .shared_parent import SharedParentSessionClient, SharedParentSessionError, condition_candidate_id
 from .state import ExecutionState, digest
@@ -265,6 +265,73 @@ class DeleteSourceExactReferenceAdapter:
             )
         return _observation_from_probe(state, evaluator, intervention, raw, provenance=provenance)
 
+    def _partial_probe_outcomes(
+        self,
+        prepared: list[tuple[ArmExecutionRequest, dict[str, Any]]],
+        exc: BaseException,
+        *,
+        strategy: str,
+    ) -> tuple[ArmExecutionOutcome, ...]:
+        """Translate low-level partial dispatch into arm-addressed outcomes.
+
+        A native scheduler may complete useful rows before reporting a later
+        failure.  Those rows remain direct evidence; only the scheduler's
+        explicit dispatch metadata decides whether an absent row was
+        executed or never started.
+        """
+        completed_rows = list(getattr(exc, "completed", ()) or ())
+        completed_indices = tuple(getattr(exc, "completed_indices", ()) or ())
+        if not completed_indices:
+            completed_indices = tuple(range(min(len(completed_rows), len(prepared))))
+        dispatched_indices = set(getattr(exc, "dispatched_indices", ()) or ())
+        if not dispatched_indices:
+            if isinstance(exc, BatchCancelled):
+                dispatched_indices.update(completed_indices)
+        completed_by_index = {
+            index: row for index, row in zip(completed_indices, completed_rows)
+            if 0 <= index < len(prepared)
+        }
+        cancellation = isinstance(exc, BatchCancelled)
+        outcomes: list[ArmExecutionOutcome] = []
+        for index, (request, payload) in enumerate(prepared):
+            raw = completed_by_index.get(index)
+            if raw is not None:
+                if isinstance(raw, Mapping):
+                    observation = _observation_from_probe(
+                        request.state, request.evaluator, request.intervention, raw,
+                        provenance=payload["provenance"],
+                    )
+                    outcomes.append(ArmExecutionOutcome(
+                        arm_id=request.arm_id, observation=observation,
+                        execution_disposition="executed",
+                        state="completed" if observation.completed else "failed",
+                        diagnostics={"execution_strategy": strategy, "partial_batch": True},
+                    ))
+                else:
+                    outcomes.append(ArmExecutionOutcome(
+                        arm_id=request.arm_id, execution_disposition="executed", state="failed",
+                        error={"error": "malformed partial probe result"},
+                        diagnostics={"execution_strategy": strategy, "partial_batch": True,
+                                     "reason": "probe_malformed"},
+                    ))
+                continue
+            if index in dispatched_indices:
+                outcomes.append(ArmExecutionOutcome(
+                    arm_id=request.arm_id, execution_disposition="executed", state="failed",
+                    error={"error": str(exc)},
+                    diagnostics={"execution_strategy": strategy, "partial_batch": True,
+                                 "reason": "batch_dispatch_failed"},
+                ))
+            else:
+                outcomes.append(ArmExecutionOutcome(
+                    arm_id=request.arm_id, execution_disposition="not_executed",
+                    state="cancelled" if cancellation else "not_executed",
+                    error={"error": str(exc)} if not cancellation else {},
+                    diagnostics={"execution_strategy": strategy, "partial_batch": True,
+                                 "reason": "cancelled_before_dispatch" if cancellation else "not_executed"},
+                ))
+        return tuple(outcomes)
+
     def execute_many(self, requests: tuple[ArmExecutionRequest, ...] | list[ArmExecutionRequest], *,
                      cancel: Any = None) -> BatchExecutionResult:
         """Execute exact-reference conditions through one generic batch seam.
@@ -314,7 +381,43 @@ class DeleteSourceExactReferenceAdapter:
         if not prepared:
             return BatchExecutionResult(tuple(outcomes), {"execution_strategy": "preflight", "batch_count": 0})
 
-        shared = self._execute_shared_parent(prepared, run=run, cancel=cancel)
+        try:
+            shared = self._execute_shared_parent(prepared, run=run, cancel=cancel)
+        except (BatchCancelled, MultiArmError) as exc:
+            self._shared_parent_disabled = True
+            if self._shared_parent is not None:
+                try:
+                    self._shared_parent.close()
+                except Exception:
+                    pass
+                self._shared_parent = None
+            return BatchExecutionResult(
+                tuple(outcomes) + self._partial_probe_outcomes(
+                    prepared, exc, strategy="shared_parent",
+                ),
+                {"execution_strategy": "shared_parent", "batch_count": 1,
+                 "batch_size": len(prepared), "partial_failure": True},
+            )
+        except Exception as exc:
+            # A shared-parent probe was accepted by the worker.  There is no
+            # safe scalar retry here; every submitted condition is executed
+            # and failed unless the protocol supplied completed rows.
+            self._shared_parent_disabled = True
+            if self._shared_parent is not None:
+                try:
+                    self._shared_parent.close()
+                except Exception:
+                    pass
+                self._shared_parent = None
+            failed = tuple(ArmExecutionOutcome(
+                arm_id=request.arm_id, execution_disposition="executed", state="failed",
+                error={"error": str(exc)},
+                diagnostics={"execution_strategy": "shared_parent", "reason": "batch_dispatch_failed"},
+            ) for request, _payload in prepared)
+            return BatchExecutionResult(tuple(outcomes) + failed, {
+                "execution_strategy": "shared_parent", "batch_count": 1,
+                "batch_size": len(prepared), "partial_failure": True,
+            })
         if shared is not None:
             outcomes.extend(shared.outcomes)
             return BatchExecutionResult(tuple(outcomes), {
@@ -332,9 +435,18 @@ class DeleteSourceExactReferenceAdapter:
         if use_native:
             native_arms = [{key: deepcopy(value) for key, value in payload.items() if key != "provenance"}
                            for _request, payload in prepared]
-            raw_rows = probe_reference_match_many(
-                self.substrate, native_arms, cancel=cancel, proof_grade=True,
-            )
+            try:
+                raw_rows = probe_reference_match_many(
+                    self.substrate, native_arms, cancel=cancel, proof_grade=True,
+                )
+            except (BatchCancelled, MultiArmError) as exc:
+                return BatchExecutionResult(
+                    tuple(outcomes) + self._partial_probe_outcomes(
+                        prepared, exc, strategy=strategy,
+                    ),
+                    {"execution_strategy": strategy, "batch_count": 1,
+                     "batch_size": len(prepared), "partial_failure": True},
+                )
             if not isinstance(raw_rows, (list, tuple)) or len(raw_rows) != len(prepared):
                 raise ExecutionAdapterError("proof-grade exact batch returned the wrong arm count")
             raw_by_arm = {request.arm_id: raw for (request, _payload), raw in zip(prepared, raw_rows)}

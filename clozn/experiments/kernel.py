@@ -30,17 +30,18 @@ class ExperimentArm:
             raise AttributeError("ExperimentArm is immutable")
         object.__setattr__(self, name, value)
 
-    def __init__(self, arm_id: str, intervention: Intervention):
+    def __init__(self, arm_id: str, intervention: Intervention | None):
         if not isinstance(arm_id, str) or not arm_id:
             raise ValueError("ExperimentArm.arm_id must be a non-empty string")
-        if not isinstance(intervention, (DeleteSource, ForceToken)):
-            raise TypeError("Experiment arms must be supported typed interventions")
+        if intervention is not None and not isinstance(intervention, (DeleteSource, ForceToken)):
+            raise TypeError("Experiment arms must be supported typed interventions or None")
         self.arm_id = arm_id
         self.intervention = intervention
         self._sealed = True
 
     def to_dict(self) -> dict[str, Any]:
-        return {"arm_id": self.arm_id, "intervention": self.intervention.to_dict()}
+        return {"arm_id": self.arm_id,
+                "intervention": self.intervention.to_dict() if self.intervention is not None else None}
 
 
 class Experiment:
@@ -54,7 +55,7 @@ class Experiment:
         object.__setattr__(self, name, value)
 
     def __init__(self, *, base: ExecutionState | ResolvedState, evaluator: Evaluator,
-                 arms: Iterable[Intervention]):
+                 arms: Iterable[Intervention | None]):
         if not isinstance(base, (ExecutionState, ResolvedState)):
             raise TypeError("Experiment.base must be an ExecutionState or ResolvedState")
         if not isinstance(evaluator, (ExactReferenceMatch, ScoreRecordedContinuation, Generate)):
@@ -63,13 +64,18 @@ class Experiment:
             raise TypeError("Experiment.arms must be an iterable of interventions")
         raw_arms = list(arms)
         expected_intervention = ForceToken if isinstance(evaluator, Generate) else DeleteSource
-        if not all(isinstance(arm, expected_intervention) for arm in raw_arms):
-            raise TypeError(f"{type(evaluator).__name__} experiments require {expected_intervention.__name__} arms")
+        if not all(
+            (arm is None and isinstance(evaluator, Generate))
+            or isinstance(arm, expected_intervention)
+            for arm in raw_arms
+        ):
+            suffix = " or an unchanged condition" if isinstance(evaluator, Generate) else ""
+            raise TypeError(f"{type(evaluator).__name__} experiments require {expected_intervention.__name__} arms{suffix}")
         if isinstance(evaluator, Generate) and not isinstance(base, ResolvedState):
             raise TypeError("Generate experiments must be bound to a ResolvedState")
         if isinstance(evaluator, Generate) and base.classification == "unavailable":
             raise ValueError("Generate experiments cannot be created from an unavailable ResolvedState")
-        arm_payload = [arm.to_dict() for arm in raw_arms]
+        arm_payload = [arm.to_dict() if arm is not None else None for arm in raw_arms]
         base_identity = _base_identity(base)
         binding = {
             "base": base_identity,
@@ -82,7 +88,7 @@ class Experiment:
             arm_id = "arm_" + _digest({
                 "base": base_identity,
                 "index": index,
-                "intervention": intervention.to_dict(),
+                "intervention": intervention.to_dict() if intervention is not None else None,
             })[:24]
             assigned.append(ExperimentArm(arm_id, intervention))
         self.base = base
@@ -118,7 +124,11 @@ class Experiment:
         experiment = cls(
             base=base,
             evaluator=evaluator_from_dict(value.get("evaluator")),
-            arms=[intervention_from_dict(item.get("intervention")) for item in raw_arms],
+            arms=[
+                intervention_from_dict(item.get("intervention"))
+                if item.get("intervention") is not None else None
+                for item in raw_arms
+            ],
         )
         if value.get("experiment_id") != experiment.experiment_id:
             raise ValueError("Experiment ID does not match its deterministic plan")

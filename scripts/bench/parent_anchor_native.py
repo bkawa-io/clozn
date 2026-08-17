@@ -24,7 +24,7 @@ if str(ENGINE_CLIENT_ROOT) not in sys.path:
     sys.path.insert(0, str(ENGINE_CLIENT_ROOT))
 
 from clozn.runs.answer_preservation import _generation_contract_from_run, classify_reference_match
-from clozn.runs.multi_arm import probe_reference_match_many
+from clozn.experiments.multi_arm import probe_reference_match_many
 from clozn.experiments.effective_prompt import render_effective_prompt_for_retained
 from clozn.runs.store import get_run
 

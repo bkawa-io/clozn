@@ -57,6 +57,106 @@ class AnswerTokenBoundary:
         return cls(value.get("index"))
 
 
+class RecordedAnswerBoundary:
+    """Read-only projection of one addressable recorded answer-token boundary.
+
+    ``recorded_token_id`` and ``recorded_token_piece`` describe the token whose
+    decision is next at this boundary.  They are evidence projections, not a
+    second coordinate system; the canonical address remains ``index``.
+    """
+
+    __slots__ = (
+        "index", "recorded_token_id", "recorded_token_piece", "response_offset",
+        "state_fingerprint", "_sealed",
+    )
+
+    def __setattr__(self, name, value):
+        if getattr(self, "_sealed", False):
+            raise AttributeError("RecordedAnswerBoundary is immutable")
+        object.__setattr__(self, name, value)
+
+    def __init__(self, *, index: int, recorded_token_id: int,
+                 recorded_token_piece: str, response_offset: int,
+                 state_fingerprint: str):
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            raise StateRefError("boundary index must be a non-negative integer")
+        if isinstance(recorded_token_id, bool) or not isinstance(recorded_token_id, int) or recorded_token_id < 0:
+            raise StateRefError("recorded boundary token ID must be a non-negative integer")
+        if not isinstance(recorded_token_piece, str):
+            raise StateRefError("recorded boundary token piece must be a string")
+        if isinstance(response_offset, bool) or not isinstance(response_offset, int) or response_offset < 0:
+            raise StateRefError("recorded boundary response offset must be non-negative")
+        if not isinstance(state_fingerprint, str) or not state_fingerprint:
+            raise StateRefError("recorded boundary state fingerprint is required")
+        self.index = index
+        self.recorded_token_id = recorded_token_id
+        self.recorded_token_piece = recorded_token_piece
+        self.response_offset = response_offset
+        self.state_fingerprint = state_fingerprint
+        self._sealed = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": "answer_token_boundary",
+            "index": self.index,
+            "recorded_token_id": self.recorded_token_id,
+            "recorded_token_piece": self.recorded_token_piece,
+            "token_id": self.recorded_token_id,
+            "token_piece": self.recorded_token_piece,
+            "response_offset": self.response_offset,
+            "state_fingerprint": self.state_fingerprint,
+        }
+
+    @property
+    def token_id(self) -> int:
+        return self.recorded_token_id
+
+    @property
+    def token_piece(self) -> str:
+        return self.recorded_token_piece
+
+
+def _recorded_tokens(run: Mapping[str, Any]) -> tuple[list[str], list[int]]:
+    if not isinstance(run, Mapping):
+        raise StateRefError("recorded token history requires a run mapping")
+    trace = run.get("trace")
+    pieces = trace.get("tokens") if isinstance(trace, Mapping) else None
+    token_ids = trace.get("token_ids") if isinstance(trace, Mapping) else None
+    if not (
+        isinstance(pieces, list) and pieces
+        and all(isinstance(piece, str) for piece in pieces)
+        and isinstance(token_ids, list) and token_ids
+        and all(isinstance(token_id, int) and not isinstance(token_id, bool) and token_id >= 0
+                for token_id in token_ids)
+        and len(pieces) == len(token_ids)
+    ):
+        raise StateRefError("recorded token history is malformed or unavailable")
+    return pieces, token_ids
+
+
+def enumerate_answer_boundaries(run: Mapping[str, Any]) -> tuple[RecordedAnswerBoundary, ...]:
+    """Enumerate the canonical, model-free answer-token decision boundaries.
+
+    The final recorded token is the last addressable decision.  A boundary
+    does not imply that a checkpoint or a worker is available; that is the
+    responsibility of :func:`resolve_state`.
+    """
+    pieces, token_ids = _recorded_tokens(run)
+    result = []
+    offset = 0
+    for index, (piece, token_id) in enumerate(zip(pieces, token_ids)):
+        ref = StateRef.before_answer_token(run, index)
+        result.append(RecordedAnswerBoundary(
+            index=index, recorded_token_id=token_id, recorded_token_piece=piece,
+            response_offset=offset, state_fingerprint=ref.state_fingerprint,
+        ))
+        offset += len(piece)
+    return tuple(result)
+
+
+list_answer_token_boundaries = enumerate_answer_boundaries
+
+
 class StateRef:
     """An immutable reference to one recorded answer-token boundary."""
 
@@ -376,7 +476,9 @@ def resolve_state(state_ref: StateRef, *, run: Mapping[str, Any] | None = None,
 
 
 __all__ = [
-    "AnswerTokenBoundary", "RESOLUTION_POLICIES", "RESOLVED_STATE_SCHEMA_VERSION",
+    "AnswerTokenBoundary", "RecordedAnswerBoundary", "enumerate_answer_boundaries",
+    "list_answer_token_boundaries",
+    "RESOLUTION_POLICIES", "RESOLVED_STATE_SCHEMA_VERSION",
     "ResolvedState", "STATE_CLASSIFICATIONS", "STATE_REF_SCHEMA_VERSION", "StateRef",
     "StateRefError", "resolve_state",
 ]

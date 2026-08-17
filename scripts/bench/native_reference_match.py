@@ -244,7 +244,7 @@ def run(args: argparse.Namespace) -> dict:
 
     from clozn.server import app as cs
     EngineSubstrate = cs.EngineSubstrate
-    from clozn.runs.multi_arm import probe_reference_match_many
+    from clozn.experiments.multi_arm import probe_reference_match_many
     try:
         from clozn_engine import EngineClient
     except ImportError:
@@ -307,7 +307,10 @@ def run(args: argparse.Namespace) -> dict:
             f"starting native parity probe: {len(parity_requested)} arms",
             run_started, progress_enabled)
         native_started = time.perf_counter_ns()
-        native = probe_reference_match_many(sub, parity_requested, proof_grade=False)
+        # This benchmark intentionally invokes the substrate's opt-in
+        # non-proof-grade native path.  The generic experiment runner never
+        # does this; qualification remains a separate measurement.
+        native = sub.probe_reference_match_many(parity_requested, proof_grade=False)
         native_wall = time.perf_counter_ns() - native_started
         parity_equal = all(
             _evidence_projection(scalar[index]) == _evidence_projection(native[index])
@@ -343,7 +346,7 @@ def run(args: argparse.Namespace) -> dict:
                 f"starting full native probe: {len(arms)} arms",
                 run_started, progress_enabled)
             full_started = time.perf_counter_ns()
-            full_native = probe_reference_match_many(sub, arms, proof_grade=False)
+            full_native = sub.probe_reference_match_many(arms, proof_grade=False)
             full_native_wall = time.perf_counter_ns() - full_started
             native_metrics = dict(sub.last_native_reference_match_metrics or native_metrics)
             native_strategy = native_metrics.get("strategy", native_strategy)

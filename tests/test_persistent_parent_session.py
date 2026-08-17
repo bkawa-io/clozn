@@ -4,11 +4,11 @@ import json
 
 import pytest
 
-from clozn.runs.persistent_parent import (
-    PersistentParentParityError,
-    PersistentParentSessionClient,
-    PersistentParentSessionError,
-    assert_scalar_parity,
+from clozn.experiments.shared_parent import (
+    SharedParentParityError,
+    SharedParentSessionClient,
+    SharedParentSessionError,
+    assert_evidence_parity,
 )
 
 
@@ -68,7 +68,7 @@ CONTRACT = {
 
 def _client():
     engine = _Engine()
-    client = PersistentParentSessionClient(engine, (1, 2), CONTRACT)
+    client = SharedParentSessionClient(engine, (1, 2), CONTRACT)
     return client, engine
 
 
@@ -89,7 +89,7 @@ def test_create_establishes_deterministic_parent_version_zero():
 def test_probe_binds_expected_parent_version_and_rejects_stale():
     client, engine = _client()
     client.create("PARENT")
-    with pytest.raises(PersistentParentSessionError) as exc:
+    with pytest.raises(SharedParentSessionError) as exc:
         client.probe_round(_children(), expected_parent_version=7)
     assert exc.value.code == "stale_parent_state"
     assert engine.probes == []
@@ -109,7 +109,7 @@ def test_explicit_promotion_increments_parent_version_without_client_selection()
     client, engine = _client()
     client.create("PARENT")
     client.probe_round(_children())
-    client.promote("child-b", scalar_preserves=True)
+    client.promote("child-b", exact_preserved=True)
     assert client.parent_version == 1
     assert engine.promotions == ["child-b"]
 
@@ -118,12 +118,12 @@ def test_old_child_cannot_be_promoted_after_parent_changes_and_double_promotion_
     client, _engine = _client()
     client.create("PARENT")
     client.probe_round(_children())
-    client.promote("child-b", scalar_preserves=True)
-    with pytest.raises(PersistentParentSessionError) as exc:
-        client.promote("child-a", scalar_preserves=True)
+    client.promote("child-b", exact_preserved=True)
+    with pytest.raises(SharedParentSessionError) as exc:
+        client.promote("child-a", exact_preserved=True)
     assert exc.value.code == "stale_candidate"
-    with pytest.raises(PersistentParentSessionError) as exc:
-        client.promote("child-b", scalar_preserves=True)
+    with pytest.raises(SharedParentSessionError) as exc:
+        client.promote("child-b", exact_preserved=True)
     assert exc.value.code == "stale_candidate"
 
 
@@ -132,7 +132,7 @@ def test_close_invalidates_later_operations():
     client.create("PARENT")
     client.close()
     assert engine.closed == ["session-1"]
-    with pytest.raises(PersistentParentSessionError) as exc:
+    with pytest.raises(SharedParentSessionError) as exc:
         client.probe_round(_children())
     assert exc.value.code == "session_closed"
 
@@ -144,25 +144,25 @@ def test_cancellation_does_not_logically_promote_a_child():
     client.cancel_round()
     assert client.parent_version == 0
     assert engine.promotions == []
-    with pytest.raises(PersistentParentSessionError):
-        client.promote("child-b", scalar_preserves=True)
+    with pytest.raises(SharedParentSessionError):
+        client.promote("child-b", exact_preserved=True)
 
 
-def test_scalar_rejection_prevents_promotion():
+def test_unverified_evidence_prevents_promotion():
     client, engine = _client()
     client.create("PARENT")
     client.probe_round(_children())
-    with pytest.raises(PersistentParentSessionError) as exc:
-        client.promote("child-b", scalar_preserves=False)
-    assert exc.value.code == "scalar_rejection_prevents_promotion"
+    with pytest.raises(SharedParentSessionError) as exc:
+        client.promote("child-b", exact_preserved=False)
+    assert exc.value.code == "promotion_requires_exact_preservation"
     assert engine.promotions == []
 
 
 def test_native_scalar_disagreement_surfaces_typed_parity_failure():
-    with pytest.raises(PersistentParentParityError) as exc:
-        assert_scalar_parity([{"status": "matched", "matched_token_count": 2}],
-                             [{"status": "diverged", "matched_token_count": 1}])
-    assert exc.value.code == "persistent_parent_parity_failure"
+    with pytest.raises(SharedParentParityError) as exc:
+        assert_evidence_parity([{"status": "matched", "matched_token_count": 2}],
+                               [{"status": "diverged", "matched_token_count": 1}])
+    assert exc.value.code == "shared_parent_parity_failure"
     assert exc.value.mismatches[0]["arm_index"] == 0
 
 

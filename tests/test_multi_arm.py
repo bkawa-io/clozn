@@ -4,7 +4,7 @@ from threading import Event
 
 import pytest
 
-from clozn.runs.multi_arm import (
+from clozn.experiments.multi_arm import (
     BatchCancelled,
     MultiArmError,
     concurrent_many,
@@ -81,6 +81,9 @@ class ScalarSubstrate:
 class NativeBatchSubstrate(ScalarSubstrate):
     """A deliberately completion-reordered native fake."""
 
+    score_tokens_many_proof_grade = True
+    probe_reference_match_many_proof_grade = True
+
     def score_tokens_many(self, arms, *, cancel=None):
         results = [{"arm_index": index, "result": self.score_tokens(**arm)}
                    for index, arm in enumerate(arms)]
@@ -155,6 +158,8 @@ def test_batch_cancellation_returns_completed_results_and_does_not_dispatch_queu
 
 def test_different_messages_share_one_native_score_batch_when_contract_matches():
     class GroupingSubstrate(ScalarSubstrate):
+        score_tokens_many_proof_grade = True
+
         def __init__(self):
             super().__init__()
             self.batches = []
@@ -178,6 +183,8 @@ def test_different_messages_share_one_native_score_batch_when_contract_matches()
 
 def test_different_messages_share_exact_batch_but_contract_changes_split_groups():
     class GroupingSubstrate(ScalarSubstrate):
+        probe_reference_match_many_proof_grade = True
+
         def __init__(self):
             super().__init__()
             self.batches = []

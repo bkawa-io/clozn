@@ -219,6 +219,7 @@ def materialize_generated_observation(
     observation_store: ObservationStore | None = None,
     store: ObservationStore | None = None,
     reload_parent: Callable[[str], Mapping[str, Any] | None] | None = None,
+    observation_id: str | None = None,
 ) -> dict[str, Any]:
     """Promote one persisted GeneratedObservation to one child Run.
 
@@ -243,8 +244,10 @@ def materialize_generated_observation(
     observation = arm.observation
     if observation.status != "completed":
         raise MaterializationError("unavailable or failed generation cannot be materialized")
-    if not isinstance(arm.intervention, ForceToken):
-        raise MaterializationError("generated materialization requires a ForceToken arm")
+    if observation_id is not None and observation.observation_id != observation_id:
+        raise MaterializationStaleError("the requested GeneratedObservation does not match the persisted arm")
+    if arm.intervention is not None and not isinstance(arm.intervention, ForceToken):
+        raise MaterializationError("generated materialization requires ForceToken or an unchanged condition")
     if resolved.base.run_id != base_run["id"]:
         raise MaterializationStaleError("experiment result is bound to another parent run")
     current_parent = reload_parent(base_run["id"]) if callable(reload_parent) else base_run
@@ -263,11 +266,14 @@ def materialize_generated_observation(
     if observation.observation_id != expected["observation_id"] \
             or observation.observation_key_sha256 != expected["observation_key_sha256"]:
         raise MaterializationStaleError("GeneratedObservation identity does not match the persisted arm")
+    expected_intervention = arm.intervention.to_dict() if arm.intervention is not None else None
+    if observation.intervention != expected_intervention:
+        raise MaterializationStaleError("GeneratedObservation intervention does not match the persisted arm")
 
     trace = current_parent.get("trace") if isinstance(current_parent.get("trace"), Mapping) else {}
     pieces = trace.get("tokens") if isinstance(trace.get("tokens"), list) else []
     position = resolved.base.position.index
-    if len(pieces) <= position:
+    if len(pieces) < position:
         raise MaterializationStaleError("the parent token boundary is no longer available")
     prefix = "".join(str(piece) for piece in pieces[:position])
     response = prefix + observation.generated_suffix_text
@@ -288,7 +294,7 @@ def materialize_generated_observation(
                 from clozn.runs.trace import steps_to_trace
                 child_trace = steps_to_trace(full_steps)
 
-    intervention = arm.intervention.to_dict()
+    intervention = arm.intervention.to_dict() if arm.intervention is not None else None
     changes = {
         "experiment": {
             "experiment_id": resolved.experiment_id,
@@ -299,6 +305,7 @@ def materialize_generated_observation(
                 "position": resolved.base.position.to_dict(),
                 "realized_fidelity": observation.fidelity_classification,
             },
+            "operation": "force_token" if arm.intervention is not None else "continue",
             "intervention": intervention,
         },
     }
