@@ -321,7 +321,7 @@ def _merged_ranges(ranges: list[list[int]]) -> list[list[int]]:
 def resolve_context_receipt_source_set(run: dict, removed_source_ids: Iterable[str]) -> dict:
     """Strictly resolve canonical Context Receipt roots and exact span sources.
 
-    This is the strict Context Dependence/regeneration seam.  It only accepts a
+    This is the strict source-removal/regeneration seam.  It only accepts a
     current, new-shape receipt whose delivered list completely verifies the raw
     messages.  When a run records an assembled message basis (the prompt that
     generation actually received), that list and its receipt projection must
@@ -394,7 +394,7 @@ def resolve_context_receipt_source_set(run: dict, removed_source_ids: Iterable[s
     # Source-set identity/provenance is lexically canonical; ranges retain
     # their prompt-basis order so a reviewer can inspect the actual deletion
     # surgery without mentally re-sorting opaque IDs.  This also matches the
-    # direct teacher-forced Context Dependence experiment record.
+    # direct teacher-forced source-removal experiment record.
     for source_id in sorted(requested, key=lambda value: (
         by_id[value]["message_index"], by_id[value]["unicode_range"], value
     )):
@@ -492,7 +492,7 @@ def neutralize_context_receipt_sources(run: dict, source_ids: Iterable[str]) -> 
     """Strict matched-Unicode-length neutralization control for source spans.
 
     This is deliberately a sibling of ``delete_context_receipt_sources``:
-    deletion remains the canonical Context Dependence intervention, while this
+    deletion remains the canonical source-removal intervention, while this
     function records a separately named robustness control.  It reuses the
     deletion resolver only for the source catalog/current-byte proof and never
     uses its deleted messages.  Thus a parent/child source selection is merged

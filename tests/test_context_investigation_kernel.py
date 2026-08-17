@@ -162,14 +162,6 @@ def test_reader_stale_baseline_does_not_retokenize_response():
     assert "reconstruct" in document["reason"]
 
 
-def test_reader_ignores_legacy_context_dependence_artifact():
-    run, source_ids = _run()
-    run["context_dependence_study"] = {"schema_version": "clozn.context-dependence-study.v2", "status": "available"}
-    plan = plan_context_effects(run, source_ids=source_ids[:1])
-    document = build_context_investigation_reader(run, plan, observation_store=MemoryStore())
-    assert document["status"] == "not_measured"
-
-
 def test_answer_query_reuses_vectors_and_ranks_signed_effects():
     run, source_ids = _run()
     view = _view(run, source_ids[:2])

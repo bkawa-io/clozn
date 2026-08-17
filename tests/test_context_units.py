@@ -2,12 +2,9 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from itertools import combinations
-
 import pytest
 
 from clozn import schemas
-from clozn.receipts.context_dependence import ContextDependenceStudy
 from clozn.replay.span_bridge import (
     ContextReceiptSourceResolutionError,
     resolve_context_receipt_source_set,
@@ -145,34 +142,6 @@ def test_drifted_message_refuses_an_existing_auto_source():
     run["messages"][0]["content"] += " tampered"
     with pytest.raises(ContextReceiptSourceResolutionError):
         resolve_context_receipt_source_set(run, [source_id])
-
-
-class _ScoreSub:
-    def score_tokens(self, messages, continuation_ids, **kwargs):
-        return [{"id": 1, "piece": "ok", "logprob": -1.0}]
-
-
-def test_default_ids_go_directly_through_context_dependence_and_all_small_subsets():
-    messages = [
-        {"role": "system", "content": "# A\nalpha\n\n# B\nbeta"},
-        {"role": "user", "content": "old"},
-        {"role": "user", "content": "current"},
-    ]
-    run = _run(messages, run_id="run_study")
-    run["assembled_messages"] = deepcopy(messages)
-    run["context_receipt"] = build_context_receipt(
-        messages=messages, assembled_messages=messages, run_id="run_study", privacy="full"
-    )
-    run["response"] = "ok"
-    run["trace"] = {"token_ids": [1]}
-    run["context_units"] = build_context_unit_manifest(run)
-    ids = run["context_units"]["default_source_ids"]
-    study = ContextDependenceStudy(run, _ScoreSub())
-    assert set(ids).issubset(study.source_ids)
-    assert study.measure_removal_effect(ids[:1])["exact_removed_ranges"]
-    for size in range(1, len(ids) + 1):
-        for subset in combinations(ids, size):
-            assert study.measure_removal_effect(list(subset))["removed_source_ids"] == sorted(subset)
 
 
 def test_manifest_schema_is_valid():

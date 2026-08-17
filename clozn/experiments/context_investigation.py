@@ -3,8 +3,7 @@
 This module is deliberately read-side only. It consumes a model-free
 ContextEffectsPlan, a recorded Run/Context Receipt, and the durable
 ExperimentView/ObservationStore representation. It never selects a worker,
-starts a job, scores a continuation, or reads the legacy Context Dependence
-artifact.
+starts a job, or scores a continuation.
 """
 from __future__ import annotations
 

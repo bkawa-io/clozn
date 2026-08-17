@@ -493,7 +493,7 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
         }
         # Construct the default source universe only after receipt capture has
         # minted and persisted canonical seg_/src_ identities.  The manifest
-        # therefore contains IDs the strict Context Dependence path can consume
+        # therefore contains IDs the strict source-removal path can consume
         # directly; derivation failures produce an empty universe rather than a
         # speculative coordinate mapping.
         from . import context_units
