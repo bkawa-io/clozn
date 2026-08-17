@@ -87,6 +87,12 @@ def discover() -> list:
             module = importlib.import_module(dotted)
             if getattr(module, MARKER, False) is not True:
                 continue
+            # A legacy module may remain importable as a differential oracle
+            # without remaining an active product route.  This keeps route
+            # ownership explicit at discovery time rather than relying on a
+            # dead handler to reject requests after dispatch.
+            if getattr(module, "CLOZN_ROUTE_ENABLED", True) is not True:
+                continue
             if not hasattr(module, "try_get") and not hasattr(module, "try_post"):
                 raise AttributeError(
                     f"sets {MARKER} = True but defines neither try_get(h, p) nor try_post(h, p, body)")

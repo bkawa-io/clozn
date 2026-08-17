@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.experiment-generated-observation.v2",
+  "title": "Standalone generated experiment observation",
+  "type": "object",
+  "required": [
+    "schema_version", "observation_id", "observation_key_sha256", "observation_key",
+    "run_id", "base_execution_fingerprint", "evaluator", "condition", "contract",
+    "status", "state_ref", "realization", "fidelity", "intervention",
+    "generated_suffix_text", "generated_token_ids", "generation_contract",
+    "input_snapshot"
+  ],
+  "properties": {
+    "schema_version": {"const": "clozn.experiment-generated-observation.v2"},
+    "observation_id": {"type": "string", "minLength": 1},
+    "observation_key_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "observation_key": {"type": "object", "additionalProperties": true},
+    "run_id": {"type": "string", "minLength": 1},
+    "base_execution_fingerprint": {"type": "string", "minLength": 1},
+    "evaluator": {"type": "object", "additionalProperties": true},
+    "condition": {"type": "object", "additionalProperties": true},
+    "contract": {"type": "object", "additionalProperties": true},
+    "status": {"enum": ["completed", "unavailable", "failed"]},
+    "state_ref": {"type": ["object", "null"]},
+    "realization": {"type": "object", "additionalProperties": true},
+    "fidelity": {"type": "object", "additionalProperties": true},
+    "intervention": {"type": ["object", "null"]},
+    "generated_suffix_text": {"type": "string"},
+    "generated_token_ids": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+    "generated_steps": {"type": ["array", "null"]},
+    "finish_reason": {"type": ["string", "null"]},
+    "generation_contract": {"type": "object", "additionalProperties": true},
+    "runtime_provenance": {"type": "object", "additionalProperties": true},
+    "exact_control_proof": {"type": "object", "additionalProperties": true},
+    "input_snapshot": {"type": ["object", "null"]},
+    "execution_provenance": {"type": "object", "additionalProperties": true},
+    "proof_grade": {"type": "string", "minLength": 1},
+    "trusted": {"type": "boolean"},
+    "diagnostics": {"type": "object", "additionalProperties": true}
+  },
+  "additionalProperties": true
+}

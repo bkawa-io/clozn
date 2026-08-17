@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.context-investigation-counterfactual-result.v1",
+  "title": "Compact Context Investigation counterfactual result",
+  "type": "object",
+  "required": ["schema_version", "run_id", "source_id", "experiment_id", "arm_id", "status", "generated_text", "generated_token_count", "experiment_state"],
+  "properties": {
+    "schema_version": {"const": "clozn.context-investigation-counterfactual-result.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "source_id": {"type": "string", "minLength": 1},
+    "experiment_id": {"type": "string", "minLength": 1},
+    "arm_id": {"type": "string", "minLength": 1},
+    "observation_id": {"type": ["string", "null"]},
+    "status": {"type": "string"},
+    "generated_text": {"type": "string"},
+    "generated_token_count": {"type": "integer", "minimum": 0},
+    "finish_reason": {"type": ["string", "null"]},
+    "reason": {"type": ["string", "null"]},
+    "reason_code": {"type": ["string", "null"]},
+    "experiment_state": {"type": "string"}
+  }
+}

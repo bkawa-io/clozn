@@ -7,7 +7,12 @@ recorded run's model.
 """
 from __future__ import annotations
 
+# Legacy Context Dependence remains importable as a differential oracle for
+# historical fixtures, but it is no longer a product route.  Context
+# Investigation v1 is the sole authoritative backend surface for new source
+# actions and counterfactual generation.
 CLOZN_ROUTE_AUTOLOAD = True
+CLOZN_ROUTE_ENABLED = False
 
 _SCHEMA_V1 = "clozn.context-dependence-study.v1"
 _SCHEMA_V2 = "clozn.context-dependence-study.v2"

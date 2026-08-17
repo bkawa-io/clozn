@@ -6,12 +6,13 @@ from copy import deepcopy
 import math
 from typing import Any
 
+from .interventions import DeleteSource
 from .state import canonical_json, digest
 
 
 SCHEMA_VERSION = "clozn.experiment-observation.v2"
 TOKEN_SCORE_SCHEMA_VERSION = "clozn.experiment-token-score-observation.v2"
-GENERATED_OBSERVATION_SCHEMA_VERSION = "clozn.experiment-generated-observation.v1"
+GENERATED_OBSERVATION_SCHEMA_VERSION = "clozn.experiment-generated-observation.v2"
 OBSERVATION_STATUSES = frozenset({"completed", "exact_preserved", "diverged", "unavailable", "failed"})
 TOKEN_SCORE_STATUSES = frozenset({"completed", "unavailable", "failed"})
 
@@ -353,20 +354,29 @@ class GeneratedObservation(Observation):
     __slots__ = (
         "state_ref", "realization", "fidelity", "intervention", "generated_suffix_text",
         "generated_token_ids", "generated_steps", "finish_reason", "generation_contract",
-        "runtime_provenance", "exact_control_proof",
+        "runtime_provenance", "exact_control_proof", "input_snapshot",
     )
 
-    def __init__(self, *, state_ref: Any, realization: Mapping[str, Any], fidelity: Mapping[str, Any],
+    def __init__(self, *, state_ref: Any = None, realization: Mapping[str, Any], fidelity: Mapping[str, Any],
                  intervention: Any, generated_suffix_text: str, generated_token_ids=None,
                  generated_steps=None, finish_reason: str | None = None,
                  generation_contract: Mapping[str, Any] | None = None,
                  runtime_provenance: Mapping[str, Any] | None = None,
-                 exact_control_proof: Mapping[str, Any] | None = None, **kwargs):
+                 exact_control_proof: Mapping[str, Any] | None = None,
+                 input_snapshot: Mapping[str, Any] | None = None, **kwargs):
         from .state_ref import StateRef
-        if not isinstance(state_ref, StateRef):
-            raise ObservationError("GeneratedObservation.state_ref must be a StateRef")
+        if state_ref is not None and not isinstance(state_ref, StateRef):
+            raise ObservationError("GeneratedObservation.state_ref must be a StateRef or None")
+        if state_ref is None:
+            evaluator_value = kwargs.get("evaluator")
+            if not isinstance(evaluator_value, Mapping) or evaluator_value.get("kind") != "generate":
+                raise ObservationError("StateRef-free GeneratedObservation must be a Generate observation")
+            if not isinstance(intervention, DeleteSource):
+                raise ObservationError("StateRef-free GeneratedObservation requires DeleteSource")
         if not isinstance(realization, Mapping) or not isinstance(fidelity, Mapping):
             raise ObservationError("GeneratedObservation realization and fidelity are required")
+        if input_snapshot is not None and not isinstance(input_snapshot, Mapping):
+            raise ObservationError("GeneratedObservation.input_snapshot must be an object when supplied")
         if not isinstance(generated_suffix_text, str):
             raise ObservationError("generated_suffix_text must be a string")
         ids = tuple(generated_token_ids or ())
@@ -380,13 +390,13 @@ class GeneratedObservation(Observation):
         if isinstance(supplied_key, Mapping):
             supplied_contract = supplied_key.get("contract")
             if isinstance(supplied_contract, Mapping):
-                if supplied_contract.get("state_ref") != state_ref.identity_payload():
+                if state_ref is not None and supplied_contract.get("state_ref") != state_ref.identity_payload():
                     raise ObservationIntegrityError("GeneratedObservation StateRef disagrees with its identity")
                 realization_identity = supplied_contract.get("state_realization")
                 if isinstance(realization_identity, Mapping) and realization_identity.get("realization") != dict(realization):
                     raise ObservationIntegrityError("GeneratedObservation realization disagrees with its identity")
         supplied_base = kwargs.get("base_execution_fingerprint")
-        if supplied_base is not None and supplied_base != state_ref.execution_fingerprint:
+        if state_ref is not None and supplied_base is not None and supplied_base != state_ref.execution_fingerprint:
             raise ObservationIntegrityError("GeneratedObservation base execution disagrees with its StateRef")
         supplied_condition = kwargs.get("condition")
         expected_condition = condition_for_intervention(intervention)
@@ -404,6 +414,7 @@ class GeneratedObservation(Observation):
         self.generation_contract = _copy_mapping(generation_contract)
         self.runtime_provenance = _copy_mapping(runtime_provenance)
         self.exact_control_proof = _copy_mapping(exact_control_proof)
+        self.input_snapshot = _copy_mapping(input_snapshot)
         self._sealed = True
 
     @property
@@ -414,7 +425,7 @@ class GeneratedObservation(Observation):
         value = self._base_dict()
         value["schema_version"] = GENERATED_OBSERVATION_SCHEMA_VERSION
         value.update({
-            "state_ref": self.state_ref.to_dict(),
+            "state_ref": self.state_ref.to_dict() if self.state_ref is not None else None,
             "realization": deepcopy(self.realization), "fidelity": deepcopy(self.fidelity),
             "intervention": deepcopy(self.intervention), "generated_suffix_text": self.generated_suffix_text,
             "generated_token_ids": list(self.generated_token_ids),
@@ -422,6 +433,7 @@ class GeneratedObservation(Observation):
             "generation_contract": deepcopy(self.generation_contract),
             "runtime_provenance": deepcopy(self.runtime_provenance),
             "exact_control_proof": deepcopy(self.exact_control_proof),
+            "input_snapshot": deepcopy(self.input_snapshot),
         })
         return value
 
@@ -434,7 +446,7 @@ class GeneratedObservation(Observation):
         try:
             intervention = (intervention_from_dict(value.get("intervention"))
                             if value.get("intervention") is not None else None)
-            state_ref = StateRef.from_dict(value.get("state_ref"))
+            state_ref = StateRef.from_dict(value.get("state_ref")) if value.get("state_ref") is not None else None
         except Exception as exc:
             raise ObservationError("GeneratedObservation contains malformed state or intervention") from exc
         return cls(
@@ -443,6 +455,7 @@ class GeneratedObservation(Observation):
             generated_token_ids=value.get("generated_token_ids") or (), generated_steps=value.get("generated_steps"),
             finish_reason=value.get("finish_reason"), generation_contract=value.get("generation_contract"),
             runtime_provenance=value.get("runtime_provenance"), exact_control_proof=value.get("exact_control_proof"),
+            input_snapshot=value.get("input_snapshot"),
             observation_id=value.get("observation_id"), observation_key_sha256=value.get("observation_key_sha256"),
             observation_key=value.get("observation_key"), run_id=value.get("run_id"),
             base_execution_fingerprint=value.get("base_execution_fingerprint"), evaluator=value.get("evaluator"),

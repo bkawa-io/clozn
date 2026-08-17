@@ -34,7 +34,7 @@ from .interventions import DeleteSource
 from .interventions import ForceToken, Intervention, intervention_from_dict
 from .kernel import Experiment, ExperimentArm
 from .materialize import MaterializeBranch, materialize_arm, materialize_generated_observation
-from .generation import GenerateExecutionAdapter, GenerateExecutionError
+from .generation import DeleteSourceGenerateAdapter, GenerateExecutionAdapter, GenerateExecutionError
 from .observations import (
     Observation, ObservationError, ObservationIntegrityError, GeneratedObservation, TokenScoreDelta,
     TokenScoreObservation, condition_for_intervention, execution_observation_identity,
@@ -96,7 +96,7 @@ __all__ = ["REGISTRY", "catalog", "run_experiment", "substrate_ok", "MANIFEST_SC
            "resolve_delete_source", "resolve_answer_selection", "project_answer_effects",
            "project_answer_selection", "experimental_run_experiment", "materialize_arm",
            "materialize_generated_observation", "MaterializeBranch", "GenerateExecutionAdapter",
-           "GenerateExecutionError", "BEST_VERIFIED", "INCLUSION_MINIMUM", "SearchBudget",
+           "DeleteSourceGenerateAdapter", "GenerateExecutionError", "BEST_VERIFIED", "INCLUSION_MINIMUM", "SearchBudget",
            "SearchEvidenceRef", "SearchResult", "SearchTrial", "SearchTrajectoryEntry",
            "run_adaptive_search", "ContextSearchDispatcher", "ContextSearchUnavailable",
            "ContextInvestigationError", "ContextInvestigationStale", "ContextInvestigationUnavailable",

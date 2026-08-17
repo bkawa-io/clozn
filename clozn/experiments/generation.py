@@ -8,10 +8,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from copy import deepcopy
+import math
 from typing import Any
 
 from clozn.replay.execution_fork import (
-    parent_runtime_projection, plan_execution_fork,
+    _runtime_projection, parent_runtime_projection, plan_execution_fork,
 )
 from clozn.replay.execution_fork_execute import (
     ExecutionForkExecutionError, _worker_generation_steps, _worker_receipt,
@@ -20,14 +21,24 @@ from clozn.replay.execution_fork_execute import (
 from clozn.replay import fork as reconstructed_fork
 
 from .evaluators import Generate
-from .interventions import ForceToken
+from .execution import resolve_delete_source
+from .effective_prompt import resolve_effective_prompt
+from .interventions import DeleteSource, ForceToken
 from .observations import GeneratedObservation, execution_observation_identity
 from .state import ExecutionState, digest
 from .state_ref import ResolvedState, StateRefError
 
-
 class GenerateExecutionError(ValueError):
     """A Generate arm cannot produce honest standalone evidence."""
+
+
+def _plain(value: Any) -> Any:
+    """Detach ExecutionState's recursively frozen mapping/list values."""
+    if isinstance(value, Mapping):
+        return {str(key): _plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(item) for item in value]
+    return deepcopy(value)
 
 
 def _runtime_from_substrate(run: Mapping[str, Any], substrate: Any) -> Mapping[str, Any] | None:
@@ -77,7 +88,8 @@ def _worker_from_substrate(substrate: Any) -> Mapping[str, Any] | None:
     return None
 
 
-def _identity_kwargs(base: ResolvedState, evaluator: Generate, intervention: ForceToken | None) -> dict[str, Any]:
+def _identity_kwargs(base: ExecutionState | ResolvedState, evaluator: Generate,
+                     intervention: DeleteSource | ForceToken | None) -> dict[str, Any]:
     identity = execution_observation_identity(base, evaluator, intervention)
     key = identity["observation_key"]
     return {
@@ -90,14 +102,16 @@ def _identity_kwargs(base: ResolvedState, evaluator: Generate, intervention: For
     }
 
 
-def _unavailable(base: ResolvedState, evaluator: Generate, intervention: ForceToken | None,
+def _unavailable(base: ExecutionState | ResolvedState, evaluator: Generate,
+                 intervention: DeleteSource | ForceToken | None,
                  code: str, message: str, *, diagnostics: Mapping[str, Any] | None = None) -> GeneratedObservation:
     value = {"reason_code": code, "message": message}
     value.update(dict(diagnostics or {}))
     return GeneratedObservation(
         **_identity_kwargs(base, evaluator, intervention), status="unavailable",
-        state_ref=base.state_ref, realization=base.realization,
-        fidelity={"classification": base.classification, "proof_status": "not_confirmed"},
+        state_ref=getattr(base, "state_ref", None), realization=getattr(base, "realization", {}),
+        fidelity={"classification": getattr(base, "classification", "recorded_execution"),
+                  "proof_status": "not_confirmed"},
         intervention=intervention, generated_suffix_text="", generated_token_ids=(),
         execution_provenance={"adapter": "generate", "state_resolution": base.to_dict()},
         runtime_provenance={}, exact_control_proof={}, generation_contract=evaluator.to_dict(),
@@ -105,7 +119,8 @@ def _unavailable(base: ResolvedState, evaluator: Generate, intervention: ForceTo
     )
 
 
-def _failed(base: ResolvedState, evaluator: Generate, intervention: ForceToken | None,
+def _failed(base: ExecutionState | ResolvedState, evaluator: Generate,
+            intervention: DeleteSource | ForceToken | None,
             code: str, message: str, *, diagnostics: Mapping[str, Any] | None = None) -> GeneratedObservation:
     observation = _unavailable(base, evaluator, intervention, code, message, diagnostics=diagnostics)
     # Reconstruct with the explicit failure state; failed evidence is equally non-reusable.
@@ -455,4 +470,250 @@ class GenerateExecutionAdapter:
         )
 
 
-__all__ = ["GenerateExecutionAdapter", "GenerateExecutionError"]
+class DeleteSourceGenerateAdapter:
+    """Generate one prompt-boundary DeleteSource arm without creating a Run.
+
+    This is intentionally separate from :class:`GenerateExecutionAdapter`:
+    time travel restores a resolved execution state and proves an unchanged
+    control, while Context Investigation changes the prompt before generation
+    and uses the recorded Run as its reference.  Both produce the same
+    GeneratedObservation type and use the same generic runner.
+    """
+
+    def __init__(self, substrate: Any, *, run: Mapping[str, Any] | None = None,
+                 run_loader: Callable[[str], Mapping[str, Any] | None] | None = None):
+        if substrate is None:
+            raise ValueError("DeleteSourceGenerateAdapter requires a substrate")
+        self.substrate = substrate
+        self._run = deepcopy(dict(run)) if isinstance(run, Mapping) else None
+        self._run_loader = run_loader
+
+    def load_run(self, state: ExecutionState) -> Mapping[str, Any] | None:
+        if self._run_loader is not None:
+            return self._run_loader(state.run_id)
+        if self._run is not None and self._run.get("id") == state.run_id:
+            return deepcopy(self._run)
+        return None
+
+    def _validated_run(self, state: ExecutionState) -> dict[str, Any]:
+        run = self.load_run(state)
+        if not isinstance(run, Mapping):
+            raise GenerateExecutionError("the base Run could not be loaded")
+        current = ExecutionState.from_run(run)
+        if current.execution_fingerprint != state.execution_fingerprint:
+            raise GenerateExecutionError("the base execution fingerprint changed")
+        if current.context_receipt_identity.get("digest") != state.context_receipt_identity.get("digest"):
+            raise GenerateExecutionError("the Context Receipt binding changed after planning")
+        return dict(run)
+
+    def _runtime_binding(self, run: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        recorded = parent_runtime_projection(run)
+        current_raw = _runtime_from_substrate(run, self.substrate)
+        current = _runtime_projection(current_raw, run_meta=current_raw) if current_raw is not None else None
+        if recorded is None or current is None:
+            raise GenerateExecutionError("recorded/current runtime identity is unavailable")
+        if current != recorded:
+            code = "template_mismatch" if current.get("template_fingerprint") != recorded.get("template_fingerprint") else "runtime_identity_mismatch"
+            raise GenerateExecutionError(f"{code}: the selected worker does not match the recorded runtime")
+        return deepcopy(recorded), deepcopy(current)
+
+    @staticmethod
+    def _recorded_dials(run: Mapping[str, Any]) -> dict[str, float]:
+        behavior = run.get("behavior")
+        raw = behavior.get("active_dials") if isinstance(behavior, Mapping) else {}
+        if raw is None:
+            return {}
+        if not isinstance(raw, Mapping):
+            raise GenerateExecutionError("recorded steering controls are malformed")
+        result: dict[str, float] = {}
+        for name, value in raw.items():
+            if (not isinstance(name, str) or not name or isinstance(value, bool)
+                    or not isinstance(value, (int, float)) or not math.isfinite(float(value))):
+                raise GenerateExecutionError("recorded steering controls are malformed")
+            result[name] = float(value)
+        return result
+
+    @staticmethod
+    def _steering_snapshot(steer: Any) -> tuple[dict[str, Any], Any]:
+        if steer is None:
+            return {}, None
+        current = getattr(steer, "strength", {})
+        if not isinstance(current, Mapping):
+            raise GenerateExecutionError("live steering state is unavailable")
+        return deepcopy(dict(current)), getattr(steer, "_engaged", None)
+
+    @staticmethod
+    def _set_strength(steer: Any, values: Mapping[str, Any]) -> None:
+        try:
+            steer.strength = dict(values)
+            return
+        except Exception:
+            pass
+        clear = getattr(steer, "clear", None)
+        set_value = getattr(steer, "set", None)
+        if not callable(clear) or not callable(set_value):
+            raise GenerateExecutionError("steering state cannot be applied exactly")
+        clear()
+        for name, value in values.items():
+            set_value(str(name), float(value))
+
+    def _generate(self, run: Mapping[str, Any], state: ExecutionState,
+                  evaluator: Generate, intervention: DeleteSource) -> GeneratedObservation:
+        contract = state.generation_contract
+        if not isinstance(contract, Mapping) or state.generation_contract_reason:
+            return _unavailable(state, evaluator, intervention, "generation_contract_unavailable",
+                                state.generation_contract_reason or "the recorded generation contract is incomplete")
+        expected = evaluator.to_dict()
+        for key in ("max_new", "decode_mode", "sampling", "stop"):
+            expected_value = expected.get(key)
+            recorded_value = contract.get(key)
+            if key == "stop":
+                expected_value = list(expected_value or ())
+                recorded_value = list(recorded_value or ())
+            if expected_value != recorded_value:
+                return _unavailable(state, evaluator, intervention, "generation_contract_mismatch",
+                                    "the evaluator does not match the recorded generation contract")
+        try:
+            runtime, actual_runtime = self._runtime_binding(run)
+            recorded_dials = self._recorded_dials(run)
+            resolved = resolve_delete_source(run, intervention)
+            prompt = resolve_effective_prompt(run, intervention)
+        except Exception as exc:
+            code = getattr(exc, "reason", None) or "context_generation_unavailable"
+            return _unavailable(state, evaluator, intervention, code, str(exc))
+
+        steer = getattr(self.substrate, "steer", None)
+        if recorded_dials and steer is None:
+            return _unavailable(state, evaluator, intervention, "recorded_steering_unavailable",
+                                "the recorded steering controls cannot be applied by this worker")
+        try:
+            saved_strength, saved_engaged = self._steering_snapshot(steer)
+        except GenerateExecutionError as exc:
+            return _unavailable(state, evaluator, intervention, "live_steering_unavailable", str(exc))
+
+        messages = prompt.rendered_messages()
+        trace_steps: list[dict[str, Any]] = []
+        mem_out: dict[str, Any] = {}
+        sample = False if evaluator.decode_mode == "greedy" else deepcopy(dict(evaluator.sampling or {}))
+        reply = None
+        generation_error: Exception | None = None
+        restore_error: Exception | None = None
+        try:
+            if steer is not None:
+                self._set_strength(steer, recorded_dials)
+            reply = self.substrate.chat(
+                deepcopy(messages), max_new=evaluator.max_new, sample=sample,
+                trace_out=trace_steps, mem_out=mem_out, stop=list(evaluator.stop),
+            )
+        except Exception as exc:
+            generation_error = exc
+        finally:
+            if steer is not None:
+                try:
+                    self._set_strength(steer, saved_strength)
+                    if saved_engaged is not None:
+                        steer._engaged = saved_engaged
+                except Exception as exc:
+                    restore_error = exc
+
+        if restore_error is not None:
+            return _failed(
+                state, evaluator, intervention, "steering_restore_failed",
+                f"live steering controls could not be restored: {restore_error}",
+                diagnostics={"generation_error": str(generation_error) if generation_error else None},
+            )
+        if generation_error is not None:
+            return _failed(state, evaluator, intervention, "generation_failed", str(generation_error))
+
+        text = reply if isinstance(reply, str) else reply.get("text") if isinstance(reply, Mapping) else None
+        if not isinstance(text, str):
+            return _failed(state, evaluator, intervention, "generation_malformed", "worker returned no generated text")
+        final_prompt = mem_out.get("final_prompt")
+        if not isinstance(final_prompt, str) or not final_prompt:
+            return _unavailable(state, evaluator, intervention, "generated_prompt_unavailable",
+                                "worker did not return the exact rendered prompt")
+        actual_messages = mem_out.get("assembled_messages")
+        if not isinstance(actual_messages, list):
+            actual_messages = deepcopy(messages)
+        normalized_steps: list[dict[str, Any]] = []
+        for index, raw in enumerate(trace_steps):
+            if not isinstance(raw, Mapping):
+                return _unavailable(state, evaluator, intervention, "malformed_worker_token_evidence",
+                                    "worker generation trace contains a malformed step")
+            token_id = raw.get("token_id", raw.get("id"))
+            piece = raw.get("piece", raw.get("token", raw.get("text")))
+            if (isinstance(token_id, bool) or not isinstance(token_id, int) or token_id < 0
+                    or not isinstance(piece, str)):
+                return _unavailable(state, evaluator, intervention, "malformed_worker_token_evidence",
+                                    "worker generation trace lacks exact token IDs or pieces")
+            item = deepcopy(dict(raw))
+            item["index"] = index
+            item["token_id"] = token_id
+            item["piece"] = piece
+            normalized_steps.append(item)
+        if not normalized_steps or "".join(item["piece"] for item in normalized_steps) != text:
+            return _unavailable(state, evaluator, intervention, "malformed_worker_token_evidence",
+                                "worker token pieces do not reconstruct generated text")
+        finish_reason = None
+        finish_accessor = getattr(self.substrate, "_last_finish_reason", None)
+        if callable(finish_accessor):
+            try:
+                finish_reason = finish_accessor()
+            except Exception:
+                finish_reason = None
+        elif isinstance(finish_accessor, str):
+            finish_reason = finish_accessor
+        if finish_reason is None and isinstance(mem_out.get("finish_reason"), str):
+            finish_reason = mem_out["finish_reason"]
+        input_snapshot = {
+            "schema_version": "clozn.context-counterfactual-input.v1",
+            "source_ids": list(intervention.source_ids),
+            "exact_removed_ranges": deepcopy(resolved.get("exact_removed_ranges") or []),
+            "source_basis": resolved.get("basis"),
+            "basis_digest": resolved.get("basis_digest"),
+            "intervened_context_digest": resolved.get("intervened_context_digest"),
+            "messages": prompt.worker_messages(),
+            "assembled_messages": deepcopy(actual_messages),
+            "final_prompt": final_prompt,
+            "runtime_identity": runtime,
+            "actual_runtime_identity": actual_runtime,
+            "execution_controls": {
+                "active_dials": deepcopy(recorded_dials),
+                "generation_contract": _plain(contract),
+            },
+            "context_receipt_digest": state.context_receipt_digest,
+        }
+        return GeneratedObservation(
+            **_identity_kwargs(state, evaluator, intervention), status="completed", state_ref=None,
+            realization={},
+            fidelity={"classification": "direct_context_generation", "proof_status": "not_applicable",
+                      "context_changed_before_prompt": True, "removed_source_ids": list(intervention.source_ids)},
+            intervention=intervention, generated_suffix_text=text,
+            generated_token_ids=tuple(item["token_id"] for item in normalized_steps),
+            generated_steps=normalized_steps, finish_reason=finish_reason,
+            generation_contract=_plain(contract), runtime_provenance={
+                "runtime_identity": runtime, "actual_runtime_identity": actual_runtime,
+                "recorded_active_dials": deepcopy(recorded_dials),
+            }, exact_control_proof={}, input_snapshot=input_snapshot,
+            execution_provenance={"adapter": "delete_source_generate", "execution": "direct_generation",
+                                  "source_basis": resolved.get("basis"),
+                                  "removed_source_ids": list(intervention.source_ids)},
+            proof_grade="direct_generation", trusted=True,
+            diagnostics={"reason_code": "context_counterfactual_generated"},
+        )
+
+    def execute(self, state: ExecutionState, intervention: DeleteSource | None = None, *,
+                evaluator: Generate | None = None, arm_id: str | None = None) -> GeneratedObservation:
+        evaluator = evaluator or Generate(max_new=1)
+        if not isinstance(state, ExecutionState) or not isinstance(evaluator, Generate):
+            raise TypeError("DeleteSource Generate execution requires ExecutionState and Generate")
+        if not isinstance(intervention, DeleteSource):
+            raise TypeError("context Generate arms require DeleteSource")
+        try:
+            run = self._validated_run(state)
+        except Exception as exc:
+            return _unavailable(state, evaluator, intervention, "stale_execution_state", str(exc))
+        return self._generate(run, state, evaluator, intervention)
+
+
+__all__ = ["DeleteSourceGenerateAdapter", "GenerateExecutionAdapter", "GenerateExecutionError"]

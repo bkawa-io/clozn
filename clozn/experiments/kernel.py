@@ -63,18 +63,23 @@ class Experiment:
         if isinstance(arms, (str, bytes)):
             raise TypeError("Experiment.arms must be an iterable of interventions")
         raw_arms = list(arms)
-        expected_intervention = ForceToken if isinstance(evaluator, Generate) else DeleteSource
+        expected_intervention = (ForceToken, DeleteSource) if isinstance(evaluator, Generate) else DeleteSource
         if not all(
             (arm is None and isinstance(evaluator, Generate))
             or isinstance(arm, expected_intervention)
             for arm in raw_arms
         ):
             suffix = " or an unchanged condition" if isinstance(evaluator, Generate) else ""
-            raise TypeError(f"{type(evaluator).__name__} experiments require {expected_intervention.__name__} arms{suffix}")
-        if isinstance(evaluator, Generate) and not isinstance(base, ResolvedState):
-            raise TypeError("Generate experiments must be bound to a ResolvedState")
-        if isinstance(evaluator, Generate) and base.classification == "unavailable":
+            name = "ForceToken or DeleteSource" if isinstance(evaluator, Generate) else "DeleteSource"
+            raise TypeError(f"{type(evaluator).__name__} experiments require {name} arms{suffix}")
+        if isinstance(evaluator, Generate) and isinstance(base, ResolvedState) and base.classification == "unavailable":
             raise ValueError("Generate experiments cannot be created from an unavailable ResolvedState")
+        if isinstance(evaluator, Generate) and isinstance(base, ExecutionState):
+            if any(arm is None or not isinstance(arm, DeleteSource) for arm in raw_arms):
+                raise TypeError("ExecutionState Generate experiments require DeleteSource arms")
+        if isinstance(evaluator, Generate) and isinstance(base, ResolvedState):
+            if any(arm is not None and not isinstance(arm, ForceToken) for arm in raw_arms):
+                raise TypeError("ResolvedState Generate experiments require ForceToken or unchanged arms")
         arm_payload = [arm.to_dict() if arm is not None else None for arm in raw_arms]
         base_identity = _base_identity(base)
         binding = {

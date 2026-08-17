@@ -17,6 +17,7 @@ from .execution import (
     ExecutionStateStaleError,
     resolve_delete_source,
 )
+from .effective_prompt import resolve_effective_prompt
 from .interventions import DeleteSource, ForceToken
 from .observations import GeneratedObservation, execution_observation_identity
 from .persistence import ExperimentArmView, ExperimentView, ObservationStore
@@ -64,6 +65,156 @@ def _resolve_result(result: ExperimentResult | ExperimentView | str | None, *,
     if resolved_id and observation_store is not None:
         return observation_store.get_experiment(resolved_id)
     raise TypeError("materialize_arm requires an ExperimentResult or a persisted experiment ID/store")
+
+
+def _materialize_context_generated_observation(
+    base_run: Mapping[str, Any], resolved: ExperimentResult | ExperimentView,
+    arm_id: str, *, observation_id: str | None,
+    reload_parent: Callable[[str], Mapping[str, Any] | None] | None,
+) -> dict[str, Any]:
+    """Promote a prompt-boundary Generate observation without re-rendering or running a model."""
+    from .evaluators import Generate
+
+    if not isinstance(resolved.evaluator, Generate):
+        raise MaterializationError("context generated materialization requires a Generate evaluator")
+    try:
+        arm = resolved.arm_for(arm_id)
+    except KeyError as exc:
+        raise MaterializationError(f"experiment result has no arm {arm_id!r}") from exc
+    if arm.state != "completed" or not isinstance(arm.observation, GeneratedObservation):
+        raise MaterializationError("arm has no completed GeneratedObservation")
+    observation = arm.observation
+    if observation.status != "completed":
+        raise MaterializationError("unavailable or failed generation cannot be materialized")
+    if observation.state_ref is not None:
+        raise MaterializationError("context GeneratedObservation must not carry a StateRef")
+    if not isinstance(arm.intervention, DeleteSource):
+        raise MaterializationError("context generated materialization requires DeleteSource")
+    if observation_id is not None and observation.observation_id != observation_id:
+        raise MaterializationStaleError("the requested GeneratedObservation does not match the persisted arm")
+    if resolved.base.run_id != base_run.get("id"):
+        raise MaterializationStaleError("experiment result is bound to another parent run")
+
+    current_parent = reload_parent(base_run["id"]) if callable(reload_parent) else base_run
+    if not isinstance(current_parent, Mapping):
+        raise MaterializationStaleError("the parent could not be reloaded")
+    current_parent = dict(current_parent)
+    try:
+        current_state = ExecutionState.from_run(current_parent)
+    except Exception as exc:
+        raise MaterializationStaleError(f"the current parent has no valid execution state: {exc}") from exc
+    if current_state.execution_fingerprint != resolved.base.execution_fingerprint:
+        raise MaterializationStaleError("the parent execution fingerprint changed after the experiment")
+    if current_state.context_receipt_identity.get("digest") != resolved.base.context_receipt_identity.get("digest"):
+        raise MaterializationStaleError("the parent Context Receipt changed after the experiment")
+
+    expected = execution_observation_identity(resolved.base, resolved.evaluator, arm.intervention)
+    if (observation.observation_id != expected["observation_id"]
+            or observation.observation_key_sha256 != expected["observation_key_sha256"]):
+        raise MaterializationStaleError("GeneratedObservation identity does not match the persisted arm")
+    if observation.intervention != arm.intervention.to_dict():
+        raise MaterializationStaleError("GeneratedObservation intervention does not match the persisted arm")
+
+    snapshot = observation.input_snapshot
+    if not isinstance(snapshot, Mapping):
+        raise MaterializationError("GeneratedObservation has no immutable context input snapshot")
+    if snapshot.get("context_receipt_digest") != current_state.context_receipt_digest:
+        raise MaterializationStaleError("GeneratedObservation Context Receipt binding is stale")
+    if list(snapshot.get("source_ids") or []) != list(arm.intervention.source_ids):
+        raise MaterializationStaleError("GeneratedObservation source binding does not match the arm")
+
+    try:
+        current_resolved = resolve_delete_source(current_parent, arm.intervention)
+        current_prompt = resolve_effective_prompt(current_parent, arm.intervention)
+    except Exception as exc:
+        raise MaterializationStaleError(f"current source deletion cannot be revalidated: {exc}") from exc
+    for key in ("exact_removed_ranges", "source_basis", "basis_digest", "intervened_context_digest"):
+        snapshot_key = key
+        resolved_key = "basis" if key == "source_basis" else key
+        if snapshot.get(snapshot_key) != current_resolved.get(resolved_key):
+            raise MaterializationStaleError(f"GeneratedObservation {key} no longer matches the current Context Receipt")
+    if snapshot.get("messages") != current_prompt.worker_messages():
+        raise MaterializationStaleError("GeneratedObservation deleted messages no longer match the current prompt")
+    if snapshot.get("assembled_messages") != current_prompt.rendered_messages():
+        raise MaterializationStaleError("GeneratedObservation assembled prompt no longer matches the current prompt")
+    final_prompt = snapshot.get("final_prompt")
+    if not isinstance(final_prompt, str) or not final_prompt:
+        raise MaterializationError("GeneratedObservation is missing the exact final prompt")
+
+    response = observation.generated_suffix_text
+    child_trace = None
+    trace_state = "unavailable"
+    if isinstance(observation.generated_steps, (list, tuple)) and observation.generated_steps:
+        steps = [deepcopy(step) for step in observation.generated_steps]
+        valid = all(
+            isinstance(step, Mapping)
+            and isinstance(step.get("piece"), str)
+            and isinstance(step.get("token_id"), int)
+            and not isinstance(step.get("token_id"), bool)
+            and step.get("token_id") >= 0
+            for step in steps
+        )
+        if valid and "".join(step["piece"] for step in steps) == response:
+            from clozn.runs.trace import steps_to_trace
+            child_trace = steps_to_trace(steps)
+            trace_state = "available" if child_trace else "unavailable"
+
+    changes = {
+        "experiment": {
+            "experiment_id": resolved.experiment_id,
+            "arm_id": arm_id,
+            "observation_id": observation.observation_id,
+            "base_state": {
+                "run_id": resolved.base.run_id,
+                "origin": "recorded_prompt_boundary",
+                "realized_fidelity": observation.fidelity_classification,
+            },
+            "operation": "delete_source_generate",
+            "origin": {"kind": "recorded_prompt_boundary"},
+            "intervention": arm.intervention.to_dict(),
+        },
+    }
+    behavior = deepcopy(current_parent.get("behavior") or {})
+    controls = snapshot.get("execution_controls")
+    if isinstance(controls, Mapping) and isinstance(controls.get("active_dials"), Mapping):
+        behavior["active_dials"] = deepcopy(dict(controls["active_dials"]))
+    captured_runtime = snapshot.get("runtime_identity")
+    child_identity = (
+        deepcopy(dict(captured_runtime))
+        if isinstance(captured_runtime, Mapping) else
+        deepcopy(current_parent.get("identity") or {})
+    )
+    child_id = run_store.record(
+        source="experiment", client="experimental_kernel",
+        model=current_parent.get("model", ""), substrate=current_parent.get("substrate", ""),
+        messages=deepcopy(snapshot.get("messages") or []),
+        assembled_messages=deepcopy(snapshot.get("assembled_messages") or []),
+        final_prompt=final_prompt, response=response,
+        memory=deepcopy(current_parent.get("memory") or {}), behavior=behavior,
+        trace=child_trace, finish_reason=observation.finish_reason,
+        parent_run_id=current_parent["id"], changes_applied=changes,
+        meta=deepcopy(current_parent.get("meta") or {}),
+        identity=child_identity,
+        output_contract=deepcopy(current_parent.get("output_contract") or {}),
+    )
+    if not child_id:
+        return {
+            "schema_version": SCHEMA_VERSION, "state": "failed",
+            "parent_run_id": current_parent["id"], "experiment_id": resolved.experiment_id,
+            "arm_id": arm_id, "observation_id": observation.observation_id,
+            "reason": "run_persistence_failed",
+        }
+    child = run_store.get_run(child_id)
+    comparison = diff_runs(current_parent, child) if isinstance(child, Mapping) else None
+    return {
+        "schema_version": SCHEMA_VERSION, "state": "completed",
+        "parent_run_id": current_parent["id"], "child_run_id": child_id,
+        "experiment_id": resolved.experiment_id, "arm_id": arm_id,
+        "observation_id": observation.observation_id,
+        "realized_fidelity": observation.fidelity_classification,
+        "trace_state": trace_state, "comparison": comparison,
+        "compare_path": f"#/compare/{current_parent['id']}/{child_id}",
+    }
 
 
 def materialize_arm(
@@ -233,8 +384,13 @@ def materialize_generated_observation(
         raise ValueError("pass only one observation store")
     durable = observation_store or store
     resolved = _resolve_result(result, experiment_id=experiment_id, observation_store=durable)
+    if isinstance(resolved.base, ExecutionState):
+        return _materialize_context_generated_observation(
+            base_run, resolved, arm_id, observation_id=observation_id,
+            reload_parent=reload_parent,
+        )
     if not isinstance(resolved.base, ResolvedState):
-        raise MaterializationError("generated materialization requires a ResolvedState base")
+        raise MaterializationError("generated materialization requires an ExecutionState or ResolvedState base")
     try:
         arm = resolved.arm_for(arm_id)
     except KeyError as exc:
