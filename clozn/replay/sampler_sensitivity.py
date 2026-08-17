@@ -16,7 +16,7 @@ import math
 
 from clozn import schemas
 from clozn.replay.controlled import recorded_sampling_config
-from clozn.replay.execution_fork import parent_execution_fingerprint
+from clozn.experiments.execution_facts import parent_execution_fingerprint
 
 
 PLAN_SCHEMA_VERSION = "clozn.sampler-sensitivity-plan.v1"

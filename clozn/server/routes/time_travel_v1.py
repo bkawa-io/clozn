@@ -65,10 +65,10 @@ def _identity_and_selection(h, run, *, route: str, required: bool):
         runtime = dict(selection.runtime_key)
         worker = dict(selection.worker_identity) if isinstance(selection.worker_identity, Mapping) else None
     else:
-        # Reuse the existing run-scoped identity normalization seam. This is
+        # Reuse the neutral run-scoped identity normalization seam. This is
         # planning/execution provenance, not the historical fork API.
-        from clozn.server.routes.execution_fork import _identity_facts
-        runtime, worker, _engine = _identity_facts(selection)
+        from clozn.experiments.execution_facts import selection_identity_facts
+        runtime, worker, _engine = selection_identity_facts(selection)
     return selection, runtime, worker
 
 

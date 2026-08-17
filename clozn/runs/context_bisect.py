@@ -17,7 +17,7 @@ from typing import Any
 from clozn import schemas
 from clozn.replay import span_bridge
 from clozn.replay.controlled import recorded_sampling_config
-from clozn.replay.execution_fork import parent_execution_fingerprint, parent_runtime_projection
+from clozn.experiments.execution_facts import parent_execution_fingerprint, parent_runtime_projection
 from clozn.runs import influence_geometry as geometry
 from clozn.runs.influence_counterfactual import _measurement
 

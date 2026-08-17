@@ -10,9 +10,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 import math
 
-from clozn.replay.execution_fork import parent_execution_fingerprint, sampling_intervention_contract
+from clozn.experiments.execution_facts import parent_execution_fingerprint, parent_runtime_projection
+from clozn.replay.execution_fork import sampling_intervention_contract
 from clozn.replay.controlled import recorded_sampling_config
-from clozn.replay.execution_fork import parent_runtime_projection
 from clozn.runs import close_calls
 from clozn.runs import context_tension
 from clozn.runs import context_utilization

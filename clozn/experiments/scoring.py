@@ -14,7 +14,7 @@ import math
 from typing import Any
 
 from clozn.receipts.rederive import score_arm, with_arm_conditions
-from clozn.replay.execution_fork import _runtime_projection, parent_runtime_projection
+from .execution_facts import parent_runtime_projection, runtime_projection as _runtime_projection
 
 from .batch import ArmExecutionOutcome, ArmExecutionRequest, BatchExecutionResult
 from .evaluators import ScoreRecordedContinuation

@@ -173,9 +173,9 @@ def checkpoint_reference_from_pin(pin_result: Mapping[str, Any], *, run_id: str)
     """Project a verified durable pin into the execution-fork planner's reference shape.
 
     The pin store deliberately returns the complete export envelope because checkpoint hydration
-    needs its bytes.  State planning must not pass that envelope to ``plan_execution_fork`` as if it
-    were a live worker reference; this projection keeps the two contracts explicit and carries only
-    the immutable planner facts.  The execution seam remains responsible for importing/hydrating the
+    needs its bytes. State planning must not pass that envelope as if it were a live worker reference;
+    this projection keeps the two contracts explicit and carries only the immutable execution-state
+    facts. The execution seam remains responsible for importing/hydrating the
     envelope when the selected worker needs it.
     """
     if not isinstance(pin_result, Mapping) or pin_result.get("ok") is not True:
@@ -468,7 +468,7 @@ def time_travel_capabilities(run: Mapping[str, Any], *, checkpoint: Mapping[str,
         # A capability read has no live worker selection.  The parent runtime is a static identity
         # fact, and a durable pin supplies the worker generation needed to classify an exact plan.
         # The synthetic worker label is explicitly planning-only and is never used for execution.
-        from clozn.replay.execution_fork import parent_runtime_projection
+        from clozn.experiments.execution_facts import parent_runtime_projection
         static_runtime = runtime_identity or parent_runtime_projection(run)
         static_worker = worker_identity
         if static_worker is None and isinstance(checkpoint, Mapping):

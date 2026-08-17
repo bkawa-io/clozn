@@ -5,8 +5,8 @@ THREE CONCEPTS, NEVER COLLAPSED
 ------------------------------------
 1. RECONSTRUCTED replay. Clozn can rebuild the prefix and replay from recorded text/tokens. This does
    NOT restore the same internal execution state -- KV state is not restored, sampler state is
-   reinitialized, the prompt prefix is retokenized, batch shape is not preserved (see
-   `clozn.replay.execution_fork.RECONSTRUCTION_DIFFERENCES`, reused verbatim, never copied). Labeled
+   reinitialized, the prompt prefix is retokenized, batch shape is not preserved (see the neutral
+   execution-facts contract, reused verbatim, never copied). Labeled
    `reconstructed`, NEVER `exact`.
 2. EXACT rewind ELIGIBILITY. The recorded run carries enough evidence that an exact execution fork MAY
    be possible, but exact execution still needs LIVE checks this module cannot and does not perform:
@@ -16,7 +16,7 @@ THREE CONCEPTS, NEVER COLLAPSED
    (`clozn.replay.execution_fork.plan_execution_fork`), completely unchanged by this module.
 3. VERIFIED exact rewind. A prior exact execution fork actually ran from this boundary and its
    MANDATORY unchanged control reproduced the parent's continuation under Clozn's strict token/text
-   comparison (`clozn.replay.execution_fork_execute.prove_unchanged_control`). This is HISTORICAL
+   comparison through the exact-resume proof seam. This is HISTORICAL
    evidence -- `historically_verified_exact` -- and even then this module reports
    `exact_rewind.state == "requires_live_plan"` and `live_execution.state == "not_checked"` right next
    to it. "Was exact then" is never conflated with "is executable exactly now": the checkpoint or
@@ -36,13 +36,10 @@ proof (`_is_verified_exact` below checks all four explicitly, never inferring on
 
 REUSE, NEVER A SECOND DEFINITION
 -------------------------------------
-Static prerequisites come from `clozn.replay.execution_fork.recorded_fork_prerequisites` -- the SAME
-pure helper `plan_execution_fork` itself calls for its response-token-boundary gate, extracted
-specifically so this module and the live planner can never drift apart (see that function's own
-docstring). Supported change-type vocabularies come from `execution_fork.KNOWN_CHANGES` /
-`RECONSTRUCTED_CHANGES` -- never a second, copied list. This module does NOT replicate the planner's
-runtime-IDENTITY-MATCH check (there is no "selected" runtime to match against without a live caller);
-it only asks whether the PARENT's own recorded runtime identity resolves at all.
+Static prerequisites and supported change vocabularies come from the neutral execution-facts
+contract. This module does NOT replicate a live runtime-identity match (there is no selected runtime
+to match against without a live caller); it only asks whether the PARENT's own recorded runtime
+identity resolves at all.
 
 FAILED EXACTNESS ATTEMPTS ARE NOT "IMPOSSIBLE FOREVER"
 ------------------------------------------------------------
@@ -56,8 +53,8 @@ negative claim).
 NO WORKER, NO CHECKPOINT, EVER
 -----------------------------------
 This module imports NOTHING that can reach a worker, an engine, model routing, or checkpoint capture --
-see its own import list: `clozn.replay.execution_fork` (pure planning logic),
-`clozn.replay.execution_fork_results` is READ ONLY consulted by the caller (route), never imported here.
+its only execution dependency is the neutral model-free facts module. The receipt store is READ ONLY
+consulted by the caller (route), never imported here.
 `build_rewind_fidelity` takes `historical_receipts` as a plain argument specifically so this module never
 needs to know how they were loaded (filesystem access stays in the route/results-store layer).
 
@@ -68,7 +65,11 @@ Neither `run` nor any receipt in `historical_receipts` is ever mutated.
 """
 from __future__ import annotations
 
-from clozn.replay import execution_fork
+from clozn.experiments.execution_facts import (
+    KNOWN_CHANGES, RECONSTRUCTED_CHANGES, RECONSTRUCTION_DIFFERENCES,
+    parent_execution_fingerprint,
+    recorded_execution_prerequisites,
+)
 
 SCHEMA_VERSION = "clozn.rewind-fidelity.v1"
 
@@ -126,7 +127,7 @@ def _boundary_sort_key(receipt: dict) -> tuple:
 def _historical_proof(run_id: str, run: dict, historical_receipts) -> dict:
     from clozn import schemas
 
-    fingerprint = execution_fork.parent_execution_fingerprint(run)
+    fingerprint = parent_execution_fingerprint(run)
     malformed = 0
     verified_by_position: dict[int, list[dict]] = {}
 
@@ -203,7 +204,7 @@ def build_rewind_fidelity(run: dict, *, historical_receipts: list = ()) -> dict:
     if not run_id:
         raise ValueError("run.id must be a non-empty string")
 
-    prerequisites = execution_fork.recorded_fork_prerequisites(run)
+    prerequisites = recorded_execution_prerequisites(run)
     token_ready = prerequisites["token_alignment_available"]
     reconstructed_available = token_ready and prerequisites["final_prompt_available"]
     exact_static_available = token_ready and prerequisites["parent_runtime_identity_available"]
@@ -211,8 +212,8 @@ def build_rewind_fidelity(run: dict, *, historical_receipts: list = ()) -> dict:
     if reconstructed_available:
         reconstructed_replay = {
             "state": "available",
-            "supported_change_types": sorted(execution_fork.RECONSTRUCTED_CHANGES),
-            "unavoidable_differences": list(execution_fork.RECONSTRUCTION_DIFFERENCES),
+            "supported_change_types": sorted(RECONSTRUCTED_CHANGES),
+            "unavoidable_differences": list(RECONSTRUCTION_DIFFERENCES),
         }
     else:
         reasons = []
@@ -232,7 +233,7 @@ def build_rewind_fidelity(run: dict, *, historical_receipts: list = ()) -> dict:
         exact_rewind = {
             "state": "requires_live_plan",
             "static_prerequisites": static_prerequisites,
-            "supported_change_types_if_live_plan_succeeds": sorted(execution_fork.KNOWN_CHANGES),
+            "supported_change_types_if_live_plan_succeeds": sorted(KNOWN_CHANGES),
             "live_requirements": list(_LIVE_REQUIREMENTS),
             "authority": "execution_fork_plan",
         }

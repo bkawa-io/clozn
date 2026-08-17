@@ -88,9 +88,8 @@ def _identity_facts(selection) -> tuple[dict | None, dict | None, object | None]
     function, ``clozn.server.routes.fork`` (the legacy fork wrapper), and
     ``clozn.server.routes.token_workbench_actions`` (the per-token fork/causal-trace actions).
     """
-    if selection.runtime_key is not None:
-        return dict(selection.runtime_key), dict(selection.worker_identity), selection.engine
-    return _sub_facts(selection.sub)
+    from clozn.experiments.execution_facts import selection_identity_facts
+    return selection_identity_facts(selection)
 
 
 def _parent_sub_facts(h, parent: Mapping, route_path: str):

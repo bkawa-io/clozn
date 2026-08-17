@@ -42,23 +42,8 @@ def _worker_generation_steps(reply: Mapping) -> list[dict] | None:
     that expose generation-time ``steps`` or folded autoregressive ``events`` can therefore hand us
     an honest trace; older workers simply leave the comparison trace unavailable.
     """
-    from clozn.runs.trace import accumulate_ar_events, normalize_trace
-
-    candidates = []
-    if isinstance(reply.get("steps"), list):
-        candidates.append(reply["steps"])
-    raw_trace = reply.get("trace")
-    if isinstance(raw_trace, (list, Mapping)):
-        candidates.append(raw_trace)
-    for key in ("events", "generation_events", "frames"):
-        if isinstance(reply.get(key), list):
-            candidates.append(accumulate_ar_events(reply[key]))
-    for raw in candidates:
-        normalized = normalize_trace(raw)
-        steps = normalized.get("steps")
-        if isinstance(steps, list) and steps:
-            return [deepcopy(step) for step in steps if isinstance(step, Mapping)]
-    return None
+    from clozn.experiments.exact_execution import worker_generation_steps
+    return worker_generation_steps(reply)
 
 
 def _recorded_forced_step(parent_steps: list[dict], position: int,

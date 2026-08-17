@@ -15,7 +15,7 @@ from types import MappingProxyType
 from typing import Any
 
 from clozn.receipts.rederive import with_arm_conditions
-from clozn.replay.execution_fork import parent_execution_fingerprint
+from .execution_facts import parent_execution_fingerprint
 from clozn.runs.answer_preservation import (
     generation_contract_from_run,
     _trace_token_pieces,

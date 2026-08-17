@@ -12,7 +12,7 @@ import json
 import math
 from typing import Any
 
-from clozn.replay.execution_fork import parent_execution_fingerprint
+from clozn.experiments.execution_facts import parent_execution_fingerprint
 from clozn.runs import influence_geometry as geometry
 
 

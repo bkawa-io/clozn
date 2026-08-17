@@ -395,7 +395,7 @@ def _unavailable(state_ref: StateRef, code: str, message: str, *, plan: Mapping[
 def _reconstructed(state_ref: StateRef, *, plan: Mapping[str, Any] | None = None,
                    reason_code: str = "reconstructed_only",
                    message: str = "the caller explicitly permitted reconstructed replay") -> ResolvedState:
-    from clozn.replay.execution_fork import RECONSTRUCTION_DIFFERENCES
+    from .execution_facts import RECONSTRUCTION_DIFFERENCES
     exactness = plan.get("exactness") if isinstance(plan, Mapping) else {}
     realization = {
         "regime": exactness.get("regime", "reconstructed_text"),
@@ -414,13 +414,11 @@ def _reconstructed(state_ref: StateRef, *, plan: Mapping[str, Any] | None = None
 def _model_free_reconstruction_plan(state_ref: StateRef, source: Mapping[str, Any]) -> dict[str, Any]:
     """Build the small reconstruction plan when no live identity is available.
 
-    ``plan_execution_fork`` deliberately requires a selected worker because its normal caller is
-    preparing a live fork.  A read-only capability request, and a reconstructed experiment, do not
-    need a worker identity: the replay path uses the recorded prompt and explicitly reports that KV,
-    sampler state, and batch shape are not restored.  Keep the plan's semantic fields aligned with
-    the execution-fork planner without manufacturing a live worker binding.
+    A read-only capability request, and a reconstructed experiment, do not need a worker identity:
+    the replay path uses the recorded prompt and explicitly reports that KV, sampler state, and batch
+    shape are not restored.
     """
-    from clozn.replay.execution_fork import RECONSTRUCTION_DIFFERENCES
+    from .execution_facts import RECONSTRUCTION_DIFFERENCES
 
     return {
         "classification": "reconstructed_replay",
@@ -576,8 +574,8 @@ def resolve_state(state_ref: StateRef, *, run: Mapping[str, Any] | None = None,
     except StateRefError as exc:
         return _unavailable(state_ref, "stale_parent_execution", str(exc))
 
-    from clozn.replay.execution_fork import plan_execution_fork, recorded_fork_prerequisites
-    prerequisites = recorded_fork_prerequisites(source)
+    from .execution_facts import recorded_execution_prerequisites, resolve_exact_resume_facts
+    prerequisites = recorded_execution_prerequisites(source)
     if not prerequisites["token_alignment_available"]:
         return _unavailable(state_ref, "recorded_token_history_unavailable",
                             "recorded token IDs and pieces are not aligned")
@@ -585,37 +583,26 @@ def resolve_state(state_ref: StateRef, *, run: Mapping[str, Any] | None = None,
         if not prerequisites["final_prompt_available"]:
             return _unavailable(state_ref, "reconstruction_prompt_unavailable",
                                 "the parent has no exact rendered prompt for reconstruction")
-        # Preserve exact parity with the trusted planner when live identities are supplied.  A
-        # model-free caller such as GET /capabilities is allowed to plan reconstructed replay from
-        # recorded evidence alone, so it uses the explicit model-free projection instead of
-        # manufacturing a worker identity.
-        if runtime_identity is not None or worker_identity is not None:
-            plan = plan_execution_fork(
-                source, {"position": state_ref.position.index, "change": {"type": "none"}},
-                checkpoint=None, worker_identity=worker_identity, runtime_identity=runtime_identity,
-            )
-            if plan.get("classification") != "reconstructed_replay":
-                reason = (plan.get("reasons") or [{}])[0]
-                return _unavailable(
-                    state_ref, str(reason.get("code") or "reconstruction_unavailable"),
-                    str(reason.get("message") or "reconstructed replay is unavailable"), plan=plan,
-                )
-        else:
-            plan = _model_free_reconstruction_plan(state_ref, source)
+        # Reconstructed replay is a model-free state realization.  Runtime identity is useful
+        # provenance when supplied, but it is not an exact-execution prerequisite and must not
+        # route this path through the legacy fork planner.
+        plan = _model_free_reconstruction_plan(state_ref, source)
+        if runtime_identity is not None:
+            plan["runtime_identity"] = deepcopy(dict(runtime_identity))
+        if worker_identity is not None:
+            plan["worker_identity"] = deepcopy(dict(worker_identity))
         return _reconstructed(state_ref, plan=plan, reason_code="checkpoint_not_supplied")
     if checkpoint is None:
         return _unavailable(state_ref, "checkpoint_missing", "exact resolution requires a checkpoint reference")
 
-    plan = plan_execution_fork(
-        source,
-        {"position": state_ref.position.index, "change": {"type": "none"}},
-        checkpoint=checkpoint, worker_identity=worker_identity, runtime_identity=runtime_identity,
+    plan, reason = resolve_exact_resume_facts(
+        source, position=state_ref.position.index, checkpoint=checkpoint,
+        worker_identity=worker_identity, runtime_identity=runtime_identity,
     )
-    if plan.get("classification") != "exact_execution_fork":
-        reason = (plan.get("reasons") or [{}])[0]
+    if plan is None:
         return _unavailable(
             state_ref, str(reason.get("code") or "exact_state_unavailable"),
-            str(reason.get("message") or "exact execution state is unavailable"), plan=plan,
+            str(reason.get("message") or "exact execution state is unavailable"),
         )
     realization = {
         "regime": plan.get("exactness", {}).get("regime", "exact_execution_fork"),

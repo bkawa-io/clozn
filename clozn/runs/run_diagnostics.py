@@ -12,7 +12,10 @@ from copy import deepcopy
 from typing import Any
 
 from clozn import schemas
-from clozn.replay.execution_fork import parent_runtime_projection, recorded_fork_prerequisites
+from clozn.experiments.execution_facts import (
+    parent_runtime_projection,
+    recorded_execution_prerequisites as recorded_fork_prerequisites,
+)
 from clozn.replay.rewind_fidelity import build_rewind_fidelity
 from clozn.runs.answer_preservation import generation_contract_from_run
 from clozn.runs.context_receipt import read_receipt

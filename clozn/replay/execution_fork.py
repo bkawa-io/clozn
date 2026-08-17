@@ -29,40 +29,6 @@ CLASSIFICATIONS = (
     "reconstructed_replay",
     "unavailable",
 )
-# Public (no leading underscore, unlike the module's other internal projection helpers) because
-# clozn.replay.rewind_fidelity's read-only fidelity projection reuses these exact three definitions --
-# "expose those capabilities by importing/reusing the same definitions... never copy arrays into a
-# second module where they can drift" is the whole point of naming them for reuse rather than keeping
-# them a private implementation detail of the planner alone.
-KNOWN_CHANGES = frozenset({"none", "force_token", "sampling", "steer", "residual_write"})
-RECONSTRUCTED_CHANGES = frozenset({"none", "force_token"})
-RECONSTRUCTION_DIFFERENCES = [
-    "kv_state_not_restored",
-    "sampler_state_reinitialized",
-    "prompt_prefix_retokenized",
-    "batch_shape_not_preserved",
-]
-
-
-def parent_execution_fingerprint(parent_run: Mapping) -> str:
-    """Digest the immutable parent facts that an execution plan actually consumes."""
-    if not isinstance(parent_run, Mapping):
-        raise ValueError("parent_run must be an object")
-    trace = parent_run.get("trace")
-    trace = trace if isinstance(trace, Mapping) else {}
-    return _sha256({
-        "id": parent_run.get("id"),
-        "identity": parent_run.get("identity"),
-        "meta": parent_run.get("meta"),
-        "final_prompt": parent_run.get("final_prompt"),
-        "response": parent_run.get("response"),
-        "trace": {
-            "tokens": trace.get("tokens"),
-            "token_ids": trace.get("token_ids"),
-        },
-    })
-
-
 def _json_copy(value: Any) -> Any:
     """Return a JSON-safe detached copy, rejecting NaN and non-wire values up front."""
     try:
@@ -83,14 +49,6 @@ def _is_int(value: Any, *, minimum: int = 0) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= minimum
 
 
-def _is_hex(value: Any, length: int) -> bool:
-    return (
-        isinstance(value, str)
-        and len(value) == length
-        and all(char in "0123456789abcdef" for char in value)
-    )
-
-
 def _finite_number(value: Any, *, minimum: float | None = None,
                    maximum: float | None = None) -> bool:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
@@ -106,329 +64,6 @@ def _finite_number(value: Any, *, minimum: float | None = None,
 
 def _reason(code: str, message: str) -> dict:
     return {"code": code, "message": message}
-
-
-def _adapter_projection(value: Any) -> dict | None:
-    """Normalize either ADR-004's adapter shape or a run identity's raw adapter facet."""
-    if value is None or value == {}:
-        return {
-            "present": False,
-            "identity_sha256": None,
-            "artifact_sha256": None,
-            "scale": None,
-        }
-    if not isinstance(value, Mapping):
-        return None
-    raw = _json_copy(dict(value))
-    if raw.get("present") is False:
-        if any(raw.get(name) is not None for name in ("identity_sha256", "artifact_sha256", "scale")):
-            return None
-        return {
-            "present": False,
-            "identity_sha256": None,
-            "artifact_sha256": None,
-            "scale": None,
-        }
-    supplied_hash = raw.get("identity_sha256")
-    artifact_hash = raw.get("artifact_sha256")
-    scale = raw.get("scale")
-    # A raw run facet may not have promoted identity_sha256 yet. It is safe to derive identity from
-    # the complete facet, but artifact_sha256 and scale are irreducible facts and must be recorded.
-    if not (_is_hex(artifact_hash, 64)
-            and _finite_number(scale)):
-        return None
-    if not _is_hex(supplied_hash, 64):
-        identity_source = dict(raw)
-        identity_source.pop("present", None)
-        identity_source.pop("identity_sha256", None)
-        supplied_hash = _sha256(identity_source)
-    return {
-        "present": True,
-        "identity_sha256": supplied_hash,
-        "artifact_sha256": artifact_hash,
-        "scale": scale,
-    }
-
-
-def _runtime_projection(value: Any, *, run_meta: Mapping | None = None) -> dict | None:
-    """Normalize current or parent run identity into the exact runtime key needed by this planner."""
-    if not isinstance(value, Mapping):
-        return None
-    raw = dict(value)
-    meta = dict(run_meta or {})
-    model_sha = raw.get("model_sha256", raw.get("gguf_artifact_sha256"))
-    template = raw.get("template_fingerprint")
-    engine_build = raw.get("engine_build")
-    if engine_build is None:
-        ext = raw.get("ext")
-        engine_artifact = (
-            ext.get("engine_artifact") if isinstance(ext, Mapping) else None
-        )
-        artifact_sha = (
-            engine_artifact.get("artifact_sha256")
-            if isinstance(engine_artifact, Mapping) else None
-        )
-        if _is_hex(artifact_sha, 64):
-            # The supervisor hashes the selected executable bytes before
-            # worker launch and passes that measured digest to the gateway.
-            engine_build = f"sha256:{artifact_sha}"
-    ext = raw.get("ext")
-    engine_artifact = ext.get("engine_artifact") if isinstance(ext, Mapping) else None
-    engine_artifact_sha = (
-        engine_artifact.get("artifact_sha256")
-        if isinstance(engine_artifact, Mapping)
-        else None
-    )
-    if engine_artifact_sha is not None:
-        if not _is_hex(engine_artifact_sha, 64):
-            return None
-        observed_engine_build = f"sha256:{engine_artifact_sha}"
-        if engine_build is None:
-            engine_build = observed_engine_build
-        elif engine_build != observed_engine_build:
-            # These are two purported exact identities for the same selected executable. Never pick
-            # one silently: an old named build plus a different observed artifact is not replay-safe.
-            return None
-    context_size = raw.get("context_size", raw.get("n_ctx", meta.get("n_ctx")))
-    backend = raw.get("backend", raw.get("device", meta.get("device")))
-    white_box_flags = raw.get("white_box_flags", meta.get("white_box_flags"))
-
-    adapter_raw = raw.get("adapter")
-    if adapter_raw is None:
-        ext = raw.get("ext")
-        adapter_raw = ext.get("adapter") if isinstance(ext, Mapping) else None
-    adapter = _adapter_projection(adapter_raw)
-
-    if not (
-        _is_hex(model_sha, 64)
-        and isinstance(template, str)
-        and 16 <= len(template) <= 64
-        and all(c in "0123456789abcdef" for c in template)
-        and isinstance(engine_build, str)
-        and bool(engine_build)
-        and _is_int(context_size, minimum=1)
-        and isinstance(backend, str)
-        and bool(backend)
-        and adapter is not None
-        and isinstance(white_box_flags, Mapping)
-        and all(isinstance(name, str) and isinstance(enabled, bool)
-                for name, enabled in white_box_flags.items())
-    ):
-        return None
-    # Use ADR 004's exact canonical field names so this digest is byte-for-byte compatible with
-    # clozn.cli.worker_registry.RuntimeKey.key_sha256, not a fork-specific lookalike hash.
-    key_facets = {
-        "gguf_artifact_sha256": model_sha,
-        "template_fingerprint": template,
-        "engine_build": engine_build,
-        "context_size": context_size,
-        "backend": backend,
-        "adapter": adapter,
-        "white_box_flags": dict(sorted(white_box_flags.items())),
-    }
-    calculated_key = _sha256(key_facets)
-    supplied_key = raw.get("key_sha256", raw.get("runtime_key_sha256"))
-    if supplied_key is not None and supplied_key != calculated_key:
-        return None
-    return {
-        "runtime_key_sha256": calculated_key,
-        "model_sha256": model_sha,
-        "template_fingerprint": template,
-        "engine_build": engine_build,
-        "context_size": context_size,
-        "backend": backend,
-        "adapter": adapter,
-        "white_box_flags": dict(sorted(white_box_flags.items())),
-    }
-
-
-def parent_runtime_projection(parent_run: Mapping) -> dict | None:
-    """Resolve the immutable parent's exact runtime without masking contradictions.
-
-    Managed multi-model runs persist the authoritative ADR-004 key in their model-routing receipt.
-    That receipt may be more complete than the older top-level ``identity`` block. When present and
-    schema-valid it is authoritative, but every overlapping top-level identity/meta fact must agree;
-    malformed routing evidence or any disagreement fails closed instead of falling back.
-    """
-    if not isinstance(parent_run, Mapping):
-        return None
-    meta = parent_run.get("meta")
-    meta = meta if isinstance(meta, Mapping) else {}
-    identity = parent_run.get("identity")
-    identity = identity if isinstance(identity, Mapping) else {}
-    routing = meta.get("model_routing")
-    if routing is None:
-        return _runtime_projection(identity, run_meta=meta)
-    if not isinstance(routing, Mapping):
-        return None
-    try:
-        schemas.validate(dict(routing), "clozn.model-routing.v1")
-    except (schemas.ValidationError, schemas.SchemaError):
-        return None
-    result = routing.get("result")
-    receipt = result.get("receipt") if isinstance(result, Mapping) else None
-    if (
-        not isinstance(result, Mapping)
-        or result.get("status") != "routed"
-        or not isinstance(receipt, Mapping)
-    ):
-        return None
-    authoritative = _runtime_projection(receipt.get("runtime_key"))
-    if authoritative is None:
-        return None
-    resolved_model = receipt.get("resolved_model_id")
-    if not (
-        isinstance(resolved_model, str)
-        and resolved_model
-        and parent_run.get("model") == resolved_model
-    ):
-        return None
-
-    complete_legacy = _runtime_projection(identity, run_meta=meta)
-    if complete_legacy is not None and complete_legacy != authoritative:
-        return None
-    expected = {
-        "model_sha256": authoritative["model_sha256"],
-        "template_fingerprint": authoritative["template_fingerprint"],
-        "engine_build": authoritative["engine_build"],
-        "context_size": authoritative["context_size"],
-        "backend": authoritative["backend"],
-    }
-    partial = {
-        "model_sha256": identity.get(
-            "model_sha256", identity.get("gguf_artifact_sha256")),
-        "template_fingerprint": identity.get("template_fingerprint"),
-        "engine_build": identity.get("engine_build"),
-        "context_size": identity.get(
-            "context_size", identity.get("n_ctx", meta.get("n_ctx"))),
-    }
-    for name, observed in partial.items():
-        if observed is not None and observed != expected[name]:
-            return None
-
-    observed_backend = identity.get(
-        "backend", identity.get("device", meta.get("device")))
-    if observed_backend is not None:
-        authoritative_backend = authoritative["backend"]
-        if authoritative_backend in {"cpu", "cuda"}:
-            if observed_backend != authoritative_backend:
-                return None
-        elif authoritative_backend == "gpu":
-            if (
-                not isinstance(observed_backend, str)
-                or observed_backend.strip().lower() not in {"gpu", "cuda", "metal"}
-            ):
-                return None
-        elif observed_backend != authoritative_backend:
-            return None
-
-    adapter_raw = identity.get("adapter")
-    if adapter_raw is None:
-        ext = identity.get("ext")
-        adapter_raw = ext.get("adapter") if isinstance(ext, Mapping) else None
-    if adapter_raw is not None:
-        if not isinstance(adapter_raw, Mapping):
-            return None
-        adapter_raw = dict(adapter_raw)
-        expected_adapter = authoritative["adapter"]
-        recorded_presence = adapter_raw.get("present")
-        if recorded_presence is None:
-            recorded_presence = bool(adapter_raw)
-        if (
-            not isinstance(recorded_presence, bool)
-            or recorded_presence is not expected_adapter["present"]
-        ):
-            return None
-        for name in ("identity_sha256", "artifact_sha256", "scale"):
-            observed = adapter_raw.get(name)
-            if observed is not None and observed != expected_adapter[name]:
-                return None
-
-    for source in (identity.get("white_box_flags"), meta.get("white_box_flags")):
-        if source is None:
-            continue
-        if not isinstance(source, Mapping):
-            return None
-        for name, enabled in source.items():
-            if (
-                not isinstance(name, str)
-                or not isinstance(enabled, bool)
-                or authoritative["white_box_flags"].get(name) is not enabled
-            ):
-                return None
-    # EngineSubstrate meta.model_id is the worker/upstream friendly identity. It is intentionally
-    # not compared with the gateway's canonical resolved_model_id namespace; parent_run.model is
-    # the canonical selected ID after model-routing journaling and was checked above.
-    meta_sha = meta.get("model_sha256")
-    if meta_sha is not None and meta_sha != authoritative["model_sha256"]:
-        return None
-    return authoritative
-
-
-def recorded_fork_prerequisites(parent_run: Mapping) -> dict:
-    """The purely RECORDED-RUN facts execution-fork planning needs, decoupled from any live worker/
-    selected-runtime/checkpoint state. `plan_execution_fork` below reuses this verbatim for its own
-    response-token-boundary gate (`missing_response_token_boundary` / `position_out_of_range`) and for
-    the reconstruction path's `reconstruction_prompt_unavailable` gate, so there is exactly one
-    implementation of "does this run have complete, aligned recorded evidence" -- never a second,
-    subtly different one. `clozn.replay.rewind_fidelity.build_rewind_fidelity` (the read-only Rewind
-    Fidelity projection) is the other caller: tests in both `tests/test_execution_fork_planner.py` and
-    `tests/test_rewind_fidelity.py` cross-check against this same function so the live planner and the
-    offline projection can never drift apart.
-
-    Deliberately does NOT decide runtime-identity MATCH (there is no "selected" runtime without a live
-    caller to select one) -- only whether the PARENT's own recorded runtime identity resolves at all
-    (`parent_runtime_identity_available`, via the already-pure `parent_runtime_projection` above).
-
-    Never raises; a malformed or absent run degrades every field to its unavailable state.
-    """
-    parent_run = parent_run if isinstance(parent_run, Mapping) else {}
-    trace = parent_run.get("trace")
-    pieces = trace.get("tokens") if isinstance(trace, Mapping) else None
-    token_ids = trace.get("token_ids") if isinstance(trace, Mapping) else None
-
-    pieces_available = (
-        isinstance(pieces, list) and bool(pieces) and all(isinstance(piece, str) for piece in pieces)
-    )
-    ids_available = (
-        isinstance(token_ids, list) and bool(token_ids) and all(_is_int(tid) for tid in token_ids)
-    )
-    token_alignment_available = (
-        pieces_available and ids_available and len(pieces) == len(token_ids)
-    )
-
-    final_prompt = parent_run.get("final_prompt")
-    final_prompt_available = isinstance(final_prompt, str) and bool(final_prompt)
-
-    return {
-        "token_pieces_available": pieces_available,
-        "token_ids_available": ids_available,
-        "token_alignment_available": token_alignment_available,
-        # Reconstruction uses the response-piece coordinate even when a legacy run did not retain
-        # numeric ids.  Exact planning separately gates on token_alignment_available.
-        "recorded_token_count": len(pieces) if pieces_available else None,
-        "final_prompt_available": final_prompt_available,
-        "parent_runtime_identity_available": parent_runtime_projection(parent_run) is not None,
-    }
-
-
-def _worker_projection(value: Any) -> dict | None:
-    if not isinstance(value, Mapping):
-        return None
-    worker_id = value.get("worker_id")
-    generation = value.get("worker_generation_id")
-    protocol = value.get("protocol_version")
-    if not (
-        isinstance(worker_id, str) and worker_id
-        and isinstance(generation, str) and generation
-        and isinstance(protocol, str) and protocol
-    ):
-        return None
-    return {
-        "worker_id": worker_id,
-        "worker_generation_id": generation,
-        "protocol_version": protocol,
-    }
 
 
 def _normalize_change(change: Mapping) -> tuple[dict | None, dict | None]:
@@ -592,26 +227,6 @@ def recorded_sampling_state(parent_run: Mapping) -> dict | None:
              ("temperature", "top_k", "top_p", "seed")) and (
                  config.get("repeat_penalty", config.get("rep_penalty")) is not None
              ) else None
-
-
-def _checkpoint_projection(value: Any) -> dict | None:
-    if not isinstance(value, Mapping):
-        return None
-    raw = _json_copy(dict(value))
-    required = ("checkpoint_id", "worker_generation_id", "state", "parent_run_id")
-    if any(not isinstance(raw.get(name), str) or not raw[name] for name in required):
-        return None
-    if raw["state"] not in {"available", "missing", "expired"}:
-        return None
-    allowed = {
-        "checkpoint_id", "worker_generation_id", "state", "parent_run_id",
-        "prompt_tokens", "n_past", "size_bytes",
-    }
-    out = {name: raw[name] for name in allowed if name in raw}
-    for name in ("prompt_tokens", "n_past", "size_bytes"):
-        if name in out and not _is_int(out[name]):
-            return None
-    return out
 
 
 def _artifact_base(parent_run_id: str, parent_fingerprint: str,
@@ -863,3 +478,30 @@ def plan_execution_fork(
         "exact_preconditions_met",
         "the checkpoint, identities, boundaries, and intervention are eligible for exact execution",
     ))
+
+
+# Legacy planner compatibility: the old public planner remains available for its existing route
+# callers, but the immutable execution facts it consumes have one neutral kernel owner.  These
+# assignments deliberately preserve the old import surface without making the experimental kernel
+# import this module.
+from clozn.experiments.execution_facts import (  # noqa: E402  (after legacy planner definitions)
+    KNOWN_CHANGES as _NEUTRAL_KNOWN_CHANGES,
+    RECONSTRUCTED_CHANGES as _NEUTRAL_RECONSTRUCTED_CHANGES,
+    RECONSTRUCTION_DIFFERENCES as _NEUTRAL_RECONSTRUCTION_DIFFERENCES,
+    parent_execution_fingerprint as _neutral_parent_execution_fingerprint,
+    parent_runtime_projection as _neutral_parent_runtime_projection,
+    recorded_execution_prerequisites as _neutral_recorded_execution_prerequisites,
+    normalize_checkpoint_reference as _neutral_normalize_checkpoint_reference,
+    runtime_projection as _neutral_runtime_projection,
+    worker_identity_projection as _neutral_worker_identity_projection,
+)
+
+KNOWN_CHANGES = _NEUTRAL_KNOWN_CHANGES
+RECONSTRUCTED_CHANGES = _NEUTRAL_RECONSTRUCTED_CHANGES
+RECONSTRUCTION_DIFFERENCES = _NEUTRAL_RECONSTRUCTION_DIFFERENCES
+parent_execution_fingerprint = _neutral_parent_execution_fingerprint
+parent_runtime_projection = _neutral_parent_runtime_projection
+_runtime_projection = _neutral_runtime_projection
+recorded_fork_prerequisites = _neutral_recorded_execution_prerequisites
+_checkpoint_projection = _neutral_normalize_checkpoint_reference
+_worker_projection = _neutral_worker_identity_projection

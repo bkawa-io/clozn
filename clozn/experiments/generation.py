@@ -11,20 +11,22 @@ from copy import deepcopy
 import math
 from typing import Any
 
-from clozn.replay.execution_fork import (
-    _runtime_projection, parent_runtime_projection, plan_execution_fork,
-)
-from clozn.replay.execution_fork_execute import (
-    ExecutionForkExecutionError, _worker_generation_steps, _worker_receipt,
-    prove_unchanged_control,
-)
-from clozn.replay import fork as reconstructed_fork
-
 from .evaluators import Generate
+from .exact_execution import (
+    prove_unchanged_control, validate_worker_receipt, worker_generation_steps,
+)
+from .execution_facts import (
+    parent_runtime_projection, resolve_exact_resume_facts,
+    runtime_projection as _runtime_projection,
+)
 from .execution import resolve_delete_source
 from .effective_prompt import resolve_effective_prompt
 from .interventions import DeleteSource, ForceToken
 from .observations import GeneratedObservation, execution_observation_identity
+from .reconstructed_execution import (
+    complete_greedy, complete_traced, detect_retokenization, prompt_base,
+    recorded_steer_kwargs,
+)
 from .state import ExecutionState, digest
 from .state_ref import (
     STOCHASTIC_EXECUTION_UNBOUND, STOCHASTIC_EXECUTION_UNBOUND_MESSAGE,
@@ -179,7 +181,7 @@ def _worker_evidence(reply: Mapping[str, Any]) -> tuple[str, tuple[int, ...], li
             return "", (), None, "worker returned malformed generated token pieces"
         if "".join(pieces) != text:
             return "", (), None, "worker token pieces do not decode to worker text"
-    steps = _worker_generation_steps(reply)
+    steps = worker_generation_steps(reply)
     if steps is not None:
         if any(not isinstance(step, Mapping) or not isinstance(step.get("piece"), str)
                for step in steps):
@@ -232,10 +234,17 @@ class GenerateExecutionAdapter:
     def _exact_plan(self, resolved: ResolvedState, run: Mapping[str, Any], change: Mapping[str, Any]) -> dict[str, Any]:
         checkpoint = resolved.realization.get("checkpoint_reference")
         runtime, worker = self._identities(run)
-        return plan_execution_fork(
-            run, {"position": resolved.position.index, "change": dict(change)},
-            checkpoint=checkpoint, runtime_identity=runtime, worker_identity=worker,
+        plan, reason = resolve_exact_resume_facts(
+            run, position=resolved.position.index, checkpoint=checkpoint,
+            runtime_identity=runtime, worker_identity=worker,
         )
+        if plan is None:
+            return {
+                "classification": "unavailable",
+                "reasons": [reason],
+            }
+        plan["intervention"] = deepcopy(dict(change))
+        return plan
 
     def _control_exact(self, resolved: ResolvedState, evaluator: Generate,
                        run: Mapping[str, Any]) -> GeneratedObservation:
@@ -285,14 +294,14 @@ class GenerateExecutionAdapter:
     def _reconstructed_completion(self, run: Mapping[str, Any], prompt: str, budget: int):
         if budget <= 0:
             return "", "branch_horizon_exhausted", None
-        extra = reconstructed_fork._steer_kwargs(self.substrate, dict(run))
-        traced = reconstructed_fork._complete_traced(self.engine, prompt, budget, extra)
+        extra = recorded_steer_kwargs(self.substrate, dict(run))
+        traced = complete_traced(self.engine, prompt, budget, extra)
         if traced is not None:
             # The shared fork seam returns (text, steps, finish), while this
             # adapter's local contract is (text, finish, steps).
             continuation, steps, finish = traced
             return continuation, finish, steps
-        text, finish = reconstructed_fork._complete_greedy(self.engine, prompt, budget, extra)
+        text, finish = complete_greedy(self.engine, prompt, budget, extra)
         return text, finish, None
 
     def _reconstructed(self, resolved: ResolvedState, evaluator: Generate,
@@ -306,7 +315,7 @@ class GenerateExecutionAdapter:
         trace = run.get("trace") if isinstance(run.get("trace"), Mapping) else {}
         pieces = trace.get("tokens") if isinstance(trace.get("tokens"), list) else []
         position = resolved.position.index
-        prompt, prompt_source = reconstructed_fork._prompt_base(dict(run), self.substrate)
+        prompt, prompt_source = prompt_base(dict(run), self.substrate)
         if not isinstance(prompt, str) or not prompt:
             return _unavailable(resolved, evaluator, intervention, "reconstruction_prompt_unavailable",
                                 "the parent exact rendered prompt is unavailable")
@@ -327,7 +336,7 @@ class GenerateExecutionAdapter:
                 generated_ids = tuple(([intervention.token_id] if intervention and intervention.token_id is not None else []) + candidate_ids)
         elif intervention is not None and intervention.token_id is not None:
             generated_ids = (intervention.token_id,)
-        retokenized = reconstructed_fork._detect_retokenization(
+        retokenized = detect_retokenization(
             self.substrate, dict(run), [*pieces[:position], forced] if intervention else list(pieces[:position]),
         )
         realization = deepcopy(resolved.realization)
@@ -434,7 +443,8 @@ class GenerateExecutionAdapter:
                 truncate_to=plan["exactness"]["truncate_to"], max_tokens=evaluator.max_new,
                 intervention={"type": "force_token", "token_id": intervention.token_id},
             )
-            receipt = _worker_receipt(reply, plan, {"type": "force_token", "token_id": intervention.token_id})
+            receipt = validate_worker_receipt(
+                reply, plan, {"type": "force_token", "token_id": intervention.token_id})
             text, ids, steps, evidence_error = _worker_evidence(reply)
             if evidence_error:
                 return _failed(state, evaluator, intervention, "malformed_worker_token_evidence", evidence_error)

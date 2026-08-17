@@ -175,7 +175,7 @@ def _runtime_projection_for_sub(run: Mapping[str, Any], sub: Any) -> dict | None
     if not callable(identity_fn) or not callable(meta_fn):
         return None
     try:
-        from clozn.replay.execution_fork import parent_runtime_projection
+        from clozn.experiments.execution_facts import parent_runtime_projection
         current = {
             "id": run.get("id", "current"),
             "model": run.get("model"),
@@ -219,8 +219,7 @@ def assess_exact_eligibility(run: Mapping[str, Any], sub: Any = None,
         if contract["sampling"].get("seed") is None:
             reasons.append("sampled_replay_not_proven")
 
-    from clozn.replay import execution_fork
-    from clozn.replay.execution_fork import parent_runtime_projection
+    from clozn.experiments.execution_facts import parent_runtime_projection, runtime_projection
     recorded_runtime = None
     try:
         recorded_runtime = parent_runtime_projection(run)
@@ -229,8 +228,7 @@ def assess_exact_eligibility(run: Mapping[str, Any], sub: Any = None,
     if recorded_runtime is None:
         reasons.append("runtime_identity_unavailable")
     if current_runtime is not None:
-        current_projection = execution_fork._runtime_projection(
-            current_runtime, run_meta=current_runtime)
+        current_projection = runtime_projection(current_runtime, run_meta=current_runtime)
     else:
         current_projection = _runtime_projection_for_sub(run, sub)
     if current_projection is None:
