@@ -26,7 +26,10 @@ from .effective_prompt import resolve_effective_prompt
 from .interventions import DeleteSource, ForceToken
 from .observations import GeneratedObservation, execution_observation_identity
 from .state import ExecutionState, digest
-from .state_ref import ResolvedState, StateRefError, operation_readiness
+from .state_ref import (
+    STOCHASTIC_EXECUTION_UNBOUND, STOCHASTIC_EXECUTION_UNBOUND_MESSAGE,
+    ResolvedState, StateRefError, operation_readiness,
+)
 
 class GenerateExecutionError(ValueError):
     """A Generate arm cannot produce honest standalone evidence."""
@@ -184,15 +187,6 @@ def _worker_evidence(reply: Mapping[str, Any]) -> tuple[str, tuple[int, ...], li
     return text, tuple(ids), steps, None
 
 
-def _sampler_preserved(reply: Mapping[str, Any]) -> bool:
-    if reply.get("sampler_state_preserved") is True:
-        return True
-    sampler = reply.get("sampler")
-    return isinstance(sampler, Mapping) and (
-        sampler.get("sampler_state_preserved") is True or sampler.get("state_preserved") is True
-    )
-
-
 class GenerateExecutionAdapter:
     """Execute Generate arms into GeneratedObservation objects only."""
 
@@ -245,6 +239,15 @@ class GenerateExecutionAdapter:
 
     def _control_exact(self, resolved: ResolvedState, evaluator: Generate,
                        run: Mapping[str, Any]) -> GeneratedObservation:
+        # The public Generate time-travel path uses execution-fork, whose reply does not carry the
+        # proof-grade sampler configuration/state receipt needed to make a sampled continuation
+        # reusable. Keep this guard beside the worker call as a defense-in-depth invariant even
+        # though operation_readiness rejects the same request before reaching this method.
+        if evaluator.decode_mode == "sample":
+            return _unavailable(
+                resolved, evaluator, None, STOCHASTIC_EXECUTION_UNBOUND,
+                STOCHASTIC_EXECUTION_UNBOUND_MESSAGE,
+            )
         try:
             plan = resolved.plan or self._exact_plan(resolved, run, {"type": "none"})
             proof = prove_unchanged_control(run, plan, self.engine)
@@ -258,12 +261,6 @@ class GenerateExecutionAdapter:
                 "the unchanged exact control diverged; exact intervention was not run",
                 diagnostics={"control_proof": deepcopy(proof)},
             )
-        if evaluator.decode_mode == "sample" and proof_receipt.get("sampler_state_preserved") is not True:
-            return _unavailable(
-                resolved, evaluator, None, "sampler_state_unavailable",
-                "exact Generate requires a captured and verified sampler state",
-                diagnostics={"control_proof": deepcopy(proof)},
-            )
         trace = run.get("trace") if isinstance(run.get("trace"), Mapping) else {}
         pieces = trace.get("tokens") if isinstance(trace.get("tokens"), list) else []
         ids = trace.get("token_ids") if isinstance(trace.get("token_ids"), list) else []
@@ -274,7 +271,7 @@ class GenerateExecutionAdapter:
             realization=resolved.realization,
             fidelity={"classification": "exact_execution_fork", "proof_status": "confirmed",
                       "exact_match": True, "unchanged_control": "matched",
-                      "sampler_state": "confirmed" if evaluator.decode_mode == "sample" else "not_required"},
+                      "sampler_state": "not_required"},
             intervention=None, generated_suffix_text="".join(pieces[position:]),
             generated_token_ids=ids[position:], generated_steps=deepcopy(steps[position:]) if steps else None,
             finish_reason=run.get("finish_reason"), generation_contract=evaluator.to_dict(),
@@ -301,8 +298,8 @@ class GenerateExecutionAdapter:
     def _reconstructed(self, resolved: ResolvedState, evaluator: Generate,
                        intervention: ForceToken | None, run: Mapping[str, Any]) -> GeneratedObservation:
         if evaluator.decode_mode != "greedy":
-            return _unavailable(resolved, evaluator, intervention, "stochastic_execution_unbound",
-                                "reconstructed Generate is reusable only for a greedy continuation")
+            return _unavailable(resolved, evaluator, intervention, STOCHASTIC_EXECUTION_UNBOUND,
+                                STOCHASTIC_EXECUTION_UNBOUND_MESSAGE)
         if intervention is not None and intervention.token_piece is None:
             return _unavailable(resolved, evaluator, intervention, "reconstruction_token_piece_unavailable",
                                 "reconstructed ForceToken requires token_piece")
@@ -391,6 +388,13 @@ class GenerateExecutionAdapter:
                 state, evaluator, intervention, str(readiness.get("reason_code") or "generation_unavailable"),
                 str(readiness.get("reason") or "the requested Generate operation is unavailable"),
             )
+        if evaluator.decode_mode == "sample":
+            # Keep the adapter's eligibility boundary identical to operation_readiness even if a
+            # caller reaches this method outside the ordinary runner.
+            return _unavailable(
+                state, evaluator, intervention, STOCHASTIC_EXECUTION_UNBOUND,
+                STOCHASTIC_EXECUTION_UNBOUND_MESSAGE,
+            )
         try:
             run = self._validated_run(state)
         except Exception as exc:
@@ -431,9 +435,6 @@ class GenerateExecutionAdapter:
                 intervention={"type": "force_token", "token_id": intervention.token_id},
             )
             receipt = _worker_receipt(reply, plan, {"type": "force_token", "token_id": intervention.token_id})
-            if evaluator.decode_mode == "sample" and not _sampler_preserved(reply):
-                return _unavailable(state, evaluator, intervention, "sampler_state_unavailable",
-                                    "worker did not verify sampler/RNG preservation")
             text, ids, steps, evidence_error = _worker_evidence(reply)
             if evidence_error:
                 return _failed(state, evaluator, intervention, "malformed_worker_token_evidence", evidence_error)
@@ -474,7 +475,7 @@ class GenerateExecutionAdapter:
             realization=state.realization,
             fidelity={"classification": "exact_execution_fork", "proof_status": "confirmed",
                       "exact_match": True, "unchanged_control": "matched",
-                      "sampler_state": "confirmed" if evaluator.decode_mode == "sample" else "not_required"},
+                      "sampler_state": "not_required"},
             intervention=intervention, generated_suffix_text=text, generated_token_ids=ids,
             generated_steps=steps, finish_reason=reply.get("finish_reason"),
             generation_contract=evaluator.to_dict(), runtime_provenance={"worker_receipt": receipt},

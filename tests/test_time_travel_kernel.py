@@ -15,7 +15,9 @@ from clozn.experiments.materialize import materialize_generated_observation
 from clozn.experiments.persistence import ObservationStore
 from clozn.experiments.runner import run_experiment
 from clozn.experiments.state import ExecutionState
-from clozn.experiments.state_ref import StateRef, StateRefError, resolve_state
+from clozn.experiments.state_ref import (
+    STOCHASTIC_EXECUTION_UNBOUND, StateRef, StateRefError, operation_readiness, resolve_state,
+)
 from clozn.recipes.time_travel import (
     enumerate_answer_boundaries, materialize_time_travel, resolve_time_travel,
     run_time_travel, time_travel_capabilities,
@@ -57,6 +59,24 @@ def _run():
             ],
         },
     }
+
+
+def _sampled_run():
+    run = _run()
+    run["generation_contract"] = {
+        "decode_mode": "sample",
+        "sampling": {
+            "temperature": 0.8,
+            "top_p": 0.9,
+            "top_k": 40,
+            "repeat_penalty": 1.0,
+            "seed": 7,
+        },
+        "max_new": 3,
+        "stop": [],
+        "expected_termination": {"reason": "stop", "reason_raw": "stop"},
+    }
+    return run
 
 
 def _exact_checkpoint(run):
@@ -205,6 +225,80 @@ def test_operation_readiness_distinguishes_reconstructed_continue_and_force_inpu
     assert operations["continue"]["available"] is True
     assert operations["force_token"]["available"] is False
     assert operations["force_token"]["reason_code"] == "reconstruction_token_piece_unavailable"
+
+
+def test_sampled_continue_and_force_token_share_fail_closed_readiness_without_worker_calls():
+    run = _sampled_run()
+    resolved_reconstructed = resolve_state(
+        StateRef.before_answer_token(run, 1), run=run, policy="reconstructed_only",
+        runtime_identity=RUNTIME, worker_identity=WORKER,
+    )
+    resolved_exact = resolve_state(
+        StateRef.before_answer_token(run, 1), run=run, policy="exact_required",
+        checkpoint=_exact_checkpoint(run), runtime_identity=RUNTIME, worker_identity=WORKER,
+    )
+    evaluator = Generate(max_new=2, decode_mode="sample", sampling={
+        "temperature": 0.8, "top_p": 0.9, "top_k": 40, "repeat_penalty": 1.0, "seed": 7,
+    })
+    force = ForceToken(token_id=77, token_piece="ALT")
+
+    reconstructed_substrate = ReconstructedSubstrate()
+    reconstructed_adapter = GenerateExecutionAdapter(reconstructed_substrate, run=run)
+    reconstructed_control = reconstructed_adapter.execute_control(resolved_reconstructed, evaluator=evaluator)
+    reconstructed_force = reconstructed_adapter.execute(resolved_reconstructed, force, evaluator=evaluator)
+    assert reconstructed_control.diagnostics["reason_code"] == STOCHASTIC_EXECUTION_UNBOUND
+    assert reconstructed_force.diagnostics["reason_code"] == STOCHASTIC_EXECUTION_UNBOUND
+    assert reconstructed_substrate.engine.calls == []
+
+    exact_substrate = ExactSubstrate()
+    exact_adapter = GenerateExecutionAdapter(exact_substrate, run=run)
+    exact_control = exact_adapter.execute_control(resolved_exact, evaluator=evaluator)
+    exact_force = exact_adapter.execute(resolved_exact, force, evaluator=evaluator)
+    assert exact_control.diagnostics["reason_code"] == STOCHASTIC_EXECUTION_UNBOUND
+    assert exact_force.diagnostics["reason_code"] == STOCHASTIC_EXECUTION_UNBOUND
+    assert exact_substrate.engine.calls == []
+
+
+def test_sampled_capabilities_and_recipe_reject_both_operations_without_model_calls():
+    run = _sampled_run()
+    ref = StateRef.before_answer_token(run, 1)
+    reconstructed = resolve_state(ref, run=run, policy="reconstructed_only")
+    readiness = operation_readiness(reconstructed, operation="continue", decode_mode="sample")
+    assert readiness["plannable"] is False
+    assert readiness["reason_code"] == STOCHASTIC_EXECUTION_UNBOUND
+
+    capabilities = time_travel_capabilities(
+        run, checkpoint=_exact_checkpoint(run), runtime_identity=RUNTIME, worker_identity=WORKER,
+    )
+    for operation in ("continue", "force_token"):
+        assert capabilities["available_operations"][operation]["plannable"] is False
+        assert capabilities["available_operations"][operation]["reason_code"] == STOCHASTIC_EXECUTION_UNBOUND
+    assert capabilities["sampler_restore"]["state"] == "unavailable"
+    assert capabilities["sampler_restore"]["reason_code"] == STOCHASTIC_EXECUTION_UNBOUND
+
+
+def test_incomplete_sampled_metadata_does_not_fall_back_to_greedy():
+    run = _run()
+    run["meta"]["decode"] = {"mode": "sample"}
+    resolved = resolve_state(
+        StateRef.before_answer_token(run, 1), run=run, policy="reconstructed_only",
+        runtime_identity=RUNTIME, worker_identity=WORKER,
+    )
+    readiness = operation_readiness(resolved, operation="continue")
+    assert readiness["plannable"] is False
+    assert readiness["reason_code"] == STOCHASTIC_EXECUTION_UNBOUND
+
+
+def test_run_time_travel_rejects_sampled_parent_before_experiment_or_model_call():
+    run = _sampled_run()
+    substrate = ExactSubstrate()
+    result = run_time_travel(
+        run, position=1, max_new=2, policy="exact_required", checkpoint=_exact_checkpoint(run),
+        runtime_identity=RUNTIME, worker_identity=WORKER, substrate=substrate,
+    )
+    assert result.status == "unavailable"
+    assert result.diagnostics["operation_readiness"]["reason_code"] == STOCHASTIC_EXECUTION_UNBOUND
+    assert substrate.engine.calls == []
 
 
 def test_reopened_generated_evidence_materializes_without_touching_engine(tmp_path, monkeypatch):

@@ -104,11 +104,11 @@ def _generation_contract_from_run(run: Mapping[str, Any]) -> tuple[dict[str, Any
     if mode not in {"greedy", "sample"}:
         return None, "generation_contract_incomplete"
     if not _is_int(max_new, 1):
-        return None, "generation_contract_incomplete"
+        return None, "sampled_replay_not_proven" if mode == "sample" else "generation_contract_incomplete"
     if not isinstance(stop, list) or any(not isinstance(item, str) for item in stop):
-        return None, "generation_contract_incomplete"
+        return None, "sampled_replay_not_proven" if mode == "sample" else "generation_contract_incomplete"
     if not isinstance(expected, Mapping) or not isinstance(expected.get("reason"), str):
-        return None, "generation_contract_incomplete"
+        return None, "sampled_replay_not_proven" if mode == "sample" else "generation_contract_incomplete"
 
     contract: dict[str, Any] = {
         "decode_mode": mode,

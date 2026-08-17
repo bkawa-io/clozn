@@ -149,6 +149,16 @@ def _branch_point(run: Mapping[str, Any], state_ref: StateRef) -> dict[str, Any]
 
 
 def _parent_generation_contract(run: Mapping[str, Any]) -> dict[str, Any]:
+    # Reuse the canonical recorded-run contract reader used by ExecutionState. In particular, do
+    # not let a sampled ``meta.decode`` be silently reinterpreted as greedy merely because the
+    # recipe's historical projection did not look there.
+    try:
+        from clozn.runs.answer_preservation import _generation_contract_from_run
+        canonical, _reason = _generation_contract_from_run(run)
+        if isinstance(canonical, Mapping):
+            return dict(canonical)
+    except Exception:
+        pass
     for key in ("generation_contract", "output_contract"):
         value = run.get(key)
         if isinstance(value, Mapping):

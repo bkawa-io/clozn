@@ -16,6 +16,10 @@ STATE_CLASSIFICATIONS = frozenset({
 RESOLUTION_POLICIES = frozenset({
     "exact_required", "exact_preferred", "reconstructed_only",
 })
+STOCHASTIC_EXECUTION_UNBOUND = "stochastic_execution_unbound"
+STOCHASTIC_EXECUTION_UNBOUND_MESSAGE = (
+    "the current replay protocol does not bind the sampler/RNG state for a reusable continuation"
+)
 
 
 class StateRefError(ValueError):
@@ -475,6 +479,19 @@ def operation_readiness(
         return base
 
     contract = resolved_state.execution.generation_contract
+    if not isinstance(contract, Mapping):
+        # A recorded sampled run can have enough metadata to identify its regime while still
+        # lacking the complete immutable sampler contract. Do not let the historical greedy
+        # default turn that into an apparently deterministic operation. Runs with no decode
+        # regime at all retain the legacy greedy planning default.
+        if resolved_state.execution.generation_contract_reason == "sampled_replay_not_proven":
+            base.update({
+                "state": "unavailable", "plannable": False,
+                "reason_code": STOCHASTIC_EXECUTION_UNBOUND,
+                "reason": STOCHASTIC_EXECUTION_UNBOUND_MESSAGE,
+                "sampler": {"required": True, "mode": "sample", "status": "unbound"},
+            })
+            return base
     recorded_mode = contract.get("decode_mode") if isinstance(contract, Mapping) else None
     mode = decode_mode or recorded_mode or "greedy"
     if mode not in {"greedy", "sample"}:
@@ -497,8 +514,8 @@ def operation_readiness(
     if mode == "sample":
         base.update({
             "state": "unavailable", "plannable": False,
-            "reason_code": "stochastic_execution_unbound",
-            "reason": "the current replay protocol does not bind the sampler/RNG state for a reusable continuation",
+            "reason_code": STOCHASTIC_EXECUTION_UNBOUND,
+            "reason": STOCHASTIC_EXECUTION_UNBOUND_MESSAGE,
         })
         return base
 
@@ -621,5 +638,5 @@ __all__ = [
     "list_answer_token_boundaries",
     "RESOLUTION_POLICIES", "RESOLVED_STATE_SCHEMA_VERSION",
     "ResolvedState", "STATE_CLASSIFICATIONS", "STATE_REF_SCHEMA_VERSION", "StateRef",
-    "StateRefError", "operation_readiness", "resolve_state",
+    "StateRefError", "STOCHASTIC_EXECUTION_UNBOUND", "operation_readiness", "resolve_state",
 ]
