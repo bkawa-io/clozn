@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.minimal-context-search-result.v2",
+  "title": "Durable Minimal Context search result",
+  "type": "object",
+  "required": [
+    "schema_version", "result_id", "run_id", "search_id", "status",
+    "base_execution_fingerprint", "universe", "objective", "control_observation_id",
+    "trials", "trajectory", "original", "best", "reduction", "certificate",
+    "stopping_reason", "experiment_accounting", "source_inspection", "proof",
+    "policy", "budget", "inclusion_check"
+  ],
+  "properties": {
+    "schema_version": {"const": "clozn.minimal-context-search-result.v2"},
+    "result_id": {"type": "string", "pattern": "^mcres_[0-9a-f]{24}$"},
+    "run_id": {"type": "string", "minLength": 1},
+    "search_id": {"type": "string", "minLength": 1},
+    "status": {"enum": ["completed", "unavailable", "cancelled"]},
+    "search_status": {"type": ["string", "null"]},
+    "reason": {"type": ["string", "null"]},
+    "reason_code": {"type": ["string", "null"]},
+    "base_execution_fingerprint": {"type": "string", "minLength": 1},
+    "universe": {"type": "object", "additionalProperties": true},
+    "objective": {
+      "type": "object",
+      "required": ["kind", "version"],
+      "properties": {"kind": {"const": "rendered_prompt_tokens"}, "version": {"const": "rendered_prompt_tokens.v1"}},
+      "additionalProperties": true
+    },
+    "control_observation_id": {"type": ["string", "null"]},
+    "trials": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+    "trajectory": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+    "original": {"type": "object", "additionalProperties": true},
+    "best": {"type": ["object", "null"], "additionalProperties": true},
+    "reduction": {"type": "object", "additionalProperties": true},
+    "certificate": {"enum": ["BEST_VERIFIED", "INCLUSION_MINIMUM", "EXACT_MINIMUM", null]},
+    "stopping_reason": {
+      "enum": [
+        "exact_minimum_proven", "inclusion_minimum_proven", "budget_exhausted",
+        "search_policy_complete", "control_unavailable", "search_unavailable", "cancelled"
+      ]
+    },
+    "experiment_accounting": {"type": "object", "additionalProperties": true},
+    "source_inspection": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+    "proof": {"type": "object", "additionalProperties": true},
+    "policy": {"type": "object", "additionalProperties": true},
+    "budget": {"type": "object", "additionalProperties": true},
+    "inclusion_check": {"type": "object", "additionalProperties": true}
+  },
+  "additionalProperties": false
+}

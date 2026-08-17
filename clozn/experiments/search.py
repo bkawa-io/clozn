@@ -18,6 +18,7 @@ UnitID: TypeAlias = str | int
 
 BEST_VERIFIED = "BEST_VERIFIED"
 INCLUSION_MINIMUM = "INCLUSION_MINIMUM"
+EXACT_MINIMUM = "EXACT_MINIMUM"
 OK = "ok"
 CONTROL_FAILED = "control_failed"
 
@@ -97,6 +98,7 @@ class Budget:
     max_counterfactual_probes: int
     used_counterfactual_probes: int
     exhausted: bool
+    blocked_by_budget: bool = False
 
     @property
     def total_direct_experiments(self) -> int:
@@ -362,6 +364,7 @@ def run_budgeted_reduction(
     trials: list[Trial] = []
     trajectory: list[TrajectoryEntry] = []
     used_probes = 0
+    budget_blocked = False
     next_ordinal = 1
     next_batch_id = 1
     dispatcher_owner = getattr(probe_many, "__self__", None)
@@ -380,7 +383,7 @@ def run_budgeted_reduction(
         records: list[tuple[Candidate, PreparedCandidate]], stage: str,
         *, parent_retained_ids: tuple[UnitID, ...] = (),
     ) -> list[_Observation]:
-        nonlocal used_probes, next_ordinal, next_batch_id
+        nonlocal used_probes, budget_blocked, next_ordinal, next_batch_id
         pending = [(candidate, prepared) for candidate, prepared in records
                    if candidate.retained_ids not in direct_cache]
         if not pending:
@@ -394,6 +397,7 @@ def run_budgeted_reduction(
             ]
         new_pending = [item for item in pending if item not in reusable_pending]
         if len(new_pending) > remaining:
+            budget_blocked = True
             new_pending = new_pending[:remaining]
         pending = reusable_pending + new_pending
         if not pending:
@@ -592,6 +596,7 @@ def run_budgeted_reduction(
         max_counterfactual_probes=max_counterfactual_probes,
         used_counterfactual_probes=used_probes,
         exhausted=used_probes >= max_counterfactual_probes,
+        blocked_by_budget=budget_blocked,
     )
     return BudgetedReductionResult(
         status=OK,
@@ -696,6 +701,7 @@ class SearchBudget:
     used_new_executions: int
     reused_observation_count: int = 0
     exhausted: bool = False
+    blocked_by_budget: bool = False
 
     @property
     def max_counterfactual_probes(self) -> int:
@@ -715,6 +721,7 @@ class SearchBudget:
             "used_new_executions": self.used_new_executions,
             "reused_observation_count": self.reused_observation_count,
             "exhausted": self.exhausted,
+            "blocked_by_budget": self.blocked_by_budget,
         }
 
 
@@ -910,6 +917,7 @@ class SearchResult:
             used_new_executions=int(budget_raw.get("used_new_executions")),
             reused_observation_count=int(budget_raw.get("reused_observation_count", 0)),
             exhausted=bool(budget_raw.get("exhausted")),
+            blocked_by_budget=bool(budget_raw.get("blocked_by_budget", False)),
         )
         inclusion = InclusionCheck(
             bool(inclusion_raw.get("attempted")), bool(inclusion_raw.get("complete")),
@@ -931,6 +939,7 @@ class SearchResult:
             policy=value.get("policy") if isinstance(value.get("policy"), Mapping) else None,
             objective=value.get("objective") if isinstance(value.get("objective"), Mapping) else {},
         )
+
 
     @classmethod
     def from_reduction(cls, reduction: BudgetedReductionResult, *, search_id: str | None = None,
@@ -970,8 +979,9 @@ class SearchResult:
         budget = SearchBudget(
             max_new_executions=reduction.budget.max_counterfactual_probes,
             used_new_executions=reduction.budget.used_counterfactual_probes,
-            reused_observation_count=sum(item.disposition == "reused" for item in trials),
+            reused_observation_count=sum(item.disposition == "reused" for item in trials if item.stage != "control"),
             exhausted=reduction.budget.exhausted,
+            blocked_by_budget=reduction.budget.blocked_by_budget,
         )
         inclusion = reduction.inclusion_check
         return cls(
@@ -997,6 +1007,103 @@ class SearchResult:
             objective=objective,
         )
 
+
+def certify_exact_minimum(
+    ordered_unit_ids: Iterable[UnitID],
+    trials: Iterable[SearchTrial],
+    *,
+    control_evidence: SearchEvidenceRef | None = None,
+    original_candidate: Candidate | None = None,
+    winner: Candidate | None = None,
+) -> dict[str, Any] | None:
+    """Certify a global minimum from an already-complete direct evidence ledger.
+
+    This is deliberately a pure read-side check.  It never enumerates the
+    candidate powerset and never calls a model; it only proves that the
+    supplied ledger contains one trusted direct classification for every
+    subset of the finite universe.  Missing, unavailable, failed, or
+    not-executed candidates therefore make the certificate unavailable.
+    """
+    universe = tuple(ordered_unit_ids)
+    if len(set(universe)) != len(universe):
+        raise ValueError("EXACT_MINIMUM requires a universe without duplicate IDs")
+    positions = {value: index for index, value in enumerate(universe)}
+
+    def canonical(raw: Iterable[UnitID]) -> tuple[UnitID, ...] | None:
+        values = tuple(raw)
+        if len(set(values)) != len(values) or not set(values).issubset(positions):
+            return None
+        return tuple(value for value in universe if value in set(values))
+
+    def direct(ref: SearchEvidenceRef | None, classification: str) -> bool:
+        if classification not in {"preserves", "diverged"} or ref is None:
+            return False
+        if ref.disposition == "not_executed" or not ref.observation_id:
+            return False
+        if classification == "preserves":
+            return ref.observation_status in {"exact_preserved", "matched"}
+        return ref.observation_status == "diverged"
+
+    ledger: dict[tuple[UnitID, ...], tuple[int, str, SearchEvidenceRef]] = {}
+    for trial in trials:
+        candidate = canonical(trial.retained_ids)
+        if candidate is None:
+            return None
+        if not direct(trial.evidence_ref, trial.classification):
+            continue
+        value = (trial.cost, trial.classification, trial.evidence_ref)
+        prior = ledger.get(candidate)
+        if prior is not None and (
+            (prior[0], prior[1], prior[2].observation_id)
+            != (value[0], value[1], value[2].observation_id)
+        ):
+            return None
+        ledger[candidate] = value
+
+    # A control is normally represented by the reducer's control trial.  The
+    # explicit ref is accepted as an additional guard for callers that keep
+    # the control outside the candidate trial sequence.
+    full = universe
+    if control_evidence is not None and direct(control_evidence, "preserves"):
+        if original_candidate is None:
+            return None
+        prior = ledger.get(full)
+        value = (original_candidate.cost, "preserves", control_evidence)
+        if prior is not None and (
+            (prior[0], prior[1], prior[2].observation_id)
+            != (value[0], value[1], value[2].observation_id)
+        ):
+            return None
+        ledger[full] = value
+
+    expected = 2 ** len(universe)
+    if len(ledger) != expected:
+        return None
+
+    preserving = [
+        (candidate, value) for candidate, value in ledger.items()
+        if value[1] == "preserves"
+    ]
+    if not preserving or any(value[0] < 0 for _candidate, value in ledger.items()):
+        return None
+    best_candidate, best_value = min(
+        preserving,
+        key=lambda item: (item[1][0], len(item[0]), tuple(positions[value] for value in item[0])),
+    )
+    if winner is not None:
+        canonical_winner = canonical(winner.retained_ids)
+        if canonical_winner != best_candidate or winner.cost != best_value[0]:
+            return None
+    return {
+        "certificate": EXACT_MINIMUM,
+        "candidate_space_size": expected,
+        "directly_classified_subset_count": len(ledger),
+        "preserving_subset_count": len(preserving),
+        "diverged_subset_count": expected - len(preserving),
+        "globally_minimum_cost": best_value[0],
+        "winner_retained_ids": list(best_candidate),
+        "coverage_complete": True,
+    }
 
 def classify_exact_observation(value: Any) -> str:
     """Classify only direct exact-reference statuses; everything else is unknown."""
@@ -1067,11 +1174,11 @@ SearchCandidate = Candidate
 
 
 __all__ = [
-    "BEST_VERIFIED", "CONTROL_FAILED", "INCLUSION_MINIMUM", "OK", "SEARCH_UNAVAILABLE",
+    "BEST_VERIFIED", "CONTROL_FAILED", "EXACT_MINIMUM", "INCLUSION_MINIMUM", "OK", "SEARCH_UNAVAILABLE",
     "SEARCH_POLICY_VERSION", "SEARCH_POLICY_KIND", "canonical_search_policy",
     "UnitID", "Candidate", "SearchCandidate", "PreparedCandidate",
     "Budget", "BudgetedReductionResult", "Trial", "TrajectoryEntry",
     "accepted_trial", "run_budgeted_reduction",
     "SearchEvidenceRef", "SearchBudget", "SearchTrial", "SearchTrajectoryEntry", "InclusionCheck",
-    "SearchResult", "classify_exact_observation", "run_adaptive_search",
+    "SearchResult", "classify_exact_observation", "certify_exact_minimum", "run_adaptive_search",
 ]

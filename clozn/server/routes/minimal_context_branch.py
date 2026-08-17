@@ -4,6 +4,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 CLOZN_ROUTE_AUTOLOAD = True
+# The winner-bound result route in ``minimal_context.py`` is the product
+# surface.  Keep this module importable as a historical low-level test seam,
+# but do not expose the arbitrary client-selected branch endpoint.
+CLOZN_ROUTE_ENABLED = False
 _SUFFIX = "/minimal-context/branch"
 
 

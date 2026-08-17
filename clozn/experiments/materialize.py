@@ -232,6 +232,7 @@ def materialize_arm(
     require_preserved: bool = False,
     observation_store: ObservationStore | None = None,
     store: ObservationStore | None = None,
+    materialization_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Revalidate one arm and persist exactly one ordinary replay child.
 
@@ -312,6 +313,13 @@ def materialize_arm(
             },
         },
     }
+    # Opaque derived provenance is supplied by the caller-facing recipe.  The
+    # generic materializer records it without interpreting Minimal Context or
+    # introducing a recipe-specific execution path.
+    if materialization_context is not None:
+        if not isinstance(materialization_context, Mapping):
+            raise MaterializationError("materialization_context must be an object")
+        changes["experiment"]["derived_provenance"] = deepcopy(dict(materialization_context))
     behavior = current_parent.get("behavior")
     active_dials = behavior.get("active_dials") if isinstance(behavior, Mapping) else None
     if isinstance(active_dials, Mapping) and active_dials:
