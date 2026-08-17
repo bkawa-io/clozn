@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from itertools import combinations
 
 import clozn.runs.store as run_store
 from clozn.experiments.effective_prompt import inject_block
@@ -47,6 +48,99 @@ def test_executed_unavailable_and_failed_arms_each_charge_new_budget():
     assert len(calls[1:]) == 3
     assert [trial.disposition for trial in result.trials[1:]] == ["executed"] * 3
     assert result.certificate == BEST_VERIFIED
+
+
+def _model_free_cached_search(universe, preserving, reusable, *, inclusion=True):
+    calls = []
+
+    def prepare(retained):
+        retained = tuple(retained)
+        return {"retained_ids": retained, "cost": len(retained), "payload": retained}
+
+    def probe_many(candidates):
+        rows = []
+        for candidate in candidates:
+            retained = tuple(candidate["retained_ids"])
+            calls.append(retained)
+            rows.append({
+                "status": "matched" if frozenset(retained) in preserving else "diverged",
+                "disposition": "reused",
+            })
+        return rows
+
+    result = run_adaptive_search(
+        universe, 0, prepare, probe_many,
+        candidate_is_reusable=lambda retained: tuple(retained) in reusable,
+        attempt_inclusion_check=inclusion,
+    )
+    return result, calls
+
+
+def test_zero_budget_reaches_later_cached_coarse_granularity():
+    universe = tuple("ABCDEFGH")
+    later_preserving = frozenset({"C", "D", "E", "F", "G", "H"})
+    result, calls = _model_free_cached_search(
+        universe,
+        {frozenset(universe), later_preserving},
+        {tuple(ids) for size in range(len(universe) + 1) for ids in combinations(universe, size)},
+        inclusion=False,
+    )
+
+    assert result.budget.used_new_executions == 0
+    assert result.budget.exhausted is True
+    assert later_preserving in {frozenset(trial.retained_ids) for trial in result.trials}
+    assert result.best_candidate.retained_ids == tuple("CDEFGH")
+    assert len(calls) > 3
+
+
+def test_zero_budget_partial_batch_keeps_uncached_candidates_unknown():
+    universe = ("A", "B", "C", "D")
+    result, _calls = _model_free_cached_search(
+        universe,
+        {frozenset(universe)},
+        {("A", "B")},
+        inclusion=True,
+    )
+
+    trial_ids = {trial.retained_ids for trial in result.trials}
+    assert ("A", "B") in trial_ids
+    assert ("C", "D") not in trial_ids
+    assert result.best_candidate.retained_ids == universe
+    assert result.certificate == BEST_VERIFIED
+    assert result.inclusion_check.complete is False
+
+
+def test_zero_budget_cached_inclusion_children_can_certify_inclusion_minimum():
+    universe = ("A", "B", "C")
+    result, _calls = _model_free_cached_search(
+        universe,
+        {frozenset(universe)},
+        {tuple(ids) for ids in (
+            ("A", "B"), ("A", "C"), ("B", "C"),
+        )},
+        inclusion=True,
+    )
+
+    assert result.budget.used_new_executions == 0
+    assert result.certificate == "INCLUSION_MINIMUM"
+    assert result.inclusion_check.complete is True
+    assert result.inclusion_check.tested_child_count == 3
+
+
+def test_zero_budget_incomplete_cached_inclusion_remains_best_verified():
+    universe = ("A", "B", "C")
+    result, _calls = _model_free_cached_search(
+        universe,
+        {frozenset(universe)},
+        {("A", "B"), ("A", "C")},
+        inclusion=True,
+    )
+
+    assert result.budget.used_new_executions == 0
+    assert result.certificate == BEST_VERIFIED
+    assert result.inclusion_check.complete is False
+    assert result.inclusion_check.tested_child_count == 2
+    assert result.inclusion_check.total_child_count == 3
 
 
 def test_zero_budget_reuses_completed_observations_and_derives_same_result(tmp_path, monkeypatch):

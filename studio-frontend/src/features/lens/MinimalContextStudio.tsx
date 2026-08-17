@@ -1,36 +1,29 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  branchMinimalContextWinner,
   cancelMinimalContextJob,
-  listMinimalContextResults,
-  loadMinimalContextResult,
   loadMinimalContextRun,
   pollMinimalContextJob,
   startMinimalContextJob,
   type MinimalContextCertificate,
-  type MinimalContextCriterion,
   type MinimalContextJob,
   type MinimalContextResult,
   type MinimalContextRunDetail,
   type MinimalContextSourceUnit,
-  type MinimalContextSummary,
 } from "../../data/minimalContext";
 
 const CERTIFICATE_LABEL: Record<MinimalContextCertificate, string> = {
-  inclusion_minimum: "INCLUSION-MINIMAL",
-  best_verified: "BEST VERIFIED",
+  INCLUSION_MINIMUM: "INCLUSION-MINIMAL",
+  BEST_VERIFIED: "BEST VERIFIED",
 };
 
 const CERTIFICATE_EXPLANATION: Record<MinimalContextCertificate, string> = {
-  inclusion_minimum: "No retained unit can be individually removed.",
-  best_verified: "Smaller unmeasured sets may exist.",
+  INCLUSION_MINIMUM: "The recorded answer was preserved, and deleting any one remaining source was directly tested and caused divergence.",
+  BEST_VERIFIED: "Lowest-cost preserving candidate observed within the search budget. A smaller preserving candidate may exist.",
 };
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function certificateRank(value?: MinimalContextCertificate): number {
-  return value === "inclusion_minimum" ? 0 : 1;
 }
 
 function phaseLabel(phase: string): string {
@@ -39,8 +32,6 @@ function phaseLabel(phase: string): string {
   if (phase === "unchanged_control") return "Checking unchanged control";
   if (phase === "searching") return "Searching";
   if (phase === "verifying_candidate") return "Verifying candidate";
-  const cardinality = phase.match(/^certifying_cardinality_(\d+)$/);
-  if (cardinality) return `Certifying ${cardinality[1]}-source layer`;
   if (phase === "validating") return "Validating proof";
   if (phase === "persisting") return "Persisting result";
   return phase.replaceAll("_", " ");
@@ -61,8 +52,8 @@ function contextCatalog(detail: MinimalContextRunDetail | null): Map<string, Min
         map.set(row.segment_id, {
           source_id: row.segment_id,
           message_index: index,
-          role: String(message.role ?? ""),
-          unicode_range: [0, String(message.content ?? "").length],
+          role: String(message?.role ?? ""),
+          unicode_range: [0, String(message?.content ?? "").length],
           source_kind: "whole_message",
           derivation: "message_root",
           source_label: row.source_label,
@@ -89,73 +80,44 @@ function sourceKind(unit: MinimalContextSourceUnit): string {
   return "MESSAGE ROOT";
 }
 
-function compatibleSummary(summary: MinimalContextSummary, criterion: MinimalContextCriterion) {
-  return summary.preservation_kind === criterion && summary.status === "found";
-}
-
-function bestSummary(summaries: MinimalContextSummary[], criterion: MinimalContextCriterion) {
-  return summaries
-    .filter((summary) => compatibleSummary(summary, criterion))
-    .sort((left, right) => (
-      certificateRank(left.certificate_kind) - certificateRank(right.certificate_kind)
-      || (left.retained_source_count ?? Number.MAX_SAFE_INTEGER) - (right.retained_source_count ?? Number.MAX_SAFE_INTEGER)
-      || left.result_id.localeCompare(right.result_id)
-    ))[0];
-}
-
 function Hero({ result }: { result: MinimalContextResult }) {
-  const certificate = result.certificate?.kind;
-  const sourceCount = result.source_universe.source_count;
-  const retained = result.candidate?.retained_source_count;
-  const exact = result.preservation.kind === "exact_recorded_output";
+  const certificate = result.certificate ?? null;
+  const sourceCount = result.universe.source_ids.length;
+  const retained = result.best?.retained_source_ids.length;
   return (
     <section className="minimal-context-hero" aria-label="Minimal Context result">
       <div className="minimal-context-hero-count">
         <strong>{numberText(sourceCount)}</strong><span>CONTEXT UNITS</span>
         <b aria-hidden="true">→</b>
-        <strong>{numberText(retained)}</strong>
+        <strong>{numberText(retained)}</strong><span>RETAINED</span>
       </div>
       <div className="minimal-context-hero-proof">
         <span>{certificate ? CERTIFICATE_LABEL[certificate] : result.status.replaceAll("_", " ").toUpperCase()}</span>
-        <p>
-          {exact && "recorded answer reproduced token-for-token"}
-        </p>
-        {certificate && <small>{CERTIFICATE_EXPLANATION[certificate]}</small>}
+        {certificate && <p>{CERTIFICATE_EXPLANATION[certificate]}</p>}
       </div>
     </section>
   );
 }
 
-function Coverage({ result }: { result: MinimalContextResult }) {
-  const rows = result.coverage?.lower_cardinalities ?? [];
-  const exact = result.preservation.kind === "exact_recorded_output";
+function SearchProof({ result }: { result: MinimalContextResult }) {
+  const { budget, inclusion_check: inclusion } = result;
+  const unknown = Math.max(0, inclusion.total_child_count - inclusion.tested_child_count);
   return (
     <section className="minimal-context-section" aria-labelledby="minimal-context-proof-title">
-      <header><span className="eyebrow">PROOF COVERAGE</span><h2 id="minimal-context-proof-title">Minimality frontier</h2></header>
-      <p className="minimal-context-muted">
-        Retained source count against directly checked smaller candidates.
-      </p>
-      {exact && rows.length > 0 ? (
-        <div className="minimal-context-coverage-table" role="table" aria-label="Proof coverage by retained source count">
-          {rows.map((row) => {
-            const remaining = Math.max(0, row.candidate_count - row.tested_count);
-            return (
-              <div className="minimal-context-coverage-row" role="row" key={row.retained_source_count}>
-                <strong>{row.retained_source_count} {row.retained_source_count === 1 ? "source" : "sources"}</strong>
-                <span>{row.complete ? `${row.tested_count.toLocaleString()} / ${row.candidate_count.toLocaleString()} ruled out` : `${row.tested_count.toLocaleString()} / ${row.candidate_count.toLocaleString()} tested`}</span>
-                {!row.complete && <em>{remaining.toLocaleString()} remain unmeasured</em>}
-              </div>
-            );
-          })}
-          {result.candidate && <div className="minimal-context-coverage-row is-pass" role="row"><strong>{result.candidate.retained_source_count} sources</strong><span>PASS · preserving candidate</span></div>}
-        </div>
-      ) : (
-        <div className="minimal-context-coverage-summary">
-          <strong>{numberText(result.coverage?.smaller_tested_count)} tested</strong>
-          <span>{numberText(result.coverage?.smaller_remaining_count)} remain unmeasured</span>
-        </div>
-      )}
-      <p className="minimal-context-unmeasured">Unmeasured candidates are not counted as failed.</p>
+      <header><span className="eyebrow">DIRECT SEARCH</span><h2 id="minimal-context-proof-title">Observed evidence</h2></header>
+      <div className="minimal-context-coverage-summary">
+        <strong>{numberText(budget.used_new_executions)} new executions</strong>
+        <span>{numberText(budget.reused_observation_count)} reused observations</span>
+        <span>{numberText(budget.max_new_executions)} execution budget</span>
+      </div>
+      {inclusion.attempted ? (
+        <p className="minimal-context-muted">
+          Inclusion check: {inclusion.tested_child_count.toLocaleString()} / {inclusion.total_child_count.toLocaleString()} children directly tested
+          {inclusion.complete ? "; all diverged." : unknown ? `; ${unknown.toLocaleString()} remain unknown.` : "."}
+        </p>
+      ) : <p className="minimal-context-muted">Inclusion check was not requested.</p>}
+      <p className="minimal-context-muted">Rendered prompt tokens: {numberText(result.best?.rendered_prompt_token_cost)}</p>
+      <p className="minimal-context-unmeasured">Unknown candidates are not counted as failures.</p>
     </section>
   );
 }
@@ -164,7 +126,7 @@ function ContextCollapse({ detail, result }: { detail: MinimalContextRunDetail |
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const catalog = useMemo(() => contextCatalog(detail), [detail]);
   const unitDerivation = new Map((detail?.context_units?.units ?? []).map((unit) => [unit.source_id, unit.derivation]));
-  const retained = new Set(result.candidate?.retained_source_ids ?? []);
+  const retained = new Set(result.best?.retained_source_ids ?? []);
   const selected = selectedId ? catalog.get(selectedId) : undefined;
   const protectedIndices = new Set(detail?.context_units?.protected_message_indices ?? []);
   const protectedMessages = [...protectedIndices].map((index) => detail?.messages?.[index]).filter(Boolean);
@@ -172,7 +134,7 @@ function ContextCollapse({ detail, result }: { detail: MinimalContextRunDetail |
     <section className="minimal-context-section" aria-labelledby="minimal-context-collapse-title">
       <header><span className="eyebrow">CONTEXT COLLAPSE</span><h2 id="minimal-context-collapse-title">Retained versus omitted</h2></header>
       <div className="minimal-context-unit-list">
-        {result.source_universe.source_ids.map((sourceId, index) => {
+        {result.universe.source_ids.map((sourceId, index) => {
           const unit = catalog.get(sourceId) ?? { source_id: sourceId, message_index: 0, role: "", unicode_range: [0, 0] as [number, number] };
           const isRetained = retained.has(sourceId);
           const derivation = unitDerivation.get(sourceId) ?? (unit.parent_source_id ? "auto_structural" : unit.derivation);
@@ -189,6 +151,10 @@ function ContextCollapse({ detail, result }: { detail: MinimalContextRunDetail |
   );
 }
 
+function Unavailable({ result }: { result: MinimalContextResult }) {
+  return <section className="minimal-context-error" role="alert"><strong>MINIMAL CONTEXT UNAVAILABLE</strong><span>{result.reason ?? "Exact recorded-answer control could not be reproduced."}</span>{result.reason_code && <code>code: {result.reason_code}</code>}</section>;
+}
+
 function Progress({ job, onCancel }: { job: MinimalContextJob; onCancel: () => void }) {
   return <section className="minimal-context-progress" aria-live="polite"><div><span className="eyebrow">MINIMAL CONTEXT JOB</span><strong>{phaseLabel(job.progress.phase)}</strong>{job.progress.bestRetainedSourceCount != null && <small>best verified: {job.progress.bestRetainedSourceCount} units</small>}</div><div><b>{job.progress.completedUnits.toLocaleString()} / {job.progress.totalUnits.toLocaleString()}</b><span>{Math.round(job.progress.percent)}%</span></div>{job.progress.certificateCandidateKind && <p>{CERTIFICATE_LABEL[job.progress.certificateCandidateKind]}</p>}{job.cancellable && <button type="button" onClick={onCancel}>CANCEL</button>}</section>;
 }
@@ -197,45 +163,76 @@ export interface MinimalContextStudioProps { runId: string }
 
 export function MinimalContextStudio({ runId }: MinimalContextStudioProps) {
   const [detail, setDetail] = useState<MinimalContextRunDetail | null>(null);
-  const [summaries, setSummaries] = useState<MinimalContextSummary[]>([]);
-  const criterion: MinimalContextCriterion = "exact_recorded_output";
-  const [selectedResultId, setSelectedResultId] = useState("");
   const [result, setResult] = useState<MinimalContextResult | null>(null);
   const [job, setJob] = useState<MinimalContextJob | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [branchError, setBranchError] = useState<string | null>(null);
+  const [childId, setChildId] = useState<string | null>(null);
+  const [branching, setBranching] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  async function refresh() {
-    const [nextDetail, nextSummaries] = await Promise.all([loadMinimalContextRun(runId), listMinimalContextResults(runId)]);
-    setDetail(nextDetail); setSummaries(nextSummaries); setLoading(false);
-    const compatible = bestSummary(nextSummaries, criterion);
-    if (compatible) { setSelectedResultId(compatible.result_id); setResult(await loadMinimalContextResult(runId, compatible.result_id)); }
-  }
-  useEffect(() => { setLoading(true); void refresh(); }, [runId]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    const compatible = bestSummary(summaries, criterion);
-    if (!compatible) { setSelectedResultId(""); setResult(null); return; }
-    setSelectedResultId(compatible.result_id); void loadMinimalContextResult(runId, compatible.result_id).then(setResult);
-  }, [criterion, runId, summaries]);
+    let active = true;
+    setLoading(true); setDetail(null); setResult(null); setJob(null); setError(null); setBranchError(null); setChildId(null);
+    void loadMinimalContextRun(runId).then((nextDetail) => {
+      if (active) { setDetail(nextDetail); setLoading(false); }
+    });
+    return () => { active = false; };
+  }, [runId]);
+
   useEffect(() => {
     if (!job || ["completed", "failed", "cancelled"].includes(job.state)) return;
     const timer = window.setTimeout(() => { void pollMinimalContextJob(runId, job.jobId).then(setJob).catch((caught: Error) => setError(caught.message)); }, 250);
     return () => window.clearTimeout(timer);
   }, [job, runId]);
-  useEffect(() => { if (job?.state === "completed") void refresh(); if (job?.state === "failed" && job.error) setError(job.error.message); }, [job?.state]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!job) return;
+    if (job.state === "completed") {
+      if (job.result) { setResult(job.result); setError(null); }
+      else setError("The completed Minimal Context job did not include a search result.");
+    } else if (job.state === "failed" && job.error) setError(job.error.message);
+  }, [job]);
 
   async function start() {
-    setError(null); setResult(null);
+    setError(null); setBranchError(null); setChildId(null); setResult(null);
     try { setJob(await startMinimalContextJob(runId, { preservation: { kind: "exact_recorded_output" }, universe: { max_units: 50 }, max_new_counterfactual_observations: 128, attempt_inclusion_check: true })); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "Minimal Context could not start."); }
   }
-  async function cancel() { if (!job) return; try { setJob(await cancelMinimalContextJob(runId, job.jobId)); } catch (caught) { setError(caught instanceof Error ? caught.message : "Cancellation failed."); } }
-  const selectedSummary = summaries.find((summary) => summary.result_id === selectedResultId);
+
+  async function cancel() {
+    if (!job) return;
+    try { setJob(await cancelMinimalContextJob(runId, job.jobId)); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Cancellation failed."); }
+  }
+
+  async function branch() {
+    const best = result?.best;
+    if (!best || !best.experiment_id || !best.arm_id || !best.observation_id
+        || best.observation_status !== "exact_preserved" || !best.removed_source_ids.length) return;
+    setBranching(true); setBranchError(null); setChildId(null);
+    try {
+      const created = record(await branchMinimalContextWinner(runId, {
+        experiment_id: best.experiment_id, arm_id: best.arm_id, observation_id: best.observation_id,
+      }));
+      const createdId = typeof created.child_run_id === "string" ? created.child_run_id : null;
+      if (!createdId) throw new Error("The branch response did not include a child run id.");
+      setChildId(createdId);
+    } catch (caught) { setBranchError(caught instanceof Error ? caught.message : "The reduced-context branch could not be created."); }
+    finally { setBranching(false); }
+  }
+
+  const best = result?.best;
+  const branchEligible = result?.status === "completed"
+    && Boolean(best && best.experiment_id && best.arm_id && best.observation_id
+      && best.observation_status === "exact_preserved" && best.removed_source_ids.length);
+
   return <div className="minimal-context-studio">
     <header className="minimal-context-header"><div><span className="eyebrow">MINIMAL CONTEXT</span><h1>Reduce context</h1><p>Find the smallest directly verified context set that preserves the recorded answer.</p></div></header>
     {job && <Progress job={job} onCancel={cancel} />}
     {error && <div className="minimal-context-error" role="alert"><strong>MINIMAL CONTEXT UNAVAILABLE</strong><span>{error}</span></div>}
-    {!loading && result ? <><Hero result={result} /><div className="minimal-context-meta"><span>{selectedSummary?.universe_id ?? result.source_universe.search_universe_id ?? "UNIVERSE UNAVAILABLE"}</span><span>{result.result_id}</span></div><Coverage result={result} /><ContextCollapse detail={detail} result={result} onError={setError} /></> : !job && <section className="minimal-context-empty"><span className="eyebrow">NO VERIFIED RESULT</span><h2>Reduce this recorded context</h2><p>Check whether the recorded answer can be reproduced token-for-token.</p><button type="button" onClick={start}>RUN EXACT MINIMAL CONTEXT</button></section>}
-    {summaries.length > 0 && <label className="minimal-context-history"><span>RESULT HISTORY</span><select value={selectedResultId} onChange={(event) => { setSelectedResultId(event.target.value); void loadMinimalContextResult(runId, event.target.value).then(setResult); }}>{summaries.map((summary) => <option key={summary.result_id} value={summary.result_id}>Exact · {summary.certificate_kind ? CERTIFICATE_LABEL[summary.certificate_kind] : summary.status} · {summary.retained_source_count ?? "—"} retained</option>)}</select></label>}
+    {!loading && result?.status === "unavailable" && <Unavailable result={result} />}
+    {!loading && result?.status === "completed" && <><Hero result={result} /><div className="minimal-context-meta"><span>{result.universe.universe_id ?? "UNIVERSE UNAVAILABLE"}</span><span>{result.search_id}</span></div><SearchProof result={result} />{result.best && <ContextCollapse detail={detail} result={result} />}<div className="minimal-context-actions">{branchEligible && <button type="button" onClick={() => void branch()} disabled={branching}>{branching ? "BRANCHING…" : "BRANCH WITH THIS CONTEXT"}</button>}{childId && <p role="status">Child branch created — <a href={`#/runs/${encodeURIComponent(childId)}`}>OPEN {childId.slice(-8)}</a></p>}{branchError && <p className="minimal-context-error" role="alert">{branchError}</p>}</div></>}
+    {!loading && !result && !job && !error && <section className="minimal-context-empty"><span className="eyebrow">NO VERIFIED RESULT</span><h2>Reduce this recorded context</h2><p>Check whether the recorded answer can be reproduced token-for-token.</p><button type="button" onClick={start}>RUN EXACT MINIMAL CONTEXT</button></section>}
   </div>;
 }

@@ -1,5 +1,6 @@
-export type MinimalContextCriterion = "exact_recorded_output";
-export type MinimalContextCertificate = "inclusion_minimum" | "best_verified";
+export type MinimalContextCertificate = "BEST_VERIFIED" | "INCLUSION_MINIMUM";
+export type MinimalContextClassification = "preserves" | "diverged" | "unknown";
+export type MinimalContextDisposition = "reused" | "executed" | "not_executed";
 
 export interface MinimalContextProgress {
   phase: string;
@@ -10,29 +11,51 @@ export interface MinimalContextProgress {
   certificateCandidateKind?: MinimalContextCertificate;
 }
 
-export interface MinimalContextJob {
-  schemaVersion: string;
-  jobId: string;
-  runId: string;
-  kind: string;
-  state: "queued" | "running" | "persisting" | "cancelling" | "completed" | "failed" | "cancelled";
-  progress: MinimalContextProgress;
-  cancelRequested: boolean;
-  cancellable: boolean;
-  cached: boolean;
-  cancelAccepted?: boolean;
-  error?: { code?: string; message: string };
-  result?: MinimalContextResult;
+export interface MinimalContextEvidenceRef {
+  disposition: MinimalContextDisposition;
+  experiment_id?: string;
+  arm_id?: string;
+  observation_id?: string;
+  observation_status?: string;
 }
 
-export interface MinimalContextSummary {
-  result_id: string;
-  preservation_kind: MinimalContextCriterion;
-  source_count: number;
-  retained_source_count?: number;
-  certificate_kind?: MinimalContextCertificate;
-  status: string;
-  universe_id?: string;
+export interface MinimalContextTrial {
+  ordinal: number;
+  stage: string;
+  retained_ids: string[];
+  cost: number;
+  classification: MinimalContextClassification;
+  disposition: MinimalContextDisposition;
+  experiment_id?: string | null;
+  arm_id?: string | null;
+  observation_id?: string | null;
+  observation_status?: string | null;
+  evidence?: MinimalContextEvidenceRef | null;
+  batch_id?: number | null;
+  parent_retained_ids?: string[];
+}
+
+export interface MinimalContextTrajectoryEntry {
+  counterfactual_probe_count: number;
+  retained_ids: string[];
+  cost: number;
+  retained_unit_count: number;
+  stage: string;
+}
+
+export interface MinimalContextBudget {
+  max_new_executions: number;
+  used_new_executions: number;
+  reused_observation_count: number;
+  exhausted: boolean;
+}
+
+export interface MinimalContextInclusionCheck {
+  attempted: boolean;
+  complete: boolean;
+  tested_child_count: number;
+  total_child_count: number;
+  all_children_failed: boolean;
 }
 
 export interface MinimalContextSourceUnit {
@@ -50,44 +73,60 @@ export interface MinimalContextSourceUnit {
 }
 
 export interface MinimalContextResult {
-  schema_version: string;
-  run_id: string;
-  result_id: string;
+  schema_version: "clozn.minimal-context-search-result.v1";
+  search_id: string;
   status: string;
-  source_universe: {
+  search_status?: string | null;
+  reason?: string | null;
+  reason_code?: string | null;
+  base_execution_fingerprint: string;
+  universe: {
+    universe_id?: string;
     source_ids: string[];
-    source_count: number;
-    context_units_manifest_sha256?: string;
-    search_universe_id?: string;
+    source_count?: number;
+    [key: string]: unknown;
   };
-  preservation: { kind: MinimalContextCriterion; tolerance_nats?: number };
-  candidate?: {
+  objective: {
+    kind: string;
+    version: string;
+    [key: string]: unknown;
+  };
+  control_observation_id?: string | null;
+  trials: MinimalContextTrial[];
+  trajectory: MinimalContextTrajectoryEntry[];
+  best?: {
     retained_source_ids: string[];
     removed_source_ids: string[];
-    retained_source_count: number;
-    within_tolerance: boolean;
+    rendered_prompt_token_cost: number;
+    experiment_id?: string | null;
+    arm_id?: string | null;
+    observation_id?: string | null;
+    observation_status?: string | null;
+  } | null;
+  certificate?: MinimalContextCertificate | null;
+  policy: {
+    kind: string;
+    version: string;
+    attempt_inclusion_check: boolean;
+    [key: string]: unknown;
   };
-  certificate?: {
-    kind: MinimalContextCertificate;
-    candidate_retained_source_count: number;
-    global_minimality: "proven" | "not_proven";
-    inclusion_minimality: "proven" | "not_proven";
-  };
-  coverage?: {
-    lower_cardinalities?: Array<{
-      retained_source_count: number;
-      candidate_count: number;
-      tested_count: number;
-      preserving_count: number;
-      complete: boolean;
-    }>;
-    smaller_candidate_count: number;
-    smaller_tested_count: number;
-    smaller_remaining_count: number;
-  };
-  budget?: { total_new_probes?: number; search_probe_budget?: number; certification_probe_budget?: number };
-  cache_binding?: Record<string, unknown>;
-  error?: string;
+  budget: MinimalContextBudget;
+  inclusion_check: MinimalContextInclusionCheck;
+}
+
+export interface MinimalContextJob {
+  schemaVersion: string;
+  jobId: string;
+  runId: string;
+  kind: string;
+  state: "queued" | "running" | "persisting" | "cancelling" | "completed" | "failed" | "cancelled";
+  progress: MinimalContextProgress;
+  cancelRequested: boolean;
+  cancellable: boolean;
+  cached: boolean;
+  cancelAccepted?: boolean;
+  error?: { code?: string; message: string };
+  result?: MinimalContextResult;
 }
 
 export interface MinimalContextRunDetail {
@@ -107,6 +146,13 @@ export interface MinimalContextRunDetail {
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function parseResult(value: unknown): MinimalContextResult | undefined {
+  const body = record(value);
+  if (body.schema_version !== "clozn.minimal-context-search-result.v1"
+      || typeof body.search_id !== "string" || !body.search_id) return undefined;
+  return value as MinimalContextResult;
 }
 
 function parseJob(value: unknown): MinimalContextJob {
@@ -137,7 +183,7 @@ function parseJob(value: unknown): MinimalContextJob {
       code: typeof error.code === "string" ? error.code : undefined,
       message: error.message,
     } : undefined,
-    result: record(body.result).result_id ? body.result as MinimalContextResult : undefined,
+    result: parseResult(body.result),
   };
 }
 
@@ -158,19 +204,6 @@ async function requestJson(url: string, init?: RequestInit): Promise<unknown> {
 export async function loadMinimalContextRun(runId: string, signal?: AbortSignal): Promise<MinimalContextRunDetail | null> {
   try { return await requestJson(`/runs/${encodeURIComponent(runId)}`, { signal }) as MinimalContextRunDetail; }
   catch { return null; }
-}
-
-export async function listMinimalContextResults(runId: string, signal?: AbortSignal): Promise<MinimalContextSummary[]> {
-  try {
-    const body = record(await requestJson(`/runs/${encodeURIComponent(runId)}/minimal-context`, { signal }));
-    return Array.isArray(body.results) ? body.results as MinimalContextSummary[] : [];
-  } catch { return []; }
-}
-
-export async function loadMinimalContextResult(runId: string, resultId: string, signal?: AbortSignal): Promise<MinimalContextResult | null> {
-  try {
-    return await requestJson(`/runs/${encodeURIComponent(runId)}/minimal-context/${encodeURIComponent(resultId)}`, { signal }) as MinimalContextResult;
-  } catch { return null; }
 }
 
 export async function startMinimalContextJob(
@@ -197,4 +230,17 @@ export async function cancelMinimalContextJob(runId: string, jobId: string, sign
     body: "{}",
     signal,
   }));
+}
+
+export async function branchMinimalContextWinner(
+  runId: string,
+  references: { experiment_id: string; arm_id: string; observation_id: string },
+  signal?: AbortSignal,
+): Promise<unknown> {
+  return requestJson(`/runs/${encodeURIComponent(runId)}/minimal-context/branch`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(references),
+    signal,
+  });
 }

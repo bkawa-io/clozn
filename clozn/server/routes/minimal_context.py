@@ -176,21 +176,11 @@ def _start_job(h, run_id: str, body: dict) -> bool:
     return True
 
 
-def _get_run_or_jobs(h, run_id: str) -> bool:
-    run = _get_run_or_404(h, run_id)
-    if run is None:
-        return True
-    h._json(200, {"run_id": run_id, "results": []})
-    return True
-
-
 def try_get(h, path):
     parsed = _split(path)
     if parsed is None:
         return False
     run_id, tail = parsed
-    if tail == "":
-        return _get_run_or_jobs(h, run_id)
     if tail.startswith("/jobs/"):
         job_id = tail[len("/jobs/"): ]
         if not job_id or "/" in job_id:

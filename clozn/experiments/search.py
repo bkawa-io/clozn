@@ -505,7 +505,6 @@ def run_budgeted_reduction(
             on_candidate_accepted(candidate, observation.prepared, observation.evidence)
         return True
 
-    budget_exhausted = False
     inclusion_complete = False
     while best.retained_ids:
         # One-unit deletions belong to the optional certification sweep.  Do
@@ -531,9 +530,6 @@ def run_budgeted_reduction(
         if chosen is not None and maybe_adopt(chosen, "coarse"):
             granularity = 2
             continue
-        if used_probes >= max_counterfactual_probes:
-            budget_exhausted = True
-            break
         if granularity < len(best.retained_ids):
             granularity = min(len(best.retained_ids), granularity * 2)
             continue
@@ -574,8 +570,6 @@ def run_budgeted_reduction(
             )
             if complete:
                 inclusion_complete = True
-            elif used_probes >= max_counterfactual_probes:
-                budget_exhausted = True
             inclusion = InclusionCheck(
                 True,
                 complete,
@@ -599,8 +593,6 @@ def run_budgeted_reduction(
         used_counterfactual_probes=used_probes,
         exhausted=used_probes >= max_counterfactual_probes,
     )
-    if budget_exhausted and not inclusion_complete:
-        certificate = BEST_VERIFIED
     return BudgetedReductionResult(
         status=OK,
         certificate_level=certificate,
