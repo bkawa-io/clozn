@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   cancelMinimalContextJob,
-  branchFromMinimalContext,
   listMinimalContextResults,
   loadMinimalContextResult,
   loadMinimalContextRun,
@@ -15,16 +14,13 @@ import {
   type MinimalContextSourceUnit,
   type MinimalContextSummary,
 } from "../../data/minimalContext";
-import "./MinimalContextStudio.css";
 
 const CERTIFICATE_LABEL: Record<MinimalContextCertificate, string> = {
-  exact_minimum: "EXACT MINIMUM",
   inclusion_minimum: "INCLUSION-MINIMAL",
   best_verified: "BEST VERIFIED",
 };
 
 const CERTIFICATE_EXPLANATION: Record<MinimalContextCertificate, string> = {
-  exact_minimum: "All smaller-cardinality sets were directly ruled out.",
   inclusion_minimum: "No retained unit can be individually removed.",
   best_verified: "Smaller unmeasured sets may exist.",
 };
@@ -34,7 +30,7 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 function certificateRank(value?: MinimalContextCertificate): number {
-  return value === "exact_minimum" ? 0 : value === "inclusion_minimum" ? 1 : 2;
+  return value === "inclusion_minimum" ? 0 : 1;
 }
 
 function phaseLabel(phase: string): string {
@@ -122,9 +118,7 @@ function Hero({ result }: { result: MinimalContextResult }) {
       <div className="minimal-context-hero-proof">
         <span>{certificate ? CERTIFICATE_LABEL[certificate] : result.status.replaceAll("_", " ").toUpperCase()}</span>
         <p>
-          {exact
-            ? "recorded answer reproduced token-for-token"
-            : `teacher-forced likelihood preserved within ${numberText(result.preservation.tolerance_nats, "the recorded tolerance")} nats`}
+          {exact && "recorded answer reproduced token-for-token"}
         </p>
         {certificate && <small>{CERTIFICATE_EXPLANATION[certificate]}</small>}
       </div>
@@ -139,7 +133,7 @@ function Coverage({ result }: { result: MinimalContextResult }) {
     <section className="minimal-context-section" aria-labelledby="minimal-context-proof-title">
       <header><span className="eyebrow">PROOF COVERAGE</span><h2 id="minimal-context-proof-title">Minimality frontier</h2></header>
       <p className="minimal-context-muted">
-        {exact ? "Retained source count against directly checked smaller candidates." : "Distance-to-baseline checks across the retained-count frontier."}
+        Retained source count against directly checked smaller candidates.
       </p>
       {exact && rows.length > 0 ? (
         <div className="minimal-context-coverage-table" role="table" aria-label="Proof coverage by retained source count">
@@ -166,33 +160,14 @@ function Coverage({ result }: { result: MinimalContextResult }) {
   );
 }
 
-function ContextCollapse({ detail, result, onError }: { detail: MinimalContextRunDetail | null; result: MinimalContextResult; onError: (message: string) => void }) {
+function ContextCollapse({ detail, result }: { detail: MinimalContextRunDetail | null; result: MinimalContextResult }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [branching, setBranching] = useState(false);
   const catalog = useMemo(() => contextCatalog(detail), [detail]);
   const unitDerivation = new Map((detail?.context_units?.units ?? []).map((unit) => [unit.source_id, unit.derivation]));
   const retained = new Set(result.candidate?.retained_source_ids ?? []);
   const selected = selectedId ? catalog.get(selectedId) : undefined;
   const protectedIndices = new Set(detail?.context_units?.protected_message_indices ?? []);
   const protectedMessages = [...protectedIndices].map((index) => detail?.messages?.[index]).filter(Boolean);
-  async function branch(action: "remove_and_branch" | "add_back_and_branch" | "branch_with_only") {
-    if (!selectedId || branching) return;
-    setBranching(true);
-    try {
-      const body = await branchFromMinimalContext(result.run_id, {
-        result_id: result.result_id,
-        action,
-        source_ids: [selectedId],
-      });
-      const childId = typeof body.child_run_id === "string" ? body.child_run_id : "";
-      if (!childId) throw new Error(typeof body.reason === "string" ? body.reason : "The branch did not produce a child Run.");
-      window.location.hash = `#/compare/${encodeURIComponent(result.run_id)}/${encodeURIComponent(childId)}`;
-    } catch (caught) {
-      onError(caught instanceof Error ? caught.message : "The source branch could not be created.");
-    } finally {
-      setBranching(false);
-    }
-  }
   return (
     <section className="minimal-context-section" aria-labelledby="minimal-context-collapse-title">
       <header><span className="eyebrow">CONTEXT COLLAPSE</span><h2 id="minimal-context-collapse-title">Retained versus omitted</h2></header>
@@ -209,7 +184,7 @@ function ContextCollapse({ detail, result, onError }: { detail: MinimalContextRu
         })}
       </div>
       <div className="minimal-context-protected"><span className="eyebrow">PROTECTED CURRENT REQUEST</span>{protectedMessages.length ? protectedMessages.map((message, index) => <p key={index}><strong>{String(message?.role ?? "message").toUpperCase()}</strong>{message?.content}</p>) : <p>Protected request text was not recorded.</p>}</div>
-      {selected && <aside className="minimal-context-source-detail" aria-label="Selected source detail"><header><span>{selected.role.toUpperCase()} · MESSAGE {selected.message_index + 1}</span><code>{selected.source_id}</code></header><blockquote>{unitText(detail, selected)}</blockquote><dl><div><dt>Range</dt><dd>{selected.unicode_range[0]}–{selected.unicode_range[1]} Unicode</dd></div><div><dt>Provenance</dt><dd>{sourceKind({ ...selected, derivation: unitDerivation.get(selected.source_id) ?? selected.derivation })}</dd></div><div><dt>Intervention</dt><dd>{retained.has(selected.source_id) ? "Retained in preserving candidate" : "Omitted by candidate intervention"}</dd></div>{selected.source_label && <div><dt>Caller label</dt><dd>{selected.source_label}</dd></div>}</dl><div className="minimal-context-branch-actions"><button type="button" disabled={branching} onClick={() => void branch(retained.has(selected.source_id) ? "remove_and_branch" : "add_back_and_branch")}>{branching ? "BRANCHING…" : retained.has(selected.source_id) ? "REMOVE + BRANCH" : "ADD BACK + BRANCH"}</button><button type="button" disabled={branching} onClick={() => void branch("branch_with_only")}>BRANCH WITH ONLY THIS SET</button></div></aside>}
+      {selected && <aside className="minimal-context-source-detail" aria-label="Selected source detail"><header><span>{selected.role.toUpperCase()} · MESSAGE {selected.message_index + 1}</span><code>{selected.source_id}</code></header><blockquote>{unitText(detail, selected)}</blockquote><dl><div><dt>Range</dt><dd>{selected.unicode_range[0]}–{selected.unicode_range[1]} Unicode</dd></div><div><dt>Provenance</dt><dd>{sourceKind({ ...selected, derivation: unitDerivation.get(selected.source_id) ?? selected.derivation })}</dd></div><div><dt>Intervention</dt><dd>{retained.has(selected.source_id) ? "Retained in preserving candidate" : "Omitted by candidate intervention"}</dd></div>{selected.source_label && <div><dt>Caller label</dt><dd>{selected.source_label}</dd>}</div></dl></aside>}
     </section>
   );
 }
@@ -223,7 +198,7 @@ export interface MinimalContextStudioProps { runId: string }
 export function MinimalContextStudio({ runId }: MinimalContextStudioProps) {
   const [detail, setDetail] = useState<MinimalContextRunDetail | null>(null);
   const [summaries, setSummaries] = useState<MinimalContextSummary[]>([]);
-  const [criterion, setCriterion] = useState<MinimalContextCriterion>("exact_recorded_output");
+  const criterion: MinimalContextCriterion = "exact_recorded_output";
   const [selectedResultId, setSelectedResultId] = useState("");
   const [result, setResult] = useState<MinimalContextResult | null>(null);
   const [job, setJob] = useState<MinimalContextJob | null>(null);
@@ -251,16 +226,16 @@ export function MinimalContextStudio({ runId }: MinimalContextStudioProps) {
 
   async function start() {
     setError(null); setResult(null);
-    try { setJob(await startMinimalContextJob(runId, { preservation: { kind: criterion }, universe: { max_units: 50 }, search_probe_budget: 128, certification_probe_budget: 2000, search_seed: 0 })); }
+    try { setJob(await startMinimalContextJob(runId, { preservation: { kind: "exact_recorded_output" }, universe: { max_units: 50 }, max_new_counterfactual_observations: 128, attempt_inclusion_check: true })); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "Minimal Context could not start."); }
   }
   async function cancel() { if (!job) return; try { setJob(await cancelMinimalContextJob(runId, job.jobId)); } catch (caught) { setError(caught instanceof Error ? caught.message : "Cancellation failed."); } }
   const selectedSummary = summaries.find((summary) => summary.result_id === selectedResultId);
   return <div className="minimal-context-studio">
-    <header className="minimal-context-header"><div><span className="eyebrow">MINIMAL CONTEXT</span><h1>Reduce context</h1><p>Find the smallest directly verified context set under an explicit preservation criterion.</p></div><div className="minimal-context-criteria" role="group" aria-label="Preservation criterion"><button type="button" className={criterion === "exact_recorded_output" ? "is-active" : ""} onClick={() => setCriterion("exact_recorded_output")}>Exact recorded output</button><button type="button" className={criterion === "teacher_forced_likelihood" ? "is-active" : ""} onClick={() => setCriterion("teacher_forced_likelihood")}>Teacher-forced likelihood</button></div></header>
+    <header className="minimal-context-header"><div><span className="eyebrow">MINIMAL CONTEXT</span><h1>Reduce context</h1><p>Find the smallest directly verified context set that preserves the recorded answer.</p></div></header>
     {job && <Progress job={job} onCancel={cancel} />}
-    {error && <div className="minimal-context-error" role="alert"><strong>MINIMAL CONTEXT UNAVAILABLE</strong><span>{error}</span>{criterion === "exact_recorded_output" && <small>Exact mode was not silently replaced. Choose Teacher-forced likelihood to run a separate criterion.</small>}</div>}
-    {!loading && result ? <><Hero result={result} /><div className="minimal-context-meta"><span>{selectedSummary?.universe_id ?? result.source_universe.search_universe_id ?? "UNIVERSE UNAVAILABLE"}</span><span>{result.result_id}</span></div><Coverage result={result} /><ContextCollapse detail={detail} result={result} onError={setError} /></> : !job && <section className="minimal-context-empty"><span className="eyebrow">NO VERIFIED RESULT</span><h2>Reduce this recorded context</h2><p>{criterion === "exact_recorded_output" ? "Check whether the recorded answer can be reproduced token-for-token." : "Check whether the recorded continuation remains within the chosen likelihood tolerance."}</p><button type="button" onClick={start}>RUN {criterion === "exact_recorded_output" ? "EXACT" : "LIKELIHOOD"} MINIMAL CONTEXT</button></section>}
-    {summaries.length > 0 && <label className="minimal-context-history"><span>RESULT HISTORY</span><select value={selectedResultId} onChange={(event) => { setSelectedResultId(event.target.value); void loadMinimalContextResult(runId, event.target.value).then(setResult); }}>{summaries.map((summary) => <option key={summary.result_id} value={summary.result_id}>{summary.preservation_kind === "exact_recorded_output" ? "Exact" : "Likelihood"} · {summary.certificate_kind ? CERTIFICATE_LABEL[summary.certificate_kind] : summary.status} · {summary.retained_source_count ?? "—"} retained</option>)}</select></label>}
+    {error && <div className="minimal-context-error" role="alert"><strong>MINIMAL CONTEXT UNAVAILABLE</strong><span>{error}</span></div>}
+    {!loading && result ? <><Hero result={result} /><div className="minimal-context-meta"><span>{selectedSummary?.universe_id ?? result.source_universe.search_universe_id ?? "UNIVERSE UNAVAILABLE"}</span><span>{result.result_id}</span></div><Coverage result={result} /><ContextCollapse detail={detail} result={result} onError={setError} /></> : !job && <section className="minimal-context-empty"><span className="eyebrow">NO VERIFIED RESULT</span><h2>Reduce this recorded context</h2><p>Check whether the recorded answer can be reproduced token-for-token.</p><button type="button" onClick={start}>RUN EXACT MINIMAL CONTEXT</button></section>}
+    {summaries.length > 0 && <label className="minimal-context-history"><span>RESULT HISTORY</span><select value={selectedResultId} onChange={(event) => { setSelectedResultId(event.target.value); void loadMinimalContextResult(runId, event.target.value).then(setResult); }}>{summaries.map((summary) => <option key={summary.result_id} value={summary.result_id}>Exact · {summary.certificate_kind ? CERTIFICATE_LABEL[summary.certificate_kind] : summary.status} · {summary.retained_source_count ?? "—"} retained</option>)}</select></label>}
   </div>;
 }

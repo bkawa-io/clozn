@@ -3,12 +3,11 @@ from __future__ import annotations
 from collections import Counter
 
 from clozn.runs.answer_preservation import is_reference_match_preserving
-from clozn.runs.budgeted_reduce import (
+from clozn.experiments.search import (
     BEST_VERIFIED,
     INCLUSION_MINIMUM,
     run_budgeted_reduction,
 )
-from clozn.runs.budgeted_reduce import PreparedCandidate
 
 
 def _run(universe, preserving, *, costs=None, budget=100, inclusion=True):
@@ -67,7 +66,8 @@ def test_zero_budget_returns_controlled_full_context():
     assert result.certificate_level == BEST_VERIFIED
     assert result.best_candidate.retained_ids == (0, 1, 2)
     assert result.budget.used_counterfactual_probes == 0
-    assert result.inclusion_check.attempted is False
+    assert result.inclusion_check.attempted is True
+    assert result.inclusion_check.complete is False
     assert calls == [[(0, 1, 2)]]
 
 
@@ -239,34 +239,3 @@ def test_shared_exact_reference_predicate_is_strict():
     assert is_reference_match_preserving({"status": "diverged"}) is False
     assert is_reference_match_preserving({"preserves": True}) is False
     assert is_reference_match_preserving(None) is False
-
-
-def test_exact_engine_adapter_uses_worker_prompt_token_count_and_shared_probe(monkeypatch):
-    import clozn.runs.budgeted_reduce_reference as reference_adapter
-
-    class Engine:
-        def apply_template_info(self, messages):
-            return {"prompt": "rendered", "prompt_tokens": 123}
-
-    calls = []
-
-    def fake_probe(substrate, arms):
-        calls.append((substrate, arms))
-        return [{"status": "matched"} for _ in arms]
-
-    monkeypatch.setattr(reference_adapter, "probe_reference_match_many", fake_probe)
-    adapter = reference_adapter.EngineReferenceMatchAdapter(
-        engine=Engine(),
-        substrate=object(),
-        render_messages=lambda retained: [{"role": "system", "content": str(retained)}],
-        reference_token_ids=(11, 22),
-        generation_contract={"decode_mode": "greedy"},
-    )
-
-    prepared = adapter.prepare_candidate(("unit",))
-    assert isinstance(prepared, PreparedCandidate)
-    assert prepared.cost == 123
-    assert prepared.probe_payload["reference_token_ids"] == [11, 22]
-    assert adapter.probe_many([prepared]) == [{"status": "matched"}]
-    assert calls and "proof_grade" not in calls[0][1][0]
-    assert adapter.is_preserving({"status": "matched"}) is True

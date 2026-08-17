@@ -1,5 +1,5 @@
-export type MinimalContextCriterion = "exact_recorded_output" | "teacher_forced_likelihood";
-export type MinimalContextCertificate = "exact_minimum" | "inclusion_minimum" | "best_verified";
+export type MinimalContextCriterion = "exact_recorded_output";
+export type MinimalContextCertificate = "inclusion_minimum" | "best_verified";
 
 export interface MinimalContextProgress {
   phase: string;
@@ -195,21 +195,6 @@ export async function cancelMinimalContextJob(runId: string, jobId: string, sign
     method: "POST",
     headers: { "content-type": "application/json" },
     body: "{}",
-    signal,
-  }));
-}
-
-export type MinimalContextBranchAction = "remove_and_branch" | "add_back_and_branch" | "branch_with_only";
-
-export async function branchFromMinimalContext(
-  runId: string,
-  request: { result_id: string; action: MinimalContextBranchAction; source_ids: string[] },
-  signal?: AbortSignal,
-): Promise<Record<string, unknown>> {
-  return record(await requestJson(`/runs/${encodeURIComponent(runId)}/minimal-context/branch`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(request),
     signal,
   }));
 }

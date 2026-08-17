@@ -9,10 +9,6 @@ from clozn.runs.answer_preservation import (
     assess_exact_eligibility,
     classify_reference_match,
 )
-from clozn.runs.minimal_context import (
-    MinimalContextError,
-    run_minimal_context_search,
-)
 from clozn.server import app as cs
 
 
@@ -87,8 +83,6 @@ def _identity(template="b" * 32):
         "backend": "cpu",
         "white_box_flags": {"sae": False, "jlens": False, "attn_knockout": False},
     }
-
-
 def _eligible_run():
     return {
         "id": "run-exact",
@@ -136,46 +130,3 @@ def test_eligibility_rejects_missing_ids_retokenization_and_identity_drift():
     mismatch = assess_exact_eligibility(run, _CurrentRuntime("c" * 32))
     assert mismatch["eligible"] is False
     assert "template_mismatch" in mismatch["reasons"]
-
-
-def _probe_record(removed, status):
-    return {
-        "schema_version": "clozn.reference-match-probe.v1",
-        "probe_id": "rmp_" + ("a" * 24),
-        "run_id": "run-exact",
-        "removed_source_ids": list(removed),
-        "exact_removed_ranges": [],
-        "basis_digest": "0" * 64,
-        "intervened_context_digest": "1" * 64,
-        "reference_token_ids_sha256": "2" * 64,
-        "reference_token_count": 3,
-        "generation_contract": CONTRACT,
-        "result": {"status": status},
-        "provenance": "direct_generation_probe",
-    }
-
-
-def test_exact_minimal_context_accepts_only_direct_probe_evidence():
-    def measure(removed):
-        return _probe_record(removed, "matched" if set(removed) == {"A"} else "diverged")
-
-    result = run_minimal_context_search(
-        ["A", "B"], measure, tolerance_nats=0.0,
-        search_probe_budget=10, certification_probe_budget=10,
-        candidate_retained_source_sets=[["B"]],
-        preservation={"kind": "exact_recorded_output", "target": "whole_recorded_continuation"},
-    )
-    assert result["candidate"]["result_status"] == "matched"
-    assert result["candidate"]["provenance"] == "direct_generation_probe"
-    assert result["certificate"]["kind"] == "exact_minimum"
-    assert "delta_nats" not in result["candidate"]
-
-
-def test_likelihood_evidence_cannot_fill_exact_proof_rows():
-    with pytest.raises(MinimalContextError, match="direct exact evidence"):
-        run_minimal_context_search(
-            ["A", "B"], lambda removed: {"experiment_id": "x", "removed_source_ids": list(removed),
-                                             "delta_nats": 0.0, "provenance": "measured"},
-            tolerance_nats=0.0, search_probe_budget=1, certification_probe_budget=1,
-            preservation={"kind": "exact_recorded_output", "target": "whole_recorded_continuation"},
-        )

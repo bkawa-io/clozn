@@ -24,17 +24,14 @@ ENGINE_CLIENT_ROOT = ROOT / "engine" / "client"
 if str(ENGINE_CLIENT_ROOT) not in sys.path:
     sys.path.insert(0, str(ENGINE_CLIENT_ROOT))
 
-from clozn.runs.budgeted_reduce import PreparedCandidate, run_budgeted_reduction
+from clozn.experiments.effective_prompt import render_effective_prompt_for_retained
+from clozn.experiments.search import PreparedCandidate, accepted_trial, run_budgeted_reduction
 from clozn.runs.context_search_universe import plan_context_search_universe
 from clozn.runs.parent_anchor_geometry import (
     SCHEMA,
     aggregate_batches,
     aggregate_case,
     build_probe_row,
-)
-from clozn.runs.realistic_minimal_context import (
-    _accepted_trial,
-    _render_messages_for_retained,
 )
 from clozn.runs.store import get_run
 
@@ -67,7 +64,7 @@ class _RecordedLedgerAdapter:
 
     def prepare_candidate(self, retained_ids: tuple[str, ...]) -> PreparedCandidate:
         row = self.by_ids.get(tuple(retained_ids))
-        messages = _render_messages_for_retained(self.run, self.universe_ids, tuple(retained_ids))
+        messages = render_effective_prompt_for_retained(self.run, self.universe_ids, tuple(retained_ids))
         rendered = self.engine.apply_template_info(messages, include_token_ids=True)
         token_ids = tuple(rendered["prompt_token_ids"])
         worker_cost = len(token_ids)
@@ -162,7 +159,7 @@ def _case_geometry(case_report: dict[str, Any], *, engine: Any, max_units: int, 
     if replay_mismatches:
         raise ValueError(f"case {case_id} replay did not match saved ledger: {replay_mismatches[0]}")
 
-    accepted = {trial.ordinal: _accepted_trial(result, trial) for trial in result.trials}
+    accepted = {trial.ordinal: accepted_trial(result, trial) for trial in result.trials}
     rows = []
     for trial in result.trials:
         if trial.stage == "control":

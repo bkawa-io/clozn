@@ -4,7 +4,6 @@ from threading import Event
 
 import pytest
 
-from clozn.runs.minimal_context import run_minimal_context_search
 from clozn.runs.multi_arm import (
     BatchCancelled,
     MultiArmError,
@@ -240,30 +239,3 @@ def test_malformed_arm_is_rejected_before_any_dispatch():
         score_tokens_many(substrate, [_score_arms()[0], {"messages": "not-a-list"}])
     assert raised.value.arm_index == 1
     assert substrate.score_calls == []
-
-
-def test_minimal_context_solver_consumes_batch_measurement_without_changing_certificate_logic():
-    batches = []
-
-    def measure_many(removed_sets):
-        removed_sets = tuple(tuple(item) for item in removed_sets)
-        batches.append(removed_sets)
-        return [
-            {
-                "experiment_id": "exp_" + "_".join(removed),
-                "removed_source_ids": list(removed),
-                "delta_nats": 0.0 if len({"a", "b", "c", "d"}.difference(removed)) >= 2 else 1.0,
-                "provenance": "measured",
-            }
-            for removed in removed_sets
-        ]
-
-    result = run_minimal_context_search(
-        ["a", "b", "c", "d"], None, measure_removed_many=measure_many,
-        tolerance_nats=0.1, search_probe_budget=20, certification_probe_budget=20,
-        run_id="run_batch",
-    )
-    assert result["status"] == "found"
-    assert result["certificate"]["kind"] == "exact_minimum"
-    assert result["candidate"]["retained_source_count"] == 2
-    assert batches

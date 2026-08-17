@@ -25,7 +25,6 @@ from clozn.experiments.state import ExecutionState
 import clozn.runs.store as runlog
 from clozn.recipes.removability import can_remove, removability_message
 from clozn.runs.context_receipt import build_context_receipt
-from clozn.runs.answer_preservation import ExactAnswerPreservationStudy
 
 
 CONTRACT = {
@@ -333,7 +332,6 @@ def test_failed_materialization_does_not_create_a_child(tmp_path, monkeypatch):
     assert "child_run_id" not in outcome
     assert runlog.list_runs(20) == []
 
-
 def test_removability_recipe_is_thin_and_uses_preservation_language():
     run, source_ids = _run()
     result = can_remove(
@@ -346,24 +344,3 @@ def test_removability_recipe_is_thin_and_uses_preservation_language():
         "Deleting this source caused divergence at recorded answer token"
     )
     assert "irrelevant" not in removability_message(result, arm_id)
-
-
-def test_new_removability_path_matches_legacy_direct_probe_oracle():
-    run, source_ids = _run()
-    substrate = ProbeSubstrate()
-    legacy = ExactAnswerPreservationStudy(
-        run, substrate, source_ids=[source_ids[1]],
-    )
-    legacy_probe = legacy.probe_removed_sources([source_ids[1]])
-    new_result = can_remove(
-        run,
-        [source_ids[1]],
-        execution_adapter=DeleteSourceExactReferenceAdapter(substrate, run=run),
-    )
-    new_observation = new_result.arms[0]
-    expected_status = {
-        "matched": "exact_preserved",
-        "diverged": "diverged",
-    }[legacy_probe["result"]["status"]]
-    assert new_observation.status == expected_status
-    assert new_observation.first_divergence_index == legacy_probe["result"].get("first_divergence_index")

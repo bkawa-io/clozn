@@ -28,21 +28,9 @@ def _last_user(messages):
 
 
 def _inject_block(messages, block):
-    """`messages` with `block` folded in as system context (a copy -- never mutates the caller's list).
-
-    Appends to an existing system message (the client's own instructions keep first position) or
-    prepends a new one; a None/empty block returns the messages unchanged. That last case is now the
-    common one on the product paths -- with cards gone nothing composes a block today -- but the seam
-    stays rather than being inlined away, because it is the shape fork.py and quant_check.py reproduce.
-    """
-    if not block:
-        return list(messages)
-    msgs = [dict(m) for m in messages]
-    for m in msgs:
-        if m.get("role") == "system":
-            m["content"] = (str(m.get("content") or "") + "\n\n" + block).strip()
-            return msgs
-    return [{"role": "system", "content": block}] + msgs
+    """Compatibility name for the canonical experiment effective-prompt seam."""
+    from clozn.experiments.effective_prompt import inject_block
+    return inject_block(messages, block)
 
 
 def _export_markdown(run: dict, xr: dict | None) -> str:
