@@ -172,6 +172,7 @@ def test_reconstructed_generate_creates_no_runs_and_materialization_does_not_cal
     result = run_experiment(experiment, GenerateExecutionAdapter(substrate, run=run), observation_store=store)
     assert result.state == "completed"
     assert result.arms[0].observation.fidelity_classification == "reconstructed_replay"
+    assert substrate.engine.calls[-1][1]["max_tokens"] == 1  # the forced token consumes one max_new slot
     assert run_store.list_runs(20) == []
     calls = len(substrate.engine.calls)
     materialized = materialize_generated_observation(
@@ -189,6 +190,38 @@ def test_reconstructed_generate_creates_no_runs_and_materialization_does_not_cal
     )
     assert second["child_run_id"] != materialized["child_run_id"]
     assert len(run_store.list_runs(20)) == 2
+
+
+def test_exact_generate_confirms_control_creates_no_run_and_materializes_without_model_call(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_store, "RUNS_DIR", str(tmp_path / "runs"))
+    run_store._schema_verified.clear()
+    run = _run()
+    resolved = resolve_state(
+        StateRef.before_answer_token(run, 1), run=run, policy="exact_required",
+        checkpoint=_exact_checkpoint(run), runtime_identity=RUNTIME, worker_identity=WORKER,
+    )
+    experiment = Experiment(
+        base=resolved, evaluator=Generate(max_new=2),
+        arms=[ForceToken(token_id=77, token_piece="ALT")],
+    )
+    substrate = ExactSubstrate(mismatch=False)
+    store = ObservationStore()
+    result = run_experiment(experiment, GenerateExecutionAdapter(substrate, run=run), observation_store=store)
+    assert result.state == "completed"
+    assert result.control.fidelity["proof_status"] == "confirmed"
+    assert result.arms[0].observation.fidelity["exact_match"] is True
+    assert result.arms[0].observation.fidelity_classification == "exact_execution_fork"
+    assert substrate.engine.calls[-1]["max_tokens"] == 2  # exact worker budget includes the forced slot
+    assert len(run_store.list_runs(20)) == 0
+    calls = len(substrate.engine.calls)
+    materialized = materialize_generated_observation(
+        run, experiment.experiment_id, result.arms[0].arm_id, observation_store=store,
+    )
+    assert materialized["state"] == "completed"
+    assert len(substrate.engine.calls) == calls
+    child = run_store.get_run(materialized["child_run_id"])
+    assert child["response"] == "zeroALT tail"
+    assert child["changes_applied"]["experiment"]["base_state"]["realized_fidelity"] == "exact_execution_fork"
 
 
 def test_exact_control_mismatch_blocks_force_arm_and_persists_no_transient_observation(tmp_path, monkeypatch):

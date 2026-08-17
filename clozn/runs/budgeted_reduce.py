@@ -326,6 +326,8 @@ def run_budgeted_reduction(
     preservation_predicate: Callable[[Any], bool] | None = None,
     is_failed: Callable[[Any], bool] | None = None,
     failure_predicate: Callable[[Any], bool] | None = None,
+    candidate_is_reusable: Callable[[tuple[UnitID, ...]], bool] | None = None,
+    probe_charges_budget: Callable[[Any], bool] | None = None,
 ) -> BudgetedReductionResult:
     """Run the deterministic v0 budgeted deletion search.
 
@@ -384,8 +386,16 @@ def run_budgeted_reduction(
         if not pending:
             return [direct_cache[candidate.retained_ids] for candidate, _prepared in records]
         remaining = max_counterfactual_probes - used_probes
-        if len(pending) > remaining:
-            pending = pending[:remaining]
+        if candidate_is_reusable is None:
+            reusable_pending: list[tuple[Candidate, PreparedCandidate]] = []
+        else:
+            reusable_pending = [
+                item for item in pending if candidate_is_reusable(item[0].retained_ids)
+            ]
+        new_pending = [item for item in pending if item not in reusable_pending]
+        if len(new_pending) > remaining:
+            new_pending = new_pending[:remaining]
+        pending = reusable_pending + new_pending
         if not pending:
             return [direct_cache[candidate.retained_ids] for candidate, _prepared in records
                     if candidate.retained_ids in direct_cache]
@@ -404,7 +414,10 @@ def run_budgeted_reduction(
             raise ValueError(
                 "probe_many must return exactly one evidence result per prepared candidate"
             )
-        used_probes += len(pending)
+        if probe_charges_budget is None:
+            used_probes += len(pending)
+        else:
+            used_probes += sum(1 for evidence in raw_results if probe_charges_budget(evidence))
         for (candidate, prepared), evidence in zip(pending, raw_results):
             preserves = bool(predicate(evidence))
             failed = bool(failed_predicate(evidence))

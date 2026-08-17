@@ -77,6 +77,8 @@ def materialize_arm(
     max_new: int | None = None,
     replay_fn: Callable[..., Mapping[str, Any] | None] = replay_run,
     experiment_id: str | None = None,
+    observation_id: str | None = None,
+    require_preserved: bool = False,
     observation_store: ObservationStore | None = None,
     store: ObservationStore | None = None,
 ) -> dict[str, Any]:
@@ -97,6 +99,16 @@ def materialize_arm(
         raise MaterializationError("only an experiment with a completed arm can be materialized")
     if result.base.run_id != base_run["id"]:
         raise MaterializationStaleError("experiment result is bound to another parent run")
+    try:
+        selected_arm = result.arm_for(arm_id)
+    except KeyError as exc:
+        raise MaterializationError(f"experiment result has no arm {arm_id!r}") from exc
+    if observation_id is not None and selected_arm.observation_id != observation_id:
+        raise MaterializationStaleError("the requested observation does not match the persisted arm")
+    if require_preserved and (
+        selected_arm.observation is None or selected_arm.observation.status != "exact_preserved"
+    ):
+        raise MaterializationError("materialization requires a directly observed exact_preserved arm")
 
     if callable(reload_parent):
         current_parent = reload_parent(base_run["id"])
@@ -142,6 +154,7 @@ def materialize_arm(
         "experiment": {
             "experiment_id": result.experiment_id,
             "arm_id": arm_id,
+            "observation_id": selected_arm.observation_id,
             "intervention": {
                 "kind": "delete_source",
                 "source_ids": list(intervention.source_ids),

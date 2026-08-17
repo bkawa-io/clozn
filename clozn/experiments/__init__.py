@@ -18,6 +18,7 @@ def __getattr__(name):
 
 
 from .evaluators import ExactReferenceMatch, ScoreRecordedContinuation, Generate
+from .context_search import ContextSearchDispatcher, ContextSearchUnavailable
 from .execution import (
     DeleteSourceExactReferenceAdapter,
     ExecutionAdapter,
@@ -54,6 +55,10 @@ from .state_ref import (
     AnswerTokenBoundary, ResolvedState, StateRef, StateRefError,
     resolve_state,
 )
+from .search import (
+    BEST_VERIFIED, INCLUSION_MINIMUM, SearchBudget, SearchEvidenceRef, SearchResult,
+    SearchTrial, SearchTrajectoryEntry, run_adaptive_search,
+)
 from .suite import (MANIFEST_SCHEMA, RESULT_SCHEMA, list_result_paths, load_manifest, load_result,
                     results_directory, run_manifest, select_cells, validate_manifest, validate_result)
 
@@ -80,4 +85,6 @@ __all__ = ["REGISTRY", "catalog", "run_experiment", "substrate_ok", "MANIFEST_SC
            "resolve_delete_source", "resolve_answer_selection", "project_answer_effects",
            "project_answer_selection", "experimental_run_experiment", "materialize_arm",
            "materialize_generated_observation", "MaterializeBranch", "GenerateExecutionAdapter",
-           "GenerateExecutionError"]
+           "GenerateExecutionError", "BEST_VERIFIED", "INCLUSION_MINIMUM", "SearchBudget",
+           "SearchEvidenceRef", "SearchResult", "SearchTrial", "SearchTrajectoryEntry",
+           "run_adaptive_search", "ContextSearchDispatcher", "ContextSearchUnavailable"]

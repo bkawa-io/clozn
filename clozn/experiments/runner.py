@@ -383,8 +383,9 @@ def run_experiment(experiment: Experiment, execution_adapter: Any, *, include_co
                                      "diagnostics": observation.diagnostics},
                     )
                 else:
-                    observation_id = observation.observation_id
-                    observation_cache[identity["observation_key_sha256"]] = observation
+                    observation_id = observation.observation_id if _reusable(observation) else None
+                    if _reusable(observation):
+                        observation_cache[identity["observation_key_sha256"]] = observation
                 state = "completed" if _reusable(observation) else "failed"
             except Exception as exc:
                 error = {"error": str(exc)}

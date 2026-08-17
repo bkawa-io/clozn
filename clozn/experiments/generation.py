@@ -275,7 +275,10 @@ class GenerateExecutionAdapter:
         extra = reconstructed_fork._steer_kwargs(self.substrate, dict(run))
         traced = reconstructed_fork._complete_traced(self.engine, prompt, budget, extra)
         if traced is not None:
-            return traced
+            # The shared fork seam returns (text, steps, finish), while this
+            # adapter's local contract is (text, finish, steps).
+            continuation, steps, finish = traced
+            return continuation, finish, steps
         text, finish = reconstructed_fork._complete_greedy(self.engine, prompt, budget, extra)
         return text, finish, None
 
