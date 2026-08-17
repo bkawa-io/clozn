@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.context-investigation-reader.v1",
+  "title": "Linked Context and Answer read model",
+  "description": "A derived, read-only projection over a recorded Run, Context Receipt, and durable Q2 score observations.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "status",
+    "measurement",
+    "context",
+    "answer",
+    "sources",
+    "loci",
+    "presentation",
+    "capabilities"
+  ],
+  "properties": {
+    "schema_version": {"const": "clozn.context-investigation-reader.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "status": {"enum": ["not_measured", "partial", "completed", "stale", "unavailable"]},
+    "reason": {"type": "string"},
+    "reason_code": {"type": "string"},
+    "measurement": {
+      "type": "object",
+      "required": [
+        "status",
+        "experiment_id",
+        "evaluator",
+        "intervention",
+        "source_universe",
+        "source_universe_basis",
+        "completed_source_count",
+        "unavailable_source_count",
+        "failed_source_count",
+        "not_measured_source_count"
+      ],
+      "properties": {
+        "status": {"enum": ["not_measured", "partial", "completed", "stale", "unavailable"]},
+        "experiment_id": {"type": ["string", "null"]},
+        "evaluator": {"const": "score_recorded_continuation"},
+        "intervention": {"const": "delete_source"},
+        "source_universe": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "source_universe_basis": {"type": ["string", "null"]},
+        "completed_source_count": {"type": "integer", "minimum": 0},
+        "unavailable_source_count": {"type": "integer", "minimum": 0},
+        "failed_source_count": {"type": "integer", "minimum": 0},
+        "not_measured_source_count": {"type": "integer", "minimum": 0},
+        "baseline_observation_id": {"type": ["string", "null"]}
+      }
+    },
+    "context": {
+      "type": "object",
+      "required": ["coordinate_basis", "blocks"],
+      "properties": {
+        "coordinate_basis": {"const": "context_display_unicode.v1"},
+        "separator": {"type": "string"},
+        "blocks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["message_index", "role", "text", "segment_id", "display_unicode_range", "source_ids"],
+            "properties": {
+              "message_index": {"type": "integer", "minimum": 0},
+              "role": {"type": "string"},
+              "text": {"type": "string"},
+              "segment_id": {"type": "string", "minLength": 1},
+              "display_unicode_range": {"$ref": "#/$defs/range"},
+              "source_ids": {"type": "array", "items": {"type": "string", "minLength": 1}}
+            }
+          }
+        }
+      }
+    },
+    "answer": {"type": "object"},
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source_id", "segment_id", "message_index", "unicode_range", "byte_range", "display_unicode_range", "granularity", "measurement", "summary", "loci"],
+        "properties": {
+          "source_id": {"type": "string", "minLength": 1},
+          "segment_id": {"type": "string", "minLength": 1},
+          "message_index": {"type": "integer", "minimum": 0},
+          "label": {"type": ["string", "null"]},
+          "provenance_kind": {"type": ["string", "null"]},
+          "parent_source_id": {"type": ["string", "null"]},
+          "unicode_range": {"$ref": "#/$defs/range"},
+          "byte_range": {"$ref": "#/$defs/range"},
+          "display_unicode_range": {"$ref": "#/$defs/range"},
+          "granularity": {"enum": ["exact_span", "whole_segment"]},
+          "measurement": {"type": "object"},
+          "summary": {"type": "object"},
+          "loci": {"type": "array", "items": {"type": "string", "minLength": 1}}
+        }
+      }
+    },
+    "loci": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "direction": {"enum": ["support", "suppression"]},
+          "classification": {"enum": ["measured_support", "measured_suppression"]}
+        }
+      }
+    },
+    "presentation": {
+      "type": "object",
+      "required": ["measurement_floor_nats"],
+      "properties": {"measurement_floor_nats": {"type": "number", "minimum": 0}}
+    },
+    "capabilities": {
+      "type": "object",
+      "required": ["context_effects", "measurement", "answer_selection_projection"],
+      "properties": {
+        "context_effects": {"enum": ["measurable", "unavailable"]},
+        "measurement": {"type": "string"},
+        "answer_selection_projection": {"enum": ["available", "unavailable"]}
+      }
+    }
+  },
+  "$defs": {
+    "range": {
+      "type": "array",
+      "items": {"type": "integer", "minimum": 0},
+      "minItems": 2,
+      "maxItems": 2
+    }
+  }
+}

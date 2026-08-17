@@ -1,0 +1,362 @@
+"""Backend Context Investigation A routes over the generic Q2 experiment kernel.
+
+The reader and answer query are pure reads. Only the explicit effects job is
+allowed to select a scoring substrate and execute a Q2 Experiment.
+"""
+from __future__ import annotations
+
+from collections.abc import Mapping
+import math
+from urllib.parse import parse_qs, urlsplit
+
+from clozn.experiments.context_investigation import (
+    AnswerSelectionProjectionUnavailable,
+    DEFAULT_MEASUREMENT_FLOOR_NATS,
+    build_context_investigation_reader,
+    query_answer_effects,
+)
+from clozn.experiments.persistence import (
+    ExperimentPersistenceError,
+    ObservationNotFound,
+    ObservationStore,
+)
+from clozn.experiments.selections import AnswerSelection
+from clozn.recipes.context_effects import measure_context_effects, plan_context_effects
+
+
+CLOZN_ROUTE_AUTOLOAD = True
+
+_PREFIX = "/runs/"
+_SUFFIX = "/context-investigation"
+_KIND = "context_investigation_effects"
+_READER_SCHEMA = "clozn.context-investigation-reader.v1"
+
+
+class ContextInvestigationRouteError(ValueError):
+    def __init__(self, message: str, *, code: str, status: int = 400):
+        super().__init__(message)
+        self.code = code
+        self.status = status
+
+
+def _run_id(path: str) -> tuple[str, str] | None:
+    clean = path.split("?", 1)[0]
+    if not clean.startswith(_PREFIX):
+        return None
+    rest = clean[len(_PREFIX):]
+    run_id, marker, tail = rest.partition(_SUFFIX)
+    if marker != _SUFFIX or not run_id:
+        return None
+    return run_id, tail
+
+
+def _get_run(h, run_id: str):
+    import clozn.runs.store as runlog
+
+    run = runlog.get_run(run_id)
+    if run is None:
+        h._json(404, {"error": "run not found", "code": "context_investigation_run_not_found"})
+        return None
+    return run
+
+
+def _query_floor(h) -> float | None:
+    query = parse_qs(urlsplit(getattr(h, "path", "")).query, keep_blank_values=True)
+    raw = (query.get("floor_nats") or [None])[-1]
+    if raw in {None, ""}:
+        return DEFAULT_MEASUREMENT_FLOOR_NATS
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise ContextInvestigationRouteError(
+            "floor_nats must be a finite non-negative number", code="invalid_floor"
+        ) from None
+    if not math.isfinite(value) or value < 0:
+        raise ContextInvestigationRouteError(
+            "floor_nats must be a finite non-negative number", code="invalid_floor"
+        )
+    return value
+
+
+def _plan_or_error(h, run: Mapping[str, object], source_ids=None):
+    try:
+        return plan_context_effects(run, source_ids=source_ids)
+    except Exception as exc:
+        h._json(409, {
+            "error": str(exc),
+            "code": "context_investigation_plan_unavailable",
+        })
+        return None
+
+
+def _reader(h, run_id: str) -> bool:
+    run = _get_run(h, run_id)
+    if run is None:
+        return True
+    try:
+        floor = _query_floor(h)
+    except ContextInvestigationRouteError as exc:
+        h._json(exc.status, {"error": str(exc), "code": exc.code})
+        return True
+    plan = _plan_or_error(h, run)
+    if plan is None:
+        return True
+    document = build_context_investigation_reader(
+        run, plan, observation_store=ObservationStore(), floor_nats=floor,
+    )
+    h._json(200, document)
+    return True
+
+
+def _compact_job_result(result) -> dict:
+    completed = unavailable = failed = not_measured = 0
+    for row in result.arms:
+        if row.observation is not None and row.observation.completed:
+            completed += 1
+            continue
+        status = row.diagnostics.get("observation_status")
+        if status == "unavailable":
+            unavailable += 1
+        elif status == "failed" or row.state == "failed":
+            failed += 1
+        else:
+            not_measured += 1
+    return {
+        "schema_version": "clozn.context-investigation-effects-job-result.v1",
+        "experiment_id": result.experiment_id,
+        "source_count": len(result.arms),
+        "completed_source_count": completed,
+        "unavailable_source_count": unavailable,
+        "failed_source_count": failed,
+        "not_measured_source_count": not_measured,
+        "state": result.state,
+    }
+
+
+def _job_worker(run: Mapping[str, object], sub, engine, source_ids, plan_id: str):
+    def worker(control):
+        import clozn.runs.store as runlog
+        from clozn.server.influence_jobs import JobCancelled
+
+        latest = runlog.get_run(run.get("id"))
+        if latest is None:
+            return {"state": "failed", "error": {
+                "code": "context_investigation_run_deleted",
+                "message": "recorded run no longer exists",
+            }}
+        current_plan = plan_context_effects(latest, source_ids=source_ids)
+        if current_plan.experiment_id != plan_id:
+            return {"state": "failed", "error": {
+                "code": "context_investigation_run_changed",
+                "message": "recorded Run or Context Receipt changed while the job was queued",
+            }}
+        control.checkpoint(
+            phase="scoring_recorded_continuation",
+            completed=0,
+            total=len(current_plan.measurement_source_ids),
+        )
+        result = measure_context_effects(
+            latest,
+            source_ids=source_ids,
+            substrate=sub,
+            execution_adapter=None,
+            observation_store=ObservationStore(),
+            cancel=control.cancel_requested,
+        )
+        if control.cancel_requested():
+            raise JobCancelled("Context Investigation effects job cancelled")
+        control.checkpoint(
+            phase="persisting_observations",
+            completed=len(current_plan.measurement_source_ids),
+            total=len(current_plan.measurement_source_ids),
+        )
+        control.attach_result(_compact_job_result(result))
+        return {"state": "completed"}
+
+    return worker
+
+
+def _normalize_effect_request(body: object) -> dict:
+    if body is None:
+        body = {}
+    if not isinstance(body, Mapping):
+        raise ContextInvestigationRouteError("request body must be an object", code="invalid_body")
+    unknown = set(body).difference({"source_ids"})
+    if unknown:
+        raise ContextInvestigationRouteError(
+            "only source_ids is accepted for the recorded continuation measurement",
+            code="unsupported_effect_request",
+        )
+    source_ids = body.get("source_ids")
+    if source_ids is not None:
+        if isinstance(source_ids, (str, bytes)) or not isinstance(source_ids, (list, tuple)):
+            raise ContextInvestigationRouteError(
+                "source_ids must be an array of canonical Context Receipt IDs",
+                code="invalid_source_ids",
+            )
+        if not source_ids or len(source_ids) != len(set(source_ids)):
+            raise ContextInvestigationRouteError(
+                "source_ids must be a non-empty duplicate-free array",
+                code="invalid_source_ids",
+            )
+    return {"source_ids": list(source_ids) if source_ids is not None else None}
+
+
+def _start_effects_job(h, run_id: str, body) -> bool:
+    from clozn.server.influence_jobs import JOBS, JobCapacityError
+    from clozn.server.model_routing import select_control_model_for_run
+
+    run = _get_run(h, run_id)
+    if run is None:
+        return True
+    try:
+        request = _normalize_effect_request(body)
+    except ContextInvestigationRouteError as exc:
+        h._json(exc.status, {"error": str(exc), "code": exc.code})
+        return True
+    plan = _plan_or_error(h, run, source_ids=request["source_ids"])
+    if plan is None:
+        return True
+    selection = select_control_model_for_run(
+        h, run.get("model"), route="/runs/<id>/context-investigation/effects/jobs",
+    )
+    if selection is None:
+        return True
+    if not callable(getattr(selection.sub, "score_tokens", None)):
+        h._json(503, {
+            "error": "recorded continuation scoring is unavailable",
+            "code": "context_investigation_score_capability_unavailable",
+        })
+        return True
+    try:
+        job = JOBS.start(
+            run_id,
+            _job_worker(run, selection.sub, selection.engine, request["source_ids"], plan.experiment_id),
+            kind=_KIND,
+        )
+    except JobCapacityError as exc:
+        h._json(429, {"error": str(exc), "code": "context_investigation_job_capacity"})
+        return True
+    h._json(202, job)
+    return True
+
+
+def _query(h, run_id: str, body) -> bool:
+    run = _get_run(h, run_id)
+    if run is None:
+        return True
+    if not isinstance(body, Mapping):
+        h._json(400, {"error": "body must be an object", "code": "invalid_body"})
+        return True
+    if set(body).difference({"answer_start", "answer_end", "floor_nats"}):
+        h._json(400, {
+            "error": "answer_start, answer_end, and optional floor_nats are accepted",
+            "code": "unsupported_query",
+        })
+        return True
+    start, end = body.get("answer_start"), body.get("answer_end")
+    if (
+        isinstance(start, bool) or isinstance(end, bool)
+        or not isinstance(start, int) or not isinstance(end, int)
+        or start < 0 or end <= start
+        or not isinstance(run.get("response"), str) or end > len(run["response"])
+    ):
+        h._json(400, {
+            "error": "answer_start and answer_end must be non-negative half-open Unicode offsets",
+            "code": "invalid_answer_range",
+        })
+        return True
+    try:
+        floor = body.get("floor_nats", DEFAULT_MEASUREMENT_FLOOR_NATS)
+        if isinstance(floor, bool) or not isinstance(floor, (int, float)) or not math.isfinite(float(floor)) or floor < 0:
+            raise ValueError
+        selection = AnswerSelection.from_range(start, end, selected_text=run.get("response", "")[start:end])
+    except (ValueError, TypeError, IndexError):
+        h._json(400, {"error": "floor_nats must be finite and answer range must be valid", "code": "invalid_query"})
+        return True
+    plan = _plan_or_error(h, run)
+    if plan is None:
+        return True
+    store = ObservationStore()
+    reader = build_context_investigation_reader(run, plan, observation_store=store, floor_nats=float(floor))
+    if reader.get("status") == "not_measured":
+        h._json(200, {
+            "schema_version": "clozn.context-investigation-query.v1",
+            "status": "not_measured",
+            "selection": None,
+            "effects": [],
+            "measurement_floor_nats": float(floor),
+        })
+        return True
+    if reader.get("status") in {"stale", "unavailable"}:
+        h._json(200, {
+            "schema_version": "clozn.context-investigation-query.v1",
+            "status": reader.get("status"),
+            "reason": reader.get("reason"),
+            "reason_code": reader.get("reason_code"),
+            "selection": None,
+            "effects": [],
+            "measurement_floor_nats": float(floor),
+        })
+        return True
+    try:
+        view = store.get_experiment(plan.experiment_id)
+        result = query_answer_effects(view, selection, floor_nats=float(floor))
+    except AnswerSelectionProjectionUnavailable as exc:
+        h._json(422, {
+            "error": str(exc),
+            "code": "answer_selection_unavailable",
+        })
+        return True
+    except (ObservationNotFound, ExperimentPersistenceError) as exc:
+        h._json(409, {"error": str(exc), "code": "context_investigation_evidence_unavailable"})
+        return True
+    h._json(200, result)
+    return True
+
+
+def try_get(h, path):
+    parsed = _run_id(path)
+    if parsed is None:
+        return False
+    run_id, tail = parsed
+    if tail == "/reader":
+        return _reader(h, run_id)
+    if tail.startswith("/effects/jobs/"):
+        job_id = tail[len("/effects/jobs/"):]
+        if not job_id or "/" in job_id:
+            return False
+        from clozn.server.influence_jobs import JOBS
+        job = JOBS.get(run_id, job_id)
+        if job is None:
+            h._json(404, {"error": "Context Investigation effects job not found", "code": "job_not_found"})
+        else:
+            h._json(200, job)
+        return True
+    return False
+
+
+def try_post(h, path, body):
+    parsed = _run_id(path)
+    if parsed is None:
+        return False
+    run_id, tail = parsed
+    if tail == "/effects/jobs":
+        return _start_effects_job(h, run_id, body)
+    if tail.startswith("/effects/jobs/") and tail.endswith("/cancel"):
+        job_id = tail[len("/effects/jobs/"):-len("/cancel")]
+        if not job_id or "/" in job_id:
+            return False
+        from clozn.server.influence_jobs import JOBS
+        job = JOBS.cancel(run_id, job_id)
+        if job is None:
+            h._json(404, {"error": "Context Investigation effects job not found", "code": "job_not_found"})
+        else:
+            h._json(200, job)
+        return True
+    if tail == "/query":
+        return _query(h, run_id, body)
+    return False
+
+
+__all__ = ["CLOZN_ROUTE_AUTOLOAD", "try_get", "try_post"]

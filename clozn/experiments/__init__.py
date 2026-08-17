@@ -46,6 +46,12 @@ from .persistence import (
     ObservationNotFound, ObservationPersistenceError, ObservationStore,
 )
 from .projection import AnswerSpanEffect, ProjectionError, project_answer_effects, project_answer_selection
+from .context_investigation import (
+    AnswerSelectionProjectionUnavailable, ContextInvestigationError, ContextInvestigationStale,
+    ContextInvestigationUnavailable, DEFAULT_MEASUREMENT_FLOOR_NATS, DISPLAY_COORDINATE_BASIS,
+    build_context_investigation_reader, project_locus_details, project_source_loci,
+    query_answer_effects,
+)
 from .runner import ExperimentResult, run_experiment as experimental_run_experiment
 from .scoring import (
     DeleteSourceRecordedContinuationScoreAdapter, DeleteSourceScoreAdapter,
@@ -93,5 +99,9 @@ __all__ = ["REGISTRY", "catalog", "run_experiment", "substrate_ok", "MANIFEST_SC
            "GenerateExecutionError", "BEST_VERIFIED", "INCLUSION_MINIMUM", "SearchBudget",
            "SearchEvidenceRef", "SearchResult", "SearchTrial", "SearchTrajectoryEntry",
            "run_adaptive_search", "ContextSearchDispatcher", "ContextSearchUnavailable",
+           "ContextInvestigationError", "ContextInvestigationStale", "ContextInvestigationUnavailable",
+           "AnswerSelectionProjectionUnavailable", "DEFAULT_MEASUREMENT_FLOOR_NATS",
+           "DISPLAY_COORDINATE_BASIS", "build_context_investigation_reader", "project_locus_details",
+           "project_source_loci", "query_answer_effects",
            "ArmExecutionOutcome", "ArmExecutionRequest", "BatchExecutionError",
            "BatchExecutionResult", "SharedParentSessionClient", "SharedParentSessionError"]

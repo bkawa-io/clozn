@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.context-investigation-query.v1",
+  "title": "Read-only answer-to-source Context Investigation query",
+  "type": "object",
+  "required": ["schema_version", "status", "selection", "effects", "measurement_floor_nats"],
+  "properties": {
+    "schema_version": {"const": "clozn.context-investigation-query.v1"},
+    "status": {"enum": ["not_measured", "partial", "completed", "stale", "unavailable"]},
+    "reason": {"type": "string"},
+    "reason_code": {"type": "string"},
+    "selection": {
+      "type": ["object", "null"],
+      "properties": {
+        "unicode_range": {"$ref": "#/$defs/range"},
+        "token_range": {"$ref": "#/$defs/range"},
+        "text": {"type": "string"},
+        "token_ids": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+        "token_pieces": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "effects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source_id", "direction", "measurement_status", "experiment_id", "arm_id", "baseline_observation_id", "intervention_observation_id"],
+        "properties": {
+          "source_id": {"type": "string", "minLength": 1},
+          "delta_nats": {"type": ["number", "null"]},
+          "direction": {"type": "string"},
+          "classification": {"type": ["string", "null"]},
+          "measurement_status": {"type": "string"},
+          "experiment_id": {"type": "string", "minLength": 1},
+          "arm_id": {"type": "string", "minLength": 1},
+          "baseline_observation_id": {"type": ["string", "null"]},
+          "intervention_observation_id": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "measurement_floor_nats": {"type": "number", "minimum": 0}
+  },
+  "$defs": {
+    "range": {
+      "type": "array",
+      "items": {"type": "integer", "minimum": 0},
+      "minItems": 2,
+      "maxItems": 2
+    }
+  }
+}

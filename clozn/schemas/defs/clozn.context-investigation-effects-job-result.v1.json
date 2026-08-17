@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.context-investigation-effects-job-result.v1",
+  "title": "Compact Context Investigation effects job result",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "experiment_id",
+    "source_count",
+    "completed_source_count",
+    "unavailable_source_count",
+    "failed_source_count",
+    "not_measured_source_count",
+    "state"
+  ],
+  "properties": {
+    "schema_version": {"const": "clozn.context-investigation-effects-job-result.v1"},
+    "experiment_id": {"type": "string", "minLength": 1},
+    "source_count": {"type": "integer", "minimum": 0},
+    "completed_source_count": {"type": "integer", "minimum": 0},
+    "unavailable_source_count": {"type": "integer", "minimum": 0},
+    "failed_source_count": {"type": "integer", "minimum": 0},
+    "not_measured_source_count": {"type": "integer", "minimum": 0},
+    "state": {"type": "string"}
+  }
+}
