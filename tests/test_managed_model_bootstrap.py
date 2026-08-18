@@ -461,7 +461,7 @@ def test_unselected_run_engine_routes_never_use_default_worker(
     "beta" is genuinely unknown to it, and the typed `clozn.model-routing.v1` refusal is what a
     caller actually sees -- never a bare 503, and never alpha/SUB/ENGINE touched either way.
     """
-    from clozn.server.routes import fork, influence_map, receipts, replay
+    from clozn.server.routes import influence_map, receipts, replay
     import clozn.runs.store as runlog
 
     calls = []
@@ -520,11 +520,6 @@ def test_unselected_run_engine_routes_never_use_default_worker(
                 influence_map.try_post,
                 "/runs/run_beta/influence-map",
                 {},
-            ),
-            (
-                fork.try_post,
-                "/runs/run_beta/fork",
-                {"position": 0, "token": "x"},
             ),
         )
         for function, path, body in cases:

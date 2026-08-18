@@ -52,7 +52,7 @@
     "exact_fork": {
       "available": true,
       "snapshot_state": "not_attempted",
-      "action": {"method": "POST", "href": "/runs/run_0019fb1479b18_96e8c5/fork"}
+      "action": {"method": "POST", "href": "/runs/run_0019fb1479b18_96e8c5/tokens/1/force-token"}
     },
     "source_measurement": {
       "available": true,

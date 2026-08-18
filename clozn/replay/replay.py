@@ -22,7 +22,7 @@ the same dials/strength the normal chat path reads:
                read against `assembled_messages` when the run has it (that's what the model actually
                saw); a part anchored to `final_prompt` (message_index: null -- a raw-prompt run with no
                message breakdown) can't be spliced through this path (chat() takes a message list, not
-               a raw prompt override -- that's fork.py's engine.complete seam, not this one's) and is
+               a raw prompt override -- that's the Branch Fan engine.complete seam, not this one's) and is
                left in place with an honest note. Unknown section names, or a run with no `sections`
                manifest at all (predates section capture), are the SAME best-effort no-op + honest note
                `disabled_memory_ids` already uses for a card ablation that can't apply in the active mode.
@@ -146,7 +146,7 @@ def _effective_dials(sub) -> dict:
 # saw -- else the raw messages); `message_index: null` means the span is anchored to `final_prompt`
 # instead, which this module has no way to feed back into `sub.chat()` (its only surface is a MESSAGE
 # list, not a raw prompt string -- that override exists on the engine's raw-completion seam, which is
-# fork.py's territory, not replay's). We splice everything we CAN (message-anchored parts) and leave
+# Branch Fan's territory, not replay's). We splice everything we CAN (message-anchored parts) and leave
 # final_prompt-anchored parts in place with an honest note, rather than silently pretending they were
 # removed.
 

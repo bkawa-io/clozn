@@ -215,7 +215,8 @@ tests/test_generation_guard.py's fakes expect.
 
 HONESTY: if ANY committed round's capture fell back to untraced (the plain fallback ran for a chunk that
 was NOT legitimately empty), the WHOLE reply's trace is OMITTED (trace=None) -- never a partial trace
-pretending to be complete. This mirrors clozn.replay.fork's own _spliced_child_trace precedent
+pretending to be complete. This follows the same fail-closed trace-evidence rule used by
+controlled replay
 (all-or-nothing: no trace with a silently-missing span) rather than inventing a new per-step "untraced"
 marker this codebase's trace schema (clozn.runs.trace.TRACE_KEYS) has no other consumer for.
 `clozn_guard_receipt['trace_captured']` says which happened; `trace_omitted_note` explains why when it's
@@ -1166,7 +1167,7 @@ def guarded_chat_completion(handler, messages: list, *, model: str, max_tokens: 
     )
     _commit_pending()   # flush the final round
 
-    # HONEST all-or-nothing splice (mirrors clozn.replay.fork's _spliced_child_trace precedent): vacuously
+    # HONEST all-or-nothing splice: vacuously
     # True when nothing was ever generated (committed == []) -- there is nothing to have failed tracing.
     trace_captured = all(traced for _, traced in committed)
     final_trace = None

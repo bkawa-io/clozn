@@ -61,11 +61,9 @@ def _workbench_action(method: str, href: str, *, request_body: dict | None = Non
     entry's `available`/`status`/`reason` already carries the readiness facts; `action` is only ever a
     navigation pointer, never a second copy of investigation's id/label/kind/availability/reason.
 
-    Every capability's `action` points at a REAL, live Milestone F endpoint
-    (clozn/server/routes/token_workbench_actions.py) as of this module's Milestone F update -- not the
-    pre-Milestone-F routes those actions used to describe (the legacy fork route,
-    POST /runs/<id>/causal-trace, POST /runs/<id>/influence-map/jobs), which remain live but are no
-    longer what this preview recommends."""
+    Every capability's `action` points at a REAL, live Token Workbench endpoint
+    (clozn/server/routes/token_workbench_actions.py); this projection never advertises a retired
+    compatibility route."""
     out: dict[str, Any] = {"method": method, "href": href}
     if request_body is not None:
         out["request_body"] = dict(request_body)
@@ -92,7 +90,7 @@ def _run_section(run: Mapping[str, Any]) -> dict:
 
 def _token_section(run: Mapping[str, Any], index: int) -> dict:
     """The token's identity at `index`. Raises ValueError (the route's 400) when the run has no trace
-    or `index` is out of range -- mirrors clozn.replay.fork's own validation contract."""
+    or `index` is out of range -- mirrors the canonical recorded-token validation contract."""
     trace = run.get("trace") if isinstance(run.get("trace"), Mapping) else {}
     pieces = trace.get("tokens")
     if not isinstance(pieces, list) or not pieces:

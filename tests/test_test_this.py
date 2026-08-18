@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import importlib
 
 import pytest
 
@@ -152,26 +153,37 @@ def test_malformed_recorded_alternative_is_unavailable():
     assert plan["resolution"]["reason"]["code"] == "alternative_unavailable"
 
 
-def test_execution_dispatches_force_token_without_duplicating_fork(monkeypatch):
+def test_execution_dispatches_force_token_through_time_travel_without_child_run(monkeypatch):
     parent = run()
     seen = {}
-    child = {"id": "child", "outcome": "reconstructed_replay", "reasons": [],
-             "trace": {"tokens": ["a", "x", "c"], "token_ids": [10, 20, 12]},
-             "response": "axc"}
 
-    def fake_compat(run_arg, sub, position, **kwargs):
-        seen.update({"run": run_arg, "sub": sub, "position": position, **kwargs})
-        return child
+    class FakeTravel:
+        status = "completed"
+        experiment_id = "experiment-1"
+        arm_id = "arm-1"
+        observation_id = "observation-1"
 
-    monkeypatch.setattr("clozn.replay.fork.compat_fork", fake_compat)
+        def to_dict(self):
+            return {
+                "schema_version": "clozn.time-travel-result.v1",
+                "run_id": parent["id"], "status": "completed",
+                "experiment_id": self.experiment_id, "arm_id": self.arm_id,
+                "observation_id": self.observation_id, "diagnostics": {},
+            }
+
+    def fake_time_travel(run_arg, **kwargs):
+        seen.update({"run": run_arg, **kwargs})
+        return FakeTravel()
+
+    monkeypatch.setattr(importlib.import_module("clozn.recipes.time_travel"), "run_time_travel", fake_time_travel)
     result = executor.execute_test_this(parent, object(), token_request(),
                                         runtime_identity=None, worker_identity=None)
     assert result["outcome"] == "completed"
-    assert result["child_run_id"] == "child"
+    assert "child_run_id" not in result
+    assert result["result"]["observation_id"] == "observation-1"
     assert seen["position"] == 1
     assert seen["token_id"] == 20
-    assert "token" not in seen
-    assert result["comparison"]["state"] in {"available", "trace_unavailable"}
+    assert seen["token_piece"] is None
 
 
 def test_branch_fan_dispatches_directly_and_preserves_partial_result(monkeypatch):
@@ -210,20 +222,24 @@ def test_sampling_dispatch_requires_exact_and_never_uses_reconstructed_fork(monk
         "selection": {"kind": "sampling", "position": 0},
         "test": {"kind": "change_sampling", "changes": {"temperature": 0.2}},
     }
-    monkeypatch.setattr("clozn.replay.fork.capture_exact_fork_context", lambda *a, **k: {
+    monkeypatch.setattr("clozn.replay.execution_fork.capture_exact_force_token_context", lambda *a, **k: {
         "status": "ineligible", "reason": {"code": "checkpoint_unavailable", "message": "no checkpoint"}
     })
-    monkeypatch.setattr("clozn.replay.fork.compat_fork", lambda *a, **k: pytest.fail("reconstructed fallback"))
     result = executor.execute_test_this(parent, type("Sub", (), {"engine": object()})(), request,
                                         runtime_identity={"x": 1}, worker_identity={"x": 1})
     assert result["outcome"] == "unavailable"
     assert result["operation"] == "sampling_fork"
 
 
-def test_result_does_not_embed_raw_child_text(monkeypatch):
+def test_result_does_not_embed_raw_generated_text(monkeypatch):
     parent = run()
-    child = {"id": "child", "outcome": "reconstructed_replay", "reasons": [],
-             "response": "SECRET ANSWER", "trace": {"tokens": ["a", "x", "c"], "token_ids": [10, 20, 12]}}
-    monkeypatch.setattr("clozn.replay.fork.compat_fork", lambda *a, **k: child)
+    class FakeTravel:
+        status = "completed"
+        experiment_id = arm_id = observation_id = "ref"
+
+        def to_dict(self):
+            return {"schema_version": "clozn.time-travel-result.v1", "status": "completed"}
+
+    monkeypatch.setattr(importlib.import_module("clozn.recipes.time_travel"), "run_time_travel", lambda *a, **k: FakeTravel())
     result = executor.execute_test_this(parent, object(), token_request())
     assert "SECRET ANSWER" not in str(result)

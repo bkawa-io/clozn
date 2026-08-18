@@ -1,8 +1,9 @@
 """Execution dispatcher for the explicit Test This action.
 
 There is intentionally very little execution logic here.  The module resolves the pure plan again,
-then hands the request to the existing force-token compatibility fork, Branch Fan orchestrator, or
-exact Execution Fork executor.  Child persistence, exactness proof, checkpoint handling, and diff
+then hands the request to the canonical Time Travel recipe, Branch Fan orchestrator, or exact
+Execution Fork executor.  Force-token generation is evidence-first; child materialization is a
+separate explicit operation. Child persistence, exactness proof, checkpoint handling, and diff
 calculation remain owned by those lower-level primitives.
 """
 from __future__ import annotations
@@ -125,7 +126,8 @@ def _single_result(parent: Mapping, plan: Mapping, child_result: Mapping | None)
 
 def _execute_force_token(parent: Mapping, sub, plan: Mapping, *, runtime_identity,
                          worker_identity, reload_parent=None, cancel_check=None) -> dict:
-    from clozn.replay.fork import compat_fork
+    from clozn.experiments.persistence import ObservationStore
+    from clozn.recipes.time_travel import run_time_travel
 
     selection = plan["selection"]
     candidate = resolve_recorded_alternative(
@@ -134,24 +136,70 @@ def _execute_force_token(parent: Mapping, sub, plan: Mapping, *, runtime_identit
         alternative_rank=plan["test"].get("alternative_rank"),
         token_id=plan["test"].get("token_id"),
     )
-    # The resolved piece is never supplied by the caller.  It is read from the immutable parent's
-    # recorded alternatives and passed only to the existing compatibility fork implementation.
-    kwargs = {
-        "runtime_identity": runtime_identity,
-        "worker_identity": worker_identity,
+    # The resolved piece is read from the immutable parent's recorded alternatives. The canonical
+    # recipe owns StateRef/Generate resolution and returns a durable GeneratedObservation reference;
+    # this dispatcher never creates a child Run.
+    try:
+        travel = run_time_travel(
+            parent,
+            position=selection["position"],
+            token_id=candidate.get("token_id"),
+            token_piece=None if candidate.get("token_id") is not None else candidate.get("piece"),
+            max_new=32,
+            policy="exact_preferred",
+            runtime_identity=runtime_identity,
+            worker_identity=worker_identity,
+            substrate=sub,
+            run_loader=reload_parent,
+            observation_store=ObservationStore(),
+            cancel=cancel_check,
+        )
+    except Exception as exc:
+        return _time_travel_result(parent, plan, None, reason=_reason(
+            "time_travel_execution_failed", str(exc)))
+    return _time_travel_result(parent, plan, travel)
+
+
+def _time_travel_result(parent: Mapping, plan: Mapping, travel, *, reason: Mapping | None = None) -> dict:
+    """Wrap the canonical TimeTravelResult in the Test This envelope without child persistence."""
+    operation = plan["resolved_test"]["operation"]
+    projection = travel.to_dict() if travel is not None else None
+    status = getattr(travel, "status", "failed") if travel is not None else "failed"
+    outcome = "completed" if status == "completed" else ("failed" if status == "failed" else "unavailable")
+    reasons = [_reason(reason.get("code"), reason.get("message"))] if isinstance(reason, Mapping) else []
+    if isinstance(projection, Mapping):
+        code = projection.get("reason_code") or projection.get("diagnostics", {}).get("reason_code")
+        message = projection.get("reason") or projection.get("diagnostics", {}).get("message")
+        if outcome != "completed" and isinstance(code, str) and code:
+            reasons = [_reason(code, message or "the time-travel operation was unavailable")]
+    document = {
+        "schema_version": RESULT_SCHEMA_VERSION,
+        "run_id": parent["id"],
+        "selection": deepcopy(dict(plan["selection"])),
+        "test": deepcopy(dict(plan["test"])),
+        "operation": operation,
+        "outcome": outcome,
+        "result": {
+            "time_travel": deepcopy(projection) if isinstance(projection, Mapping) else {},
+            "experiment_id": getattr(travel, "experiment_id", None),
+            "arm_id": getattr(travel, "arm_id", None),
+            "observation_id": getattr(travel, "observation_id", None),
+            "reasons": reasons,
+        },
+        "artifact": {
+            "schema": "clozn.time-travel-result.v1",
+            "result": deepcopy(projection) if isinstance(projection, Mapping) else None,
+        },
+        "comparison": None,
     }
-    if candidate.get("token_id") is not None:
-        kwargs["token_id"] = candidate["token_id"]
-    else:
-        kwargs["token"] = candidate["piece"]
-    child = compat_fork(parent, sub, selection["position"], **kwargs)
-    return _single_result(parent, plan, child)
+    schemas.validate(document, RESULT_SCHEMA_VERSION)
+    return document
 
 
 def _execute_sampling(parent: Mapping, sub, plan: Mapping, *, runtime_identity,
                       worker_identity, reload_parent=None, cancel_check=None) -> dict:
-    from clozn.replay.fork import (
-        capture_exact_fork_context,
+    from clozn.replay.execution_fork import (
+        capture_exact_force_token_context,
         execute_exact_force_token,
         plan_exact_force_token,
     )
@@ -169,7 +217,7 @@ def _execute_sampling(parent: Mapping, sub, plan: Mapping, *, runtime_identity,
         })
 
     try:
-        capture = capture_exact_fork_context(
+        capture = capture_exact_force_token_context(
             parent, engine, runtime_identity=dict(runtime_identity), worker_identity=dict(worker_identity))
     except Exception:
         capture = {"status": "ineligible", "reason": _reason(

@@ -64,7 +64,7 @@ class Selection:
     sub = object()
 
 
-def test_execution_resolves_parent_model_and_returns_child(monkeypatch):
+def test_execution_resolves_parent_model_and_returns_evidence(monkeypatch):
     run = parent()
     seen = {}
     monkeypatch.setattr(runlog, "get_run", lambda _rid: run)
@@ -81,8 +81,9 @@ def test_execution_resolves_parent_model_and_returns_child(monkeypatch):
         "selection": {"kind": "response_token", "position": 1},
         "test": {"kind": "try_alternative", "alternative_rank": 0},
         "operation": "force_token", "outcome": "completed",
-        "result": {"child_run_id": "child"}, "artifact": None,
-        "comparison": None, "child_run_id": "child",
+        "result": {"observation_id": "observation-1"},
+        "artifact": {"schema": "clozn.time-travel-result.v1"},
+        "comparison": None,
     })
     h = Handler()
     route.try_post(h, "/runs/run_route/test-this", body())

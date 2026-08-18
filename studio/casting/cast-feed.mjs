@@ -34,9 +34,9 @@
      this run's own recorded text -- never a verified argument, never invented. The hero note states
      the exact K, the positions (by token text + index), the layers, and the two cap counts (cells
      dropped, flips dropped) -- no silent caps, per the codebase's honesty rules.
-   ghosts (almosts): forkable is now TRUE for every recorded alternative (each carries non-empty
-     text, and its tokenIndex is by construction a valid position in the reply's own trace) --
-     observatory.mjs's handleFork() wires the click to the real POST /runs/<id>/fork route.
+   ghosts (almosts): each recorded alternative is a valid ForceToken candidate. The canonical
+     Time Travel path records GeneratedObservation evidence first; any child Run is created only
+     by explicit materialization.
 
    Caching: buildJlensTrajectory's fetches (the expensive part -- one POST /jlens per sampled layer)
    are cached per run id at module scope (JLENS_CACHE) so re-picking the same run, or forking then
@@ -136,11 +136,9 @@ function mapAnswerTokensToSky(influence, traceTokens, skyIndexById, strengths, m
   return out;
 }
 
-/* Every recorded alternative is forkable: it carries non-empty text (the .filter below) and its
-   tokenIndex is, by construction, a valid position in this reply's own recorded trace -- exactly
-   what POST /runs/<id>/fork needs ({position, token}; see fork.py's resolve_forced_token). Whether
-   the route can actually SERVE a fork right now (engine ready, etc.) is a live/runtime condition,
-   surfaced by observatory.mjs's handleFork() on the actual request -- never guessed here. */
+/* Every recorded alternative is a valid ForceToken candidate: it carries non-empty text (the
+   .filter below) and its tokenIndex is, by construction, a valid position in this reply's own
+   recorded trace. Runtime readiness is handled by the canonical Time Travel capability path. */
 function buildAlmosts(alts) {
   if (!Array.isArray(alts) || !alts.length) return [];
   return alts.slice(0, 3).map(a => {
@@ -344,11 +342,8 @@ export async function assembleRealCast(run, state) {
 
 /* assembleRealCastUnsafe sets state.castUnavailableReason right before every early `return null` --
    a side channel (mirroring state.jlensTrajectory/jlensArgument) so the host can show a SPECIFIC
-   reason instead of one generic catch-all. (Historical note: forked child runs used to land here
-   ALWAYS -- fork.py regenerated through the raw completion seam and recorded trace {}. fork.py now
-   splices an honest child trace whenever the prefix verifies token-exact, so a forked child normally
-   casts; a child still lands here when that verification failed -- fork records WHY in
-   changes_applied.fork.trace_provenance, and the message below points at it.) */
+   reason instead of one generic catch-all. Reconstructed Branch Fan children only land here when
+   their recorded trace is unavailable; the Branch Fan provenance records that limitation. */
 async function assembleRealCastUnsafe(run, state) {
   state.castUnavailableReason = null;
   const text = String(run.response || "").trim();
@@ -389,7 +384,7 @@ async function assembleRealCastUnsafe(run, state) {
     state.castUnavailableReason = "this run has no recorded per-token trace"
       + (run.parent_run_id
          ? " (a forked child only gets one when its spliced prefix verified token-exact -- this "
-           + "one's fork record says why: changes_applied.fork.trace_provenance)"
+           + "one's Branch Fan record says why: changes_applied.branch_fan.trace_provenance)"
          : "");
     return null;
   }
@@ -424,9 +419,9 @@ async function assembleRealCastUnsafe(run, state) {
     traceEnt.length
       ? "per-token entropy: this run's own recorded top-k(approx) entropy."
       : "per-token entropy: not recorded on this run -- every planted word reads as calm by default.",
-    "ghosts: this run's own recorded alternatives, by probability -- each is forkable (⑂): forking "
-      + "calls the real POST /runs/<id>/fork route, greedy-continues on the live engine from the forced "
-      + "token, and opens the resulting child run.",
+    "ghosts: this run's own recorded alternatives, by probability -- each is a ForceToken candidate. "
+      + "Time Travel records generated evidence first; explicit materialization can then create a "
+      + "child run.",
   ];
 
   const jl = await buildJlensTrajectoryCached(state.runId, text.slice(0, JLENS_TEXT_CAP), state);

@@ -1,7 +1,7 @@
 """Exact-only execution-fork planning and execution gateway.
 
-This is deliberately separate from ``POST /runs/<id>/fork``.  That route remains the legacy
-reconstructed-text path until FORK-02 can turn it into an explicit compatibility wrapper.
+This route exposes the low-level checkpoint/planning substrate used by Time Travel and other
+controlled replay consumers. It is not a public child-Run compatibility route.
 """
 from __future__ import annotations
 
@@ -85,8 +85,7 @@ def _identity_facts(selection) -> tuple[dict | None, dict | None, object | None]
     extra probe). Legacy no-router path: ``select_control_model_for_run`` leaves those two ``None``
     (it is a zero-cost shim for callers that only need ``.sub``) -- derive them here, via
     ``_sub_facts``'s one ``engine.health()`` probe, for the heavier consumers that do: this
-    function, ``clozn.server.routes.fork`` (the legacy fork wrapper), and
-    ``clozn.server.routes.token_workbench_actions`` (the per-token fork/causal-trace actions).
+    function, and the run-scoped controlled execution consumers.
     """
     from clozn.experiments.execution_facts import selection_identity_facts
     return selection_identity_facts(selection)

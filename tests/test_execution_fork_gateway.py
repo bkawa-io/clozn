@@ -595,8 +595,8 @@ def test_new_gateway_route_plans_and_executes_without_touching_legacy_route(stor
     from clozn.server import app as server
     assert route in server._POST_ROUTES
     assert route in server._GET_ROUTES
-    from clozn.server.routes import fork as legacy
-    assert legacy in server._POST_ROUTES
+
+    assert not any(getattr(item, "__name__", "") == "fork" for item in server._POST_ROUTES)
 
 
 def test_gateway_rejects_stale_planned_worker_and_persists_terminal_result(stores):

@@ -17,7 +17,6 @@ function outputToken(name: string) {
 }
 
 vi.mock("../data/api", () => ({
-  createFork: vi.fn(),
   loadRunInspection: vi.fn(),
   loadRuntimeState: vi.fn(),
 }));

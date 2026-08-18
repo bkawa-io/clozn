@@ -17,7 +17,7 @@ WHY A JOB, NOT A SYNCHRONOUS POST
 run_experiment() drives 2-3 full, blocking `sub.chat()` generations (no_op_replay, treatment, and --
 when a matched control exists -- random_equal_effect_control), each a real greedy decode against a
 live worker. That is materially heavier than a single generation, in the same weight class as
-`clozn.replay.fork.compat_fork` (one job) and `clozn.analysis.tracer.trace` (one job) -- both of
+the controlled experiment executor and `clozn.analysis.tracer.trace` (one job) -- both of
 which the token-workbench action surface (`clozn/server/routes/token_workbench_actions.py`) already
 runs through `clozn.server.influence_jobs.JOBS` rather than blocking the HTTP thread, specifically so
 a caller polls progress and can cancel instead of holding a connection open across multiple sequential

@@ -38,8 +38,8 @@ almost always points at content with a different hash, and gets caught here rath
 confident, wrong ablation. Two kinds are refused by construction, honestly, never guessed, regardless of
 native-id shape:
   * `rendered_prompt_segment` (basis `rendered_prompt`, i.e. `final_prompt`) -- `replay()`'s only surface
-    is a MESSAGE list (`chat(messages, ...)`), never a raw-prompt override; that is fork.py's territory,
-    per replay.py's own module docstring. Splicing here would require inventing a capability replay does
+    is a MESSAGE list (`chat(messages, ...)`), never a raw-prompt override; raw-prompt reconstruction
+    belongs to the Branch Fan execution seam. Splicing here would require inventing a capability replay does
     not have.
   * `answer_span` (basis `scored_answer`) -- a piece of the model's OWN reply, not prompt content. There
     is nothing to ablate out of a PROMPT here; that is a different kind of question this slice does not

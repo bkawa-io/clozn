@@ -7,7 +7,7 @@ import pytest
 
 from clozn import schemas
 from clozn.replay import branch_fan as fan
-from clozn.replay import fork
+from clozn.replay import execution_fork
 from clozn.replay.execution_fork_execute import _exact_child_trace
 import clozn.runs.store as runlog
 
@@ -157,7 +157,7 @@ def test_exact_capture_is_once_plans_and_controls_are_per_candidate(monkeypatch)
     sub = Sub(exact=True)
     capture_calls, plan_calls, execute_calls = [], [], []
 
-    monkeypatch.setattr(fork, "capture_exact_fork_context", lambda *args, **kwargs: (
+    monkeypatch.setattr(execution_fork, "capture_exact_force_token_context", lambda *args, **kwargs: (
         capture_calls.append((args, kwargs)) or {
             "status": "available",
             "checkpoint_reference": {
@@ -186,8 +186,8 @@ def test_exact_capture_is_once_plans_and_controls_are_per_candidate(monkeypatch)
         child["execution_fork"] = receipt
         return {"receipt": receipt, "child": child}
 
-    monkeypatch.setattr(fork, "plan_exact_force_token", fake_plan)
-    monkeypatch.setattr(fork, "execute_exact_force_token", fake_execute)
+    monkeypatch.setattr(execution_fork, "plan_exact_force_token", fake_plan)
+    monkeypatch.setattr(execution_fork, "execute_exact_force_token", fake_execute)
     monkeypatch.setattr(fan, "_comparison", lambda parent, child: {
         "state": "available", "common_prefix_len": 1,
         "first_divergence_view": {"state": "available"},
@@ -208,17 +208,17 @@ def test_missing_id_can_reconstruct_alongside_exact_candidate(monkeypatch):
         {"piece": " no id", "prob": 0.2},
     ], []])
     sub = Sub(exact=True)
-    monkeypatch.setattr(fork, "capture_exact_fork_context", lambda *args, **kwargs: {
+    monkeypatch.setattr(execution_fork, "capture_exact_force_token_context", lambda *args, **kwargs: {
         "status": "available",
         "checkpoint_reference": {
             "checkpoint_id": "checkpoint-1", "worker_generation_id": "generation-a",
             "state": "available", "parent_run_id": parent["id"],
         },
     })
-    monkeypatch.setattr(fork, "plan_exact_force_token", lambda parent_run, request, **kwargs: {
+    monkeypatch.setattr(execution_fork, "plan_exact_force_token", lambda parent_run, request, **kwargs: {
         "classification": "exact_execution_fork", "request": {"change": request["change"]},
     })
-    monkeypatch.setattr(fork, "execute_exact_force_token", lambda *args, **kwargs: {
+    monkeypatch.setattr(execution_fork, "execute_exact_force_token", lambda *args, **kwargs: {
         "receipt": {
             "phase": "completed", "execution_id": "fork_exec_" + "a" * 20,
             "exactness": {"proof_status": "confirmed"}, "unchanged_control": {"status": "matched"},
@@ -241,17 +241,17 @@ def test_missing_id_can_reconstruct_alongside_exact_candidate(monkeypatch):
 def test_cancellation_preserves_completed_children_and_marks_remaining(monkeypatch):
     parent = _parent()
     sub = Sub(exact=True)
-    monkeypatch.setattr(fork, "capture_exact_fork_context", lambda *args, **kwargs: {
+    monkeypatch.setattr(execution_fork, "capture_exact_force_token_context", lambda *args, **kwargs: {
         "status": "available",
         "checkpoint_reference": {
             "checkpoint_id": "checkpoint-1", "worker_generation_id": "generation-a",
             "state": "available", "parent_run_id": parent["id"],
         },
     })
-    monkeypatch.setattr(fork, "plan_exact_force_token", lambda parent_run, request, **kwargs: {
+    monkeypatch.setattr(execution_fork, "plan_exact_force_token", lambda parent_run, request, **kwargs: {
         "classification": "exact_execution_fork", "request": {"change": request["change"]},
     })
-    monkeypatch.setattr(fork, "execute_exact_force_token", lambda *args, **kwargs: {
+    monkeypatch.setattr(execution_fork, "execute_exact_force_token", lambda *args, **kwargs: {
         "receipt": {
             "phase": "completed", "execution_id": "fork_exec_" + "a" * 20,
             "exactness": {"proof_status": "confirmed"}, "unchanged_control": {"status": "matched"},
@@ -331,7 +331,7 @@ def test_reconstructed_final_boundary_uses_zero_continuation_without_generation(
         "final_prompt": "<prompt>",
         "trace": {"tokens": ["one", " two"], "token_ids": [1, 2]},
     }
-    child = fork.fork(parent, sub, 1, token=" three", max_new=0)
+    child = fan.reconstruct_branch_child(parent, sub, 1, token=" three", max_new=0)
     assert child is not None
     assert child["response"] == "one three"
     assert engine.calls == 0

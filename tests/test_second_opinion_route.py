@@ -305,7 +305,7 @@ def test_candidates_run_not_found_is_404(iso, managed):
 
 def test_try_post_ignores_unrelated_paths(iso):
     h = Handler()
-    assert route.try_post(h, "/runs/x/fork", {}) is False
+    assert route.try_post(h, "/runs/x/not-a-second-opinion-route", {}) is False
 
 
 def test_try_get_ignores_unrelated_paths(iso):

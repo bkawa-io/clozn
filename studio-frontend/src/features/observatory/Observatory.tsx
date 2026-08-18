@@ -8,7 +8,7 @@ import { ConfidencePlot } from "./ConfidencePlot";
 import { LayerScope } from "./LayerScope";
 import { TokenDistributionCard } from "./TokenDistributionCard";
 import { TraceScope } from "./TraceScope";
-import { useTokenWorkbench, type ForkOutcomeBanner } from "./useTokenWorkbench";
+import { useTokenWorkbench, type TimeTravelOutcomeBanner } from "./useTokenWorkbench";
 import { VariantDeltaPlot } from "./VariantDeltaPlot";
 import { VariantScope } from "./VariantScope";
 import type { ScopeSelectionState, ScopeUrlState, ScopeView } from "./urlState";
@@ -30,9 +30,9 @@ function formatPercent(value: number) {
 }
 
 interface ObservatoryWorkspaceProps extends ObservatoryProps {
-  lastForkOutcome: ForkOutcomeBanner | null;
-  onForkOutcome: (banner: ForkOutcomeBanner) => void;
-  onDismissForkOutcome: () => void;
+  lastTimeTravelOutcome: TimeTravelOutcomeBanner | null;
+  onTimeTravelOutcome: (banner: TimeTravelOutcomeBanner) => void;
+  onDismissTimeTravelOutcome: () => void;
 }
 
 function ObservatoryWorkspace({
@@ -43,9 +43,9 @@ function ObservatoryWorkspace({
   onSelectRun,
   initialState,
   onStateChange,
-  lastForkOutcome,
-  onForkOutcome,
-  onDismissForkOutcome,
+  lastTimeTravelOutcome,
+  onTimeTravelOutcome,
+  onDismissTimeTravelOutcome,
 }: ObservatoryWorkspaceProps) {
   const {
     selection,
@@ -60,7 +60,7 @@ function ObservatoryWorkspace({
     materializeTokenBranch,
     forkChoice,
     setForkChoice,
-  } = useTokenWorkbench({ data, runtime, initialState, onStateChange, onSelectRun, onForkOutcome });
+  } = useTokenWorkbench({ data, runtime, initialState, onStateChange, onSelectRun, onTimeTravelOutcome });
   const activeView: ScopeView = selection.view;
   const selectedToken = selection.token;
   const selectedLayer = selection.layer;
@@ -369,12 +369,12 @@ function ObservatoryWorkspace({
             onMaterialize={materializeTokenBranch}
           />
 
-          {lastForkOutcome && data.id === lastForkOutcome.parentId && (
+          {lastTimeTravelOutcome && data.id === lastTimeTravelOutcome.parentId && (
             <section className="inspector-section fork-outcome-banner">
               <div className="fork-result" role="status">
-                <span>GENERATED OBSERVATION {String(lastForkOutcome.artifact.observation_id || "").slice(-8)}</span>
+                <span>GENERATED OBSERVATION {String(lastTimeTravelOutcome.artifact.observation_id || "").slice(-8)}</span>
                 <span>Materialization is explicit; no child Run exists yet.</span>
-                <button type="button" onClick={onDismissForkOutcome}>DISMISS</button>
+                <button type="button" onClick={onDismissTimeTravelOutcome}>DISMISS</button>
               </div>
             </section>
           )}
@@ -523,11 +523,11 @@ function ObservatoryWorkspace({
 
 export function Observatory(props: ObservatoryProps) {
   const { data, initialState, runtime } = props;
-  const [lastForkOutcome, setLastForkOutcome] = useState<ForkOutcomeBanner | null>(null);
+  const [lastTimeTravelOutcome, setLastTimeTravelOutcome] = useState<TimeTravelOutcomeBanner | null>(null);
 
   // The evidence banner is parent-bound and must not follow the user to another run.
   useEffect(() => {
-    setLastForkOutcome((current) => (current && current.parentId !== data.id ? null : current));
+    setLastTimeTravelOutcome((current) => (current && current.parentId !== data.id ? null : current));
   }, [data.id]);
 
   const resetKey = [
@@ -542,9 +542,9 @@ export function Observatory(props: ObservatoryProps) {
     <ObservatoryWorkspace
       key={resetKey}
       {...props}
-      lastForkOutcome={lastForkOutcome}
-      onForkOutcome={setLastForkOutcome}
-      onDismissForkOutcome={() => setLastForkOutcome(null)}
+      lastTimeTravelOutcome={lastTimeTravelOutcome}
+      onTimeTravelOutcome={setLastTimeTravelOutcome}
+      onDismissTimeTravelOutcome={() => setLastTimeTravelOutcome(null)}
     />
   );
 }

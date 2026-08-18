@@ -505,3 +505,59 @@ _runtime_projection = _neutral_runtime_projection
 recorded_fork_prerequisites = _neutral_recorded_execution_prerequisites
 _checkpoint_projection = _neutral_normalize_checkpoint_reference
 _worker_projection = _neutral_worker_identity_projection
+
+
+def capture_exact_force_token_context(
+    run: Mapping, engine, *, runtime_identity: Mapping, worker_identity: Mapping,
+) -> dict:
+    """Capture one exact execution context for Branch Fan and sampler probes.
+
+    This is an adapter around the canonical checkpoint-capture seam.  It contains no product
+    orchestration and deliberately returns eligibility rather than silently changing execution
+    regimes.
+    """
+    from copy import deepcopy
+
+    from clozn.replay.checkpoint_capture import CheckpointCaptureError, capture_parent_checkpoint
+
+    try:
+        capture = capture_parent_checkpoint(
+            run, engine, runtime_identity=runtime_identity, worker_identity=worker_identity)
+    except CheckpointCaptureError as exc:
+        return {"status": "ineligible", "reason": _reason(
+            "checkpoint_capture_request_invalid", str(exc))}
+    if capture.get("status") != "available":
+        reason = (capture.get("reasons") or [{}])[0]
+        return {"status": "ineligible", "reason": _reason(
+            reason.get("code", "checkpoint_unavailable"),
+            reason.get("message", "no exact checkpoint could be captured"))}
+    return {
+        "status": "available",
+        "checkpoint_reference": deepcopy(capture["checkpoint_reference"]),
+        "capture": capture,
+    }
+
+
+def plan_exact_force_token(
+    run: Mapping, request: Mapping, *, checkpoint_reference: Mapping,
+    runtime_identity: Mapping, worker_identity: Mapping,
+) -> dict:
+    """Plan a force-token execution against an already captured checkpoint."""
+    return plan_execution_fork(
+        run, request, checkpoint=checkpoint_reference,
+        runtime_identity=runtime_identity, worker_identity=worker_identity,
+    )
+
+
+def execute_exact_force_token(
+    run: Mapping, plan: Mapping, engine, *, runtime_identity: Mapping,
+    worker_identity: Mapping, reload_parent=None, cancel_check=None,
+) -> dict:
+    """Execute one planned exact force-token candidate through the canonical executor."""
+    from clozn.replay.execution_fork_execute import execute_exact_fork
+
+    return execute_exact_fork(
+        run, plan, engine,
+        runtime_identity=runtime_identity, worker_identity=worker_identity,
+        reload_parent=reload_parent, cancel_check=cancel_check,
+    )

@@ -7,7 +7,7 @@ and the risk/provenance helpers for proposed cards. Memory cards were cut from t
 
 What is left has nothing to do with memory, hence the rename:
 
-  * `_inject_block` -- fold ANY system block into a message list. `replay/fork.py` and
+  * `_inject_block` -- fold ANY system block into a message list. Branch Fan and
     `cli/commands/quant_check.py` each keep a local copy and document matching this exact shape
     (append to an existing system message so the client's own instructions keep first position, else
     prepend a new one), so this stays the canonical definition they are checked against.

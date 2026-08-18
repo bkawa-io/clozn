@@ -35,7 +35,7 @@
       "available": false,
       "snapshot_state": "worker_unreachable",
       "reason": "no live engine worker is currently reachable",
-      "action": {"method": "POST", "href": "/runs/run_0019fb1479b18_96e8c5/fork"}
+      "action": {"method": "POST", "href": "/runs/run_0019fb1479b18_96e8c5/tokens/1/force-token"}
     },
     "source_measurement": {
       "available": false,

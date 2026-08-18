@@ -22,9 +22,8 @@ export interface CandidateReading {
   score: number;
   delta: number;
   /** The recorded alternative's numeric token id, when the backend reported one. Threaded through so a
-   * fork request can name an exact token id instead of only a text piece -- see ForkOutcome below and
-   * `docs/EXECUTION_FORK_CONTRACT.md`: the exact execution-fork path requires a numeric id, and text
-   * alone can only ever qualify for the reconstructed splice. */
+   * ForceToken requests can name an exact token id instead of only a text piece; the canonical
+   * Time Travel result reports whether the generated observation was exact or reconstructed. */
   tokenId?: number;
 }
 
@@ -397,86 +396,3 @@ export interface RuntimeState {
     sae: boolean;
   };
 }
-
-// -- FORK-02: POST /runs/<id>/fork's compatibility wrapper (clozn.replay.fork.compat_fork) ---------
-//
-// The gateway has exactly three outcomes (see docs/EXECUTION_FORK_CONTRACT.md and the compat_fork
-// docstring): a bit-exact checkpoint-restored fork, the legacy text splice explicitly labeled as a
-// reconstruction, or a typed `unavailable`. This is its OWN closed union, deliberately kept separate
-// from InfluenceEvidenceState / DiagnosisStatus / PerformanceRuleStatus / PerformanceEvidenceState
-// above: those describe measurement confidence on DIFFERENT artifacts, and collapsing this into one of
-// them (or into a shared generic "status" enum) would let a fork outcome be rendered with a badge or
-// caveat sentence that was written for a different fact. A value that is not exactly
-// `exact_execution_fork` must render as the WEAKER claim, never be silently upgraded.
-export type ForkOutcomeKind = "exact_execution_fork" | "reconstructed_replay" | "unavailable";
-
-/** The `{code, message}` shape clozn.execution-fork.v1 uses for its own `reasons` -- the backend's own
- * words, not a UI paraphrase, so this module never drifts from the vocabulary the gateway defines. */
-export interface ForkReason {
-  code: string;
-  message: string;
-}
-
-/** `clozn.execution-fork.v1`'s exactness receipt: which restore regime ran (or would run), the worker
- * wire source, whether the claim is only planned or worker-confirmed, and the response-token boundary
- * the worker restored to. Fields are individually optional because `unavailable` may carry a partial
- * receipt from an exact attempt that started and then failed. */
-export interface ForkExactness {
-  regime?: string;
-  source?: string;
-  proofStatus?: string;
-  truncateTo?: number;
-}
-
-export interface ForkUnchangedControlResult {
-  status?: string;
-  exactMatch?: boolean;
-  note?: string;
-}
-
-/** The mandatory unchanged-control proof an exact fork must pass before its intervention is even
- * attempted (see EXECUTION_FORK_CONTRACT.md's "Exact gateway execution"). Present on the exact and
- * unavailable outcomes; never present on a reconstructed reply, which has no worker control to run. */
-export interface ForkUnchangedControl {
-  required?: boolean;
-  status: string;
-  result?: ForkUnchangedControlResult;
-}
-
-/** The intervention the worker actually applied, read from the child's own `execution_fork` receipt
- * (`request.execution_change` / `execution.intervention.restore_mode`) -- never re-derived from the
- * request the UI sent, so this can't drift from what the worker confirmed. */
-export interface ForkIntervention {
-  type: string;
-  tokenId?: number;
-  tokenPiece?: string;
-  restoreMode?: string;
-}
-
-export type ForkOutcome =
-  | {
-      kind: "exact_execution_fork";
-      reasons: ForkReason[];
-      exactness: ForkExactness;
-      unchangedControl?: ForkUnchangedControl;
-      intervention?: ForkIntervention;
-      executionId?: string;
-    }
-  | {
-      kind: "reconstructed_replay";
-      reasons: ForkReason[];
-      exactness: ForkExactness;
-      /** `clozn.execution-fork.v1`'s fixed list of what the splice can never reproduce (KV state, sampler
-       * state, prompt retokenization, batch shape) -- shown verbatim, not summarized into one caveat. */
-      unavoidableDifferences: string[];
-      /** True unless the spliced prefix verified token-exact on this substrate. Mirrors fork()'s own
-       * conservative default: unverifiable is flagged retokenized, never assumed clean. */
-      retokenized: boolean;
-    }
-  | {
-      kind: "unavailable";
-      reasons: ForkReason[];
-      exactness?: ForkExactness;
-      unchangedControl?: ForkUnchangedControl;
-      executionId?: string;
-    };

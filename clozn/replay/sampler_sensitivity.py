@@ -551,7 +551,9 @@ def execute_sampler_sensitivity(parent_run: dict, sub, plan: Mapping, *, runtime
         schemas.validate(result, SCHEMA_VERSION)
         return result
 
-    from clozn.replay.fork import capture_exact_fork_context, execute_exact_force_token, plan_exact_force_token
+    from clozn.replay.execution_fork import (
+        capture_exact_force_token_context, execute_exact_force_token, plan_exact_force_token,
+    )
 
     engine = getattr(sub, "engine", None) if sub is not None else None
     if engine is None or not isinstance(runtime_identity, Mapping) or not isinstance(worker_identity, Mapping):
@@ -571,7 +573,7 @@ def execute_sampler_sensitivity(parent_run: dict, sub, plan: Mapping, *, runtime
         return result
 
     try:
-        capture = capture_exact_fork_context(
+        capture = capture_exact_force_token_context(
             parent_run, engine, runtime_identity=dict(runtime_identity), worker_identity=dict(worker_identity))
     except Exception:
         capture = {"status": "ineligible", "reason": _reason("checkpoint_capture_unavailable", "an exact sampler checkpoint could not be captured")}

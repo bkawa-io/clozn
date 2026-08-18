@@ -129,7 +129,7 @@ export interface ActionArtifactMap {
  * action's artifact as another's lives where it matters: each `runAction` branch below only ever
  * produces its OWN action's artifact shape, and each reader (ActionTray.tsx, LayerScope.tsx) casts to
  * the one type it knows to expect for the specific action id it is rendering -- the same pattern
- * ForkOutcomePanel's own `never`-exhaustiveness switch already uses. */
+ * the action tray's own `never`-exhaustiveness switch already uses. */
 export interface ActionState {
   phase: "unavailable" | "idle" | "running" | "cancelling" | "cancelled" | "cached" | "completed" | "error";
   /** The capability's OWN native status word (snapshot_state / status), shown as text alongside `phase`
@@ -142,7 +142,7 @@ export interface ActionState {
   pairCompatibility?: Record<string, unknown>;
 }
 
-export interface ForkOutcomeBanner {
+export interface TimeTravelOutcomeBanner {
   parentId: string;
   artifact: TimeTravelArtifact;
 }
@@ -256,7 +256,7 @@ export interface UseTokenWorkbenchOptions {
   onSelectRun: (runId: string) => void;
   /** Reported once a force-token action reaches `completed`; the callback is evidence-only and never
    * implies that a child Run exists. */
-  onForkOutcome?: (banner: ForkOutcomeBanner) => void;
+  onTimeTravelOutcome?: (banner: TimeTravelOutcomeBanner) => void;
 }
 
 export function useTokenWorkbench({
@@ -265,7 +265,7 @@ export function useTokenWorkbench({
   initialState,
   onStateChange,
   onSelectRun,
-  onForkOutcome,
+  onTimeTravelOutcome,
 }: UseTokenWorkbenchOptions) {
   const [selection, dispatch] = useReducer(
     selectionReducer,
@@ -434,7 +434,7 @@ export function useTokenWorkbench({
 
     function reportForceTokenArtifact(artifact: TimeTravelArtifact | undefined) {
       if (!mountedRef.current || !artifact) return;
-      onForkOutcome?.({ parentId: runId, artifact });
+      onTimeTravelOutcome?.({ parentId: runId, artifact });
     }
 
     if (id === "exact_fork") {
@@ -527,7 +527,7 @@ export function useTokenWorkbench({
       setActionState(id, { phase: "running", job: envelope.job });
       void pollJob(id, requestId, runId, index, envelope.job, decodeMechanisticDiffJobResult, () => {});
     }).catch((error) => setActionState(id, { phase: "error", reason: describeActionError(error) }));
-  }, [actions, doc, forkChoice, onForkOutcome, onSelectRun, pollJob, selection.reference, selection.token, setActionState, data.id]);
+  }, [actions, doc, forkChoice, onTimeTravelOutcome, onSelectRun, pollJob, selection.reference, selection.token, setActionState, data.id]);
 
   const cancelAction = useCallback((id: ActionId) => {
     setActions((current) => {

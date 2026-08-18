@@ -148,9 +148,9 @@ def test_execution_captures_once_reuses_checkpoint_and_separates_probe_compariso
         }, "child": child}
 
     seen_changes = [probe["change"] for probe in plan["probes"]]
-    monkeypatch.setattr("clozn.replay.fork.capture_exact_fork_context", capture)
-    monkeypatch.setattr("clozn.replay.fork.plan_exact_force_token", exact_plan)
-    monkeypatch.setattr("clozn.replay.fork.execute_exact_force_token", execute)
+    monkeypatch.setattr("clozn.replay.execution_fork.capture_exact_force_token_context", capture)
+    monkeypatch.setattr("clozn.replay.execution_fork.plan_exact_force_token", exact_plan)
+    monkeypatch.setattr("clozn.replay.execution_fork.execute_exact_force_token", execute)
     result = execute_sampler_sensitivity(
         run, Sub(), plan,
         runtime_identity={"runtime": "same"}, worker_identity={"worker": "same"},
@@ -167,10 +167,9 @@ def test_execution_captures_once_reuses_checkpoint_and_separates_probe_compariso
 def test_execution_does_not_fallback_to_reconstructed_replay(monkeypatch):
     run = parent()
     plan = plan_sampler_sensitivity(run)
-    monkeypatch.setattr("clozn.replay.fork.capture_exact_fork_context", lambda *a, **k: {
+    monkeypatch.setattr("clozn.replay.execution_fork.capture_exact_force_token_context", lambda *a, **k: {
         "status": "ineligible", "reason": {"code": "checkpoint_unavailable", "message": "no checkpoint"}
     })
-    monkeypatch.setattr("clozn.replay.fork.fork", lambda *a, **k: pytest.fail("reconstructed sampler fork"))
     result = execute_sampler_sensitivity(
         run, Sub(), plan,
         runtime_identity={"runtime": "same"}, worker_identity={"worker": "same"},

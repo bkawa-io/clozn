@@ -24,7 +24,7 @@ This file proves, for a representative, broad sample of the converted routes:
 
 No model, no GPU, no engine launch: every engine here is a small deterministic fake whose
 `.health()` satisfies `PreloadedModelBinding`/`qualify_live_identity`'s own bookkeeping, and every
-downstream domain call (`clozn.replay.fork.compat_fork`, `clozn.analysis.tracer.trace`, ...) is
+downstream domain call (`clozn.analysis.tracer.trace`, ...) is
 monkeypatched to record which `sub`/`engine_url` it was actually given -- this file is about the
 SELECTION layer, not re-testing each domain function's own business logic (that has its own
 coverage elsewhere, e.g. test_replay.py, test_causal_trace_server.py, test_receipts_server.py).
@@ -44,7 +44,6 @@ from clozn.server.routes import (
     corrective_actions,
     corrective_retries,
     execution_fork,
-    fork,
     influence_map,
     investigation,
     investigation_experiment,
@@ -198,7 +197,6 @@ def _run(**overrides):
 # and the route must surface the typed clozn.model-routing.v1 refusal, never a bare 503/500 and
 # never touching alpha or the legacy SUB.
 _REFUSAL_CASES = [
-    (fork, "try_post", "/fork", {"position": 0, "token": "x"}),
     (causal_trace, "try_post", "/causal-trace", {}),
     (provenance, "try_post", "/provenance", {}),
     (influence_map, "try_post", "/influence-map", {}),
@@ -238,26 +236,6 @@ def test_unresolvable_run_model_refuses_typed_never_falls_back(iso, managed, mod
 
 
 # ==================================================================================== success path
-
-def test_fork_uses_the_runs_own_model_worker_never_the_default(iso, managed, monkeypatch):
-    router, alpha, beta = managed
-    run = _run(model="beta")
-    captured = {}
-
-    def fake_compat_fork(run_arg, sub, position, **kwargs):
-        captured["sub"] = sub
-        captured["runtime_identity"] = kwargs.get("runtime_identity")
-        return {"outcome": "reconstructed_replay", "id": "run_child"}
-
-    import clozn.replay.fork as fork_mod
-    monkeypatch.setattr(fork_mod, "compat_fork", fake_compat_fork)
-
-    h = Handler()
-    assert fork.try_post(h, f"/runs/{run['id']}/fork", {"position": 0, "token": "x"})
-    assert h.status == 200
-    assert captured["sub"] is beta.sub
-    assert captured["sub"] is not alpha.sub
-
 
 def test_causal_trace_uses_the_runs_own_engine_not_the_control_pair_engine(iso, managed, monkeypatch):
     """This is the ctx.ENGINE bug: before this change, causal_trace._engine_base fell back to the
@@ -590,36 +568,20 @@ def test_corrective_actions_confirm_hard_refuses_on_unresolvable_worker(iso, man
 def test_legacy_no_router_still_uses_active_sub_directly_unchanged(iso, monkeypatch):
     """MODEL_ROUTER is None (the pre-existing single-worker product path): every converted route
     must keep resolving through ctx.active_sub/ctx.active_engine exactly as before -- proved here
-    for a representative sample (fork's 503 gate, and a working substrate reaching the deep call)."""
+    for a representative working substrate reaching the deep call."""
     previous = server.MODEL_ROUTER, server.SUB, server.ENGINE
     server.MODEL_ROUTER = None
     server.SUB = None
     server.ENGINE = None
     try:
         run = _run(model="whatever-legacy-runs-had")
-        h = Handler()
-        assert fork.try_post(h, f"/runs/{run['id']}/fork", {"position": 0, "token": "x"})
-        assert h.status == 503   # no substrate at all -- the ORIGINAL, unconditional gate
-
         engine = FakeEngine(digest="z" * 64, template="9" * 16, build="b", generation="g",
                             base="http://127.0.0.1:1")
         sub = FakeSub(engine)
         server.SUB = sub
         server.ENGINE = engine
 
-        captured = {}
-
-        def fake_compat_fork(run_arg, passed_sub, position, **kwargs):
-            captured["sub"] = passed_sub
-            return {"outcome": "reconstructed_replay", "id": "run_child"}
-
-        import clozn.replay.fork as fork_mod
-        monkeypatch.setattr(fork_mod, "compat_fork", fake_compat_fork)
-
-        h2 = Handler()
-        assert fork.try_post(h2, f"/runs/{run['id']}/fork", {"position": 0, "token": "x"})
-        assert h2.status == 200
-        assert captured["sub"] is sub   # the legacy global SUB, exactly as before this change
+        assert server.SUB is sub
     finally:
         server.MODEL_ROUTER, server.SUB, server.ENGINE = previous
 

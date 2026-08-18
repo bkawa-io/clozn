@@ -608,10 +608,9 @@ from clozn.server.routes import openai as _openai_routes              # noqa: E4
 from clozn.server.routes import engine as _engine_routes              # noqa: E402
 from clozn.server.routes import models as _models_routes              # noqa: E402 (local GGUF inventory)
 from clozn.server.routes import readouts as _readouts_routes          # noqa: E402
-# Inspector route families: fork-at-token, journal actuary, model diff (F8).
+# Inspector route families: journal actuary, model diff (F8).
 from clozn.server.routes import provenance as _provenance_routes       # noqa: E402
 from clozn.server.routes import causal_trace as _causal_trace_routes   # noqa: E402
-from clozn.server.routes import fork as _fork_routes                   # noqa: E402
 from clozn.server.routes import journal as _journal_routes             # noqa: E402
 from clozn.server.routes import card as _card_routes                        # noqa: E402
 from clozn.server.routes import diff as _diff_routes                   # noqa: E402
@@ -641,7 +640,7 @@ _POST_ROUTES = [_health_routes, _receipts_routes,
                _corrective_retry_routes, _replay_routes,
                _timetravel_routes, _preferences_routes, _feedback_routes,
                _ollama_routes, _openai_routes, _engine_routes, _readouts_routes,
-               _fork_routes, _journal_routes, _diff_routes,
+               _journal_routes, _diff_routes,
                _receipt_link_routes, _influence_map_routes, _contracts_routes,
                _provenance_routes, _causal_trace_routes,
                *_route_autoload.with_try_post(_autoloaded_routes)]

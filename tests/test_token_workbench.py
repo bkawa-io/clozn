@@ -222,7 +222,7 @@ def test_exact_fork_available_for_an_organic_run_with_a_ready_worker():
         "available": True,
         "snapshot_state": "not_attempted",
         # Milestone F: points at the token-workbench action endpoint, not the pre-Milestone-F
-        # /runs/<id>/fork route (still live, but no longer what this preview recommends).
+        # The retired /fork route is not part of this preview; the canonical action is ForceToken.
         "action": {"method": "POST", "href": "/runs/run_current/tokens/1/force-token"},
     }
 

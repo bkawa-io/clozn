@@ -20,7 +20,6 @@ import {
 } from "./urlState";
 
 vi.mock("../../data/api", () => ({
-  createFork: vi.fn(),
   loadRunInspection: vi.fn(),
   loadRuntimeState: vi.fn(),
 }));
