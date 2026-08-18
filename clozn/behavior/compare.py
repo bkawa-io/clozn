@@ -9,7 +9,7 @@ compare_metrics() below is a SEPARATE, additive dict that clozn.replay.correctiv
 merges alongside receipt_metrics()'s own output; it never replaces or reshapes it.
 
 Both metrics here are pure text counting, no model call, no dependency beyond the stdlib --
-exactly as honest, and exactly as crude, as clozn.replay.counterfactual._coherence's degeneracy
+exactly as honest, and exactly as crude, as clozn.replay.coherence._coherence's degeneracy
 check (which this module deliberately does not duplicate: that one only flags "degenerate: bool"
 for a single text; this one COUNTS repeats across a before/after pair).
 
@@ -37,7 +37,7 @@ _HEADING_RE = re.compile(r"^#{1,6}\s+\S", re.MULTILINE)
 
 def _repeated_phrase_count(text: str, n: int = 3) -> int:
     """Count of DISTINCT n-word phrases that appear more than once in `text` (default trigrams --
-    the same window clozn.replay.counterfactual._coherence's repeat-3gram check uses, just counted
+    the same window clozn.replay.coherence._coherence's repeat-3gram check uses, just counted
     instead of only flagged). Case-insensitive, word-boundary tokenized; punctuation is not part of
     a word. A text shorter than `n` words has no phrases to repeat -- 0, not an error."""
     words = _WORD_RE.findall((text or "").lower())

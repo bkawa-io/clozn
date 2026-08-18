@@ -1262,7 +1262,7 @@ class EngineClient:
 
     def unembed_row(self, token_id: int) -> dict:
         """POST /jlens/unembed_row: ONE row of the model's own (quantized) unembed/lm_head
-        matrix, W_U[token_id] -- the ingredient clozn/behavior/steering/concept_dir.py's dir(c) =
+        matrix, W_U[token_id] -- the ingredient clozn/analysis/concept_dir.py's dir(c) =
         normalize(J_l^T @ W_U[c]) needs but has no other in-product source for (J_l ships in the
         product J-lens sidecar; W_U doesn't -- see concept_dir.py's BLOCKER_NOTE). Extracted
         server-side via ggml_get_rows (dequantizes whatever GGUF quant type the head is), so only

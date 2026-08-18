@@ -353,9 +353,8 @@ gateway import (`import clozn.server.app` with no torch installed, line 85) **an
 (line 94) — and `test_runtime_architecture.py` is the file that exercises `clozn.cli.runtime_process`,
 `spawn_runtime`, and `RuntimeConfig` directly (§1.5). Grepped for `import torch` in that test file: zero
 matches. So **`clozn.cli.runtime_process` — the supervisor's own module — is already proven torch-free in
-CI today**, by the same lane that proves the gateway is. Torch appears in exactly four modules in this
-repository (`clozn/behavior/steering/hf_adapter.py`, `clozn/lab/slotmem_qwen/store.py`,
-`clozn/readouts/brain.py`, `clozn/readouts/sae7b.py`), none reachable from `clozn serve`'s own import
+CI today**, by the same lane that proves the gateway is. Torch appears in exactly two modules in this
+repository (`clozn/readouts/brain.py`, `clozn/readouts/sae7b.py`), none reachable from `clozn serve`'s own import
 graph, none imported by `runtime_process.py` or `app.py`. **There is no current CLI/gateway dependency
 split for `gateway_python` to protect** — the premise behind the field, as stated in the brief, is false
 for this codebase as it exists today.

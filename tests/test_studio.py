@@ -48,20 +48,9 @@ def main():
     ok("QwenSubstrate: chat + chat_stream + _gen + handle",
        has_all(lab_subs.QwenSubstrate, ("chat", "chat_stream", "_gen", "handle")))
 
-    # --- steering: the tone dials (AR) --------------------------------------------------------------
-    import clozn.behavior.steering as steering
-
-    ok("10 base tone axes", len(steering.AXES) == 10)
-    ok("EngineSteer: compute/set/generate (tone dials on any GGUF via the engine)",
-       has_all(steering.EngineSteer, ("compute", "set", "generate")))
-
     # --- optional PyTorch lab ----------------------------------------------------------------------
     import importlib.util
     if importlib.util.find_spec("torch") and importlib.util.find_spec("transformers"):
-        ok("SteeringControl: compute/set/engage/save_state/load_state",
-           has_all(steering.SteeringControl,
-                   ("compute", "set", "engage", "disengage", "save_state", "load_state")))
-
         import clozn.lab.substrates.self_teach as self_teach_server
         ok("SelfTeach: say/consolidate/save/load/_generate",
            has_all(self_teach_server.SelfTeach, ("say", "consolidate", "save", "load", "_generate")))
