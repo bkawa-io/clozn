@@ -338,6 +338,7 @@ def run_time_travel(
     observation_store: ObservationStore | None = None, store: ObservationStore | None = None,
     include_control: bool = True, decode_mode: str | None = None, sampling: Mapping[str, Any] | None = None,
     stop: list[str] | tuple[str, ...] | None = None,
+    cancel: Any | None = None,
 ) -> TimeTravelResult:
     """Resolve, execute, and project one Continue or ForceToken experiment."""
     if not isinstance(run, Mapping):
@@ -387,8 +388,10 @@ def run_time_travel(
         adapter = GenerateExecutionAdapter(substrate, run=run, run_loader=run_loader,
                                            runtime_identity=runtime_identity, worker_identity=worker_identity)
     durable = observation_store or store or ObservationStore()
-    result = run_experiment(experiment, adapter, include_control=include_control,
-                            observation_store=durable, requested_by={"recipe": "time_travel"})
+    result = run_experiment(
+        experiment, adapter, include_control=include_control, cancel=cancel,
+        observation_store=durable, requested_by={"recipe": "time_travel"},
+    )
     arm = result.arms[0] if result.arms else None
     observation = arm.observation if arm is not None else None
     if isinstance(observation, GeneratedObservation) and observation.status == "completed":

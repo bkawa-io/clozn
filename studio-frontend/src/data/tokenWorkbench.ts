@@ -1,4 +1,4 @@
-// clozn.token-workbench.v1 (GET) and its Milestone F action surface (POST fork / causal-trace /
+// clozn.token-workbench.v1 (GET) and its action surface (POST force-token / causal-trace /
 // source-measure / mechanistic-diff, plus generic job status/cancel). See
 // clozn/runs/token_workbench.py and clozn/runs/token_workbench_actions.py -- this module never
 // re-derives their logic, only decodes what they already return.
@@ -16,7 +16,6 @@
 // interfaces, four action-result parsers, never a shared "status: string" grab-bag.
 import type { CausalTraceEvidence } from "../features/observatory/layerApi";
 import { parseCausalTraceEvidence } from "../features/observatory/layerApi";
-import { parseForkArtifact, type ForkArtifact } from "./api";
 import type { InfluenceMapJobState } from "./types";
 
 type JsonRecord = Record<string, unknown>;
@@ -151,6 +150,31 @@ export interface ExactForkCapability {
   snapshotState: string;
   reason?: string;
   action?: WorkbenchAction;
+}
+
+/** The observation-first token intervention result attached to a Workbench job. */
+export interface TimeTravelArtifact extends JsonRecord {
+  schema_version: "clozn.time-travel-result.v1";
+  run_id: string;
+  experiment_id?: string | null;
+  arm_id?: string | null;
+  observation_id?: string | null;
+  status: string;
+  resolution?: string;
+  fidelity?: string;
+  continuation?: JsonRecord;
+  diagnostics?: JsonRecord;
+}
+
+export function parseTimeTravelArtifact(value: unknown): TimeTravelArtifact {
+  const item = record(value);
+  if (item.schema_version !== "clozn.time-travel-result.v1") {
+    throw new Error("force-token result was not a clozn.time-travel-result.v1 artifact");
+  }
+  if (typeof item.run_id !== "string" || !item.run_id || typeof item.status !== "string") {
+    throw new Error("force-token result omitted its run or status");
+  }
+  return item as TimeTravelArtifact;
 }
 
 export interface SourceMeasurementCapability {
@@ -390,7 +414,7 @@ export interface WorkbenchJob {
   cached: boolean;
   cancelAccepted?: boolean;
   error?: { code?: string; message: string };
-  /** The action's own artifact, when its worker chose to attach one (fork/causal-trace do; source-
+  /** The action's own artifact, when its worker chose to attach one (force-token/causal-trace do; source-
    * measure persists to the run itself instead -- see clozn/runs/token_workbench_actions.py). Raw and
    * unparsed here on purpose: each action's own result parser (below) decodes it, never this module. */
   result?: unknown;
@@ -500,15 +524,38 @@ function parseEnvelope<TArtifact>(
   };
 }
 
-export function postForkAction(
+export function postForceTokenAction(
   runId: string,
   index: number,
   token: string,
   tokenId: number | undefined,
   signal?: AbortSignal,
-): Promise<WorkbenchActionResult<ForkArtifact>> {
-  const body = tokenId == null ? { token } : { token, token_id: tokenId };
-  return postAction(runId, index, "fork", body, signal).then((raw) => parseEnvelope(raw, parseForkArtifact));
+): Promise<WorkbenchActionResult<TimeTravelArtifact>> {
+  const body = tokenId == null ? { token_piece: token } : { token_piece: token, token_id: tokenId };
+  return postAction(runId, index, "force-token", body, signal).then((raw) =>
+    parseEnvelope(raw, parseTimeTravelArtifact));
+}
+
+export async function materializeTimeTravel(
+  runId: string,
+  artifact: TimeTravelArtifact,
+  signal?: AbortSignal,
+): Promise<JsonRecord> {
+  const experimentId = nonEmptyString(artifact.experiment_id);
+  const armId = nonEmptyString(artifact.arm_id);
+  const observationId = nonEmptyString(artifact.observation_id);
+  if (!experimentId || !armId || !observationId) throw new Error("generated observation is not materializable");
+  const response = await fetch(`/runs/${encodeURIComponent(runId)}/time-travel/materialize`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ experiment_id: experimentId, arm_id: armId, observation_id: observationId }),
+    signal,
+  });
+  const body = record(await response.json().catch(() => ({})));
+  if (!response.ok) throw new WorkbenchActionError(
+    String(body.error || body.reason || `materialization failed (${response.status})`), response.status,
+  );
+  return body;
 }
 
 export function postCausalTraceAction(

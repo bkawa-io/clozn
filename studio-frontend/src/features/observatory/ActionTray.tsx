@@ -1,5 +1,4 @@
-import type { ForkArtifact } from "../../data/api";
-import type { MechanisticDiffArtifact } from "../../data/tokenWorkbench";
+import type { MechanisticDiffArtifact, TimeTravelArtifact } from "../../data/tokenWorkbench";
 import { ACTION_CONFIG, ACTION_ORDER } from "./actionConfig";
 import type { CausalTraceEvidence } from "./layerApi";
 import type { ActionId, ActionState } from "./useTokenWorkbench";
@@ -45,15 +44,33 @@ function pairCompatibilityOperations(report: Record<string, unknown>): Array<{ n
   });
 }
 
-function ActionResult({ id, state }: { id: ActionId; state: ActionState }) {
+function ActionResult({ id, state, onMaterialize }: {
+  id: ActionId;
+  state: ActionState;
+  onMaterialize?: (artifact: TimeTravelArtifact) => void;
+}) {
   if (id === "exact_fork" && (state.phase === "cached" || state.phase === "completed") && state.artifact) {
-    const artifact = state.artifact as ForkArtifact;
+    const artifact = state.artifact as TimeTravelArtifact;
+    const continuation = artifact.continuation && typeof artifact.continuation === "object"
+      ? artifact.continuation : {};
+    const materializable = artifact.status === "completed"
+      && typeof artifact.experiment_id === "string"
+      && typeof artifact.arm_id === "string"
+      && typeof artifact.observation_id === "string";
     return (
-      <p className="action-result">
-        {artifact.child
-          ? `${state.phase === "cached" ? "REUSED" : "CREATED"} CHILD RUN ${artifact.child.id.slice(-8)} -- opening it now`
-          : "no child run was created"}
-      </p>
+      <div className="action-result">
+        <p>
+          {artifact.status === "completed"
+            ? `GENERATED OBSERVATION ${String(artifact.observation_id).slice(-8)} · ${artifact.fidelity ?? artifact.resolution ?? "UNAVAILABLE"}`
+            : `FORCE-TOKEN ${artifact.status.toUpperCase()} · ${String(artifact.reason ?? "no generated evidence")}`}
+        </p>
+        {typeof continuation.generated_suffix_text === "string" && (
+          <p>GENERATED SUFFIX: {continuation.generated_suffix_text}</p>
+        )}
+        {materializable && onMaterialize && (
+          <button type="button" onClick={() => onMaterialize(artifact)}>MATERIALIZE CHILD RUN</button>
+        )}
+      </div>
     );
   }
   if (id === "causal_trace" && (state.phase === "cached" || state.phase === "completed") && state.artifact) {
@@ -107,7 +124,9 @@ function ActionResult({ id, state }: { id: ActionId; state: ActionState }) {
  * rendered by its own type-specific branch above (`ActionResult`) -- the four artifacts are never
  * cross-rendered through a shared summary.
  */
-export function ActionTray({ actions, onRun, onCancel, forkChoiceLabel }: ActionTrayProps) {
+export function ActionTray({ actions, onRun, onCancel, forkChoiceLabel, onMaterialize }: ActionTrayProps & {
+  onMaterialize?: (artifact: TimeTravelArtifact) => void;
+}) {
   return (
     <section className="action-tray" aria-label="Token workbench actions">
       <header className="section-title"><h3>Actions</h3><span>{ACTION_ORDER.length}</span></header>
@@ -152,7 +171,7 @@ export function ActionTray({ actions, onRun, onCancel, forkChoiceLabel }: Action
                   {state.reason}
                 </p>
               )}
-              <ActionResult id={id} state={state} />
+              <ActionResult id={id} state={state} onMaterialize={onMaterialize} />
               <p className="action-undo">{config.undo}</p>
             </article>
           );

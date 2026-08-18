@@ -2,7 +2,7 @@
 Milestone E's GET /runs/<id>/tokens/<index>/workbench is deliberately read-only and computes nothing;
 these four POST routes are its action surface, plus a generic job status/cancel pair.
 
-    POST /runs/<id>/tokens/<index>/fork
+    POST /runs/<id>/tokens/<index>/force-token
     POST /runs/<id>/tokens/<index>/causal-trace
     POST /runs/<id>/tokens/<index>/source-measure
     POST /runs/<id>/tokens/<index>/mechanistic-diff
@@ -15,8 +15,8 @@ own docstring for the full contract):
     202 {"outcome": "job", "job": ...}
     422 {"outcome": "unavailable", "reason": {"code", "message"}}
 plus the ordinary HTTP failure modes: 404 (no such run/job), 400 (bad index/body), 503 (no worker
-reachable at all -- a harder failure than "this action is unavailable", mirroring
-POST /runs/<id>/fork's and POST /runs/<id>/influence-map's own established 503 convention), 429 (job
+reachable at all -- a harder failure than "this action is unavailable", using the shared run-scoped
+model-action convention), 429 (job
 capacity full).
 
 Registered via CLOZN_ROUTE_AUTOLOAD (docs/SEAMS.md Seam 4) -- no edit to clozn/server/app.py. All
@@ -98,7 +98,7 @@ def try_post(h, p, body):
         return True
 
     handlers = {
-        "fork": _fork_action,
+        "force-token": _force_token_action,
         "causal-trace": _causal_trace_action,
         "source-measure": _source_measure_action,
         "mechanistic-diff": _mechanistic_diff_action,
@@ -121,58 +121,84 @@ def try_post(h, p, body):
     return handler(h, run, index, body)
 
 
-# ================================================================================================ fork
-def _fork_action(h, run, index, body):
+# ========================================================================================== force-token
+def _force_token_action(h, run, index, body):
     # The parent run's OWN model selects the worker -- never a client-supplied one -- through the
-    # same shared, router-aware helper POST /runs/<id>/fork uses (clozn.server.routes.fork).
+    # shared, router-aware run-scoped model resolver.
     from clozn.server.model_routing import select_control_model_for_run
     selection = select_control_model_for_run(
-        h, run.get("model"), route="/runs/<id>/tokens/<index>/fork")
+        h, run.get("model"), route="/runs/<id>/tokens/<index>/force-token")
     if selection is None:
         return True   # typed clozn.model-routing.v1 refusal already written
     sub = selection.sub
     if not (sub and getattr(sub, "engine", None)):
-        h._json(503, {"error": "fork requires a ready product model worker"})
+        h._json(503, {"error": "force-token requires a ready product model worker"})
         return True
-
-    import clozn.replay.fork as fork_mod
 
     trace = run.get("trace") or {}
     pieces = trace.get("tokens")
     if not isinstance(pieces, list) or not pieces:
-        h._json(400, {"error": "run has no trace to fork from"})
+        h._json(400, {"error": "run has no recorded token trace"})
         return True
     if index < 0 or index >= len(pieces):
         h._json(400, {
             "error": f"token index {index} out of range (the reply has {len(pieces)} trace tokens)"})
         return True
-    try:
-        forced_piece, _was_recorded = fork_mod.resolve_forced_token(
-            trace, index, token=body.get("token"), token_id=body.get("token_id"))
-    except ValueError as exc:
-        h._json(400, {"error": str(exc)})
+    token_piece = body.get("token_piece", body.get("token"))
+    if token_piece is not None and (not isinstance(token_piece, str) or not token_piece):
+        h._json(400, {"error": "token_piece must be a non-empty string"})
+        return True
+    token_id = body.get("token_id")
+    if token_id is not None and (isinstance(token_id, bool) or not isinstance(token_id, int) or token_id < 0):
+        h._json(400, {"error": "token_id must be a non-negative integer"})
+        return True
+    if token_piece is None and token_id is None:
+        h._json(400, {"error": "force-token requires token_id or token_piece"})
+        return True
+    alternatives = trace.get("alternatives") if isinstance(trace.get("alternatives"), list) else []
+    pairs = alternatives[index] if index < len(alternatives) and isinstance(alternatives[index], list) else []
+    recorded_id = trace.get("token_ids")[index] if isinstance(trace.get("token_ids"), list) and index < len(trace.get("token_ids")) else None
+    recorded_piece = pieces[index]
+    matched_piece = None
+    if token_id is not None:
+        for item in pairs:
+            if not isinstance(item, dict):
+                continue
+            item_id = item.get("token_id", item.get("id"))
+            item_piece = item.get("piece", item.get("text"))
+            if item_id == token_id:
+                matched_piece = item_piece
+                break
+        if matched_piece is None and token_id == recorded_id:
+            matched_piece = recorded_piece
+        if matched_piece is None and token_piece is None:
+            h._json(400, {"error": f"token_id {token_id} is not recorded at position {index}"})
+            return True
+        if matched_piece is not None and token_piece is not None and token_piece != matched_piece:
+            h._json(400, {"error": "token_id and token_piece identify different recorded tokens"})
+            return True
+        if token_piece is None:
+            token_piece = matched_piece
+    max_new = body.get("max_new", 32)
+    if isinstance(max_new, bool) or not isinstance(max_new, int) or max_new < 0:
+        h._json(400, {"error": "max_new must be a non-negative integer"})
         return True
 
-    import clozn.runs.store as runlog
-    from clozn.runs.token_workbench_actions import find_cached_fork_child, fork_worker
-
-    related = list(runlog.iter_runs(limit=200))
-    cached = find_cached_fork_child(related, run["id"], index, forced_piece)
-    if cached is not None:
-        h._json(200, {"outcome": "cached", "artifact": cached})
-        return True
-
-    from clozn.server.routes.execution_fork import _identity_facts
-
-    runtime_identity, worker_identity, _engine = _identity_facts(selection)
-    worker = fork_worker(
-        run, sub, index, token=body.get("token"), token_id=body.get("token_id"),
-        runtime_identity=runtime_identity, worker_identity=worker_identity)
+    if selection.runtime_key is not None:
+        runtime_identity = dict(selection.runtime_key)
+        worker_identity = dict(selection.worker_identity) if selection.worker_identity is not None else None
+    else:
+        from clozn.experiments.execution_facts import selection_identity_facts
+        runtime_identity, worker_identity, _engine = selection_identity_facts(selection)
+    from clozn.runs.token_workbench_actions import force_token_worker
+    worker = force_token_worker(
+        run, sub, index, token_piece=token_piece, token_id=token_id,
+        max_new=max_new, runtime_identity=runtime_identity, worker_identity=worker_identity)
 
     from clozn.server.influence_jobs import JOBS, JobCapacityError
 
     try:
-        job = JOBS.start(run["id"], worker, kind="fork")
+        job = JOBS.start(run["id"], worker, kind="force_token")
     except JobCapacityError as exc:
         h._json(429, {"error": str(exc)})
         return True
@@ -228,11 +254,14 @@ def _causal_trace_action(h, run, index, body):
         return True
 
     from clozn.server.routes.causal_trace import _engine_base
-    from clozn.server.routes.execution_fork import _identity_facts
     from clozn.runs.token_workbench_actions import (
         CAUSAL_TRACE_METHOD_VERSION, action_cache_key, causal_trace_worker, find_cached_action)
 
-    runtime_identity, _worker_identity, _engine = _identity_facts(selection)
+    if selection.runtime_key is not None:
+        runtime_identity = dict(selection.runtime_key)
+    else:
+        from clozn.experiments.execution_facts import selection_identity_facts
+        runtime_identity, _worker_identity, _engine = selection_identity_facts(selection)
     params = {"seed": seed, "screen_mode": screen_mode, "contrast": contrast}
     cache_key = action_cache_key(
         run, index, "causal_trace", CAUSAL_TRACE_METHOD_VERSION, params,

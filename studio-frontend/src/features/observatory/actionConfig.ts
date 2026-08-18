@@ -24,18 +24,14 @@ export interface ActionConfig {
 export const ACTION_CONFIG: Record<ActionId, ActionConfig> = {
   exact_fork: {
     id: "exact_fork",
-    label: "FORK",
+    label: "FORCE TOKEN",
     changesExecution: true,
-    produces: "child_run",
-    cost: "one checkpoint restore (or, when unavailable, a text-splice reconstruction) plus one "
-      + "generation step on the current worker",
-    claimBoundary: "creates a new immutable run continuing from this token with a different piece forced "
-      + "-- an exact execution fork restores exact KV state; a reconstructed replay re-tokenizes a text "
-      + "splice and is not guaranteed to run on the exact recorded token ids (see the outcome panel for "
-      + "which one happened)",
-    undo: "no undo -- the created run is a permanent record; cancelling before it finishes only stops "
-      + "this Studio from reporting on it (the request already sent may still complete and be saved as "
-      + "a child run you did not see appear)",
+    produces: "evidence_artifact",
+    cost: "one canonical Generate experiment from the selected answer-token boundary",
+    claimBoundary: "records a counterfactual continuation as a GeneratedObservation; exact fidelity is "
+      + "reported only after the unchanged control proves it",
+    undo: "no undo needed -- this is standalone evidence; use MATERIALIZE CHILD RUN explicitly when "
+      + "you want to promote the generated observation into lineage",
   },
   causal_trace: {
     id: "causal_trace",

@@ -26,7 +26,7 @@ exact_fork/source_measurement/causal_trace/mechanistic_diff into one shared shap
     replaying, read-only, the SAME pure structural preconditions
     ``clozn.replay.checkpoint_capture.capture_parent_checkpoint`` checks before it ever touches a
     worker (composed via that module's private ``_trace_history``/``_sampler``/``_steering`` helpers,
-    so this preview cannot drift from what the real POST /runs/<id>/fork will actually accept).
+    so this preview cannot drift from the canonical force-token action's exact preconditions).
   * ``source_measurement``  -- {available, status, reason?, action?}. ``status`` is
     clozn.run-investigation.v1's OWN ``prompt_source_influence`` section state, carried verbatim.
   * ``causal_trace``        -- {available, status, reason?, action?}. There is no persisted native
@@ -63,7 +63,7 @@ def _workbench_action(method: str, href: str, *, request_body: dict | None = Non
 
     Every capability's `action` points at a REAL, live Milestone F endpoint
     (clozn/server/routes/token_workbench_actions.py) as of this module's Milestone F update -- not the
-    pre-Milestone-F routes those actions used to describe (POST /runs/<id>/fork,
+    pre-Milestone-F routes those actions used to describe (the legacy fork route,
     POST /runs/<id>/causal-trace, POST /runs/<id>/influence-map/jobs), which remain live but are no
     longer what this preview recommends."""
     out: dict[str, Any] = {"method": method, "href": href}
@@ -224,13 +224,13 @@ def _comparison_section(
 
 # ---------------------------------------------------------------------------------------- capabilities
 def _exact_fork_capability(run: Mapping[str, Any], index: int, *, worker_ready: bool) -> dict:
-    """A cheap PREVIEW of whether POST /runs/<id>/fork could reach the exact_execution_fork outcome.
+    """A cheap PREVIEW of whether the observation-first force-token action is requestable.
 
     Composes clozn.replay.checkpoint_capture's own pure precondition helpers (never its network-calling
     capture_parent_checkpoint) so this preview cannot silently drift from what that route actually
     accepts. It is a preview, not authoritative: the POST route re-validates independently and is the
     only thing allowed to actually capture a checkpoint."""
-    action = _workbench_action("POST", f"/runs/{run.get('id')}/tokens/{index}/fork")
+    action = _workbench_action("POST", f"/runs/{run.get('id')}/tokens/{index}/force-token")
     if not worker_ready:
         return {
             "available": False, "snapshot_state": "worker_unreachable",

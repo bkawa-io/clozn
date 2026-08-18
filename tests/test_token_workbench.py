@@ -223,7 +223,7 @@ def test_exact_fork_available_for_an_organic_run_with_a_ready_worker():
         "snapshot_state": "not_attempted",
         # Milestone F: points at the token-workbench action endpoint, not the pre-Milestone-F
         # /runs/<id>/fork route (still live, but no longer what this preview recommends).
-        "action": {"method": "POST", "href": "/runs/run_current/tokens/1/fork"},
+        "action": {"method": "POST", "href": "/runs/run_current/tokens/1/force-token"},
     }
 
 

@@ -7,7 +7,7 @@ import {
   loadTokenWorkbench,
   loadWorkbenchJob,
   postCausalTraceAction,
-  postForkAction,
+  postForceTokenAction,
   postMechanisticDiffAction,
   postSourceMeasureAction,
   type WorkbenchDocument,
@@ -20,7 +20,7 @@ vi.mock("../../data/tokenWorkbench", async (importOriginal) => {
   return {
     ...actual,
     loadTokenWorkbench: vi.fn(),
-    postForkAction: vi.fn(),
+    postForceTokenAction: vi.fn(),
     postCausalTraceAction: vi.fn(),
     postSourceMeasureAction: vi.fn(),
     postMechanisticDiffAction: vi.fn(),
@@ -30,7 +30,7 @@ vi.mock("../../data/tokenWorkbench", async (importOriginal) => {
 });
 
 const loadDoc = vi.mocked(loadTokenWorkbench);
-const forkAction = vi.mocked(postForkAction);
+const forkAction = vi.mocked(postForceTokenAction);
 const causalAction = vi.mocked(postCausalTraceAction);
 const sourceAction = vi.mocked(postSourceMeasureAction);
 const diffAction = vi.mocked(postMechanisticDiffAction);
@@ -181,7 +181,7 @@ describe("a stale workbench response can never overwrite a newer selection", () 
 });
 
 describe("action outcomes", () => {
-  test("exact_fork reaching cached navigates via onSelectRun", async () => {
+  test("exact_fork reaching cached retains the generated observation without navigation", async () => {
     const data = run("run-a");
     loadDoc.mockResolvedValue(doc(0, {
       capabilities: {
@@ -194,8 +194,12 @@ describe("action outcomes", () => {
     forkAction.mockResolvedValue({
       outcome: "cached",
       artifact: {
-        outcome: { kind: "reconstructed_replay", reasons: [], exactness: {}, unavoidableDifferences: [], retokenized: true },
-        child: { id: "child-1", parentId: "run-a", note: "reused" },
+        schema_version: "clozn.time-travel-result.v1",
+        run_id: "run-a",
+        status: "completed",
+        experiment_id: "exp-1",
+        arm_id: "arm-1",
+        observation_id: "obs-1",
       },
     });
     const onSelectRun = vi.fn();
@@ -204,7 +208,7 @@ describe("action outcomes", () => {
 
     act(() => result.current.runAction("exact_fork"));
     await waitFor(() => expect(result.current.actions.exact_fork.phase).toBe("cached"));
-    expect(onSelectRun).toHaveBeenCalledWith("child-1");
+    expect(onSelectRun).not.toHaveBeenCalled();
   });
 
   test("causal_trace reaching a completed job polls to completion", async () => {

@@ -4,16 +4,15 @@ actions.py is the thin HTTP surface over this module.
 
 THE CONTRACT
 ------------
-Every action (fork / causal-trace / source-measure / mechanistic-diff) resolves to exactly ONE of three
+Every action (force-token / causal-trace / source-measure / mechanistic-diff) resolves to exactly ONE of three
 shapes -- never a bare error, never a silent no-op, never a 200 hiding "nothing happened":
   1. `{"outcome": "cached", "artifact": ...}`   -- already computed for this exact identity.
   2. `{"outcome": "job", "job": ...}`           -- long-running work started (poll/cancel by job_id).
   3. `{"outcome": "unavailable", "reason": {"code", "message"}}` -- typed, never a bare false.
 The route layer builds this envelope; this module supplies the artifact/job-worker/refusal each action
 actually needs, composing existing producers rather than reimplementing them:
-  * fork              -> clozn.replay.fork.compat_fork (already returns exact_execution_fork /
-                         reconstructed_replay / unavailable -- that vocabulary rides through untouched
-                         as a job's `result`, never renamed).
+  * force-token       -> clozn.recipes.time_travel.run_time_travel, returning a
+                         GeneratedObservation-backed result without creating a child Run.
   * causal-trace       -> clozn.analysis.tracer.trace, the SAME computation POST /runs/<id>/causal-trace
                          already runs synchronously (composed read-only; that route is unchanged).
   * source-measure     -> clozn.server.routes.influence_map's own job worker + cache_matches (composed
@@ -36,9 +35,8 @@ method's own version tag (bump it if that method's default behavior changes mate
 request parameters, and the CURRENT worker's runtime identity (a causal trace against a different
 engine build is not the same evidence). Cached causal-trace results are persisted on the run itself
 (`run["token_workbench_actions"]`, schema `clozn.token-workbench-action.v1`) so a repeat request -- even
-from a different process -- is a cache hit, never a recompute. fork's cache is its own already-durable
-child runs (an existing child with the same parent + position + forced piece IS the cached artifact;
-no separate cache entry duplicates it). source-measure reuses influence-map's own persisted
+from a different process -- is a cache hit, never a recompute. force-token has no Workbench child cache;
+the ObservationStore is its only reusable evidence authority. source-measure reuses influence-map's own persisted
 `run["influence_map"]` + `cache_matches` verbatim. mechanistic-diff's cache includes both run
 fingerprints, the capture grid, top-k request, and tensor-retention policy.
 
@@ -56,7 +54,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from contextlib import contextmanager
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping
 
 SCHEMA_VERSION = "clozn.token-workbench-action.v1"
 CAUSAL_TRACE_METHOD_VERSION = "causal_trace.v1"
@@ -167,76 +165,50 @@ def store_action_result(run_id: str, entry: Mapping[str, Any]) -> bool:
     return runlog.replace_run(updated)
 
 
-# =================================================================================== fork's own cache
-def _forced_piece_from_child(child: Mapping[str, Any]) -> tuple[Any, str] | None:
-    """(position, forced piece text) a child run's OWN changes_applied already recorded, reading
-    EITHER the legacy splice shape (`changes.fork`) or the exact-execution-fork shape
-    (`changes.execution_fork`) -- fork's two regimes record the forced piece under different keys, but
-    both keep it, so this is not a guess."""
-    changes = child.get("changes_applied")
-    if not isinstance(changes, Mapping):
-        return None
-    legacy = changes.get("fork")
-    if isinstance(legacy, Mapping) and "position" in legacy:
-        return legacy.get("position"), str(legacy.get("token", ""))
-    exact = changes.get("execution_fork")
-    if isinstance(exact, Mapping):
-        intervention = exact.get("intervention")
-        piece = intervention.get("token_piece") if isinstance(intervention, Mapping) else None
-        return exact.get("position"), str(piece or "")
-    return None
-
-
-def find_cached_fork_child(
-    related_runs: Sequence[Mapping[str, Any]], parent_run_id: str, position: int, forced_piece: str,
-) -> dict | None:
-    """An existing child run already produced by forcing the SAME piece at the SAME position on this
-    parent. Fork's own cache IS its already-durable children -- runlog.record makes every fork
-    immutable and persistent already, so no separate cache entry would do anything but duplicate it."""
-    for candidate in related_runs:
-        if not isinstance(candidate, Mapping) or candidate.get("parent_run_id") != parent_run_id:
-            continue
-        if _forced_piece_from_child(candidate) == (position, forced_piece):
-            return deepcopy(dict(candidate))
-    return None
-
-
 # ========================================================================================= job workers
-def fork_worker(
-    run: Mapping[str, Any], sub, index: int, *, token=None, token_id=None,
+def force_token_worker(
+    run: Mapping[str, Any], sub, index: int, *, token_piece: str | None = None, token_id: int | None = None,
     runtime_identity: Mapping[str, Any] | None, worker_identity: Mapping[str, Any] | None,
+    max_new: int = 32,
 ) -> Callable:
-    """The JobControl-shaped `worker(control)` callable for a fork job: composes
-    clozn.replay.fork.compat_fork() read-only. Whatever outcome compat_fork reaches
-    (exact_execution_fork / reconstructed_replay / unavailable) becomes this job's `result` VERBATIM --
-    this function never re-labels it. compat_fork has no cooperative cancellation hook (each of its
-    worker round trips is one blocking call), so a cancel request here is honored at the STATE level:
-    clozn.server.influence_jobs's own generic post-call check still reports "cancelled" rather than
-    "completed" and skips persistence, but the call already in flight keeps running to completion in
-    its own thread -- the same caveat causal_trace_worker documents below."""
+    """Run one Workbench ForceToken arm through the canonical time-travel recipe.
+
+    This worker attaches a TimeTravelResult to the shared job only. It never calls a legacy fork
+    executor and never persists a child Run; promotion is an explicit `/time-travel/materialize`
+    request handled by the generic materializer.
+    """
 
     def worker(control):
-        import clozn.replay.fork as fork_mod
+        from clozn.experiments.persistence import ObservationStore
+        from clozn.recipes.time_travel import checkpoint_reference_from_pin, run_time_travel
+        from clozn.server.influence_jobs import JobCancelled
 
-        control.checkpoint(phase="forking", completed=0, total=1)
+        control.checkpoint(phase="resolving", completed=0, total=1)
+        if control.cancel_requested():
+            raise JobCancelled("force-token job cancelled before generation")
+
+        # A durable pin is a read-only exact-state input. Do not capture a fresh checkpoint here:
+        # that would be an untracked execution and would recreate the old fork orchestration.
+        checkpoint = None
         try:
-            child = fork_mod.compat_fork(
-                run, sub, index, token=token, token_id=token_id,
-                runtime_identity=runtime_identity, worker_identity=worker_identity)
-        except ValueError as exc:
-            # The route validates position/token BEFORE ever starting a job; a ValueError reaching
-            # here is a genuine internal inconsistency, not a client input error -- an honest job
-            # failure, never silently swallowed.
-            return {"state": "failed", "error": {
-                "code": "fork_job_invalid_request", "message": str(exc)}}
-        control.checkpoint(phase="validating", completed=1, total=1)
-        if child is None:
-            return {"state": "failed", "error": {
-                "code": "fork_job_failed",
-                "message": (
-                    "fork failed (generation error, or the run's prompt could not be reconstructed)"),
-            }}
-        control.attach_result(child)
+            from clozn.replay.checkpoint_pin_store import resolve_pin
+            checkpoint = checkpoint_reference_from_pin(
+                resolve_pin(run.get("id")), run_id=str(run.get("id") or ""),
+            )
+        except Exception:
+            checkpoint = None
+
+        control.checkpoint(phase="generating", completed=0, total=1)
+        import clozn.runs.store as runlog
+        result = run_time_travel(
+            run, position=index, token_id=token_id, token_piece=token_piece, max_new=max_new,
+            policy="exact_preferred", checkpoint=checkpoint,
+            runtime_identity=runtime_identity, worker_identity=worker_identity,
+            substrate=sub, run_loader=runlog.get_run, observation_store=ObservationStore(),
+            cancel=control.cancel_requested,
+        )
+        control.checkpoint(phase="recording", completed=1, total=1)
+        control.attach_result(result.to_dict())
         return {"state": "completed"}
 
     return worker
@@ -251,7 +223,7 @@ def causal_trace_worker(
     runs synchronously (that route is unchanged; this is an independent second caller of the same
     function). tracer.trace() accepts no cancel_requested/progress callback, so it cannot be
     cooperatively interrupted mid-trace; cancellation is honored at the job-STATE level only (see
-    fork_worker's docstring for the identical caveat) -- a cancelled job never reports "completed" and
+    the force-token worker's job-level cancellation boundary -- a cancelled job never reports "completed" and
     never persists its result, even though the trace itself keeps running to completion in the
     background."""
     run_id = str(run.get("id") or "")

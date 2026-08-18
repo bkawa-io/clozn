@@ -140,55 +140,140 @@ def _wait_for_job(run_id, job_id, states, timeout=2.0):
     pytest.fail(f"job did not reach {states}; last={last}")
 
 
-# =================================================================================== fork
-def test_fork_starts_a_job_that_completes_and_embeds_compat_forks_own_outcome(stores):
+# =================================================================================== force-token
+def test_force_token_starts_an_observation_job_without_creating_a_child_run(stores):
     run = _organic_run()
     sub = FakeSub()
-    claimed, h = _post(sub, run["id"], 1, "fork", {"position": 1, "token_id": 44})
+    before = len(list(runlog.iter_runs()))
+    claimed, h = _post(sub, run["id"], 1, "force-token", {"token_id": 44})
 
     assert claimed is True
     assert h.status == 202
     assert h.body["outcome"] == "job"
-    assert h.body["job"]["kind"] == "fork"
+    assert h.body["job"]["kind"] == "force_token"
     final = _wait_for_job(run["id"], h.body["job"]["job_id"], {"completed", "failed", "cancelled"})
     assert final["state"] == "completed"
-    assert final["result"]["outcome"] == "reconstructed_replay"   # no exact checkpoint machinery here
-    assert final["result"]["parent_run_id"] == run["id"]
+    assert final["result"]["schema_version"] == "clozn.time-travel-result.v1"
+    assert final["result"]["status"] == "completed"
+    assert final["result"]["operation"]["kind"] == "force_token"
+    assert final["result"]["observation_id"]
+    assert final["result"]["continuation"]["fidelity"]["classification"] == "reconstructed_replay"
+    assert len(list(runlog.iter_runs())) == before
 
 
-def test_fork_repeat_request_hits_the_cache_not_a_new_job(stores):
+def test_force_token_repeat_request_reuses_kernel_observation_without_child_cache(stores):
     run = _organic_run()
     sub = FakeSub()
-    _claimed, h = _post(sub, run["id"], 1, "fork", {"position": 1, "token_id": 44})
+    _claimed, h = _post(sub, run["id"], 1, "force-token", {"token_id": 44})
     first = _wait_for_job(run["id"], h.body["job"]["job_id"], {"completed"})
-    child_id = first["result"]["id"]
+    observation_id = first["result"]["observation_id"]
 
-    claimed2, h2 = _post(sub, run["id"], 1, "fork", {"position": 1, "token_id": 44})
+    claimed2, h2 = _post(sub, run["id"], 1, "force-token", {"token_id": 44})
     assert claimed2 is True
-    assert h2.status == 200
-    assert h2.body["outcome"] == "cached"
-    assert h2.body["artifact"]["id"] == child_id
+    assert h2.status == 202
+    second = _wait_for_job(run["id"], h2.body["job"]["job_id"], {"completed"})
+    assert second["result"]["observation_id"] == observation_id
 
 
-def test_fork_no_engine_is_a_hard_503_not_the_three_way_contract(stores):
+def test_force_token_materializes_explicitly_without_regeneration(stores):
+    run = _organic_run()
+    engine = FakeEngine()
+    sub = FakeSub(engine)
+    before = len(list(runlog.iter_runs()))
+
+    claimed, h = _post(sub, run["id"], 1, "force-token", {"token_id": 44})
+    assert claimed is True
+    final = _wait_for_job(run["id"], h.body["job"]["job_id"], {"completed"})
+    calls_before_materialization = len(engine.calls)
+
+    from clozn.experiments.persistence import ObservationStore
+    from clozn.recipes.time_travel import TimeTravelResult, materialize_time_travel
+
+    materialized = materialize_time_travel(
+        run, TimeTravelResult.from_dict(final["result"]),
+        observation_store=ObservationStore(), reload_parent=runlog.get_run,
+    )
+
+    assert materialized["state"] == "completed"
+    assert len(engine.calls) == calls_before_materialization
+    assert len(list(runlog.iter_runs())) == before + 1
+    child = runlog.get_run(materialized["child_run_id"])
+    assert child["parent_run_id"] == run["id"]
+    assert child["changes_applied"]["experiment"]["observation_id"] == final["result"]["observation_id"]
+
+
+def test_force_token_route_does_not_leave_a_legacy_fork_alias(stores):
+    run = _organic_run()
+    claimed, _handler = _post(FakeSub(), run["id"], 1, "fork", {"token_id": 44})
+    assert claimed is False
+
+
+def test_force_token_cancellation_does_not_publish_evidence_or_create_a_run(stores):
+    run = _organic_run()
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingEngine(FakeEngine):
+        def complete(self, prompt, **params):
+            started.set()
+            release.wait(2)
+            return super().complete(prompt, **params)
+
+    sub = FakeSub(BlockingEngine())
+    before = len(list(runlog.iter_runs()))
+    claimed, h = _post(sub, run["id"], 1, "force-token", {"token_id": 44})
+    assert claimed is True
+    job_id = h.body["job"]["job_id"]
+    assert started.wait(2)
+
+    cancel_handler = Handler()
+    assert route.try_post(cancel_handler, f"/runs/{run['id']}/tokens/1/jobs/{job_id}/cancel", {}) is True
+    assert cancel_handler.body["cancel_accepted"] is True
+    release.set()
+    final = _wait_for_job(run["id"], job_id, {"cancelled", "failed"})
+
+    assert final["state"] == "cancelled"
+    assert "result" not in final
+    assert len(list(runlog.iter_runs())) == before
+
+
+def test_force_token_generation_failure_publishes_no_child_run(stores):
+    run = _organic_run()
+    before = len(list(runlog.iter_runs()))
+
+    class FailingEngine(FakeEngine):
+        def complete(self, prompt, **params):
+            self.calls.append(dict(params, prompt=prompt))
+            raise RuntimeError("fixture generation failure")
+
+    claimed, h = _post(FakeSub(FailingEngine()), run["id"], 1, "force-token", {"token_id": 44})
+    assert claimed is True
+    final = _wait_for_job(run["id"], h.body["job"]["job_id"], {"completed", "failed"})
+
+    assert final["state"] == "completed"
+    assert final["result"]["status"] == "failed"
+    assert len(list(runlog.iter_runs())) == before
+
+
+def test_force_token_no_engine_is_a_hard_503_not_the_three_way_contract(stores):
     run = _organic_run()
 
     class NoEngine:
         engine = None
 
-    claimed, h = _post(NoEngine(), run["id"], 1, "fork", {"position": 1, "token": "x"})
+    claimed, h = _post(NoEngine(), run["id"], 1, "force-token", {"position": 1, "token_piece": "x"})
     assert claimed is True
     assert h.status == 503
 
 
-def test_fork_bad_index_and_bad_token_are_400(stores):
+def test_force_token_bad_index_and_bad_token_are_400(stores):
     run = _organic_run()
     sub = FakeSub()
-    claimed, h = _post(sub, run["id"], 99, "fork", {"position": 99, "token": "x"})
+    claimed, h = _post(sub, run["id"], 99, "force-token", {"token_piece": "x"})
     assert claimed is True and h.status == 400
     assert "out of range" in h.body["error"]
 
-    claimed2, h2 = _post(sub, run["id"], 1, "fork", {"position": 1})
+    claimed2, h2 = _post(sub, run["id"], 1, "force-token", {})
     assert claimed2 is True and h2.status == 400
 
 
@@ -599,7 +684,7 @@ def test_every_action_reaches_one_of_the_three_outcomes(stores, monkeypatch):
     })
 
     for action, body in (
-        ("fork", {"position": 1, "token_id": 44}),
+        ("force-token", {"token_id": 44}),
         ("causal-trace", {}),
         ("source-measure", {}),
         ("mechanistic-diff", {}),

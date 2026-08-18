@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { parseForkArtifact, type ForkArtifact } from "../../data/api";
 import type { ObservatoryData, RuntimeState } from "../../data/types";
 import {
   cancelWorkbenchJob,
   JOB_TERMINAL_STATES,
   loadTokenWorkbench,
   loadWorkbenchJob,
+  materializeTimeTravel,
   postCausalTraceAction,
-  postForkAction,
+  postForceTokenAction,
   postMechanisticDiffAction,
   postSourceMeasureAction,
   parseMechanisticDiffArtifact,
@@ -17,6 +17,7 @@ import {
   type WorkbenchCapabilities,
   type WorkbenchDocument,
   type WorkbenchJob,
+  type TimeTravelArtifact,
 } from "../../data/tokenWorkbench";
 import { parseCausalTraceEvidence, type CausalTraceEvidence } from "./layerApi";
 import type { ScopeSelectionState, ScopeUrlState, ScopeView } from "./urlState";
@@ -24,8 +25,8 @@ import type { ScopeSelectionState, ScopeUrlState, ScopeView } from "./urlState";
 /**
  * The ONE authority for "which token of which run, seen against which optional reference run, in which
  * view" -- Milestone E's replacement for ObservatoryWorkspace's five previously scattered `useState`
- * calls (selectedToken / selectedLayer / variantReferenceId / view / forkToken), plus Milestone F's
- * generic action-tray state machine (fork / causal-trace / source-measure / mechanistic-diff), all in one
+ * calls (selectedToken / selectedLayer / variantReferenceId / view / forkToken), plus the Workbench
+ * action-tray state machine (force-token / causal-trace / source-measure / mechanistic-diff), all in one
  * hook so a token selection and an action's lifecycle can never drift out of sync with each other.
  *
  * THE CENTRAL RULE THIS FILE ENFORCES
@@ -34,7 +35,7 @@ import type { ScopeSelectionState, ScopeUrlState, ScopeView } from "./urlState";
  * backend guarantees triggers no computation (see clozn/runs/token_workbench.py). No action ever starts
  * from a selection change -- `runAction` is only ever called from an explicit user click in ActionTray.
  * A stale response for a superseded selection is guarded by one monotonic request-id ref, the same
- * pattern scope.tsx already used for run/fork races (see that file's own doc comment).
+ * pattern scope.tsx already used for run/action races (see that file's own doc comment).
  */
 
 // ------------------------------------------------------------------------------------------- selection
@@ -115,7 +116,7 @@ export const ACTION_IDS = ["exact_fork", "causal_trace", "source_measurement", "
 export type ActionId = (typeof ACTION_IDS)[number];
 
 export interface ActionArtifactMap {
-  exact_fork: ForkArtifact;
+  exact_fork: TimeTravelArtifact;
   causal_trace: CausalTraceEvidence;
   source_measurement: Record<string, unknown>;
   mechanistic_diff: MechanisticDiffArtifact;
@@ -137,15 +138,13 @@ export interface ActionState {
   nativeStatus?: string;
   reason?: string;
   job?: WorkbenchJob;
-  artifact?: ForkArtifact | CausalTraceEvidence | MechanisticDiffArtifact | Record<string, unknown>;
+  artifact?: TimeTravelArtifact | CausalTraceEvidence | MechanisticDiffArtifact | Record<string, unknown>;
   pairCompatibility?: Record<string, unknown>;
 }
 
 export interface ForkOutcomeBanner {
   parentId: string;
-  childId: string;
-  note?: string;
-  artifact: ForkArtifact;
+  artifact: TimeTravelArtifact;
 }
 
 function unavailableAction(reason: string, nativeStatus?: string): ActionState {
@@ -214,13 +213,12 @@ function describeActionError(error: unknown): string {
   return error instanceof Error ? error.message : "the action request failed";
 }
 
-/** The fork job worker attaches the created child run record itself as `job.result` (see
- * clozn.runs.token_workbench_actions.fork_worker's `control.attach_result(child)`) -- the exact same
- * shape `parseForkArtifact` already decodes for the cached branch and for the legacy POST /runs/<id>/fork
- * response, so a completed job reuses it verbatim. */
-function decodeForkJobResult(result: unknown): ForkArtifact | undefined {
+/** The force-token worker attaches the canonical TimeTravelResult; no child Run is present here. */
+function decodeForceTokenJobResult(result: unknown): TimeTravelArtifact | undefined {
   try {
-    return parseForkArtifact(result);
+    const value = result && typeof result === "object" ? result as Record<string, unknown> : {};
+    if (value.schema_version !== "clozn.time-travel-result.v1") return undefined;
+    return value as TimeTravelArtifact;
   } catch {
     return undefined;
   }
@@ -253,13 +251,11 @@ export interface UseTokenWorkbenchOptions {
   runtime: RuntimeState;
   initialState?: ScopeUrlState;
   onStateChange?: (state: ScopeSelectionState) => void;
-  /** Fork's own navigation IS run selection -- a successful fork just created a new immutable run, so
-   * this reuses whatever the caller already uses to load a different run (ScopePanel's `selectRun`)
-   * rather than the token workbench inventing a second navigation path. */
+  /** Explicit materialization uses the ordinary run-selection callback after the evidence has been
+   * promoted by the canonical materializer. */
   onSelectRun: (runId: string) => void;
-  /** Reported once a fork action reaches `cached`/`completed` with a child -- the caller decides how
-   * long to keep showing it (Observatory keeps it alive across the run-change remount that
-   * `onSelectRun` triggers; see Observatory.tsx). */
+  /** Reported once a force-token action reaches `completed`; the callback is evidence-only and never
+   * implies that a child Run exists. */
   onForkOutcome?: (banner: ForkOutcomeBanner) => void;
 }
 
@@ -283,14 +279,14 @@ export function useTokenWorkbench({
   // One monotonic id per SELECTION (run id + token index + reference id). Every async effect below --
   // the workbench GET, every action's job poll -- captures its own value and checks it before writing
   // state, so a response for a superseded selection can never land on top of a newer one (the same
-  // pattern scope.tsx's own requestIdRef already uses for run/fork races).
+  // pattern scope.tsx's own requestIdRef already uses for run/action races).
   const selectionRequestId = useRef(0);
   const actionControllers = useRef<Partial<Record<ActionId, AbortController>>>({});
   // The requestId check above only catches staleness WITHIN one mounted instance of this hook. A run
   // switch remounts the whole workspace (Observatory.tsx's `key={resetKey}`) -- when that happens THIS
   // instance is discarded outright, its own selectionRequestId ref frozen forever at whatever it last
   // was, so the requestId comparison alone could still pass and let an in-flight action's callback (most
-  // dangerously `onSelectRun` for a fork) fire into a world that has moved on. `mountedRef` closes that
+  // dangerously `onSelectRun` after materialization) fire into a world that has moved on. `mountedRef` closes that
   // gap: every external callback this hook can invoke asynchronously checks it first.
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -436,20 +432,9 @@ export function useTokenWorkbench({
     const index = selection.token;
     setActionState(id, { phase: "running" });
 
-    function reportForkArtifact(artifact: ForkArtifact | undefined) {
-      // `mountedRef` (not just the requestId check already applied by every caller of this function) --
-      // a run switch can remount this whole hook instance while this fork's request is still in flight;
-      // once that happens, this closure must never navigate the NEW instance's world on the old one's
-      // behalf. See mountedRef's own doc comment above for why the requestId check alone cannot catch
-      // this case.
-      if (!mountedRef.current || !artifact?.child) return;
-      onForkOutcome?.({
-        parentId: artifact.child.parentId || runId,
-        childId: artifact.child.id,
-        note: artifact.child.note,
-        artifact,
-      });
-      onSelectRun(artifact.child.id);
+    function reportForceTokenArtifact(artifact: TimeTravelArtifact | undefined) {
+      if (!mountedRef.current || !artifact) return;
+      onForkOutcome?.({ parentId: runId, artifact });
     }
 
     if (id === "exact_fork") {
@@ -460,11 +445,11 @@ export function useTokenWorkbench({
         setActionState(id, { phase: "error", reason: "no candidate token is available to fork" });
         return;
       }
-      void postForkAction(runId, index, choice.piece, choice.tokenId).then((envelope) => {
+      void postForceTokenAction(runId, index, choice.piece, choice.tokenId).then((envelope) => {
         if (selectionRequestId.current !== requestId) return;
         if (envelope.outcome === "cached") {
           setActionState(id, { phase: "cached", artifact: envelope.artifact });
-          reportForkArtifact(envelope.artifact);
+          reportForceTokenArtifact(envelope.artifact);
           return;
         }
         if (envelope.outcome === "unavailable") {
@@ -472,8 +457,8 @@ export function useTokenWorkbench({
           return;
         }
         setActionState(id, { phase: "running", job: envelope.job });
-        void pollJob(id, requestId, runId, index, envelope.job, decodeForkJobResult, (artifact) => {
-          reportForkArtifact(artifact as ForkArtifact | undefined);
+        void pollJob(id, requestId, runId, index, envelope.job, decodeForceTokenJobResult, (artifact) => {
+          reportForceTokenArtifact(artifact as TimeTravelArtifact | undefined);
         });
       }).catch((error) => setActionState(id, { phase: "error", reason: describeActionError(error) }));
       return;
@@ -553,6 +538,23 @@ export function useTokenWorkbench({
     });
   }, [data.id, selection.token]);
 
+  const materializeTokenBranch = useCallback(async (artifact: TimeTravelArtifact) => {
+    if (artifact.status !== "completed") return;
+    try {
+      const result = await materializeTimeTravel(data.id, artifact);
+      const childId = typeof result.child_run_id === "string" ? result.child_run_id : "";
+      if (!childId) throw new Error("materialization returned no child run id");
+      if (mountedRef.current) onSelectRun(childId);
+    } catch (error) {
+      if (mountedRef.current) {
+        setActionState("exact_fork", {
+          phase: "error",
+          reason: describeActionError(error),
+        });
+      }
+    }
+  }, [data.id, onSelectRun, setActionState]);
+
   return {
     selection: { ...selection, view: activeView },
     setView,
@@ -564,6 +566,7 @@ export function useTokenWorkbench({
     actions,
     runAction,
     cancelAction,
+    materializeTokenBranch,
     forkChoice,
     setForkChoice,
   };

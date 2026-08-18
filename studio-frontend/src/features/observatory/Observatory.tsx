@@ -5,7 +5,6 @@ import { workbenchComparisonDifferenceCount, workbenchComparisonFindings, workbe
 import { alignTokens } from "../compare/alignment";
 import { ActionTray } from "./ActionTray";
 import { ConfidencePlot } from "./ConfidencePlot";
-import { ForkOutcomePanel } from "./ForkOutcomePanel";
 import { LayerScope } from "./LayerScope";
 import { TokenDistributionCard } from "./TokenDistributionCard";
 import { TraceScope } from "./TraceScope";
@@ -20,9 +19,7 @@ export interface ObservatoryProps {
   runtime: RuntimeState;
   inspectorOpen: boolean;
   runStatus: "idle" | "loading" | "error";
-  /** Fork's own navigation IS run selection now (Milestone F folded the fork control into the action
-   * tray -- see useTokenWorkbench.ts) -- a completed fork calls this with the new child run's id exactly
-   * as picking a different run from the dropdown would. */
+  /** Explicit materialization calls this after the canonical materializer creates a child Run. */
   onSelectRun: (runId: string) => void;
   initialState?: ScopeUrlState;
   onStateChange?: (state: ScopeSelectionState) => void;
@@ -60,6 +57,7 @@ function ObservatoryWorkspace({
     actions,
     runAction,
     cancelAction,
+    materializeTokenBranch,
     forkChoice,
     setForkChoice,
   } = useTokenWorkbench({ data, runtime, initialState, onStateChange, onSelectRun, onForkOutcome });
@@ -368,16 +366,14 @@ function ObservatoryWorkspace({
             onRun={runAction}
             onCancel={cancelAction}
             forkChoiceLabel={forkChoiceLabel}
+            onMaterialize={materializeTokenBranch}
           />
 
-          {lastForkOutcome && data.id === lastForkOutcome.childId && (
+          {lastForkOutcome && data.id === lastForkOutcome.parentId && (
             <section className="inspector-section fork-outcome-banner">
-              <ForkOutcomePanel outcome={lastForkOutcome.artifact.outcome} note={lastForkOutcome.note} />
               <div className="fork-result" role="status">
-                <span>CHILD {lastForkOutcome.childId}</span>
-                <a href={`#/compare/${encodeURIComponent(lastForkOutcome.parentId)}/${encodeURIComponent(lastForkOutcome.childId)}`}>
-                  COMPARE PARENT / CHILD
-                </a>
+                <span>GENERATED OBSERVATION {String(lastForkOutcome.artifact.observation_id || "").slice(-8)}</span>
+                <span>Materialization is explicit; no child Run exists yet.</span>
                 <button type="button" onClick={onDismissForkOutcome}>DISMISS</button>
               </div>
             </section>
@@ -529,10 +525,9 @@ export function Observatory(props: ObservatoryProps) {
   const { data, initialState, runtime } = props;
   const [lastForkOutcome, setLastForkOutcome] = useState<ForkOutcomeBanner | null>(null);
 
-  // The banner survives the run-change remount below (a completed fork navigates onto its own child
-  // run), but must not keep showing once the user has moved on to some OTHER run entirely.
+  // The evidence banner is parent-bound and must not follow the user to another run.
   useEffect(() => {
-    setLastForkOutcome((current) => (current && current.childId !== data.id ? null : current));
+    setLastForkOutcome((current) => (current && current.parentId !== data.id ? null : current));
   }, [data.id]);
 
   const resetKey = [

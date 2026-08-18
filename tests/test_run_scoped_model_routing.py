@@ -358,22 +358,21 @@ def test_rederive_uses_the_runs_own_model_worker(iso, managed, monkeypatch):
     assert captured["sub"] is not alpha.sub
 
 
-def test_token_workbench_fork_action_uses_the_runs_own_model_worker(iso, managed, monkeypatch):
+def test_token_workbench_force_token_action_uses_the_runs_own_model_worker(iso, managed, monkeypatch):
     router, alpha, beta = managed
     run = _run(model="beta", trace={"tokens": ["hello", " there"], "token_ids": [1, 2]})
     captured = {}
 
-    def fake_fork_worker(run_arg, sub, index, **kwargs):
+    def fake_force_token_worker(run_arg, sub, index, **kwargs):
         captured["sub"] = sub
         return lambda control: {"state": "completed"}
 
     from clozn.runs import token_workbench_actions as domain
-    monkeypatch.setattr(domain, "fork_worker", fake_fork_worker)
-    monkeypatch.setattr(domain, "find_cached_fork_child", lambda *_a, **_k: None)
+    monkeypatch.setattr(domain, "force_token_worker", fake_force_token_worker)
 
     h = Handler()
     assert token_workbench_actions.try_post(
-        h, f"/runs/{run['id']}/tokens/0/fork", {"token": "x"})
+        h, f"/runs/{run['id']}/tokens/0/force-token", {"token_piece": "x"})
     assert h.status == 202
     assert captured["sub"] is beta.sub
     assert captured["sub"] is not alpha.sub

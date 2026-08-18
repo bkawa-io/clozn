@@ -49,7 +49,7 @@ vi.mock("../data/tokenWorkbench", async (importOriginal) => {
   return {
     ...actual,
     loadTokenWorkbench: vi.fn(),
-    postForkAction: vi.fn(),
+    postForceTokenAction: vi.fn(),
     postCausalTraceAction: vi.fn(),
     postSourceMeasureAction: vi.fn(),
     postMechanisticDiffAction: vi.fn(),
@@ -155,7 +155,7 @@ beforeEach(async () => {
   const wb = await import("../data/tokenWorkbench");
   vi.mocked(wb.loadTokenWorkbench).mockReset();
   vi.mocked(wb.loadTokenWorkbench).mockImplementation(async (runId, index) => workbenchDoc(runId, index));
-  vi.mocked(wb.postForkAction).mockReset();
+  vi.mocked(wb.postForceTokenAction).mockReset();
   vi.mocked(wb.postCausalTraceAction).mockReset();
   vi.mocked(wb.postSourceMeasureAction).mockReset();
   vi.mocked(wb.postMechanisticDiffAction).mockReset();
@@ -180,20 +180,20 @@ describe("ScopePanel load boundaries", () => {
 describe("ScopePanel fork race safety", () => {
   test("a slow fork response for run A never paints over a run selected meanwhile", async () => {
     const wb = await import("../data/tokenWorkbench");
-    const forkResponse = deferred<WorkbenchActionResult<import("../data/api").ForkArtifact>>();
-    vi.mocked(wb.postForkAction).mockReturnValue(forkResponse.promise);
+    const forkResponse = deferred<WorkbenchActionResult<import("../data/tokenWorkbench").TimeTravelArtifact>>();
+    vi.mocked(wb.postForceTokenAction).mockReturnValue(forkResponse.promise);
     const user = userEvent.setup();
 
     render(<ScopePanel runtime={runtime} inspectorOpen params={{ runId: runA.id }} />);
 
     // Run A is loaded first (the mounting useEffect calls selectRun(runA.id)).
     await waitFor(() => expect(outputToken("a0")).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByRole("article", { name: "FORK" })).toBeInTheDocument());
-    const forkRow = screen.getByRole("article", { name: "FORK" });
+    await waitFor(() => expect(screen.getByRole("article", { name: "FORCE TOKEN" })).toBeInTheDocument());
+    const forkRow = screen.getByRole("article", { name: "FORCE TOKEN" });
     await waitFor(() => expect(within(forkRow).getByRole("button", { name: "RUN" })).toBeEnabled());
 
     await user.click(within(forkRow).getByRole("button", { name: "RUN" }));
-    expect(vi.mocked(wb.postForkAction)).toHaveBeenCalledWith(runA.id, expect.any(Number), "alt", 99);
+    expect(vi.mocked(wb.postForceTokenAction)).toHaveBeenCalledWith(runA.id, expect.any(Number), "alt", 99);
     await waitFor(() => expect(within(forkRow).getByRole("button", { name: "STARTING" })).toBeInTheDocument());
 
     // While that fork request for A is still in flight, the user picks a different run: B.
@@ -206,12 +206,13 @@ describe("ScopePanel fork race safety", () => {
       forkResponse.resolve({
         outcome: "cached",
         artifact: {
-          outcome: {
-            kind: "exact_execution_fork",
-            reasons: [{ code: "exact_preconditions_met", message: "ok" }],
-            exactness: { regime: "prompt_boundary_reprefill", source: "reprefill", proofStatus: "confirmed" },
-          },
-          child: { id: childOfA.id, parentId: runA.id },
+          schema_version: "clozn.time-travel-result.v1",
+          run_id: runA.id,
+          status: "completed",
+          fidelity: "EXACT",
+          experiment_id: "exp-a",
+          arm_id: "arm-a",
+          observation_id: "obs-a",
         },
       });
     });

@@ -52,7 +52,7 @@ vi.mock("../../data/tokenWorkbench", async (importOriginal) => {
   return {
     ...actual,
     loadTokenWorkbench: vi.fn(),
-    postForkAction: vi.fn(),
+    postForceTokenAction: vi.fn(),
     postCausalTraceAction: vi.fn(),
     postSourceMeasureAction: vi.fn(),
     postMechanisticDiffAction: vi.fn(),
@@ -195,7 +195,7 @@ beforeEach(async () => {
   const wb = await importWorkbenchMocks();
   vi.mocked(wb.loadTokenWorkbench).mockReset();
   vi.mocked(wb.loadTokenWorkbench).mockImplementation(async (runId, index) => workbenchDoc(runId, index));
-  vi.mocked(wb.postForkAction).mockReset();
+  vi.mocked(wb.postForceTokenAction).mockReset();
   vi.mocked(wb.postCausalTraceAction).mockReset();
   vi.mocked(wb.postSourceMeasureAction).mockReset();
   vi.mocked(wb.postMechanisticDiffAction).mockReset();
@@ -346,13 +346,13 @@ describe("Observatory async and action boundaries", () => {
     const tape = screen.getByRole("listbox", { name: "Output tokens" });
     await user.click(within(tape).getAllByRole("option")[2]);
     await waitFor(() => expect(vi.mocked(wb.loadTokenWorkbench)).toHaveBeenCalledTimes(2));
-    expect(vi.mocked(wb.postForkAction)).not.toHaveBeenCalled();
+    expect(vi.mocked(wb.postForceTokenAction)).not.toHaveBeenCalled();
     expect(vi.mocked(wb.postCausalTraceAction)).not.toHaveBeenCalled();
     expect(vi.mocked(wb.postSourceMeasureAction)).not.toHaveBeenCalled();
     await waitFor(() => expect(parseScopeUrl(location.hash)?.state.token).toBe(2));
   });
 
-  test("a cached fork outcome navigates via onSelectRun and the banner survives the run change", async () => {
+  test("a completed force-token result stays as evidence until explicit materialization", async () => {
     const wb = await importWorkbenchMocks();
     vi.mocked(wb.loadTokenWorkbench).mockImplementation(async (runId, index) => {
       if (runId === current.id) {
@@ -367,31 +367,31 @@ describe("Observatory async and action boundaries", () => {
       }
       return workbenchDoc(runId, index);
     });
-    vi.mocked(wb.postForkAction).mockResolvedValue({
+    vi.mocked(wb.postForceTokenAction).mockResolvedValue({
       outcome: "cached",
       artifact: {
-        outcome: {
-          kind: "exact_execution_fork",
-          reasons: [{ code: "exact_preconditions_met", message: "ok" }],
-          exactness: { regime: "generated_token_live_kv", proofStatus: "confirmed" },
-        },
-        child: { id: child.id, parentId: current.id, note: "reused an existing fork" },
+        schema_version: "clozn.time-travel-result.v1",
+        run_id: current.id,
+        status: "completed",
+        fidelity: "RECONSTRUCTED",
+        experiment_id: "exp-1",
+        arm_id: "arm-1",
+        observation_id: "obs-1",
+        continuation: { generated_suffix_text: " alternative" },
       },
     });
     const onSelectRun = vi.fn();
     const user = userEvent.setup();
     const view = render(observatory({ onSelectRun }));
 
-    await waitFor(() => expect(screen.getByRole("article", { name: "FORK" })).toBeInTheDocument());
-    const forkRow = screen.getByRole("article", { name: "FORK" });
+    await waitFor(() => expect(screen.getByRole("article", { name: "FORCE TOKEN" })).toBeInTheDocument());
+    const forkRow = screen.getByRole("article", { name: "FORCE TOKEN" });
     await waitFor(() => expect(within(forkRow).getByRole("button", { name: "RUN" })).toBeEnabled());
     await user.click(within(forkRow).getByRole("button", { name: "RUN" }));
 
-    await waitFor(() => expect(onSelectRun).toHaveBeenCalledWith(child.id));
-
-    view.rerender(observatory({ data: child, onSelectRun }));
-    expect(await screen.findByText("EXACT EXECUTION FORK")).toBeInTheDocument();
-    expect(screen.getByText(`CHILD ${child.id}`)).toBeInTheDocument();
+    expect(onSelectRun).not.toHaveBeenCalled();
+    expect(await screen.findByText("GENERATED OBSERVATION obs-1 · RECONSTRUCTED")).toBeInTheDocument();
+    expect(screen.getByText(/Materialization is explicit/)).toBeInTheDocument();
   });
 
   test("an unavailable action shows its typed reason as visible text, never color alone", async () => {
