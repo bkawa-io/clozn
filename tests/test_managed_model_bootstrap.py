@@ -239,7 +239,7 @@ def test_managed_runtime_uses_live_in_memory_projection(monkeypatch, tmp_path):
     try:
         assert stack.gateway.pid == os.getpid()
         selected = app.MODEL_ROUTER.select_control_model(
-            "beta", route="/runs/<id>/execution-fork/plan"
+            "beta", route="/runs/<id>/snapshot/pin"
         )
         assert selected.model_id == "beta"
         assert selected.worker_identity["runtime_key_sha256"] == (
@@ -316,7 +316,7 @@ def test_legacy_engine_substrate_identity_is_exact_fork_eligible(
         _runtime_projection,
         parent_runtime_projection,
     )
-    from clozn.server.routes.execution_fork import _sub_facts
+    from clozn.experiments.execution_facts import selection_identity_facts
     from clozn.server.substrates import EngineSubstrate
 
     model_sha = hashlib.sha256(b"legacy-model").hexdigest()
@@ -371,7 +371,8 @@ def test_legacy_engine_substrate_identity_is_exact_fork_eligible(
         "meta": meta,
     }
     parent_runtime = parent_runtime_projection(parent)
-    selected_runtime, worker, selected_engine = _sub_facts(sub)
+    selected_runtime, worker, selected_engine = selection_identity_facts(
+        SimpleNamespace(sub=sub, engine=sub.engine))
     assert selected_engine is sub.engine
     assert worker["worker_generation_id"] == "legacy-process-generation"
     assert parent_runtime is not None

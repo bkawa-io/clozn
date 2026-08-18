@@ -119,18 +119,6 @@ export const studioApi = {
     const endpoint = `${runPath(runId, "/suggested-breakpoints")}?limit=50`;
     return decodeSuggestedBreakpoints(await getJson(endpoint, signal), endpoint);
   },
-  async captureCheckpoint(runId: string, signal?: AbortSignal): Promise<JsonObject> {
-    const endpoint = runPath(runId, "/execution-fork/checkpoint");
-    return decodeJsonObject(await postJson(endpoint, {}, signal, [201]), endpoint);
-  },
-  async planExactFork(runId: string, request: JsonObject, checkpointReference: JsonObject, signal?: AbortSignal): Promise<JsonObject> {
-    const endpoint = runPath(runId, "/execution-fork/plan");
-    return decodeJsonObject(await postJson(endpoint, { request, checkpoint_reference: checkpointReference }, signal), endpoint);
-  },
-  async executeExactFork(runId: string, plan: JsonObject, signal?: AbortSignal): Promise<JsonObject> {
-    const endpoint = runPath(runId, "/execution-fork");
-    return decodeJsonObject(await postJson(endpoint, { plan }, signal, [201, 409, 422]), endpoint);
-  },
   async testThis(runId: string, request: JsonObject, signal?: AbortSignal): Promise<JsonObject> {
     const endpoint = runPath(runId, "/test-this");
     return decodeJsonObject(await postJson(endpoint, request, signal, [201, 409, 422]), endpoint);

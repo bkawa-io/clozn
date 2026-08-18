@@ -57,16 +57,15 @@ def try_post(h, p, body):
         h._json(422, result)
         return True
 
-    # The resolver uses parent.model and the same managed/legacy routing path as execution-fork.
+    # The resolver uses parent.model and the same managed/legacy run-scoped routing path as
+    # other controlled operations.
     # It never accepts a model supplied in this body.  Keep the selected substrate itself so
     # reconstructed replay can reapply the parent's recorded dials/template seam.
-    from clozn.server.model_routing import select_control_model_for_run
-    from clozn.server.routes.execution_fork import _identity_facts
-    selection = select_control_model_for_run(h, parent.get("model"), route="/runs/<id>/branch-fan")
-    if selection is None:
+    from clozn.server.model_routing import select_run_model_facts
+    facts = select_run_model_facts(h, parent, route="/runs/<id>/branch-fan")
+    if facts is None:
         return True
-    runtime_identity, worker_identity, engine = _identity_facts(selection)
-    sub = selection.sub
+    runtime_identity, worker_identity, engine, sub = facts
     if engine is None or runtime_identity is None or worker_identity is None:
         h._json(503, {
             "error": "branch fan requires a ready identity-qualified product worker",

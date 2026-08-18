@@ -1,4 +1,4 @@
-"""Model-free FORK-01 execution, persistence, and gateway coverage."""
+"""Model-free internal exact-resume execution and persistence coverage."""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -12,7 +12,6 @@ import clozn.runs.store as runlog
 from clozn.replay.execution_fork import plan_execution_fork
 from clozn.replay.execution_fork_execute import execute_exact_fork
 from clozn.replay import execution_fork_results
-from clozn.server.routes import execution_fork as route
 
 
 RUNTIME = {
@@ -315,7 +314,7 @@ def test_child_journal_rebinds_restarted_worker_and_sampling_regime(stores):
     routing = child["meta"]["model_routing"]
     assert routing["protocol"] == {
         "surface": "native",
-        "route": "/runs/<id>/execution-fork",
+        "route": "/internal/exact-resume",
     }
     assert routing["request"]["request_id"] == child["execution_fork"]["execution_id"]
     routed_worker = routing["result"]["receipt"]["worker_identity"]
@@ -533,90 +532,14 @@ def test_persistence_failure_becomes_terminal_receipt_not_a_success(stores):
     assert execution_fork_results.get(result["receipt"]["execution_id"]) == result["receipt"]
 
 
-class Handler:
-    def __init__(self, sub):
-        self._inj_sub = sub
-        self.status = None
-        self.body = None
-
-    def _json(self, status, body, **_kwargs):
-        self.status, self.body = status, body
-
-
-class FakeSub:
-    def __init__(self, engine, *, worker=None):
-        self.engine = engine
-        self.runtime_identity = lambda: deepcopy(RUNTIME)
-        self.worker_identity = lambda: deepcopy(worker or WORKER)
-
-
-def test_new_gateway_route_plans_and_executes_without_touching_legacy_route(stores):
-    parent = _parent()
-    planning_engine = FakeEngine([])
-    sub = FakeSub(planning_engine)
-    h = Handler(sub)
-    checkpoint = {
-        "checkpoint_id": "ckpt-generation-a-7",
-        "worker_generation_id": "generation-a",
-        "state": "available",
-        "parent_run_id": parent["id"],
-        "prompt_tokens": 10,
-        "n_past": 13,
-    }
-    assert route.try_post(
-        h,
-        f"/runs/{parent['id']}/execution-fork/plan",
-        {
-            "request": {
-                "position": 1,
-                "change": {
-                    "type": "force_token", "token_id": 44, "token_piece": " four"},
-            },
-            "checkpoint_reference": checkpoint,
-        },
-    )
-    assert h.status == 200
-    plan = h.body
-    assert plan["classification"] == "exact_execution_fork"
-    assert planning_engine.calls == []
-
-    execution_engine = _success_engine(plan)
-    h2 = Handler(FakeSub(execution_engine))
-    assert route.try_post(
-        h2, f"/runs/{parent['id']}/execution-fork", {"plan": plan})
-    assert h2.status == 201
-    execution_id = h2.body["receipt"]["execution_id"]
-
-    h3 = Handler(FakeSub(execution_engine))
-    assert route.try_get(h3, f"/execution-forks/{execution_id}")
-    assert h3.status == 200
-    assert h3.body == h2.body["receipt"]
-
+def test_public_execution_fork_routes_are_not_registered():
     from clozn.server import app as server
-    assert route in server._POST_ROUTES
-    assert route in server._GET_ROUTES
 
-    assert not any(getattr(item, "__name__", "") == "fork" for item in server._POST_ROUTES)
-
-
-def test_gateway_rejects_stale_planned_worker_and_persists_terminal_result(stores):
-    parent = _parent()
-    plan = _plan(parent)
-    engine = _success_engine(plan)
-    stale_worker = {
-        "worker_id": "generation-b",
-        "worker_generation_id": "generation-b",
-        "protocol_version": "1.1",
-    }
-    h = Handler(FakeSub(engine, worker=stale_worker))
-    assert route.try_post(
-        h, f"/runs/{parent['id']}/execution-fork", {"plan": plan})
-    assert h.status == 422
-    assert h.body["child"] is None
-    assert h.body["receipt"]["reasons"][0]["code"] == "stale_plan"
-    assert engine.calls == []
-    execution_id = h.body["receipt"]["execution_id"]
-    assert execution_fork_results.get(execution_id) == h.body["receipt"]
+    route_modules = [
+        getattr(item, "__name__", "")
+        for item in (*server._POST_ROUTES, *server._GET_ROUTES)
+    ]
+    assert "execution_fork" not in route_modules
 
 
 def test_terminal_result_ids_are_immutable(stores):

@@ -74,8 +74,6 @@ def test_execution_resolves_parent_model_and_returns_evidence(monkeypatch):
         return Selection()
 
     monkeypatch.setattr("clozn.server.model_routing.select_control_model_for_run", select)
-    monkeypatch.setattr("clozn.server.routes.execution_fork._identity_facts",
-                        lambda _selection: (None, None, object()))
     monkeypatch.setattr("clozn.replay.test_this.execute_test_this", lambda *a, **k: {
         "schema_version": "clozn.test-this-result.v1", "run_id": run["id"],
         "selection": {"kind": "response_token", "position": 1},

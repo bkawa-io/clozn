@@ -148,11 +148,11 @@ def try_post(h, p, body):
             h._json(422, artifact)
             return True
 
-        from clozn.server.routes.execution_fork import _parent_sub_facts
-        facts = _parent_sub_facts(h, source_run, "/runs/<id>/time-machine/branch")
+        from clozn.server.model_routing import select_run_model_facts
+        facts = select_run_model_facts(h, source_run, route="/runs/<id>/time-machine/branch")
         if facts is None:
             return True
-        runtime, worker, engine = facts
+        runtime, worker, engine, _sub = facts
         if engine is None or runtime is None or worker is None:
             h._json(503, {
                 "error": "exact Time Machine child replay requires a ready identity-qualified product worker",
@@ -367,13 +367,13 @@ def try_post(h, p, body):
             h._json(422, artifact)
             return True
 
-        from clozn.server.routes.execution_fork import _parent_sub_facts
-        facts = _parent_sub_facts(
+        from clozn.server.model_routing import select_run_model_facts
+        facts = select_run_model_facts(
             h, source_run if source_run is not None else run,
-            "/runs/<id>/time-machine/verify")
+            route="/runs/<id>/time-machine/verify")
         if facts is None:
             return True
-        runtime, worker, engine = facts
+        runtime, worker, engine, _sub = facts
         if engine is None or runtime is None or worker is None:
             h._json(503, {
                 "error": "exact Time Machine verification requires a ready identity-qualified product worker",

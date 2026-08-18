@@ -67,14 +67,13 @@ def try_post(h, p, body):
 
     # Resolve only the immutable parent's recorded model.  The request has no model, worker, or
     # runtime override and this route never falls back to the gateway default.
-    from clozn.server.model_routing import select_control_model_for_run
-    from clozn.server.routes.execution_fork import _identity_facts
+    from clozn.server.model_routing import select_run_model_facts
 
-    selection = select_control_model_for_run(
-        h, parent.get("model"), route="/runs/<id>/influence-counterfactual")
-    if selection is None:
+    facts = select_run_model_facts(
+        h, parent, route="/runs/<id>/influence-counterfactual")
+    if facts is None:
         return True
-    runtime_identity, worker_identity, engine = _identity_facts(selection)
+    runtime_identity, worker_identity, engine, sub = facts
     if engine is None or runtime_identity is None or worker_identity is None:
         return _error(
             h, 503, "influence_counterfactual_worker_unavailable",
@@ -84,7 +83,7 @@ def try_post(h, p, body):
     try:
         result = execute_influence_counterfactual(
             parent,
-            selection.sub,
+            sub,
             body,
             runtime_identity=runtime_identity,
             worker_identity=worker_identity,

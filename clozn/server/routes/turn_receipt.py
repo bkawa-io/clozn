@@ -1,7 +1,7 @@
 """GET /runs/<id>/turn-receipt -- the everyday, read-side Turn Receipt v1.
 
 This route only loads the recorded run and already-persisted optional evidence.  It never invokes an
-influence scorer, model, worker, checkpoint, rewind, or live execution-fork planner.  Missing evidence is
+influence scorer, model, worker, checkpoint, rewind, or live exact-resume planner.  Missing evidence is
 represented by the projection's explicit ``not_measured``/unavailable states.
 """
 from __future__ import annotations

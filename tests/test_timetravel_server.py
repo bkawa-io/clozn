@@ -578,8 +578,8 @@ def test_time_machine_verifies_an_earlier_session_turn(iso, monkeypatch):
             "reasons": [{"code": "exact_checkpoint_captured", "message": "matched"}],
         },
     )
-    from clozn.server.routes import execution_fork
-    monkeypatch.setattr(execution_fork, "_parent_sub_facts", lambda *args: ({}, {}, object()))
+    from clozn.server import model_routing
+    monkeypatch.setattr(model_routing, "select_run_model_facts", lambda *args, **kwargs: ({}, {}, object(), object()))
     out = _post("/runs/" + rid + "/time-machine/verify", {"turn": 0})
     assert out["status"] == "verified"
     assert out["scope"] == "session_turn_prompt_boundary"
@@ -617,8 +617,8 @@ def test_time_machine_verification_hydrates_a_durable_source_pin(iso, monkeypatc
             "envelope": {"envelope_version": "clozn.checkpoint-export.v1", "state": {}},
         } if run_id == turn_zero_id else {"unavailable": "no pin"},
     )
-    from clozn.server.routes import execution_fork
-    monkeypatch.setattr(execution_fork, "_parent_sub_facts", lambda *args: ({}, {}, object()))
+    from clozn.server import model_routing
+    monkeypatch.setattr(model_routing, "select_run_model_facts", lambda *args, **kwargs: ({}, {}, object(), object()))
     out = _post("/runs/" + rid + "/time-machine/verify", {"turn": 0})
     assert out["status"] == "verified"
     assert seen == {
@@ -682,11 +682,11 @@ def test_time_machine_exact_branch_persists_a_same_prompt_child(iso, monkeypatch
             "child": {"id": "run_exact_child_0123456789"},
         },
     )
-    from clozn.server.routes import execution_fork as execution_fork_route
+    from clozn.server import model_routing
     monkeypatch.setattr(
-        execution_fork_route,
-        "_parent_sub_facts",
-        lambda *args: ({"runtime": "facts"}, {"worker": "facts"}, object()),
+        model_routing,
+        "select_run_model_facts",
+        lambda *args, **kwargs: ({"runtime": "facts"}, {"worker": "facts"}, object(), object()),
     )
     out = _post("/runs/" + rid + "/time-machine/branch", {"turn": 2})
     assert out["status"] == "completed"
@@ -727,8 +727,8 @@ def test_time_machine_verification_persists_verified_prompt_boundary(iso, monkey
             "reasons": [{"code": "exact_checkpoint_captured", "message": "matched"}],
         },
     )
-    from clozn.server.routes import execution_fork
-    monkeypatch.setattr(execution_fork, "_parent_sub_facts", lambda *args: ({}, {}, object()))
+    from clozn.server import model_routing
+    monkeypatch.setattr(model_routing, "select_run_model_facts", lambda *args, **kwargs: ({}, {}, object(), object()))
     out = _post("/runs/" + rid + "/time-machine/verify", {"turn": 2})
     assert out["status"] == "verified"
     assert out["exact_replay"] is True
@@ -752,8 +752,8 @@ def test_time_machine_eligibility_exposes_prior_proof_without_overclaiming(iso, 
             "reasons": [{"code": "exact_checkpoint_captured", "message": "matched"}],
         },
     )
-    from clozn.server.routes import execution_fork
-    monkeypatch.setattr(execution_fork, "_parent_sub_facts", lambda *args: ({}, {}, object()))
+    from clozn.server import model_routing
+    monkeypatch.setattr(model_routing, "select_run_model_facts", lambda *args, **kwargs: ({}, {}, object(), object()))
     verified = _post("/runs/" + rid + "/time-machine/verify", {"turn": 2})
     out = _get("/runs/" + rid + "/time-machine")
     turn = out["turns"][2]

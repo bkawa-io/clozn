@@ -266,7 +266,7 @@ function TimeTravelDataSurface({ runId, mode, tokenPosition, breakpointId, rival
             reconstructedReplay: { state: "not_reported" as const },
             historicalExactProof: { state: "not_reported" as const },
           }),
-          exactFork: { state: "ready_to_execute" as const, requirements: ["Live checkpoint and worker identity verified by the execution-fork planner."] },
+          exactFork: { state: "ready_to_execute" as const, requirements: ["Live checkpoint and worker identity verified by the exact-resume planner."] },
         },
       },
     } : {}),

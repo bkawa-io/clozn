@@ -496,7 +496,7 @@ def _child_model_routing(
     updated = deepcopy(dict(routing))
     updated["protocol"] = {
         "surface": "native",
-        "route": "/runs/<id>/execution-fork",
+        "route": "/internal/exact-resume",
     }
     updated["request"] = {
         "request_id": receipt["execution_id"],

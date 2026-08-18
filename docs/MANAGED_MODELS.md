@@ -258,9 +258,9 @@ didn't install an explicit worker selection. Today, the routes behind `/runs/<id
 `/runs/<id>/receipts`, `/runs/<id>/replay`, `/runs/<id>/counterfactual`, the influence-map routes, and
 the legacy `/runs/<id>/fork` all resolve their worker through that same plain `active_sub(h)` — so
 under a managed gateway they get no worker and answer unavailable, for any run, not only ones whose
-model can't be determined. Only exact execution-fork (`/runs/<id>/execution-fork*`) and snapshot pin
-have been updated to resolve a run's own recorded model explicitly through the router
-(`_parent_sub_facts` in `clozn/server/routes/execution_fork.py`) and therefore work under a managed
+model can't be determined. Controlled replay and snapshot pin
+resolve a run's own recorded model explicitly through the shared run-scoped model-facts helper and
+therefore work under a managed
 gateway today. This is verified directly by
 `test_unselected_run_engine_routes_never_use_default_worker` in `tests/test_managed_model_bootstrap.py`.
 

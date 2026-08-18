@@ -12,8 +12,11 @@ from clozn.cli.worker_registry import AdapterRuntimeIdentity, RuntimeKey
 from clozn.replay.checkpoint_capture import capture_parent_checkpoint
 from clozn.replay.execution_fork import parent_runtime_projection
 import clozn.runs.store as runlog
-from clozn.server.model_routing import PreloadedModelBinding, PreloadedModelRouter
-from clozn.server.routes import execution_fork as route
+from clozn.server.model_routing import (
+    PreloadedModelBinding,
+    PreloadedModelRouter,
+    select_run_model_facts,
+)
 
 
 RUNTIME = {
@@ -462,7 +465,7 @@ def test_diverged_control_leaves_real_checkpoint_visible_but_unusable(store):
 
 # ============================================================================================
 # Boundary stop-token exemption (gateway/prove_unchanged_control divergence characterized live
-# against qwen2.5-0.5b-instruct-q4_k_m.gguf: scripts/smoke/gateway_eos_boundary_battery.py).
+# against qwen2.5-0.5b-instruct-q4_k_m.gguf in the live EOS boundary battery).
 #
 # The recorded parent trace (native chat-io's transcript) includes the chat turn's terminal
 # stop/EOS-class token as an explicit trailing entry whenever the run finished via
@@ -677,18 +680,17 @@ def test_legacy_engine_substrate_shape_uses_observed_executable_sha(store, monke
     monkeypatch.setattr(server, "MODEL_ROUTER", None)
     handler = Handler(OrganicSub(engine))
 
-    assert route.try_post(
-        handler,
-        f"/runs/{parent['id']}/execution-fork/checkpoint",
-        {},
-    )
-    assert handler.status == 201
-    assert handler.body["status"] == "available"
+    facts = select_run_model_facts(handler, parent, route="/runs/<id>/snapshot/pin")
+    assert facts is not None
+    runtime, worker, selected_engine, _sub = facts
+    artifact = capture_parent_checkpoint(
+        parent, selected_engine, runtime_identity=runtime, worker_identity=worker)
+    assert artifact["status"] == "available"
     projected = parent_runtime_projection(parent)
     assert projected is not None
     assert projected["engine_build"] == engine_build
     assert (
-        handler.body["identity"]["selected_runtime_key_sha256"]
+        artifact["identity"]["selected_runtime_key_sha256"]
         == projected["runtime_key_sha256"]
     )
 
@@ -717,62 +719,6 @@ def test_legacy_engine_substrate_shape_uses_observed_executable_sha(store, monke
     assert refused["status"] == "unavailable"
     assert refused["reasons"][0]["code"] == "runtime_identity_unavailable"
     assert refused_engine.calls == []
-
-
-def test_gateway_checkpoint_route_returns_public_artifact_and_rejects_v1_options(store):
-    parent = _parent()
-    engine = CaptureEngine()
-    handler = Handler(FakeSub(engine))
-
-    assert route.try_post(
-        handler,
-        f"/runs/{parent['id']}/execution-fork/checkpoint",
-        {},
-    )
-    assert handler.status == 201
-    assert handler.body["status"] == "available"
-    assert handler.body["schema_version"] == "clozn.checkpoint-reference.v1"
-
-    rejected = Handler(FakeSub(CaptureEngine()))
-    assert route.try_post(
-        rejected,
-        f"/runs/{parent['id']}/execution-fork/checkpoint",
-        {"pin": True},
-    )
-    assert rejected.status == 400
-    assert rejected.body["code"] == "checkpoint_capture_options_unsupported"
-
-
-def test_gateway_checkpoint_route_can_explicitly_hydrate_a_durable_pin(store, monkeypatch):
-    parent = _parent()
-    engine = CaptureEngine()
-    envelope = {
-        "envelope_version": "clozn.checkpoint-export.v1",
-        "identity": {"model_sha256": "a" * 64},
-        "state": {
-            "tokens": [1, 2, 11, 22, 33],
-            "n_tokens": 5,
-            "n_past": 5,
-            "prompt_tokens": 2,
-        },
-        "payload_sha256": "c" * 64,
-    }
-    monkeypatch.setattr(
-        "clozn.replay.checkpoint_pin_store.resolve_pin",
-        lambda run_id: {"ok": True, "manifest": {"run_id": run_id}, "envelope": envelope},
-    )
-    handler = Handler(FakeSub(engine))
-
-    assert route.try_post(
-        handler,
-        f"/runs/{parent['id']}/execution-fork/checkpoint",
-        {"pinned": True},
-    )
-    assert handler.status == 201
-    assert handler.body["status"] == "available"
-    assert [name for name, _call in engine.calls] == [
-        "score", "import_checkpoint", "execution_fork"
-    ]
 
 
 def test_capture_can_hydrate_a_resolved_pin_and_still_prove_the_same_control(store):
@@ -951,18 +897,16 @@ def test_gateway_capture_selects_non_default_parent_model_worker(
     monkeypatch.setattr(server, "MODEL_ROUTER", router)
     handler = Handler(alpha.sub)
 
-    assert route.try_post(
-        handler,
-        f"/runs/{parent['id']}/execution-fork/checkpoint",
-        {},
-    )
-
-    assert handler.status == 201
-    assert handler.body["status"] == "available"
+    facts = select_run_model_facts(handler, parent, route="/runs/<id>/snapshot/pin")
+    assert facts is not None
+    runtime, worker, selected_engine, _sub = facts
+    artifact = capture_parent_checkpoint(
+        parent, selected_engine, runtime_identity=runtime, worker_identity=worker)
+    assert artifact["status"] == "available"
     assert [name for name, _call in beta_engine.calls] == [
         "score", "checkpoint", "execution_fork"]
     assert alpha_engine.calls == []
-    assert handler.body["identity"]["worker_generation_id"] == "generation-a"
+    assert artifact["identity"]["worker_generation_id"] == "generation-a"
 
     contradicted = deepcopy(parent)
     contradicted["identity"]["model_sha256"] = "f" * 64

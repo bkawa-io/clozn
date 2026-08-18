@@ -28,9 +28,7 @@
             "route": {
               "enum": [
                 "/api/clozn/generate",
-                "/runs/<id>/execution-fork/checkpoint",
-                "/runs/<id>/execution-fork/plan",
-                "/runs/<id>/execution-fork",
+                "/internal/exact-resume",
                 "/runs/<id>/snapshot/pin",
                 "/runs/<id>/investigation",
                 "/runs/<id>/investigation-experiment",

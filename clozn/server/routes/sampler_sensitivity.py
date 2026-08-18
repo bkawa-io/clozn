@@ -73,16 +73,14 @@ def try_post(h, p, body):
         return True
 
     # Parent-scoped routing: the request has no model/worker/runtime override.  The selected
-    # substrate is the only live dependency and is resolved using the same run-scoped helper as
-    # the existing execution-fork route.
-    from clozn.server.model_routing import select_control_model_for_run
-    from clozn.server.routes.execution_fork import _identity_facts
+    # substrate is the only live dependency and is resolved through the neutral run-scoped helper.
+    from clozn.server.model_routing import select_run_model_facts
 
-    selection = select_control_model_for_run(
-        h, parent.get("model"), route="/runs/<id>/sampler-sensitivity")
-    if selection is None:
+    facts = select_run_model_facts(
+        h, parent, route="/runs/<id>/sampler-sensitivity")
+    if facts is None:
         return True
-    runtime_identity, worker_identity, engine = _identity_facts(selection)
+    runtime_identity, worker_identity, engine, sub = facts
     if engine is None or runtime_identity is None or worker_identity is None:
         return _error(
             h, 503, "sampler_sensitivity_worker_unavailable",
@@ -92,7 +90,7 @@ def try_post(h, p, body):
     try:
         result = execute_sampler_sensitivity(
             parent,
-            selection.sub,
+            sub,
             plan,
             runtime_identity=runtime_identity,
             worker_identity=worker_identity,

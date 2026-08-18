@@ -58,14 +58,13 @@ def try_post(h, p, body):
         return True
 
     # Parent-scoped routing only.  The request carries no model, worker, runtime, or adapter override.
-    from clozn.server.model_routing import select_control_model_for_run
-    from clozn.server.routes.execution_fork import _identity_facts
+    from clozn.server.model_routing import select_run_model_facts
 
-    selection = select_control_model_for_run(
-        h, parent.get("model"), route="/runs/<id>/context-bisect")
-    if selection is None:
+    facts = select_run_model_facts(
+        h, parent, route="/runs/<id>/context-bisect")
+    if facts is None:
         return True
-    runtime_identity, worker_identity, engine = _identity_facts(selection)
+    runtime_identity, worker_identity, engine, sub = facts
     if engine is None or runtime_identity is None or worker_identity is None:
         return _error(
             h, 503, "context_bisect_worker_unavailable",
@@ -75,7 +74,7 @@ def try_post(h, p, body):
     try:
         result = execute_context_bisect(
             parent,
-            selection.sub,
+            sub,
             body,
             runtime_identity=runtime_identity,
             worker_identity=worker_identity,

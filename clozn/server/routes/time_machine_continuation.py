@@ -433,13 +433,12 @@ def try_post(h, p, body):
         return True
     source = _source_projection(requested_run, source_run, request.turn)
 
-    from clozn.server.model_routing import select_control_model_for_run
-    from clozn.server.routes.execution_fork import _identity_facts
-    selection = select_control_model_for_run(
-        h, source_run.get("model"), route="/runs/<id>/time-machine/continue")
-    if selection is None:
+    from clozn.server.model_routing import select_run_model_facts
+    facts = select_run_model_facts(
+        h, source_run, route="/runs/<id>/time-machine/continue")
+    if facts is None:
         return True
-    runtime_identity, worker_identity, engine = _identity_facts(selection)
+    runtime_identity, worker_identity, engine, _sub = facts
     if engine is None or not isinstance(runtime_identity, Mapping) or not isinstance(worker_identity, Mapping):
         receipt = continuation.build_unavailable_receipt(
             base,

@@ -143,7 +143,7 @@ def add_subparser(sub):
     parser.set_defaults(fn=_no_command)
 
     pin = commands.add_parser(
-        "pin", help="durably pin a run's execution-fork checkpoint (survives worker restart)")
+        "pin", help="durably pin a run's checkpoint (survives worker restart)")
     pin.add_argument("run_id")
     pin.add_argument("--note", default=None, help="a short label to remember why this was pinned")
     pin.add_argument("--port", type=int, default=0, help="Clozn gateway port (default 8080)")

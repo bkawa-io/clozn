@@ -1333,10 +1333,9 @@ def select_control_model_for_run(
     route: str,
 ) -> "ModelSelection | None":
     """Resolve the exact preloaded worker for a RUN-SCOPED control-plane operation -- receipts,
-    replay, influence, investigation, causal-trace, corrective actions/retries, legacy fork, and
-    their kin -- generalizing what began as ``clozn.server.routes.execution_fork``'s own
-    ``_parent_sub_facts`` (execution-fork planning/execution, snapshot pin) into one place every
-    run-scoped route can share, instead of copy-pasting the router/no-router branch into each one.
+    replay, influence, investigation, causal-trace, corrective actions/retries, and their kin.
+    The run-scoped model selection and identity composition is centralized here so every route can
+    share the router/no-router branch instead of importing another product vertical.
 
     ``model`` MUST be read from the run's own immutable stored record (``run.get("model")``),
     NEVER a client-supplied parameter: the entire point of per-run selection is that a caller
@@ -1349,13 +1348,12 @@ def select_control_model_for_run(
     ``ctx.active_sub(handler)`` -- every existing capability check (``getattr(sub, "chat", None)``,
     the ``if not (sub and ...): 503`` guards, etc.) and its 503 stays exactly as it was; only
     WHERE ``sub`` comes from changes. ``.engine``/``.runtime_key``/``.worker_identity`` are also
-    present for the minority of callers that need exact runtime/worker identity (execution-fork,
-    snapshot pin, the per-token fork/causal-trace actions) -- on the legacy no-router path those
+    present for the minority of callers that need exact runtime/worker identity (snapshot pin,
+    controlled replay, and per-token causal-trace actions) -- on the legacy no-router path those
     two are left ``None`` here, matching ``select_for_handler``'s own legacy shim, rather than pay
     a live ``engine.health()`` probe on every run-scoped READ that never asked for one (e.g.
     investigation/workbench composition, which is documented to touch no engine at all). A caller
-    that needs them even in legacy mode derives them itself -- see
-    ``clozn.server.routes.execution_fork._identity_facts``, which wraps this exact function.
+    that needs them even in legacy mode can use ``select_run_model_facts`` below.
 
     Returns ``None`` when no worker could be resolved: a typed ``clozn.model-routing.v1`` refusal
     has already been written to ``handler`` via ``_emit_error``. Callers must return immediately
@@ -1382,6 +1380,24 @@ def select_control_model_for_run(
     except ModelRoutingError as error:
         _emit_error(handler, error, "native")
         return None
+
+
+def select_run_model_facts(handler, run: Mapping, *, route: str):
+    """Resolve an immutable run to ``(runtime, worker, engine, substrate)`` facts.
+
+    Run-scoped execution features must select the model recorded on the run before asking for
+    live identity facts.  Keeping this composition here makes snapshot pinning, historical
+    replay, and other controlled operations independent of any one retired HTTP product route.
+    ``None`` means the existing routing layer has already shaped an unavailable-model response.
+    """
+    if not isinstance(run, Mapping):
+        return None
+    selection = select_control_model_for_run(handler, run.get("model"), route=route)
+    if selection is None:
+        return None
+    from clozn.experiments.execution_facts import selection_identity_facts
+    runtime, worker, engine = selection_identity_facts(selection)
+    return runtime, worker, engine, getattr(selection, "sub", None)
 
 
 def peek_control_model_for_run(handler, model, *, route: str):

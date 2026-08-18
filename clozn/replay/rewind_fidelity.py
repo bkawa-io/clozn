@@ -12,8 +12,8 @@ THREE CONCEPTS, NEVER COLLAPSED
    be possible, but exact execution still needs LIVE checks this module cannot and does not perform:
    matching runtime identity, matching worker generation, a compatible checkpoint, valid checkpoint
    token history, and the mandatory unchanged control. Labeled `requires_live_plan` -- never
-   `exact_available`. That live authority remains `POST /runs/<id>/execution-fork/plan`
-   (`clozn.replay.execution_fork.plan_execution_fork`), completely unchanged by this module.
+   `exact_available`. The canonical Time Travel resolver owns those live checks; this module
+   remains a read-only projection.
 3. VERIFIED exact rewind. A prior exact execution fork actually ran from this boundary and its
    MANDATORY unchanged control reproduced the parent's continuation under Clozn's strict token/text
    comparison through the exact-resume proof seam. This is HISTORICAL

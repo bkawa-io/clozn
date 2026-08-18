@@ -155,7 +155,7 @@ def test_route_registered_before_the_runs_fallback():
 def test_route_does_not_match_unrelated_paths():
     h = Handler("/runs/x/context-utilization")
     assert route.try_get(h, "/runs/x/context-utilization") is False
-    assert route.try_get(h, "/runs/x/execution-fork") is False
+    assert route.try_get(h, "/runs/x/not-a-rewind-fidelity-route") is False
     assert route.try_get(h, "/runs/x") is False
     assert route.try_get(h, "/other") is False
 

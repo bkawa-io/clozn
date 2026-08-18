@@ -66,3 +66,59 @@ def test_unpin_route_surfaces_dependents(monkeypatch):
     assert h.status == 409
     assert h.body["code"] == "snapshot_unpin_has_dependents"
     assert h.body["children"] == ["run_child"]
+
+
+def test_pin_route_uses_run_scoped_model_facts_and_persists_capture(monkeypatch):
+    from clozn.server.routes import snapshot
+
+    parent = {"id": "run_pin", "model": "beta"}
+    seen = {}
+
+    class Engine:
+        def export_checkpoint(self, checkpoint_id, *, worker_generation_id):
+            seen["export"] = (checkpoint_id, worker_generation_id)
+            return {
+                "envelope": {
+                    "envelope_version": "clozn.checkpoint-export.v1",
+                    "identity": {}, "state": {}, "payload_sha256": "a" * 64,
+                },
+                "size_bytes": 7,
+            }
+
+    engine = Engine()
+    runtime = {"runtime_key_sha256": "r" * 64}
+    worker = {"worker_generation_id": "generation-beta"}
+    monkeypatch.setattr("clozn.runs.store.get_run", lambda run_id: parent if run_id == parent["id"] else None)
+    monkeypatch.setattr(
+        "clozn.server.model_routing.select_run_model_facts",
+        lambda _handler, run, *, route: (
+            seen.update({"model": run["model"], "route": route}) or
+            (runtime, worker, engine, object())
+        ),
+    )
+    monkeypatch.setattr(
+        "clozn.replay.checkpoint_capture.capture_parent_checkpoint",
+        lambda run, selected_engine, **kwargs: {
+            "status": "available",
+            "checkpoint_reference": {
+                "checkpoint_id": "checkpoint-beta",
+                "worker_generation_id": "generation-beta",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "clozn.replay.checkpoint_pin_store.pin_checkpoint",
+        lambda run_id, envelope, **kwargs: {
+            "schema_version": "clozn.pinned-checkpoint.v1", "run_id": run_id,
+            "pin_id": "pin-beta",
+        },
+    )
+
+    h = Handler("/runs/run_pin/snapshot/pin")
+    assert snapshot.try_post(h, "/runs/run_pin/snapshot/pin", {"note": "keep"}) is True
+    assert h.status == 201
+    assert seen == {
+        "model": "beta", "route": "/runs/<id>/snapshot/pin",
+        "export": ("checkpoint-beta", "generation-beta"),
+    }
+    assert h.body["manifest"]["pin_id"] == "pin-beta"

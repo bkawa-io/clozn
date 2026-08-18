@@ -2,9 +2,8 @@
 
 The gateway-level composition that makes durable pinning reachable from a running product server:
 (1) reconstruct the run as a live, in-memory checkpoint on whichever worker currently serves its
-model (clozn.replay.checkpoint_capture.capture_parent_checkpoint -- the SAME fail-closed machinery
-``POST /runs/<id>/execution-fork/checkpoint`` already uses, via the SAME `_parent_sub_facts` worker/
-runtime-identity resolution as clozn/server/routes/execution_fork.py, reused rather than re-derived);
+model (clozn.replay.checkpoint_capture.capture_parent_checkpoint, using the shared run-scoped
+model/runtime identity resolver);
 (2) export it via the engine's new POST /v1/checkpoint/export; (3) persist it durably via
 clozn.replay.checkpoint_pin_store.pin_checkpoint (content-addressed blob + SQLite metadata).
 
@@ -53,11 +52,11 @@ def try_post(h, p, body):
             "code": "snapshot_pin_options_unsupported"})
         return True
 
-    from clozn.server.routes.execution_fork import _parent_sub_facts
-    facts = _parent_sub_facts(h, parent, p)
+    from clozn.server.model_routing import select_run_model_facts
+    facts = select_run_model_facts(h, parent, route="/runs/<id>/snapshot/pin")
     if facts is None:
-        return True  # _parent_sub_facts already wrote the routing-error response
-    runtime, worker, engine = facts
+        return True  # the routing helper already wrote the routing-error response
+    runtime, worker, engine, _sub = facts
     if engine is None or runtime is None or worker is None:
         h._json(503, {
             "error": "pinning a checkpoint requires a ready identity-qualified product worker",
@@ -123,7 +122,7 @@ def try_post(h, p, body):
         # calls this route once with preview:true to display size, then requires --yes before calling
         # it again with preview:false to actually persist. Nothing has touched the blob store or
         # SQLite at this point; the capture above lives only in the worker's OWN ephemeral memory
-        # (exactly the existing execution-fork checkpoint capture -- unchanged by this preview).
+        # (exactly the existing checkpoint capture -- unchanged by this preview).
         h._json(200, {
             "ok": True, "preview": True, "run_id": run_id,
             "size_bytes": export.get("size_bytes"),

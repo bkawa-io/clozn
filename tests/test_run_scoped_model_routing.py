@@ -38,12 +38,15 @@ import pytest
 import clozn.runs.store as runlog
 from clozn.cli.worker_registry import AdapterRuntimeIdentity, RuntimeKey
 from clozn.server import app as server
-from clozn.server.model_routing import PreloadedModelBinding, PreloadedModelRouter
+from clozn.server.model_routing import (
+    PreloadedModelBinding,
+    PreloadedModelRouter,
+    select_run_model_facts,
+)
 from clozn.server.routes import (
     causal_trace,
     corrective_actions,
     corrective_retries,
-    execution_fork,
     influence_map,
     investigation,
     investigation_experiment,
@@ -586,29 +589,31 @@ def test_legacy_no_router_still_uses_active_sub_directly_unchanged(iso, monkeypa
         server.MODEL_ROUTER, server.SUB, server.ENGINE = previous
 
 
-# ============================================================== execution-fork/snapshot still share
+# ============================================================== neutral run-scoped identity facts
 
-def test_identity_facts_reuses_router_binding_facts_without_reprobing(iso, managed):
-    """Managed path: _identity_facts must return the router binding's OWN runtime_key/worker_identity
-    verbatim (no extra engine.health() probe) -- the exact de-duplication FORK-PIN-01's snapshot.py
-    docstring promises stays intact after generalizing _parent_sub_facts."""
+def test_run_model_facts_reuses_router_binding_facts_without_reprobing(iso, managed):
+    """Managed path returns the router binding's OWN identity without an extra health probe."""
     router, alpha, beta = managed
-    selection = router.select_control_model("beta", route="/runs/<id>/execution-fork/plan")
-    runtime, worker, engine = execution_fork._identity_facts(selection)
+    run = _run(model="beta")
+    facts = select_run_model_facts(Handler(), run, route="/runs/<id>/snapshot/pin")
+    assert facts is not None
+    runtime, worker, engine, sub = facts
+    selection = router.select_control_model("beta", route="/runs/<id>/snapshot/pin")
     assert runtime == selection.runtime_key
     assert worker == selection.worker_identity
     assert engine is beta.engine
+    assert sub is beta.sub
 
 
-def test_identity_facts_derives_via_sub_facts_on_legacy_path(iso):
-    """Legacy (no router) path: _identity_facts must fall back to _sub_facts's own engine.health()
-    derivation, exactly the pre-existing behavior _parent_sub_facts had before this change."""
+def test_selection_identity_facts_derives_on_legacy_path(iso):
+    """Legacy (no router) path still derives identity through one engine health probe."""
     from clozn.server.model_routing import ModelSelection
+    from clozn.experiments.execution_facts import selection_identity_facts
 
     engine = FakeEngine(digest="z" * 64, template="9" * 16, build="b", generation="g",
                         base="http://127.0.0.1:1")
     sub = FakeSub(engine)
     selection = ModelSelection(model_id="legacy", sub=sub, engine=engine, artifact=None)
-    runtime, worker, resolved_engine = execution_fork._identity_facts(selection)
+    runtime, worker, resolved_engine = selection_identity_facts(selection)
     assert resolved_engine is engine
     assert worker["worker_generation_id"] == "g"

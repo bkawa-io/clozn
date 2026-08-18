@@ -12,11 +12,11 @@ adjacent logic, no engine/worker import anywhere in its own dependency chain). I
 `clozn.server.app` (no `SUB`/`ENGINE` access) -- a fidelity indicator must be drawable while the runtime
 is completely offline.
 
-NOT A REPLACEMENT FOR THE LIVE PLANNER
+NOT A LIVE EXECUTION PLANNER
 -------------------------------------------
-`POST /runs/<id>/execution-fork/plan` remains the sole authority for "is an exact rewind executable
-right now" -- it depends on live worker/checkpoint/runtime state this route deliberately never inspects.
-This route answers a narrower, cheaper question from recorded evidence and prior proof alone; see
+The canonical Time Travel resolver is the authority for whether an exact rewind can be realized now;
+it depends on live worker/checkpoint/runtime state this route deliberately never inspects. This route
+answers a narrower, cheaper question from recorded evidence and prior proof alone; see
 `clozn.replay.rewind_fidelity`'s own module docstring for the full three-concept boundary
 (reconstructed / requires_live_plan / historically_verified_exact) this route's response encodes.
 
