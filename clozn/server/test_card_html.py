@@ -21,9 +21,6 @@ def _run(**over) -> dict:
         "response_summary": "Italy is shaped like a boot.",
         "messages": [{"role": "user", "content": "What country is shaped like a boot?"}],
         "response": "Italy is shaped like a boot.",
-        "memory": {"cards_applied": ["enjoys geography trivia"], "applied_ids": ["mem_1"],
-                   "mode": "prompt", "gate": 0.62},
-        "behavior": {"active_dials": {}},
         "trace": {
             "tokens": ["Italy", " is", " shaped", " like", " a", " boot", "."],
             "confidence": [0.91, 0.98, 0.95, 0.98, 0.99, 0.44, 0.99],
@@ -42,7 +39,7 @@ def _run(**over) -> dict:
 _RECEIPTS = {
     "run_id": "run_test0000001_abc123",
     "receipts": [{
-        "influence": {"card_id": "mem_1", "text": "enjoys <geography> trivia"},
+        "influence": {"text": "enjoys <geography> trivia"},
         "has_effect": True,
         "causal_verified": True,
         "baseline_reply": "Italy is shaped like a boot.",
@@ -50,7 +47,7 @@ _RECEIPTS = {
         "delta": {"words": [6, 8], "wps": [6.0, 8.0], "changed": 38},
     }],
     "forced_receipts": [{
-        "influence": {"card_id": "mem_1", "text": "enjoys <geography> trivia"},
+        "influence": {"text": "enjoys <geography> trivia"},
         "mode": "forced",
         "causal_verified": True,
         "has_effect": True,

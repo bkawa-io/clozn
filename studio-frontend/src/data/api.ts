@@ -69,15 +69,7 @@ function durationFromMilliseconds(value: unknown): { text: string; milliseconds?
 
 function runSummary(run: JsonRecord): RunSummary {
   const timing = record(run.timing);
-  const memory = record(run.memory);
-  const behavior = record(run.behavior);
   const duration = durationFromMilliseconds(timing.duration_ms ?? run.duration_ms);
-  const activeDials = record(behavior.active_dials);
-  const cards = Array.isArray(memory.cards_applied)
-    ? memory.cards_applied
-    : Array.isArray(memory.applied_ids)
-      ? memory.applied_ids
-      : [];
   const createdTs = Number(run.created_ts);
   return {
     id: String(run.id ?? run.run_id ?? ""),
@@ -107,8 +99,6 @@ function runSummary(run: JsonRecord): RunSummary {
     sessionKey: typeof run.session_key === "string" && run.session_key ? run.session_key : undefined,
     flags: Array.isArray(run.flags) ? run.flags.map(String) : [],
     warningCount: Array.isArray(run.warnings) ? run.warnings.length : 0,
-    activeDialCount: Object.keys(activeDials).length,
-    memoryCardCount: cards.length,
   };
 }
 
@@ -1078,29 +1068,10 @@ function adapterLabels(...values: unknown[]) {
 }
 
 function runConfiguration(run: JsonRecord): RunConfiguration {
-  const behavior = record(run.behavior);
-  const memory = record(run.memory);
   const meta = record(run.meta);
   const identity = record(run.identity);
   const changes = record(run.changes_applied);
-  const activeDials = Object.fromEntries(
-    Object.entries(record(behavior.active_dials))
-      .map(([name, value]) => [name, Number(value)] as const)
-      .filter(([, value]) => Number.isFinite(value)),
-  );
-  const rawCards = Array.isArray(memory.cards_applied)
-    ? memory.cards_applied
-    : Array.isArray(memory.applied_ids)
-      ? memory.applied_ids
-      : [];
-  const memoryStrength = Number(memory.strength);
   return {
-    activeDials,
-    memoryCards: rawCards.map((card) => {
-      const item = record(card);
-      return String(item.id ?? item.text ?? card);
-    }).filter(Boolean),
-    memoryStrength: Number.isFinite(memoryStrength) ? memoryStrength : undefined,
     adapters: adapterLabels(
       run.adapters,
       run.adapter,

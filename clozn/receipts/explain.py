@@ -11,15 +11,14 @@ be trusted to answer about itself):
                           aggregate confidence % -- that scalar self-report probe is dead (it saturates at
                           every scale -- a measured dead end). {"available": false, ...}
                           when the run carries no per-token trace at all (the HF chat path may not).
-  * influences_active -- the active tone dials logged as having ridden this reply, plus the run's
-                          `sections` manifest (prompt sections: rag_context/system-prompt/etc., each
-                          with its name/source/char_count/preview -- see clozn.runs.sections). Memory
-                          cards and anchored memory were cut from the product on 2026-07-27, so dials +
-                          sections are the whole story. Every entry -- dial OR section -- is tagged
-                          causal_verified:null -- ACTIVE is not PROOF; only M2's on-demand ablation
-                          receipt may ever set this true. This module never runs that receipt. A run
-                          recorded before section capture landed carries no `sections` field at all --
-                          surfaced as an explicit {"available": false, "note": ...}, never a
+  * influences_active -- the run's `sections` manifest (prompt sections: rag_context/system-prompt/etc.,
+                          each with its name/source/char_count/preview -- see clozn.runs.sections).
+                          Memory cards, anchored memory, and named-dial personalization were all cut
+                          from the product, so sections are the whole story now. Every section entry is
+                          tagged causal_verified:null -- ACTIVE is not PROOF; only M2's on-demand
+                          ablation receipt may ever set this true. This module never runs that receipt.
+                          A run recorded before section capture landed carries no `sections` field at
+                          all -- surfaced as an explicit {"available": false, "note": ...}, never a
                           silently-empty list.
   * concepts           -- the engine's sae:<id> feature readouts, when a run happens to carry them.
                           {"available": false, ...} otherwise (true today for every run: no current
@@ -108,10 +107,10 @@ def _confidence(run: dict) -> dict:
 # ---------------------------------------------------------------------------------------- influences_active
 def _section_entry(sec: dict) -> dict:
     """One section from the run's manifest, reshaped for display: id/name/source/char_count/preview,
-    always tagged causal_verified:null (the same invariant as a card or dial entry -- ACTIVE is not
-    PROOF; only M2's on-demand section-ablation receipt, `exclude_sections`, may ever prove one caused
-    the reply, and it never runs from here). Guards every field individually so one malformed section in
-    the manifest can't take the others down with it."""
+    always tagged causal_verified:null (ACTIVE is not PROOF; only M2's on-demand section-ablation
+    receipt, `exclude_sections`, may ever prove one caused the reply, and it never runs from here).
+    Guards every field individually so one malformed section in the manifest can't take the others
+    down with it."""
     return {
         "id": sec.get("id"),
         "name": sec.get("name"),
@@ -138,19 +137,13 @@ def _sections_active(run: dict) -> dict:
 
 
 def _influences_active(run: dict) -> dict:
-    """The active tone dials logged as having ridden this reply, plus the run's section manifest.
+    """The run's section manifest -- the only logged "what shaped this reply" signal left.
 
-    Memory cards and anchored memory were cut from the product on 2026-07-27, so dials + sections are
-    the whole story: steering is the only thing that shapes a reply, and `sections` records which PARTS
-    of the prompt could have shaped it. Every entry -- dial or section -- is tagged causal_verified:null
-    -- ACTIVE is not PROOF, and only an on-demand ablation receipt may ever flip it."""
-    behavior = _as_dict(run.get("behavior"))
-    dials_raw = _as_dict(behavior.get("active_dials"))
-    dials = [{"name": k, "value": v, "causal_verified": None} for k, v in dials_raw.items()]
-    out = {"dials": dials, "sections": _sections_active(run)}
-    if not dials:
-        out["note"] = "no dial was active on this turn"
-    return out
+    Memory cards, anchored memory, and named-dial personalization were all cut from the product, so
+    `sections` (which PARTS of the prompt could have shaped the reply) is the whole story now. Every
+    section entry is tagged causal_verified:null -- ACTIVE is not PROOF, and only an on-demand ablation
+    receipt may ever flip it."""
+    return {"sections": _sections_active(run)}
 
 
 # -------------------------------------------------------------------------------------------------- concepts
@@ -212,8 +205,7 @@ def explain(run: dict | None) -> dict:
     try:
         influences = _influences_active(run)
     except Exception:
-        influences = {"dials": [],
-                      "sections": {"available": False, "note": _NO_SECTIONS_NOTE},
+        influences = {"sections": {"available": False, "note": _NO_SECTIONS_NOTE},
                       "note": "influence manifest unavailable"}
     try:
         concepts = _concepts(run)

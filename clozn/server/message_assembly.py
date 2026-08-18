@@ -34,8 +34,8 @@ def _inject_block(messages, block):
 
 
 def _export_markdown(run: dict, xr: dict | None) -> str:
-    """Render a run (+ its M1 explain) as a human-readable Markdown receipt: the conversation, which
-    dials shaped it, why it stopped, and where it hesitated. Pure / no model -- the JSON export carries
-    the full structured bundle; this is its readable companion."""
+    """Render a run (+ its M1 explain) as a human-readable Markdown receipt: the conversation, why it
+    stopped, and where it hesitated. Pure / no model -- the JSON export carries the full structured
+    bundle; this is its readable companion."""
     import clozn.receipts.bundle as receipt_bundle
     return receipt_bundle.to_markdown(receipt_bundle.build(run, explain=xr))

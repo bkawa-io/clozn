@@ -71,11 +71,11 @@ Both are why a keyword search for `adapter` in this repo misleads.
 to clozn's interface. Nothing to do with model weights.
 
 **Control-vector steering** — `GgmlAdapter::set_steer` calls llama.cpp's `llama_set_adapter_cvec`, which
-despite the name is the *control-vector* API, and is what the tone dials use. A control vector adds one
-vector to the residual stream at inference time, uniformly across a layer range. A LoRA is a pair of
-low-rank matrices whose product reconstructs a per-weight-matrix delta, multiplied into specific
-attention/MLP projections. Different mathematical objects, different point in the model, different API.
-Having one gets you no part of the other.
+despite the name is the *control-vector* API, and is what raw vector steering (`steer_vec`,
+`POST /intervene`) uses. A control vector adds one vector to the residual stream at inference time,
+uniformly across a layer range. A LoRA is a pair of low-rank matrices whose product reconstructs a
+per-weight-matrix delta, multiplied into specific attention/MLP projections. Different mathematical
+objects, different point in the model, different API. Having one gets you no part of the other.
 
 llama.cpp compounds this by placing `llama_set_adapters_lora` directly beside `llama_set_adapter_cvec`
 in `llama.h`.

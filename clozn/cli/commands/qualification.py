@@ -1,7 +1,7 @@
 """Qualification planner and the explicit Q3 core runner entry point.
 
 ``--plan`` remains model-free.  ``--run`` is opt-in: it starts the normal product runtime for one
-portable core smoke and writes a receipt.  It does not install artifacts or claim Q4-Q8 lab support.
+portable core smoke and writes a receipt.  It does not install artifacts or claim Q5-Q8 lab support.
 """
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ def cmd_qualify(args) -> int:
             for step in report["steps"]:
                 suffix = f" -- {step['reason']}" if step.get("reason") else ""
                 print(f"  [{step['boundary']}] {step['id']}: {step['status']}{suffix}")
-            print("  Q4 dials, Q5 J-lens, Q6 batteries, and Q7 installation remain separate steps")
+            print("  Q5 J-lens, Q6 batteries, and Q7 installation remain separate steps")
             print(f"  receipt: {output}")
         return 0 if report["claims"]["qualification_status"] == "core_passed" else 1
     if not args.plan:

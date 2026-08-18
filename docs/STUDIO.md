@@ -30,9 +30,9 @@ SQLite journal and become available in Studio.
   history, settings, tools, and output changes.
 - **Experiments** renders the case × variant × seed matrix, summaries, filters, and cell detail from
   versioned experiment results.
-- **Behavior** exposes qualified steering controls and one-shot corrective retries: preview a bounded
-  action, confirm it to run a matched baseline/corrected comparison, and optionally keep the corrected
-  child as that run's own revision (with an explicit undo). Durable, auto-applying corrections
+- **Behavior** exposes one-shot corrective retries and runtime sampling defaults. A retry previews a
+  bounded action, confirms it to run a matched baseline/corrected comparison, and optionally keeps the
+  corrected child as that run's own revision (with an explicit undo). Durable, auto-applying corrections
   ("Teach Once") were retired — nothing kept here shapes a later, unrelated request; see
   [CAPABILITIES.md](CAPABILITIES.md).
 - **Model** reports the loaded worker and optional artifact state.
@@ -90,6 +90,8 @@ surfaces.
 ## Removed surfaces
 
 Prompt-card and learned-prefix memory are not current Studio features. The former standalone PyTorch
-workbench and diffusion UI were retired with that path. Old screenshots, design specs, and handoff notes
-remain useful historical records, but they are labeled as archives and are not instructions for running
-the current product.
+workbench and diffusion UI were retired with that path. Tone dials, dial calibration, user preferences,
+feedback signals, memory cards, and concept steering as a user-facing control were removed along with the
+rest of the personalization layer; raw-vector steering (`steer_vec`, `POST /intervene`) is unaffected.
+Old screenshots, design specs, and handoff notes remain useful historical records, but they are labeled
+as archives and are not instructions for running the current product.

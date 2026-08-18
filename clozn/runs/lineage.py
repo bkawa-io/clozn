@@ -18,34 +18,6 @@ def _change_label(run: dict) -> str | None:
         return changes["label"].strip()
 
     parts = []
-    if changes.get("memory_off"):
-        parts.append("memory off")
-    disabled = changes.get("disabled_memory_ids")
-    if isinstance(disabled, list) and disabled:
-        parts.append(f"memory disabled ({len(disabled)})")
-    if changes.get("behavior_off"):
-        parts.append("dials neutralized")
-
-    overrides = changes.get("behavior_overrides")
-    if isinstance(overrides, dict):
-        eff = ((run.get("behavior") or {}).get("active_dials") or {})
-        for k in sorted(overrides):
-            v = eff.get(k, overrides.get(k))
-            try:
-                parts.append(f"{k} {float(v):.2f}")
-            except (TypeError, ValueError):
-                parts.append(str(k))
-
-    if changes.get("nudge"):
-        name = str(changes.get("nudge"))
-        eff = ((run.get("behavior") or {}).get("active_dials") or {})
-        suffix = ""
-        try:
-            if eff.get(name) is not None:
-                suffix = f" -> {float(eff[name]):.2f}"
-        except (TypeError, ValueError):
-            suffix = ""
-        parts.append(f"{name} up{suffix}")
 
     corrective = changes.get("corrective_retry")
     if isinstance(corrective, dict) and corrective.get("preset"):

@@ -932,13 +932,6 @@ int main(int argc, char** argv) {
             return;
         }
 
-        // Optional PyTorch-trained soft prefix (the train-on-HF / serve-on-llama.cpp bridge): a flat
-        // prefix_rows x n_embd float array spliced in ahead of the prompt before decoding. AR-only.
-        std::vector<float> prefix_embd;
-        const int prefix_rows = body.value("prefix_rows", 0);
-        if (prefix_rows > 0 && body.contains("prefix_embd") && body["prefix_embd"].is_array()) {
-            prefix_embd = body["prefix_embd"].get<std::vector<float>>();   // AR: ar_forward_embd; diffusion: set_diffusion_prefix
-        }
         std::vector<float> steer_vec;
         if (body.contains("steer_vec") && body["steer_vec"].is_array()) {
             steer_vec = body["steer_vec"].get<std::vector<float>>();
@@ -966,7 +959,7 @@ int main(int argc, char** argv) {
 
         // One call into the runtime on a POOLED context (acquire blocks until one is free, so N
         // workers run N requests concurrently; the Lease releases it on any exit).
-        auto run = [&pool, &concept_probes, &steer_probes, &sae_serve, prompt_ids, suffix_ids, gap, cfg, sample, is_infill, ar_mode, features, steer_concept, steer_coef, steer_layer, prefix_embd, prefix_rows, steer_vec, reference_tokens, lens_on, lens_layer, plane, readout_layers, write_reqs, chat_grammar, want_ckpt, ckpt_id_out, &checkpoints, request_timing_phases, &startup_timing_phases, &startup_timing_claimed, duration_ns](
+        auto run = [&pool, &concept_probes, &steer_probes, &sae_serve, prompt_ids, suffix_ids, gap, cfg, sample, is_infill, ar_mode, features, steer_concept, steer_coef, steer_layer, steer_vec, reference_tokens, lens_on, lens_layer, plane, readout_layers, write_reqs, chat_grammar, want_ckpt, ckpt_id_out, &checkpoints, request_timing_phases, &startup_timing_phases, &startup_timing_claimed, duration_ns](
                        const std::function<void(const Event&)>& on_event) {
             std::vector<PerformancePhase> phases = request_timing_phases;
             const PerfClock::time_point worker_start_started = PerfClock::now();
@@ -1007,7 +1000,7 @@ int main(int argc, char** argv) {
             const std::function<void(const Event&)> ev = with_sae_readout(on_event, sae_serve, sae_on);
             const ConceptProbes* probes = (features && concept_probes.ready()) ? &concept_probes : nullptr;
             const bool steering = !steer_concept.empty() && steer_coef != 0.0 && steer_probes.ready();
-            const bool raw_steer = !steer_vec.empty();   // a raw tone direction (studio engine dials)
+            const bool raw_steer = !steer_vec.empty();   // a raw direction vector, applied verbatim (interpretability write-path)
             if (steering || raw_steer) {
                 const int nl = (*lease).n_layer();
                 int lo, hi;
@@ -1031,11 +1024,7 @@ int main(int argc, char** argv) {
             }
             // AR model => the causal left-to-right loop (same white-box reads/steering, no scheduler).
             // Diffusion => the denoiser (whole-sequence generate, or infill between prefix/suffix).
-            // Diffusion: a soft prefix rides in as a frozen block via set_diffusion_prefix (AR uses the
-            // ar_forward_embd arg instead). Either way it's the HF-trained memory, injected into the GGUF.
-            const bool diff_prefix = !ar_mode && !prefix_embd.empty() && prefix_rows > 0;
-            if (diff_prefix) (*lease).set_diffusion_prefix(prefix_embd, prefix_rows);
-            // Restore the pooled context to a clean state (steer/prefix/tap/emit off) on EVERY exit path.
+            // Restore the pooled context to a clean state (steer/tap/emit off) on EVERY exit path.
             // Critical: a generator can throw (n_ctx exceeded, llama_decode failure, ...). On the STREAMING
             // path that throw escapes into cpp-httplib's worker thread with no handler -> std::terminate() ->
             // abort(): a silent hard crash (no trace on a Windows Release build). So clean up + rethrow -- the
@@ -1043,7 +1032,6 @@ int main(int argc, char** argv) {
             // caller is already inside httplib's routing try/catch, so it degrades to a 500. Either way the
             // pooled context goes back clean, never dirty.
             auto cleanup = [&]() {
-                if (diff_prefix) (*lease).clear_diffusion_prefix();
                 if (steering || raw_steer) (*lease).clear_steer();
                 if (sae_on || lens_on) (*lease).set_tap_layer(default_tap);
                 if (plane) {  // disarm the capture plane before returning the pooled context
@@ -1064,7 +1052,6 @@ int main(int argc, char** argv) {
                         "models are supported");
                 }
                 GenerateResult r = generate_ar(*lease, prompt_ids, cfg, ev, sample, probes,
-                                     prefix_embd.empty() ? nullptr : &prefix_embd, prefix_rows,
                                      reference_tokens.empty() ? nullptr : &reference_tokens,
                                      chat_grammar ? &*chat_grammar : nullptr, nullptr,
                                      // resume_truncate_to / force_first_token: execution-fork only,
@@ -1076,15 +1063,14 @@ int main(int argc, char** argv) {
                     // the SAME single-token shape the loop itself would have used, so the saved
                     // state is exactly the state an uninterrupted longer run would have had.
                     const int n_board = static_cast<int>(r.board.size());
-                    // steer/prefix are still armed here (cleanup runs after) -- intentionally:
-                    // the top-up decode must run under the run's own regime.
+                    // steer is still armed here (cleanup runs after) -- intentionally: the top-up
+                    // decode must run under the run's own regime.
                     (*lease).evict_from(n_board - 1);
                     (*lease).ar_forward({r.board[static_cast<size_t>(n_board - 1)]}, n_board - 1);
                     EngineCheckpoint ckpt = (*lease).save_checkpoint(r.board, n_board);
                     // The prompt/generated boundary within r.board (execution-fork's regime split):
                     // r.board == prompt_ids ++ generated by construction, so prompt_ids.size() IS
-                    // that boundary -- no soft prefix is included (prefix_embd rides in as raw
-                    // embeddings, never token ids, so it never enters r.board).
+                    // that boundary.
                     ckpt.prompt_tokens = static_cast<int>(prompt_ids.size());
                     if (sample.temperature > 0.0) {
                         ckpt.has_sampler = true;
@@ -1553,9 +1539,9 @@ int main(int argc, char** argv) {
             try {
                 r = fast
                     ? generate_ar(*lease, ckpt.tokens, cfg, {}, sample, nullptr,
-                                  nullptr, 0, nullptr, nullptr, &ckpt)
+                                  nullptr, nullptr, &ckpt)
                     : generate_ar(*lease, ckpt.tokens, cfg, {}, sample, nullptr,
-                                  nullptr, 0, nullptr);
+                                  nullptr);
             } catch (...) {
                 if (steer_source == "checkpoint") (*lease).clear_steer();
                 throw;
@@ -1878,14 +1864,14 @@ int main(int argc, char** argv) {
                     // -> bridge-decode the boundary token -> continue. generate_ar's resume_from +
                     // resume_truncate_to do exactly this (see generate_ar.cpp).
                     r = generate_ar(*lease, ckpt.tokens, cfg, {}, sample, nullptr,
-                                    nullptr, 0, nullptr, nullptr, &ckpt, truncate_to, force_ptr);
+                                    nullptr, nullptr, &ckpt, truncate_to, force_ptr);
                 } else {
                     // Reprefill: tokens[0, truncate_to) as ONE batch, reproducing the original
                     // prefill's own shape -- never the live-KV bridge (see the route doc above).
                     const std::vector<int> reprefill_prompt(ckpt.tokens.begin(),
                                                              ckpt.tokens.begin() + truncate_to);
                     r = generate_ar(*lease, reprefill_prompt, cfg, {}, sample, nullptr,
-                                    nullptr, 0, nullptr, nullptr, nullptr, -1, force_ptr);
+                                    nullptr, nullptr, nullptr, -1, force_ptr);
                 }
 
                 json applied{{"type", itype}};

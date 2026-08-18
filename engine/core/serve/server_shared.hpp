@@ -1156,7 +1156,7 @@ struct JlensServe {
 
     // Hand back ONE row of the model's own (quantized) unembed/lm_head matrix -- W_U[token_id],
     // a [d_model] fp32 vector -- via ggml_get_rows. This is the missing ingredient the product's
-    // dir(c) concept-dial (clozn/behavior/steering/concept_dir.py) needs: dir(c) =
+    // dir(c) concept-dial (clozn/analysis/concept_dir.py) needs: dir(c) =
     // normalize(J_l^T @ W_U[c]) already has J_l (the shipped product sidecar, read straight with
     // plain numpy) but had NO in-product source for W_U at all -- it lives only inside this
     // process, read straight out of the loaded GGUF for /jlens (out_head above). ggml_get_rows

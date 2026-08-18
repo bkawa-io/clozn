@@ -1,3 +1,1 @@
-"""Behavior controls: feedback, preferences, and steering."""
-
-from . import feedback, preferences
+"""Behavior controls: corrective-action registry and flow, and compare-view metrics."""

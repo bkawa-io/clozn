@@ -443,6 +443,18 @@ def _verify_0007(db: sqlite3.Connection) -> bool:
     )
 
 
+
+
+# NOT dropping pinned_checkpoints.has_steer (migration 3, above): the 2026-08 personalization cut's own
+# decision doc listed it as historical-provenance cruft to migrate away, but it isn't that. It is
+# checkpoint steer-VECTOR persistence -- whether a pinned KV snapshot carries an active raw steer vector
+# -- written and read by clozn/replay/checkpoint_pin_store.py on every pin/restore, mirroring
+# clozn.pinned-checkpoint.v1.json's `state.has_steer` (also kept, `required`, for the same reason). Raw
+# steering is the one part of that cut's scope explicitly kept ("checkpoint steer persistence" is listed
+# verbatim under KEEP COMPLETELY UNTOUCHED); the named tone-dial layer being removed never touched this
+# column. Dropping it would break live checkpoint pinning, not clean up vestigial data, so the
+# personalization cut adds no migration of its own.
+#
 # The shipped, ordered migration set. Append-only: once released, a migration's `apply` must never be
 # edited (a DB that already applied it would silently diverge from one that applies the edited version) --
 # ship a NEW migration with a higher version instead.

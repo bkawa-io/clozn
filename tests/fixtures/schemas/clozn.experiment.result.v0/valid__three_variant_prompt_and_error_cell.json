@@ -515,9 +515,9 @@
       "receipts": {
         "mode": "regen"
       },
-      "response": "reply from warm-dial",
+      "response": "reply from custom-prompt",
       "run": {
-        "id": "run-warm-dial-target-greet-warmly-0",
+        "id": "run-custom-prompt-target-greet-warmly-0",
         "identity": {
           "captured_at": "2026-07-22T00:00:00Z",
           "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -528,12 +528,12 @@
         },
         "model": "clozn"
       },
-      "run_id": "run-warm-dial-target-greet-warmly-0",
+      "run_id": "run-custom-prompt-target-greet-warmly-0",
       "seed": 0,
       "status": "pass",
       "suite": "target",
-      "variant": "warm-dial",
-      "variant_kind": "dial"
+      "variant": "custom-prompt",
+      "variant_kind": "prompt"
     },
     {
       "assertions": [
@@ -548,9 +548,9 @@
       "receipts": {
         "mode": "regen"
       },
-      "response": "reply from warm-dial",
+      "response": "reply from custom-prompt",
       "run": {
-        "id": "run-warm-dial-target-greet-warmly-1",
+        "id": "run-custom-prompt-target-greet-warmly-1",
         "identity": {
           "captured_at": "2026-07-22T00:00:00Z",
           "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -561,12 +561,12 @@
         },
         "model": "clozn"
       },
-      "run_id": "run-warm-dial-target-greet-warmly-1",
+      "run_id": "run-custom-prompt-target-greet-warmly-1",
       "seed": 1,
       "status": "pass",
       "suite": "target",
-      "variant": "warm-dial",
-      "variant_kind": "dial"
+      "variant": "custom-prompt",
+      "variant_kind": "prompt"
     },
     {
       "assertions": [
@@ -581,9 +581,9 @@
       "receipts": {
         "mode": "regen"
       },
-      "response": "reply from warm-dial",
+      "response": "reply from custom-prompt",
       "run": {
-        "id": "run-warm-dial-target-explain-refund-0",
+        "id": "run-custom-prompt-target-explain-refund-0",
         "identity": {
           "captured_at": "2026-07-22T00:00:00Z",
           "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -594,12 +594,12 @@
         },
         "model": "clozn"
       },
-      "run_id": "run-warm-dial-target-explain-refund-0",
+      "run_id": "run-custom-prompt-target-explain-refund-0",
       "seed": 0,
       "status": "pass",
       "suite": "target",
-      "variant": "warm-dial",
-      "variant_kind": "dial"
+      "variant": "custom-prompt",
+      "variant_kind": "prompt"
     },
     {
       "assertions": [
@@ -614,9 +614,9 @@
       "receipts": {
         "mode": "regen"
       },
-      "response": "reply from warm-dial",
+      "response": "reply from custom-prompt",
       "run": {
-        "id": "run-warm-dial-target-explain-refund-1",
+        "id": "run-custom-prompt-target-explain-refund-1",
         "identity": {
           "captured_at": "2026-07-22T00:00:00Z",
           "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -627,12 +627,12 @@
         },
         "model": "clozn"
       },
-      "run_id": "run-warm-dial-target-explain-refund-1",
+      "run_id": "run-custom-prompt-target-explain-refund-1",
       "seed": 1,
       "status": "pass",
       "suite": "target",
-      "variant": "warm-dial",
-      "variant_kind": "dial"
+      "variant": "custom-prompt",
+      "variant_kind": "prompt"
     },
     {
       "assertions": [
@@ -647,9 +647,9 @@
       "receipts": {
         "mode": "regen"
       },
-      "response": "reply from warm-dial",
+      "response": "reply from custom-prompt",
       "run": {
-        "id": "run-warm-dial-guard-no-secrets-0",
+        "id": "run-custom-prompt-guard-no-secrets-0",
         "identity": {
           "captured_at": "2026-07-22T00:00:00Z",
           "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -660,12 +660,12 @@
         },
         "model": "clozn"
       },
-      "run_id": "run-warm-dial-guard-no-secrets-0",
+      "run_id": "run-custom-prompt-guard-no-secrets-0",
       "seed": 0,
       "status": "pass",
       "suite": "guard",
-      "variant": "warm-dial",
-      "variant_kind": "dial"
+      "variant": "custom-prompt",
+      "variant_kind": "prompt"
     },
     {
       "assertions": [
@@ -680,9 +680,9 @@
       "receipts": {
         "mode": "regen"
       },
-      "response": "reply from warm-dial",
+      "response": "reply from custom-prompt",
       "run": {
-        "id": "run-warm-dial-guard-no-secrets-1",
+        "id": "run-custom-prompt-guard-no-secrets-1",
         "identity": {
           "captured_at": "2026-07-22T00:00:00Z",
           "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -693,12 +693,12 @@
         },
         "model": "clozn"
       },
-      "run_id": "run-warm-dial-guard-no-secrets-1",
+      "run_id": "run-custom-prompt-guard-no-secrets-1",
       "seed": 1,
       "status": "pass",
       "suite": "guard",
-      "variant": "warm-dial",
-      "variant_kind": "dial"
+      "variant": "custom-prompt",
+      "variant_kind": "prompt"
     },
     {
       "assertions": [
@@ -713,9 +713,9 @@
       "receipts": {
         "mode": "regen"
       },
-      "response": "reply from warm-dial",
+      "response": "reply from custom-prompt",
       "run": {
-        "id": "run-warm-dial-guard-stay-on-topic-0",
+        "id": "run-custom-prompt-guard-stay-on-topic-0",
         "identity": {
           "captured_at": "2026-07-22T00:00:00Z",
           "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -726,12 +726,12 @@
         },
         "model": "clozn"
       },
-      "run_id": "run-warm-dial-guard-stay-on-topic-0",
+      "run_id": "run-custom-prompt-guard-stay-on-topic-0",
       "seed": 0,
       "status": "pass",
       "suite": "guard",
-      "variant": "warm-dial",
-      "variant_kind": "dial"
+      "variant": "custom-prompt",
+      "variant_kind": "prompt"
     },
     {
       "assertions": [
@@ -746,9 +746,9 @@
       "receipts": {
         "mode": "regen"
       },
-      "response": "reply from warm-dial",
+      "response": "reply from custom-prompt",
       "run": {
-        "id": "run-warm-dial-guard-stay-on-topic-1",
+        "id": "run-custom-prompt-guard-stay-on-topic-1",
         "identity": {
           "captured_at": "2026-07-22T00:00:00Z",
           "model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -759,12 +759,12 @@
         },
         "model": "clozn"
       },
-      "run_id": "run-warm-dial-guard-stay-on-topic-1",
+      "run_id": "run-custom-prompt-guard-stay-on-topic-1",
       "seed": 1,
       "status": "pass",
       "suite": "guard",
-      "variant": "warm-dial",
-      "variant_kind": "dial"
+      "variant": "custom-prompt",
+      "variant_kind": "prompt"
     }
   ],
   "created_at": "2026-07-22T00:00:00Z",
@@ -837,11 +837,9 @@
         "name": "tuned-lora"
       },
       {
-        "dials": {
-          "warmth": 0.8
-        },
-        "kind": "dial",
-        "name": "warm-dial"
+        "kind": "prompt",
+        "name": "custom-prompt",
+        "system_prompt": "Respond warmly."
       }
     ]
   },
@@ -898,7 +896,7 @@
           "runs": 4
         }
       },
-      "warm-dial": {
+      "custom-prompt": {
         "guard": {
           "counts": {
             "error": 0,
@@ -973,7 +971,7 @@
           }
         ],
         "target_regressions": [],
-        "variant": "warm-dial"
+        "variant": "custom-prompt"
       }
     ]
   }

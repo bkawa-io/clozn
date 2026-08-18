@@ -141,11 +141,6 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
                            const std::function<void(const Event&)>& on_event = {},
                            const SampleConfig& sample = {},
                            const ConceptProbes* read_probes = nullptr,
-                           // Optional PyTorch-trained soft prefix: prefix_rows x n_embd raw embeddings spliced
-                           // in ahead of the prompt (via ar_forward_embd) before decoding, so a memory learned
-                           // on the HF model rides into this ggml generation. nullptr/0 = no prefix (default).
-                           const std::vector<float>* prefix_embd = nullptr,
-                           int prefix_rows = 0,
                            // Optional early-stop reference (prove-all ablated arms): the baseline reply's
                            // committed token ids. Generation halts at the first generated token that differs
                            // from reference[k] -- yielding a bit-exact PREFIX of the full reply plus a

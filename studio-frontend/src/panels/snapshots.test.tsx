@@ -14,7 +14,7 @@ const runtime: RuntimeState = {
   runs: [{
     id: "run-alpha", label: "Explain alpha · native · alpha", prompt: "Explain alpha", response: "Alpha",
     createdAt: "2026-08-01T00:00:00Z", source: "openai_api", client: "local", model: "qwen",
-    substrate: "cpu", duration: "1 s", flags: [], warningCount: 0, activeDialCount: 0, memoryCardCount: 0,
+    substrate: "cpu", duration: "1 s", flags: [], warningCount: 0,
   }],
 };
 
@@ -24,7 +24,7 @@ const manifest = {
   run_id: "run-alpha",
   pinned_at: "2026-08-01T00:00:00Z",
   identity: { architecture: "qwen2", n_ctx: 4096 },
-  state: { n_past: 128, n_tokens: 128, prompt_tokens: 96, causal: true, has_sampler: false, has_steer: false },
+  state: { n_past: 128, n_tokens: 128, prompt_tokens: 96, causal: true, has_sampler: false },
   blob: { kv_bytes: 2048, envelope_bytes: 3072 },
 };
 

@@ -78,7 +78,7 @@ function reading(id: string, tokenPrefix: string): ObservatoryData {
       { token: "alt", score: 0.1, delta: -0.7, tokenId: 99 },
     ],
     sources: [],
-    configuration: { activeDials: {}, memoryCards: [], adapters: [], changes: [] },
+    configuration: { adapters: [], changes: [] },
   };
 }
 
@@ -96,8 +96,6 @@ function summary(data: ObservatoryData): RunSummary {
     duration: data.duration,
     flags: [],
     warningCount: 0,
-    activeDialCount: 0,
-    memoryCardCount: 0,
   };
 }
 

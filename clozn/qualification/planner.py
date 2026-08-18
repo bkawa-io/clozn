@@ -21,7 +21,7 @@ from clozn.cli import fit_planner
 PLAN_SCHEMA = "clozn.qualification-plan.v1"
 
 _LAB_DEPENDENCIES = (
-    ("torch", "PyTorch", "dial calibration and white-box fitting"),
+    ("torch", "PyTorch", "white-box fitting"),
     ("transformers", "Transformers", "reference-model and calibration probes"),
 )
 
@@ -145,16 +145,12 @@ def build_plan(model: str, header: Mapping[str, Any], *, generated_at: str | Non
               reason="model-specific parser/renderer checks are planned, not executed"),
         _step("influence_provenance", "Check influence and provenance eligibility", "product", "ready",
               reason="white-box capability and attention materialization are verified by Q3"),
-        _step("dials", "Calibrate model-scoped control dials", "lab", "blocked" if missing else "planned",
-              requires=["torch", "transformers"],
-              reason=(f"missing lab dependencies: {', '.join(missing)}" if missing
-                      else "lab dependencies are present; calibration runner is a later Q4 step")),
         _step("jlens", "Fit and transfer-check a model-scoped J-lens", "lab", "blocked" if missing else "planned",
               requires=["torch", "transformers"],
               reason=(f"missing lab dependencies: {', '.join(missing)}" if missing
                       else "lab dependencies are present; J-lens runner is a later Q5 step")),
         _step("batteries", "Run model-specific and cross-model batteries", "lab", "planned",
-              reason="depends on core, calibration, and optional white-box artifacts"),
+              reason="depends on core and optional white-box artifacts"),
         _step("install", "Review and install checksummed qualification artifacts", "product", "planned",
               reason="only Q7 may modify the local qualification registry"),
     ]

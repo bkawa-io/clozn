@@ -630,7 +630,6 @@ def _child_journal(
         meta["repetition_penalty"] = decode["repeat_penalty"]
         meta["seed"] = decode["seed"]
     elif change["type"] == "steer":
-        behavior["active_dials"] = {}
         if change.get("clear") is True:
             meta.pop("execution_fork_steering", None)
         else:
@@ -640,7 +639,6 @@ def _child_journal(
                 "steer_vec": vector,
                 "steer_layer": change.get("steer_layer", 0),
                 "steer_coef": float(change.get("steer_coef", 1.0)),
-                "active_dials_sha256": _sha({}),
                 "intervention_sha256": _sha(change),
             }
     return meta, behavior, identity

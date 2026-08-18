@@ -78,8 +78,6 @@ const runtime: RuntimeState = {
     finishReason: "stop",
     flags: [],
     warningCount: 0,
-    activeDialCount: 0,
-    memoryCardCount: 0,
   }],
 };
 

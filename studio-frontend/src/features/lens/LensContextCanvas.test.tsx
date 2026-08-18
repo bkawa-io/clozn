@@ -30,7 +30,7 @@ function inspection(overrides: Partial<ObservatoryData> = {}): ObservatoryData {
     contextCoverage: { totalSources: 3, measuredSources: 2, omittedSources: 1, measuredSpans: 2, complete: false },
     influenceMethod: { mode: "matched_control", claimLimit: "source relevance or necessity", caveat: "Measured links are bounded to the selected context spans." },
     influenceThresholds: { cellAbsDeltaNats: .05 },
-    configuration: { activeDials: {}, memoryCards: [], adapters: [], changes: [] },
+    configuration: { adapters: [], changes: [] },
     ...overrides,
   };
 }

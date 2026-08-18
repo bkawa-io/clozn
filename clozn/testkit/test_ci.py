@@ -148,17 +148,6 @@ def test_max_tokens_meta_equality_check():
     assert bad.case("c1").status == "fail"
 
 
-def test_card_applied_check():
-    client = FakeClient({"q": _run("run_1", "hi", cards_applied=["likes concise answers"],
-                                    applied_ids=["mem_1"])})
-    ok = ci.run_suite(
-        {"cases": [{"name": "c1", "prompt": "q", "expect": {"card_applied": "mem_1"}}]}, client)
-    bad = ci.run_suite(
-        {"cases": [{"name": "c1", "prompt": "q", "expect": {"card_applied": "mem_9"}}]}, client)
-    assert ok.case("c1").status == "pass"
-    assert bad.case("c1").status == "fail"
-
-
 def test_multiple_cases_and_overall_suite_status():
     client = FakeClient({
         "good": _run("run_1", "Paris is the capital of France."),
@@ -196,7 +185,7 @@ def test_prove_records_has_effect_and_causal_verified_per_influence():
         "run_id": "run_1",
         "receipts": [
             {"influence": {"card_id": "mem_1"}, "has_effect": True, "causal_verified": True},
-            {"influence": {"dial": "warm"}, "has_effect": False, "causal_verified": True},
+            {"influence": {"section": "rag_context"}, "has_effect": False, "causal_verified": True},
         ],
         "skipped": [{"influence": {"text": "no id"}, "reason": "no card id recorded"}],
         "redundant_pairs": [],
@@ -211,7 +200,7 @@ def test_prove_records_has_effect_and_causal_verified_per_influence():
     by_key = {ci._influence_key(r["influence"]): r for r in case.receipts}
     assert by_key["card_id=mem_1"] == {"influence": {"card_id": "mem_1"}, "has_effect": True,
                                         "causal_verified": True}
-    assert by_key["dial=warm"]["causal_verified"] is True
+    assert by_key["section=rag_context"]["causal_verified"] is True
     assert len(case.receipts_skipped) == 1
 
 

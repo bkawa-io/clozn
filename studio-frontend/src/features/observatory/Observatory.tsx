@@ -12,7 +12,7 @@ import { useTokenWorkbench, type TimeTravelOutcomeBanner } from "./useTokenWorkb
 import { VariantDeltaPlot } from "./VariantDeltaPlot";
 import { VariantScope } from "./VariantScope";
 import type { ScopeSelectionState, ScopeUrlState, ScopeView } from "./urlState";
-import { describeVariant, dialDifferences } from "./variant";
+import { describeVariant } from "./variant";
 
 export interface ObservatoryProps {
   data: ObservatoryData;
@@ -78,7 +78,6 @@ function ObservatoryWorkspace({
     [variantReference, data.tokens],
   );
   const variantRelation = variantReference ? describeVariant(variantReference, data) : undefined;
-  const variantDials = variantReference ? dialDifferences(variantReference, data) : [];
   const variantColumnIndex = variantAlignment.columnByB.get(selectedToken);
   const variantColumn = variantColumnIndex == null ? undefined : variantAlignment.columns[variantColumnIndex];
   const variantReferenceToken = variantColumn?.aIndex == null
@@ -404,19 +403,8 @@ function ObservatoryWorkspace({
                 <div><dt>Adapter reference</dt><dd>{variantReference?.configuration.adapters.join(", ") || "UNREPORTED"}</dd></div>
                 <div><dt>Adapter current</dt><dd>{data.configuration.adapters.join(", ") || "UNREPORTED"}</dd></div>
               </dl>
-              {variantDials.length > 0 && (
-                <div className="variant-dial-deltas">
-                  <header><span>DIAL DIFFERENCES</span><b>{variantDials.length}</b></header>
-                  {variantDials.slice(0, 6).map((dial) => (
-                    <div key={dial.name}>
-                      <span>{dial.name}</span>
-                      <output>{dial.reference >= 0 ? "+" : ""}{dial.reference.toFixed(2)} → {dial.current >= 0 ? "+" : ""}{dial.current.toFixed(2)}</output>
-                    </div>
-                  ))}
-                </div>
-              )}
               {comparisonFindings.length > 0 && (
-                <div className="variant-dial-deltas">
+                <div className="variant-deltas">
                   <header><span>BACKEND COMPARISON FINDINGS</span><b>{comparisonFindings.length}</b></header>
                   {comparisonFindings.map((finding) => (
                     <div key={finding}><span>{finding}</span></div>

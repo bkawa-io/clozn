@@ -177,9 +177,9 @@ exercised, so nobody trusts a row this document doesn't back up.
 
 | Dir | What |
 |---|---|
-| `clozn/`    | the product Python package — server/API, run journal, context receipts, replay, steering, readouts, the J-lens proxy, and Model CI (`python -m clozn`) |
+| `clozn/`    | the product Python package — server/API, run journal, context receipts, replay, readouts, the J-lens proxy, and Model CI (`python -m clozn`) |
 | `engine/`   | the C++/ggml runtime plus optional CUDA kernels — runs GGUF models, emits the state stream, harvests activations, applies steers, and serves `/jlens` |
-| `studio/`   | the white-box UI — runs, comparisons, experiments, context/source evidence, performance, tone dials, and J-lens readouts, served by the backend |
+| `studio/`   | the white-box UI — runs, comparisons, experiments, context/source evidence, performance, and J-lens readouts, served by the backend |
 | `protocol/` | the one state-stream contract the engine emits and the studio consumes |
 | `docs/`     | architecture, the consolidated roadmap, and the honest technical account |
 | `tests/`    | the model-free product suite · `scripts/` dev tooling |

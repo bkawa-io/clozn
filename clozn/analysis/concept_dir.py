@@ -5,11 +5,10 @@ scale 0.25-0.5: raises logprob(c) +6..9 nat over baseline, content-specific vs a
 write; scale>=1 over-injects and loses coherence -- see
 ../clozn-jlens-work/artifacts/dirc_selfconsistency_result.txt and j5a_swap_result.txt) into a
 product module: type ANY concept word, get a steer direction, with ZERO contrastive pos/neg
-calibration prompts (unlike axes.py's tone dials, which need a harvested diff-of-means over a
-whole pole pair). This module builds and caches the vector; engine_adapter.py's EngineSteer
-remains the SEPARATE diff-of-means (tone-dial) mechanism -- the two compose (both ultimately ride
-the same steer_vec/coef/layer wire contract: clozn_engine.EngineClient.intervene / .score, and
-EngineSubstrate.chat's kw["steer_vec"]), they are not the same math.
+calibration prompts (the retired tone-dial mechanism needed a harvested diff-of-means over a
+whole pole pair; dir(c) needs neither a pole nor any harvesting). This module builds and caches
+the vector, which rides the same steer_vec/coef/layer wire contract every steering write uses:
+clozn_engine.EngineClient.intervene / .score, and EngineSubstrate.chat's kw["steer_vec"].
 
 Math (identical convention to dirc.py / oracle.py -- both are lab-only and NOT imported here; the
 ~15 lines below are the product's own copy of the same formulas, since the formulas themselves
@@ -232,8 +231,7 @@ def concept_calibration_path(model_sha256: Optional[str] = None) -> str:
     _model_scoped_path's own "no digest known yet" fallback). This module stays import-light (no
     clozn.server.app dependency: it must keep working standalone via --selftest/--demo, with no server
     process at all), so the digest is a plain string argument here, never read off a live substrate --
-    callers that DO have a live substrate (the server, a future engine_adapter wiring) pass its
-    `model_sha256` through explicitly."""
+    callers that DO have a live substrate (the server) pass its `model_sha256` through explicitly."""
     base = os.path.join(os.path.expanduser("~"), ".clozn")
     if model_sha256:
         return os.path.join(base, "models", str(model_sha256), "concept_dial_calibration.json")
@@ -520,7 +518,7 @@ class ConceptDirSource:
 
 def _text_of(resp) -> str:
     """Extract generated text from an EngineClient .complete()/.intervene() response (OpenAI-ish
-    {choices:[{text|message}]}) -- mirrors engine_adapter.EngineSteer._text."""
+    {choices:[{text|message}]})."""
     ch = resp.get("choices") if isinstance(resp, dict) else None
     if ch:
         return ch[0].get("text") or (ch[0].get("message") or {}).get("content") or ""
@@ -786,7 +784,7 @@ class ConceptSteer:
 # sidecar loaded (`--jlens <dir>` / CLOZN_JLENS_DIR); W_U comes from that same server's
 # /jlens/unembed_row route (see the BLOCKER-AND-FIX section above), so --unembed-dir is now
 # OPTIONAL (pass it only to force the older lab-export path instead, e.g. for a model whose
-# engine isn't running): `python -m clozn.behavior.steering.concept_dir --demo --port 8095
+# engine isn't running): `python -m clozn.analysis.concept_dir --demo --port 8095
 #   --concept ocean --strength 0.35`
 
 def _selftest() -> int:

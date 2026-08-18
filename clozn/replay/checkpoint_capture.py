@@ -146,17 +146,15 @@ def _sampler(parent: Mapping, output_count: int) -> tuple[dict, dict | None] | N
 
 
 def _steering(parent: Mapping) -> tuple[dict, dict] | None:
-    behavior = parent.get("behavior")
-    behavior = behavior if isinstance(behavior, Mapping) else {}
-    active_dials = behavior.get("active_dials", {})
-    if not isinstance(active_dials, Mapping):
-        return None
-    active_dials = dict(active_dials)
+    """Fail-closed steering-provenance gate for exact checkpoint capture: a steered parent must carry
+    its exact recorded raw vector, layer, and coefficient, or capture refuses rather than replaying an
+    unproven intervention. Named-dial personalization is retired, so this handles only the two
+    remaining cases -- no steering at all, or a recorded raw vector."""
     meta = parent.get("meta")
     meta = meta if isinstance(meta, Mapping) else {}
     raw = meta.get("execution_fork_steering")
 
-    if not active_dials and raw is None:
+    if raw is None:
         return {
             "mode": "none",
             "provenance": "recorded_none",
@@ -167,8 +165,6 @@ def _steering(parent: Mapping) -> tuple[dict, dict] | None:
     vector = raw.get("steer_vec")
     layer = raw.get("steer_layer")
     coef = raw.get("steer_coef")
-    dials_sha = raw.get("active_dials_sha256")
-    expected_dials_sha = _sha(active_dials)
     if not (
         isinstance(vector, list)
         and vector
@@ -177,8 +173,6 @@ def _steering(parent: Mapping) -> tuple[dict, dict] | None:
         and not isinstance(layer, bool)
         and layer >= 0
         and _finite(coef)
-        and isinstance(dials_sha, str)
-        and dials_sha == expected_dials_sha
     ):
         return None
     artifact = {
@@ -188,7 +182,6 @@ def _steering(parent: Mapping) -> tuple[dict, dict] | None:
         "vector_elements": len(vector),
         "steer_layer": layer,
         "steer_coef": float(coef),
-        "active_dials_sha256": expected_dials_sha,
     }
     return artifact, {
         "steer_vec": list(vector),
@@ -375,8 +368,7 @@ def capture_parent_checkpoint(
             artifact, status="unavailable",
             code="steering_provenance_missing",
             message=(
-                "steered parents require their exact recorded raw vector, layer, coefficient, "
-                "and active-dial digest; dial names alone are insufficient"))
+                "steered parents require their exact recorded raw vector, layer, and coefficient"))
     steering_artifact, steering_wire = steering_pair
 
     placeholder = {

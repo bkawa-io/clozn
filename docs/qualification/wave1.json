@@ -5,7 +5,6 @@
     "discovered",
     "core",
     "white_box",
-    "dials",
     "jlens"
   ],
   "models": [
@@ -28,7 +27,6 @@
       "status": {
         "core": "passed_deep_cpu",
         "white_box": "partial",
-        "dials": "legacy_global_requires_model_scoped_recalibration",
         "jlens": "qualified_q4_k_m"
       },
       "evidence": {
@@ -57,7 +55,6 @@
       "status": {
         "core": "passed_basic_and_deep_cpu",
         "white_box": "native_probe_startup_passed; targeted_write_tests_pending",
-        "dials": "pending",
         "jlens": "pending"
       },
       "evidence": {
@@ -86,7 +83,6 @@
       "status": {
         "core": "passed_basic_and_deep_cpu",
         "white_box": "native_probe_startup_passed; targeted_write_tests_pending",
-        "dials": "pending",
         "jlens": "pending"
       },
       "evidence": {
@@ -115,7 +111,6 @@
       "status": {
         "core": "passed_basic_and_deep_cpu",
         "white_box": "native_probe_startup_passed; targeted_write_tests_pending",
-        "dials": "pending",
         "jlens": "pending"
       },
       "evidence": {
@@ -145,7 +140,6 @@
       "status": {
         "core": "passed_basic_and_deep_cpu",
         "white_box": "native_probe_startup_passed; targeted_write_tests_pending",
-        "dials": "pending",
         "jlens": "pending"
       },
       "evidence": {

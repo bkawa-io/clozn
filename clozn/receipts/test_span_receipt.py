@@ -50,8 +50,7 @@ class FakeSteer:
 
 
 class FakeMem:
-    def __init__(self, strength=1.0):
-        self.memory_strength = float(strength)
+    def __init__(self):
         self.rules = []
         self.prefix = None
 
@@ -114,7 +113,6 @@ RUN = {
     "messages": [{"role": "system", "content": "You are a careful assistant."},
                  {"role": "user", "content": USER}],
     "response": "PWNED",
-    "behavior": {"active_dials": {}},
     "trace": {"token_ids": [11, 22, 33]},
 }
 

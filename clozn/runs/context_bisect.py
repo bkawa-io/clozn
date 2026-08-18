@@ -302,8 +302,6 @@ def plan_context_bisect(
         execution_state, execution_reason = "unavailable", "parent_runtime_identity_unavailable"
     elif not isinstance(messages, list):
         execution_state, execution_reason = "unavailable", "message_basis_unavailable"
-    elif not isinstance(run.get("behavior", {}).get("active_dials", {}) if isinstance(run.get("behavior"), Mapping) else {}, Mapping):
-        execution_state, execution_reason = "unavailable", "recorded_steering_malformed"
 
     plan = {
         "schema_version": PLAN_SCHEMA_VERSION,

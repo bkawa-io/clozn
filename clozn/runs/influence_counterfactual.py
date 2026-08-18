@@ -205,14 +205,10 @@ def _decode_projection(run: Mapping) -> tuple[dict, Any, str]:
 
 
 def _steering_projection(run: Mapping) -> dict:
-    behavior = run.get("behavior")
-    dials = behavior.get("active_dials") if isinstance(behavior, Mapping) else None
-    if not isinstance(dials, Mapping):
-        return {"state": "not_recorded", "active": False}
-    if any(not isinstance(key, str) or not isinstance(value, (int, float)) or isinstance(value, bool)
-           for key, value in dials.items()):
-        return {"state": "unavailable", "reason": "recorded_steering_malformed"}
-    return {"state": "recorded", "active": bool(dials), "count": len(dials)}
+    """Runs carry no recorded steering state since the personalization cut removed named tone dials
+    (and no per-run raw steer_vec record exists to report instead), so this is always "not recorded" --
+    kept as its own projection because the plan schema requires an `execution.steering` object."""
+    return {"state": "not_recorded", "active": False}
 
 
 def _specificity_projection(run: Mapping, source_span: Mapping, answer_span_id: str,
@@ -294,9 +290,6 @@ def build_influence_counterfactual_plan(run: Mapping, request: Any = None, *,
     elif source_span is None or span_resolution.get("state") != "available":
         execution_state = "unavailable"
         execution_reason = span_resolution.get("reason") or "span_address_not_found_or_drifted"
-    elif steering.get("state") == "unavailable":
-        execution_state = "unavailable"
-        execution_reason = steering.get("reason") or "recorded_steering_malformed"
     elif not isinstance(run.get("messages"), list):
         execution_state = "unavailable"
         execution_reason = "message_basis_unavailable"

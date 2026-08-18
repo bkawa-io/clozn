@@ -235,7 +235,7 @@ def _exact_fork_capability(run: Mapping[str, Any], index: int, *, worker_ready: 
             "reason": "no live engine worker is currently reachable", "action": action,
         }
 
-    from clozn.replay.checkpoint_capture import _sampler, _steering, _trace_history
+    from clozn.replay.checkpoint_capture import _sampler, _trace_history
 
     history = _trace_history(run)
     if history is None:
@@ -287,11 +287,6 @@ def _exact_fork_capability(run: Mapping[str, Any], index: int, *, worker_ready: 
             "available": False, "snapshot_state": "sampler_provenance_missing",
             "reason": "the run's sampler mode, parameters, and fixed seed are not exactly recoverable",
             "action": action,
-        }
-    if _steering(run) is None:
-        return {
-            "available": False, "snapshot_state": "steering_provenance_missing",
-            "reason": "the run's steering provenance is not exactly recoverable", "action": action,
         }
     return {"available": True, "snapshot_state": "not_attempted", "action": action}
 

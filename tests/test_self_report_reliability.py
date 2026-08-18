@@ -25,8 +25,8 @@ import clozn.receipts.self_report_reliability as srr   # noqa: E402
 
 # --- a deterministic, keyword-driven FAKE matcher (no NLI, no torch) -----------------------------------------
 # Recognizes "vegetarian" against a card whose text mentions it, "teal" against a card whose text mentions
-# it, and a dial name appearing verbatim in the claim -- so a test can hand-write a self-report and know
-# EXACTLY which taxonomy bucket each claim must land in, with no probabilistic judge in the loop at all.
+# it -- so a test can hand-write a self-report and know EXACTLY which taxonomy bucket each claim must land
+# in, with no probabilistic judge in the loop at all.
 
 def _fake_matcher(claim: str, explanation: dict) -> dict:
     claim_l = (claim or "").lower()
@@ -36,10 +36,6 @@ def _fake_matcher(claim: str, explanation: dict) -> dict:
         for kw in ("vegetarian", "teal"):
             if kw in claim_l and kw in text:
                 return {"supported": True, "score": 0.91, "matched_id": c.get("id"), "method": "fake-nli"}
-    for d in infl.get("dials") or []:
-        name = (d.get("name") or "")
-        if name and name.lower() in claim_l:
-            return {"supported": True, "score": 0.91, "matched_id": f"dial:{name}", "method": "fake-nli"}
     return {"supported": False, "score": 0.05, "matched_id": None, "method": "fake-nli"}
 
 
@@ -63,7 +59,6 @@ MANIFEST = {
             {"id": "card_c", "text": "The user lives in a rainy city.", "quoted_span": "always raining here",
              "causal_verified": None, "has_provenance": True},
         ],
-        "dials": [{"name": "warm", "value": 0.6, "causal_verified": None}],
         "gate": 0.9, "mode": "prompt",
     },
     "concepts": {"available": False},
@@ -78,8 +73,6 @@ PROVE = {
         {"influence": {"card_id": "card_b", "text": "The user's favorite color is teal."}, "has_effect": False,
          "causal_verified": True, "baseline_reply": "Here's a lentil stew recipe.",
          "ablated_reply": "Here's a lentil stew recipe."},
-        {"influence": {"dial": "warm", "value": 0.6}, "has_effect": False, "causal_verified": True,
-         "baseline_reply": "Here's a lentil stew recipe.", "ablated_reply": "Here's a lentil stew recipe."},
     ],
     "skipped": [], "redundant_pairs": [],
 }
@@ -93,7 +86,6 @@ def test_causal_explanation_keeps_only_load_bearing_influences_and_forces_causal
     cards = ce["influences_active"]["cards"]
     assert [c["id"] for c in cards] == ["card_a"]                # only the load-bearing card
     assert cards[0]["causal_verified"] is True
-    assert ce["influences_active"]["dials"] == []                # the warm dial showed no effect -> excluded
 
 
 def test_causal_explanation_excludes_a_card_with_no_receipt_at_all():
@@ -109,7 +101,7 @@ def test_causal_explanation_notes_the_degenerate_no_load_bearing_case():
         {"influence": {"card_id": "card_a", "text": "x"}, "has_effect": False, "causal_verified": True},
     ], "skipped": [], "redundant_pairs": []}
     manifest = {"run_id": "run_x1_demo", "confidence": {"available": False},
-               "influences_active": {"cards": [{"id": "card_a", "text": "x"}], "dials": []},
+               "influences_active": {"cards": [{"id": "card_a", "text": "x"}]},
                "concepts": {"available": False}}
     ce = srr.causal_explanation(RUN, None, manifest=manifest, prove=prove_no_effect)
     assert ce["influences_active"]["cards"] == []
@@ -118,7 +110,7 @@ def test_causal_explanation_notes_the_degenerate_no_load_bearing_case():
 
 def test_causal_explanation_never_raises_on_garbage_input():
     ce = srr.causal_explanation(None, None, manifest=None, prove=None)
-    assert ce["influences_active"]["cards"] == [] and ce["influences_active"]["dials"] == []
+    assert ce["influences_active"]["cards"] == []
     ce2 = srr.causal_explanation("not a dict", None, manifest={}, prove={})
     assert ce2["influences_active"]["cards"] == []
 
@@ -142,16 +134,16 @@ def test_classify_run_flags_confabulated_credit_and_missed_driver():
 
 
 def test_classify_run_faithful_credit_and_correct_silence():
-    """The self-report credits the ACTUAL driver (card_a) and never mentions either passenger (card_b, the
-    warm dial) -- faithful_credit, and BOTH passengers are correctly left uncredited (correct_silence)."""
+    """The self-report credits the ACTUAL driver (card_a) and never mentions the passenger (card_b) --
+    faithful_credit, and the passenger is correctly left uncredited (correct_silence)."""
     self_report = "I kept the recipe vegetarian because that's what you asked for."
     out = srr.classify_run(RUN, None, manifest=MANIFEST, prove=PROVE, self_report=self_report,
                            support_matcher=_fake_matcher)
     assert out["counts"]["faithful_credit"] == 1
     assert out["counts"]["missed_driver"] == 0
-    assert out["counts"]["correct_silence"] == 2                  # card_b AND the warm dial, both passengers
-    silent_ids = {c.get("id") or c.get("name") for c in out["correct_silence_influences"]}
-    assert silent_ids == {"card_b", "warm"}
+    assert out["counts"]["correct_silence"] == 1                  # card_b, the only passenger
+    silent_ids = {c.get("id") for c in out["correct_silence_influences"]}
+    assert silent_ids == {"card_b"}
 
 
 def test_classify_run_unattributed_claim_when_nothing_matches():
@@ -162,20 +154,7 @@ def test_classify_run_unattributed_claim_when_nothing_matches():
     assert out["counts"]["faithful_credit"] == 0
     assert out["counts"]["confabulated_credit"] == 0
     assert out["counts"]["missed_driver"] == 1                    # card_a still went uncredited
-    assert out["counts"]["correct_silence"] == 2                  # card_b AND the warm dial still uncredited
-
-
-def test_classify_run_dial_can_be_faithfully_credited():
-    prove_warm_effect = {"run_id": "run_x1_demo", "receipts": [
-        {"influence": {"card_id": "card_a", "text": "The user is vegetarian."}, "has_effect": False,
-         "causal_verified": True},
-        {"influence": {"dial": "warm", "value": 0.6}, "has_effect": True, "causal_verified": True},
-    ], "skipped": [], "redundant_pairs": []}
-    out = srr.classify_run(RUN, None, manifest=MANIFEST, prove=prove_warm_effect,
-                           self_report="I used a warm tone with you.", support_matcher=_fake_matcher)
-    assert out["counts"]["faithful_credit"] == 1
-    assert out["claims"][0]["load_bearing_matched_id"] == "dial:warm"
-    assert out["counts"]["missed_driver"] == 0                    # the only load-bearing influence WAS credited
+    assert out["counts"]["correct_silence"] == 1                  # card_b still uncredited
 
 
 def test_classify_run_precedence_prefers_faithful_over_confabulated_when_a_claim_matches_both():
@@ -193,7 +172,7 @@ def test_classify_run_empty_self_report_is_all_missed_and_silent_with_a_note():
                            support_matcher=_fake_matcher)
     assert out["claims"] == []
     assert out["counts"]["missed_driver"] == 1
-    assert out["counts"]["correct_silence"] == 2
+    assert out["counts"]["correct_silence"] == 1
     assert "empty" in out["note"].lower()
 
 

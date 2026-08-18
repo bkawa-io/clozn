@@ -37,8 +37,7 @@ Suite manifest shape (plain JSON, stdlib `json` only):
             "not_contains": ["Berlin"],
             "finish_reason": "stop",
             "min_confidence": 0.5,
-            "max_tokens": 256,
-            "card_applied": "likes concise answers"
+            "max_tokens": 256
           },
           "prove": false
         }
@@ -47,7 +46,7 @@ Suite manifest shape (plain JSON, stdlib `json` only):
 
 `expect` keys map onto runner.py's tiny-test vocabulary (STATIC_DISPATCH / REPRO_META_KEYS) --
 `contains`/`not_contains` take a list of strings (or a single string, auto-wrapped) and expand to one
-assertion per item; `card_applied` takes a single card id-or-text; `finish_reason`/`min_confidence` map
+assertion per item; `finish_reason`/`min_confidence` map
 1:1; `max_tokens` is an EQUALITY check against the run's recorded `meta.max_tokens` (the requested cap that
 was actually in effect for this run -- a reproducibility check, exactly like runner.py's other
 REPRO_META_KEYS checks -- NOT an upper bound on how many tokens were generated). An unrecognized `expect`
@@ -58,7 +57,8 @@ this module adds no separate validation layer on top of that, by design, so ther
 
 `prove: true` additionally calls the receipts prove-all endpoint (`POST /runs/<id>/receipts`, contracts
 §7) after the static checks, and records `{influence, has_effect, causal_verified}` for every influence
-that actually fired (leave-one-out over memory cards / behavior dials). This is a MEASUREMENT, not a gate:
+that actually fired (leave-one-out over the run's fired prompt sections -- the only ablatable influence
+kind left in the product since memory cards and tone dials were cut). This is a MEASUREMENT, not a gate:
 a prove-only case does not fail just because some influence turned out not to be load-bearing (that's
 exactly the kind of finding `diff_suites()` exists to surface across runs, not something a single suite run
 should flunk on its own). The only way `prove: true` fails a case is if the measurement itself could not be
@@ -334,8 +334,6 @@ def _translate_expect(expect) -> list:
             values = value if isinstance(value, list) else [value]
             for v in values:
                 assertions.append({"check": key, "value": v})
-        elif key == "card_applied":
-            assertions.append({"check": "card_applied", "card": value})
         else:
             # finish_reason / min_confidence / max_tokens all map 1:1 onto runner.py's own vocabulary
             # (max_tokens via REPRO_META_KEYS); anything runner.py doesn't recognize becomes a clean
@@ -501,9 +499,9 @@ def diff_suites(prev: SuiteResult, curr: SuiteResult, *, confidence_drift_thresh
       - a case whose recorded min-confidence moved by at least `confidence_drift_threshold` (either
         direction) is flagged as DRIFT, independent of its pass/fail status (a still-passing case can be
         quietly losing confidence)
-      - for `prove: true` cases, an influence keyed by its `{card_id|dial|memory_off|behavior_off}` spec
-        that was `causal_verified: true` in `prev` and is NOT in `curr` is a receipt regression (something
-        that used to be causally load-bearing no longer verifiably is) -- also folded into `.regressions`
+      - for `prove: true` cases, an influence keyed by its `{section}` spec that was `causal_verified: true`
+        in `prev` and is NOT in `curr` is a receipt regression (something that used to be causally
+        load-bearing no longer verifiably is) -- also folded into `.regressions`
       - cases present in only one of the two suites are reported separately (`new_cases`/`removed_cases`),
         never silently ignored and never scored as a regression on their own
     """

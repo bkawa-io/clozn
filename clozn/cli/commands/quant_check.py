@@ -91,10 +91,10 @@ class _EngineScoreSub:
     change what the model says", not "does memory/steer" -- so `block` is folded in as a plain
     system-message append (mirrors `clozn.server.app._inject_block`'s shape exactly) and
     `steer_strengths`/`steer_vec` are accepted for interface parity but NOT reconstructed here (no
-    per-model steer calibration is loaded by this lightweight wrapper); a run recorded with active dials
-    still teacher-forces correctly on its messages + continuation, just without replaying the dial's
-    push. A documented scope choice, not an oversight -- fresh prompts and typical --from-log runs
-    (no dials) are unaffected either way.
+    per-model steer calibration is loaded by this lightweight wrapper); a run recorded with active raw
+    steering still teacher-forces correctly on its messages + continuation, just without replaying that
+    steering's push. A documented scope choice, not an oversight -- fresh prompts and typical --from-log
+    runs (no steering) are unaffected either way.
 
     `template_engine` (optional, default None meaning "use `engine` itself"): the engine whose
     `apply_template` renders the prompt for `score_tokens`' `/score` call, while `engine` still does the
@@ -218,7 +218,6 @@ def generate_fresh_run(sub_a: "_EngineScoreSub", category: str, prompt: str, *, 
             "messages": messages,
             "response": text,
             "category": category,
-            "behavior": {"active_dials": {}},
             "trace": {"token_ids": ids},
         }
     except Exception:

@@ -7,8 +7,8 @@ marker actually gate: model-marked tests are skipped unless the run's mark expre
 The tripwire (`_never_write_the_real_user_data`): dozens of test files isolate themselves by
 monkeypatching clozn.settings.SETTINGS_PATH (and the card/run stores) at a tmp dir. That isolation is
 invisible when it FAILS -- a test that misses the patch just quietly rewrites the developer's own
-~/.clozn/studio_settings.json (active profile, sampling, guard config) and still passes. This autouse
-fixture hashes the real files before and after every test and fails the test that changed one.
+~/.clozn/studio_settings.json (sampling, guard config) and still passes. This autouse fixture hashes
+the real files before and after every test and fails the test that changed one.
 
 It checks the FILES, not the module globals, on purpose: a path assertion would fire on the hundreds of
 tests that legitimately never touch settings, and would miss a write that reached the real store by some
@@ -23,9 +23,7 @@ import os
 import pytest
 
 _CLOZN = os.path.expanduser("~/.clozn")
-_GUARDED = [os.path.join(_CLOZN, name) for name in
-            ("studio_settings.json", "studio_memory_cards.json", "studio_library.json",
-             "studio_personality.json", "dial_calibration.json")]
+_GUARDED = [os.path.join(_CLOZN, name) for name in ("studio_settings.json",)]
 
 
 def _digest(path):

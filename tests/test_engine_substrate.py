@@ -1,7 +1,7 @@
-"""test_engine_substrate -- EngineSubstrate: chat + prompt-mode memory + tone dials on the C++ GGUF
-engine, NO PyTorch model resident (clozn_server.EngineSubstrate / RUNTIME_SPLIT.md's keystone). This is
-what lets /v1/chat/completions (and, via SUB.chat(), the whole receipts/replay/explain/narrate/
-counterfactual stack) run on the fast engine instead of a loaded Qwen-7B.
+"""test_engine_substrate -- EngineSubstrate: chat on the C++ GGUF engine, NO PyTorch model resident
+(clozn_server.EngineSubstrate / RUNTIME_SPLIT.md's keystone). This is what lets /v1/chat/completions
+(and, via SUB.chat(), the whole receipts/replay/explain/narrate stack) run on the fast engine instead of
+a loaded Qwen-7B.
 
 Model-free throughout -- no C++ engine process, no GPU, no real socket. clozn_server.ENGINE is
 monkeypatched to a FakeEngine whose `.base` points at a closed local port (127.0.0.1:1, with a short
@@ -12,16 +12,17 @@ FakeEngine-backed test below actually exercises; it is NOT itself under test her
 test_trace_capture.py for _engine_complete_traced's own streaming-path coverage).
 
 Covers:
-  * EngineSubstrate.__init__: builds when ENGINE is configured and raises when it is not.
+  * EngineSubstrate.__init__: builds when ENGINE is configured and raises when it is not; the lazy
+    model_family/model_id/model_sha256 identity resolution (cooldown-gated retry while the engine is
+    down at startup).
   * EngineSubstrate.chat(): returns the engine's text (stripped); fills mem_out/trace_out exactly like
-    QwenSubstrate.chat; folds the prompt-mode memory block into the rendered chat-template prompt (and
-    omits it when there is none); forwards the active dials' steer_vec (falling back to disk when the
-    live steer carries no strength, mirroring the pre-existing /engine/chat hybrid endpoint).
-  * _EngineMemory: card-store-backed .rules (active cards only), .prefix always None, no-op
-    consolidate()/reset(), .state() shape.
-  * steering.EngineSteer's new SteeringControl-compatible surface: clear/engage/disengage/active/
-    save_state/load_state, and generate()'s engage-gated default-dial path (the clean A/B baseline
-    Substrate._steer's /steer/check needs).
+    the historical contract; captures the exact rendered final_prompt.
+  * run_meta() reproducibility metadata and S5 interactive-sampling resolution.
+  * RequestContext: the per-call bundle chat()/chat_stream() publish as self._request (backlog #2).
+
+No tone dials, no memory cards, no EngineSteer: both were retired with the personalization cut (see
+RUNTIME_SPLIT.md). Raw-vector steering (steer_vec/steer_strengths on score_tokens, /intervene) survives
+as interpretability/causal-attribution machinery -- see test_engine_score.py / test_engine_stream.py.
 """
 from __future__ import annotations
 
@@ -29,7 +30,6 @@ import json
 import os
 import sys
 
-import numpy as np
 import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -38,9 +38,6 @@ sys.path.insert(0, RESEARCH)
 
 from clozn.server import app as cs          # noqa: E402
 import clozn.settings as clozn_settings          # noqa: E402
-
-
-from clozn.behavior.steering import EngineSteer   # noqa: E402
 
 
 # --- a stand-in for clozn_engine.EngineClient: .base points at a closed local port (127.0.0.1:1 --
@@ -72,9 +69,7 @@ class FakeEngine:
 @pytest.fixture
 def iso(tmp_path, monkeypatch):
     """Isolate every path this suite might touch so nothing reads or writes the real ~/.clozn on this
-    machine: CLOZN_DIR (_pers()/_disk_dials()/EngineSteer.save_state/load_state), the card store
-    (_EngineMemory.rules/.state), and the settings file (_EngineMemory.__init__'s memory_strength read).
-    Mirrors test_dial_library_server.py / test_memory_mode.py's own iso fixtures."""
+    machine: CLOZN_DIR and the settings file."""
     monkeypatch.setattr(cs, "CLOZN_DIR", str(tmp_path))
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
     return tmp_path
@@ -82,12 +77,9 @@ def iso(tmp_path, monkeypatch):
 
 @pytest.fixture
 def fake_engine(monkeypatch):
-    """clozn_server.ENGINE -> a fresh FakeEngine; ENGINE_STEER reset to None so _engine_steer()
-    builds a real steering.EngineSteer on it (construction itself makes no network call -- .compute()
-    would, but nothing here has a reason to call it)."""
+    """clozn_server.ENGINE -> a fresh FakeEngine."""
     fe = FakeEngine()
     monkeypatch.setattr(cs, "ENGINE", fe)
-    monkeypatch.setattr(cs, "ENGINE_STEER", None)
     return fe
 
 
@@ -105,51 +97,16 @@ def test_engine_substrate_builds_a_real_product_adapter(iso, fake_engine):
     assert sub.name == "engine"
     assert sub.engine is fake_engine
     assert sub.brain is None                       # no SAE on the pure-engine substrate
-    assert isinstance(sub.steer, EngineSteer)
-    assert sub.memory is sub._mem
-
-
-# ==================================================================================== J-transport auto-wiring
-# (engine_adapter.EngineSteer.enable_j_transport / jlens_transport.py -- see their docstrings.
-# EngineSubstrate is the ONE real production call site: it auto-enables J-transport using the
-# running engine's OWN reported model_sha256, the strongest model identity this substrate ever
-# actually has (no local GGUF file path to re-derive full contracts.gguf_identity() metadata
-# from). This is always safe to attempt -- see jlens_transport's HONESTY CONTRACT -- because
-# "no compact-eligible artifact claims this GGUF" degrades to an exact no-op, never a guess.
-
-def test_engine_substrate_auto_enables_j_transport_when_engine_reports_model_sha256(iso, monkeypatch):
-    class _FakeEngineWithHealth(FakeEngine):
-        def health(self):
-            return {"model": "qwen2.5-7b", "model_sha256": "abc123abcd"}
-
-    fe = _FakeEngineWithHealth()
-    monkeypatch.setattr(cs, "ENGINE", fe)
-    monkeypatch.setattr(cs, "ENGINE_STEER", None)
-    sub = cs.EngineSubstrate()
-    assert sub.model_sha256 == "abc123abcd"
-    assert sub.steer._j_transport is True
-    assert sub.steer._jlens_model_sha256 == "abc123abcd"
-
-
-def test_engine_substrate_leaves_j_transport_off_without_a_model_sha256(iso, fake_engine):
-    """FakeEngine (no .health() at all -- this suite's default) -> model_sha256 stays None -> the
-    J-transport wiring is skipped entirely, so every OTHER test in this file (none of which ever
-    supply a model_sha256) is byte-for-byte unaffected by its existence."""
-    sub = cs.EngineSubstrate()
-    assert sub.model_sha256 is None
-    assert sub.steer._j_transport is False
-    assert sub.steer.last_j_transport is None
 
 
 # ==================================================================================== fix #2: lazy identity re-resolution
 # (engine-down pressure test finding #2): model_family/model_id/model_sha256 used to resolve from ONE
 # best-effort health() call at __init__ time, wrapped in a bare `except Exception: pass`. If the engine
 # was down when the gateway started, they stayed None (the "clozn-local" fallback) for the REST OF THE
-# PROCESS's life -- only a full restart re-derived them -- which silently and permanently disabled
-# per-model dial persistence (self._pers_steer, set once from model_sha256) even after the engine came
-# back up. They're properties now (backed by _resolve_identity()/_maybe_reresolve_identity()): a read
-# while still unresolved retries (cooldown-gated, so a persistently-down engine never taxes every
-# request with an extra health() round-trip), and never re-fetches once resolved.
+# PROCESS's life -- only a full restart re-derived them. They're properties now (backed by
+# _resolve_identity()/_maybe_reresolve_identity()): a read while still unresolved retries (cooldown-gated,
+# so a persistently-down engine never taxes every request with an extra health() round-trip), and never
+# re-fetches once resolved.
 
 class _FlakyHealthEngine(FakeEngine):
     """health() raises the first `fail_times` calls (a down-at-startup engine), then succeeds -- lets a
@@ -172,13 +129,11 @@ class _FlakyHealthEngine(FakeEngine):
 def test_identity_stays_unresolved_when_the_engine_is_down_at_startup(iso, monkeypatch):
     fe = _FlakyHealthEngine(fail_times=99)              # never recovers within this test
     monkeypatch.setattr(cs, "ENGINE", fe)
-    monkeypatch.setattr(cs, "ENGINE_STEER", None)
     sub = cs.EngineSubstrate()
     assert fe.health_calls == 1                          # one attempt, at construction
     assert sub.model_sha256 is None
     assert sub.model_family is None
     assert sub.model_id is None
-    assert sub._pers_steer is None
 
 
 def test_identity_retry_is_cooldown_gated_not_on_every_read(iso, monkeypatch):
@@ -186,20 +141,17 @@ def test_identity_retry_is_cooldown_gated_not_on_every_read(iso, monkeypatch):
     that would add the connect-refused tax to every ordinary request while the engine stays down."""
     fe = _FlakyHealthEngine(fail_times=99)
     monkeypatch.setattr(cs, "ENGINE", fe)
-    monkeypatch.setattr(cs, "ENGINE_STEER", None)
     sub = cs.EngineSubstrate()
     assert fe.health_calls == 1
     for _ in range(10):
         assert sub.model_sha256 is None
         assert sub.model_family is None
-        assert sub._pers_steer is None
     assert fe.health_calls == 1                          # still just the one attempt -- cooldown held
 
 
 def test_identity_lazily_resolves_once_the_engine_comes_back(iso, monkeypatch):
     fe = _FlakyHealthEngine(fail_times=1)                # down for one attempt, then healthy
     monkeypatch.setattr(cs, "ENGINE", fe)
-    monkeypatch.setattr(cs, "ENGINE_STEER", None)
     sub = cs.EngineSubstrate()
     assert sub.model_sha256 is None                      # unresolved right after construction
     assert fe.health_calls == 1
@@ -210,14 +162,11 @@ def test_identity_lazily_resolves_once_the_engine_comes_back(iso, monkeypatch):
     assert fe.health_calls == 2
     assert sub.model_family == "qwen2.5-7b"
     assert sub.model_id == "Qwen/Qwen2.5-7B-Instruct"
-    assert sub._pers_steer is not None
-    assert "deadbeef01" in sub._pers_steer
 
 
 def test_identity_never_refetches_once_resolved(iso, monkeypatch):
     fe = _FlakyHealthEngine(fail_times=1)
     monkeypatch.setattr(cs, "ENGINE", fe)
-    monkeypatch.setattr(cs, "ENGINE_STEER", None)
     sub = cs.EngineSubstrate()
     sub._identity_last_attempt -= (sub._IDENTITY_RETRY_COOLDOWN_S + 1)
     assert sub.model_sha256 == "deadbeef01"
@@ -229,30 +178,6 @@ def test_identity_never_refetches_once_resolved(iso, monkeypatch):
     assert fe.health_calls == 2                          # never re-fetched once resolved
 
 
-def test_dial_persistence_activates_once_identity_resolves(iso, monkeypatch):
-    """The functional payoff, not just cosmetics: once model_sha256 resolves, self._pers_steer becomes a
-    real per-model path and saving a dial value actually persists to disk -- silently and permanently
-    broken before this fix, for the rest of a process that started with the engine down."""
-    fe = _FlakyHealthEngine(fail_times=1)
-    monkeypatch.setattr(cs, "ENGINE", fe)
-    monkeypatch.setattr(cs, "ENGINE_STEER", None)
-    sub = cs.EngineSubstrate()
-    assert sub._pers_steer is None                       # dial persistence disabled while unresolved
-
-    sub._identity_last_attempt -= (sub._IDENTITY_RETRY_COOLDOWN_S + 1)
-    path = sub._pers_steer
-    assert path is not None
-
-    # 0.5 is inside the uncalibrated ceiling (0.6); this test is about PERSISTENCE, not caps, so it
-    # uses a value the cap will not touch. (It used to set 0.7, which now clamps -- see
-    # test_engine_library_dials.py for the cap's own coverage.)
-    sub.steer.set("warm", 0.5)
-    sub.steer.save_state(sub._pers_steer)                # exactly what /steer/set's route code does
-    assert os.path.isfile(path)
-    with open(path, encoding="utf-8") as f:
-        assert json.load(f)["warm"] == 0.5
-
-
 # ==================================================================================== chat() basics
 
 def test_chat_returns_the_engines_text_stripped(iso, fake_engine, monkeypatch):
@@ -260,18 +185,6 @@ def test_chat_returns_the_engines_text_stripped(iso, fake_engine, monkeypatch):
     sub = cs.EngineSubstrate()
     assert sub.chat([{"role": "user", "content": "hi"}]) == "hello there"
     assert len(fake_engine.calls) == 1             # the .complete() fallback actually ran
-
-
-
-
-# ==================================================================================== chat() -- prompt-mode memory folds into the prompt
-
-
-
-def test_chat_omits_the_block_when_prompt_block_for_returns_none(iso, fake_engine, monkeypatch):
-    sub = cs.EngineSubstrate()
-    sub.chat([{"role": "user", "content": "hi"}])
-    assert "loves rock climbing" not in fake_engine.calls[-1]["prompt"]
 
 
 # ==================================================================================== chat() -- final_prompt capture (backlog #5)
@@ -285,181 +198,6 @@ def test_chat_records_the_rendered_final_prompt_in_mem_out(iso, fake_engine, mon
     assert mem_out["final_prompt"] == fake_engine.calls[-1]["prompt"]   # exactly what generation saw
     assert mem_out["final_prompt"]                                      # non-empty even with no memory block
     assert "hi" in mem_out["final_prompt"]
-
-
-
-
-# ==================================================================================== chat() -- dials forward a steer_vec
-
-class FakeSteer:
-    """A minimal SteeringControl-compatible double: just chat()'s TONE branch needs (.strength,
-    .layer, .steer_vector()) -- unlike a real steering.EngineSteer, no .compute()/harvest() (which
-    would need a live engine to derive axis directions from) is involved."""
-
-    def __init__(self, strength, vec, layer=14):
-        self.strength = dict(strength)
-        self._vec = vec
-        self.layer = layer
-        self.vector_calls = []
-
-    def steer_vector(self, strength):
-        self.vector_calls.append(dict(strength))
-        return self._vec
-
-
-def _bare_engine_substrate(engine, steer, mem=None):
-    """EngineSubstrate via object.__new__ (mirrors test_dial_library_server.py's _bare_substrate) --
-    exercises chat()'s dial-forwarding logic directly against a hand-picked FakeSteer, without needing
-    a real EngineSteer (whose .compute() would need a live engine to harvest axis vectors from)."""
-    sub = object.__new__(cs.EngineSubstrate)
-    sub.engine = engine
-    sub.steer = steer
-    sub._mem = mem
-    sub.memory = sub._mem
-    return sub
-
-
-def test_chat_forwards_the_active_dials_steer_vec_to_the_engine(iso, monkeypatch):
-    fe = FakeEngine()
-    steer = FakeSteer(strength={"warm": 1.0}, vec=[0.1, 0.2, 0.3], layer=14)
-    sub = _bare_engine_substrate(fe, steer)
-
-    sub.chat([{"role": "user", "content": "hi"}])
-
-    assert steer.vector_calls == [{"warm": 1.0}]
-    params = fe.calls[-1]["params"]
-    assert params["steer_vec"] == [0.1, 0.2, 0.3]
-    assert params["steer"] == {"coef": 1.0, "layer": 14}
-
-
-def test_chat_skips_steer_vec_when_no_dial_is_active(iso, monkeypatch):
-    fe = FakeEngine()
-    steer = FakeSteer(strength={"warm": 0.0}, vec=None)      # present, but every value is falsy
-    sub = _bare_engine_substrate(fe, steer)
-
-    sub.chat([{"role": "user", "content": "hi"}])
-
-    assert steer.vector_calls == []                # any(st.values()) is False -> never even asked
-    assert "steer_vec" not in fe.calls[-1]["params"]
-
-
-def test_chat_falls_back_to_disk_dials_when_the_live_steer_has_no_strength(iso, monkeypatch):
-    """self.steer.strength == {} (e.g. nothing dialed yet this process) -> chat() reads the persisted
-    personality.json dials instead, exactly like the pre-existing /engine/chat hybrid endpoint does."""
-    with open(os.path.join(str(iso), "studio_personality.json"), "w", encoding="utf-8") as f:
-        json.dump({"warm": 0.8}, f)
-    fe = FakeEngine()
-    steer = FakeSteer(strength={}, vec=[0.4, 0.5])
-    sub = _bare_engine_substrate(fe, steer)
-
-    sub.chat([{"role": "user", "content": "hi"}])
-
-    assert steer.vector_calls == [{"warm": 0.8}]
-    assert fe.calls[-1]["params"]["steer_vec"] == [0.4, 0.5]
-
-
-# ==================================================================================== _EngineMemory
-
-
-
-
-
-
-
-
-
-# ==================================================================================== EngineSteer's new SteeringControl-compatible surface
-
-class _FakeEC:
-    """A stand-in engine client for steering.EngineSteer ITSELF (distinct from FakeEngine above, which
-    stands in for clozn_server's module-level ENGINE) -- just enough for generate()'s no-dial path
-    (.complete) vs its dialed path (.intervene), so engage()'s gating is observable without a real
-    engine or a harvested axis vector."""
-
-    def __init__(self):
-        self.complete_calls = []
-        self.intervene_calls = []
-
-    def complete(self, prompt, **params):
-        self.complete_calls.append(prompt)
-        return {"choices": [{"text": "baseline"}]}
-
-    def intervene(self, prompt, **params):
-        self.intervene_calls.append(prompt)
-        return {"choices": [{"text": "steered"}]}
-
-
-def test_engine_steer_save_and_load_state_round_trip(tmp_path):
-    es = EngineSteer(_FakeEC())
-    es.strength = {"warm": 0.7, "concise": -0.3}
-    path = str(tmp_path / "nested" / "personality.json")   # save_state must create the parent dir too
-    es.save_state(path)
-
-    es2 = EngineSteer(_FakeEC())
-    es2.load_state(path)
-    assert es2.strength == {"warm": 0.7, "concise": -0.3}
-
-
-def test_engine_steer_load_state_missing_file_is_a_noop(tmp_path):
-    es = EngineSteer(_FakeEC())
-    es.strength = {"warm": 0.5}
-    es.load_state(str(tmp_path / "nope.json"))
-    assert es.strength == {"warm": 0.5}             # untouched
-
-
-def test_engine_steer_load_state_corrupt_file_is_a_noop_never_raises(tmp_path):
-    path = tmp_path / "bad.json"
-    path.write_text("{not valid json", encoding="utf-8")
-    es = EngineSteer(_FakeEC())
-    es.strength = {"warm": 0.5}
-    es.load_state(str(path))
-    assert es.strength == {"warm": 0.5}             # untouched -- a corrupt file must never crash a boot
-
-
-def test_engine_steer_clear_empties_strength():
-    es = EngineSteer(_FakeEC())
-    es.strength = {"warm": 1.0}
-    es.clear()
-    assert es.strength == {}
-
-
-def test_engine_steer_active_filters_zeros_keeps_negatives():
-    es = EngineSteer(_FakeEC())
-    es.strength = {"warm": 1.0, "concise": 0.0, "formal": -0.5}
-    assert es.active() == {"warm": 1.0, "formal": -0.5}
-
-
-def test_engine_steer_generate_gates_dials_on_engage_disengage():
-    ec = _FakeEC()
-    es = EngineSteer(ec)
-    es.ready = True                                 # skip .compute() -- no live engine to harvest from
-    es.vecs = {"warm": np.array([1.0, 0.0])}
-    es.strength = {"warm": 1.0}
-
-    es.generate("hello")                            # unengaged default path -> the clean, unsteered baseline
-    assert ec.complete_calls == ["hello"]
-    assert ec.intervene_calls == []
-
-    es.engage()
-    es.generate("hello")                            # engaged -> the active dial actually applies
-    assert ec.intervene_calls == ["hello"]
-    assert ec.complete_calls == ["hello"]            # (unchanged from the call above)
-
-    es.disengage()
-    es.generate("hello")                            # back to the clean baseline
-    assert ec.complete_calls == ["hello", "hello"]
-
-
-def test_engine_steer_generate_explicit_strength_is_unaffected_by_engage():
-    """An explicit `strength=` kwarg bypasses the
-    engage gate entirely -- CHANGE 1 only touches the strength=None DEFAULT path."""
-    ec = _FakeEC()
-    es = EngineSteer(ec)
-    es.ready = True
-    es.vecs = {"warm": np.array([1.0, 0.0])}
-    es.generate("hello", strength={"warm": 1.0})    # never engaged, but strength is explicit
-    assert ec.intervene_calls == ["hello"]
-    assert ec.complete_calls == []
 
 
 # ==================================================================================== run_meta (repro metadata)
@@ -539,19 +277,7 @@ def test_run_meta_never_raises_on_a_bad_health(iso):
                               "decode": {"mode": "greedy", "temperature": 0.0, "seed": 0}}
 
 
-
-
 # ==================================================================================== S5: interactive sampling
-
-    clozn_settings.set_setting("sampling", False)
-    clozn_settings.set_setting("sampling", True)     # explicit: still must not matter
-    clozn_settings.set_setting("sampling", False)
-    clozn_settings.set_setting("sampling", True)     # explicit: still must not matter
-
-
-
-
-
 
 def test_resolve_sampling_generates_a_fresh_seed_each_call(iso):
     """A fresh per-turn seed (not a fixed one) is what S5 promises -- two resolutions differ."""
@@ -647,20 +373,16 @@ def test_chat_publishes_a_fresh_request_context_each_call(iso, fake_engine, monk
     assert sub._last_finish_reason == second.finish_reason
 
 
-def test_request_context_carries_sampling_steering_and_trace(iso, fake_engine, monkeypatch):
-    """The context's fields are actually POPULATED, not just plumbing -- sampling (the resolved regime),
-    steering_snapshot (a COPY of the dial strengths this call used), and trace (the per-token steps)."""
-    steer = FakeSteer(strength={"warm": 0.6}, vec=[0.1, 0.2], layer=14)
+def test_request_context_carries_sampling_and_trace(iso, fake_engine, monkeypatch):
+    """The context's fields are actually POPULATED, not just plumbing -- sampling (the resolved regime)
+    and trace (the per-token steps)."""
     sub = cs.EngineSubstrate()
-    sub.steer = steer
     fake_engine.text = "hello there"
 
     sub.chat([{"role": "user", "content": "hi"}], sample=False)
 
     req = sub._request
     assert req.sampling is None                      # sample=False -> greedy -> _resolve_sampling -> None
-    assert req.steering_snapshot == {"warm": 0.6}
-    assert req.steering_snapshot is not steer.strength   # a COPY -- a later live mutation must not retro-edit it
     assert req.finish_reason is None or isinstance(req.finish_reason, str)
     assert isinstance(req.trace, list)
 

@@ -1,13 +1,3 @@
-export interface BehaviorAxis {
-  name: string;
-  poles: [string, string];
-  value: number;
-  max: number;
-  calibrated: boolean;
-  library?: boolean;
-  custom?: boolean;
-}
-
 export interface SamplingSettings {
   sampling: boolean;
   sample_temperature: number;
@@ -17,27 +7,8 @@ export interface SamplingSettings {
 }
 
 export interface BehaviorWorkspaceData {
-  axes: BehaviorAxis[];
   sampling?: SamplingSettings;
-  errors: Partial<Record<"axes" | "sampling", string>>;
-}
-
-export interface AxisPreview {
-  prompt: string;
-  axis: string;
-  value: number;
-  baseline: string;
-  steered: string;
-  warning?: string;
-}
-
-export interface ConceptPreview {
-  prompt: string;
-  concept: string;
-  strength: number;
-  baseline: string;
-  steered?: string;
-  note?: string;
+  errors: Partial<Record<"sampling", string>>;
 }
 
 // The clozn.corrective-flow.v1 client (types + preview/confirm/keep/undo/source-use functions) moved to
@@ -51,10 +22,6 @@ type JsonRecord = Record<string, unknown>;
 
 function record(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonRecord : {};
-}
-
-function records(value: unknown): JsonRecord[] {
-  return Array.isArray(value) ? value.map(record) : [];
 }
 
 function errorText(body: JsonRecord, status: number) {
@@ -96,23 +63,6 @@ async function post(url: string, body: JsonRecord, signal?: AbortSignal) {
   });
 }
 
-function axisFromBody(axis: JsonRecord): BehaviorAxis | null {
-  const name = String(axis.name || "");
-  const rawPoles = Array.isArray(axis.poles) ? axis.poles.map(String) : [];
-  if (!name || rawPoles.length !== 2) return null;
-  const max = Number(axis.max);
-  const value = Number(axis.value);
-  return {
-    name,
-    poles: [rawPoles[0], rawPoles[1]],
-    max: Number.isFinite(max) && max > 0 ? max : 1.5,
-    value: Number.isFinite(value) ? value : 0,
-    calibrated: axis.calibrated === true,
-    library: axis.library === true,
-    custom: axis.custom === true,
-  };
-}
-
 function samplingFromBody(body: JsonRecord): SamplingSettings {
   return {
     sampling: body.sampling === true,
@@ -124,73 +74,14 @@ function samplingFromBody(body: JsonRecord): SamplingSettings {
 }
 
 export async function loadBehaviorWorkspace(signal?: AbortSignal): Promise<BehaviorWorkspaceData> {
-  const results = await Promise.allSettled([
-    post("/steer/axes", {}, signal),
-    get("/sampling/mode", signal),
-  ]);
-  const [axes, sampling] = results;
-  const errors: BehaviorWorkspaceData["errors"] = {};
-  if (axes.status === "rejected") errors.axes = axes.reason instanceof Error ? axes.reason.message : "Axes unavailable";
-  if (sampling.status === "rejected") errors.sampling = sampling.reason instanceof Error ? sampling.reason.message : "Sampling unavailable";
-
-  return {
-    axes: axes.status === "fulfilled"
-      ? records(axes.value.axes).map(axisFromBody).filter((axis): axis is BehaviorAxis => axis !== null)
-      : [],
-    sampling: sampling.status === "fulfilled" ? samplingFromBody(sampling.value) : undefined,
-    errors,
-  };
-}
-
-export async function applyAxis(name: string, value: number) {
-  const body = await post("/steer/set", { name, value });
-  return {
-    active: Object.fromEntries(
-      Object.entries(record(body.active))
-        .map(([axis, next]) => [axis, Number(next)])
-        .filter((entry) => Number.isFinite(entry[1])),
-    ),
-    warning: typeof body.warning === "string" ? body.warning : undefined,
-  };
-}
-
-export async function previewAxis(name: string, value: number, prompt: string): Promise<AxisPreview> {
-  const body = await post("/steer/check", { name, value, prompt });
-  return {
-    prompt: String(body.prompt || prompt),
-    axis: String(body.axis || name),
-    value: Number(body.value) || value,
-    baseline: String(body.baseline || ""),
-    steered: String(body.steered || ""),
-    warning: typeof body.warning === "string" ? body.warning : undefined,
-  };
-}
-
-export async function applyConcept(concept: string, strength: number) {
-  const body = await post("/steer/concept/set", { concept, strength });
-  if (body.ok !== true) throw new Error(errorText(body, 200));
-  return Object.fromEntries(
-    Object.entries(record(body.active))
-      .map(([name, value]) => [name, Number(value)])
-      .filter((entry) => Number.isFinite(entry[1])),
-  );
-}
-
-export async function previewConcept(
-  concept: string,
-  strength: number,
-  prompt: string,
-): Promise<ConceptPreview> {
-  const body = await post("/steer/concept/check", { concept, strength, prompt });
-  if (body.steered == null) throw new Error(errorText(body, 200));
-  return {
-    prompt: String(body.prompt || prompt),
-    concept: String(body.concept || concept),
-    strength: Number(body.strength) || strength,
-    baseline: String(body.baseline || ""),
-    steered: String(body.steered || ""),
-    note: typeof body.note === "string" ? body.note : undefined,
-  };
+  try {
+    return { sampling: samplingFromBody(await get("/sampling/mode", signal)), errors: {} };
+  } catch (error) {
+    return {
+      sampling: undefined,
+      errors: { sampling: error instanceof Error ? error.message : "Sampling unavailable" },
+    };
+  }
 }
 
 export async function saveSampling(settings: SamplingSettings): Promise<SamplingSettings> {

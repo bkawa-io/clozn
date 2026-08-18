@@ -22,8 +22,6 @@ function run(overrides: Partial<RunSummary> = {}): RunSummary {
     duration: "1.3 s",
     flags: [],
     warningCount: 0,
-    activeDialCount: 0,
-    memoryCardCount: 0,
     ...overrides,
   };
 }

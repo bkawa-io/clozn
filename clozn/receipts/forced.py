@@ -28,9 +28,11 @@ if one shows up anyway, `_forced_ablation` prefers the message path, which alrea
 anchored leftovers honestly via `_apply_section_exclusions`'s own partial-application note.
 
 No null-floor control is computed for a section ablation on EITHER path (there's no register-matched
-"equal-sized irrelevant text" analogue for an arbitrary prompt span the way a card has filler text or a
-dial has a random direction); the receipt still reports its raw delta, just without a floor-clearing
-ratio.
+"equal-sized irrelevant text" analogue for an arbitrary prompt span); the receipt still reports its raw
+delta, just without a floor-clearing ratio. `section` is the only ablation kind `_forced_ablation` knows
+today -- memory-card and behavior-off (tone dial) ablation, which used to have their own null-floor
+controls (filler text / a random steering direction), were cut from the product along with cards and
+dials; `_forced_ablation` returns None for any influence spec it doesn't recognize.
 """
 from __future__ import annotations
 
@@ -53,11 +55,10 @@ _FORCED_CAVEAT = (
 )
 
 _FORCED_NOTE = (
-    "dial vectors (and, for a card ablation, the recompiled memory block) are computed from TODAY's "
-    "steering library / card store at the run's recorded strengths and card texts -- the same "
-    "limitation the regen receipt already carries. The with/without prompts differ in length by "
-    "whatever was ablated; deltas align per CONTINUATION token position, which is what matters -- not "
-    "per prompt token."
+    "the 'without' arm's block/steer state is reconstructed directly from this receipt's own ablation "
+    "(the section content removed, or steering cleared) -- there is no separate calibration store this "
+    "reconstruction depends on. The with/without prompts differ in length by whatever was ablated; "
+    "deltas align per CONTINUATION token position, which is what matters -- not per prompt token."
 )
 
 _FORCED_RAW_PROMPT_NOTE = (
@@ -246,73 +247,25 @@ def _forced_raw_prompt_receipt(run: dict, influence: dict, sub, conditions: dict
 
 
 def _forced_ablation(run: dict, influence: dict, sub, conditions: dict):
+    """One influence spec -> its forced with/without construction, or None for a kind this module doesn't
+    know how to ablate. `section` is the only real kind (see module docstring); memory-card and
+    behavior-off ablation used to have their own branches here (filler text / a random steering
+    direction respectively) but both were cut from the product along with cards and dials."""
     influence = influence or {}
     with_block = conditions.get("raw_block")
     with_strengths = dict(conditions.get("steer_strengths") or {})
-
-    cid = influence.get("card_id")
-    if cid:
-        return {"without": None, "control": None,
-                "note": "memory cards were removed from the product on 2026-07-27; a card influence "
-                        "can no longer be ablated, and nothing emits one"}
-
-    dial = influence.get("dial")
-    if dial:
-        without_strengths = dict(with_strengths)
-        without_strengths.pop(dial, None)
-        control = None
-        steer = getattr(sub, "steer", None)
-        if steer is not None and hasattr(steer, "steer_vector") and with_strengths.get(dial):
-            try:
-                isolated = steer.steer_vector({dial: with_strengths[dial]})
-            except Exception:
-                isolated = None
-            norm = _vector_norm(isolated) if isolated else 0.0
-            if norm > 0:
-                seed = f"{run.get('id')}:dial:{dial}"
-                rand_vec = _random_vector_of_norm(len(isolated), norm, seed)
-                control = {"block": with_block, "steer_strengths": without_strengths, "steer_vec": rand_vec}
-        return {"without": {"block": with_block, "steer_strengths": without_strengths}, "control": control,
-                "note": None if with_strengths.get(dial) else
-                       f"dial '{dial}' was not active on this run -- nothing to ablate"}
-
-    if influence.get("behavior_off"):
-        control = None
-        steer = getattr(sub, "steer", None)
-        if (steer is not None and hasattr(steer, "steer_vector") and with_strengths
-                and any(with_strengths.values())):
-            try:
-                full_vec = steer.steer_vector(with_strengths)
-            except Exception:
-                full_vec = None
-            norm = _vector_norm(full_vec) if full_vec else 0.0
-            if norm > 0:
-                seed = f"{run.get('id')}:behavior_off"
-                rand_vec = _random_vector_of_norm(len(full_vec), norm, seed)
-                control = {"block": with_block, "steer_strengths": {}, "steer_vec": rand_vec}
-        return {"without": {"block": with_block, "steer_strengths": {}}, "control": control,
-                "note": None if with_strengths else "no active dial on this run -- nothing to ablate"}
 
     section = influence.get("section")
     if section:
         # A prompt-CONTENT ablation, not a block/steer swap -- see this module's docstring. Reuse
         # replay.py's own splice (`_apply_section_exclusions` already does the by-name manifest lookup +
         # per-name honest notes, including the raw-anchored-part case) against the RAW message list, since
-        # that's the list an "api"/"auto" section's offsets were computed against.
-        #
-        # Callers are expected to have already filtered to api/auto sources (deltas._section_influences's
-        # dedup rule -- see this module's docstring); a "memory_card" section's offsets are into
-        # assembled_messages instead, which splicing against the RAW list here would get subtly wrong
-        # rather than honestly failing. Guarded directly (not just trusted from the caller) so a
-        # misdirected call degrades to a note instead of a silently-bad splice.
+        # that's the list an "api"/"auto" section's offsets were computed against. Callers are expected
+        # to have already filtered to api/auto sources (deltas._section_influences's dedup rule -- see
+        # this module's docstring), so every entry reached here is message-anchored or final_prompt-
+        # anchored, never a legacy memory-card-sourced one.
         manifest = run.get("sections") if isinstance(run.get("sections"), list) else []
         entry = next((s for s in manifest if isinstance(s, dict) and s.get("name") == section), None)
-        if entry is not None and entry.get("source") == "memory_card":
-            return {"without": None, "control": None,
-                    "note": f"section '{section}' is memory-card-sourced -- memory cards were removed "
-                            "from the product on 2026-07-27, so a legacy card-sourced section has no "
-                            "ablation path at all anymore (a section-name ablation here only supports "
-                            "api/auto sections)"}
 
         # RAW-PROMPT section: every part anchored to final_prompt (message_index: null -- a raw-prompt/
         # CLI or native-journaled run with no message breakdown at all). A MIXED section (some parts
@@ -321,8 +274,8 @@ def _forced_ablation(run: dict, influence: dict, sub, conditions: dict):
         # raw-anchored leftovers honestly via _apply_section_exclusions's own partial-application note --
         # only an ALL-null section takes this branch. Returns a `raw_prompt_ablation` sentinel that
         # forced_receipt dispatches on BEFORE its generic messages-based with/without construction (see
-        # _forced_raw_prompt_receipt) -- "without"/"control" stay None/None here since this ablation never
-        # reconstructs block/steer arms the way every other kind does.
+        # _forced_raw_prompt_receipt) -- "without"/"control" stay None/None here since this ablation
+        # doesn't reconstruct block/steer arms at all.
         if entry is not None:
             parts = entry.get("parts") if isinstance(entry.get("parts"), list) else []
             if parts and all(isinstance(p, dict) and p.get("message_index") is None for p in parts):
@@ -385,9 +338,8 @@ def forced_receipt(run: dict, influence: dict, sub) -> dict | None:
                             "here)", "caveat": _FORCED_CAVEAT}
 
         # A section ablation's "without" dict carries its OWN spliced `messages` (a content edit, not a
-        # block/steer swap); every other kind leaves that key absent and gets `raw_messages` unchanged --
-        # popped rather than passed alongside so a section's `messages` key never collides with the
-        # explicit kwarg below.
+        # block/steer swap) -- popped rather than passed alongside so it never collides with the explicit
+        # kwarg below.
         without_kwargs = dict(ablation["without"])
         without_messages = without_kwargs.pop("messages", conditions["raw_messages"])
         without_tokens, without_ok = rederive.score_arm(
@@ -402,29 +354,10 @@ def forced_receipt(run: dict, influence: dict, sub) -> dict | None:
         if ablation.get("note"):
             out["ablation_note"] = ablation["note"]
 
-        control = ablation.get("control")
-        if control is not None:
-            control_kwargs = dict(control)
-            control_messages = control_kwargs.pop("messages", conditions["raw_messages"])
-            control_tokens, control_ok = rederive.score_arm(
-                sub, conditions, messages=control_messages, **control_kwargs)
-            control_deltas = _forced_deltas(with_tokens, control_tokens) if control_ok else None
-            if control_deltas is not None:
-                c_summary = _delta_summary(control_deltas)
-                floor_mean = c_summary["mean_nats_per_token"]
-                ratio = (out["mean_nats_per_token"] / floor_mean) if floor_mean > 0 else None
-                out["null_floor"] = {
-                    "kind": ("card_filler" if influence.get("card_id") else
-                            "block_filler" if influence.get("memory_off") else
-                            "behavior_off_random_vector" if influence.get("behavior_off") else
-                            "dial_random_vector"),
-                    "deltas": [round(d, 6) for d in control_deltas],
-                    "sum_nats": c_summary["sum_nats"],
-                    "mean_nats_per_token": floor_mean,
-                    "ratio_real_over_floor": round(ratio, 3) if ratio is not None else None,
-                    "exceeds_floor_by_order_of_magnitude": bool(ratio is not None
-                                                                and ratio >= _NULL_FLOOR_RATIO_MIN),
-                }
+        # No null-floor control here: `_forced_ablation` only ever hands back `section` ablations now, and
+        # a section (an arbitrary prompt span) has no register-matched filler/random-vector control to
+        # build one from -- see the module docstring. `_NULL_FLOOR_RATIO_MIN` and the `null_floor` shape
+        # itself live on in span_receipt.py, whose neutral-filler control is a different mechanism.
         return out
     except Exception:
         return None

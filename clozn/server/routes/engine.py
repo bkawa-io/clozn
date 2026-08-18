@@ -1,7 +1,7 @@
 """Engine-backed chat + steering + model routing, and the studio chat surface that logs a run
 (POST /say for the HF/qwen memory model). `/engine/*` here covers WRITE/generation calls (as opposed to
-the pure readouts in routes/readouts.py): observe (edit a residual, watch the prediction move) and native
-GGUF chat with prompt-card memory. `/say` dispatches to
+the pure readouts in routes/readouts.py): observe (edit a residual, watch the prediction move) and a
+native GGUF chat alias. `/say` dispatches to
 whichever substrate is active (SUB.handle) and additionally logs the run -- unlike the fully generic
 SUB.handle(path, body) fallback (still in clozn.server.app's do_POST), this shapes a specific response AND
 captures a trace/memory record for the Run Inspector. Mechanical extraction of the matching branches out
@@ -111,7 +111,7 @@ def try_post(h, p, body):
         except Exception as e:
             h._json(502, {"error": f"engine: {e}"})
         return True
-    if p == "/engine/chat":   # Native chat alias: GGUF generation with prompt-card memory
+    if p == "/engine/chat":   # Native chat alias: plain GGUF generation, no memory/tone-dial personalization
         if ctx.ENGINE is None:
             h._json(502, {"error": "no engine configured"})
             return True
@@ -122,22 +122,11 @@ def try_post(h, p, body):
         try:
             mx = int(body.get("max_tokens", 220))
             kw = {}
-            # (A memory-card block was composed and injected here until the 2026-07-27 cards cut.)
             memout["assembled_messages"] = list(msgs)
             prompt = ctx._engine_tmpl(ctx.ENGINE, msgs)
-            # backlog #5: record the EXACT rendered chat-template string the model saw (both memory
-            # modes render one). _log_run reads memout["final_prompt"] -> the run record's final_prompt.
+            # backlog #5: record the EXACT rendered chat-template string the model saw.
+            # _log_run reads memout["final_prompt"] -> the run record's final_prompt.
             memout["final_prompt"] = prompt
-            # TONE: live dial values if a substrate is up, else the saved values from disk
-            st = getattr(getattr(ctx.active_sub(h), "steer", None), "strength", None) if ctx.active_sub(h) else None
-            if not st:
-                st = ctx._disk_dials()
-            if st and any(st.values()):
-                es = ctx._engine_steer()
-                sv = es.steer_vector(st) if es is not None else None
-                if sv:
-                    kw["steer_vec"] = sv
-                    kw["steer"] = {"coef": 1.0, "layer": es.layer}
             # Generate + capture a per-token trace alongside (B3). Reply is byte-identical to the
             # plain complete(); the trace feeds the Run Inspector timeline. steps=[] (diffusion, or a
             # stream hiccup) -> runlog stores a clean empty trace.
@@ -151,8 +140,7 @@ def try_post(h, p, body):
             # Pass the raw step list; runlog.record normalizes it -> {tokens, confidence, alternatives}.
             h._log_run("engine_chat", msgs, reply_raw, "clozn-qwen (engine)", t0, trace=steps,
                        mem_out=memout, finish_reason=finish)
-            h._json(200, {"reply": reply,
-                         "tone": bool(kw.get("steer_vec")), "via": "engine (GGUF)"})
+            h._json(200, {"reply": reply, "via": "engine (GGUF)"})
         except Exception as e:
             h._log_run("engine_chat", msgs, "", "clozn-qwen (engine)", t0, error=str(e), mem_out=memout)
             h._json(502, {"error": f"engine-chat: {e}"})

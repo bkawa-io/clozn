@@ -130,7 +130,6 @@ export interface CaseDef {
 export interface VariantDef {
   name: string;
   kind: string;
-  dials?: Record<string, number>;
   model?: string;
   baseUrl?: string;
   systemPrompt?: string;

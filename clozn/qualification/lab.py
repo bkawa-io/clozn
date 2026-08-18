@@ -1,4 +1,4 @@
-"""Q4--Q8 lab adapters and transactional artifact lifecycle.
+"""Q5--Q8 lab adapters and transactional artifact lifecycle.
 
 The adapters are intentionally thin.  Heavy fitting/calibration remains an explicit command owned
 by the lab environment; Clozn records its output, validates the resulting model-bound manifest, and
@@ -23,7 +23,6 @@ from .pipeline import RUN_SCHEMA, run_external_step, validate_jlens_artifact
 
 LAB_SCHEMA = "clozn.qualification-lab-step.v1"
 INSTALL_SCHEMA = "clozn.qualification-install.v1"
-DIAL_SCHEMA = "clozn.dial-calibration.v1"
 
 
 def _now() -> str:
@@ -68,18 +67,6 @@ def _lab_receipt(step_id: str, status: str, *, model_sha256: str | None = None,
     return document
 
 
-def run_dial_calibration(model_identity: Mapping[str, Any], argv: Sequence[str], *,
-                         output_dir: str, timeout: float = 3600.0) -> dict[str, Any]:
-    """Q4: run an explicit calibration command and validate its ``dials`` manifest."""
-    sha = str(model_identity.get("sha256") or "").lower() or None
-    command = run_external_step("dials", argv, timeout=timeout, output_dir=output_dir)
-    if command["status"] != "passed":
-        return _lab_receipt("dials", "failed", model_sha256=sha,
-                            evidence=command.get("evidence"), reason=command.get("reason"))
-    return _validate_generated_artifact("dials", model_identity, output_dir,
-                                        command.get("evidence") or {})
-
-
 def run_jlens_fit(model_identity: Mapping[str, Any], argv: Sequence[str], *,
                   output_dir: str, timeout: float = 7200.0) -> dict[str, Any]:
     """Q5: run an explicit fit command and validate the model-bound J-lens manifest."""
@@ -90,117 +77,6 @@ def run_jlens_fit(model_identity: Mapping[str, Any], argv: Sequence[str], *,
                             evidence=command.get("evidence"), reason=command.get("reason"))
     return _validate_generated_artifact("jlens", model_identity, output_dir,
                                         command.get("evidence") or {})
-
-
-def record_dial_calibration(model_identity: Mapping[str, Any], report: Mapping[str, Any], *,
-                            command_evidence: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """Normalize ``engine_autocalibrate.py`` output into a Q4 lab receipt.
-
-    A calibration with no usable dial is real negative evidence, not a successful empty artifact.  A
-    mixed report remains visible as a partial success through its per-dial lists; installation still
-    requires a separate reviewed manifest containing the exact model identity.
-    """
-    if not isinstance(report, Mapping) or not report:
-        return _lab_receipt("dials", "failed", model_sha256=str(model_identity.get("sha256") or "").lower() or None,
-                            reason="calibration report is empty or not an object")
-    usable = []
-    unusable = []
-    for name, value in report.items():
-        if not isinstance(name, str) or not isinstance(value, Mapping):
-            return _lab_receipt("dials", "failed", model_sha256=str(model_identity.get("sha256") or "").lower() or None,
-                                reason="calibration report contains an invalid dial row")
-        works = value.get("works", value.get("range_valid"))
-        if works is True and isinstance(value.get("usable_range"), list):
-            usable.append(name)
-        else:
-            unusable.append(name)
-    evidence = {
-        "usable_dials": usable,
-        "unusable_dials": unusable,
-        "dial_count": len(report),
-        "report": dict(report),
-    }
-    if command_evidence:
-        evidence["command"] = dict(command_evidence)
-    status = "passed" if usable else "failed"
-    reason = None if usable else "no dial cleared the coherence/effect/null calibration gate"
-    return _lab_receipt("dials", status,
-                        model_sha256=str(model_identity.get("sha256") or "").lower() or None,
-                        evidence=evidence, reason=reason)
-
-
-def install_dial_calibration(model_identity: Mapping[str, Any], report: Mapping[str, Any], *,
-                             root: str) -> dict[str, Any]:
-    """Q4/Q7: install a successful calibration under the exact GGUF hash.
-
-    The runtime accepts only ``~/.clozn/models/<sha>/dial_calibration.json`` for a real model.  The
-    historical root-level ``~/.clozn/dial_calibration.json`` is deliberately never read or promoted
-    by this function.  Reports with no usable dial are refused rather than becoming an empty-looking
-    success artifact.
-    """
-    sha = str(model_identity.get("sha256") or "").lower()
-    if len(sha) != 64 or any(char not in "0123456789abcdef" for char in sha):
-        raise ValueError("model identity must contain a lowercase SHA-256 digest")
-    receipt = record_dial_calibration(model_identity, report)
-    if receipt["status"] != "passed":
-        raise ValueError(receipt.get("reason") or "dial calibration did not produce a usable dial")
-    dials = {
-        name: {**dict(value), "works": bool(value.get("works", value.get("range_valid")))}
-        for name, value in report.items()
-    }
-    document = {
-        "schema_version": DIAL_SCHEMA,
-        "generated_at": _now(),
-        "model_sha256": sha,
-        "method": "engine_autocalibrate.py coherence/effect/shuffled-null sweep",
-        "dials": dials,
-    }
-    schemas.validate(document, DIAL_SCHEMA)
-    target = Path(root).resolve() / "models" / sha / "dial_calibration.json"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if target.exists():
-        try:
-            with target.open(encoding="utf-8") as handle:
-                existing = json.load(handle)
-            schemas.validate(existing, DIAL_SCHEMA)
-        except Exception as exc:
-            raise ValueError(f"refusing to overwrite an invalid scoped dial calibration: {exc}") from None
-        if existing.get("model_sha256") != sha:
-            raise ValueError("refusing to overwrite a calibration for a different model identity")
-        if _digest(existing.get("dials")) == _digest(dials):
-            return _install_receipt("already_present", "dials", sha, target)
-        raise ValueError("refusing to overwrite a different calibration under the same model identity")
-    atomic_write_json(str(target), document, indent=2, ensure_ascii=False)
-    return _install_receipt("installed", "dials", sha, target)
-
-
-def rollback_dial_calibration(transaction: Mapping[str, Any]) -> dict[str, Any]:
-    """Remove one model-scoped dial calibration installed by ``install_dial_calibration``.
-
-    Dial calibration is stored under ``models/<sha>/dial_calibration.json`` rather than the
-    generic ``<artifact_type>/<sha>`` registry layout. Keep its rollback guard explicit so a
-    receipt cannot be redirected to an arbitrary file or a different model.
-    """
-    if not isinstance(transaction, Mapping) or transaction.get("status") != "installed":
-        raise ValueError("only an installed dial calibration can be rolled back")
-    sha = str(transaction.get("model_sha256") or "").lower()
-    path = Path(str(transaction.get("path") or "")).resolve()
-    if (len(sha) != 64 or any(char not in "0123456789abcdef" for char in sha)
-            or path.name != "dial_calibration.json"
-            or path.parent.name != sha
-            or path.parent.parent.name != "models"):
-        raise ValueError("rollback target is not a recognized model-scoped dial calibration")
-    if not path.is_file():
-        raise ValueError("rollback target does not exist")
-    try:
-        with path.open(encoding="utf-8") as handle:
-            document = json.load(handle)
-    except Exception as exc:
-        raise ValueError(f"rollback target is not valid dial calibration: {exc}") from None
-    if not isinstance(document, Mapping) or str(document.get("model_sha256") or "").lower() != sha:
-        raise ValueError("rollback target does not match its model identity")
-    path.unlink()
-    return _install_receipt("rolled_back", "dials", sha, path)
 
 
 def _validate_generated_artifact(artifact_type: str, model_identity: Mapping[str, Any],
@@ -420,6 +296,5 @@ def acceptance_fixture(*, model: str, core: Mapping[str, Any], calibration: Mapp
     return document
 
 
-__all__ = ["LAB_SCHEMA", "INSTALL_SCHEMA", "DIAL_SCHEMA", "run_dial_calibration", "record_dial_calibration",
-           "install_dial_calibration", "rollback_dial_calibration", "run_jlens_fit", "record_jlens_validation",
+__all__ = ["LAB_SCHEMA", "INSTALL_SCHEMA", "run_jlens_fit", "record_jlens_validation",
            "run_battery", "install_artifact", "rollback_artifact", "acceptance_fixture"]

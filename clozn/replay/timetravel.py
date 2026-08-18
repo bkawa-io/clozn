@@ -40,7 +40,6 @@ module -- and its tests -- stay model-free. IO/among-tensors ops never raise int
 from __future__ import annotations
 
 from collections.abc import Mapping
-import inspect
 import time
 import uuid
 
@@ -767,13 +766,6 @@ def branch_messages(messages, turn: int, alt_user=None) -> list[dict]:
 
 
 # --------------------------------------------------------------------------- branch -> child run record
-def _snapshot_strength(steer) -> dict:
-    try:
-        return dict(getattr(steer, "strength", {}) or {})
-    except Exception:
-        return {}
-
-
 def branch(run: dict, turn: int, sub, alt_user=None, sample: bool = False,
            store: "SnapshotStore | None" = None) -> dict | None:
     """Branch `run` at conversational `turn`: re-generate the truncated (optionally alt-user) transcript on
@@ -781,10 +773,9 @@ def branch(run: dict, turn: int, sub, alt_user=None, sample: bool = False,
     the branch turn + whether the user turn was edited). Returns the child run dict, or None on any failure
     (a branch must never raise into the request handler).
 
-    Substrate safety mirrors replay.py: the live knobs are NOT changed by a branch (we only truncate the
-    transcript), but we still snapshot .steer.strength / .memory.memory_strength and restore them in a
-    finally so a future knob-carrying variant can't leave the studio mutated. NEVER persists (no
-    save_state). Greedy by default (sample=False) so the branch is deterministic -- the receipt path.
+    Substrate safety mirrors replay.py: a branch only truncates the transcript and never touches any
+    live substrate knob. NEVER persists (no save_state). Greedy by default (sample=False) so the
+    branch is deterministic -- the receipt path.
 
     If a bounded `store` is passed AND a snapshot for (run, turn) holding a real cache exists, this is where
     a future fast path would restore it and skip the shared-prefix re-prefill; v1 re-generates from the
@@ -801,11 +792,6 @@ def branch(run: dict, turn: int, sub, alt_user=None, sample: bool = False,
         except ValueError:
             return None
 
-        steer = getattr(sub, "steer", None)
-        mem = getattr(sub, "memory", None) or getattr(sub, "_mem", None)
-        saved_strength = _snapshot_strength(steer)
-        saved_mem = getattr(mem, "memory_strength", None) if mem is not None else None
-
         snap = store.get(run.get("id"), int(turn)) if store is not None else None
         changes = {"branch_turn": int(turn),
                    "edited_user": bool(alt_user is not None and str(alt_user).strip()),
@@ -814,44 +800,13 @@ def branch(run: dict, turn: int, sub, alt_user=None, sample: bool = False,
             changes["alt_user"] = str(alt_user)
 
         t0 = time.time()
-        try:
-            call_kw = {"max_new": 256, "sample": bool(sample)}
-            try:
-                if "memory_scope" in inspect.signature(chat).parameters:
-                    from clozn.replay.replay import _memory_scope_for_run
-                    call_kw["memory_scope"] = _memory_scope_for_run(run)
-            except (TypeError, ValueError):
-                pass
-            reply = chat(branched, **call_kw)
-        finally:                                          # restore EXACTLY (never leave the studio mutated)
-            if steer is not None:
-                try:
-                    steer.strength = dict(saved_strength)
-                except Exception:
-                    pass
-            if mem is not None and saved_mem is not None:
-                try:
-                    mem.memory_strength = saved_mem
-                except Exception:
-                    pass
+        reply = chat(branched, max_new=256, sample=bool(sample))
         reply = reply if isinstance(reply, str) else str(reply)
-
-        # child memory/behavior summary: a branch keeps the live knobs, so report what's actually in force.
-        dials = {}
-        try:
-            if steer is not None and hasattr(steer, "active"):
-                dials = dict(steer.active())
-        except Exception:
-            dials = {}
-        memd = {"strength": float(saved_mem) if saved_mem is not None else 1.0,
-                "has_prefix": (getattr(mem, "prefix", None) is not None) if mem is not None else False,
-                "cards_applied": [], "proposed_cards": []}
 
         rid = runlog.record(
             source="branch", client="studio",
             model=run.get("model"), substrate=run.get("substrate"),
             messages=branched, response=reply,
-            memory=memd, behavior={"active_dials": dials},
             parent_run_id=run.get("id"), changes_applied=changes, started=t0,
             session_key=run.get("session_key"), client_key=run.get("client_key"),
             client_key_source=run.get("client_key_source"), project_key=run.get("project_key"),

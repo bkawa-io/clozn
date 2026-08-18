@@ -64,7 +64,6 @@ HAPPY_PATH = {
             {"id": "mem_1", "text": "Keep it brief.", "causal_verified": None, "has_provenance": True,
              "source_run_id": "run_src", "source_turn": 1, "quoted_span": "please keep it brief"},
         ],
-        "dials": [{"name": "concise", "value": 0.5, "causal_verified": None}],
     },
     "concepts": {"available": False, "note": "concept readout needs the qwen/PyTorch substrate (SAE) — not available on this run."},
 }
@@ -79,7 +78,6 @@ def test_happy_path_renders_hesitations_alternatives_and_gate():
     assert "0.77" in out and "prompt" in out                         # gate value + mode
     assert "Keep it brief." in out
     assert "please keep it brief" in out                             # the provenance quote, verbatim
-    assert "concise" in out and "0.50" in out                        # the dial + its value
 
 
 def test_sparkline_renders_and_uses_only_block_glyphs():
@@ -113,7 +111,7 @@ def test_not_available_notes_render_verbatim_not_hidden():
     expl = {
         "run_id": "run_no_trace",
         "confidence": {"available": False, "note": "token trace captured on the engine path"},
-        "influences_active": {"cards": [], "dials": [], "gate": None, "mode": None, "note": "no memory applied"},
+        "influences_active": {"cards": [], "gate": None, "mode": None, "note": "no memory applied"},
         "concepts": {"available": False, "note": "concept readout needs the qwen/PyTorch substrate (SAE) — not available on this run."},
     }
     out = clozn_cli.format_explain(expl)
@@ -129,13 +127,12 @@ def test_zero_hesitations_and_no_influences_still_renders_honestly_not_hidden():
         "run_id": "run_confident",
         "confidence": {"available": True, "threshold": 0.5, "n_tokens": 3, "summary": "0 hesitations",
                        "uncertain_moments": []},
-        "influences_active": {"cards": [], "dials": [], "gate": None, "mode": None, "note": "no memory applied"},
+        "influences_active": {"cards": [], "gate": None, "mode": None, "note": "no memory applied"},
         "concepts": {"available": False, "note": "concept readout needs the qwen/PyTorch substrate (SAE) — not available on this run."},
     }
     out = clozn_cli.format_explain(expl)
     assert "0 hesitations" in out
     assert "no memory applied" in out
-    assert "no dials active" in out
     assert not _PCT_RE.search(out)
 
 
@@ -155,7 +152,7 @@ def test_concepts_available_renders_features_and_scores():
 @pytest.mark.parametrize("garbage", [
     None, "not a dict", 42, [], ["also", "not", "a", "dict"],
     {"confidence": "nope", "influences_active": 3, "concepts": ["nope"]},
-    {"confidence": {"uncertain_moments": "not-a-list"}, "influences_active": {"cards": "nope", "dials": {}},
+    {"confidence": {"uncertain_moments": "not-a-list"}, "influences_active": {"cards": "nope"},
      "concepts": {"available": True, "spans": "nope"}},
 ])
 def test_never_raises_on_malformed_input(garbage):

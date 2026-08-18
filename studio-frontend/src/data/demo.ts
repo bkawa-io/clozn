@@ -26,8 +26,6 @@ export const DEMO_OBSERVATORY: ObservatoryData = {
   ],
   sources: [],
   configuration: {
-    activeDials: {},
-    memoryCards: [],
     adapters: [],
     changes: [],
   },

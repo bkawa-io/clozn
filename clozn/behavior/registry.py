@@ -1,51 +1,29 @@
 """clozn/behavior/registry.py -- the versioned corrective-action registry (roadmap feature 08).
 
-This is deliberately NOT a hand-maintained duplicate of the two vocabularies that already exist:
+This is deliberately NOT a hand-maintained duplicate of clozn.replay.corrective.CORRECTION_PRESETS
+-- the prompt_policy backend, already shipped and tested (4 of the spec's 6 default actions existed
+before this feature; the other 2 were added alongside this module).
 
-  * clozn.replay.corrective.CORRECTION_PRESETS -- the prompt_policy backend, already shipped and
-    tested (4 of the spec's 6 default actions existed before this feature; the other 2 were added
-    alongside this module).
-  * clozn.behavior.steering.axes.AXES -- the control_vector backend's dial catalog, already gated by
-    per-exact-model calibration (clozn.behavior.steering.engine_adapter.EngineSteer.ceiling_for).
-
-build_registry() assembles both into ONE reviewable catalog, matching the spec's action-registry
+build_registry() assembles it into ONE reviewable catalog, matching the spec's action-registry
 shape (id, label, description, backends in preference order, qualification, safe bounds, known
 conflicts). An action id here IS the existing CORRECTION_PRESETS key (e.g. "less-verbose") --
 never a parallel identifier a caller would have to translate.
 
 HONESTY CONTRACT
 -----------------
-Every action's `backends` list enumerates outcomes for all four vocabulary values the spec
-defines: prompt_policy, control_vector, sampling_policy, unsupported. A backend this build cannot
-honestly offer is listed with `"type": "unsupported"` and a `reason`, never silently dropped -- a
-reader of the registry sees the full vocabulary evaluated, never has to guess what wasn't tried.
-
-`qualified` on a control_vector backend is only ever present when a live `steer` (an
-EngineSteer-shaped duck type: `.ceiling_for(name) -> (max, calibrated)`) was supplied to
-build_registry(): calibration is per exact model sha256 (see engine_adapter.py's own docstring), so
-with no loaded model there is nothing honest to report and the field is omitted, never guessed as
-True or False (SEAMS.md rule 2: omit, never null-pad).
+Every action's `backends` list enumerates outcomes for the vocabulary values this build can still
+honestly offer: prompt_policy (always) and sampling_policy (declared `"type": "unsupported"` with
+a `reason`, since no action recipe uses it yet -- see _sampling_policy_backend). The spec's fourth
+value, control_vector (the tone-dial backend), was retired along with the rest of the
+personalization layer and no longer appears here at all -- there is nothing left to honestly
+report a `reason` about, so it is dropped rather than kept as a permanent stub.
 """
 from __future__ import annotations
 
-import hashlib
-import json
-
-from clozn.behavior.steering import axes as _axes
 from clozn.replay.corrective import CORRECTION_PRESETS
 
 SCHEMA = "clozn.action-registry.v1"
 REGISTRY_VERSION = "1"
-
-# action id (== the existing CORRECTION_PRESETS key) -> the matching control-vector dial name in
-# clozn.behavior.steering.axes.AXES, for the 2 of 6 actions a calibrated dial can also express.
-# The other 4 (use-context, ask-before-guessing, preserve-formatting, stop-repeating) have no
-# matching axis and stay prompt_policy-only -- that absence is the "unsupported" control_vector
-# backend below, not an oversight.
-_DIAL_FOR_ACTION = {
-    "less-verbose": "concise",
-    "more-concrete": "concrete",
-}
 
 _LABELS = {
     "less-verbose": "More concise",
@@ -74,76 +52,6 @@ def _prompt_policy_backend(action_id: str) -> dict:
     }
 
 
-def _control_qualification_id(steer, dial: str) -> str:
-    """Stable evidence identity for the live calibration that qualified a dial.
-
-    EngineSteer intentionally exposes qualification through ``ceiling_for`` rather than a
-    product-wide registry id.  Hash the exact calibration entry and include the best model
-    identity the adapter carries, so a result never says only "qualified" with no evidence key.
-    """
-    model_id = str(
-        getattr(steer, "_jlens_model_sha256", None)
-        or getattr(steer, "model_sha256", None)
-        or "model-identity-unreported"
-    )
-    calibration = getattr(steer, "calibration", None)
-    entry = calibration.get(dial) if isinstance(calibration, dict) else None
-    payload = json.dumps(
-        {"model": model_id, "dial": dial, "calibration": entry},
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
-    return "clozn.control-vector-qualification.v1:" + hashlib.sha256(
-        payload.encode("utf-8")
-    ).hexdigest()[:24]
-
-
-def _control_vector_backend(action_id: str, steer) -> dict:
-    dial = _DIAL_FOR_ACTION.get(action_id)
-    if dial is None:
-        reason = f"no control-vector dial exists for {action_id!r}"
-        return {
-            "type": "unsupported",
-            "requested_type": "control_vector",
-            "available": False,
-            "reason": reason,
-            "unavailability_reason": reason,
-        }
-    axis = _axes.AXES.get(dial) or {}
-    declared_max = float(axis.get("max", 1.5))
-    backend = {
-        "type": "control_vector",
-        "recipe_version": "1",
-        "parameters": {"dial": dial},
-        "qualification": "model_build_exact",
-        "safe_bounds": {"declared_max": declared_max},
-        "available": False,
-        "unavailability_reason": "no live exact-model calibration was supplied",
-    }
-    if steer is not None and hasattr(steer, "ceiling_for"):
-        try:
-            ceiling, calibrated = steer.ceiling_for(dial)
-        except Exception:
-            # Can't establish live qualification -- degrade to the static shape above rather than
-            # fail the whole registry or guess at a bool (SEAMS.md rule 2: omit, never null-pad).
-            return backend
-        backend["qualified"] = bool(calibrated)
-        backend["available"] = bool(calibrated)
-        backend["safe_bounds"]["enforced_ceiling"] = float(ceiling)
-        if calibrated:
-            backend["qualification_id"] = _control_qualification_id(steer, dial)
-            backend.pop("unavailability_reason", None)
-        else:
-            reason = (
-                f"no calibration for this exact model; {dial!r} is capped at the generic "
-                f"uncalibrated ceiling, not its declared max"
-            )
-            backend["reason"] = reason
-            backend["unavailability_reason"] = reason
-    return backend
-
-
 def _sampling_policy_backend() -> dict:
     """No action in this registry version has a sampling-policy recipe (spec non-goal: "a
     general-purpose steering-vector laboratory"). Declared unsupported explicitly rather than
@@ -158,7 +66,7 @@ def _sampling_policy_backend() -> dict:
     }
 
 
-def _action_entry(action_id: str, steer) -> dict:
+def _action_entry(action_id: str) -> dict:
     return {
         "id": action_id,
         "label": _LABELS[action_id],
@@ -172,25 +80,17 @@ def _action_entry(action_id: str, steer) -> dict:
         "evaluation_metrics": ["word_count", "repetition", "formatting"],
         "backends": [
             _prompt_policy_backend(action_id),
-            _control_vector_backend(action_id, steer),
             _sampling_policy_backend(),
         ],
     }
 
 
-def build_registry(steer=None) -> dict:
-    """The full clozn.action-registry.v1 document.
-
-    `steer` is an optional duck-typed control-vector engine (EngineSteer-shaped) for the CURRENTLY
-    loaded model. When given, control_vector backends report a live `qualified` bool for the exact
-    model in force; when omitted (no worker loaded, or a caller that only wants the static catalog),
-    that field is left out entirely. Never raises: a `steer` whose `ceiling_for` misbehaves degrades
-    that one backend entry to its static (unqualified) shape rather than failing the whole registry.
-    """
+def build_registry() -> dict:
+    """The full clozn.action-registry.v1 document."""
     return {
         "schema_version": SCHEMA,
         "version": REGISTRY_VERSION,
-        "actions": [_action_entry(action_id, steer) for action_id in CORRECTION_PRESETS],
+        "actions": [_action_entry(action_id) for action_id in CORRECTION_PRESETS],
     }
 
 
@@ -198,39 +98,3 @@ def action_ids() -> list[str]:
     """Every action id currently in the registry, in vocabulary order -- convenience for callers
     (routes, CLI) that want the id list without building the full document."""
     return list(CORRECTION_PRESETS)
-
-
-def dial_for_action(action_id: str) -> str | None:
-    """The control-vector dial name backing `action_id`, or None if this action has no matching
-    axis -- the same lookup build_registry() uses internally, exposed for a caller (retry_compare())
-    that wants to CHOOSE a backend rather than just describe one."""
-    return _DIAL_FOR_ACTION.get(action_id)
-
-
-# Fraction of the calibrated ceiling a chosen control-vector strength uses. Deliberately inside the
-# PROVEN usable range rather than at the ceiling itself: ceiling_for()'s calibrated usable_max is
-# where a sweep last found the dial still coherent, not a target to run right up against on every
-# request. 0.67 is a plain, conservative default -- not itself calibrated -- until a real per-action
-# strength recipe exists.
-_DEFAULT_CEILING_FRACTION = 0.67
-
-
-def qualified_dial_strength(action_id: str, steer) -> tuple[str, float] | None:
-    """(dial, strength) for `action_id`'s control-vector backend IF `steer` reports it CALIBRATED
-    for the exact loaded model (EngineSteer.ceiling_for, e959477's fail-closed contract) -- else
-    None, meaning prompt_policy is the only honest choice for this call. Never raises: a missing
-    dial, a missing/misbehaving `steer`, or an uncalibrated model all return None rather than
-    guessing a strength nobody validated."""
-    dial = _DIAL_FOR_ACTION.get(action_id)
-    if dial is None or steer is None or not hasattr(steer, "ceiling_for"):
-        return None
-    try:
-        ceiling, calibrated = steer.ceiling_for(dial)
-    except Exception:
-        return None
-    if not calibrated:
-        return None
-    strength = round(float(ceiling) * _DEFAULT_CEILING_FRACTION, 4)
-    if strength <= 0:
-        return None
-    return dial, strength

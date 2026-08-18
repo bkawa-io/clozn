@@ -20,25 +20,10 @@ import clozn.settings as clozn_settings          # noqa: E402
 import clozn.runs.store as runlog  # noqa: E402
 
 
-class _Memory:
-    memory_strength = 1.0
-    rules = []
-    prefix = None
-
-
-class _Steer:
-    strength = {}
-
-    def active(self):
-        return {}
-
-
 class _Substrate:
     name = "engine"
 
     def __init__(self):
-        self.memory = self._mem = _Memory()
-        self.steer = _Steer()
         self._finish = "stop"
 
     def chat(self, messages, max_new=256, sample=True, trace_out=None, mem_out=None):

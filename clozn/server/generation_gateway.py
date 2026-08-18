@@ -27,14 +27,13 @@ class InstrumentedChatResult:
     """One compatibility request after it has crossed Clozn's instrumented substrate.
 
     Compatibility routes own their wire formats, but they must not each grow a second
-    inference path.  This result is the shared seam: memory assembly, steering, trace
+    inference path.  This result is the shared seam: prompt assembly, trace
     capture, finish-reason capture, and run journaling have already happened by the
     time a route turns it into OpenAI- or Ollama-shaped JSON.
     """
 
     reply: str
     trace_steps: list
-    memory: dict
     finish_reason: str | None
     public_finish_reason: str
     run_id: str | None
@@ -73,8 +72,8 @@ def instrumented_chat(handler, messages: list, *, model: str, max_tokens: int = 
     """Run chat through the active substrate and persist the resulting evidence.
 
     This is deliberately below every compatibility serializer.  The active substrate
-    is where Clozn applies prompt-card memory, tone steering, and the
-    traced engine call; ``handler._log_run`` is where that evidence becomes a receipt.
+    is where Clozn renders the prompt and makes the traced engine call;
+    ``handler._log_run`` is where that evidence becomes a receipt.
     A route calling ``ENGINE.complete`` directly skips all of those layers.
 
     Generation errors are journaled before being re-raised so callers can preserve
@@ -190,7 +189,7 @@ def instrumented_chat(handler, messages: list, *, model: str, max_tokens: int = 
         persistence.run_id = None
         raise persistence
     return InstrumentedChatResult(
-        reply=think.public_text, trace_steps=public_steps, memory=memout,
+        reply=think.public_text, trace_steps=public_steps,
         finish_reason=finish, public_finish_reason=public_finish, run_id=rid,
         warnings=warnings_for(finish, {"max_tokens": int(max_tokens)}),
         reasoning=think.journal(reasoning_steps=reasoning_steps),

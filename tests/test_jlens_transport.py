@@ -1,4 +1,4 @@
-"""test_jlens_transport.py -- clozn/behavior/steering/jlens_transport.py (J-transport an
+"""test_jlens_transport.py -- clozn/analysis/jlens_transport.py (J-transport an
 ALREADY-BUILT steer direction: notes/JLENS_SAE_FINDINGS.md finding #1, "J-transported SAE steering
 is 1.5-2x more stable than raw").
 
@@ -34,7 +34,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, REPO_ROOT)
 
-import clozn.behavior.steering.jlens_transport as jt  # noqa: E402
+import clozn.analysis.jlens_transport as jt  # noqa: E402
 from clozn.artifacts import contracts  # noqa: E402
 
 

@@ -215,8 +215,7 @@
         "vector_sha256",
         "vector_elements",
         "steer_layer",
-        "steer_coef",
-        "active_dials_sha256"
+        "steer_coef"
       ],
       "additionalProperties": false,
       "properties": {
@@ -225,8 +224,7 @@
         "vector_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "vector_elements": {"type": "integer", "minimum": 1},
         "steer_layer": {"type": "integer", "minimum": 0},
-        "steer_coef": {"type": "number"},
-        "active_dials_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        "steer_coef": {"type": "number"}
       }
     },
     "Identity": {

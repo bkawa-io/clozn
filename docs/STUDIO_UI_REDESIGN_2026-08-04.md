@@ -105,9 +105,7 @@ Compare
 
 Improve
 ├── Quick tests
-├── Corrections
-├── Controls
-└── Profiles
+└── Corrections
 
 Runtime
 ├── Overview
@@ -141,10 +139,7 @@ Runtime
 | Experiment matrix | Compare → Experiment matrix | Keep, add creation/import guidance and result summary |
 | One-shot retries | Improve → Quick tests | Also launched contextually from Inspect |
 | Corrections | Improve → Corrections | Preserve durable lifecycle |
-| Tone dials | Improve → Controls | Group and show changed axes first |
-| Concept steering | Improve → Controls | Capability-gated section, not an empty module |
 | Runtime defaults | Runtime → Defaults and capture | Move out of Behavior/Improve |
-| Profiles | Improve → Profiles | Add bundle preview and active-state summary |
 | Runtime installation state | Runtime → Overview | Compact health and action summary |
 | Runtime inventory | Runtime → Models | Full-width model table/cards |
 | Runtime capability flags | Runtime → Capabilities | Group by user task and availability |
@@ -592,38 +587,6 @@ Saved corrections appear as readable cards with instruction, exact scope, status
 and undo/disable actions. Recorded resolution appears on the selected correction or run, not as an empty
 global panel.
 
-### 8.3 Improve → Controls
-
-Combine Tone dials and Concept steering as qualified controls.
-
-#### Tone
-
-- Group axes into voice, density, certainty, and formatting where the capability metadata allows it.
-- Show changed/active axes first.
-- Collapse neutral axes into `7 unchanged controls`.
-- Keep bipolar sliders because position around zero is the correct encoding.
-- Show a readable A/B response preview for the selected change.
-- Display `uncalibrated` once at the group level when all axes share that state.
-
-#### Concepts
-
-- If J-lens is unavailable, show one prerequisite card and route to Runtime → Capabilities.
-- Do not show active-looking Apply controls before the prerequisite is satisfied.
-- When available, show the concept, direction, strength, method, artifact identity, and an A/B preview.
-
-### 8.4 Improve → Profiles
-
-Before save, show the bundle contents:
-
-- Active tone axes and values.
-- Active concept directions.
-- Guard and generation defaults referenced by the profile.
-- Model/artifact compatibility.
-- Description and intended use.
-
-Saved profiles use cards with active/inactive state, last changed time, compatibility, and preview. The
-user should never have to infer what `10 DIALS` means.
-
 ## 9. Runtime redesign
 
 Runtime is a supporting utility workspace. Its first question is: **Can this installation perform the
@@ -639,7 +602,7 @@ next operation?**
 │ Serving model         │ Evidence capabilities │ Storage / snapshots  │
 │ Ready                 │ 4 available · 4 absent│ 3 pinned              │
 ├───────────────────────┴───────────────────────┴──────────────────────┤
-│ Attention: J-lens unavailable; concept steering cannot run.         │
+│ Attention: J-lens unavailable.                                       │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -724,7 +687,6 @@ session and run rather than substitute the first available run.
 | What changed between runs? | Semantic groups and data-type-specific diffs | Raw field diff | Dumbbells for categories and JSON |
 | How far is a finding from causal support? | One ordinal ladder | Detailed receipts | Five peer colors |
 | How did confidence change? | Text-aligned line/small-multiple plot | Token table | Plot detached from output text |
-| How is behavior configured? | Bipolar sliders + A/B preview | Full axis table | Ten identical neutral rows |
 | Is the runtime ready? | Status summary + capability groups | Endpoint/source ledger | Large repeated absence cards |
 
 ## 12. Empty, blocked, and unavailable states
@@ -744,8 +706,6 @@ Examples:
   Inspect the capture tier in Runtime → Defaults and capture.`
 - **No experiment results:** `No recorded experiment result bundles. Run clozn experiment … or import a
   result bundle.`
-- **Concept steering unavailable:** `J-lens is not configured for this model. See Runtime →
-  Capabilities.`
 
 Do not allocate a permanent full page to a single unavailable action.
 
@@ -800,8 +760,6 @@ the viewer explicitly opens technical details.
 ### Phase 4: reorganize Improve and Runtime
 
 - Move Runtime defaults to Runtime.
-- Combine qualified behavior controls.
-- Add profile bundle previews.
 - Split Runtime into focused subpages and use the full-width Snapshots layout.
 
 ### Phase 5: remove compatibility ambiguity

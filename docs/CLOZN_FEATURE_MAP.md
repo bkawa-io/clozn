@@ -671,7 +671,7 @@ The engine can score an exact continuation against:
 
 - Prompt text or exact prompt tokens
 - Continuation text or exact continuation tokens
-- Steering vectors
+- Raw steering vectors
 - Residual writes
 - Head writes
 - FFN writes
@@ -774,7 +774,6 @@ A recorded run can be re-executed with explicit changes to:
 - Greedy mode
 - Context
 - Template
-- Behavior dials
 - Output budget
 
 The child records its parent and exact applied changes.
@@ -814,7 +813,7 @@ Checkpoint data can include:
 - Prompt/generated boundary
 - RNG and sampler state
 - Temperature, top-k/top-p, repetition penalty
-- Steering state
+- Raw steering state
 - Worker generation identity
 - Lifecycle and size
 
@@ -880,7 +879,7 @@ CLOZN supports several explanation artifacts with different cost and rigor.
 
 ### Leave-one-out receipts
 
-For an active dial or prompt section, CLOZN can compare:
+For an active steering vector or prompt section, CLOZN can compare:
 
 - Greedy execution with the influence
 - Greedy execution without it
@@ -949,7 +948,7 @@ Primary implementations: [`core.py`](../clozn/receipts/core.py),
 [`coalition.py`](../clozn/receipts/coalition.py), [`narrate.py`](../clozn/receipts/narrate.py), and
 [`self_report_reliability.py`](../clozn/receipts/self_report_reliability.py).
 
-## 16. Behavior controls, corrections, and feedback
+## 16. Behavior controls and corrections
 
 ### Corrective actions (one-shot, request-local)
 
@@ -977,20 +976,7 @@ A preview/confirm generates a matched baseline and corrected child; "keeping" a 
 corrected child as that one run's own revision. Nothing here persists beyond the run it was generated
 from -- see [CAPABILITIES.md](CAPABILITIES.md) for the request-local vs. durable distinction.
 
-### Feedback and preferences
-
-Run-linked feedback can record:
-
-- Kind
-- Dial
-- Direction
-- Metadata
-
-Feedback is aggregated into pending preference proposals. Proposals require explicit approval or
-dismissal.
-
-Primary implementations: [`registry.py`](../clozn/behavior/registry.py) and
-[`preferences.py`](../clozn/behavior/preferences.py).
+Primary implementation: [`registry.py`](../clozn/behavior/registry.py).
 
 ## 17. Guarded generation
 
@@ -1037,7 +1023,7 @@ Experiments support:
 
 - Case × variant × seed matrices
 - Target and guard suites
-- Base, tuned, quantized, prompt, and dial variants
+- Base, tuned, quantized, and prompt variants
 - Message inputs
 - Assertions
 - Exact manifest digest
@@ -1172,7 +1158,6 @@ Qualification can record:
 - Performance check
 - Structured I/O qualification
 - White-box qualification
-- Dial qualification
 - J-lens qualification
 - Acceptance batteries
 

@@ -126,8 +126,7 @@ def try_post(h, p, body):
             return True
         influence = body.get("influence")
         if not isinstance(influence, dict) or not influence:
-            h._json(400, {"error": "need an influence spec: one of "
-                         "{card_id|dial|memory_off|behavior_off}"})
+            h._json(400, {"error": "need an influence spec: {section}"})
             return True
         from clozn import receipts
         try:

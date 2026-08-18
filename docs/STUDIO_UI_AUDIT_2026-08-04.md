@@ -49,9 +49,9 @@ The central problem is not only small type. Almost everything receives similar v
 - Fixed sidebars and an open inspector consume substantial width by default.
 - Several sophisticated visualizations encode data the user cannot identify.
 
-The strongest surfaces are Read, Timing, the standalone Diagnostics overview, and potentially Tone
-dials. These surfaces foreground recognizable content or familiar measurements. The weakest are What
-mattered, Why, Runs, Runtime, and the raw portion of Compare.
+The strongest surfaces are Read, Timing, and the standalone Diagnostics overview. These surfaces
+foreground recognizable content or familiar measurements. The weakest are What mattered, Why, Runs,
+Runtime, and the raw portion of Compare.
 
 ## 3. Cross-product findings
 
@@ -418,46 +418,21 @@ alternate Compare object is plausible, but it is not a useful empty state or dem
 The default three-column layout is a major contributor to unreadability. Collapsing the Consequence
 inspector makes the center substantially better, but the control is difficult to discover.
 
-### 4.21 Behavior — Corrections
+### 4.21 Behavior — One-shot retries
 
-The durable-correction concept is clear, but the scope-containment diagram is too prominent before the
-user has written an instruction. The empty Consequence inspector wastes width. The recorded-resolution
-action correctly returns `not measured`, but its explanation truncates inside the narrow card.
-
-### 4.22 Behavior — One-shot retries
-
-The action-card model is understandable, though descriptions are long and small. The distinction from
-Corrections should be explicit: temporary test versus persistent behavior change. The module also
+The action-card model is understandable, though descriptions are long and small. The module also
 overlaps with corrective retries shown on Why.
 
-### 4.23 Behavior — Tone dials
-
-This is the most promising Behavior demonstration. Bipolar sliders are appropriate, but ten identical
-neutral and uncalibrated rows create monotony. Changed axes should be prominent; neutral axes can
-collapse. Concrete before/after response examples would make the controls meaningful.
-
-### 4.24 Behavior — Concept steering
-
-The page is mostly empty: one concept field, one strength slider, disabled actions, and `J-LENS
-REQUIRED`. The slider is appropriate, but availability should be explained before presenting apparently
-usable controls. The page needs examples and a clearer relationship between concept, strength, and
-expected output.
-
-### 4.25 Behavior — Runtime defaults
+### 4.22 Behavior — Runtime defaults
 
 The content is comparatively simple: sampling parameters and a disposition guard. The main issue is
 information architecture. `Runtime` exists both here and as a top-level workspace. This module should be
 named for its task, such as Generation defaults, and belong to Runtime.
 
-### 4.26 Behavior — Profiles
-
-This page is very sparse. It says a profile contains `10 DIALS` without showing what will be captured.
-The user cannot preview or understand the bundle before saving it.
-
-### 4.27 Runtime
+### 4.23 Runtime
 
 **First impression:** Extremely overwhelming. It combines health, capability flags, serving model,
-local inventory, axes, profiles, omitted records, snapshots, adoption, privacy controls, and a source
+local inventory, omitted records, snapshots, adoption, privacy controls, and a source
 ledger in one long internal scroll.
 
 **Important information:** Is the runtime healthy? What model is serving? What capabilities work? What

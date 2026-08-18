@@ -118,8 +118,7 @@ read_disposition/build_counter are injected callables) -- fully unit-testable wi
 GPU. `guarded_chat_completion` is the thin production adapter that wires it to a real EngineSubstrate's
 engine client + a fresh concept_dir.ConceptSteer; it is exercised in tests/test_generation_guard_server.py
 via a fake substrate/engine (never a live engine), matching this codebase's "live path deferred, the
-pure/wiring logic is model-free tested" split (see scripts/calibration/concept_dial_autocalibrate.py's
-own sweep).
+pure/wiring logic is model-free tested" split.
 
 ===============================================================================================
 RE-STEER CAP
@@ -162,11 +161,15 @@ own "no_norm_calibration" block. Confirmed live: Qwen2.5-7B-Instruct Q4_K_M's gu
 fires "violence" at layer 14 (guard_threshold_calibration.json), but neither VALIDATED_MEDIAN_RESID_NORM
 (only 16/21/25) nor a per-model concept_dial_calibration.json (none exists at all under this model's
 ~/.clozn/models/<sha>/ as of this pass) covers layer 14 on this model -- so every real fire on this model/
-concept hits this exact gap. It closes the moment someone runs scripts/calibration/
-concept_dial_autocalibrate.py (--layers 14, or the model's other fitted layers) against a live engine with
-this model loaded: it measures median_resid_norm (and a usable dir(c) scale range) per layer and writes
-~/.clozn/models/<model_sha256>/concept_dial_calibration.json via concept_dir.save_concept_dial_calibration
--- ConceptSteer reads it automatically the next time it's constructed, no code change needed.
+concept hits this exact gap. The tool that used to close it (scripts/calibration/
+concept_dial_autocalibrate.py, which measured median_resid_norm per layer and wrote
+~/.clozn/models/<model_sha256>/concept_dial_calibration.json via concept_dir.save_concept_dial_calibration)
+was removed with the rest of the tone-dial calibration tooling in the personalization cut; nothing in this
+tree currently regenerates that file for an uncovered layer. ConceptSteer would still read it automatically
+the moment a file existed there -- there is just no producer for one today -- so this gap stays open (a
+calibrated concept whose layer isn't in VALIDATED_MEDIAN_RESID_NORM will keep hitting "no_norm_calibration"
+on its first real fire) until a replacement measurement path exists. See the counter-injection degrade
+below for how this module survives that honestly instead of crashing.
 
 Before this update, that failure was an uncaught RuntimeError inside build_counter(), propagating out of
 run_guarded_generation and guarded_chat_completion into clozn.server.app's top-level dispatcher guard
@@ -236,12 +239,13 @@ SCOPE LIMITS OF THIS FIRST CUT (said honestly, not silently)
     (fail-closed for the same reason as above -- a streamed reply's early tokens are already delivered to
     the client before any correction could happen, so silently ignoring the guard on a streaming request
     would be exactly the silent pass this module exists to prevent).
-  * NOT YET COMPOSED with prompt-card memory, tone-dial steering, corrective-retry policies, or structured
-    output -- a guarded generation renders the chat messages through the model's own template
-    (clozn.server.app._engine_tmpl, the same renderer chat() uses) and generates directly against the raw
-    engine client, bypassing that machinery entirely for this first cut. Composing them is future work,
-    not silently dropped.
-  * Coherence is a light, cheap NOTE (clozn.replay.counterfactual._coherence's pure text-counting check,
+  * NOT YET COMPOSED with corrective-retry policies or structured output -- a guarded generation renders
+    the chat messages through the model's own template (clozn.server.app._engine_tmpl, the same renderer
+    chat() uses) and generates directly against the raw engine client, bypassing that machinery entirely
+    for this first cut. Composing them is future work, not silently dropped. (Prompt-card memory and
+    named-dial personalization, the other two surfaces this bullet used to list, were cut from the
+    product entirely -- there is nothing left there to compose with.)
+  * Coherence is a light, cheap NOTE (clozn.replay.coherence._coherence's pure text-counting check,
     over the corrected chunks only), not a hard gate -- see `_coherence_note`.
   * The calibration itself is a SMALL-BATTERY presence separation (6 banned + 6 clean prompts on Qwen2.5-
     7B) -- a real, honest signal-design fix, but not a public reliability claim at any scale. GUARD_CAVEAT
@@ -305,9 +309,9 @@ GUARD_COUNTER_FAILURE_NOTE = (
     "disposition crossing its calibrated threshold, but building the corrective counter-direction failed "
     "for that specific fire (see each fire's own 'counter_error') -- that flagged chunk was NOT corrected "
     "and rode into the reply exactly as originally generated. This is a per-fire degrade, not a guard "
-    "failure or a silent pass: the request was not refused and the reply was not aborted; run "
-    "scripts/calibration/concept_dial_autocalibrate.py against this model/layer to close the gap (see the "
-    "module docstring)."
+    "failure or a silent pass: the request was not refused and the reply was not aborted; this model/layer "
+    "is missing a median-residual-norm scale calibration and no tool in this tree currently produces one "
+    "(see the module docstring)."
 )
 
 # See the module docstring's 2026-07-25 "guarded generation now carries a real per-token trace" section.
@@ -841,14 +845,14 @@ def run_guarded_generation(
 
 def _coherence_note(corrected_texts: list) -> dict:
     """Cheap coherence check over the CORRECTED chunks only (pure text counting, no model call -- reuses
-    clozn.replay.counterfactual._coherence, the same mandatory degenerate-output gate
-    research/dial_autocalibrate_engine.py's own sweep uses). A light note, not a hard gate: A1.1's own
+    clozn.replay.coherence._coherence, the same mandatory degenerate-output gate
+    clozn.replay.corrective's corrective-retry flow also shares). A light note, not a hard gate: A1.1's own
     protocol counted "outputs looking incoherent" as a check, not a kill condition on its own. On any
     import/scan failure this degrades to {"checked": False, ...} rather than breaking the guard result."""
     if not corrected_texts:
         return {"checked": True, "n_checked": 0, "any_degenerate": False}
     try:
-        from clozn.replay.counterfactual import _coherence
+        from clozn.replay.coherence import _coherence
         flags = [_coherence(t) for t in corrected_texts]
         return {
             "checked": True, "n_checked": len(flags),
@@ -1011,7 +1015,7 @@ def _traced_complete(engine, prompt: str, max_tokens: int, engine_kw: dict):
         return text, steps, finish, True
     except Exception:
         pass
-    from clozn.behavior.steering.concept_dir import _text_of as _engine_text_of
+    from clozn.analysis.concept_dir import _text_of as _engine_text_of
     resp = engine.complete(prompt, max_tokens=int(max_tokens), **engine_kw)
     ch = resp.get("choices") if isinstance(resp, dict) else None
     finish = ch[0].get("finish_reason") if (ch and isinstance(ch[0], dict)) else None
@@ -1048,7 +1052,7 @@ def _traced_intervene(engine, prompt: str, vector, coef: float, layer: int, max_
         return text, steps, finish, True
     except Exception:
         pass
-    from clozn.behavior.steering.concept_dir import _text_of as _engine_text_of
+    from clozn.analysis.concept_dir import _text_of as _engine_text_of
     resp = engine.intervene(prompt, vector=vector, coef=coef, layer=layer, max_tokens=int(max_tokens),
                             **engine_kw)
     ch = resp.get("choices") if isinstance(resp, dict) else None
@@ -1082,7 +1086,7 @@ def guarded_chat_completion(handler, messages: list, *, model: str, max_tokens: 
     caller's own error handling applies, matching every other engine-touching route)."""
     import time
     from clozn.server import app as ctx
-    from clozn.behavior.steering.concept_dir import ConceptSteer
+    from clozn.analysis.concept_dir import ConceptSteer
 
     started = time.time()
     sub = ctx.active_sub(handler)

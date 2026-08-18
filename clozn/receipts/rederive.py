@@ -13,10 +13,11 @@ alone; only receipts.py additionally needs to SWAP the block/steer between two c
 Public surface:
 
   * with_arm_conditions(run) -- everything needed to reconstruct a run's WITH-arm forced-scoring
-    conditions from the record ALONE: the prompt messages, the active dials (`behavior.active_dials`),
-    and the continuation as TOKEN IDS from the stored trace (falling back to the raw `response` TEXT,
-    flagged `retokenized: True` -- boundary-approximate, per REPRODUCE_AND_PROVE_PLAN.md's
-    tokenization-boundary caveat).
+    conditions from the record ALONE: the prompt messages, `steer_strengths` (always {} -- a regular
+    run carries no recorded steering state; named-dial personalization is retired and nothing else
+    logs a raw steer vector onto an ordinary run record), and the continuation as TOKEN IDS from the
+    stored trace (falling back to the raw `response` TEXT, flagged `retokenized: True` --
+    boundary-approximate, per REPRODUCE_AND_PROVE_PLAN.md's tokenization-boundary caveat).
   * score_arm(sub, conditions, ...) -- one forced-scoring call reusing `conditions`'s messages/
     continuation under a possibly-different block/steer_strengths/steer_vec -- what makes a with/
     without receipt arm just two calls that share everything except the one knob under test.
@@ -31,14 +32,6 @@ against `sub.chat` -- fully unit-testable with a fake substrate, no model, no GP
 from __future__ import annotations
 
 import math
-
-
-def _dials(run: dict) -> dict:
-    """The dials that were actually in force on this run (behavior.active_dials), or {}."""
-    try:
-        return dict((run.get("behavior") or {}).get("active_dials") or {})
-    except Exception:
-        return {}
 
 
 def _continuation_ids(run: dict):
@@ -74,7 +67,8 @@ def with_arm_conditions(run: dict) -> dict:
                                     block to an existing system message rather than replacing it, so
                                     re-injecting a DIFFERENT block onto already-ASSEMBLED messages would
                                     double up old+new block text instead of swapping it.
-      "steer_strengths"          -- behavior.active_dials, or {}.
+      "steer_strengths"          -- always {}: a regular run carries no recorded steering state to
+                                    reconstruct (named-dial personalization is retired).
       "continuation_ids"/"retokenized" -- see _continuation_ids.
       "response"                 -- the stored reply text (the continuation-TEXT fallback's input).
     """
@@ -94,7 +88,7 @@ def with_arm_conditions(run: dict) -> dict:
         "block_source": block_source,
         "raw_messages": raw_messages,
         "raw_block": raw_block,
-        "steer_strengths": _dials(run),
+        "steer_strengths": {},
         "continuation_ids": ids,
         "retokenized": retokenized,
         "response": run.get("response") or "",
@@ -162,7 +156,6 @@ def rederive(run: dict, sub) -> dict | None:
             "meta": {
                 "retokenized": conditions["retokenized"],
                 "block_source": conditions["block_source"],
-                "dials": conditions["steer_strengths"],
                 "n_tokens": len(steps),
             },
         }

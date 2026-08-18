@@ -94,7 +94,6 @@ def _changes(plan: Mapping, arm: str, region: Mapping | None = None) -> dict:
             "answer_span_id": plan["influence"]["answer_span_id"],
             "intervention_recipe": FILLER_RECIPE,
         },
-        "behavior_off": True,
     }
     if isinstance(region, Mapping):
         changes["context_bisect"].update({
@@ -102,11 +101,6 @@ def _changes(plan: Mapping, arm: str, region: Mapping | None = None) -> dict:
             "root_relative_start": region["root_interval"]["start"],
             "root_relative_end": region["root_interval"]["end"],
         })
-    dials = counterfactual._recorded_dials(plan.get("_parent", {}))
-    if dials is None:
-        return changes
-    if dials:
-        changes["behavior_overrides"] = dials
     return changes
 
 
@@ -378,13 +372,7 @@ def execute_context_bisect(
             "root_source_span_id": current_plan["influence"]["source_span_id"],
             "answer_span_id": current_plan["influence"]["answer_span_id"],
         },
-        "behavior_off": True,
     }
-    dials = counterfactual._recorded_dials(parent_run)
-    if dials is None:
-        return stop_result("inconclusive", "recorded_steering_malformed")
-    if dials:
-        control_changes["behavior_overrides"] = dials
     control = _run_arm(parent_run, sub, budget, control_changes, messages=messages, sampling=sampling)
     if not isinstance(control, Mapping) or not control.get("id"):
         result["execution"]["status"] = "failed"

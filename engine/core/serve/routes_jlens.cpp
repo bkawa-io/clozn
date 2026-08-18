@@ -124,7 +124,7 @@ void register_jlens_routes(httplib::Server& svr, ServerContext& ctx) {
 
     // POST /jlens/unembed_row — hands back ONE row of the model's own (quantized) unembed/lm_head
     // matrix, W_U[token_id] ([d_model] fp32) — the ingredient the product's dir(c) concept-dial
-    // (clozn/behavior/steering/concept_dir.py: dir(c) = normalize(J_l^T @ W_U[c])) was missing:
+    // (clozn/analysis/concept_dir.py: dir(c) = normalize(J_l^T @ W_U[c])) was missing:
     // J_l already ships in the product J-lens sidecar (read directly with plain numpy); W_U lived
     // ONLY inside this process (read straight out of the loaded GGUF for /jlens above — see
     // JlensServe::load's out_head) with no route back to it at all (concept_dir.py's

@@ -173,7 +173,6 @@ def _format_influences(inf: dict) -> list[str]:
         gate_s = f"{gate:.2f}" if isinstance(gate, (int, float)) else str(gate)
         out.append(f"  {fmt.DIM}gate {gate_s}{(' · ' + str(mode)) if mode else ''}{fmt.RST}")
     cards = [c for c in fmt._as_list(inf.get("cards")) if isinstance(c, dict)]
-    dials = [d for d in fmt._as_list(inf.get("dials")) if isinstance(d, dict)]
     if cards:
         for c in cards:
             out.append(f"  [{_verified_tag(c.get('causal_verified'))}] {c.get('text', '')}")
@@ -184,13 +183,6 @@ def _format_influences(inf: dict) -> list[str]:
                 out.append(f"      {fmt.DIM}{c['note']}{fmt.RST}")
     else:
         out.append(f"  {fmt.DIM}{inf.get('note', 'no memory applied')}{fmt.RST}")
-    if dials:
-        for d in dials:
-            val = d.get("value")
-            val_s = f"{val:.2f}" if isinstance(val, (int, float)) else str(val)
-            out.append(f"  [{_verified_tag(d.get('causal_verified'))}] dial {d.get('name')} = {val_s}")
-    else:
-        out.append(f"  {fmt.DIM}no dials active{fmt.RST}")
     return out
 
 
@@ -463,7 +455,7 @@ def _fetch_prove(port: int, run_id: str, *, mode: str, coalitions: bool, coaliti
 def _format_receipt_line(rec: dict) -> str:
     inf = rec.get("influence") or {}
     label = f"card {inf.get('card_id')}" if inf.get("card_id") else (
-        f"dial {inf.get('dial')}" if inf.get("dial") else "influence")
+        f"section {inf.get('section')}" if inf.get("section") else "influence")
     tag = "changed" if rec.get("has_effect") else "no effect"
     verified = "" if rec.get("causal_verified") else "  (not verified -- see ablation_note)"
     return f"  [{tag}] {label}{verified}"

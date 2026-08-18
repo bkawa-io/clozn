@@ -33,7 +33,7 @@ manifest, not today's; use the **actual** (post-truncation) input that was sent,
 gate}`, `behavior.active_dials`, `trace{tokens,confidence,alternatives}`, `timing`. `replay.py` does the
 greedy ablation (`/runs/<id>/replay` with `memory_off|disabled_memory_ids|behavior_off|behavior_overrides
 |greedy`), state restored in `finally`. heavn Replay renders the token timeline, influence column, per-card /
-per-dial receipt buttons + delta strips. `memory_cards` carries provenance quotes. The engine emits
+per-dial receipt buttons + delta strips. The engine emits
 `sae:<id>` concept readouts on the stream. **The missing work is assembly + a lightweight surface + the
 narration, not new primitives.**
 
@@ -43,8 +43,8 @@ narration, not new primitives.**
 One endpoint that reads the run and returns a structured `explanation` with no model calls:
 - **confidence**: from `trace` — the K "uncertain moments" (tokens below a threshold), each with its
   alternatives; a one-line "N hesitations" summary. NEVER a single aggregate % (that's the dead scalar).
-- **influences_active**: the manifest — cards that fired (each with its provenance quote + gate value),
-  dials that were on. Free — already logged. Each tagged `causal_verified:null` (active, not yet proven).
+- **influences_active**: the manifest — cards that fired (each with its provenance quote + gate value).
+  Free — already logged. Each tagged `causal_verified:null` (active, not yet proven).
 - **concepts**: if the run has `sae:*` readouts (engine path), the top features per span; else omit with
   an honest "concept readout needs the qwen/PyTorch substrate (SAE) — not available on this run."
 Done: a captured run returns a complete explanation object; model-free tests over a fixture run.
@@ -58,13 +58,8 @@ batched-receipts win — free at bf16; re-verify at 7B nf4 before relying on it 
 guard:** if dropping A alone and B alone each show ~no effect but dropping both together does, report
 "A+B are redundant; together they drive this" instead of "neither mattered" (leave-one-out's blind spot).
 Cost note honestly surfaced: a front-of-context card ablation re-prefills the whole context (KV can't be
-reused); a dial toggles at decode time (prompt KV reusable) — cheap. Done: rigorous per-influence deltas
-with the redundancy case tested.
-
-### M3 — counterfactual dials (interactive) — Sonnet, hours
-Sliders in the panel that re-run the reply greedily via `replay.py {behavior_overrides,greedy}`, live.
-Each dial shows its measured per-model dose (the dose-receipt rule — a 7B-calibrated dial derails a 1.5B).
-Done: "make it warmer" re-rolls the reply and shows the delta.
+reused); a steering-vector toggle at decode time (prompt KV reusable) — cheap. Done: rigorous
+per-influence deltas with the redundancy case tested.
 
 ### M4 — the accountable-self narration (the crown; honesty-critical) — Opus, ~2 days
 Compose a natural-language *why*, and guard it:

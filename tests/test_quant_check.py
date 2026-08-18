@@ -180,7 +180,6 @@ def test_generate_fresh_run_happy_path():
     assert run["response"] == "Paris is the capital."
     assert run["trace"]["token_ids"] == [11, 12]
     assert run["messages"] == [{"role": "user", "content": "What is the capital of France?"}]
-    assert run["behavior"] == {"active_dials": {}}
     # generation used greedy (temperature 0) and the fixing /score reused the SAME rendered prompt
     assert eng.complete_calls[-1]["temperature"] == 0.0
     assert eng.score_calls[-1]["continuation"] == "Paris is the capital."
@@ -276,7 +275,7 @@ def test_gather_from_log_runs_empty_journal(monkeypatch):
 RUN_A = {"id": "run_1", "category": "factual_qa",
         "messages": [{"role": "user", "content": "hi"}],
         "assembled_messages": [{"role": "user", "content": "hi"}],
-        "response": "ok", "behavior": {"active_dials": {}}, "trace": {"token_ids": [1, 2]}}
+        "response": "ok", "trace": {"token_ids": [1, 2]}}
 
 TOKENS_A = [_tok(1, "o", -0.1, [_tok(1, "o", -0.1)]), _tok(2, "k", -0.1, [_tok(2, "k", -0.1)])]
 TOKENS_B = [_tok(1, "o", -0.2, [_tok(1, "o", -0.2)]), _tok(2, "k", -0.2, [_tok(2, "k", -0.2)])]

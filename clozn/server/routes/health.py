@@ -115,8 +115,7 @@ def try_get(h, p):
             h._json(502, {"error": f"engine unreachable: {e}"})
         return True
     if p == "/state":
-        h._json(200, {"substrate": ctx.active_subname(h), "memory_mode": ctx._memory_mode(),
-                      **(ctx.active_sub(h).state() if ctx.active_sub(h) else {})})
+        h._json(200, {"substrate": ctx.active_subname(h)})
         return True
     if p == "/capture/tier":
         from clozn.runs import capture_mode

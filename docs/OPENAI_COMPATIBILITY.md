@@ -145,8 +145,8 @@ separate acceptance work.
 
 - Chat response objects/chunks use the standard object names and one choice at index 0.
 - Every accepted Chat Completions request crosses Clozn's instrumented substrate and is written to the local
-  run journal with its delivered messages, rendered prompt, active dials/corrective policy, trace, and
-  finish/failure state.
+  run journal with its delivered messages, rendered prompt, corrective policy, trace, and finish/failure
+  state.
 - Non-streaming chat responses may add `clozn_run_id` and `X-Clozn-Run-Id`; opt-in Clozn fields are additive.
 - Token usage is omitted when unknown. Clozn no longer fabricates zero prompt/completion token counts.
 - When available, usage comes from the executing worker's final rendered prompt and decoder accounting;

@@ -22,7 +22,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, REPO_ROOT)
 
-import clozn.behavior.steering.concept_dir as concept_dir  # noqa: E402
+import clozn.analysis.concept_dir as concept_dir  # noqa: E402
 import clozn.receipts.swap_receipt as sr                    # noqa: E402
 
 

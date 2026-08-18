@@ -25,26 +25,11 @@ AIDER = shutil.which("aider")
 pytestmark = pytest.mark.skipif(AIDER is None, reason="aider-chat is not installed")
 
 
-class _Memory:
-    memory_strength = 1.0
-    rules = []
-    prefix = None
-
-
-class _Steer:
-    strength = {}
-
-    def active(self):
-        return {}
-
-
 class _Substrate:
     name = "engine"
 
     def __init__(self, answer):
         self.answer = answer
-        self.memory = self._mem = _Memory()
-        self.steer = _Steer()
 
     def _fill(self, messages, mem_out):
         if mem_out is not None:

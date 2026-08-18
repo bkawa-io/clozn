@@ -2,8 +2,8 @@
 
 The repeatable form of the Phase 0 keystone validation (RUNTIME_SPLIT.md): with the studio running on
 `--substrate engine` (a live GGUF engine behind it), confirm that the whole torch-free Server tier --
-chat + the receipts/replay stack + memory + tone dials -- actually runs on the engine, with NO PyTorch
-model resident. Run it after any change to EngineSubstrate / the engine, or as a pre-ship gate.
+chat + the receipts/replay stack -- actually runs on the engine, with NO PyTorch model resident. Run
+it after any change to EngineSubstrate / the engine, or as a pre-ship gate.
 
     # 1. start the engine (GPU build; put build-gpu/bin + CUDA on PATH -- clozn serve does this for you):
     #    clozn serve qwen --port 8092
@@ -109,58 +109,11 @@ def run(base: str, engine_base: str | None = None) -> int:
     st, rc = c.post(f"/runs/{rid}/receipts")
     ck.add("receipts (M2): leave-one-out ran", "receipts" in rc, f"status={st}")
 
-    st, cf = c.post(f"/runs/{rid}/counterfactual", {"behavior_overrides": {"warm": 1.0}})
-    ck.add("counterfactual (M3): dial re-gen + causal check",
-           "causal_verified" in cf and not cf.get("__error"),
-           f"has_effect={cf.get('has_effect')} verified={cf.get('causal_verified')}")
-
     st, nr = c.post(f"/runs/{rid}/narrate")
     ck.add("narrate (M4): accountable narration", "constrained_narration" in nr, f"status={st}")
 
     st, rp = c.post(f"/runs/{rid}/replay", {"changes": {"greedy": True}})
     ck.add("replay (F1): produced a child run", bool(rp.get("id")) and "response" in rp, f"status={st}")
-
-    # 3. memory: a clean add -> approve -> on-topic chat -> injected? -> remove round-trip (no residue)
-    _, add = c.post("/memory/add", {"text": "The user is a huge fan of astronomy and stargazing."})
-    cid = add.get("id")
-    injected = False
-    if cid:
-        c.post("/memory/approve", {"id": cid})
-        _, mchat = c.post("/v1/chat/completions",
-                          {"messages": [{"role": "user", "content": "What hobby would you recommend tonight?"}],
-                           "max_tokens": 50})
-        mreply = (((mchat.get("choices") or [{}])[0].get("message") or {}).get("content") or "").lower()
-        injected = any(w in mreply for w in ("star", "astronom", "sky", "night sky", "telescope"))
-        c.post("/memory/remove", {"id": cid})          # cleanup regardless of outcome
-    ck.add("memory: an active card steers the engine reply", injected,
-           "astronomy card -> stargazing-flavored reply" if injected else "card did not visibly inject")
-
-    # 4. tone dials: set a built-in dial -> chat -> the reply shifts -> reset (no residue)
-    _, neutral = c.post("/v1/chat/completions",
-                        {"messages": [{"role": "user", "content": "My code has a bug."}], "max_tokens": 40})
-    c.post("/steer/set", {"name": "warm", "value": 0.8})
-    _, warm = c.post("/v1/chat/completions",
-                     {"messages": [{"role": "user", "content": "My code has a bug."}], "max_tokens": 40})
-    c.post("/steer/set", {"name": "warm", "value": 0.0})    # reset
-    n_txt = (((neutral.get("choices") or [{}])[0].get("message") or {}).get("content") or "")
-    w_txt = (((warm.get("choices") or [{}])[0].get("message") or {}).get("content") or "")
-    ck.add("dial: warm shifts the engine reply", bool(w_txt.strip()) and n_txt.strip() != w_txt.strip(),
-           "warm != neutral" if n_txt.strip() != w_txt.strip() else "no measurable shift")
-
-    # 5. LIBRARY dials (Phase 1): the shipped 27 must appear tagged "library" AND actually steer engine-native
-    _, axes = c.post("/steer/axes")
-    lib_names = [a.get("name") for a in (axes.get("axes") or []) if a.get("library")]
-    ck.add("library dials listed on engine substrate (>=20)", len(lib_names) >= 20, f"{len(lib_names)} tagged 'library'")
-    if "ceremonious" in lib_names:
-        c.post("/steer/set", {"name": "ceremonious", "value": 1.5})   # first set harvests all dial directions (~slow)
-        _, cchat = c.post("/v1/chat/completions",
-                          {"messages": [{"role": "user", "content": "Tell me about the weather today."}],
-                           "max_tokens": 45})
-        c.post("/steer/set", {"name": "ceremonious", "value": 0.0})   # reset
-        ctxt = (((cchat.get("choices") or [{}])[0].get("message") or {}).get("content") or "").lower()
-        ornate = any(w in ctxt for w in ("esteemed", "hallowed", "grand", "splendid", "regal", "noble",
-                                         "thee", "thou", "gracious", "majest", "behold", "dear "))
-        ck.add("library dial 'ceremonious' steers (ornate register)", ornate, ctxt[:70])
 
     # Distinguish a genuine feature failure from the known engine-crash-under-load bug: if the engine is
     # dead at the end but the early (also generation-dependent) checks passed, the later failures are

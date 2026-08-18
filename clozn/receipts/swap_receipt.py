@@ -5,7 +5,7 @@ scale~=0.5, random-null flat).
 
 The receipt: READ what the model is disposed toward at the pre-answer position (J-lens top-1,
 L21 by default), WRITE a different, contrasting concept `to_concept` into the residual DURING
-regeneration (dir(to_concept), from clozn/behavior/steering/concept_dir.py's Build-1 primitive,
+regeneration (dir(to_concept), from clozn/analysis/concept_dir.py's Build-1 primitive,
 at the same validated operating point), and DIFF the regenerated answer against the un-swapped
 baseline. "The model was leaning toward X; we swapped in Y at L21; the answer changed from ...
 to ... -- a targeted, content-specific shift toward Y" is the claim this receipt is built to
@@ -184,7 +184,7 @@ def swap_receipt(run: dict, from_hint, to_concept: str, sub, *,
         # Inside the try on purpose: this function documents "Never raises", so a missing numpy has to
         # degrade to a blocked receipt like every other failure here, not escape as an ImportError.
         try:
-            import clozn.behavior.steering.concept_dir as concept_dir
+            import clozn.analysis.concept_dir as concept_dir
         except ImportError as e:
             out["blocked"] = "steering_unavailable"
             out["note"] = (f"concept steering is unavailable in this install ({e}). swap receipts need "

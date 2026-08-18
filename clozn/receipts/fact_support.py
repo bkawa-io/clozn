@@ -30,19 +30,6 @@ def _citable_facts(explanation: dict) -> list[dict]:
             text += f" (also considered: {alt_text})"
         facts.append({"id": fid, "text": text, "category": "hesitation"})
 
-    infl = _as_dict(explanation.get("influences_active"))
-    for i, c in enumerate(_as_list(infl.get("cards"))):
-        if not isinstance(c, dict):
-            continue
-        fid = c.get("id") or f"card_noid:{i}"
-        text = " ".join(x for x in [c.get("text") or "", c.get("quoted_span") or ""] if x) or "(no text on record)"
-        facts.append({"id": str(fid), "text": text, "category": "card"})
-    for d in _as_list(infl.get("dials")):
-        if not isinstance(d, dict) or not d.get("name"):
-            continue
-        facts.append({"id": f"dial:{d['name']}", "text": f"tone dial '{d['name']}' set to {d.get('value')}",
-                      "category": "dial"})
-
     concepts = _as_dict(explanation.get("concepts"))
     for si, span in enumerate(_as_list(concepts.get("spans"))):
         if not isinstance(span, dict):
@@ -58,20 +45,12 @@ def _citable_facts(explanation: dict) -> list[dict]:
 
 
 def _influence_lexicon(explanation: dict) -> list[dict]:
-    """The narrower card/dial evidence set used by lexical_default."""
-    infl = _as_dict(_as_dict(explanation).get("influences_active"))
-    out: list[dict] = []
-    for i, c in enumerate(_as_list(infl.get("cards"))):
-        if not isinstance(c, dict):
-            continue
-        fid = c.get("id") or f"card_noid:{i}"
-        text = " ".join(x for x in [c.get("text") or "", c.get("quoted_span") or ""] if x)
-        if text:
-            out.append({"id": str(fid), "text": text})
-    for d in _as_list(infl.get("dials")):
-        if isinstance(d, dict) and d.get("name"):
-            out.append({"id": f"dial:{d['name']}", "text": str(d["name"])})
-    return out
+    """The narrower influence evidence set used by lexical_default. Memory cards and named-dial
+    personalization are both retired, and influences_active carries no other named-influence field
+    (only the section manifest, which this lexicon does not index), so this is always empty now --
+    kept as its own function rather than inlined so lexical_default's contract stays unchanged if a
+    future influence source is added here."""
+    return []
 
 
 _STOPWORDS = frozenset(
@@ -87,7 +66,7 @@ def _words(text) -> set[str]:
 
 
 def lexical_default(claim: str, explanation: dict) -> dict:
-    """Weak model-free support matcher based on token overlap with influence quotes/dial names."""
+    """Weak model-free support matcher based on token overlap with the influence lexicon."""
     claim_words = _words(claim)
     lexicon = _influence_lexicon(explanation)
     if not claim_words or not lexicon:

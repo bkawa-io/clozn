@@ -41,11 +41,11 @@ HAPPY_PATH = {
     "run_id": "run_1",
     "receipts": [
         {"influence": {"card_id": "c1"}, "has_effect": True, "causal_verified": True},
-        {"influence": {"dial": "warm"}, "has_effect": False, "causal_verified": True},
+        {"influence": {"section": "rag_context"}, "has_effect": False, "causal_verified": True},
     ],
     "skipped": [],
     "redundant_pairs": [],
-    "approximation_note": "leave-one-out over every fired card/dial, plus a pairwise redundancy guard.",
+    "approximation_note": "leave-one-out over every fired card/section, plus a pairwise redundancy guard.",
     "perf_note": "sequential, not batched.",
 }
 
@@ -54,7 +54,7 @@ def test_happy_path_renders_every_receipt_and_the_run_id():
     out = clozn_cli.format_prove(HAPPY_PATH)
     assert "run_1" in out
     assert "card c1" in out and "changed" in out
-    assert "dial warm" in out and "no effect" in out
+    assert "section rag_context" in out and "no effect" in out
 
 
 def test_no_fired_influences_is_an_honest_empty_result_not_an_error():
@@ -75,10 +75,11 @@ def test_redundant_pairs_render_as_their_own_line():
 def test_coalitions_report_renders_when_present():
     obj = dict(HAPPY_PATH)
     obj["coalitions"] = {
-        "available": True, "n_influences": 2, "keys": ["card:c1", "dial:warm"],
-        "solo": {"card:c1": 0.3, "dial:warm": 0.1}, "pairs_evaluated": [["card:c1", "dial:warm"]],
+        "available": True, "n_influences": 2, "keys": ["card:c1", "section:rag_context"],
+        "solo": {"card:c1": 0.3, "section:rag_context": 0.1},
+        "pairs_evaluated": [["card:c1", "section:rag_context"]],
         "pairs_capped": False, "k_pairs": 1, "joint": {"value": 0.35},
-        "shapley": {"class": "exact", "values": {"card:c1": 0.275, "dial:warm": 0.075},
+        "shapley": {"class": "exact", "values": {"card:c1": 0.275, "section:rag_context": 0.075},
                    "estimator_note": "exact Shapley over the full 4-coalition power set (N=2 <= 4)."},
         "interaction_gap": {"joint_value": 0.35, "sum_solo": 0.4, "gap": -0.05, "ratio": -0.125,
                            "note": "solo attribution characteristically OVERCOUNTS a joint effect ..."},

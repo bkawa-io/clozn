@@ -14,9 +14,9 @@ THIS module is the general-purpose, direction-agnostic step: "take a direction s
 built (diff-of-means, dir(c), an SAE decoder column, anything living in one layer's [d_model]
 residual space) and J-transport it." It is deliberately separate from concept_dir.py's dir(c),
 which already bakes an equivalent transport into its OWN math (dir_c = normalize(J_l^T @
-W_U[token])) -- dir(c) does not need this module, everything ELSE on the steering path does
-(EngineSteer's axes.py tone dials today have no J step at all; see engine_adapter.py's
-`j_transport=` wiring).
+W_U[token])) -- dir(c) does not need this module; a caller building a direction some other way
+(an SAE decoder column, or any other [d_model] residual-space direction) is exactly who this
+module is for.
 
 *** THE COMPACT FORM (why no dense [d_model, d_model] matrix is required at injection time) ***
 notes/JLENS_SAE_FINDINGS.md's "Key technical notes":

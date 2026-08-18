@@ -27,8 +27,7 @@
     "vector_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
     "vector_elements": 2,
     "steer_layer": 4,
-    "steer_coef": 1.0,
-    "active_dials_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    "steer_coef": 1.0
   },
   "proof": {"status": "not_run"},
   "reasons": [{"code": "missing_output_token_history", "message": "not available"}]

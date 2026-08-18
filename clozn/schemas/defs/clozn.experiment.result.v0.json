@@ -93,8 +93,7 @@
       "required": ["name", "kind"],
       "properties": {
         "name": { "type": "string", "minLength": 1 },
-        "kind": { "type": "string", "enum": ["base", "tuned", "quant", "prompt", "dial"] },
-        "dials": { "type": "object" },
+        "kind": { "type": "string", "enum": ["base", "tuned", "quant", "prompt"] },
         "base_url": { "type": "string" },
         "model": { "type": "string" },
         "system_prompt": { "type": "string" },
@@ -177,7 +176,7 @@
         "suite": { "type": "string", "enum": ["target", "guard"] },
         "case": { "type": "string", "minLength": 1 },
         "variant": { "type": "string", "minLength": 1 },
-        "variant_kind": { "type": "string", "enum": ["base", "tuned", "quant", "prompt", "dial"] },
+        "variant_kind": { "type": "string", "enum": ["base", "tuned", "quant", "prompt"] },
         "seed": { "type": "integer" },
         "status": { "type": "string", "enum": ["pass", "fail", "error", "unscored"] },
         "run_id": { "type": ["string", "null"] },

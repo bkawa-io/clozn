@@ -35,7 +35,6 @@ const capabilityLabels: Record<string, string> = {
   sampling: "Sampling",
   score_arms: "Arm scoring",
   state_stream: "State stream",
-  steering: "Activation steering",
   streaming: "Token streaming",
 };
 
@@ -249,7 +248,7 @@ function SourceRow({
 }
 
 export function Model({ runtime, inspectorOpen }: ModelProps) {
-  const [data, setData] = useState<ModelWorkspaceData>({ axes: [], errors: {} });
+  const [data, setData] = useState<ModelWorkspaceData>({ errors: {} });
   const [loadState, setLoadState] = useState<RuntimeLoadState>("loading");
   const [fatalError, setFatalError] = useState<string>();
 
@@ -281,7 +280,6 @@ export function Model({ runtime, inspectorOpen }: ModelProps) {
     () => stateBoardCards(data, flags, loading, engineReason),
     [data, engineReason, flags, loading],
   );
-  const activeAxes = data.axes.filter((axis) => Math.abs(axis.value) > 0.0001);
   const capabilityReason = loading
     ? "The engine-health request is still running, so no capability flags are available yet."
     : data.errors.engine
@@ -289,8 +287,6 @@ export function Model({ runtime, inspectorOpen }: ModelProps) {
       : "The /engine/health response did not include any capability flags.";
   const inventoryReason = data.errors.inventory
     ?? "The /models/local response did not provide a model inventory record.";
-  const axesReason = data.errors.axes
-    ?? "The /steer/axes response did not include steering-axis records.";
 
   return (
     <>
@@ -308,7 +304,6 @@ export function Model({ runtime, inspectorOpen }: ModelProps) {
           <dl>
             <div><dt>Engine source</dt><dd>/engine/health</dd></div>
             <div><dt>Inventory source</dt><dd>/models/local</dd></div>
-            <div><dt>Configuration</dt><dd>/steer/axes</dd></div>
           </dl>
         </div>
 
@@ -407,36 +402,11 @@ export function Model({ runtime, inspectorOpen }: ModelProps) {
             <header className="runtime-section-head">
               <div>
                 <span>Configuration evidence</span>
-                <h2 id="runtime-configuration-title">Axes and omitted installation records</h2>
+                <h2 id="runtime-configuration-title">Omitted installation records</h2>
               </div>
               <a href="#/behavior">OPEN BEHAVIOR</a>
             </header>
             <div className="runtime-configuration-grid">
-              <article className="runtime-configuration-record">
-                <span>Steering axes</span>
-                {loading ? (
-                  <RuntimeAbsence label="Steering axes pending" state="not_measured" reason="The /steer/axes request has not completed." />
-                ) : data.errors.axes ? (
-                  <RuntimeAbsence label="Steering axes unavailable" reason={axesReason} />
-                ) : data.axes.length === 0 ? (
-                  <RuntimeAbsence label="Steering axes not measured" state="not_measured" reason={axesReason} />
-                ) : (
-                  <>
-                    <p>{activeAxes.length} active of {data.axes.length} reported axes.</p>
-                    {activeAxes.length > 0 && (
-                      <ul className="runtime-axis-list" aria-label="Active steering axes">
-                        {activeAxes.map((axis) => (
-                          <li key={axis.name}>
-                            <strong>{axis.name}</strong>
-                            <span>{axis.value >= 0 ? "+" : ""}{axis.value.toFixed(2)} · {axis.calibrated ? "calibrated" : "not calibrated"}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </>
-                )}
-              </article>
-
               <article className="runtime-configuration-record">
                 <span>Qualification</span>
                 <RuntimeAbsence
@@ -497,15 +467,6 @@ export function Model({ runtime, inspectorOpen }: ModelProps) {
               absence={data.localModels ? undefined : {
                 state: loading ? "not_measured" : "unavailable",
                 reason: loading ? "The request has not completed." : inventoryReason,
-              }}
-            />
-            <SourceRow
-              label="Steering axes"
-              endpoint="/steer/axes"
-              detail={!loading && !data.errors.axes && data.axes.length > 0 ? `${data.axes.length} axis record${data.axes.length === 1 ? "" : "s"} returned.` : undefined}
-              absence={!loading && !data.errors.axes && data.axes.length > 0 ? undefined : {
-                state: loading || !data.errors.axes ? "not_measured" : "unavailable",
-                reason: loading ? "The request has not completed." : axesReason,
               }}
             />
           </ul>

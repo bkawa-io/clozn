@@ -52,13 +52,9 @@ TWO WAYS A SECTION IS BORN, in priority order when more than one could apply to 
      old paragraph-split-and-merge behavior. Cap-16 (`_cap`) still applies globally, last, across whatever
      chunks either tier produced.
 
-A THIRD source used to exist: `memory_card_sections` (`source: "memory_card"`), which located each applied
-memory-card's text inside the assembled prompt by plain substring search. Memory cards were cut from the
-product on 2026-07-27 along with the rest of memory, and this producer was removed with them -- nothing in
-this codebase emits `source: "memory_card"` anymore. A run recorded before that cut may still carry a
-`"memory_card"`-sourced entry in its stored `sections` field; downstream consumers (clozn.receipts.deltas/
-forced, clozn.server.routes.section_influence/section_drill) treat that as a legacy value to skip or decline
-honestly, never something to re-derive.
+A run recorded before memory cards were cut from the product (2026-07-27) may still carry a legacy
+`"memory_card"`-sourced entry in its stored `sections` field; nothing in this codebase emits that value
+anymore, and nothing re-derives it.
 
 ID UNIQUENESS. Each of the functions below guarantees unique `id`s WITHIN its own returned list (the
 "sec_" + slug(name), suffixed _2/_3/... on collision rule the schema specifies). `dedupe_ids` exists for a
@@ -549,10 +545,6 @@ def sections_from_native(prompt: str, sections_map: dict) -> list:
 # ======================================================================================================
 # 4. combining manifests from more than one source
 # ======================================================================================================
-# A fourth source used to live here -- memory_card_sections, "applied memory cards -> sections" -- removed
-# 2026-07-29 along with the rest of memory (cut from the product 2026-07-27). See the module docstring's
-# note on the THREE-turned-TWO section sources for what it did and why a legacy run may still carry its
-# output shape (`source: "memory_card"`) even though nothing produces it anymore.
 
 def dedupe_ids(sections: list) -> list:
     """Re-suffix any `id` collision in a manifest ASSEMBLED from more than one of the functions above (each

@@ -24,19 +24,6 @@ from clozn.server import app as cs
 # ==================================================================================== fakes
 
 
-class FakeSteer:
-    strength = {"grounded": 0.4}
-
-    def active(self):
-        return dict(self.strength)
-
-
-class FakeMemory:
-    memory_strength = 0.75
-    prefix = None
-    rules = []
-
-
 class _FakeRequestContext:
     """Just enough of request_context.RequestContext's surface for clozn.server.ndjson's disconnect
     branch: .cancel()/.is_cancelled() (mirrors test_stream_cancellation.py's own stand-in)."""
@@ -62,8 +49,6 @@ class StreamingSub:
 
     def __init__(self, pieces=("Hel", "lo", "!"), finish="stop", prompt_tokens=5,
                 fail_at=None, fail_exc=None):
-        self._mem = self.memory = FakeMemory()
-        self.steer = FakeSteer()
         self.pieces = list(pieces)
         self.finish = finish
         self.prompt_tokens = prompt_tokens

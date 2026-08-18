@@ -230,7 +230,7 @@ Contains:
 - Qualification results
 - Capture tier and receipt privacy defaults
 - Engine install, upgrade, rollback, and smoke evidence
-- Steering (tone dials, concept steering) and guard calibration
+- Guard calibration
 
 Runtime is a supporting utility area rather than another way of inspecting the selected run.
 

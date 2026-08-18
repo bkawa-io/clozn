@@ -365,48 +365,6 @@
   padding-top: 10px;
 }
 
-.runtime-configuration-record > p {
-  margin: 0;
-  color: var(--ink-soft);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.runtime-axis-list {
-  display: grid;
-  gap: 5px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.runtime-axis-list li {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  border-top: 1px solid var(--line);
-  padding-top: 6px;
-}
-
-.runtime-axis-list strong,
-.runtime-axis-list span {
-  min-width: 0;
-  overflow: hidden;
-  font-family: var(--font-machine);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.runtime-axis-list strong {
-  color: var(--ink);
-}
-
-.runtime-axis-list span {
-  color: var(--ink-faint);
-  text-align: right;
-}
-
 .runtime-offers {
   background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--panel) 90%, transparent) 0 8px, color-mix(in srgb, var(--panel-solid) 90%, transparent) 8px 15px);
 }

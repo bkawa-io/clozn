@@ -27,9 +27,10 @@ measurement -- not a preference -- is why this module carries the heavier depend
 test_semantic_matcher_gated.py.
 
 THE HONEST CEILING (do not oversell this). A cross-encoder entailment score is a strong separator for the
-failure this module targets -- a fluent claim crediting an influence that was never on record -- and it does
-model per-influence ATTRIBUTION (a "concise" claim entails from the concise card, not the warm dial:
-measured, asserted in the gated test). It is still NOT a complete honesty oracle:
+failure this module targets -- a fluent claim crediting an influence that was never on record -- and it did
+model per-influence ATTRIBUTION when there was more than one named influence to attribute to (measured,
+asserted in the gated test, back when memory cards and named steering dials were both live evidence
+sources; both are retired now -- see _premises). It is still NOT a complete honesty oracle:
   * it judges one (receipt, claim) pair at a time; a COMPOUND claim ("concise because you asked, and warm
     because I like you") is now split by narrate.clause_split (the default claim_splitter) into separately
     judged clauses, so a half-confabulation no longer hides behind a supported partner clause -- but that
@@ -64,14 +65,6 @@ _ent_idx = 1        # resolved from the checkpoint's id2label on load; these are
 _contra_idx = 0
 _ok = True
 _lock = threading.Lock()
-
-
-def _as_dict(x) -> dict:
-    return x if isinstance(x, dict) else {}
-
-
-def _as_list(x) -> list:
-    return x if isinstance(x, list) else []
 
 
 def _ensure_model() -> bool:
@@ -112,31 +105,14 @@ def available() -> bool:
 
 def _premises(explanation: dict) -> list[tuple[str, str]]:
     """Turn an M1 (explain.explain) object's ACTIVE INFLUENCES into [(id, premise_sentence)] -- the evidence
-    each claim is checked against. Cards -> their text plus the user's quoted words (real provenance makes a
-    more specific premise); dials -> a natural sentence naming the steered tone (a bare axis token like "warm"
-    is a poor NLI premise, so we spell it into a sentence). Hesitations and concepts are intentionally NOT
-    premises here: "I hesitated" is not an INFLUENCE the model is crediting, and a bare concept id has no text
-    to entail from. Same evidence SET as narrate._influence_lexicon (cards + dials), better premise strings."""
-    infl = _as_dict(_as_dict(explanation).get("influences_active"))
-    out: list[tuple[str, str]] = []
-    for i, c in enumerate(_as_list(infl.get("cards"))):
-        if not isinstance(c, dict):
-            continue
-        fid = c.get("id") or f"card_noid:{i}"
-        text = (c.get("text") or "").strip()
-        quote = (c.get("quoted_span") or "").strip()
-        if not text and not quote:
-            continue
-        premise = text or "A remembered note about the user."
-        if quote:
-            premise = f'{premise} (the user said: "{quote}")'
-        out.append((str(fid), premise))
-    for d in _as_list(infl.get("dials")):
-        if not isinstance(d, dict) or not d.get("name"):
-            continue
-        name = d["name"]
-        out.append((f"dial:{name}", f'The reply was deliberately steered toward a "{name}" tone.'))
-    return out
+    each claim is checked against. Memory cards and named-dial personalization -- the two sources this used
+    to read (card text/quoted words, and a sentence naming the steered tone) -- are both retired, and
+    influences_active carries no other named-influence field (only the section manifest, which this does
+    not index), so this is always empty now. Hesitations and concepts were never premises here either: "I
+    hesitated" is not an INFLUENCE the model is crediting, and a bare concept id has no text to entail from.
+    Kept as its own function rather than inlined so nli_support_matcher's contract (an honest "no measured
+    influence on record" degrade) stays unchanged if a future influence source is added here."""
+    return []
 
 
 def _entail_scores(premises: list[tuple[str, str]], claim: str) -> list[tuple[str, float, float]]:

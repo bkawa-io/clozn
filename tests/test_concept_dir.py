@@ -1,4 +1,4 @@
-"""test_concept_dir.py -- clozn/behavior/steering/concept_dir.py (the any-concept dial: dir(c) =
+"""test_concept_dir.py -- clozn/analysis/concept_dir.py (the any-concept dial: dir(c) =
 normalize(J_l^T @ W_U[c])).
 
 Model-free and GPU-free throughout, per the task's guardrails (a GPU experiment is running
@@ -36,7 +36,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, REPO_ROOT)
 
-import clozn.behavior.steering.concept_dir as cd  # noqa: E402
+import clozn.analysis.concept_dir as cd  # noqa: E402
 
 
 # ==================================================================================== fixtures

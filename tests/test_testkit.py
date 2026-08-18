@@ -51,13 +51,6 @@ STATIC_RUN = {
         "alternatives": [[], [], [], [], [], [{"piece": " London", "prob": 0.30}], []],
         "topk_entropy": [0.01, 0.02, 0.03, 0.20, 0.05, 0.90, 0.01],
     },
-    "memory": {
-        "cards_applied": ["The user is studying French geography.", "The user likes concise answers."],
-        "applied_ids": ["france-facts", "concise-card"],
-        "relevance": [0.82, 0.40],
-        "gate": 0.9, "mode": "prompt", "strength": 1.0,
-    },
-    "behavior": {"active_dials": {"concise": 0.7}},
 }
 
 
@@ -201,35 +194,6 @@ def test_max_entropy_no_data_on_run_is_an_error():
     assert r["assertions"][0]["status"] == "error"
 
 
-# ============================================================================================= memory cards
-def test_card_applied_by_id_pass():
-    assert _run({"check": "card_applied", "card": "france-facts"})["status"] == "pass"
-
-
-def test_card_applied_by_text_substring_pass():
-    assert _run({"check": "card_applied", "card": "concise answers"})["status"] == "pass"
-
-
-def test_card_applied_fail_when_not_found():
-    assert _run({"check": "card_applied", "card": "no-such-card"})["status"] == "fail"
-
-
-def test_relevance_at_least_pass_and_fail():
-    assert _run({"check": "relevance_at_least", "card": "france-facts", "value": 0.5})["status"] == "pass"
-    assert _run({"check": "relevance_at_least", "card": "france-facts", "value": 0.95})["status"] == "fail"
-
-
-def test_relevance_at_least_card_not_found_is_a_fail():
-    a = _run({"check": "relevance_at_least", "card": "nope", "value": 0.1})
-    assert a["status"] == "fail"
-
-
-def test_relevance_at_least_card_found_but_no_relevance_recorded_is_an_error():
-    run = dict(STATIC_RUN, memory=dict(STATIC_RUN["memory"], relevance=[]))
-    r = testkit.evaluate(run, _test_spec({"check": "relevance_at_least", "card": "france-facts", "value": 0.1}))
-    assert r["assertions"][0]["status"] == "error"
-
-
 # ========================================================================================= alternative_present
 def test_alternative_present_pass_and_fail():
     assert _run({"check": "alternative_present", "value": " London"})["status"] == "pass"
@@ -277,35 +241,23 @@ class FakeSteer:
 
 
 class FakeMem:
-    def __init__(self, strength=1.0, rules=None, prefix="PFX"):
-        self.memory_strength = float(strength)
+    def __init__(self, rules=None, prefix="PFX"):
         self.rules = list(rules or [])
         self.prefix = prefix
 
 
 class FakeSub:
-    """chat() is a pure function of (memory_strength, excluded card ids, concise/warm dial values) -- no
-    randomness (mirrors tests/test_receipts.py's FakeSub exactly)."""
+    """A minimal duck-typed substrate -- only ever constructed here, never actually asked to chat(): every
+    retained `leans_on` test below either supplies no substrate at all (the honest-skip path) or an
+    injected `fetch_receipt` (which bypasses `sub` entirely), so this fixture just needs to exist, not
+    behave like a real ablatable one."""
 
-    def __init__(self, mem=None, steer=None, concise_card_ids=()):
+    def __init__(self, mem=None, steer=None):
         self.memory = mem if mem is not None else FakeMem()
         self.steer = steer if steer is not None else FakeSteer()
-        self.concise_card_ids = {str(i) for i in concise_card_ids}
 
     def chat(self, messages, max_new=256, sample=True):
-        excluded = {str(i) for i in (getattr(self.memory, "_exclude_card_ids", None) or [])}
-        if self.memory.memory_strength <= 0:
-            return "Generic reply with memory off, noticeably longer and less tailored than usual."
-        concise_active = self.concise_card_ids - excluded
-        concise_dial = float(self.steer.strength.get("concise", 0.0) or 0.0)
-        if concise_active or concise_dial > 0:
-            base = "Short answer."
-        else:
-            base = ("A much longer rambling reply with plenty of extra words, since nothing left standing "
-                    "kept this concise once every source of brevity was ablated away.")
-        if float(self.steer.strength.get("warm", 0.0) or 0.0) > 0:
-            base += " Hope that helps and warms your day a little!"
-        return base
+        raise AssertionError("no retained leans_on test should ever reach a real chat() call")
 
 
 CAUSAL_RUN = {"id": "run_causal1", "model": "clozn-qwen", "substrate": "QwenSubstrate",
@@ -313,41 +265,19 @@ CAUSAL_RUN = {"id": "run_causal1", "model": "clozn-qwen", "substrate": "QwenSubs
              "response": "THE STORED SAMPLED REPLY -- must never be used as a baseline"}
 
 
-def test_leans_on_dial_ablation_with_real_effect_passes(iso):
-    sub = FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.5}))
-    r = testkit.evaluate(CAUSAL_RUN, _test_spec({"check": "leans_on", "dial": "warm", "min_effect": 0.0},
-                                                run="run_causal1"), sub)
-    a = r["assertions"][0]
-    assert a["status"] == "pass"
-    assert a["actual"]["has_effect"] is True
-
-
-def test_leans_on_min_effect_threshold_too_high_fails_not_skips(iso):
-    """The ablation DID verify and DID show an effect -- just a small one (dropping one warm sentence off
-    a long paragraph). A min_effect that demands near-total rewording must FAIL, not silently pass."""
-    sub = FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.5}))
-    r = testkit.evaluate(CAUSAL_RUN, _test_spec({"check": "leans_on", "dial": "warm", "min_effect": 0.99},
-                                                run="run_causal1"), sub)
-    a = r["assertions"][0]
-    assert a["status"] == "fail"
-    assert a["actual"]["has_effect"] is True                # verified effect -- just below the bar
-
-
-
-
 
 
 def test_leans_on_with_no_substrate_and_no_fetch_receipt_is_an_honest_skip(iso):
     """The core honesty rule: no substrate, no live fetcher -> skip, with a note pointing at --live. NEVER
     a silent pass."""
-    r = testkit.evaluate(CAUSAL_RUN, _test_spec({"check": "leans_on", "dial": "warm"}, run="run_causal1"),
-                        sub=None)
+    r = testkit.evaluate(CAUSAL_RUN, _test_spec({"check": "leans_on", "card": "france-facts"},
+                                                run="run_causal1"), sub=None)
     a = r["assertions"][0]
     assert a["status"] == "skip"
     assert "--live" in a["note"]
 
 
-def test_leans_on_missing_card_and_dial_is_an_error(iso):
+def test_leans_on_missing_card_is_an_error(iso):
     r = testkit.evaluate(CAUSAL_RUN, _test_spec({"check": "leans_on"}, run="run_causal1"), FakeSub())
     assert r["assertions"][0]["status"] == "error"
 
@@ -355,7 +285,7 @@ def test_leans_on_missing_card_and_dial_is_an_error(iso):
 def test_leans_on_receipt_returns_none_is_a_skip(iso):
     """A bad/empty influence spec (receipts.receipt returns None) must skip, not crash or pass."""
     r = testkit.evaluate(CAUSAL_RUN, _test_spec({"check": "leans_on", "card": ""}, run="run_causal1"), FakeSub())
-    # card="" is falsy -> falls through to the "needs a card or dial" error branch (never reaches receipts)
+    # card="" is falsy -> falls through to the "needs a card" error branch (never reaches receipts)
     assert r["assertions"][0]["status"] == "error"
 
 
@@ -378,7 +308,7 @@ def test_leans_on_fetch_receipt_injection_is_used_verbatim(iso):
 
 
 def test_leans_on_fetch_receipt_returning_none_is_a_skip(iso):
-    r = testkit.evaluate(CAUSAL_RUN, _test_spec({"check": "leans_on", "dial": "warm"}, run="run_causal1"),
+    r = testkit.evaluate(CAUSAL_RUN, _test_spec({"check": "leans_on", "card": "france-facts"}, run="run_causal1"),
                         sub=None, fetch_receipt=lambda run, inf: None)
     assert r["assertions"][0]["status"] == "skip"
 
@@ -387,7 +317,7 @@ def test_leans_on_fetch_receipt_raising_is_a_skip_not_a_crash(iso):
     def boom(run, influence):
         raise RuntimeError("studio unreachable")
 
-    r = testkit.evaluate(CAUSAL_RUN, _test_spec({"check": "leans_on", "dial": "warm"}, run="run_causal1"),
+    r = testkit.evaluate(CAUSAL_RUN, _test_spec({"check": "leans_on", "card": "france-facts"}, run="run_causal1"),
                         sub=None, fetch_receipt=boom)
     a = r["assertions"][0]
     assert a["status"] == "skip"
@@ -451,7 +381,7 @@ def test_evaluate_overall_status_is_worst_of_its_assertions():
     assert r["status"] == "fail"
 
     r2 = testkit.evaluate(STATIC_RUN, _test_spec({"check": "contains", "value": "Paris"},
-                                                 {"check": "leans_on", "dial": "warm"}), sub=None)
+                                                 {"check": "leans_on", "card": "france-facts"}), sub=None)
     assert r2["status"] == "skip"                            # pass + skip -> skip (nothing failed)
 
 

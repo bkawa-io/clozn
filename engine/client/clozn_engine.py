@@ -916,13 +916,13 @@ class EngineClient:
         One causal decode of prompt++continuation on the engine reads back, for each continuation
         token, the log-softmax probability the model assigned to the token it was actually forced to
         see next -- usable both to verify a generated reply (self-consistency) and to measure how
-        much an influence (memory block / tone dial) shaped an answer (score WITH vs WITHOUT it).
+        much a steered intervention shaped an answer (score WITH vs WITHOUT it).
 
         `prompt_ids` (exact token ids, e.g. from a stored trace) take precedence over `prompt` text;
         likewise `continuation_ids` is the PRIMARY continuation form -- `continuation` text is a
         fallback that retokenizes independently and can drift at the prompt/continuation BPE boundary
         (the server flags this `boundary_approximate` in the response; treat it as approximate).
-        `steer`/`steer_vec` mirror /v1/completions' dial path (a raw n_embd direction + {coef, layer}),
+        `steer`/`steer_vec` mirror /v1/completions' steering path (a raw n_embd direction + {coef, layer}),
         so a scored call can reproduce a steered run's conditions.
         `attn_knockout` (Phase 4.2, roadmap §7 item 2): zero or more {layer, queries, keys,
         renormalize?} attention-edge cuts applied during THIS forward -- see

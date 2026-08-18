@@ -104,23 +104,7 @@ def _runtime_match(parent: Mapping, runtime_identity, worker_identity) -> tuple[
     return True, None
 
 
-def _recorded_dials(run: Mapping) -> dict | None:
-    behavior = run.get("behavior")
-    dials = behavior.get("active_dials") if isinstance(behavior, Mapping) else {}
-    if dials is None:
-        dials = {}
-    if not isinstance(dials, Mapping):
-        return None
-    if any(not isinstance(key, str) or not isinstance(value, (int, float)) or isinstance(value, bool)
-           for key, value in dials.items()):
-        return None
-    return {str(key): float(value) for key, value in dials.items()}
-
-
 def _changes(plan: Mapping, arm: str, intervention: str) -> dict:
-    dials = plan["execution"].get("steering")
-    # The actual values are deliberately recovered from the immutable parent in execute(), not from
-    # the metadata-only plan.  This placeholder is replaced by _arm_changes below.
     return {
         "influence_counterfactual": {
             "test_id": plan["test_id"],
@@ -133,17 +117,8 @@ def _changes(plan: Mapping, arm: str, intervention: str) -> dict:
     }
 
 
-def _arm_changes(parent: Mapping, plan: Mapping, arm: str, intervention: str) -> dict | None:
-    dials = _recorded_dials(parent)
-    if dials is None:
-        return None
-    changes = _changes(plan, arm, intervention)
-    # Clear whatever is live, then explicitly restore only the recorded dials.  replay() snapshots and
-    # restores the substrate around the call, so this cannot leak Studio state into later turns.
-    changes["behavior_off"] = True
-    if dials:
-        changes["behavior_overrides"] = dials
-    return changes
+def _arm_changes(parent: Mapping, plan: Mapping, arm: str, intervention: str) -> dict:
+    return _changes(plan, arm, intervention)
 
 
 def _arm_doc(state: str, child: Mapping | None = None, reason: dict | None = None) -> dict:

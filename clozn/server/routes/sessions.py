@@ -18,8 +18,8 @@ Wire shape
 
 There is no DELETE/PATCH verb here because clozn/server/app.py's handler only ever dispatches do_GET/
 do_POST (confirmed by grep -- no do_DELETE/do_PATCH exists anywhere in the module); update and delete are
-both POST actions, matching the rest of this codebase's route surface (e.g.
-clozn/server/routes/preferences.py's POST /preferences/resolve).
+both POST actions, matching the rest of this codebase's route surface (e.g. this module's own
+POST /sessions/<id>/delete above).
 
 A caller's raw `session_id` -- from the JSON body, the path segment, or the `X-Clozn-Session-Id` header
 -- is normalized identically regardless of source: clozn.runs.sessions' own `accept_key=True` rule

@@ -53,7 +53,7 @@ def _ablated_child(run: dict, changes: dict, sub, baseline_ref, baseline_reply: 
 
 
 _APPROX_NOTE = (
-    "prove-all runs leave-one-out over every fired dial from the M1 manifest, plus a REDUNDANCY "
+    "prove-all runs leave-one-out over every fired influence from the M1 manifest, plus a REDUNDANCY "
     "GUARD that checks PAIRS -- not the full power set -- among influences whose own leave-one-out showed "
     "~no effect. Documented approximation (EXPLAIN_THIS_ANSWER_SPEC.md M2): a 3-way-or-higher redundancy, "
     "where no single pair shows an effect but a larger group does, would be missed by this pairwise check."
@@ -87,24 +87,15 @@ def _receipt_regen(run: dict, influence: dict, sub) -> dict | None:
 
 
 def _fired_influences(manifest: dict):
-    """M1 manifest dials + sections as receipt influence specs.
+    """M1 manifest sections as receipt influence specs.
 
-    This also walked the manifest's memory CARDS until the 2026-07-27 cards cut, emitting a per-card
-    leave-one-out arm. Cards are gone from the product, so this now iterates dials plus the run's
-    `sections` manifest (prompt-section ablation) -- a run recorded before the cut may still name cards,
-    but there is no card store to ablate against."""
-    influences: list = []
-    skipped: list = []
-    active = (manifest or {}).get("influences_active") or {}
-    for d in active.get("dials") or []:
-        if isinstance(d, dict) and d.get("name"):
-            influences.append({"dial": d["name"], "value": d.get("value")})
-    # sections: enumeration lives in deltas.py (see _section_influences' docstring) -- this loop just
-    # extends the two lists it already returns.
-    sec_influences, sec_skipped = _section_influences(manifest)
-    influences.extend(sec_influences)
-    skipped.extend(sec_skipped)
-    return influences, skipped
+    This also walked the manifest's memory CARDS until the 2026-07-27 cards cut, and named tone dials
+    until named-dial personalization was retired, each emitting its own leave-one-out arm. Cards and
+    dials are both gone from the product, so this now iterates only the run's `sections` manifest
+    (prompt-section ablation) -- a run recorded before either cut may still name cards or dials, but
+    there is no card store or dial engine left to ablate against."""
+    # sections: enumeration lives in deltas.py (see _section_influences' docstring).
+    return _section_influences(manifest)
 
 
 def _prove_all_regen(run: dict, sub, *, manifest: dict | None = None, coalitions: bool = False,

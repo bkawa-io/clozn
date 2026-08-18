@@ -1,6 +1,6 @@
 """commands.test_model -- `clozn test-model` (FRONTIER_BETS §9.3, "the model's own CI"): run the curated
 probe sets with GREEDY decoding against a live engine, and diff the outputs against a stored golden
-fixture -- so a quant swap, a memory/dial change, or an engine upgrade that silently changes what the
+fixture -- so a quant swap, a raw-steering change, or an engine upgrade that silently changes what the
 model SAYS shows up as a failed regression check instead of a vibe.
 
 Zero research risk, pure wiring: reuses `clozn.eval.probes.run_probes` (already greedy -- temperature=0.0,

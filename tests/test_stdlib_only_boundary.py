@@ -10,7 +10,7 @@ Nothing enforced it. The `product-minimal` CI lane is named "Torch-free boundary
 INSTALLS numpy before asserting torch is absent -- so a module-scope `import numpy` reachable from the
 product import path sailed through it. Two such imports had accumulated:
 
-  * clozn/receipts/swap_receipt.py imported clozn.behavior.steering.concept_dir (steering math, numpy)
+  * clozn/receipts/swap_receipt.py imported clozn.analysis.concept_dir (steering math, numpy)
     at module scope, and read two of its constants as DEFAULT ARGUMENT values -- reachable from
     clozn/cli/main.py via clozn.experiments. `clozn --help` therefore required numpy.
   * clozn/server/routes/readouts.py imported numpy at module scope for a single call in one route,

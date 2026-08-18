@@ -9,18 +9,16 @@ function pathOf(request: PendingFetch): string {
 }
 
 async function respondWithWorkspace(controller: ReturnType<typeof createFetchController>) {
-  const requests = await Promise.all(Array.from({ length: 4 }, () => controller.nextRequest()));
+  const requests = await Promise.all(Array.from({ length: 3 }, () => controller.nextRequest()));
   const byPath = new Map(requests.map((request) => [pathOf(request), request]));
 
   expect([...byPath.keys()].sort()).toEqual([
     "/engine/health",
-    "/steer/axes",
     "/models/local",
     "/snapshots",
   ].sort());
 
   const health = byPath.get("/engine/health")!;
-  const axes = byPath.get("/steer/axes")!;
   const inventory = byPath.get("/models/local")!;
   const snapshots = byPath.get("/snapshots")!;
 
@@ -36,9 +34,6 @@ async function respondWithWorkspace(controller: ReturnType<typeof createFetchCon
         jlens: true,
       },
     },
-  });
-  controller.respondJson(axes, {
-    axes: [{ name: "concise", value: 0.25, calibrated: true }],
   });
   controller.respondJson(inventory, {
     models: [{
@@ -57,7 +52,7 @@ const runtime: RuntimeState = {
   runs: [{
     id: "run-alpha", label: "Explain alpha · native · alpha", prompt: "Explain alpha", response: "Alpha",
     createdAt: "2026-08-01T00:00:00Z", source: "openai_api", client: "local", model: "qwen",
-    substrate: "cpu", duration: "1 s", flags: [], warningCount: 0, activeDialCount: 0, memoryCardCount: 0,
+    substrate: "cpu", duration: "1 s", flags: [], warningCount: 0,
   }],
 };
 

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "clozn.action-registry.v1",
   "title": "The versioned corrective-action registry",
-  "description": "The reviewed catalog of corrective behavior actions clozn ships in the core product (agent_roadmap/08-reversible-behavior-fixes.md). Built by clozn.behavior.registry.build_registry() from the EXISTING prompt-policy preset vocabulary (clozn.replay.corrective.CORRECTION_PRESETS) and control-vector dial vocabulary (clozn.behavior.steering.axes.AXES) -- never a hand-maintained duplicate of either. Each action lists every one of the four backend types (prompt_policy, control_vector, sampling_policy, unsupported) it was actually evaluated against, in preference order; a backend this exact model/build cannot honestly qualify is listed with type 'unsupported' and a reason, never silently omitted -- a reader always sees the full vocabulary evaluated, never guesses at what wasn't tried.",
+  "description": "The reviewed catalog of corrective behavior actions clozn ships in the core product (agent_roadmap/08-reversible-behavior-fixes.md). Built by clozn.behavior.registry.build_registry() from the EXISTING prompt-policy preset vocabulary (clozn.replay.corrective.CORRECTION_PRESETS) -- never a hand-maintained duplicate. Each action lists every backend type it was actually evaluated against, in preference order (prompt_policy and sampling_policy today; control_vector, the retired named-dial backend, no longer appears here at all); a backend this exact model/build cannot honestly qualify is listed with type 'unsupported' and a reason, never silently omitted -- a reader always sees the full vocabulary evaluated, never guesses at what wasn't tried.",
   "type": "object",
   "required": ["schema_version", "version", "actions"],
   "properties": {
@@ -36,7 +36,7 @@
           },
           "scopes": {
             "type": "array",
-            "items": {"type": "string", "enum": ["once", "session", "profile"]},
+            "items": {"type": "string", "enum": ["once", "session"]},
             "minItems": 1
           },
           "eligibility": {

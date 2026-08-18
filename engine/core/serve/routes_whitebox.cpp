@@ -348,9 +348,9 @@ void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx) {
         const int topk = body.value("topk", 0);
 
         // Same steer parsing/lease discipline as /v1/completions: a NAMED concept (steer_probes) or
-        // a RAW direction (steer_vec -- how the studio's tone dials arrive) as a control vector over
-        // [lo,hi] layers. Cleared on every exit (including a throw) so a scored request never leaks
-        // a steered lease back into the pool.
+        // a RAW direction (steer_vec, applied verbatim) as a control vector over [lo,hi] layers.
+        // Cleared on every exit (including a throw) so a scored request never leaks a steered lease
+        // back into the pool.
         std::string steer_concept; double steer_coef = 0.0; int steer_layer = 0;
         if (body.contains("steer") && body["steer"].is_object()) {
             steer_concept = body["steer"].value("concept", std::string());

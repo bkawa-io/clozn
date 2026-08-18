@@ -362,7 +362,7 @@ def _put(rec: dict, *, replace: bool = False, ignore: bool = False) -> bool:
 
 
 def record(*, source: str, client: str = "unknown", model: str = "", substrate: str = "",
-           messages=None, response: str = "", memory: dict | None = None, behavior: dict | None = None,
+           messages=None, response: str = "",
            trace: dict | None = None, started: float | None = None, ended: float | None = None,
            parent_run_id: str | None = None, changes_applied: dict | None = None,
            error: str | None = None, finish_reason: str | None = None,
@@ -380,7 +380,7 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
 
     `identity` (roadmap S4.3): the immutable reproduction-identity block from
     clozn.runs.identity.runtime_identity -- model_sha256, template_fingerprint, engine_build,
-    clozn_version, captured_at. A top-level field (like memory/behavior/trace), not folded into
+    clozn_version, captured_at. A top-level field (like trace), not folded into
     `meta`, so receipts.bundle and future consumers can read it without picking through REPRO_META_KEYS.
     Callers that don't pass one (older call sites, replay/fork, the CLI run path) simply get {} --
     honestly "no identity captured for this run," not a fabricated one.
@@ -473,8 +473,6 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
             "reasoning": reasoning_doc,
             "assembled_messages": assembled_messages if assembled_messages is not None else None,
             "final_prompt": final_prompt,
-            "memory": memory or {},
-            "behavior": behavior or {},
             "trace": norm_trace,
             "timing": {"started_at": started, "ended_at": ended,
                        "duration_ms": int((ended - started) * 1000)},

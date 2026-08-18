@@ -32,22 +32,24 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer   # noqa: E4
 
 POST_GATE = RequestGate.from_env()
 
-# POST_GATE (request_gate.py) exists because EngineSubstrate keeps generation metadata, tone-dial
-# strengths, and prompt-mode memory cards on ONE shared object -- concurrent POST dispatch could let two
-# requests corrupt each other's evidence (see request_gate.py's module docstring). Backlog #2 ("request
-# isolation + cancellation") moved the generation-metadata piece onto a per-call RequestContext (see
-# clozn/server/request_context.py + EngineSubstrate.chat/chat_stream in substrates.py), which narrows --
-# but does NOT eliminate -- the reason the gate exists: self.steer.strength and the memory-card store are
-# STILL live, shared, mutable state that a concurrent /steer/* or /memory/* write could tear out from under
-# an in-flight generation read. So the gate stays broad by default; this is a DELIBERATELY SMALL allowlist
-# of POST paths audited to touch NEITHER the substrate's generation state NOR steer/memory:
+# POST_GATE (request_gate.py) exists because EngineSubstrate keeps generation metadata on a shared
+# object -- concurrent POST dispatch could let two requests corrupt each other's evidence (see
+# request_gate.py's module docstring). Backlog #2 ("request isolation + cancellation") moved the
+# generation-metadata piece onto a per-call RequestContext (see clozn/server/request_context.py +
+# EngineSubstrate.chat/chat_stream in substrates.py). Tone-dial strengths and prompt-mode memory cards --
+# this paragraph's other historical reason for the gate -- were retired with the rest of the
+# personalization layer, along with self.steer/self.memory and the /steer/*, /memory/* routes that used
+# to mutate them. The gate stays broad by default regardless: fork/checkpoint/replay/journal and
+# everything else NOT in _GENERATION_POST_PATHS below still reads or writes worker-shaped state this
+# process cannot prove is safe to run concurrently with generation (see WorkerGateRegistry.acquire_all's
+# docstring), so this remains a DELIBERATELY SMALL allowlist of POST paths audited to touch NEITHER the
+# substrate's generation state NOR anything else worker-scoped:
 #   /capture/tier -- a bare settings-file flag (clozn.runs.capture_mode), unrelated to SUB entirely.
 #   /cancel       -- cancellation control does not select a worker or start generation.
-# Every other POST -- every /memory/* and /steer/* mutation, plus fork/checkpoint/replay/journal and
-# everything else NOT in _GENERATION_POST_PATHS below -- still reads or writes worker-shaped state and
-# stays fully serialized through POST_GATE. The risk of a wrong "this is safe" call here is a corrupted
-# run record or a torn dial read, so the bar is "audited to touch nothing substrate-shaped", not a coarse
-# heuristic like "looks read-only".
+# Every other POST -- fork/checkpoint/replay/journal and everything else NOT in _GENERATION_POST_PATHS
+# below -- still reads or writes worker-shaped state and stays fully serialized through POST_GATE. The
+# risk of a wrong "this is safe" call here is a corrupted run record, so the bar is "audited to touch
+# nothing substrate-shaped", not a coarse heuristic like "looks read-only".
 _GATE_EXEMPT_POSTS = frozenset({"/capture/tier", "/cancel"})
 
 # RT-05: the closed set of routes that resolve a model through
@@ -99,16 +101,16 @@ STRUCTURED_MODE = "auto"
 class EngineUnavailable(RuntimeError):
     """Raised when the engine is completely UNREACHABLE (connection refused / host down -- a raw
     urllib.error.URLError, never even got an HTTP response), as opposed to EngineError (the engine
-    responded, but with a non-2xx JSON error). Routes that dispatch through Substrate.handle() (the
-    generic /steer/* + /memory/* fallback in _dispatch_post below) raise/catch this specially so a dead
+    responded, but with a non-2xx JSON error). Routes that dispatch through a substrate's handle() (the
+    generic per-action fallback in _dispatch_post below) raise/catch this specially so a dead
     engine answers with the same clean 502 shape every other engine-touching route uses, instead of a
     bare URLError leaking to the generic 500 fallback (see the engine-down pressure test's finding #1)."""
 
 
 def _engine_unreachable_message() -> str:
     """The one canonical "the engine isn't there" message, shared by every caller that needs to tell a
-    dead engine apart from some other failure (Substrate._ensure_steer, the receipt/rederive/swap_receipt
-    routes, EngineSubstrate.jlens) -- so the wording is identical everywhere, not re-typed per call site."""
+    dead engine apart from some other failure (the receipt/rederive/swap_receipt routes,
+    EngineSubstrate.jlens) -- so the wording is identical everywhere, not re-typed per call site."""
     if MODEL_ROUTER is not None:
         return "selected model worker is not reachable"
     base = getattr(ENGINE, "base", None) or "the engine"
@@ -377,28 +379,13 @@ def _jlens_envelope(res, run_id, text_source, want_protocol=False):
     return out
 
 
-ENGINE_STEER = None        # lazy EngineSteer on the one GGUF engine -- tone dials work on any AR GGUF
-
-
-def _engine_steer():
-    global ENGINE_STEER
-    if ENGINE_STEER is None and ENGINE is not None:
-        from clozn.behavior.steering.engine_adapter import EngineSteer
-        ENGINE_STEER = EngineSteer(ENGINE)
-    return ENGINE_STEER
-
-
-ENGINE_CONCEPT_STEER = None   # lazy ConceptSteer(ENGINE) -- Tier-1 #1's any-concept dial (dir(c)), see
-                              # clozn/behavior/steering/concept_dir.py. Mirrors _engine_steer() above; a
-                              # SEPARATE mechanism (dir(c), zero calibration) from the tone-dial EngineSteer.
-
-
-def _engine_concept_steer():
-    global ENGINE_CONCEPT_STEER
-    if ENGINE_CONCEPT_STEER is None and ENGINE is not None:
-        from clozn.behavior.steering.concept_dir import ConceptSteer
-        ENGINE_CONCEPT_STEER = ConceptSteer(ENGINE)
-    return ENGINE_CONCEPT_STEER
+# (ENGINE_STEER/_engine_steer() -- the tone-dial EngineSteer cache -- and ENGINE_CONCEPT_STEER/
+# _engine_concept_steer() -- the Studio "any-concept dial" cache, clozn/analysis/concept_dir.py's
+# ConceptSteer -- were both retired with the rest of the personalization layer: their one production
+# caller, Substrate._steer()'s /steer/concept/set|check dispatch, went with it. The underlying
+# concept_dir.ConceptSteer mechanism survives as causal-attribution machinery (generation_guard.py's
+# counter-steer loop), but that caller constructs its own fresh, per-request, per-layer instance rather
+# than reading a cached process-global one, so nothing here needs to cache it either.)
 
 
 def _qwen_tmpl(messages):
@@ -436,112 +423,10 @@ def _engine_tmpl(engine, messages, usage_out=None):
     return engine.apply_template(messages)
 
 
-def _model_scoped_path(name):
-    """Per-exact-GGUF product state path, with a legacy fallback for lab/tests."""
-    sub = globals().get("SUB")
-    digest = getattr(sub, "model_sha256", None) if sub is not None else None
-    if digest:
-        return _pers(os.path.join("models", str(digest), name))
-    return _pers(name)
-
-
-def _disk_dials():
-    """Saved tone-dial values for the active exact GGUF."""
-    path = _model_scoped_path("studio_personality.json")
-    if not os.path.isfile(path):
-        return {}
-    try:
-        with open(path) as f:
-            return {k: float(v) for k, v in json.load(f).items()}
-    except Exception:
-        return {}
-
-
-def _dial_calibration():
-    """The curated per-model dial calibration (research/dial_autocalibrate.py's sweep -- see that module's
-    docstring), read from ~/.clozn -- NEVER research/runs/dial_autocalibrate.json directly (that raw
-    research file carries full curves + sample_replies per dial, meant for a human to eyeball, not to be
-    re-parsed on every /steer/axes call; a curator step distills it down to just what a slider needs and
-    persists THAT here). Missing/broken file -> {} (never raise): calibration is optional enrichment, so
-    every caller must behave EXACTLY as it did before this existed when the file isn't there yet.
-
-    Returns {dial_name: {"usable_max", "usable_range", "derail_point", "works"}, ...}. Tolerant of either a
-    flat {dial_name: {...}} file, or one shaped like the raw research JSON ({"dials": {dial_name: {...}}},
-    with "range_valid" instead of "works") -- whichever shape the curated file ends up in, this keeps
-    working. A per-entry parse problem drops just that one dial (skipped, not crashed on)."""
-    path = _model_scoped_path("dial_calibration.json")
-    if not os.path.isfile(path):
-        return {}
-    try:
-        with open(path, encoding="utf-8") as f:
-            raw = json.load(f)
-        table = raw.get("dials", raw) if isinstance(raw, dict) else {}
-        out = {}
-        for name, c in table.items():
-            if not isinstance(c, dict):
-                continue
-            works = c.get("works", c.get("range_valid"))
-            out[name] = {
-                "usable_max": c.get("usable_max"),
-                "usable_range": c.get("usable_range"),
-                "derail_point": c.get("derail_point"),
-                "works": bool(works),
-            }
-        return out
-    except Exception:
-        return {}
-
-
-def _with_calibration(axis, c):
-    """Merge one _dial_calibration() entry into one /steer/axes axis dict, IN PLACE (also returned, so this
-    reads as an expression in a list comprehension) -- the one spot that decides what a calibrated slider
-    looks like to the studio UI. No entry for this dial (c falsy/missing) -> the axis is untouched except
-    for "calibrated": False added: NO behavior change for a dial nobody has calibrated on this model (Law
-    #6 -- the uncalibrated case must render exactly as it always has). An entry -> "max" becomes the
-    CALIBRATED usable_max, falling back to the axis's own already-declared max when usable_max itself is
-    None (a dial swept but never found usable), plus "usable_range"/"derail_point"/"works" for the UI to
-    grey out a dead dial or show its working range."""
-    if not c:
-        # UNCALIBRATED -> advertise the ceiling that EngineSteer.set() will actually ENFORCE, not the
-        # axis's declared max. These two used to disagree: the slider offered 1.5 while nothing had
-        # ever swept this model, and a user who dragged it there got repetition loops. (Measured on
-        # Qwen2.5-7B-Q4: coherent at 0.25, already degenerate at 0.5, pure loops at 1.5 while looking
-        # like a 50% length win.) A slider must never offer a value the API will silently clamp.
-        from clozn.behavior.steering.engine_adapter import UNSAFE_STRENGTH
-        axis["calibrated"] = False
-        axis["declared_max"] = axis.get("max")
-        axis["max"] = min(float(axis.get("max", 1.5)), float(UNSAFE_STRENGTH))
-        axis["uncalibrated"] = (
-            f"No calibration for this exact model, so this dial is capped at {UNSAFE_STRENGTH} "
-            f"instead of its declared {axis['declared_max']}. Calibrate this model to unlock its "
-            f"real range."
-        )
-        return axis
-    axis["max"] = c["usable_max"] if c.get("usable_max") is not None else axis["max"]
-    axis["usable_range"] = c.get("usable_range")
-    axis["derail_point"] = c.get("derail_point")
-    axis["works"] = bool(c.get("works"))
-    axis["calibrated"] = True
-    return axis
-
-
-def _library_dial_names() -> set:
-    """The set of custom-dial names that are SHIPPED-LIBRARY dials (research/deploy_dial_library.py's
-    one-time registration), read from ~/.clozn/studio_library.json's keys -- a file distinct from the
-    user's own studio_custom_<name>.json, so a library dial can never be mistaken for something the user
-    made. Missing/broken file -> empty set (never raise): before the library is deployed (or on any
-    substrate that has never loaded studio_library.json), /steer/axes must behave EXACTLY as it always
-    has -- every steer.custom entry tags "custom": True and none tag "library" -- the same Law-#6-style
-    backward compat _dial_calibration() already gives the calibration merge."""
-    path = _pers("studio_library.json")
-    if not os.path.isfile(path):
-        return set()
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        return set(data) if isinstance(data, dict) else set()
-    except Exception:
-        return set()
+# (_model_scoped_path/_disk_dials/_dial_calibration/_with_calibration/_library_dial_names -- the
+# per-exact-GGUF tone-dial state/calibration/library readers backing /steer/axes -- were retired with the
+# rest of the personalization layer; there is no more studio_personality.json, dial_calibration.json, or
+# studio_library.json to read.)
 
 
 # ------- message assembly: extracted to clozn/server/message_assembly.py; re-exported (the seam) ----
@@ -577,7 +462,7 @@ def _snap_store():
 # ------- substrates: extracted to clozn/server/substrates.py; re-exported here (the seam) -----------
 # app.py remains the canonical module: routes read ctx.<name> and tests patch cs.<name> on THIS module.
 from clozn.server.substrates import (                                                    # noqa: E402
-    Substrate, EngineSubstrate,      # Qwen/Dream lab substrates now live in clozn/lab/substrates.py
+    EngineSubstrate,      # Qwen/Dream lab substrates now live in clozn/lab/substrates.py
     _quant_from_name, _model_family_from_name,
     _engine_model_info, _engine_complete_traced, _ENGINE_MODELS, _ENGINE_MODEL_DEFAULT,
 )
@@ -586,8 +471,10 @@ from clozn.server.substrates import (                                           
 # returning True once it has written a response, so do_GET/do_POST can stop at the first family that
 # claims a path -- exactly the first-match-wins order the old inline if/elif chain had. POST falls
 # through, after every family, to the generic SUB.handle(path, body) substrate dispatch inlined at the
-# end of do_POST (the catch-all for /memory/*, /steer/* -- those live in the Substrate classes above, not
-# in a route module, since they're substrate-polymorphic domain dispatch, not per-path HTTP routing).
+# end of do_POST -- a hook for substrate-polymorphic domain dispatch (not per-path HTTP routing) that
+# used to be the /memory/*, /steer/* catch-all; both of those, and the base Substrate class that carried
+# them, were retired with the rest of the personalization layer, but the fallback itself stays for
+# whatever substrate-specific POST surface (if any) still needs it.
 #
 # runs.try_get_fallback (the generic GET /runs/<id>) is registered LAST in _GET_ROUTES, deliberately --
 # every more-specific /runs/<id>/<suffix> family (receipts' /export, runs' own /timeline etc.) must get
@@ -601,8 +488,6 @@ from clozn.server.routes import receipts as _receipts_routes          # noqa: E4
 from clozn.server.routes import replay as _replay_routes              # noqa: E402
 from clozn.server.routes import corrective_retries as _corrective_retry_routes  # noqa: E402
 from clozn.server.routes import timetravel as _timetravel_routes      # noqa: E402
-from clozn.server.routes import preferences as _preferences_routes    # noqa: E402
-from clozn.server.routes import feedback as _feedback_routes          # noqa: E402
 from clozn.server.routes import ollama as _ollama_routes              # noqa: E402
 from clozn.server.routes import openai as _openai_routes              # noqa: E402
 from clozn.server.routes import engine as _engine_routes              # noqa: E402
@@ -638,7 +523,7 @@ _GET_ROUTES = [_static_routes, _health_routes, _runs_routes, _receipts_routes,
               _runs_fallback_routes]
 _POST_ROUTES = [_health_routes, _receipts_routes,
                _corrective_retry_routes, _replay_routes,
-               _timetravel_routes, _preferences_routes, _feedback_routes,
+               _timetravel_routes,
                _ollama_routes, _openai_routes, _engine_routes, _readouts_routes,
                _journal_routes, _diff_routes,
                _receipt_link_routes, _influence_map_routes, _contracts_routes,
@@ -850,10 +735,11 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                      mem_out=None, finish_reason=None, finish_reason_fallback=None, extra_meta=None,
                      output_contract=None, sections=None):
             """Persist this interaction as an inspectable run (never let logging break the request).
-            mem_out: the {final_prompt, assembled_messages, active_dials?, actual_prompt_tokens?} record
-            the generation path filled in -- what the substrate actually did with this turn. (Used to also
-            carry the memory manifest -- applied cards, gate, strength -- until the 2026-07-27 cards cut;
-            see the body below for what survives.)
+            mem_out: the {final_prompt, assembled_messages, actual_prompt_tokens?} record the generation
+            path filled in -- what the substrate actually did with this turn. (Used to also carry the
+            memory manifest -- applied cards, gate, strength -- until the 2026-07-27 cards cut, and the
+            active tone-dial strengths until the personalization-layer cut that followed; see the body
+            below for what survives.)
             extra_meta (optional): additional {key: value} pairs folded into the run's `meta` block on top
             of the substrate/build-commit/capture-tier fields this method already assembles -- e.g. sse.py
             tags a failed stream with {"stream_failure": "client_disconnected" | "worker_disconnected"} so
@@ -901,20 +787,10 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 reasoning = think.journal()
                 # (The memory manifest -- cards_applied / applied_ids / strength / gate / prompt_block
                 # -- was assembled here until the 2026-07-27 cards cut. Runs carry no `memory` block at
-                # all now, and the readers of the old shape were removed with it.)
-                # only meaningfully-nonzero dials (|v| >= 0.05); steer.active() drops exact-zeros but a
-                # slider nudged to a hair (e.g. 0.02) still slips through and would clutter the record.
-                if "active_dials" in mo:
-                    # Some accepted surfaces build steering explicitly and report exactly what reached
-                    # the worker. This prevents a live dial setting from being journaled as applied when
-                    # that surface could not materialize it.
-                    dials = dict(mo.get("active_dials") or {})
-                else:
-                    dials = (
-                        request_sub.steer.active()
-                        if request_sub and hasattr(request_sub, "steer") else {}
-                    )
-                dials = {k: v for k, v in dials.items() if abs(float(v)) >= 0.05}
+                # all now, and the readers of the old shape were removed with it. The active-tone-dial
+                # extraction that used to sit here -- `behavior={"active_dials": dials}` on the record
+                # below -- went the same way with the rest of the personalization layer: there is no more
+                # steer object to read, and runlog.record() no longer accepts a `behavior` field at all.)
                 meta = None
                 try:                                          # engine: {model_file, quant, mode, sampling}
                     if request_sub is not None and hasattr(request_sub, "run_meta"):
@@ -992,7 +868,7 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 record_kwargs = dict(
                     source=source, client=self._client(self.headers.get("User-Agent", "")),
                     model=str(model), substrate=request_subname, messages=messages, response=response,
-                    behavior={"active_dials": dials}, started=started, error=error,
+                    started=started, error=error,
                     trace=trace, finish_reason=finish_reason, meta=meta,
                     assembled_messages=assembled_messages, final_prompt=final_prompt,
                     workspace_provider=workspace_provider, identity=identity,
@@ -1139,9 +1015,9 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 self._reject_post_gate(rejected)
                 return
             # RT-05 safety net: this POST is not one of the known generation paths, so this process does
-            # not know which (if any) single worker it touches -- fork/checkpoint/replay/journal/steer/
-            # memory all land here. In managed mode it must still never run concurrently with generation
-            # on a worker it might touch (checkpoint harvest, steer.strength, ...) -- see
+            # not know which (if any) single worker it touches -- fork/checkpoint/replay/journal all land
+            # here. In managed mode it must still never run concurrently with generation on a worker it
+            # might touch (checkpoint harvest, ...) -- see
             # WorkerGateRegistry.acquire_all's docstring. Draining every configured worker's turn gives
             # this the exact same "nothing else is running" guarantee POST_GATE alone used to give
             # everything, scoped down to just this unclassified bucket.
@@ -1154,7 +1030,7 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 if router is not None else None
             )
             if callable(tracker_factory):
-                # Unclassified mutations (steer, checkpoint, replay, journal,
+                # Unclassified mutations (checkpoint, replay, journal,
                 # and similar routes) are serialized through POST_GATE, but a
                 # cold generation can arrive concurrently because generation
                 # routes intentionally bypass that global gate. Reserve every
@@ -1219,13 +1095,18 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                     traceback.print_exc()
                     self._json(500, {"error": f"{type(e).__name__}: {e}", "route": p})
                     return
-            # Generic fallback: whatever the active substrate's own per-action dispatch serves
-            # (/memory/*, /steer/* -- Substrate._memory/_steer above, substrate-polymorphic domain
-            # dispatch, not per-path HTTP routing, so it stays here rather than in a route module).
+            # Generic fallback: whatever the active substrate's own per-action dispatch serves --
+            # substrate-polymorphic domain dispatch, not per-path HTTP routing, so it stays here rather
+            # than in a route module. Used to reach Substrate._memory/_steer's /memory/* and /steer/*
+            # catch-all; both that dispatcher and the base Substrate class carrying it were retired with
+            # the rest of the personalization layer, so no substrate defines handle() any more today --
+            # the hasattr guard below keeps this an honest 409 (not an AttributeError-turned-500) for
+            # whatever substrate-specific POST surface a future substrate might still add one for.
             try:
                 fallback_sub = active_sub(self)
                 fallback_name = active_subname(self)
-                r = fallback_sub.handle(p, body) if fallback_sub else None
+                r = (fallback_sub.handle(p, body)
+                    if fallback_sub is not None and hasattr(fallback_sub, "handle") else None)
                 if r is None:
                     return self._json(409, {
                         "error": (
@@ -1237,8 +1118,8 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                     })
                 self._json(200, r)
             except EngineUnavailable as e:
-                # the engine is down (see Substrate._ensure_steer) -- the same clean 502 shape every
-                # other engine-touching route uses, not the generic 500 below.
+                # the engine is down -- the same clean 502 shape every other engine-touching route uses,
+                # not the generic 500 below.
                 self._json(502, {"error": str(e)})
             except Exception as e:
                 self._json(500, {"error": f"{type(e).__name__}: {e}"})

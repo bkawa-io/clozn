@@ -648,14 +648,6 @@ def _influence_label(inf) -> str:
     txt = inf.get("text")
     if txt:
         return str(txt)
-    if inf.get("card_id"):
-        return f"memory card {inf['card_id']}"
-    if inf.get("dial"):
-        return f"dial · {inf['dial']}"
-    if inf.get("memory_off"):
-        return "all memory off"
-    if inf.get("behavior_off"):
-        return "all dials off"
     return "influence"
 
 
@@ -703,35 +695,17 @@ def _receipt_rows(receipts_obj: dict) -> list:
     return rows
 
 
-def _active_influences_line(bundle: dict) -> str:
-    """One CAPTURED context line: what was logged as active on the run. Active is not proof — only a
-    computed receipt below may claim effect (mirrors explain.py's causal_verified:null invariant)."""
-    active = _dict(_dict(bundle.get("explain")).get("influences_active"))
-    cards = [c for c in _list(active.get("cards")) if isinstance(c, dict)]
-    if not cards:
-        cards = [{"text": t} for t in _list(_dict(bundle.get("memory")).get("cards_applied"))]
-    dials = [d for d in _list(active.get("dials")) if isinstance(d, dict)]
-    bits = [str(_dict(c).get("text") or c) for c in cards]
-    bits += [f"dial {d.get('name')}={d.get('value')}" for d in dials if d.get("name")]
-    if not bits:
-        return ""
-    inner = " · ".join(_esc(b) for b in bits)
-    return (f'<div class="active-line"><span class="tag cap-t">captured</span> '
-            f'active this run (active ≠ causal): {inner}</div>')
-
-
 def _receipts_section(bundle: dict) -> str:
     receipts_obj = _dict(bundle.get("receipts"))
     rows = _receipt_rows(receipts_obj) if receipts_obj else []
-    active = _active_influences_line(bundle)
     if not rows:
         tag = '<span class="tag der-t">derived · on demand</span>'
-        body = active + f'<div class="absent">{_esc(_ABSENT_RECEIPTS)}</div>'
+        body = f'<div class="absent">{_esc(_ABSENT_RECEIPTS)}</div>'
         return _mod("lilac", "influences & receipts", tag, body, "receipts")
     when = receipts_obj.get("computed_at") or "on demand"
     tag = (f'<span class="tag der-t">derived — computed {_esc(when)} by leave-one-out + '
            'forced scoring</span>')
-    body = active + "".join(_receipt_row(r) for r in rows)
+    body = "".join(_receipt_row(r) for r in rows)
     skipped = _list(receipts_obj.get("skipped"))
     if skipped:
         body += (f'<div class="small-note">{len(skipped)} influence'

@@ -6,7 +6,7 @@ and layer selection (never a hardcoded, possibly-invalid layer).
 
 Model-free: drives the REAL clozn_server do_POST handler with no socket (object.__new__(H)), isolated
 runlog/cards/settings/eval stores, and a FAKE engine client (never a live one). Concept resolution
-(resolve_token_id / dir(c)) runs through the REAL clozn.behavior.steering.concept_dir math against tiny
+(resolve_token_id / dir(c)) runs through the REAL clozn.analysis.concept_dir math against tiny
 on-disk J-lens/unembed FIXTURE files (mirrors tests/test_concept_dir.py's own fixture convention) -- only
 the raw engine HTTP calls (.score/.complete/.intervene/.jlens/.apply_template/.health) are faked. The
 per-model guard calibration file itself is faked too, via monkeypatching generation_guard.guard_calibration_
@@ -364,7 +364,7 @@ def test_on_fire_uses_the_calibrated_trigger_set_and_builds_a_receipt(iso, dirc_
     assert out["choices"][0]["message"]["content"] == "safe corrected content clean chunk two"
     assert len(engine.intervene_calls) == 1
     assert engine.intervene_calls[0]["layer"] == LAYER
-    from clozn.behavior.steering.concept_dir import VALIDATED_MEDIAN_RESID_NORM
+    from clozn.analysis.concept_dir import VALIDATED_MEDIAN_RESID_NORM
     assert engine.intervene_calls[0]["coef"] == pytest.approx(
         gg.DEFAULT_COUNTER_STRENGTH * VALIDATED_MEDIAN_RESID_NORM[LAYER])
     assert engine.intervene_calls[0]["coef"] < 0

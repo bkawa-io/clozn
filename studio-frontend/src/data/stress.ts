@@ -369,8 +369,6 @@ function buildFixture(spec: FixtureSpec): ObservatoryData {
       promptTokens: spec.promptTokens,
     },
     configuration: {
-      activeDials: {},
-      memoryCards: [],
       adapters: [],
       changes: [],
     },

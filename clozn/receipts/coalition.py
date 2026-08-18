@@ -266,15 +266,13 @@ def coalition_report(run: dict, sub, *, solo_results: dict, baseline_reply: str,
     solo_values = {k: solo_results[k]["value"] for k in keys}
     influences_by_key = {k: solo_results[k]["_influence"] for k in keys if solo_results[k].get("_influence")}
     # Prefer explicit influence specs if the caller attached them; otherwise reconstruct minimally from the
-    # key convention (`_key` in deltas.py: "card:<id>" / "dial:<name>").
+    # key convention (`_key` in deltas.py: "section:<name>").
     def _spec_for(key: str) -> dict:
         if key in influences_by_key:
             return influences_by_key[key]
         kind, _, ident = key.partition(":")
-        if kind == "card":
-            return {"card_id": ident}
-        if kind == "dial":
-            return {"dial": ident}
+        if kind == "section":
+            return {"section": ident}
         return {}
 
     if n == 1:

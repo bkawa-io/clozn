@@ -7,11 +7,9 @@ It never calls a model engine directly.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
 import copy
 import hashlib
 import json
-import math
 import os
 import time
 import urllib.error
@@ -25,7 +23,7 @@ from clozn.testkit import ci as testkit_ci
 MANIFEST_SCHEMA = "clozn.experiment.v0"
 RESULT_SCHEMA = "clozn.experiment.result.v0"
 FINGERPRINT_ALGORITHM = "canonical-json-v1"
-VARIANT_KINDS = frozenset({"base", "tuned", "quant", "prompt", "dial"})
+VARIANT_KINDS = frozenset({"base", "tuned", "quant", "prompt"})
 DEFAULT_URL = "http://127.0.0.1:8080"
 # Phase 4.4 (docs/PRODUCT_ROADMAP.md §7 item 4, "statistical rigor + evidence labels as product"): the one
 # metric a manifest author predeclares as their primary comparison BEFORE looking at results, so a stats
@@ -93,15 +91,6 @@ def validate_manifest(raw: dict) -> dict:
         kind = variant.get("kind")
         if kind not in VARIANT_KINDS:
             raise ManifestError(f"variant {name!r} kind must be one of {sorted(VARIANT_KINDS)}")
-        if kind == "dial" and "dials" not in variant:
-            raise ManifestError(f"dial variant {name!r} requires a dials object")
-        if "dials" in variant:
-            dials = variant["dials"]
-            if not isinstance(dials, dict):
-                raise ManifestError(f"variant {name!r} dials must be an object")
-            for dial, value in dials.items():
-                if not isinstance(dial, str) or not dial or not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(float(value)):
-                    raise ManifestError(f"variant {name!r} has an invalid dial value for {dial!r}")
         for field in ("base_url", "model", "system_prompt", "prompt_prefix", "prompt_suffix"):
             if field in variant and not isinstance(variant[field], str):
                 raise ManifestError(f"variant {name!r} {field} must be a string")
@@ -176,7 +165,7 @@ _SEMANTIC_DEFAULT_FIELDS = (
 )
 _SEMANTIC_VARIANT_FIELDS = (
     "name", "kind", "system_prompt", "prompt_prefix", "prompt_suffix",
-    "dials", "max_tokens", "temperature", "top_p", "top_k", "repeat_penalty",
+    "max_tokens", "temperature", "top_p", "top_k", "repeat_penalty",
 )
 _SEMANTIC_CASE_FIELDS = ("name", "prompt", "messages", "expect", "prove")
 
@@ -413,31 +402,6 @@ class ExperimentClient:
             raise ExperimentClientError("completion returned no clozn_run_id and the run journal was empty")
         return response, self.get_run(run_id)
 
-    @contextmanager
-    def dial_state(self, desired: dict | None):
-        """Temporarily apply an exact dial state and always restore the gateway's prior state."""
-        if desired is None:
-            yield
-            return
-        axes_response = self.request("POST", "/steer/axes", {})
-        axes = axes_response.get("axes") if isinstance(axes_response, dict) else None
-        if not isinstance(axes, list):
-            raise ExperimentClientError("gateway did not expose /steer/axes for a dial variant")
-        prior = {a.get("name"): float(a.get("value", 0.0)) for a in axes if isinstance(a, dict) and a.get("name")}
-        unknown = sorted(set(desired) - set(prior))
-        if unknown:
-            raise ExperimentClientError(f"gateway does not provide requested dial(s): {', '.join(unknown)}")
-        try:
-            for name in prior:
-                self.request("POST", "/steer/set", {"name": name, "value": float(desired.get(name, 0.0))})
-            yield
-        finally:
-            for name, value in prior.items():
-                try:
-                    self.request("POST", "/steer/set", {"name": name, "value": value})
-                except Exception:
-                    pass
-
 
 def _messages(case: dict, variant: dict) -> list:
     messages = copy.deepcopy(case.get("messages") or [{"role": "user", "content": case["prompt"]}])
@@ -522,34 +486,32 @@ def run_manifest(raw_manifest: dict, *, default_url: str = DEFAULT_URL, seeds_ov
         url = variant.get("base_url") or defaults.get("base_url") or default_url
         client = clients.setdefault(url, client_factory(url))
         try:
-            dial_context = client.dial_state(variant.get("dials") if "dials" in variant else None)
-            with dial_context:
-                for suite_name in ("target", "guard"):
-                    for case in manifest["suites"][suite_name]["cases"]:
-                        for seed in seeds:
-                            try:
-                                params = {k: defaults[k] for k in ("max_tokens", "temperature", "top_p", "top_k", "repeat_penalty") if k in defaults}
-                                params.update({k: variant[k] for k in ("max_tokens", "temperature", "top_p", "top_k", "repeat_penalty") if k in variant})
-                                params["seed"] = seed
-                                model = variant.get("model") or defaults.get("model") or "clozn"
-                                messages = _messages(case, variant)
-                                _response, run = client.generate(messages, model=model, params=params)
-                                if case.get("expect") or case.get("prove"):
-                                    eval_case = dict(case)
-                                    eval_case["prompt"] = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "experiment case")
-                                    eval_case.pop("messages", None)
-                                    evaluated = testkit_ci.run_case(eval_case, _RecordedClient(run, client))
-                                    status, assertions = evaluated.status, evaluated.assertions
-                                    min_conf, receipts, error = evaluated.min_confidence, evaluated.receipts, evaluated.error or evaluated.prove_error
-                                else:
-                                    status, assertions, min_conf, receipts, error = "unscored", [], None, None, None
-                                cells.append({"suite": suite_name, "case": case["name"], "variant": variant["name"],
-                                              "variant_kind": variant["kind"], "seed": seed, "status": status,
-                                              "run_id": run.get("id"), "response": run.get("response"),
-                                              "assertions": assertions, "min_confidence": min_conf,
-                                              "receipts": receipts, "error": error, "run": run})
-                            except Exception as exc:
-                                cells.append(_cell_error(suite_name, case, variant, seed, exc))
+            for suite_name in ("target", "guard"):
+                for case in manifest["suites"][suite_name]["cases"]:
+                    for seed in seeds:
+                        try:
+                            params = {k: defaults[k] for k in ("max_tokens", "temperature", "top_p", "top_k", "repeat_penalty") if k in defaults}
+                            params.update({k: variant[k] for k in ("max_tokens", "temperature", "top_p", "top_k", "repeat_penalty") if k in variant})
+                            params["seed"] = seed
+                            model = variant.get("model") or defaults.get("model") or "clozn"
+                            messages = _messages(case, variant)
+                            _response, run = client.generate(messages, model=model, params=params)
+                            if case.get("expect") or case.get("prove"):
+                                eval_case = dict(case)
+                                eval_case["prompt"] = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "experiment case")
+                                eval_case.pop("messages", None)
+                                evaluated = testkit_ci.run_case(eval_case, _RecordedClient(run, client))
+                                status, assertions = evaluated.status, evaluated.assertions
+                                min_conf, receipts, error = evaluated.min_confidence, evaluated.receipts, evaluated.error or evaluated.prove_error
+                            else:
+                                status, assertions, min_conf, receipts, error = "unscored", [], None, None, None
+                            cells.append({"suite": suite_name, "case": case["name"], "variant": variant["name"],
+                                          "variant_kind": variant["kind"], "seed": seed, "status": status,
+                                          "run_id": run.get("id"), "response": run.get("response"),
+                                          "assertions": assertions, "min_confidence": min_conf,
+                                          "receipts": receipts, "error": error, "run": run})
+                        except Exception as exc:
+                            cells.append(_cell_error(suite_name, case, variant, seed, exc))
         except Exception as exc:
             for suite_name in ("target", "guard"):
                 for case in manifest["suites"][suite_name]["cases"]:

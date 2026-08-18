@@ -1,8 +1,8 @@
 # Model support and qualification
 
 **Thesis:** model support is an evidence ladder, not a yes/no label. Clozn's core is built around
-autoregressive GGUF capabilities, while white-box writes, calibrated dials, J-lenses, and SAEs require
-increasingly model-specific evidence or artifacts.
+autoregressive GGUF capabilities, while white-box writes, J-lenses, and SAEs require increasingly
+model-specific evidence or artifacts.
 
 > **Status (2026-07-17):** engine-side chat templating and cross-family Tier-0 core support have shipped.
 > The checked-in [Wave 1 qualification ledger](qualification/wave1.json) records CPU basic/deep smoke on
@@ -18,7 +18,6 @@ The ordered qualification levels are the ones serialized in `docs/qualification/
 | **Discovered** | GGUF identity, architecture, dimensions, tokenizer, and embedded chat template can be read | no training |
 | **Core** | chat, OpenAI/native streaming, run persistence, scoring, receipts, worker restart, and cleanup | run basic + deep smoke |
 | **White-box** | activation taps, steering writes, and teacher-forced scoring work at valid layers for this architecture | targeted read/write qualification |
-| **Calibrated** | model-scoped dial directions and safe ranges passed their sweep | forward-pass sweep + curation |
 | **Lens-qualified** | a model-scoped J-lens manifest and payload passed identity, checksum, dimension, and quant-transfer checks | offline fit + transfer qualification |
 
 SAE concept atlases are a separate bespoke feature: they require a compatible trained SAE and are never
@@ -44,13 +43,13 @@ the qualification ledger rather than prose so a marketing sentence cannot silent
 
 ## Current qualification roster
 
-| Family / exact checkpoint | Core | White-box | Dials | J-lens |
-|---|---|---|---|---|
-| Qwen 2.5 — `Qwen/Qwen2.5-7B-Instruct` | deep CPU 26/26 | partial | legacy global library; model-scoped recalibration required | exact Q4_K_M qualified |
-| Llama 3.1 — `meta-llama/Llama-3.1-8B-Instruct` | basic 24/24 + deep 26/26 CPU | native probe startup passed; targeted writes pending | pending | pending |
-| Qwen 3.5 — `Qwen/Qwen3.5-9B` | basic 24/24 + deep 26/26 CPU | native probe startup passed; targeted writes pending | pending | pending |
-| Gemma 4 — `google/gemma-4-E4B-it` | basic 24/24 + deep 26/26 CPU; full Jinja template passed | native probe startup passed; targeted writes pending | pending | pending |
-| Ministral 3 — `mistralai/Ministral-3-3B-Instruct-2512` | basic 24/24 + deep 26/26 CPU | native probe startup passed; targeted writes pending | pending | pending |
+| Family / exact checkpoint | Core | White-box | J-lens |
+|---|---|---|---|
+| Qwen 2.5 — `Qwen/Qwen2.5-7B-Instruct` | deep CPU 26/26 | partial | exact Q4_K_M qualified |
+| Llama 3.1 — `meta-llama/Llama-3.1-8B-Instruct` | basic 24/24 + deep 26/26 CPU | native probe startup passed; targeted writes pending | pending |
+| Qwen 3.5 — `Qwen/Qwen3.5-9B` | basic 24/24 + deep 26/26 CPU | native probe startup passed; targeted writes pending | pending |
+| Gemma 4 — `google/gemma-4-E4B-it` | basic 24/24 + deep 26/26 CPU; full Jinja template passed | native probe startup passed; targeted writes pending | pending |
+| Ministral 3 — `mistralai/Ministral-3-3B-Instruct-2512` | basic 24/24 + deep 26/26 CPU | native probe startup passed; targeted writes pending | pending |
 
 This table summarizes `wave1.json`; the JSON is authoritative when prose and the ledger disagree.
 
@@ -61,13 +60,10 @@ This table summarizes `wave1.json`; the JSON is authoritative when prose and the
    model identity/config contract instead of growing more filename heuristics.
 2. **White-box portability needs targeted writes.** Core smoke is cross-family; tap/write/score parity is
    not yet fully qualified for the four non-Qwen Wave 1 rows. This is the honest boundary on “any GGUF.”
-3. **Dials are model- and substrate-scoped.** A direction and safe range calibrated on Qwen2.5/PyTorch
-   cannot be relabeled as qualified on another checkpoint or on the C++ substrate. Each model gets its
-   own survivors and limits.
-4. **J-lenses are fit per model.** Application is forward-only C++, but fitting requires the PyTorch lab
+3. **J-lenses are fit per model.** Application is forward-only C++, but fitting requires the PyTorch lab
    and every product quant needs transfer evidence. The Qwen2.5-7B qualification record proves the path,
    not a universal artifact.
-5. **SAEs remain bespoke.** The existing Qwen SAE/concept stack does not generalize without a compatible
+4. **SAEs remain bespoke.** The existing Qwen SAE/concept stack does not generalize without a compatible
    trained SAE and matching identity/dimensions.
 
 ## Next qualification work
@@ -75,8 +71,7 @@ This table summarizes `wave1.json`; the JSON is authoritative when prose and the
 1. Finish the artifact-contract/model-registry lane already tracked as in progress in `BACKLOG.md`.
 2. Run targeted `/harvest`, `/state`/steer, and `/score` qualification on at least one non-Qwen Wave 1
    architecture, then record the exact result and GGUF digest in `wave1.json`.
-3. Produce model-scoped dial sweeps; do not inherit Qwen's safe ranges.
-4. Fit and quant-transfer a second-family J-lens before describing J-lens availability as cross-family.
+3. Fit and quant-transfer a second-family J-lens before describing J-lens availability as cross-family.
 
 The former speculative “latest model” roster was removed from this status document. Model popularity,
 download counts, and hardware-fit estimates are time-sensitive selection inputs, not runtime evidence.

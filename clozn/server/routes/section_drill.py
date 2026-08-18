@@ -3,8 +3,8 @@ found by /runs/<id>/section-influence -- "which sentence", not just "which secti
 
 WHY THIS EXISTS. Section-influence (section_influence.py) answers "which SECTION of the prompt mattered"
 -- a ranked list of shares over the run's own `sections` manifest. That's the right first cut, but a
-section can be a whole RAG paragraph, a multi-sentence memory card, or a few-shot block, and "this whole
-paragraph has 71% influence" is often not the end of the investigation -- the natural next question is
+section can be a whole RAG paragraph or a few-shot block, and "this whole paragraph has 71% influence"
+is often not the end of the investigation -- the natural next question is
 "which SENTENCE inside it actually carried that". This route answers that, at the granularity
 clozn.runs.sections.drill_split finds (sentence/line-level spans), by re-running the EXACT SAME
 teacher-forced machinery section-influence uses, just against finer synthetic sections instead of the

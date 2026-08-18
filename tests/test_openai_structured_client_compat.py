@@ -48,19 +48,6 @@ THINK_RAW_OUTPUT = (
 NATIVE_PIPELINE = dict(sio.NATIVE_WORKER_PIPELINE)
 
 
-class _Memory:
-    memory_strength = 1.0
-    rules = []
-    prefix = None
-
-
-class _Steer:
-    strength = {}
-
-    def active(self):
-        return {}
-
-
 class _StructuredSubstrate:
     """Model-free stand-in for EngineSubstrate's atomic native chat seam.
 
@@ -74,8 +61,6 @@ class _StructuredSubstrate:
     template_fingerprint = TEMPLATE_FINGERPRINT
 
     def __init__(self):
-        self.memory = self._mem = _Memory()
-        self.steer = _Steer()
         self._finish = "stop"
         self.native_calls = []
         self.engine = self._Engine(self)

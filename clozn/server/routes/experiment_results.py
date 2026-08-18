@@ -14,8 +14,8 @@ clozn.schemas.validate(doc, "clozn.experiment.result.v0") rather than trusting s
 WHY /experiment-results, NOT /experiments/<id>
 ------------------------------------------------
 GET /experiments/types already exists (clozn/server/routes/receipts.py) as the capability catalog for
-the UNRELATED single-run "change one thing" drawer primitive (clozn.experiments.experiment -- ablate a
-dial, swap a concept, re-roll, ...). Nesting case x variant x seed suite results under /experiments/<id>
+the UNRELATED single-run "change one thing" drawer primitive (clozn.experiments.experiment -- swap a
+concept, edit a turn, re-roll, ...). Nesting case x variant x seed suite results under /experiments/<id>
 would share a path prefix with that catalog for no reason beyond both modules containing the English
 word "experiment". A distinct top-level segment avoids the collision outright instead of relying on a
 real experiment_id never happening to equal "types".

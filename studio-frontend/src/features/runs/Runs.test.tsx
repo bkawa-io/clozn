@@ -25,8 +25,6 @@ function run(overrides: Partial<RunSummary> = {}): RunSummary {
     finishReason: "stop_sequence",
     flags: [],
     warningCount: 0,
-    activeDialCount: 0,
-    memoryCardCount: 0,
     ...overrides,
   };
 }

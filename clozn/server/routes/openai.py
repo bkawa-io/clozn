@@ -455,8 +455,10 @@ def try_post(h, p, body):
     # says nothing about `clozn_guard` always takes the ordinary generation path below, regardless of
     # anything configured on any earlier request. Parsed here, before the structured-output/streaming
     # logic below, because a guarded generation bypasses ALL of that in this first cut (see the module
-    # docstring's SCOPE LIMITS section) -- composing the guard with tone dials, corrective retries, or
-    # structured output is deferred, not silently dropped. `guard_spec` is None whenever the request
+    # docstring's SCOPE LIMITS section) -- composing the guard with corrective retries or structured
+    # output is deferred, not silently dropped (named-dial personalization, the third surface this
+    # comment used to list, was cut from the product entirely; there is nothing left there to compose
+    # with). `guard_spec` is None whenever the request
     # omits `clozn_guard`; every line below this block then runs completely unchanged, so the
     # byte-identical-when-absent contract holds regardless of where the guard sits in this function.
     from clozn.server import generation_guard

@@ -27,25 +27,8 @@ TOOL_SPEC = {
 }
 
 
-class _Memory:
-    memory_strength = 1.0
-    rules = []
-    prefix = None
-
-
-class _Steer:
-    strength = {}
-
-    def active(self):
-        return {}
-
-
 class _Substrate:
     name = "engine"
-
-    def __init__(self):
-        self.memory = self._mem = _Memory()
-        self.steer = _Steer()
 
     @staticmethod
     def _fill(messages, mem_out):

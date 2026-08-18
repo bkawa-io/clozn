@@ -1,8 +1,8 @@
 """End-to-end contracts for the Ollama-shaped entrance to Clozn's runtime.
 
 The important compatibility invariant is not merely that the response looks like
-Ollama.  /api/chat and /api/generate must cross the active Substrate.chat seam so
-memory, steering, per-token trace capture, finish reasons, and the run journal all
+Ollama.  /api/chat and /api/generate must cross the active substrate's chat seam so
+the prompt manifest, per-token trace capture, finish reasons, and the run journal all
 observe the same execution.  These tests drive the real handler without a model or
 socket and resolve the returned X-Clozn-Run-Id against an isolated journal.
 """
@@ -19,26 +19,11 @@ import clozn.runs.store as runlog
 from clozn.server import app as cs
 
 
-class FakeSteer:
-    strength = {"grounded": 0.4}
-
-    def active(self):
-        return dict(self.strength)
-
-
-class FakeMemory:
-    memory_strength = 0.75
-    prefix = None
-    rules = []
-
-
 class InstrumentedSub:
     name = "engine"
     brain = None
 
     def __init__(self, *, fail=False):
-        self._mem = self.memory = FakeMemory()
-        self.steer = FakeSteer()
         self.fail = fail
         self.calls = []
         self._meta = {"model_id": "fake-qwen", "sampler_mode": "sample",

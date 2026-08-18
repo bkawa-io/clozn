@@ -86,12 +86,16 @@ a dedicated intervention measurement.
 
 ## Behavior
 
-**Primary use:** configure and apply supported interventions.
+**Primary use:** run one-shot corrective retries against a recorded answer and set runtime decoding
+defaults.
 
-**Owns:** dials, concepts, memory operations, pending/applied/failed/reverted state, and consequence
-previews backed by real routes.
+**Owns:** the corrective-retry registry (preview/confirm/keep/undo, shared verbatim with Lens's own
+"Fix this answer" slot via `src/data/correctiveFlow.ts`), runtime sampling defaults (temperature,
+top-p, top-k, repeat penalty), pending/applied/failed/reverted state, and consequence previews backed
+by real routes.
 
-**Does not own:** run history, general diagnosis, or comparison conclusions.
+**Does not own:** run history, general diagnosis, comparison conclusions, or any persisted,
+user-facing steering control -- there is none.
 
 ## Primary workflow
 

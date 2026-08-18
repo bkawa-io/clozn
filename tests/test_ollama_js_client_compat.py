@@ -28,25 +28,10 @@ CLIENT_DIR = Path(__file__).with_name("clients")
 PROBE = CLIENT_DIR / "ollama-js-probe.mjs"
 
 
-class _Memory:
-    memory_strength = 1.0
-    rules = []
-    prefix = None
-
-
-class _Steer:
-    strength = {}
-
-    def active(self):
-        return {}
-
-
 class _Substrate:
     name = "engine"
 
     def __init__(self):
-        self.memory = self._mem = _Memory()
-        self.steer = _Steer()
         self._finish = "stop"
         self._stream_trace = []
 

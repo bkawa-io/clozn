@@ -207,8 +207,6 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
                            const std::function<void(const Event&)>& on_event,
                            const SampleConfig& sample,
                            const ConceptProbes* read_probes,
-                           const std::vector<float>* prefix_embd,
-                           int prefix_rows,
                            const std::vector<int>* reference,
                            const GrammarConfig* grammar,
                            const EngineCheckpoint* resume_from,
@@ -228,10 +226,6 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
         if (resume_truncate_to >= 0 &&
             (resume_truncate_to < 1 || resume_truncate_to > resume_from->n_past))
             throw std::invalid_argument("resume_truncate_to out of range [1, resume_from->n_past]");
-        if (prefix_embd != nullptr && prefix_rows > 0)
-            throw std::invalid_argument("resume_from cannot be combined with a soft prefix (the "
-                                        "prefix is already inside the saved KV, if it was there "
-                                        "at checkpoint time)");
     } else if (resume_truncate_to >= 0) {
         throw std::invalid_argument("resume_truncate_to requires resume_from");
     }
@@ -284,13 +278,7 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
     // (it's on the context, independent of the attention mode).
     if (resume_from == nullptr) adapter.set_causal(true);
 
-    // Optional: splice a PyTorch-trained soft prefix in ahead of the prompt (fills KV [0, prefix_rows))
-    // so a memory learned on the HF model shapes this ggml generation. The prompt then decodes at n_past=base.
-    int base = 0;
-    if (prefix_embd != nullptr && prefix_rows > 0) {
-        adapter.ar_forward_embd(*prefix_embd, prefix_rows, 0);
-        base = prefix_rows;
-    }
+    const int base = 0;  // n_past the prompt decode starts from
 
     std::mt19937_64 rng(sample.seed);
     if (sample.rng_discard > 0) rng.discard(sample.rng_discard);  // sampled-resume fast-forward
@@ -509,7 +497,6 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
     PerformancePhase prefill_phase{"prefill", "clozn_worker", prefill_ns,
         std::chrono::duration_cast<std::chrono::nanoseconds>(prefill_start - t_start).count()};
     if (resume_from != nullptr) prefill_phase.includes = {"kv_restore", "bridge_decode"};
-    if (prefix_embd != nullptr && prefix_rows > 0) prefill_phase.includes.push_back("soft_prefix");
     timing_phases.push_back(std::move(prefill_phase));
     timing_phases.push_back(PerformancePhase{
         "decode", "clozn_worker", decode_ns,

@@ -8,7 +8,7 @@ the existing fail-closed artifact contracts.
 
 The returned document is a receipt, not a marketing claim.  ``qualification_status`` is
 ``not_qualified`` until every required capability has evidence; a successful core smoke does not
-implicitly qualify dials, J-lenses, or white-box features.
+implicitly qualify J-lenses or white-box features.
 """
 from __future__ import annotations
 
@@ -151,13 +151,12 @@ def build_run(model: str, *, identity: Mapping[str, Any] | None = None,
               generated_at: str | None = None, live: bool = False,
               live_smoke: Callable[[str], Mapping[str, Any]] | None = None,
               smoke_timeout: float = 180.0,
-              calibration: Mapping[str, Any] | None = None,
               jlens: Mapping[str, Any] | None = None,
               batteries: Sequence[Mapping[str, Any]] | None = None) -> dict[str, Any]:
     """Build and validate one Q3--Q8 receipt.
 
     ``identity`` and ``live_smoke`` are injectable to keep model-free tests deterministic.  In
-    normal use a local GGUF is hashed and ``live=True`` starts the real runtime.  Q4/Q5/Q6 inputs
+    normal use a local GGUF is hashed and ``live=True`` starts the real runtime.  Q5/Q6 inputs
     are already-produced step receipts; this function does not treat a missing lab result as a pass.
     """
     if not isinstance(model, str) or not model.strip():
@@ -204,13 +203,6 @@ def build_run(model: str, *, identity: Mapping[str, Any] | None = None,
     steps.append(_step("white_box", "product", "not_run",
                        reason="white-box capability requires targeted engine probes"))
 
-    calibration_step = dict(calibration or {})
-    if calibration_step:
-        steps.append(_step("dials", "lab", str(calibration_step.get("status", "failed")),
-                           evidence=calibration_step.get("evidence"), reason=calibration_step.get("reason")))
-    else:
-        steps.append(_step("dials", "lab", "not_run",
-                           reason="Q4 calibration has not been supplied"))
     jlens_step = dict(jlens or {})
     if jlens_step:
         steps.append(_step("jlens", "lab", str(jlens_step.get("status", "failed")),

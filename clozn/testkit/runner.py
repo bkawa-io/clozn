@@ -22,15 +22,13 @@ Two assertion classes -- kept clearly separated below, and in every result's `ch
     <any REPRO_META_KEYS name> (seed, quant, n_ctx, device, sampler_mode, ...) -- run["meta"][name]
     min_confidence / max_confidence (overall, or `"at": <token index>`)        -- trace["confidence"]
     max_entropy (overall, or `"at": <token index>`)                            -- trace["topk_entropy"]
-    card_applied {"card": id-or-text}                              -- memory["cards_applied"/"applied_ids"]
-    relevance_at_least {"card": ..., "value": float}               -- memory["relevance"] (per-card cosine)
     alternative_present {"value": piece, "at": optional index}     -- trace["alternatives"]
 
   CAUSAL (opt-in; needs a live substrate -- runs receipts.py's leave-one-out ablation seam):
-    leans_on {"card": id-or-text} | {"dial": name}, "min_effect": float (default 0.0)
-        -> receipts.receipt(run, {"card_id": ...} | {"dial": ...}, sub); passes only when the ablation
-           actually verified (`causal_verified` truthy) AND showed an effect (`has_effect` True) at least
-           `min_effect` (a 0..1 fraction of receipt_metrics()'s word-type "changed" delta).
+    leans_on {"card": id-or-text}, "min_effect": float (default 0.0)
+        -> receipts.receipt(run, {"card_id": ...}, sub); passes only when the ablation actually verified
+           (`causal_verified` truthy) AND showed an effect (`has_effect` True) at least `min_effect` (a
+           0..1 fraction of receipt_metrics()'s word-type "changed" delta).
 
 HONESTY RULE (non-negotiable): a causal assertion that cannot be verified -- no substrate/fetcher supplied,
 the receipt seam itself returned nothing, or `causal_verified` came back False (internalized memory mode,
@@ -59,8 +57,7 @@ STATUSES = ("pass", "fail", "skip", "error")
 _STATUS_RANK = {"pass": 0, "skip": 1, "fail": 2, "error": 3}
 
 STATIC_CHECKS = ("contains", "not_contains", "matches", "equals", "finish_reason",
-                 "min_confidence", "max_confidence", "max_entropy",
-                 "card_applied", "relevance_at_least", "alternative_present")
+                 "min_confidence", "max_confidence", "max_entropy", "alternative_present")
 CAUSAL_CHECKS = ("leans_on",)
 
 # The exact repro-meta field names a spec may check by name (mirrors receipt_bundle.REPRO_META_KEYS so the
@@ -126,23 +123,6 @@ def _worst(statuses) -> str:
         if r > rank:
             rank, worst = r, s
     return worst if seen else "error"
-
-
-def _find_card(memory: dict, ref):
-    """Resolve a spec's `card` reference (an id, or a text snippet) against this run's applied cards.
-    Tries an exact id match first (applied_ids), then a case-insensitive substring match against the card
-    texts (cards_applied) -- so a spec can name a card by its stable id OR by a human-readable fragment of
-    what it says. Returns (index, id, text) for the first match, or None."""
-    texts = _as_list(memory.get("cards_applied"))
-    ids = _as_list(memory.get("applied_ids"))
-    ref_s = str(ref)
-    for i, cid in enumerate(ids):
-        if cid is not None and str(cid) == ref_s:
-            return i, cid, texts[i] if i < len(texts) else None
-    for i, t in enumerate(texts):
-        if ref_s.lower() in str(t).lower():
-            return i, ids[i] if i < len(ids) else None, t
-    return None
 
 
 # ============================================================================================ static checks
@@ -271,39 +251,6 @@ def _eval_max_entropy(run, a, name):
     return _result(name, "max_entropy", target, value, actual, "pass" if ok else "fail")
 
 
-def _eval_card_applied(run, a, name):
-    card = a.get("card")
-    if not card:
-        return _result(name, "card_applied", "memory.cards_applied", card, None, "error",
-                       "card_applied needs a 'card'")
-    found = _find_card(_as_dict(run.get("memory")), card)
-    actual = found[2] if found else None
-    return _result(name, "card_applied", "memory.cards_applied", card, actual,
-                   "pass" if found else "fail")
-
-
-def _eval_relevance_at_least(run, a, name):
-    card = a.get("card")
-    value = _as_float(a.get("value"))
-    if not card or value is None:
-        return _result(name, "relevance_at_least", "memory.relevance", a.get("value"), None, "error",
-                       "relevance_at_least needs a 'card' and a numeric 'value'")
-    memory = _as_dict(run.get("memory"))
-    found = _find_card(memory, card)
-    if not found:
-        return _result(name, "relevance_at_least", "memory.relevance", value, None, "fail",
-                       f"card {card!r} was not found among this run's applied cards")
-    idx = found[0]
-    rel = _as_list(memory.get("relevance"))
-    if idx >= len(rel) or rel[idx] is None:
-        return _result(name, "relevance_at_least", "memory.relevance", value, None, "error",
-                       "no relevance recorded for this card on this run")
-    actual = float(rel[idx])
-    ok = actual >= value
-    return _result(name, "relevance_at_least", f"memory.relevance[{card}]", value, actual,
-                   "pass" if ok else "fail")
-
-
 def _alt_pieces(alts) -> list[str]:
     out = []
     for a in alts or []:
@@ -345,8 +292,6 @@ STATIC_DISPATCH = {
     "min_confidence": _eval_min_confidence,
     "max_confidence": _eval_max_confidence,
     "max_entropy": _eval_max_entropy,
-    "card_applied": _eval_card_applied,
-    "relevance_at_least": _eval_relevance_at_least,
     "alternative_present": _eval_alternative_present,
 }
 
@@ -385,17 +330,15 @@ def judge_receipt(rec: dict | None, min_effect: float) -> tuple[str, object, str
 
 def _eval_causal(run, a, name, sub, fetch_receipt):
     check = a.get("check")
-    card, dial = a.get("card"), a.get("dial")
+    card = a.get("card")
     min_effect = _as_float(a.get("min_effect"))
     if min_effect is None:
         min_effect = 0.0
     if card:
         influence, target = {"card_id": card}, f"card:{card}"
-    elif dial:
-        influence, target = {"dial": dial}, f"dial:{dial}"
     else:
         return _result(name, check, "leans_on", a.get("min_effect"), None, "error",
-                       "leans_on needs a 'card' or a 'dial'")
+                       "leans_on needs a 'card'")
 
     if fetch_receipt is None and sub is None:
         return _result(name, check, target, min_effect, None, "skip",

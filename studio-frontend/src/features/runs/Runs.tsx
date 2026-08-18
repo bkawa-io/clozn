@@ -335,15 +335,6 @@ function RunSignals({ run, state }: { run: RunSummary; state: RunLedgerStatus })
       title: "Recorded diagnostic warnings for this run.",
     });
   }
-  if (run.activeDialCount > 0) {
-    signals.push({
-      id: "dials",
-      tone: "info",
-      label: `${run.activeDialCount} DIAL${run.activeDialCount === 1 ? "" : "S"}`,
-      title: "Tone dials were active when this run generated.",
-    });
-  }
-
   if (!signals.length) return null;
   return (
     <span className="run-card-signals" aria-label={`Signals for ${runLabel(run)}`}>
@@ -705,12 +696,8 @@ export function Runs({ runtime, inspectorOpen }: RunsProps) {
 
               <div className="runs-flags">
                 {selected.flags.map((flag) => <span key={flag}>{flag}</span>)}
-                {selected.activeDialCount > 0 && <span>{selected.activeDialCount} DIALS</span>}
-                {selected.memoryCardCount > 0 && <span>{selected.memoryCardCount} MEMORY</span>}
                 {selected.warningCount > 0 && <span>{selected.warningCount} WARNINGS</span>}
                 {selected.flags.length === 0
-                  && selected.activeDialCount === 0
-                  && selected.memoryCardCount === 0
                   && selected.warningCount === 0
                   && <span>NO FLAGS</span>}
               </div>

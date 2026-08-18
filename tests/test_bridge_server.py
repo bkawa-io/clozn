@@ -38,28 +38,10 @@ import clozn.runs.store as runlog                # noqa: E402
 # sample, trace_out=, mem_out=); its stream path (exercised only by the one streaming-sanity test below)
 # calls chat_stream(messages, max_new, mem_out=). ---------------------------------------------------------
 
-class FakeSteer:
-    def __init__(self, strength=None):
-        self.strength = dict(strength or {})
-
-    def active(self):
-        return {k: v for k, v in self.strength.items() if v}
-
-
-class FakeMem:
-    def __init__(self, strength=1.0):
-        self.memory_strength = float(strength)
-        self.rules = []
-        self.prefix = None
-
-
 class FakeSub:
     name = "qwen"
 
     def __init__(self, finish_reason="stop"):
-        self.memory = FakeMem()
-        self._mem = self.memory
-        self.steer = FakeSteer()
         self.calls = 0
         self.finish_reason = finish_reason
         self._run_meta = {"model_id": "fake-qwen", "sampler_mode": "greedy",
@@ -100,9 +82,6 @@ class NoFinishSub:
     name = "qwen"
 
     def __init__(self):
-        self.memory = FakeMem()
-        self._mem = self.memory
-        self.steer = FakeSteer()
         self._run_meta = {"model_id": "legacy-fake-qwen", "sampler_mode": "sample",
                           "sampling": "sample", "temperature": 0.7}
 
@@ -121,32 +100,6 @@ class NoFinishSub:
 
     def run_meta(self):
         return dict(self._run_meta)
-
-
-class PromptCaptureSub(FakeSub):
-    def chat(self, messages, max_new=256, sample=True, trace_out=None, mem_out=None):
-        self._run_meta.update(max_tokens=int(max_new), stream=False, prompt_tokens=13)
-        block = "You are a helpful assistant talking with a returning user.\n- Keep it brief."
-        assembled = [{"role": "system", "content": block}] + [dict(m) for m in messages]
-        if mem_out is not None:
-            mem_out.update(mode="prompt",
-                           applied=[{"id": None, "text": "Keep it brief.", "relevance": 0.82}],
-                           candidate_cards=[{"id": None, "text": "Keep it brief."}],
-                           omitted_cards=[], selection_stage="active_prompt_cards_considered_by_turn_gate",
-                           baseline_prompt_tokens=7, gate=0.91, prompt_block=block,
-                           assembled_messages=assembled)
-        return "Brief reply."
-
-
-class InternalizedSub(FakeSub):
-    def __init__(self):
-        super().__init__()
-        self.memory.prefix = "PREFIX"
-        self.memory.rules = ["Keep it brief."]
-
-    def chat(self, messages, max_new=256, sample=True, trace_out=None, mem_out=None):
-        self._run_meta.update(max_tokens=int(max_new), stream=False)
-        return "Prefix-shaped reply."
 
 
 # --- driving the real handler without a socket (mirrors test_counterfactual_server / test_narrate_server) ---

@@ -295,12 +295,6 @@ def to_markdown(bundle: dict | None) -> str:
         if bits:
             lines.append("\n_" + " - ".join(bits) + "_")
 
-    dials = _dict(_dict(run.get("behavior")).get("active_dials"))
-    if dials:
-        lines.append("\n## Behavior dials")
-        for key, val in dials.items():
-            lines.append(f"- {key}: {val}")
-
     confidence = _dict(xr.get("confidence"))
     if confidence.get("available"):
         lines.append("\n## Token trace")

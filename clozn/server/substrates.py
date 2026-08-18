@@ -1,10 +1,12 @@
-"""Product model adapter + the shared studio-surface base.
+"""Product model adapter.
 
 ``EngineSubstrate`` is the only product-serving adapter (it talks to the C++ worker over HTTP -- no
-Torch). ``Substrate`` is the shared base carrying the studio surface (prompt-card memory + tone dials),
-inherited by both the product adapter here and the PyTorch lab adapters. The Torch lab adapters
-The Torch lab adapters were deleted with the memory program on 2026-07-27; a product process has no
-Torch adapter to import, and the gateway has no loader or route that could activate one.
+Torch), and the only substrate class left in this module. It used to be joined by ``Substrate``, a
+shared base carrying the studio surface (prompt-card memory + tone dials) that both this adapter and
+the PyTorch lab adapters inherited from -- the Torch lab adapters were deleted with the memory program
+on 2026-07-27 (a product process has no Torch adapter to import, and the gateway has no loader or route
+that could activate one), and ``Substrate`` itself was retired with the rest of named-dial
+personalization: it existed only to carry the /memory/* + /steer/* dispatch, and nothing else.
 The app module remains the seam:
 mutable server state (SUB/SUBNAME/ENGINE*/SLOTS/...) and the helpers routes and tests patch live there,
 and this module reads them through `ctx` (late-bound, so a monkeypatch on the app module is always
@@ -21,29 +23,6 @@ import time
 
 from clozn.server.config import REPO_ROOT, DEMO                        # noqa: F401
 from clozn.server import app as ctx   # the seam: live server state + patchable helpers (see docstring)
-
-
-def _load_calibration_file(path: str) -> dict:
-    """Read ONE exact model's dial calibration off disk. Deliberately takes a full path instead of a
-    dial name + global lookup: the caller already knows which GGUF it is asking about, and routing
-    through global state is what let one model inherit another's ceilings. Missing/broken -> {},
-    which means "uncalibrated" and therefore the conservative ceiling -- the safe direction to fail.
-
-    Accepts either a flat {dial: {...}} file or the raw sweep's {"dials": {dial: {...}}} shape, and
-    keeps only what a ceiling decision needs."""
-    try:
-        with open(path, encoding="utf-8") as fh:
-            raw = json.load(fh)
-    except Exception:
-        return {}
-    table = raw.get("dials", raw) if isinstance(raw, dict) else {}
-    out = {}
-    for name, entry in (table or {}).items():
-        if not isinstance(entry, dict):
-            continue
-        works = entry.get("works", entry.get("range_valid", True))
-        out[str(name)] = {"usable_max": entry.get("usable_max"), "works": bool(works)}
-    return out
 from clozn.server.request_context import RequestContext   # backlog #2: per-request isolation (see EngineSubstrate)
 
 
@@ -74,149 +53,6 @@ def _experimental_parent_anchor_enabled() -> bool:
         "1", "true", "yes", "on",
     }
 
-class Substrate:
-    """Shared studio surface for any substrate: the /memory/* trait cards and the /steer/* tone dials, on
-    whatever model the subclass loads. A subclass sets self.steer, self._mem (a memory object exposing
-    .rules / .prefix / .consolidate(rules) / .reset()), self._pers_steer, self._steer_ready/_steer_info,
-    and defines _gen(prompt) -- a one-shot generate used by the /steer/check A/B (AR generate vs denoise).
-    So memory + dials are written ONCE and work identically on Qwen and Dream."""
-
-
-
-    def _ensure_steer(self):
-        """Compute the axis vectors once, race-safe (double-checked lock). Two dial calls racing on first
-        use could otherwise both run compute() on the shared model at once and corrupt it (IndexError).
-
-        A dead engine surfaces here as a raw urllib.error.URLError -- self.steer.compute()'s very first
-        harvest() round-trip fails to even connect (EngineClient._request only translates an HTTPError,
-        i.e. the engine responding with a JSON 4xx, into EngineError; a connection refusal propagates
-        unwrapped). Caught here and re-raised as ctx.EngineUnavailable so the caller gets the same clean
-        502 every other engine-touching route uses, instead of a bare URLError reaching app.py's generic
-        500 fallback (engine-down pressure test finding #1)."""
-        if not self._steer_ready:
-            with self._steer_lock:
-                if not self._steer_ready:
-                    import urllib.error
-                    try:
-                        self._steer_info = self.steer.compute()
-                    except urllib.error.URLError as e:
-                        raise ctx.EngineUnavailable(ctx._engine_unreachable_message()) from e
-                    self._steer_ready = True
-
-    def _steer(self, path, body):
-        from clozn.behavior.steering.axes import AXES
-        if path == "/steer/axes":
-            calib = ctx._dial_calibration()   # {} when uncalibrated/offline -- ctx._with_calibration no-ops per axis
-            axes = [ctx._with_calibration(
-                        {"name": k, "poles": AXES[k]["poles"], "value": self.steer.strength.get(k, 0.0),
-                         "max": AXES[k].get("max", 1.5)}, calib.get(k))
-                    for k in AXES]
-            lib_names = ctx._library_dial_names()   # shipped-library custom dials -- NOT user-made, never "yours"
-            for k, v in getattr(self.steer, "custom", {}).items():   # user-defined + shipped-library dials
-                axis = {"name": k, "poles": v["poles"], "value": self.steer.strength.get(k, 0.0), "max": v["max"]}
-                if k in lib_names:
-                    axis["library"] = True     # shipped, curated dial -- distinct from a user's own custom
-                else:
-                    axis["custom"] = True      # unchanged: a genuine user-made dial ("yours" + deletable)
-                axes.append(ctx._with_calibration(axis, calib.get(k)))
-            return {"axes": axes, "ready": self._steer_ready, "substrate": self.name}
-        if path == "/steer/custom_delete":      # a pure dict-pop -- doesn't touch the engine at all, so it
-            # must work (or fail on its OWN terms) even while the engine is down; must NOT sit behind
-            # _ensure_steer()'s unrelated ~35-round-trip calibration harvest (pressure test finding #1b).
-            if hasattr(self.steer, "remove_custom"):
-                self.steer.remove_custom(str(body.get("name", "")))
-                self.steer.save_custom(ctx._pers(f"studio_custom_{self.name}.json"))
-                if self._pers_steer:
-                    self.steer.save_state(self._pers_steer)
-            return {"custom": list(getattr(self.steer, "custom", {}))}
-        if path == "/steer/concept/set":         # Tier-1 #1: any-concept dial (dir(c)) -- ZERO calibration.
-            # A DIFFERENT mechanism (ConceptSteer) from the diff-of-means EngineSteer _ensure_steer()
-            # calibrates -- must not be gated behind that unrelated subsystem's readiness either.
-            import clozn.behavior.steering.concept_dir as concept_dir
-            cs = ctx._engine_concept_steer()
-            if cs is None:
-                return {"error": "concept dials need the product model worker (CLOZN_ENGINE_PORT)"}
-            concept = str(body.get("concept", "")).strip()
-            if not concept:
-                return {"error": "need a concept word"}
-            strength = float(body.get("strength", concept_dir.DEFAULT_STRENGTH))
-            result = cs.steer_toward(concept, strength)
-            result["active"] = cs.active()
-            return result
-        if path == "/steer/concept/check":       # A/B: baseline vs dir(concept)-steered (mirrors /steer/check)
-            import clozn.behavior.steering.concept_dir as concept_dir
-            cs = ctx._engine_concept_steer()
-            if cs is None:
-                return {"error": "concept dials need the product model worker (CLOZN_ENGINE_PORT)"}
-            concept = str(body.get("concept", "")).strip()
-            if not concept:
-                return {"error": "need a concept word"}
-            strength = float(body.get("strength", concept_dir.DEFAULT_STRENGTH))
-            prompt = str(body.get("prompt", ""))[:300]
-            max_new = int(body.get("max_new", 90))
-            base = concept_dir._text_of(cs.ec.complete(prompt, max_tokens=max_new))
-            built = cs.steer_toward(concept, strength)
-            if not built.get("ok"):
-                return {"prompt": prompt, "concept": concept, "strength": strength,
-                        "baseline": base, "steered": None,
-                        "blocked": built.get("blocked"), "note": built.get("note")}
-            steered = concept_dir._text_of(cs.ec.intervene(
-                prompt, vector=built["vector"], coef=built["coef"], layer=built["layer"], max_tokens=max_new))
-            return {"prompt": prompt, "concept": concept, "strength": strength, "layer": built["layer"],
-                    "token_id": built["token_id"], "coef": built["coef"],
-                    "baseline": base, "steered": steered, "note": built.get("note")}
-        self._ensure_steer()                    # compute the axis vectors once on first real use (race-safe)
-        if path == "/steer/compute":
-            return {"ready": True, **self._steer_info}
-        if path == "/steer/set":
-            warning = self.steer.set(str(body["name"]), float(body.get("value", 0.0)))
-            if self._pers_steer:
-                self.steer.save_state(self._pers_steer)
-            result = {"active": self.steer.active()}
-            if warning:
-                # Same message EngineSteer.set() already put on stderr (visible to whoever's running
-                # `clozn serve`) -- also handed back on the wire so an HTTP/Studio caller with no
-                # terminal in view sees it too. One warning, computed once, two audiences.
-                result["warning"] = warning
-            return result
-        if path == "/steer/check":              # A/B one dial: baseline vs steered (subclass _gen)
-            prompt = str(body.get("prompt", ""))[:300]
-            base = self._gen(prompt)
-            # The check is diagnostic, not a settings mutation. Preserve every pre-existing value (including
-            # explicit zeros used by the UI) and the engagement state. The old implementation cleared the
-            # whole live persona after every A/B check, so merely inspecting one dial silently erased all
-            # persisted in-process tone settings until the next restart.
-            prior = dict(getattr(self.steer, "strength", {}) or {})
-            was_engaged = bool(getattr(self.steer, "_engaged", False))
-            self.steer.clear()
-            warning = self.steer.set(str(body["name"]), float(body.get("value", 1.0)))
-            self.steer.engage()
-            try:
-                steered = self._gen(prompt)
-            finally:
-                self.steer.disengage()
-                self.steer.clear()
-                for name, value in prior.items():
-                    self.steer.set(name, value)   # restoring prior state, not a new user action -- its
-                                                   # own warning (if any) already fired when it was set
-                if was_engaged:
-                    self.steer.engage()
-            result = {"prompt": prompt, "axis": body.get("name"), "value": body.get("value", 1.0),
-                      "baseline": base, "steered": steered}
-            if warning:
-                result["warning"] = warning
-            return result
-        if path == "/steer/custom":             # USER-DEFINED dial: compute mean(+pole)-mean(-pole) live
-            if not hasattr(self.steer, "add_custom"):
-                return {"error": "custom dials are not supported on this substrate yet"}
-            name = str(body.get("name", "")).strip()[:24]
-            pos, neg = str(body.get("pos", "")).strip(), str(body.get("neg", "")).strip()
-            if not (name and pos and neg):
-                return {"error": "need a name and both poles (pos, neg)"}
-            info = self.steer.add_custom(name, pos, neg, float(body.get("max", 0.5)))
-            self.steer.save_custom(ctx._pers(f"studio_custom_{self.name}.json"))
-            return {"name": name, "max": info["max"], "custom": list(self.steer.custom)}
-        return None
 
 
 # roadmap feature 01: CLOZN_ENGINE_DISCOVERY_SOURCE/BACKEND/ARTIFACT_SHA256/VERSION/BUILD_ID and
@@ -249,12 +85,14 @@ def _engine_discovery_context() -> dict:
     }
 
 
-class EngineSubstrate(Substrate):
-    """PURE-ENGINE substrate: chat + prompt-mode memory + tone dials on the C++ GGUF runtime, NO PyTorch
-    model resident. THIS is the class that brings the whole torch-free Server tier -- /v1/chat/completions,
-    replay, receipts, explain, narrate, counterfactual -- onto the fast engine, because every one of those
-    routes through SUB.chat(). Memory is prompt-mode only (the card store as a topic-gated system block);
-    dials apply via EngineSteer's steer_vec. See RUNTIME_SPLIT.md (the keystone)."""
+class EngineSubstrate:
+    """PURE-ENGINE substrate: chat on the C++ GGUF runtime, NO PyTorch model resident. THIS is the class
+    that brings the whole torch-free Server tier -- /v1/chat/completions, replay, receipts, explain,
+    narrate -- onto the fast engine, because every one of those routes through SUB.chat(). No memory, no
+    named-dial personalization: both were cut from the product (memory on 2026-07-27, dials in the
+    personalization cut that followed). Raw-vector steering (steer_vec/steer_strengths on score_tokens,
+    /intervene) survives as interpretability/causal-attribution machinery -- see score_tokens' own
+    docstring. See RUNTIME_SPLIT.md (the keystone)."""
 
     name = "engine"
     # The score-many seam is a scheduling wrapper around the same scalar
@@ -268,52 +106,24 @@ class EngineSubstrate(Substrate):
     # engine never adds latency to ordinary calls.
     _IDENTITY_RETRY_COOLDOWN_S = 30.0
 
-    def __init__(self, engine=None, steer=None):
+    def __init__(self, engine=None):
         engine = engine if engine is not None else ctx.ENGINE
         if engine is None:
             raise RuntimeError("engine substrate needs the supervised GGUF worker (set CLOZN_ENGINE_PORT)")
         self.engine = engine
-        if steer is not None:
-            self.steer = steer
-        elif engine is ctx.ENGINE:
-            self.steer = ctx._engine_steer()
-        else:
-            # A routed worker cannot share the process-global EngineSteer that
-            # belongs to the legacy default worker.
-            from clozn.behavior.steering.engine_adapter import EngineSteer
-            self.steer = EngineSteer(engine)
-        if self.steer is not None:               # metadata-only: the shipped library's names/poles/max, so
-            try:                                  # they show up in /steer/axes immediately (their direction
-                self.steer.load_library(ctx._pers("studio_library.json"))   # vectors are computed lazily by compute())
-                self.steer.load_custom(ctx._pers(f"studio_custom_{self.name}.json"))  # + the user's own custom dials
-                # NOTE: the dial CALIBRATION is deliberately NOT loaded here -- see the identity
-                # resolver below. At construction time the model digest is unknown, and
-                # _dial_calibration() would silently fall back to the legacy root file (another
-                # model's numbers). It loads once this exact GGUF's sha256 is known.
-            except Exception:
-                pass
-        # (self._mem / self.memory held _EngineMemory, a card-store-backed memory object, until the
-        # 2026-07-27 cards cut. Nothing personalizes a reply through memory now -- steering does.)
-        self._mem = None
-        self.memory = None
-        self._steer_ready = False
-        self._steer_info = {}
-        self._steer_lock = threading.Lock()
         self.brain = None                       # no SAE/brain on the pure-engine substrate (concepts 409 cleanly)
         # T0.2: reflect the ACTUALLY-LOADED GGUF, not a hardcoded Qwen assumption. Derive the family from
-        # the engine's /health model file (best-effort -- never blocks boot if the engine isn't up yet)
-        # and pin the tone-dial steer tap to THIS model's mid-depth: Qwen-7B -> 14 (unchanged), Llama-3.2-1B
-        # -> 8, an unrecognized GGUF keeps EngineSteer's generic default. run_meta() re-derives this lazily
-        # too, so the run record is correct even when the engine comes up after the substrate.
+        # the engine's /health model file (best-effort -- never blocks boot if the engine isn't up yet).
+        # run_meta() re-derives this lazily too, so the run record is correct even when the engine comes
+        # up after the substrate.
         #
-        # model_family/model_id/model_sha256/_pers_steer are PROPERTIES (below), backed by the _val fields
-        # here: a startup-time engine outage must not permanently disable per-model dial persistence for
-        # the rest of the process's life -- every read retries _resolve_identity() (cooldown-gated) while
-        # unresolved, and never re-fetches once it resolves. See _resolve_identity/_maybe_reresolve_identity.
+        # model_family/model_id/model_sha256 are PROPERTIES (below), backed by the _val fields here: a
+        # startup-time engine outage must not permanently wedge identity resolution for the rest of the
+        # process's life -- every read retries _resolve_identity() (cooldown-gated) while unresolved, and
+        # never re-fetches once it resolves. See _resolve_identity/_maybe_reresolve_identity.
         self._model_family_val = None
         self._model_id_val = None
         self._model_sha256_val = None
-        self._pers_steer_val = None
         self._identity_lock = threading.Lock()
         self._identity_last_attempt = 0.0
         self._native_reference_match_arms = False
@@ -321,11 +131,10 @@ class EngineSubstrate(Substrate):
         self._resolve_identity()
 
     def _resolve_identity(self):
-        """One best-effort attempt to derive model_family/model_id/model_sha256 from the engine's /health,
-        pin the tone-dial steer layer, and -- once a sha256 is actually known -- load this exact GGUF's
-        persisted dial state and enable J-transport. Never blocks boot, never raises (a down/old engine
-        just leaves everything at its unresolved default). Called once at construction and retried lazily
-        by _maybe_reresolve_identity whenever the engine was down at the previous attempt."""
+        """One best-effort attempt to derive model_family/model_id/model_sha256 from the engine's /health.
+        Never blocks boot, never raises (a down/old engine just leaves everything at its unresolved
+        default). Called once at construction and retried lazily by _maybe_reresolve_identity whenever the
+        engine was down at the previous attempt."""
         self._identity_last_attempt = time.time()
         h = {}
         try:
@@ -337,49 +146,12 @@ class EngineSubstrate(Substrate):
             fam, _info = _engine_model_info((h or {}).get("model", ""))
             self._model_family_val = fam
             self._model_id_val = _info["model_id"]
-            if self.steer is not None and _info["steer_layer"] is not None:
-                self.steer.layer = _info["steer_layer"]
         except Exception:
             return
         sha256 = str((h or {}).get("model_sha256") or "") or None
         if not sha256:
             return
         self._model_sha256_val = sha256
-        self._pers_steer_val = ctx._pers(os.path.join("models", sha256, "studio_personality.json"))
-        if self.steer is not None:              # restore values only from this exact GGUF's state file
-            try:
-                self.steer.load_state(self._pers_steer_val)
-            except Exception:
-                pass
-            try:
-                # Resolve the calibration from THIS substrate's OWN sha256, explicitly -- never via
-                # ctx._dial_calibration(), and never via _model_scoped_path().
-                #
-                # Why: _model_scoped_path() reads the MODULE-GLOBAL ctx.SUB to find the digest. While
-                # this substrate is still resolving its own identity, ctx.SUB is not yet bound to it,
-                # so the digest reads as None and the lookup silently falls back to the legacy root
-                # ~/.clozn/dial_calibration.json -- i.e. whatever model was calibrated last.
-                #
-                # Caught live: a Qwen2.5-7B-Q4 with no calibration of its own inherited the 9B's
-                # `concise: usable_max 1.5` and accepted 1.5 as "within THIS model's calibrated
-                # usable_max", while /steer/axes (called later, once ctx.SUB was bound) correctly
-                # reported calibrated:false. Cross-model contamination is the exact failure this
-                # whole change exists to prevent, so the path must not depend on global state.
-                path = ctx._pers(os.path.join("models", sha256, "dial_calibration.json"))
-                self.steer.load_calibration(_load_calibration_file(path))
-            except Exception:
-                self.steer.load_calibration({})      # unreadable -> uncalibrated -> safe ceiling
-            # J-TRANSPORT (engine_adapter.EngineSteer's class docstring / jlens_transport.py, see
-            # notes/JLENS_SAE_FINDINGS.md finding #1): auto-enable using the running engine's OWN
-            # reported model digest -- the strongest identity this substrate actually has (no local
-            # GGUF file path to re-derive full contracts.gguf_identity() metadata from). Safe to
-            # always attempt: a byte-identical no-op (self.steer.last_j_transport["applied"] is
-            # False) whenever no compact-eligible J artifact claims this exact GGUF sha256 -- true
-            # for every model shipped today -- never a silent substitution of a mismatched J.
-            try:
-                self.steer.enable_j_transport(model_sha256=sha256)
-            except Exception:
-                pass
 
     def _maybe_reresolve_identity(self):
         """Retry _resolve_identity() iff identity is still unresolved (no model_sha256 yet) AND the
@@ -412,28 +184,14 @@ class EngineSubstrate(Substrate):
         self._maybe_reresolve_identity()
         return self._model_sha256_val
 
-    @property
-    def _pers_steer(self):
-        self._maybe_reresolve_identity()
-        return self._pers_steer_val
-
-    def _gen(self, prompt):                     # one-shot generate for the /steer/check A/B (base _steer)
-        if self.steer is not None:
-            return self.steer.generate(prompt, max_new=90)
-        from clozn.behavior.steering.engine_adapter import EngineSteer
-        return EngineSteer._text(self.engine.complete(prompt, max_tokens=90))
-
     # ---- per-request context: request isolation (backlog #2) ------------------------------------------
     # chat()/chat_stream() each start with self._new_request(), then write everything the call learns
     # about ITSELF onto that one object (see request_context.RequestContext's docstring for why). The
     # properties below are the back-compat SEAM: every existing reader of sub._last_generation_meta /
     # _last_finish_reason / _last_diverged / _last_diverged_at / _last_stream_trace keeps working
-    # unchanged, unaware that the piecemeal attributes became views onto self._request. Deliberately
-    # EngineSubstrate-only (not on the shared Substrate base): the retired torch lab adapters (
-    # substrates.py) still WRITE these same names as plain instance attributes -- putting a property with
-    # no setter on the shared base would break that assignment with `AttributeError: can't set attribute`
-    # the moment a lab substrate's chat() ran. Read-only on purpose: the only legitimate writers are
-    # chat()/chat_stream() below, and they now write through `self._request` instead.
+    # unchanged, unaware that the piecemeal attributes became views onto self._request. Read-only on
+    # purpose: the only legitimate writers are chat()/chat_stream() below, and they now write through
+    # `self._request` instead.
     def _new_request(self) -> RequestContext:
         """Start this call's own RequestContext and publish it as 'the current one' in a single attribute
         assignment. Must be the FIRST thing chat()/chat_stream() do, mirroring exactly where the old code
@@ -473,9 +231,8 @@ class EngineSubstrate(Substrate):
 
     def chat(self, messages, max_new=256, sample=True, trace_out=None, mem_out=None,
              reference_tokens=None, stop=None):
-        """One stateless chat completion on the engine with memory (prompt-mode card block) + tone dials
-        applied. Keeps the historical chat contract EXACTLY (same signature, same trace_out/mem_out
-        fill) so the receipts/replay stack is backend-agnostic.
+        """One stateless chat completion on the engine. Keeps the historical chat contract EXACTLY (same
+        signature, same trace_out/mem_out fill) so the receipts/replay stack is backend-agnostic.
 
         `sample`: the caller's request to sample (True), force greedy (False), or override this request's
         sampling fields with a dict. REPRODUCE_AND_PROVE_PLAN S5: `sample=True` (the default) resolves via
@@ -519,15 +276,7 @@ class EngineSubstrate(Substrate):
             # final_prompt = the EXACT rendered string the model saw (backlog #5); assembled_messages is its
             # pre-template form. Both recorded so the run is inspectable at either level.
             mem_out.update(assembled_messages=list(messages), final_prompt=prompt)
-        # TONE: dials from self.steer.strength (replay toggles this in place), falling back to disk.
         kw = {}
-        st = (getattr(self.steer, "strength", None) if self.steer is not None else None) or ctx._disk_dials()
-        req.steering_snapshot = dict(st) if st else {}      # what THIS call used, decoupled from the live dict
-        if self.steer is not None and st and any(st.values()):
-            sv = self.steer.steer_vector(st)
-            if sv:
-                kw["steer_vec"] = sv
-                kw["steer"] = {"coef": 1.0, "layer": self.steer.layer}
         if reference_tokens:                                # prove-all early-stop: halt when the answer changes
             kw["reference_tokens"] = [int(t) for t in reference_tokens if t is not None]
         usage = {}
@@ -570,7 +319,7 @@ class EngineSubstrate(Substrate):
             trace_out.extend(steps)
         req.trace = list(steps)
         if mem_out is not None:
-            req.memory_manifest = dict(mem_out)
+            req.prompt_manifest = dict(mem_out)
         return reply_raw.strip()
 
     def _complete_chat_native(self, messages, *, tools=None, tool_choice="auto", json_schema=None,
@@ -585,11 +334,10 @@ class EngineSubstrate(Substrate):
         whole request via ``EngineClient.complete_chat``; keeping those operations atomic prevents a
         client-held prepared descriptor from drifting between rendering and generation.
 
-        Clozn still owns the layers around that native operation.  Prompt-card memory is injected into
-        the message list before the worker renders it, tone dials use the raw steering channel as in
-        :meth:`chat`, and sampling resolves through the
-        same per-request policy.  The worker's buffered response contains the actual native event JSON,
-        so it is folded through ``accumulate_ar_events`` rather than reconstructed from a final board.
+        Clozn still owns the layers around that native operation: sampling resolves through the same
+        per-request policy as :meth:`chat`.  The worker's buffered response contains the actual native
+        event JSON, so it is folded through ``accumulate_ar_events`` rather than reconstructed from a
+        final board.
 
         The return value keeps ``raw_model_output`` byte-for-byte as supplied by the worker and exposes
         its parsed OpenAI message separately.  The same atomic response also carries the exact rendered
@@ -607,21 +355,15 @@ class EngineSubstrate(Substrate):
         # `assembled` was `_inject_block(messages, block)` -- the card block folded in as system context.
         # With cards gone the worker renders the caller's messages exactly as given.
         assembled = list(messages)
-        memory_manifest = {"assembled_messages": list(assembled)}
+        prompt_manifest = {"assembled_messages": list(assembled)}
 
         options = {}
-        st = (getattr(self.steer, "strength", None) if self.steer is not None else None) or ctx._disk_dials()
-        req.steering_snapshot = dict(st) if st else {}
-        if self.steer is not None and st and any(st.values()):
-            steer_vec = self.steer.steer_vector(st)
-            if steer_vec:
-                options["steer_vec"] = steer_vec
-                options["steer"] = {"coef": 1.0, "layer": self.steer.layer}
 
         # (Anchored memory was applied here, opt-in. Removed 2026-07-27 -- it could not recall, see
-        # notes/ANCHORED_MEMORY_FINDINGS.md.)
+        # notes/ANCHORED_MEMORY_FINDINGS.md. Tone-dial steering options were built here too, until named-
+        # dial personalization was retired -- there is no more steer object to build them from.)
         if mem_out is not None:
-            mem_out.update(memory_manifest)
+            mem_out.update(prompt_manifest)
 
         if samp and samp.get("on"):
             options.update(
@@ -634,9 +376,9 @@ class EngineSubstrate(Substrate):
         else:
             options.update(temperature=0.0, rep_penalty=1.0, top_k=0, top_p=1.0, seed=0)
 
-        # Publish the memory decision even if the worker fails.  It describes what was assembled for
+        # Publish the prompt manifest even if the worker fails.  It describes what was assembled for
         # this request, not a claim that generation succeeded.
-        req.memory_manifest = dict(memory_manifest)
+        req.prompt_manifest = dict(prompt_manifest)
         dispatch_started_ns = time.monotonic_ns()
         try:
             response = self.engine.complete_chat(
@@ -688,8 +430,8 @@ class EngineSubstrate(Substrate):
         # from the same in-worker prepare/generate transaction.  It is now valid evidence for the normal
         # context receipt and replaces the pre-generation manifest snapshot on both channels.
         rendered_prompt = chat_io["rendered_prompt"]
-        memory_manifest["final_prompt"] = rendered_prompt
-        req.memory_manifest = dict(memory_manifest)
+        prompt_manifest["final_prompt"] = rendered_prompt
+        req.prompt_manifest = dict(prompt_manifest)
         if mem_out is not None:
             mem_out["final_prompt"] = rendered_prompt
 
@@ -717,29 +459,34 @@ class EngineSubstrate(Substrate):
 
     def score_tokens(self, messages, continuation_ids=None, *, continuation=None, block=None,
                      steer_strengths=None, steer_vec=None, topk=0):
-        """Teacher-forced per-token logprob of a continuation under EXPLICIT (block,
-        steer_strengths) conditions -- the seam the forced-scoring
-        stack (rederive.py, forced receipts) builds on. Assembles the prompt EXACTLY like chat()
-        (ctx._inject_block + ctx._engine_tmpl -- the loaded model's own chat template) and the steer_vec EXACTLY
-        like chat() (self.steer.steer_vector),
-        but from the CALLER's `block`/`steer_strengths` -- NEVER from live self.memory/self.steer.strength
-        -- so a with/without arm is reconstructed purely from a run record (memory ablation = recompile
-        the block without a card; dial ablation = zero a strength and recompute) rather than from
-        whatever the live substrate happens to be doing right now. That's what makes receipt arms
-        reconstructable: two calls with different explicit `block`/`steer_strengths`, same messages
-        and continuation_ids, are directly comparable. No sampling anywhere; deterministic.
+        """Teacher-forced per-token logprob of a continuation under an EXPLICIT (block, steer_vec)
+        condition -- the seam the forced-scoring stack (rederive.py, forced receipts) builds on.
+        Assembles the prompt EXACTLY like chat() (ctx._inject_block + ctx._engine_tmpl -- the loaded
+        model's own chat template), but from the CALLER's `block`/`steer_vec` -- NEVER from live state --
+        so a with/without arm is reconstructed purely from a run record rather than from whatever the
+        live substrate happens to be doing right now. That's what makes receipt arms reconstructable: two
+        calls with different explicit `block`/`steer_vec`, same messages and continuation_ids, are
+        directly comparable. No sampling anywhere; deterministic.
 
-        `block`: a prompt-mode memory block string (or None to omit it), e.g. run.memory.prompt_block.
-        `steer_strengths`: a {dial_name: strength} dict (or None for no steer), e.g. run.behavior.dials.
+        `block`: a prompt-mode memory block string (or None to omit it), e.g. run.memory.prompt_block --
+        memory cards were retired from the product on 2026-07-27; this stays for a pre-cut run's own
+        reconstruction, and for callers (fork.py, quant_check.py) that fold an arbitrary system block in
+        this same shape.
         `continuation_ids`: the PRIMARY continuation form (token ids, e.g. from a stored trace) --
         takes precedence over `continuation` when both are given (mirrors EngineClient.score).
         `continuation`: a TEXT fallback (S3's rederive.py, for a run whose trace lacks per-token ids) --
         the engine retokenizes it independently of the prompt, which can drift at the prompt/
         continuation BPE boundary (flagged `boundary_approximate` by /score itself; see
         REPRODUCE_AND_PROVE_PLAN.md's tokenization-boundary caveat).
-        `steer_vec`: an explicit RAW steer direction, ADDED on top of whatever `steer_strengths`
-        produces (or used alone if `steer_strengths` is falsy) -- the S3 null-floor control needs a
-        direction with no named dial behind it ("a random vector of equal norm at the same layer").
+        `steer_strengths`: kept only for call-site compatibility with the forced-scoring stack's
+        with/without arm vocabulary (a {name: strength} dict). Named-dial personalization was retired, so
+        there is no more engine to turn a strength dict into a direction -- this parameter is accepted
+        but has no effect. Every current caller passes {} (rederive.with_arm_conditions's own
+        `steer_strengths` is always {}: a regular run carries no recorded steering state to reconstruct).
+        Pass `steer_vec` directly for any raw-direction need.
+        `steer_vec`: an explicit RAW steer direction -- what the S3 null-floor control and the receipt/
+        rederive/swap_receipt causal-attribution paths build directly (dir(c), or a random vector of
+        equal norm at the same layer) and pass straight through here.
 
         Returns [{"id", "piece", "logprob"}, ...] (+ "topk" per token when topk>0), one entry per
         continuation token, in the SAME order as continuation_ids (or the engine's own retokenization
@@ -748,16 +495,11 @@ class EngineSubstrate(Substrate):
         assembled = ctx._inject_block(messages, block)
         prompt = ctx._engine_tmpl(self.engine, assembled)
         kw = {}
-        sv = None
-        if self.steer is not None and steer_strengths and any(steer_strengths.values()):
-            sv = self.steer.steer_vector(steer_strengths)
         if steer_vec is not None:
-            sv = [a + b for a, b in zip(sv, steer_vec)] if sv else list(steer_vec)
-        if sv:
-            kw["steer_vec"] = sv
-            # self.steer.layer is model-aware (pinned per-family in __init__); with no steer built, pass
-            # layer 0 so the ENGINE picks its own calibrated mid-depth band -- not a hardcoded Qwen 14.
-            kw["steer"] = {"coef": 1.0, "layer": self.steer.layer if self.steer is not None else 0}
+            kw["steer_vec"] = list(steer_vec)
+            # No steer object survives to report a model-aware layer; layer 0 tells the ENGINE to pick
+            # its own calibrated mid-depth band -- the same fallback a no-direction call always used.
+            kw["steer"] = {"coef": 1.0, "layer": 0}
         if continuation_ids is not None:
             kw["continuation_ids"] = [int(t) for t in continuation_ids]
         elif continuation is not None:
@@ -1194,14 +936,14 @@ class EngineSubstrate(Substrate):
 
     def chat_stream(self, messages, max_new=256, mem_out=None, lens=None, on_frame=None, sample=True,
                     stop=None):
-        """Streaming twin of chat(): the SAME memory-block + tone-dial construction
+        """Streaming twin of chat(): the SAME prompt assembly
         (kept in lockstep -- see chat()'s comments; do not let this drift from that logic), but opens the engine's
         /v1/completions with stream:True (mirrors _engine_complete_traced's request) and yields text as
         the engine commits it, instead of waiting on one blocking call. This is what makes /v1/chat/
         completions's SSE branch (_sse_chat, gated on `getattr(SUB, "chat_stream", None)`) fire on the
         pure-engine substrate too -- before this existed, a streaming request here silently fell through
-        to one non-streamed chat() reply. mem_out: as in chat() -- prompt mode records what memory
-        actually rode this turn.
+        to one non-streamed chat() reply. mem_out: as in chat() -- records what was actually assembled
+        and sent this turn (assembled_messages/final_prompt).
 
         F1 LIVE LENS: lens = a dict {layer?, topk?, every?} (or {} for engine defaults) rides to the
         engine as body["lens"]; the engine then interleaves `jlens_live` frames (the J-lens
@@ -1236,8 +978,8 @@ class EngineSubstrate(Substrate):
         samp = ctx._resolve_sampling(sample)
         req.sampling = samp
         req.generation_meta = ctx._engine_generation_meta(max_new, stream=True, sample=samp, stop=stop)
-        # TONE: built EXACTLY as chat() builds it. (The memory-card block chat() used to compose here
-        # went with the 2026-07-27 cards cut; the two paths stay in lockstep, both now block-free.)
+        # (The memory-card block chat() used to compose here went with the 2026-07-27 cards cut; the two
+        # paths stay in lockstep, both now block-free.)
         template_usage = {}
         gateway_phases = []
         template_started_ns = time.monotonic_ns()
@@ -1252,15 +994,10 @@ class EngineSubstrate(Substrate):
         if mem_out is not None:
             # final_prompt = the EXACT rendered string the model saw (backlog #5); kept in lockstep with chat().
             mem_out.update(assembled_messages=list(messages), final_prompt=prompt)
+        # (F6 anchored memory composed a gated steer_vec here; removed 2026-07-27. Tone-dial steering
+        # built a kw["steer_vec"] here too, until named-dial personalization was retired -- there is no
+        # more steer object to build one from.)
         kw = {}
-        st = (getattr(self.steer, "strength", None) if self.steer is not None else None) or ctx._disk_dials()
-        req.steering_snapshot = dict(st) if st else {}      # what THIS call used, decoupled from the live dict
-        if self.steer is not None and st and any(st.values()):
-            sv = self.steer.steer_vector(st)
-            if sv:
-                kw["steer_vec"] = sv
-                kw["steer"] = {"coef": 1.0, "layer": self.steer.layer}
-        # (F6 anchored memory composed a gated steer_vec here; removed 2026-07-27.)
         body = dict(kw); body["prompt"] = prompt; body["max_tokens"] = int(max_new)
         if stop:
             body["stop"] = list(stop)
@@ -1379,13 +1116,7 @@ class EngineSubstrate(Substrate):
             # after the anchored removal. Generic repetition detection survives in
             # clozn/runs/degeneracy.py and still reaches run records through runs/signals.py.)
             if mem_out is not None:
-                req.memory_manifest = dict(mem_out)
-
-    def handle(self, path, body):
-        return self._steer(path, body)
-
-    def state(self):
-        return {"dials": dict(getattr(self.steer, "strength", {}) or {})}
+                req.prompt_manifest = dict(mem_out)
 
 
 def _quant_from_name(name):
@@ -1399,25 +1130,24 @@ def _quant_from_name(name):
 
 # --- engine model registry (T0.2) ---------------------------------------------------------------------
 # The engine substrate reflects the ACTUALLY-LOADED GGUF, not a hardcoded "Qwen2.5-7B" id/assumption.
-# The ONE Qwen-specific assumption the engine substrate carried was the tone-dial steer TAP LAYER
-# (mid-depth: 14 for Qwen-7B's 28 layers). This tiny registry keys that -- plus a friendly model_id for
-# run_meta -- off the loaded model's family (derived from its /health filename), with a sensible default
-# for any unrecognized GGUF (steer_layer None => don't pin a layer; let the engine use its OWN per-model
-# calibrated mid-depth steer band). Everything else the engine already calibrates per-model server-side
-# (the C++ concept/steer probe taps at startup, and the chat template via /apply_template). This is NOT a
+# This tiny registry keys a friendly model_id for run_meta off the loaded model's family (derived from
+# its /health filename), with a sensible default (None) for any unrecognized GGUF. This is NOT a
 # framework -- it is the minimal table that removes the last hardcoded-Qwen coupling from the engine path.
+# (It used to also carry the tone-dial steer TAP LAYER per family -- e.g. mid-depth 14 for Qwen-7B's 28
+# layers -- pinned onto EngineSteer at identity-resolve time. That steer object and the pin both went with
+# named-dial personalization; the engine now always picks its own per-model calibrated mid-depth steer
+# band, which is what an unrecognized GGUF already fell back to here.)
 _ENGINE_MODELS = {
-    "qwen2.5-7b":   {"model_id": "Qwen/Qwen2.5-7B-Instruct",         "steer_layer": 14},  # 28L -> mid 14 (unchanged)
-    "qwen2.5-0.5b": {"model_id": "Qwen/Qwen2.5-0.5B-Instruct",       "steer_layer": 12},  # 24L -> mid 12
-    "qwen3.5-9b":   {"model_id": "Qwen/Qwen3.5-9B",                  "steer_layer": None},
-    "llama-3.1-8b": {"model_id": "meta-llama/Llama-3.1-8B-Instruct", "steer_layer": None},
-    "llama-3.2-1b": {"model_id": "meta-llama/Llama-3.2-1B-Instruct", "steer_layer": 8},   # 16L -> mid 8
-    "llama-3.2-3b": {"model_id": "meta-llama/Llama-3.2-3B-Instruct", "steer_layer": 14},  # 28L -> mid 14
-    "gemma4-e4b":   {"model_id": "google/gemma-4-E4B-it",            "steer_layer": None},
-    "ministral3-3b": {"model_id": "mistralai/Ministral-3-3B-Instruct-2512",
-                        "steer_layer": None},
+    "qwen2.5-7b":   {"model_id": "Qwen/Qwen2.5-7B-Instruct"},
+    "qwen2.5-0.5b": {"model_id": "Qwen/Qwen2.5-0.5B-Instruct"},
+    "qwen3.5-9b":   {"model_id": "Qwen/Qwen3.5-9B"},
+    "llama-3.1-8b": {"model_id": "meta-llama/Llama-3.1-8B-Instruct"},
+    "llama-3.2-1b": {"model_id": "meta-llama/Llama-3.2-1B-Instruct"},
+    "llama-3.2-3b": {"model_id": "meta-llama/Llama-3.2-3B-Instruct"},
+    "gemma4-e4b":   {"model_id": "google/gemma-4-E4B-it"},
+    "ministral3-3b": {"model_id": "mistralai/Ministral-3-3B-Instruct-2512"},
 }
-_ENGINE_MODEL_DEFAULT = {"model_id": None, "steer_layer": None}  # unknown GGUF: nothing pinned; engine picks
+_ENGINE_MODEL_DEFAULT = {"model_id": None}  # unknown GGUF: nothing pinned
 
 
 def _model_family_from_name(name):
@@ -1441,8 +1171,8 @@ def _model_family_from_name(name):
 
 
 def _engine_model_info(name):
-    """(family, {model_id, steer_layer}) for the loaded GGUF -- the engine substrate's per-model
-    assumptions -- or (None, the default with nothing pinned) for an unrecognized model."""
+    """(family, {model_id}) for the loaded GGUF -- the engine substrate's per-model assumptions -- or
+    (None, the default with nothing pinned) for an unrecognized model."""
     fam = _model_family_from_name(name)
     return fam, dict(_ENGINE_MODELS.get(fam, _ENGINE_MODEL_DEFAULT))
 

@@ -6,28 +6,27 @@ generation, only assembly of signals runlog already captured for that turn) -- b
 happened, when" as one ordered sequence a UI can render as a timeline strip.
 
 This is a RESHAPE, not a new signal: every field emitted below already lives on the run record (runlog.py's
-schema) or one of its sub-dicts (`trace`, `memory`, `behavior`, `timing`). Nothing here is invented,
+schema) or one of its sub-dicts (`trace`, `timing`). Nothing here is invented,
 estimated, or synthesized -- an event fires only when its underlying data actually exists on the run.
 
 The event taxonomy, in emission order (each only when its data is present -- see `timeline()`'s guards):
   1. run_started    -- once, always (for a non-empty run): source/client/model/created_at.
   2. branched_from  -- only when parent_run_id is set (this run is a replay/branch of another).
-  3. dials_applied  -- only when behavior.active_dials is non-empty.
-  4. generation     -- only when there's a response or a trace: token count (from the trace, when there is
+  3. generation     -- only when there's a response or a trace: token count (from the trace, when there is
                        one) else a word count of the response -- NEVER presented as if it were a real token
                        count -- plus wall time from timing.duration_ms.
-  5. hesitation     -- one event per token whose trace confidence fell below LOW_CONF, carrying that
+  4. hesitation     -- one event per token whose trace confidence fell below LOW_CONF, carrying that
                        token's recorded alternatives. Same threshold as explain.py's uncertain_moments (see
                        LOW_CONF below): the Explain panel and this timeline must never disagree about what
                        counts as "unsure".
-  6. finished       -- when the run carries no error: the stop cause (finish_reason), or an honest
+  5. finished       -- when the run carries no error: the stop cause (finish_reason), or an honest
                        "Finished" with finish_reason: None when the run never recorded one.
-  7. error          -- when the run carries one; mutually exclusive with `finished` (an errored run has no
+  6. error          -- when the run carries one; mutually exclusive with `finished` (an errored run has no
                        stop cause to report).
 
 Zero imports beyond stdlib typing syntax. (A memory_applied event lived here until the 2026-07-27
-cards cut; runs carry no memory block at all now.) That keeps this module trivially unit-testable
-against bare fixture dicts.
+cards cut, and a dials_applied event lived here until the personalization cut; runs carry no memory
+or dial data at all now.) That keeps this module trivially unit-testable against bare fixture dicts.
 
 Never raises: `timeline()` reduces a non-dict (or empty) run to [] rather than erroring, and each event kind
 is assembled in its own guarded step so one malformed section drops only that one event -- never blanks the
@@ -86,17 +85,6 @@ def _trace_steps(trace: dict) -> list[dict]:
     return out
 
 
-
-
-# ---------------------------------------------------------------------------------------------- dials_applied
-def _dials_applied(run: dict) -> dict | None:
-    """One event for the whole set of active tone dials this turn. None when no dial is active."""
-    behavior = _as_dict(run.get("behavior"))
-    dials = _as_dict(behavior.get("active_dials"))
-    if not dials:
-        return None
-    n = len(dials)
-    return {"type": "dials_applied", "label": f"{n} behavior dial{'' if n == 1 else 's'}", "dials": dict(dials)}
 
 
 # ------------------------------------------------------------------------------------------------- generation
@@ -170,13 +158,6 @@ def timeline(run: dict | None) -> list[dict]:
         pass
 
     try:
-        if ev:
-            events.append(ev)
-    except Exception:
-        pass
-
-    try:
-        ev = _dials_applied(run)
         if ev:
             events.append(ev)
     except Exception:

@@ -50,8 +50,9 @@ read-only run inspection remain concurrent.
   an OpenAI completion stream.
 - `/runs/*`, `/experiment-results/*`, and other namespaced routes expose recorded evidence and derived
   views. A derived view does not upgrade the evidence in its source run.
-- `/steer/*` is the product-owned behavior control surface. Raw engine inspection remains separate
-  under `/engine/*`.
+- Raw vector steering (`steer_vec`) is an engine-level primitive reached through `/intervene`,
+  execution-fork steer arms, and the receipts/analysis machinery, not a dedicated product route. Raw
+  engine inspection remains separate under `/engine/*`.
 
 ## Runs, identity, and persistence
 
@@ -101,5 +102,5 @@ pass the clean-machine release lanes.
    differences must not disappear behind a friendly label.
 4. **Model-free by default.** Contracts, schemas, planners, renderers, and failure paths are testable
    without a model or network.
-5. **Qualification is scoped.** Core support never implies that a model-specific dial, lens, SAE, or
+5. **Qualification is scoped.** Core support never implies that a model-specific lens, SAE, or
    structured-I/O artifact is qualified.

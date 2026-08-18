@@ -1,23 +1,25 @@
-"""test_receipts -- model-free tests for research/receipts.py (EXPLAIN_THIS_ANSWER_SPEC.md Milestone 2).
+"""test_receipts -- model-free tests for clozn/receipts/core.py (EXPLAIN_THIS_ANSWER_SPEC.md Milestone 2).
 
 No model, no GPU, no torch: drives receipts.receipt() / receipts.prove_all() against a FAKE substrate
-(mirrors test_replay.py's FakeSub/FakeMem/FakeSteer) whose .chat() is a DETERMINISTIC function of exactly
-which influences are live at call time -- which card ids are excluded, whether memory is off, and the
-"concise"/"warm" dial values -- so a receipt's baseline-vs-ablated delta is driven ONLY by whatever
-replay.py actually changed, never by randomness.
+whose .chat() is a DETERMINISTIC function of the messages it actually saw, so a receipt's
+baseline-vs-ablated delta is driven ONLY by whatever replay.py actually changed, never by randomness.
+
+Memory-card ablation and tone-dial ablation were both cut from the product (memory cards on 2026-07-27,
+dials in the personalization cut that followed) -- `section` is the only influence kind
+receipts.core._ablation_changes/deltas.py still recognize; a legacy `dial`/`memory_off`/`behavior_off`/
+`card_id` influence spec is simply not something this codebase can ablate any more and degrades to None,
+exactly like any other unrecognized spec. See test_section_influence.py for the full section-ablation
+surface (regen AND forced mode); this file covers the metric math, the mode-dispatch plumbing, and the
+degrade-on-bad-input paths.
 
 What's under test:
   * the BOTH-ARMS-GREEDY seam: receipt() calls sub.chat() exactly twice, both greedy (sample=False), both
     over the run's own stored messages -- never touching the run's stored sampled `response`.
-  * receipt_metrics() is the canonical metric assembly used by heavn Replay, including the rounding
+  * receipt_metrics() is the canonical metric assembly used by Replay, including the rounding
     ties (Math.round rounds a trailing .5 UP; Python's builtin round() would bankers'-round it down).
-  * causal_verified is True on a real ablation, and correctly FALSE (with an `ablation_note`) when the
-    ablation could not actually apply (a per-card ablation attempted in "internalized" memory mode) --
-    relaying replay.py's own honesty note rather than silently claiming "no effect" proved something.
   * the sampled-reply-is-not-baseline `note` is present on every receipt.
-  * prove_all()'s leave-one-out over the M1 manifest, and the REDUNDANCY GUARD: two cards that are each
-    individually load-bearing-free but jointly necessary are reported as a redundant pair, not "neither
-    mattered".
+  * prove_all()'s leave-one-out over the M1 manifest's `sections`.
+  * mode dispatch (regen/forced/both) is byte-identical to calling the underlying helpers directly.
 """
 from __future__ import annotations
 
@@ -36,62 +38,22 @@ from clozn import receipts          # noqa: E402
 import clozn.runs.store as runlog             # noqa: E402
 
 
-# --- fakes (mirror test_replay.py's FakeSteer/FakeMem/FakeSub, extended with a deterministic, --------------
-# --- influence-keyed chat() so baseline vs ablated replies differ EXACTLY when the ablated state differs --
-
-class FakeSteer:
-    def __init__(self, strength=None):
-        self.strength = dict(strength or {})
-
-    def set(self, name, value):
-        self.strength[str(name)] = float(value)
-
-    def clear(self):
-        self.strength = {}
-
-    def active(self):
-        return {k: v for k, v in self.strength.items() if v}
-
-
-class FakeMem:
-    def __init__(self, strength=1.0, rules=None, prefix="PFX"):
-        self.memory_strength = float(strength)
-        self.rules = list(rules or [])
-        self.prefix = prefix
-
+# --- a minimal fake substrate -----------------------------------------------------------------------------
+# Card/dial ablation was cut from the product, so nothing here drives chat() by live substrate state any
+# more -- this just proves prove_all()/receipt() degrade cleanly (bad input, no fired influences) without
+# ever needing a real generation.
 
 class FakeSub:
-    """chat() is a pure function of (memory_strength, excluded card ids, concise/warm dial values) -- no
-    randomness -- so exact reply-string equality is a trustworthy "no effect" signal, exactly like a real
-    greedy decode."""
-
-    def __init__(self, mem=None, steer=None, concise_card_ids=()):
-        self.memory = mem if mem is not None else FakeMem()
-        self.steer = steer if steer is not None else FakeSteer()
-        self.concise_card_ids = {str(i) for i in concise_card_ids}
+    def __init__(self):
         self.seen: list = []      # one entry per chat() call, in call order
 
     @property
     def calls(self):
         return len(self.seen)
 
-    def chat(self, messages, max_new=256, sample=True):
-        excluded = {str(i) for i in (getattr(self.memory, "_exclude_card_ids", None) or [])}
-        self.seen.append({"messages": messages, "sample": sample,
-                          "memory_strength": self.memory.memory_strength,
-                          "exclude": sorted(excluded), "dials": dict(self.steer.strength)})
-        if self.memory.memory_strength <= 0:
-            return "Generic reply with memory off, noticeably longer and less tailored than usual."
-        concise_active = self.concise_card_ids - excluded
-        concise_dial = float(self.steer.strength.get("concise", 0.0) or 0.0)
-        if concise_active or concise_dial > 0:
-            base = "Short answer."
-        else:
-            base = ("A much longer rambling reply with plenty of extra words, since nothing left standing "
-                    "kept this concise once every source of brevity was ablated away.")
-        if float(self.steer.strength.get("warm", 0.0) or 0.0) > 0:
-            base += " Hope that helps and warms your day a little!"
-        return base
+    def chat(self, messages, max_new=256, sample=True, trace_out=None, mem_out=None):
+        self.seen.append({"messages": messages, "sample": sample})
+        return "A plain reply."
 
 
 RUN = {"id": "run_parent0", "model": "clozn-qwen", "substrate": "QwenSubstrate",
@@ -147,53 +109,6 @@ def test_receipt_metrics_empty_replies_never_divide_by_zero():
     assert receipts.receipt_metrics("", "") == {"words": [0, 0], "wps": [0.0, 0.0], "changed": 0}
 
 
-# ================================================================================ both-arms-greedy receipt
-
-def test_receipt_is_exactly_two_greedy_calls_over_the_runs_own_messages(iso):
-    sub = FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.5}))
-    rec = receipts.receipt(RUN, {"dial": "warm"}, sub)
-    assert rec is not None
-    assert sub.calls == 2                                        # baseline + ablated, nothing more
-    assert all(call["sample"] is False for call in sub.seen)      # BOTH arms greedy
-    assert all(call["messages"] == RUN["messages"] for call in sub.seen)   # the run's own stored messages
-
-
-def test_receipt_dial_ablation_shows_effect_and_is_causally_verified(iso):
-    sub = FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.5}))
-    rec = receipts.receipt(RUN, {"dial": "warm"}, sub)
-    assert rec["causal_verified"] is True
-    assert rec["has_effect"] is True                              # the warm suffix disappears when ablated
-    assert rec["baseline_reply"].endswith("a little!")
-    assert not rec["ablated_reply"].endswith("a little!")
-    assert rec["changes_applied"] == {"behavior_overrides": {"warm": 0.0}}
-    assert rec["delta"] == receipts.receipt_metrics(rec["baseline_reply"], rec["ablated_reply"])
-
-
-def test_receipt_never_uses_the_stored_sampled_reply_as_either_arm(iso):
-    sub = FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.5}))
-    rec = receipts.receipt(RUN, {"dial": "warm"}, sub)
-    assert RUN["response"] not in (rec["baseline_reply"], rec["ablated_reply"])
-    assert "sampled" in rec["note"].lower() and "baseline" in rec["note"].lower()
-
-
-
-
-def test_receipt_behavior_off_ablation(iso):
-    sub = FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.5}))
-    rec = receipts.receipt(RUN, {"behavior_off": True}, sub)
-    assert rec["causal_verified"] is True
-    assert rec["has_effect"] is True
-    assert "decode" in rec["cost_note"] or "cheap" in rec["cost_note"]
-
-
-
-
-
-
-# ------------------------------------------------------------- the honesty guard: an ablation that can't apply
-
-
-
 # ------------------------------------------------------------------------------- never raises / bad input
 
 def test_receipt_returns_none_on_bad_influence_spec(iso):
@@ -203,44 +118,26 @@ def test_receipt_returns_none_on_bad_influence_spec(iso):
     assert receipts.receipt(RUN, None, sub) is None
 
 
+def test_receipt_returns_none_on_a_legacy_influence_spec(iso):
+    """card/dial ablation was cut from the product -- a stray `card_id`/`memory_off`/`behavior_off` spec
+    (from before that cut) degrades to None exactly like any other unrecognized influence, never raises."""
+    sub = FakeSub()
+    assert receipts.receipt(RUN, {"card_id": "mem_card_a"}, sub) is None
+    assert receipts.receipt(RUN, {"memory_off": True}, sub) is None
+    assert receipts.receipt(RUN, {"behavior_off": True}, sub) is None
+    assert receipts.receipt(RUN, {"dial": "warm"}, sub) is None
+
+
 def test_receipt_returns_none_on_empty_run(iso):
-    assert receipts.receipt(None, {"memory_off": True}, FakeSub()) is None
-    assert receipts.receipt({}, {"memory_off": True}, FakeSub()) is None
+    assert receipts.receipt(None, {"section": "rag_context"}, FakeSub()) is None
+    assert receipts.receipt({}, {"section": "rag_context"}, FakeSub()) is None
 
 
 def test_receipt_returns_none_when_substrate_is_none(iso):
-    assert receipts.receipt(RUN, {"memory_off": True}, None) is None
+    assert receipts.receipt(RUN, {"section": "rag_context"}, None) is None
 
 
 # ==================================================================================== prove_all: leave-one-out
-
-CARD_A, CARD_B = "mem_card_a", "mem_card_b"
-
-REDUNDANT_RUN = {
-    "id": "run_redundant", "model": "clozn-qwen", "substrate": "QwenSubstrate",
-    "messages": [{"role": "user", "content": "how was your day"}],
-    "response": "SAMPLED reply, never a baseline",
-    "memory": {"cards_applied": ["Be concise.", "Keep it short."], "applied_ids": [CARD_A, CARD_B],
-              "gate": 0.9, "mode": "prompt", "strength": 1.0},
-    "behavior": {"active_dials": {"warm": 0.4}},
-}
-
-
-
-
-
-
-
-
-def test_prove_all_states_the_pairwise_approximation_and_the_perf_follow_up(iso):
-    sub = FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.4}), concise_card_ids=[CARD_A, CARD_B])
-    out = receipts.prove_all(REDUNDANT_RUN, sub)
-    assert "power set" in out["approximation_note"] or "power-set" in out["approximation_note"]
-    assert "pair" in out["approximation_note"].lower()
-    assert "batch" in out["perf_note"].lower()
-
-
-
 
 def test_prove_all_no_fired_influences_is_a_clean_empty_result(iso):
     run = {"id": "run_bare", "messages": [{"role": "user", "content": "hi"}], "response": "sampled"}
@@ -256,18 +153,30 @@ def test_prove_all_never_raises_on_garbage_input(iso):
 
 
 def test_prove_all_degrades_when_substrate_is_none(iso):
-    out = receipts.prove_all(REDUNDANT_RUN, None)
+    run = {"id": "run_x", "messages": [{"role": "user", "content": "hi"}], "response": "sampled",
+          "sections": [{"id": "sec_a", "name": "rag_context", "source": "auto",
+                       "parts": [{"message_index": 0, "start": 0, "end": 2}],
+                       "char_count": 2, "preview": "hi"}]}
+    out = receipts.prove_all(run, None)
     assert out["receipts"] == []
     assert any("baseline" in s["reason"] for s in out["skipped"])
+
+
+def test_prove_all_states_the_pairwise_approximation_and_the_perf_follow_up(iso):
+    """approximation_note/perf_note are static plumbing text, present on every prove_all() result
+    regardless of what fired -- no real run is needed to exercise them."""
+    out = receipts.prove_all({"id": "run_bare", "messages": []}, FakeSub())
+    assert "power set" in out["approximation_note"] or "power-set" in out["approximation_note"]
+    assert "pair" in out["approximation_note"].lower()
+    assert "batch" in out["perf_note"].lower()
 
 
 # ==================================================================================== sections (prompt-section receipts)
 #
 # The section generalization: a run's `sections` manifest (id/name/source/parts/char_count/preview -- the
 # fixed schema clozn.runs.sections/store produce) yields its own leave-one-out ablation arm, exactly like a
-# card or a dial, EXCEPT for sections whose source is "memory_card" -- those duplicate a card influence that
-# already has its own (richer, provenance-resolved) ablation path, so ablating both would double-count one
-# real cause (see deltas._section_influences' docstring for the full reasoning).
+# card or a dial used to, EXCEPT for sections whose source is "memory_card" -- those duplicate a card
+# influence that no longer exists (see deltas._section_influences' docstring for the full reasoning).
 
 SECTION_PREFIX = "Question. "
 SECTION_TEXT = "RAG-MARKER extra info here."
@@ -284,14 +193,12 @@ SECTION_RUN = {"id": "run_section0", "model": "clozn-qwen", "substrate": "QwenSu
 
 
 class SectionFakeSub:
-    """chat() is a pure function of whether the RAG marker text is present anywhere in `messages` -- unlike
-    this file's other FakeSub (a function of memory/dial STATE), a section ablation changes prompt CONTENT,
-    so the deterministic signal has to be read off the messages actually passed in."""
+    """chat() is a pure function of whether the RAG marker text is present anywhere in `messages` -- the
+    deterministic signal is read off the messages actually passed in, since a section ablation changes
+    prompt CONTENT rather than substrate state."""
 
     def __init__(self, marker="RAG-MARKER"):
         self.marker = marker
-        self.memory = FakeMem()
-        self.steer = FakeSteer()
         self.seen: list = []
 
     @property
@@ -390,159 +297,9 @@ def test_section_influences_helper_degrades_when_no_sections_manifest_at_all(iso
 # not ablated.
 
 
-# ============================================================================================================
-# ============================================ forced-mode receipts ==
-# ============================================================================================================
-# A GRADED, per-token DEPENDENCE measurement via teacher-forced scoring (rederive.score_arm) -- no
-# generation, no qwen substrate needed. Model-free: a ForcedFakeSub's .score_tokens is a deterministic
-# function of the (block, steer_strengths, steer_vec) it was actually called with, so a test can craft
-# EXACT with/without/control logprobs and assert on the resulting deltas/thresholds precisely -- the
-# live-hardware acceptance numbers (real engine, real GPU) are reported separately, not here.
-
-class ScoreFakeSteer:
-    """Just enough of EngineSteer's surface for _forced_ablation's dial null-floor construction:
-    .layer and a DETERMINISTIC .steer_vector() (a fixed per-axis direction scaled by the given
-    strength) -- distinct from this file's other FakeSteer (which has no .steer_vector at all)."""
-
-    def __init__(self, vecs, layer=14):
-        self.vecs = dict(vecs)
-        self.layer = layer
-        self.calls = []
-
-    def steer_vector(self, strengths):
-        self.calls.append(dict(strengths or {}))
-        active = {k: v for k, v in (strengths or {}).items() if v}
-        if not active:
-            return None
-        dim = len(next(iter(self.vecs.values())))
-        out = [0.0] * dim
-        for name, val in active.items():
-            vec = self.vecs.get(name)
-            if not vec:
-                continue
-            for i, x in enumerate(vec):
-                out[i] += x * val
-        return out
-
-
-class ForcedFakeSub:
-    """.score_tokens() is a deterministic function of (block, steer_strengths, steer_vec) -- the with/
-    without/control arms are distinguished by what's actually IN those three call args, so a test can
-    hand-craft precise logprob scenarios (a real "10x above the null floor" case, a "no active dial"
-    case, ...) without needing a live model."""
-
-    def __init__(self, pieces, logprob_fn, steer=None):
-        self.pieces = list(pieces)
-        self.logprob_fn = logprob_fn
-        self.steer = steer
-        self.calls: list = []
-
-    def score_tokens(self, messages, continuation_ids, *, continuation=None, block=None,
-                     steer_strengths=None, steer_vec=None, topk=0):
-        self.calls.append({"messages": messages, "continuation_ids": continuation_ids, "block": block,
-                          "steer_strengths": steer_strengths, "steer_vec": steer_vec})
-        lps = self.logprob_fn(block, steer_strengths, steer_vec)
-        return [{"id": i, "piece": p, "logprob": lp} for i, (p, lp) in enumerate(zip(self.pieces, lps))]
-
-
-CARD_RUN = {
-    "id": "run_card_x", "messages": [{"role": "user", "content": "weekend plans?"}],
-    "response": "sure thing",
-    "memory": {"cards_applied": ["The user loves rock climbing.", "The user has two cats."],
-              "applied_ids": ["card_x", "card_y"],
-              "prompt_block": "You are a helpful assistant talking with a returning user. Here is what "
-                              "you know about them; use it naturally to tailor how you respond:\n"
-                              "- The user loves rock climbing.\n- The user has two cats.",
-              "mode": "prompt"},
-    "behavior": {"active_dials": {}},
-    "trace": {"token_ids": [1, 2, 3]},
-}
-
-
-
-
-
-
-DIAL_RUN = {
-    "id": "run_dial_warm", "messages": [{"role": "user", "content": "hi"}], "response": "hello",
-    "behavior": {"active_dials": {"warm": 1.0}},
-    "trace": {"token_ids": [10, 11, 12]},
-}
-
-
-def _dial_lp(block, steer_strengths, steer_vec):
-    if steer_strengths and steer_strengths.get("warm"):
-        return [-0.1, -0.1, -0.1]                           # WITH: the real dial applied
-    if steer_vec is not None:
-        return [-0.2, -0.2, -0.2]                           # CONTROL: an equal-norm random direction
-    return [-3.0, -3.0, -3.0]                               # WITHOUT: dial fully zeroed, nothing standing in
-
-
-def test_forced_receipt_dial_ablation_shows_effect_and_a_small_null_floor(iso):
-    steer = ScoreFakeSteer({"warm": [1.0, 0.0, 0.0]})
-    sub = ForcedFakeSub(["a", "b", "c"], _dial_lp, steer=steer)
-    rec = receipts.forced_receipt(DIAL_RUN, {"dial": "warm"}, sub)
-    assert rec["causal_verified"] is True
-    assert rec["mean_nats_per_token"] == round(2.9, 6)
-    assert rec["has_effect"] is True
-    nf = rec["null_floor"]
-    assert nf["kind"] == "dial_random_vector"
-    assert nf["mean_nats_per_token"] == round(0.1, 6)       # -0.1 - -0.2
-    assert nf["ratio_real_over_floor"] > receipts._NULL_FLOOR_RATIO_MIN
-    assert nf["exceeds_floor_by_order_of_magnitude"] is True
-    # the control vector is a REAL raw steer_vec on the SAME (dial-zeroed) call, not a replacement of
-    # steer_strengths -- so score_tokens saw steer_strengths={} (dial popped) AND a nonzero steer_vec
-    control_calls = [c for c in sub.calls if c["steer_vec"] is not None]
-    assert len(control_calls) == 1
-    assert control_calls[0]["steer_strengths"] == {}
-    assert len(control_calls[0]["steer_vec"]) == 3
-
-
-def test_forced_receipt_dial_not_active_is_an_honest_note(iso):
-    steer = ScoreFakeSteer({"warm": [1.0, 0.0, 0.0]})
-    sub = ForcedFakeSub(["a"], lambda b, s, v: [-0.1], steer=steer)
-    run = {"id": "run_x", "messages": [], "response": "x", "behavior": {"active_dials": {}},
-          "trace": {"token_ids": [1]}}
-    rec = receipts.forced_receipt(run, {"dial": "warm"}, sub)
-    assert rec["causal_verified"] is True                   # the (no-op) ablation DID "apply" -- nothing changed
-    assert rec["ablation_note"] == "dial 'warm' was not active on this run -- nothing to ablate"
-    assert rec["mean_nats_per_token"] == 0.0                 # with == without == the same fixed logprob
-    assert "null_floor" not in rec                           # steer_strengths.get(dial) is falsy -> no control
-
-
-
-
-
-
-def test_forced_receipt_behavior_off(iso):
-    steer = ScoreFakeSteer({"warm": [1.0, 0.0, 0.0]})
-    sub = ForcedFakeSub(["a", "b", "c"], _dial_lp, steer=steer)
-    rec = receipts.forced_receipt(DIAL_RUN, {"behavior_off": True}, sub)
-    assert rec["causal_verified"] is True
-    assert rec["has_effect"] is True
-    assert rec["null_floor"]["kind"] == "behavior_off_random_vector"
-
-
-def test_forced_receipt_returns_none_on_bad_input(iso):
-    sub = ForcedFakeSub(["a"], lambda b, s, v: [-0.1])
-    assert receipts.forced_receipt(None, {"memory_off": True}, sub) is None
-    assert receipts.forced_receipt({}, {"memory_off": True}, sub) is None
-    assert receipts.forced_receipt(CARD_RUN, {}, sub) is None
-    assert receipts.forced_receipt(CARD_RUN, None, sub) is None
-    assert receipts.forced_receipt(CARD_RUN, {"nonsense": True}, sub) is None
-
-
-
-
-def test_forced_receipt_is_deterministic_across_repeated_calls(iso):
-    steer = ScoreFakeSteer({"warm": [1.0, 0.0, 0.0]})
-    sub = ForcedFakeSub(["a", "b", "c"], _dial_lp, steer=steer)
-    a = receipts.forced_receipt(DIAL_RUN, {"dial": "warm"}, sub)
-    b = receipts.forced_receipt(DIAL_RUN, {"dial": "warm"}, sub)
-    assert a == b                                            # same seeded random control vector each time
-
-
 # --------------------------------------------------------------------------------- helper-level unit tests
+# (used to back the forced-mode dial null-floor control, now retired along with dial ablation -- see
+# test_section_influence.py for forced-mode section-ablation coverage, which has no null floor of its own.)
 
 def test_matched_length_filler_is_deterministic_and_matches_length():
     a = receipts._matched_length_filler(37)
@@ -565,12 +322,10 @@ def test_random_vector_of_norm_is_deterministic_per_seed_and_matches_norm():
 def test_receipt_default_mode_is_byte_identical_to_the_pre_s3_regen_receipt(iso):
     """The load-bearing regression: omitting `mode` (every pre-S3 caller) must produce EXACTLY
     receipts._receipt_regen's dict -- no added "mode"/"forced" keys, nothing changed."""
-    sub = FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.5}))
-    default = receipts.receipt(RUN, {"dial": "warm"}, sub)
-    explicit_regen = receipts.receipt(RUN, {"dial": "warm"}, FakeSub(mem=FakeMem(1.0),
-                                                                     steer=FakeSteer({"warm": 0.5})))
-    direct = receipts._receipt_regen(RUN, {"dial": "warm"}, FakeSub(mem=FakeMem(1.0),
-                                                                    steer=FakeSteer({"warm": 0.5})))
+    influence = {"section": "rag_context", "source": "auto"}
+    default = receipts.receipt(SECTION_RUN, influence, SectionFakeSub())
+    explicit_regen = receipts.receipt(SECTION_RUN, influence, SectionFakeSub())
+    direct = receipts._receipt_regen(SECTION_RUN, influence, SectionFakeSub())
     assert default == direct
     assert explicit_regen == direct
     assert "mode" not in default
@@ -579,45 +334,8 @@ def test_receipt_default_mode_is_byte_identical_to_the_pre_s3_regen_receipt(iso)
 
 
 def test_prove_all_default_mode_is_byte_identical_to_the_pre_s3_function(iso):
-    sub = FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.4}), concise_card_ids=[CARD_A, CARD_B])
-    default = receipts.prove_all(REDUNDANT_RUN, sub)
-    direct = receipts._prove_all_regen(REDUNDANT_RUN,
-                                       FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.4}),
-                                              concise_card_ids=[CARD_A, CARD_B]))
+    default = receipts.prove_all(SECTION_RUN, SectionFakeSub())
+    direct = receipts._prove_all_regen(SECTION_RUN, SectionFakeSub())
     assert default == direct
     assert "mode" not in default
     assert "forced_receipts" not in default
-
-
-def test_receipt_mode_forced_returns_just_the_forced_receipt(iso):
-    steer = ScoreFakeSteer({"warm": [1.0, 0.0, 0.0]})
-    sub = ForcedFakeSub(["a", "b", "c"], _dial_lp, steer=steer)
-    out = receipts.receipt(DIAL_RUN, {"dial": "warm"}, sub, mode="forced")
-    assert out == receipts.forced_receipt(DIAL_RUN, {"dial": "warm"},
-                                          ForcedFakeSub(["a", "b", "c"], _dial_lp,
-                                                       steer=ScoreFakeSteer({"warm": [1.0, 0.0, 0.0]})))
-    assert "baseline_reply" not in out                      # no regen fields at all in forced-only mode
-
-
-
-
-def test_prove_all_mode_forced_never_touches_chat(iso):
-    """mode="forced" needs no qwen substrate at all -- prove_all(mode="forced") must never call .chat()."""
-    class ChatBoom:
-        def chat(self, *a, **k):
-            raise AssertionError("forced-only prove_all must never regenerate")
-    manifest = {"influences_active": {"cards": [], "dials": [{"name": "warm", "value": 1.0}]}}
-    steer = ScoreFakeSteer({"warm": [1.0, 0.0, 0.0]})
-
-    class ForcedOnlySub(ChatBoom):
-        def __init__(self):
-            self.steer = steer
-        def score_tokens(self, *a, **k):
-            return ForcedFakeSub(["a", "b", "c"], _dial_lp, steer=steer).score_tokens(*a, **k)
-
-    out = receipts.prove_all(DIAL_RUN, ForcedOnlySub(), manifest=manifest, mode="forced")
-    assert out["mode"] == "forced"
-    assert len(out["forced_receipts"]) == 1
-    assert out["forced_receipts"][0]["influence"] == {"dial": "warm", "value": 1.0}
-
-

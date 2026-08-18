@@ -168,9 +168,6 @@ export interface WorkspaceReadout {
 }
 
 export interface RunConfiguration {
-  activeDials: Record<string, number>;
-  memoryCards: string[];
-  memoryStrength?: number;
   adapters: string[];
   changes: string[];
 }
@@ -230,8 +227,6 @@ export interface RunSummary {
   sessionKey?: string;
   flags: string[];
   warningCount: number;
-  activeDialCount: number;
-  memoryCardCount: number;
   /* Confidence shape from the run index (clozn/runs/summaries.py::confidence_facts). ALL OPTIONAL,
      and absent together: a run with no recorded trace sends none of these keys rather than zeros,
      because 0 is a real and terrible confidence value while absence is not a value. Never default

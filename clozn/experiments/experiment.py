@@ -9,8 +9,6 @@ can be a thin client over a single endpoint (POST /runs/<id>/experiment, wired i
 clozn/server/routes/receipts.py) instead of six different shapes.
 
 Registry (`REGISTRY`, also served read-only via `catalog()` / GET /experiments/types):
-  ablate_dial    {dial}                   -> receipt(mode)      -- real causal receipt
-  set_dial       {dial, value}            -> counterfactual     -- what-if dial regen (decode-time, cheap)
   swap_concept   {to_concept, from_hint?} -> swap_receipt       -- read disposition, inject a concept dir,
                                                                     diff vs baseline AND a random-dir null
   edit_turn      {turn, alt_user?}        -> branch             -- fork the transcript at a turn
@@ -33,14 +31,10 @@ receipts/swap_receipt.py for why these seams exist):
 """
 from __future__ import annotations
 
-from clozn.receipts.core import receipt as _receipt
 from clozn.receipts.metrics import receipt_metrics as _receipt_metrics
 from clozn.receipts.swap_receipt import swap_receipt as _swap_receipt
-from clozn.replay.counterfactual import counterfactual as _counterfactual
 from clozn.replay.replay import replay as _replay
 from clozn.replay.timetravel import branch as _branch
-
-_RECEIPT_MODES = ("regen", "forced", "both")
 
 
 # ================================================================================================ registry
@@ -48,20 +42,6 @@ _RECEIPT_MODES = ("regen", "forced", "both")
 # (which underlying function this dispatches to, for the catalog only -- never consulted by the dispatcher,
 # which switches on `type` explicitly below so a typo here can't silently misroute a real request).
 REGISTRY: dict = {
-    "ablate_dial": {
-        "label": "zero one behavior dial",
-        "needs": ["dial"],
-        "substrate": "chat",
-        "cost_hint": "cheap: a dial ablation is a decode-time hook, so the prompt KV stays reusable",
-        "op": "receipt (mode: regen|forced|both, default regen)",
-    },
-    "set_dial": {
-        "label": "set one behavior dial to a value",
-        "needs": ["dial", "value"],
-        "substrate": "chat",
-        "cost_hint": "cheap: a dial override is a decode-time hook, so the prompt KV stays reusable",
-        "op": "counterfactual",
-    },
     "swap_concept": {
         "label": "swap the model's disposition toward a different concept",
         "needs": ["to_concept"],
@@ -98,8 +78,6 @@ _SUBSTRATE_CHECKS = {
 }
 
 _CONTROL_BY_TYPE = {
-    "ablate_dial": "with/without intervention; forced mode adds an equal-norm random-vector control when available",
-    "set_dial": "direct baseline comparison; no null control",
     "swap_concept": "equal-norm random-direction null control",
     "edit_turn": "direct branch comparison; no null control",
     "reroll": "direct regenerated comparison; no null control",
@@ -149,24 +127,6 @@ def _grounded_est_seconds(run: dict, passes):
     if not isinstance(dur_ms, (int, float)) or dur_ms <= 0:
         return None
     return round(passes * (dur_ms / 1000.0), 2)
-
-
-def _forced_passes(forced: dict | None):
-    """How many teacher-forced scoring calls a forced-mode receipt actually made: 2 (with/without) or 3
-    (plus a null-floor control), read off what the receipt itself reports it computed. None when forced
-    scoring didn't complete (causal_verified False) -- the exact call count at the point of failure isn't
-    recoverable from the returned dict, so it is left unknown rather than guessed."""
-    if not forced or not forced.get("causal_verified"):
-        return None
-    return 3 if forced.get("null_floor") is not None else 2
-
-
-def _resolve_receipt_mode(method):
-    if method is None:
-        return "regen"
-    if method in _RECEIPT_MODES:
-        return method
-    raise ValueError(f"method must be one of {_RECEIPT_MODES} for this change type (got {method!r})")
 
 
 def _resolve_branch_sample(method):
@@ -225,10 +185,6 @@ def _plain_for(ctype: str, label: str, p: dict) -> str:
 
 
 def _question_for(ctype: str, change: dict, target) -> str:
-    if ctype == "ablate_dial":
-        return f"What if the '{target}' dial had not been applied?"
-    if ctype == "set_dial":
-        return f"What if the '{change.get('dial')}' dial had been set to {change.get('value')!r}?"
     if ctype == "swap_concept":
         hint = change.get("from_hint")
         lean = f" (instead of leaning toward '{hint}')" if hint else ""
@@ -269,84 +225,10 @@ def _envelope(run: dict, change: dict, ctype: str, p: dict) -> dict:
 
 # ========================================================================================= per-type handlers
 # Each returns a "pieces" dict (see _envelope) or None if the underlying op ran but honestly couldn't
-# produce a result (mirrors receipt()/counterfactual()/branch()/replay()'s own "never raise, return None on
+# produce a result (mirrors swap_receipt()/branch()/replay()'s own "never raise, return None on
 # failure" contract -- run_experiment() maps that None straight through so the route can 500 exactly like
 # every sibling route already does). A ValueError here means the CHANGE SPEC itself was malformed -- the
 # route maps that to 400, mirroring the sibling routes' own influence/overrides/turn pre-validation.
-
-def _ablate(run, method, sub, *, influence: dict, target, label: str) -> dict | None:
-    mode = _resolve_receipt_mode(method)
-    raw = _receipt(run, influence, sub, mode=mode)
-    if raw is None:
-        return None
-    op = f"receipt:{mode}"
-    if mode == "regen":
-        return {
-            "op": op, "raw": raw, "target": target, "label": label,
-            "baseline_reply": raw.get("baseline_reply"), "changed_reply": raw.get("ablated_reply"),
-            "delta": raw.get("delta"), "has_effect": raw.get("has_effect"),
-            "causal_verified": raw.get("causal_verified"), "null": None,
-            "cost_passes": 2, "cost_note": raw.get("cost_note") or "cost: unavailable",
-            "cost_est_seconds": _grounded_est_seconds(run, 2),
-        }
-    if mode == "forced":
-        forced_passes = _forced_passes(raw)
-        note = ("cost: teacher-forced scoring re-derives per-token confidence for the answer this run "
-                "already generated -- no new tokens are generated, so this is cheap relative to a "
-                "regenerated (regen-mode) ablation.")
-        return {
-            "op": op, "raw": raw, "target": target, "label": label,
-            # forced mode never generates new text -- it re-scores the SAME committed continuation, so
-            # there is no separate "ablated reply" text; the run's own recorded response is the only text.
-            "baseline_reply": run.get("response"), "changed_reply": None,
-            "delta": None, "has_effect": raw.get("has_effect"), "causal_verified": raw.get("causal_verified"),
-            "null": raw.get("null_floor"),
-            "cost_passes": forced_passes, "cost_note": note, "cost_est_seconds": None,
-        }
-    # mode == "both": regen fields at the top level, forced nested under raw["forced"].
-    forced = raw.get("forced") or {}
-    forced_passes = _forced_passes(forced)
-    note = (raw.get("cost_note") or "cost: unavailable") + (
-        " Also runs a forced-mode (teacher-forced scoring) pass alongside the regen arms -- cheap, "
-        "no new tokens generated.")
-    return {
-        "op": op, "raw": raw, "target": target, "label": label,
-        "baseline_reply": raw.get("baseline_reply"), "changed_reply": raw.get("ablated_reply"),
-        "delta": raw.get("delta"), "has_effect": raw.get("has_effect"),
-        "causal_verified": raw.get("causal_verified"), "null": forced.get("null_floor"),
-        "cost_passes": 2 + (forced_passes or 0), "cost_note": note,
-        "cost_est_seconds": _grounded_est_seconds(run, 2),   # only the regen portion is duration-comparable
-    }
-
-
-def _handle_ablate_dial(run, change, method, sub):
-    dial = change.get("dial")
-    if not dial:
-        raise ValueError("ablate_dial needs a 'dial'")
-    return _ablate(run, method, sub, influence={"dial": str(dial)}, target=str(dial),
-                   label=f"zeroing the '{dial}' dial")
-
-
-def _handle_set_dial(run, change, method, sub):
-    dial = change.get("dial")
-    if not dial:
-        raise ValueError("set_dial needs a 'dial'")
-    if "value" not in change:
-        raise ValueError("set_dial needs a 'value'")
-    value = change["value"]
-    raw = _counterfactual(run, {str(dial): value}, sub)
-    if raw is None:
-        return None
-    return {
-        "op": "counterfactual", "raw": raw, "target": str(dial), "label": f"setting '{dial}' to {value!r}",
-        "baseline_reply": raw.get("baseline_reply"), "changed_reply": raw.get("counterfactual_reply"),
-        "delta": raw.get("delta"), "has_effect": raw.get("has_effect"),
-        "causal_verified": raw.get("causal_verified"),
-        "null": None,   # counterfactual() has no null/random-direction control at all -- honestly absent
-        "cost_passes": 2, "cost_note": raw.get("cost_note") or "cost: unavailable",
-        "cost_est_seconds": _grounded_est_seconds(run, 2),
-    }
-
 
 def _handle_swap_concept(run, change, method, sub):
     to_concept = str(change.get("to_concept") or "").strip()
@@ -445,8 +327,6 @@ def _handle_toggle_greedy(run, change, method, sub):
 
 
 _HANDLERS = {
-    "ablate_dial": _handle_ablate_dial,
-    "set_dial": _handle_set_dial,
     "swap_concept": _handle_swap_concept,
     "edit_turn": _handle_edit_turn,
     "reroll": _handle_reroll,

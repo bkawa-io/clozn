@@ -375,13 +375,6 @@ public:
     int n_ubatch() const { return n_ubatch_; }  // accelerator execution microbatch
     std::map<std::string, std::size_t> memory_breakdown() const;
 
-    // Diffusion soft-PREFIX injection (train-on-HF / serve-on-engine hybrid, diffusion side): lay a
-    // continuous prefix (m x n_embd, row-major) as a FROZEN block at positions [0,m) that the whole board
-    // attends to; the board's KV shifts to [m, m+n). Contained to forward() via pos_offset_ -- the scheduler
-    // stays oblivious (the C++ analogue of the lab's PrefixAdapter). Clear before reusing the pooled context.
-    void set_diffusion_prefix(const std::vector<float>& embd, int m);
-    void clear_diffusion_prefix();
-
     // --- Autoregressive (causal) decode: the white-box read/steer harness over a standard
     // left-to-right LLM (any llama.cpp AR GGUF — Llama/Qwen/Mistral/...), as opposed to the
     // diffusion denoiser. The interpretability primitives (tap, probes, steering) are identical;
@@ -407,12 +400,6 @@ public:
     void copy_ar_seq(int src_seq_id, int dst_seq_id, int from = 0, int to = -1);
     void evict_ar_seq_from(int seq_id, int pos);
     int ar_seq_size(int seq_id) const;
-
-    // Like ar_forward, but the inputs are RAW embeddings (n_rows x n_embd, row-major) spliced in at
-    // [n_past, n_past+n_rows) via the llama_batch.embd path (the same one multimodal models use to inject
-    // image vectors) instead of token ids. The bridge that lets a PyTorch-trained soft prefix ride into
-    // the ggml runtime: train-on-HF, serve-on-llama.cpp. Returns the last row's next-token logits.
-    ForwardResult ar_forward_embd(const std::vector<float>& embd, int n_rows, int n_past);
 
     // Teacher-forced SCORE forward (AR only; /score route): ONE causal decode of the whole sequence
     // `tokens` from a clean KV cache (absolute position 0), with per-token logits enabled ONLY at
@@ -536,7 +523,6 @@ private:
     void decode_only(const std::vector<int>& board, int from, int to,
                      std::vector<float>* logits_out = nullptr);
     const float* decode_segment(const std::vector<int>& board, int from, int to);
-    void decode_prefix_embd();   // lay the diffusion soft prefix as embd at [0, diff_m_) (frozen context)
 
     // Decode [from, to) and freeze it: capture the boundary row (logits for position to-1,
     // the shifted-head source for the next block's first slot) and advance frozen_end_.
@@ -611,8 +597,6 @@ private:
     std::vector<int> ffn_cap_layers_;
     std::vector<int> ffn_cap_positions_;
     std::map<int, std::map<int, std::vector<float>>> ffn_rows_;   // layer -> pos -> [n_embd] row
-    std::vector<float> diff_prefix_;     // [diff_m_ * n_embd] diffusion soft prefix, laid as a frozen block [0,diff_m_)
-    int diff_m_ = 0;                     // diffusion prefix length (0 = none)
     // Multi-observer capture plane (Phase 2.3): eval_cb fills cap_bufs_ for every layer in the
     // capture set; fire_capture (end of ar_forward) moves them into a CaptureFrame for the sink.
     std::vector<int> capture_layers_;                 // layers to snapshot (empty = off)
@@ -620,7 +604,6 @@ private:
     int cap_rows_ = 0;                                // rows in the last capture (= segment length)
     std::function<void(CaptureFrame&&)> capture_sink_;
     void fire_capture(int from, int rows);            // hand the completed frame to the sink (if armed)
-    int pos_offset_ = 0;                 // = diff_m_ when a prefix is active: shifts the board's physical KV positions
     // ggml scheduler eval callback: grabs the mid-layer residual during llama_decode (no source patch).
     static bool eval_cb_thunk(struct ggml_tensor* t, bool ask, void* user_data);
     bool eval_cb(struct ggml_tensor* t, bool ask);

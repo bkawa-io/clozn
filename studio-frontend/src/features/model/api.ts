@@ -15,12 +15,6 @@ export interface EngineModel {
   capabilities: Record<string, boolean>;
 }
 
-export interface ModelAxis {
-  name: string;
-  value: number;
-  calibrated: boolean;
-}
-
 export interface LocalModel {
   path: string;
   filename: string;
@@ -31,9 +25,8 @@ export interface LocalModel {
 
 export interface ModelWorkspaceData {
   engine?: EngineModel;
-  axes: ModelAxis[];
   localModels?: LocalModel[];
-  errors: Partial<Record<"engine" | "axes" | "inventory", string>>;
+  errors: Partial<Record<"engine" | "inventory", string>>;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -76,15 +69,6 @@ async function request(url: string, options: RequestInit = {}): Promise<JsonReco
 
 function get(url: string, signal?: AbortSignal) {
   return request(url, { signal });
-}
-
-function post(url: string, body: JsonRecord, signal?: AbortSignal) {
-  return request(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-    signal,
-  });
 }
 
 function engineFromBody(body: JsonRecord): EngineModel | undefined {
@@ -135,24 +119,15 @@ function message(reason: unknown, fallback: string) {
 export async function loadModelWorkspace(signal?: AbortSignal): Promise<ModelWorkspaceData> {
   const results = await Promise.allSettled([
     get("/engine/health", signal),
-    post("/steer/axes", {}, signal),
     get("/models/local", signal),
   ]);
-  const [engine, axes, inventory] = results;
+  const [engine, inventory] = results;
   const errors: ModelWorkspaceData["errors"] = {};
   if (engine.status === "rejected") errors.engine = message(engine.reason, "Engine health unavailable");
-  if (axes.status === "rejected") errors.axes = message(axes.reason, "Steering axes unavailable");
   if (inventory.status === "rejected") errors.inventory = message(inventory.reason, "Model inventory unavailable");
 
   return {
     engine: engine.status === "fulfilled" ? engineFromBody(engine.value) : undefined,
-    axes: axes.status === "fulfilled"
-      ? records(axes.value.axes).map((axis) => ({
-          name: String(axis.name || ""),
-          value: Number(axis.value) || 0,
-          calibrated: axis.calibrated === true,
-        })).filter((axis) => axis.name)
-      : [],
     localModels: inventory.status === "fulfilled" ? localModelsFromBody(inventory.value) : undefined,
     errors,
   };

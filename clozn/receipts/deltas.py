@@ -13,43 +13,28 @@ _NOTE_BASELINE = (
 
 def _key(influence: dict) -> str:
     influence = influence or {}
-    if influence.get("card_id"):
-        return f"card:{influence['card_id']}"
-    if influence.get("dial"):
-        return f"dial:{influence['dial']}"
     if influence.get("section"):
         return f"section:{influence['section']}"
-    if influence.get("memory_off"):
-        return "memory_off"
-    if influence.get("behavior_off"):
-        return "behavior_off"
     return "unknown"
 
 
 def _ablation_changes(influence: dict) -> dict | None:
-    """One influence spec -> replay changes for its ablated arm."""
+    """One influence spec -> replay changes for its ablated arm. `section` is the only ablatable influence
+    kind left in the product (memory-card and tone-dial ablation were cut along with cards and dials);
+    anything else -- including a stray legacy `card_id`/`memory_off`/`behavior_off` spec from before that
+    cut -- is not something this codebase can ablate, and returns None rather than claim otherwise."""
     if not isinstance(influence, dict):
         return None
-    cid = influence.get("card_id")
-    if cid:
-        return {"disabled_memory_ids": [str(cid)]}
-    dial = influence.get("dial")
-    if dial:
-        return {"behavior_overrides": {str(dial): 0.0}}
     section = influence.get("section")
     if section:
         return {"exclude_sections": [str(section)]}
-    if influence.get("memory_off"):
-        return {"memory_off": True}
-    if influence.get("behavior_off"):
-        return {"behavior_off": True}
     return None
 
 
 def _section_influences(manifest: dict) -> tuple[list, list]:
     """Sections from the M1 manifest (`influences_active.sections`, produced by explain.py from a run's
     `sections` field) as receipt influence specs -- (influences, skipped), the same two-list shape
-    `_fired_influences` already returns for cards/dials, so core.py's caller can just `.extend()` both.
+    `_fired_influences` in core.py returns directly to its own caller.
 
     SOURCE WHITELIST: `clozn.runs.sections` only ever produces `source: "api"` or `"auto"` today (memory
     cards, and the third `"memory_card"` section source that used to shadow a fired card's own richer
@@ -78,56 +63,34 @@ def _section_influences(manifest: dict) -> tuple[list, list]:
 
 
 def _merge_ablation_changes(influences: list) -> dict:
-    """Joint replay changes that ablate every influence at once."""
-    ids: list = []
-    overrides: dict = {}
+    """Joint replay changes that ablate every (section) influence at once."""
     sections: list = []
-    memory_off = behavior_off = False
     for inf in influences:
         c = _ablation_changes(inf) or {}
-        ids.extend(c.get("disabled_memory_ids") or [])
-        overrides.update(c.get("behavior_overrides") or {})
         sections.extend(c.get("exclude_sections") or [])
-        memory_off = memory_off or bool(c.get("memory_off"))
-        behavior_off = behavior_off or bool(c.get("behavior_off"))
-    merged: dict = {}
-    if ids:
-        merged["disabled_memory_ids"] = ids
-    if overrides:
-        merged["behavior_overrides"] = overrides
-    if sections:
-        merged["exclude_sections"] = sections
-    if memory_off:
-        merged["memory_off"] = True
-    if behavior_off:
-        merged["behavior_off"] = True
-    return merged
+    return {"exclude_sections": sections} if sections else {}
 
 
 def _cost_note(influence: dict) -> str:
     influence = influence or {}
-    if influence.get("card_id") or influence.get("memory_off"):
-        return ("cost: a front-of-context memory ablation changes the shared prefix, so the ablated arm "
-                "re-prefills the whole context (no KV reuse) -- the expensive case.")
     if influence.get("section"):
         return ("cost: a section ablation edits the prompt content itself, so the ablated arm re-prefills "
-                "the whole context (no KV reuse) -- the same expensive case as a memory ablation.")
-    return ("cost: a dial ablation acts at decode time, so the prompt KV stays reusable -- cheap relative "
-            "to a memory ablation.")
+                "the whole context (no KV reuse) -- the expensive case.")
+    return "cost: unknown ablation kind; no cost model for this influence spec."
 
 
 def _unapplied_note(ablated_child: dict, changes: dict) -> str | None:
-    notes = ((ablated_child or {}).get("memory") or {}).get("notes") or {}
-    if changes.get("disabled_memory_ids") and "disabled_memory_ids" in notes:
-        return notes["disabled_memory_ids"]
-    if changes.get("edited_memory") and "edited_memory" in notes:
-        return notes["edited_memory"]
-    if changes.get("exclude_sections") and "exclude_sections" in notes:
-        sec_notes = notes["exclude_sections"]
-        if isinstance(sec_notes, dict):
-            return "; ".join(f"{k}: {v}" for k, v in sec_notes.items())
-        return str(sec_notes)
-    return None
+    """Honest "this ablation didn't (fully) apply" text, read off the child replay's own
+    `section_notes` (replay.py's `_apply_section_exclusions` -- keyed by requested section name, one
+    entry per name that did NOT fully apply: unknown name, no manifest, no usable parts, or a
+    final_prompt-anchored part replay's chat(messages, ...) surface can't splice). None when the change
+    wasn't a section exclusion, or every requested section applied cleanly."""
+    if not changes.get("exclude_sections"):
+        return None
+    sec_notes = (ablated_child or {}).get("section_notes") or {}
+    if not sec_notes:
+        return None
+    return "; ".join(f"{k}: {v}" for k, v in sec_notes.items())
 
 
 def _build_receipt(influence: dict, baseline_child: dict, ablated_child: dict, changes: dict) -> dict:
@@ -148,7 +111,7 @@ def _build_receipt(influence: dict, baseline_child: dict, ablated_child: dict, c
     if isinstance(influence, dict) and influence.get("section"):
         # section receipts carry the same honesty fields every other receipt does (above); this just
         # tags WHICH kind of influence it is and its manifest identity, for a consumer rendering cards/
-        # dials/sections side by side without having to sniff `influence`'s shape.
+        # sections side by side without having to sniff `influence`'s shape.
         out["kind"] = "section"
         out["section_name"] = influence.get("section")
         out["section_source"] = influence.get("source")

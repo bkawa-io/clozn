@@ -7,8 +7,8 @@
 ## The decision
 
 **The product is forward-only; gradient work is offline.** The installed gateway never imports Torch,
-Transformers, or a live research model. Offline jobs may produce model-scoped dials, J-lenses, or other
-artifacts, and the product applies them only after their identity and dimensions validate.
+Transformers, or a live research model. Offline jobs may produce J-lenses or other artifacts, and the
+product applies them only after their identity and dimensions validate.
 
 The earlier prompt-card/learned-prefix memory system and its user-facing workbench were removed on
 2026-07-27. A few compatibility readers and archived research modules retain old field names; they do
@@ -57,7 +57,7 @@ template · generate · sample · tap · score · steer · optional J-lens
 
 ### Offline jobs and research
 
-- Dial derivation/calibration and model qualification.
+- Model qualification.
 - J-lens fitting and artifact export.
 - Research scripts and retained historical modules, with no public serving command.
 
@@ -65,7 +65,6 @@ template · generate · sample · tap · score · steer · optional J-lens
 
 | Artifact | Producer | Consumer | Validation |
 |---|---|---|---|
-| model-scoped dial bundle | offline calibration | engine steering | checkpoint/substrate identity and safe ranges |
 | J-lens manifest and matrices | offline fit/export | engine `/jlens` | manifest, hashes, dimensions, exact qualified GGUF |
 | SAE bundle | external or offline export | engine readout | model/layer/dimension identity |
 | run rows and trace blobs | gateway | CLI, Studio, receipts | transactional migrations and digest verification |
@@ -77,5 +76,5 @@ template · generate · sample · tap · score · steer · optional J-lens
    limited.
 2. Generation/steering mutations are serialized; there is no vLLM-style continuous batching.
 3. Loopback is the supported deployment. Remote exposure requires an explicit auth/TLS design.
-4. Core-qualified does not mean dial-, lens-, SAE-, adapter-, or structured-I/O-qualified.
+4. Core-qualified does not mean lens-, SAE-, adapter-, or structured-I/O-qualified.
 5. Managed setup is merged but not released until the public archive matrix exists.

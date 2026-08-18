@@ -232,7 +232,6 @@ function variantDef(value: unknown): VariantDef {
   return {
     name: str(v.name) ?? "",
     kind: str(v.kind) ?? "base",
-    dials: v.dials && typeof v.dials === "object" ? (v.dials as Record<string, number>) : undefined,
     model: typeof v.model === "string" ? v.model : undefined,
     baseUrl: typeof v.base_url === "string" ? v.base_url : undefined,
     systemPrompt: typeof v.system_prompt === "string" ? v.system_prompt : undefined,

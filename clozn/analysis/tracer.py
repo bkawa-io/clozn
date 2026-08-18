@@ -57,7 +57,7 @@ from typing import Optional
 
 import numpy as np
 
-from clozn.behavior.steering.concept_dir import dir_c_from_row, load_jlens_jacobians
+from clozn.analysis.concept_dir import dir_c_from_row, load_jlens_jacobians
 
 NOISE_FLOOR_MULT = 3.0   # survivors must beat this multiple of the median |control| delta
 DEFAULT_ENGINE = "http://127.0.0.1:8080"

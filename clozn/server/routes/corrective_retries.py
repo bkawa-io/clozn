@@ -43,16 +43,16 @@ def try_post(h, p, body):
             return True
         preset = str(body.get("preset") or "")
         # Optional -- absent/omitted keeps the default prompt_policy behavior byte-for-byte (spec:
-        # "must not expose raw scientific dials as the default interaction"). "control_vector" is an
-        # explicit opt-in that may still fall back to prompt_policy (comparison["backend_fallback"])
-        # when this exact model has no calibrated dial for `preset` -- see retry_compare's docstring.
+        # "must not expose raw scientific dials as the default interaction"). A calibrated named-dial
+        # backend ("control_vector") existed here before named-dial personalization was retired; the
+        # corrected arm is prompt_policy-only now -- see retry_compare's docstring.
         backend = body.get("backend")
         from clozn.replay.corrective import CORRECTION_PRESETS, retry_compare
         if preset not in CORRECTION_PRESETS:
             h._json(400, {"error": "preset must be one of: " + ", ".join(CORRECTION_PRESETS)})
             return True
-        if backend is not None and backend not in ("prompt_policy", "control_vector"):
-            h._json(400, {"error": "backend must be omitted, 'prompt_policy', or 'control_vector'"})
+        if backend is not None and backend != "prompt_policy":
+            h._json(400, {"error": "backend must be omitted or 'prompt_policy'"})
             return True
         mismatch = _identity_conflict(run, sub)
         if mismatch:

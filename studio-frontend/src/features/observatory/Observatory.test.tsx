@@ -87,8 +87,6 @@ function reading(
     ],
     sources: [],
     configuration: {
-      activeDials: {},
-      memoryCards: [],
       adapters: [],
       changes: [],
     },
@@ -109,8 +107,6 @@ function summary(data: ObservatoryData): RunSummary {
     duration: data.duration,
     flags: [],
     warningCount: 0,
-    activeDialCount: 0,
-    memoryCardCount: 0,
   };
 }
 

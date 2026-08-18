@@ -16,7 +16,6 @@ export interface SnapshotManifest {
     promptTokens?: number;
     causal?: boolean;
     hasSampler?: boolean;
-    hasSteer?: boolean;
   };
   identity: {
     modelSha256?: string;
@@ -107,7 +106,6 @@ function parseManifest(value: unknown): SnapshotManifest {
       promptTokens: optionalNumber(state.prompt_tokens),
       causal: typeof state.causal === "boolean" ? state.causal : undefined,
       hasSampler: typeof state.has_sampler === "boolean" ? state.has_sampler : undefined,
-      hasSteer: typeof state.has_steer === "boolean" ? state.has_steer : undefined,
     },
     identity: {
       modelSha256: optionalString(identity.model_sha256),

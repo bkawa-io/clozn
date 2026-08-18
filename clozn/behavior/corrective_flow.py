@@ -4,9 +4,8 @@ The generation step and the keep step are deliberately separate.  Confirming a p
 matched greedy comparison and persists its structured outcome; it never changes any standing policy.
 Keeping a successful corrected child selects it as ITS OWN parent run's revision -- a per-run,
 request-local choice, not a session/profile preference that would shape a later, unrelated request.
-Durable, auto-applied corrections (session/profile scope, persistent activation) were retired; see
-docs/CAPABILITIES.md. The keep transaction still has its own idempotency key and undo, but "undo"
-here only ever reverts which revision THIS run points at.
+The keep transaction still has its own idempotency key and undo, but "undo" here only ever reverts
+which revision THIS run points at.
 """
 from __future__ import annotations
 
@@ -96,7 +95,6 @@ def run_fingerprint(run: Mapping) -> str:
         "identity": run.get("identity"),
         "context_receipt": run.get("context_receipt"),
         "session_key": run.get("session_key"),
-        "active_profile": (run.get("meta") or {}).get("active_profile"),
         "behavior": run.get("behavior"),
     })
 
@@ -125,8 +123,8 @@ def scope_eligibility(run: Mapping, action_id: str) -> list[dict]:
     }]
 
 
-def registry_for_run(run: Mapping, *, steer=None) -> dict:
-    doc = registry.build_registry(steer=steer)
+def registry_for_run(run: Mapping) -> dict:
+    doc = registry.build_registry()
     for action in doc["actions"]:
         action["scope_eligibility"] = scope_eligibility(run, action["id"])
     doc["run_id"] = run.get("id")
@@ -182,12 +180,11 @@ def create_preview(
     action_id: str,
     requested_backend: str = "prompt_policy",
     *,
-    steer=None,
     now: float | None = None,
 ) -> dict:
     if not isinstance(run, Mapping) or not run.get("id"):
         raise CorrectiveFlowError("run must be a stored run with an id")
-    actions = registry_for_run(run, steer=steer)
+    actions = registry_for_run(run)
     action = next((item for item in actions["actions"] if item["id"] == action_id), None)
     if action is None:
         raise CorrectiveFlowError(
@@ -419,8 +416,7 @@ def keep_result(
     key = _validate_key(idempotency_key)
     if scope != "once":
         raise CorrectiveFlowError(
-            "scope must be once; durable session/profile corrections were retired -- "
-            "keeping a result only ever selects it as this run's own revision"
+            "scope must be once; keeping a result only ever selects it as this run's own revision"
         )
     clock = float(time.time() if now is None else now)
     with _LOCK:
@@ -526,13 +522,12 @@ def undo_keep(
         if tx.get("undone_ts") is not None:
             raise CorrectiveFlowError("corrective action was already undone")
         if tx.get("scope") != "once":
-            # A transaction from before durable session/profile keeps were retired. The module that
-            # could reverse it (clozn.behavior.corrective_retries) is gone; there is nothing left it
-            # could still be applying to a new generation (see generation_gateway.py), so refuse
-            # rather than guess at a mutation this build no longer knows how to perform.
+            # A transaction from a retired non-once scope. Nothing left in this build knows how to
+            # reverse it (see generation_gateway.py) -- refuse rather than guess at a mutation this
+            # build no longer supports.
             raise CorrectiveFlowError(
-                "this transaction predates the retirement of durable session/profile corrections "
-                "and can no longer be undone through this API; it has no effect on new generations"
+                "this transaction used a scope that is no longer supported and can no longer be "
+                "undone through this API; it has no effect on new generations"
             )
         parent = get_run(str(tx.get("target") or ""))
         if parent is None:

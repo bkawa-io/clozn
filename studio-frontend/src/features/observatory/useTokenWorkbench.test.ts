@@ -55,7 +55,7 @@ function run(id: string, tokenPrefix = "t"): ObservatoryData {
     })),
     candidates: [{ token: `${tokenPrefix}0`, score: 0.8, delta: 0 }],
     sources: [],
-    configuration: { activeDials: {}, memoryCards: [], adapters: [], changes: [] },
+    configuration: { adapters: [], changes: [] },
   };
 }
 

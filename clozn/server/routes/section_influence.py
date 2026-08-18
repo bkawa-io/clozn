@@ -2,14 +2,12 @@
 scores with NO regeneration (prompt-section influence, fast path).
 
 WHY THIS EXISTS. `/runs/<id>/receipts` (mode=forced) already computes a rigorous teacher-forced receipt per
-FIRED influence (clozn.receipts.forced.forced_receipt) -- including, for a card/dial, a null-floor control
--- but that's the "prove everything" batch call: one big object per influence (a per-token deltas array,
-top_dependent, a caveat paragraph, ...), card/dial/behavior-off receipts mixed in alongside sections, and a
-second /score call per receipt for the null floor nobody needs here. What a per-section overview (the
-Studio's section panel; `clozn run --show-influence`; the REPL's `/influence`) actually wants is much
-smaller: one ranked number per prompt SECTION, fast. This route is a THIN reshape of forced_receipt's own
-machinery -- same splice helpers, same /score seam, same honesty rules -- into the flatter, FIXED contract
-the UI is built against (do not change these field names):
+FIRED influence (clozn.receipts.forced.forced_receipt) -- but that's the "prove everything" batch call: one
+big object per influence (a per-token deltas array, top_dependent, a caveat paragraph, ...). What a
+per-section overview (the Studio's section panel; `clozn run --show-influence`; the REPL's `/influence`)
+actually wants is much smaller: one ranked number per prompt SECTION, fast. This route is a THIN reshape
+of forced_receipt's own machinery -- same splice helpers, same /score seam, same honesty rules -- into the
+flatter, FIXED contract the UI is built against (do not change these field names):
 
     {"run_id", "method": "teacher_forced", "note": <the approximation disclaimer>,
      "baseline_logprob": <float>,
@@ -25,13 +23,12 @@ across every scored section (0.0 for every section, never NaN, when every delta 
 token count, so a long vs. short answer's deltas are comparable.  `summary` is a bucketed, honest phrase
 ("negligible"/"small"/"substantial" x "better"/"worse") -- never a causal claim.
 
-DEDUP (why a "memory_card" section is silently absent from `sections`, never surfaced as an error): that
-section is the SAME fired influence already covered, more richly, by a card_id receipt elsewhere
-(clozn.receipts.deltas._section_influences's dedup rule -- restated here for the identical reason: scoring
-it again here would double-count one real cause under two names). It also has a practical blocker: its
-`parts[].message_index` point into `assembled_messages`, not the raw message list this route's splice
-(reused from clozn.replay.replay, via forced.py) works against -- see clozn.receipts.forced's own module
-docstring for the full raw-vs-assembled story. Only "api"/"auto" sourced sections are scored.
+DEDUP (why a legacy "memory_card" section is silently absent from `sections`, never surfaced as an error):
+that source was cut from the product on 2026-07-27 along with the rest of memory, so `clozn.runs.sections`
+never produces it today; a run recorded before the cut may still carry a stray `"memory_card"`-sourced
+entry in its manifest, and `clozn.receipts.deltas._section_influences`'s whitelist (restated here for the
+identical reason) skips it rather than try to ablate a source this codebase no longer knows how to. Only
+"api"/"auto" sourced sections are scored.
 
 COST, stated honestly: this calls `forced_receipt()` once per ablatable section, and forced_receipt itself
 always re-scores its own WITH arm internally -- so this route redoes that one (cheap: one forward pass over

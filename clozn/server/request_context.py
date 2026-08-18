@@ -54,8 +54,8 @@ class RequestContext:
     so a reference held by a caller (e.g. sse.py, to call .cancel() on the in-flight request) keeps
     describing THAT call even after a later one starts and replaces self._request with a different object.
 
-    Fields (mirrors the backlog's "id, sampling, memory manifest, steering snapshot, trace, finish reason,
-    cancellation" list exactly):
+    Fields (mirrors the backlog's "id, sampling, prompt manifest, trace, finish reason, cancellation"
+    list exactly):
       request_id          -- new_request_id(), for log correlation.
       sampling             -- ctx._resolve_sampling()'s dict, or None for the greedy/forced-deterministic path.
       generation_meta      -- ctx._engine_generation_meta(...)'s reproducibility block (what _last_generation_meta aliases).
@@ -63,13 +63,12 @@ class RequestContext:
                               event; empty when that event was unavailable or the final reply was retried.
       gateway_timing       -- request-local gateway spans (template rendering/worker dispatch). These
                               use the gateway monotonic clock and are never aligned to worker offsets.
-      memory_manifest       -- a snapshot of mem_out once the call has finished mutating it (prompt-mode block/
-                              applied cards/gate); the LIVE mem_out dict remains the primary,
+      prompt_manifest       -- a snapshot of mem_out once the call has finished mutating it
+                              (assembled_messages/final_prompt -- what memory_manifest carried before the
+                              2026-07-27 cards cut and the personalization cut that followed, now just what
+                              was actually sent); the LIVE mem_out dict remains the primary,
                               already-per-call-isolated channel (callers own and read it directly) -- this is
                               an additional, consolidated copy on the context object for symmetry.
-      steering_snapshot     -- the dial-strength dict THIS call actually used (self.steer.strength or the disk
-                              fallback, copied at dispatch time) -- decoupled from the LIVE self.steer.strength,
-                              which a concurrent /steer/set could still be mutating.
       trace                -- the per-token step list (what last_stream_trace() aliases).
       finish_reason         -- the engine's stop cause, or None (missing reads as missing, never as "stop").
       finish_reason_raw     -- the worker event's pre-normalization stop cause, when available.
@@ -96,8 +95,7 @@ class RequestContext:
     generation_meta: dict = field(default_factory=dict)
     generation_timing: dict = field(default_factory=dict)
     gateway_timing: dict = field(default_factory=dict)
-    memory_manifest: dict = field(default_factory=dict)
-    steering_snapshot: dict = field(default_factory=dict)
+    prompt_manifest: dict = field(default_factory=dict)
     trace: list = field(default_factory=list)
     finish_reason: str | None = None
     finish_reason_raw: str | None = None

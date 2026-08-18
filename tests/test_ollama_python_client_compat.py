@@ -29,26 +29,11 @@ import clozn.runs.store as runlog  # noqa: E402
 from clozn.server import app as cs  # noqa: E402
 
 
-class _Memory:
-    memory_strength = 1.0
-    rules = []
-    prefix = None
-
-
-class _Steer:
-    strength = {}
-
-    def active(self):
-        return {}
-
-
 class _Substrate:
     name = "engine"
     brain = None
 
     def __init__(self):
-        self.memory = self._mem = _Memory()
-        self.steer = _Steer()
         self._finish = "stop"
         self._stream_trace = []
 

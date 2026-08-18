@@ -131,14 +131,6 @@ def _prompt_blocks(presets) -> list[str]:
     )]
 
 
-def _dial_applied(child: Mapping[str, Any], dial: str, strength: float) -> bool:
-    active = ((child.get("behavior") or {}).get("active_dials") or {})
-    try:
-        return abs(float(active.get(dial, 0.0)) - float(strength)) < 1e-6
-    except (TypeError, ValueError):
-        return False
-
-
 def _structured_failure(
     run: Mapping[str, Any],
     preset: str,
@@ -192,18 +184,10 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *,
     ``ValueError`` before generation.  No dial or memory setting is changed here;
     replay remains the sole owner of temporary substrate state and restoration.
 
-    ``backend`` chooses the corrected arm's mechanism:
-      * ``None`` (default) or ``"prompt_policy"`` -- the system-instruction preset, exactly the
-        behavior this function had before control-vector support existed. This is the DEFAULT for a
-        reason (spec: "must not expose raw scientific dials as the default interaction") -- callers
-        opt into ``"control_vector"`` explicitly, it is never chosen automatically.
-      * ``"control_vector"`` -- request the calibrated dial backing `preset` (clozn.behavior.
-        registry.qualified_dial_strength), applied via replay's existing ``behavior_overrides``
-        snapshot/restore isolation (clozn/replay/replay.py) -- no new isolation code needed. If no
-        calibrated dial exists for this exact model (or `preset` has no matching dial at all), this
-        FALLS BACK to prompt_policy and the return value labels it: ``backend == "prompt_policy"``
-        and ``backend_fallback is True``, per the spec's "never market a prompt rewrite as an
-        internal steering intervention."
+    ``backend`` chooses the corrected arm's mechanism. ``None`` (default) or ``"prompt_policy"`` is
+    the only supported value -- the system-instruction preset. A calibrated named-dial backend
+    (``"control_vector"``) existed here before named-dial personalization was retired; the corrected
+    arm is always the prompt-instruction rewrite now.
     """
     if not isinstance(run, Mapping) or not run.get("id"):
         raise ValueError("run must be a stored run with an id")
@@ -211,8 +195,8 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *,
     # Validate before either generation. The injected copy is intentionally not put
     # back into ``run``: replay must journal only caller-delivered messages.
     inject_correction(messages, preset)
-    if backend not in (None, "prompt_policy", "control_vector"):
-        raise ValueError("backend must be None, 'prompt_policy', or 'control_vector'")
+    if backend not in (None, "prompt_policy"):
+        raise ValueError("backend must be None or 'prompt_policy'")
     budget = _original_budget(run)
     requested_backend = backend or "prompt_policy"
 
@@ -262,68 +246,34 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *,
         )
 
     instruction = CORRECTION_PRESETS[preset]
-    dial_choice = None
     chosen_backend = "prompt_policy"
     backend_fallback = False
-    if backend == "control_vector":
-        from clozn.behavior import registry
-        dial_choice = registry.qualified_dial_strength(preset, getattr(sub, "steer", None))
-        if dial_choice is not None:
-            chosen_backend = "control_vector"
-        else:
-            backend_fallback = True     # asked for control_vector; not qualified -- honest fallback
 
-    if chosen_backend == "control_vector":
-        dial, strength = dial_choice
-        corrected_changes = {
-            "greedy": True,
-            "corrective_retry": {
-                "arm": "corrected", "preset": preset, "method": "control_vector",
-                "dial": dial, "strength": strength,
-            },
-            "behavior_overrides": {dial: strength},
-        }
-        try:
-            corrected = replay_run(
-                dict(run),
-                corrected_changes,
-                sub,
-                max_new=budget,
-            )
-        except Exception as exc:
-            if not structured:
-                raise
-            return _structured_failure(
-                run, preset, requested_backend, budget,
-                baseline_outcome,
-                {"status": "error", "error": {"code": "generation_error", "message": str(exc)}},
-            )
-    else:
-        corrected_changes = {
-            "greedy": True,
-            "corrective_retry": {
-                "arm": "corrected",
-                "preset": preset,
-                "method": "system_instruction",
-                "instruction": instruction,
-            },
-        }
-        try:
-            corrected = replay_run(
-                dict(run),
-                corrected_changes,
-                sub,
-                prompt_instructions=_prompt_blocks([preset]),
-                max_new=budget,
-            )
-        except Exception as exc:
-            if not structured:
-                raise
-            return _structured_failure(
-                run, preset, requested_backend, budget,
-                baseline_outcome,
-                {"status": "error", "error": {"code": "generation_error", "message": str(exc)}},
-            )
+    corrected_changes = {
+        "greedy": True,
+        "corrective_retry": {
+            "arm": "corrected",
+            "preset": preset,
+            "method": "system_instruction",
+            "instruction": instruction,
+        },
+    }
+    try:
+        corrected = replay_run(
+            dict(run),
+            corrected_changes,
+            sub,
+            prompt_instructions=_prompt_blocks([preset]),
+            max_new=budget,
+        )
+    except Exception as exc:
+        if not structured:
+            raise
+        return _structured_failure(
+            run, preset, requested_backend, budget,
+            baseline_outcome,
+            {"status": "error", "error": {"code": "generation_error", "message": str(exc)}},
+        )
     if corrected is None:
         if structured:
             return _structured_failure(
@@ -355,20 +305,14 @@ def retry_compare(run: Mapping[str, Any], preset: str, sub, *,
             baseline_outcome, corrected_outcome,
         )
     try:
-        from .counterfactual import _coherence
+        from .coherence import _coherence
         coherence = _coherence(corrected_reply)
     except Exception:
         coherence = {"degenerate": False, "reasons": []}
 
-    if chosen_backend == "control_vector":
-        dial, strength = dial_choice
-        intervention_observed = _dial_applied(corrected, dial, strength)
-        backend_parameters = {"dial": dial, "strength": strength}
-        qualification, qualified = "model_build_exact", True
-    else:
-        intervention_observed = _instruction_survived(corrected, instruction)
-        backend_parameters = {"preset": preset}
-        qualification, qualified = "generic", None
+    intervention_observed = _instruction_survived(corrected, instruction)
+    backend_parameters = {"preset": preset}
+    qualification, qualified = "generic", None
     execution_identity = _execution_identity(
         run, preset, chosen_backend, backend_parameters, qualification=qualification,
         qualified=qualified, fallback=backend_fallback,

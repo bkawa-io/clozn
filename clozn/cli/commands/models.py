@@ -52,8 +52,8 @@ KNOWN = [
 PULLABLE = {
     "qwen-0.5b": ("bartowski/Qwen2.5-0.5B-Instruct-GGUF",    "Qwen2.5-0.5B-Instruct-Q8_0.gguf"),
     "qwen":      ("bartowski/Qwen2.5-7B-Instruct-GGUF",      "Qwen2.5-7B-Instruct-Q4_K_M.gguf"),
-    # Wave 1 qualification checkpoints. Keep these exact: J-lenses and calibrated dials are tied to
-    # the base checkpoint, tokenizer, activation dimensions, and qualified GGUF digest.
+    # Wave 1 qualification checkpoints. Keep these exact: J-lenses (Q5) are tied to the base checkpoint,
+    # tokenizer, activation dimensions, and qualified GGUF digest.
     "qwen3.5":   ("unsloth/Qwen3.5-9B-GGUF",                  "Qwen3.5-9B-Q4_K_M.gguf"),
     "llama":     ("bartowski/Meta-Llama-3.1-8B-Instruct-GGUF", "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"),
     "gemma4":    ("ggml-org/gemma-4-E4B-it-GGUF",             "gemma-4-E4B-it-Q4_K_M.gguf"),

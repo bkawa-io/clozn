@@ -3061,8 +3061,8 @@ input[type="range"]::-webkit-slider-thumb {
   overflow-wrap: anywhere;
 }
 
-.variant-dial-deltas > header,
-.variant-dial-deltas > div {
+.variant-deltas > header,
+.variant-deltas > div {
   display: flex;
   min-height: 32px;
   align-items: center;
@@ -3073,17 +3073,17 @@ input[type="range"]::-webkit-slider-thumb {
   font-size: 7px;
 }
 
-.variant-dial-deltas > header {
+.variant-deltas > header {
   color: var(--ink-faint);
   font-size: 6px;
   letter-spacing: .08em;
 }
 
-.variant-dial-deltas b {
+.variant-deltas b {
   font-weight: 500;
 }
 
-.variant-dial-deltas output {
+.variant-deltas output {
   color: var(--ink-soft);
 }
 

@@ -11,7 +11,7 @@ _CONSTRAINED_SYSTEM = (
     "measured facts listed below -- do not invent, assume, or recall anything else about the exchange "
     "(you have not been shown the question or the reply itself, on purpose). Every sentence you write must "
     "be grounded in one of these facts; write that fact's id in square brackets immediately after using it, "
-    "for example [dial:warm] or [mem_ab12]. If a section below says nothing applied, do not claim it did. "
+    "for example [hesitation:2] or [concept:7]. If a section below says nothing applied, do not claim it did. "
     "If there are no facts at all, say plainly that no measured influence is on record for this reply -- "
     "that is a complete and correct answer, not a failure."
 )

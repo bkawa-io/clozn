@@ -148,11 +148,6 @@ def _fixed_sampling(run: dict) -> bool:
     return config is False or (isinstance(config, dict) and isinstance(config.get("seed"), int))
 
 
-def _candidate_dials(run: dict) -> dict:
-    value = _dict(run.get("behavior")).get("active_dials")
-    return dict(value) if isinstance(value, dict) else {}
-
-
 def _model_identity(run: dict):
     """Return the strongest recorded model identity available for a run.
 
@@ -642,8 +637,6 @@ class SubstrateReplayRunner:
             return {"run": self.last_run} if self.last_run else {"error": "template replay failed"}
 
         changes = {
-            "behavior_off": True,
-            "behavior_overrides": _candidate_dials(candidate),
             "controlled_test": {"kind": kind, "arm": arm},
         }
         engine = getattr(self.substrate, "engine", None)
