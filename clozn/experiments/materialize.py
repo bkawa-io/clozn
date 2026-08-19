@@ -18,7 +18,7 @@ from .execution import (
     resolve_delete_source,
 )
 from .effective_prompt import resolve_effective_prompt
-from .interventions import DeleteSource, ForceToken
+from .interventions import DeleteSource, ForceToken, SampleWith
 from .observations import GeneratedObservation, execution_observation_identity
 from .persistence import ExperimentArmView, ExperimentView, ObservationStore
 from .runner import ExperimentResult
@@ -399,8 +399,9 @@ def materialize_generated_observation(
         raise MaterializationError("unavailable or failed generation cannot be materialized")
     if observation_id is not None and observation.observation_id != observation_id:
         raise MaterializationStaleError("the requested GeneratedObservation does not match the persisted arm")
-    if arm.intervention is not None and not isinstance(arm.intervention, ForceToken):
-        raise MaterializationError("generated materialization requires ForceToken or an unchanged condition")
+    if arm.intervention is not None and not isinstance(arm.intervention, (ForceToken, SampleWith)):
+        raise MaterializationError(
+            "generated materialization requires ForceToken, SampleWith, or an unchanged condition")
     if resolved.base.run_id != base_run["id"]:
         raise MaterializationStaleError("experiment result is bound to another parent run")
     current_parent = reload_parent(base_run["id"]) if callable(reload_parent) else base_run
@@ -464,7 +465,10 @@ def materialize_generated_observation(
                 "realized_fidelity": observation.fidelity_classification,
                 "fidelity": deepcopy(observation.fidelity),
             },
-            "operation": "force_token" if arm.intervention is not None else "continue",
+            "operation": (
+                "sample_with" if isinstance(arm.intervention, SampleWith)
+                else "force_token" if arm.intervention is not None else "continue"
+            ),
             "intervention": intervention,
             "exact_control_proof": deepcopy(observation.exact_control_proof),
         },

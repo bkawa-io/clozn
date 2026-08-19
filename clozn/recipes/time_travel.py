@@ -12,7 +12,7 @@ from typing import Any
 
 from clozn.experiments.evaluators import Generate
 from clozn.experiments.generation import GenerateExecutionAdapter
-from clozn.experiments.interventions import ForceToken, InterventionError
+from clozn.experiments.interventions import ForceToken, InterventionError, SampleWith
 from clozn.experiments.kernel import Experiment
 from clozn.experiments.materialize import materialize_generated_observation
 from clozn.experiments.observations import GeneratedObservation
@@ -25,6 +25,7 @@ from clozn.experiments.state_ref import (
 
 TIME_TRAVEL_RESULT_SCHEMA_VERSION = "clozn.time-travel-result.v1"
 _FIDELITY = {"exact_execution_fork": "EXACT", "reconstructed_replay": "RECONSTRUCTED", "unavailable": "UNAVAILABLE"}
+SAMPLER_CONTRACT_FIELDS = ("temperature", "top_p", "top_k", "repeat_penalty", "seed")
 
 
 class TimeTravelError(ValueError):
@@ -420,6 +421,121 @@ def run_time_travel(
     )
 
 
+def _sampler_contract(sampling: Mapping[str, Any]) -> dict[str, Any]:
+    """The fully resolved five-field sampler a probe's continuation runs under."""
+    if not isinstance(sampling, Mapping):
+        raise TimeTravelError("a sampler probe requires a resolved sampler contract",
+                              code="sampler_contract_incomplete")
+    resolved = {}
+    for name in SAMPLER_CONTRACT_FIELDS:
+        value = sampling.get(name)
+        if value is None and name == "repeat_penalty":
+            value = sampling.get("rep_penalty")
+        if value is None:
+            raise TimeTravelError(
+                f"the sampler contract is missing {name}", code="sampler_contract_incomplete")
+        resolved[name] = value
+    return resolved
+
+
+def run_sampler_probe(
+    run: Mapping[str, Any], *, position: int, sampler: Mapping[str, Any], sampling: Mapping[str, Any],
+    max_new: int, checkpoint: Mapping[str, Any] | None = None,
+    runtime_identity: Mapping[str, Any] | None = None, worker_identity: Mapping[str, Any] | None = None,
+    execution_adapter: Any | None = None, substrate: Any | None = None, run_loader=None,
+    observation_store: ObservationStore | None = None,
+    stop: list[str] | tuple[str, ...] | None = None, cancel: Any | None = None,
+) -> TimeTravelResult:
+    """Resolve an exact state and continue it under one declared sampler override.
+
+    ``sampler`` is the override relative to the recorded regime; ``sampling`` is the fully resolved
+    sampler the continuation runs under, which becomes the observation's generation contract and is
+    checked against the worker's own resolved-sampler receipt.  Like every other kernel operation,
+    this stops at a GeneratedObservation and creates no Run.
+
+    The runner's separate unchanged control is deliberately not requested: a control must reproduce
+    the parent's recorded tokens, which is a greedy claim that a sampled evaluator cannot express.
+    The execution adapter still proves that same control before returning any completed probe.
+    """
+    if not isinstance(run, Mapping):
+        raise TimeTravelError("recorded run is required", code="run_not_found")
+    try:
+        state_ref = StateRef.before_answer_token(run, position)
+    except StateRefError as exc:
+        code = "token_trace_unavailable" if "history" in str(exc) or "malformed" in str(exc) else "token_boundary_out_of_range"
+        raise TimeTravelError(str(exc), code=code) from exc
+    try:
+        intervention = SampleWith(**{name: sampler.get(name) for name in SampleWith.FIELDS})
+    except InterventionError as exc:
+        raise TimeTravelError(str(exc), code="sampler_override_unsupported") from exc
+    except AttributeError as exc:
+        raise TimeTravelError("sampler override must be an object", code="sampler_override_unsupported") from exc
+    operation = {"kind": "sample_with", **intervention.to_dict()}
+    contract = _sampler_contract(sampling)
+    try:
+        resolved = resolve_state(state_ref, run=run, policy="exact_preferred", checkpoint=checkpoint,
+                                 runtime_identity=runtime_identity, worker_identity=worker_identity)
+    except StateRefError as exc:
+        code = "invalid_resolution_policy" if "unsupported state resolution" in str(exc) else "exact_restore_unavailable"
+        raise TimeTravelError(str(exc), code=code) from exc
+    branch_point = _branch_point(run, state_ref)
+    if not resolved.available:
+        return TimeTravelResult(
+            run_id=state_ref.run_id, state_ref=state_ref, resolved_state=resolved, operation=operation,
+            experiment_id=None, arm_id=None, observation_id=None, status="unavailable",
+            continuation={"status": "unavailable"}, branch_point=branch_point,
+            diagnostics=deepcopy(resolved.diagnostics),
+        )
+    try:
+        evaluator = Generate(max_new=max_new, decode_mode="sample", sampling=contract,
+                             stop=stop if stop is not None else ())
+    except Exception as exc:
+        raise TimeTravelError(f"generation contract is unavailable: {exc}", code="generation_unsupported") from exc
+    readiness = _readiness(resolved, operation=operation, decode_mode=evaluator.decode_mode)
+    if not readiness.get("plannable", False):
+        diagnostics = _readiness_diagnostics(resolved, readiness)
+        return TimeTravelResult(
+            run_id=state_ref.run_id, state_ref=state_ref, resolved_state=resolved, operation=operation,
+            experiment_id=None, arm_id=None, observation_id=None, status="unavailable",
+            continuation={"status": "unavailable", "diagnostics": diagnostics},
+            branch_point=branch_point, diagnostics=diagnostics,
+        )
+    adapter = execution_adapter
+    if adapter is None:
+        if substrate is None:
+            raise TimeTravelError("execution adapter or substrate is required", code="generation_unsupported")
+        adapter = GenerateExecutionAdapter(substrate, run=run, run_loader=run_loader,
+                                           runtime_identity=runtime_identity, worker_identity=worker_identity)
+    experiment = Experiment(base=resolved, evaluator=evaluator, arms=[intervention])
+    result = run_experiment(
+        experiment, adapter, include_control=False, cancel=cancel,
+        observation_store=observation_store or ObservationStore(),
+        requested_by={"recipe": "sampler_probe"},
+    )
+    arm = result.arms[0] if result.arms else None
+    observation = arm.observation if arm is not None else None
+    if isinstance(observation, GeneratedObservation) and observation.status == "completed":
+        status = "completed"
+        readiness = _confirmed_readiness(readiness, observation)
+    elif isinstance(observation, GeneratedObservation) and observation.status == "failed":
+        status = "failed"
+    elif arm is not None and (arm.state == "failed" or arm.diagnostics.get("observation_status") == "failed"):
+        status = "failed"
+    else:
+        status = "unavailable"
+    diagnostics = {
+        **dict(result.diagnostics), **dict(arm.diagnostics if arm is not None else {}),
+        "operation_readiness": readiness,
+    }
+    return TimeTravelResult(
+        run_id=state_ref.run_id, state_ref=state_ref, resolved_state=resolved, operation=operation,
+        experiment_id=result.experiment_id, arm_id=arm.arm_id if arm is not None else None,
+        observation_id=arm.observation_id if arm is not None else None, status=status,
+        continuation=_continuation(observation, status=status, diagnostics=diagnostics),
+        branch_point=branch_point, diagnostics=diagnostics,
+    )
+
+
 def time_travel_capabilities(run: Mapping[str, Any], *, checkpoint: Mapping[str, Any] | None = None,
                              runtime_identity: Mapping[str, Any] | None = None,
                              worker_identity: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -587,5 +703,6 @@ time_travel = run_time_travel
 __all__ = [
     "TIME_TRAVEL_RESULT_SCHEMA_VERSION", "TimeTravelError", "TimeTravelResult", "continue_from_here",
     "enumerate_answer_boundaries", "list_answer_token_boundaries", "force_token_and_continue", "materialize_time_travel", "resolve_time_travel",
-    "run_time_travel", "time_travel", "time_travel_capabilities", "checkpoint_reference", "checkpoint_reference_from_pin",
+    "run_sampler_probe", "run_time_travel", "time_travel", "time_travel_capabilities",
+    "checkpoint_reference", "checkpoint_reference_from_pin",
 ]

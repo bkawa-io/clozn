@@ -156,16 +156,22 @@ def _execute_force_token(parent: Mapping, sub, plan: Mapping, *, runtime_identit
         )
     except Exception as exc:
         return _time_travel_result(parent, plan, None, reason=_reason(
-            "time_travel_execution_failed", str(exc)))
+            "time_travel_execution_failed", str(exc)), outcome="failed")
     return _time_travel_result(parent, plan, travel)
 
 
-def _time_travel_result(parent: Mapping, plan: Mapping, travel, *, reason: Mapping | None = None) -> dict:
-    """Wrap the canonical TimeTravelResult in the Test This envelope without child persistence."""
+def _time_travel_result(parent: Mapping, plan: Mapping, travel, *, reason: Mapping | None = None,
+                        outcome: str = "unavailable") -> dict:
+    """Wrap the canonical TimeTravelResult in the Test This envelope without child persistence.
+
+    ``outcome`` applies only when there is no result to project: a precondition that was never met
+    is unavailable, while an execution that raised is a failure.  The two are not the same claim.
+    """
     operation = plan["resolved_test"]["operation"]
     projection = travel.to_dict() if travel is not None else None
-    status = getattr(travel, "status", "failed") if travel is not None else "failed"
-    outcome = "completed" if status == "completed" else ("failed" if status == "failed" else "unavailable")
+    if travel is not None:
+        status = getattr(travel, "status", "failed")
+        outcome = "completed" if status == "completed" else ("failed" if status == "failed" else "unavailable")
     reasons = [_reason(reason.get("code"), reason.get("message"))] if isinstance(reason, Mapping) else []
     if isinstance(projection, Mapping):
         code = projection.get("reason_code") or projection.get("diagnostics", {}).get("reason_code")
@@ -198,84 +204,87 @@ def _time_travel_result(parent: Mapping, plan: Mapping, travel, *, reason: Mappi
 
 def _execute_sampling(parent: Mapping, sub, plan: Mapping, *, runtime_identity,
                       worker_identity, reload_parent=None, cancel_check=None) -> dict:
-    from clozn.replay.execution_fork import (
-        capture_exact_force_token_context,
-        execute_exact_force_token,
-        plan_exact_force_token,
-    )
+    """Run one explicit sampler test as a canonical sampler probe.
+
+    Like the force-token path, this stops at a GeneratedObservation: it creates no child Run and
+    writes no legacy execution-fork receipt.  Keeping a result is a separate explicit
+    materialization of the observation this returns.
+    """
+    from clozn.experiments.persistence import ObservationStore
+    from clozn.recipes.time_travel import run_sampler_probe
 
     engine = getattr(sub, "engine", None) if sub is not None else None
     if engine is None or not isinstance(runtime_identity, Mapping) or not isinstance(worker_identity, Mapping):
-        return _single_result(parent, plan, {
-            "outcome": "unavailable",
-            "reasons": [_reason("exact_execution_unavailable", "exact sampler execution is unavailable")],
-        })
+        return _time_travel_result(parent, plan, None, reason=_reason(
+            "exact_execution_unavailable", "exact sampler execution is unavailable"))
     if callable(cancel_check) and cancel_check():
-        return _single_result(parent, plan, {
-            "outcome": "unavailable",
-            "reasons": [_reason("execution_cancelled", "the sampler test was cancelled before execution")],
-        })
+        return _time_travel_result(parent, plan, None, reason=_reason(
+            "execution_cancelled", "the sampler test was cancelled before execution"))
+
+    override = {name: value for name, value in plan["resolved_test"]["change"].items() if name != "type"}
+    baseline = _recorded_sampler(parent)
+    if baseline is None:
+        return _time_travel_result(parent, plan, None, reason=_reason(
+            "recorded_sampler_unavailable",
+            "the recorded run has no complete sampler state to probe against"))
+    checkpoint, capture_reason = _capture_checkpoint(
+        parent, engine, runtime_identity=runtime_identity, worker_identity=worker_identity)
+    if checkpoint is None:
+        return _time_travel_result(parent, plan, None, reason=capture_reason)
+    try:
+        travel = run_sampler_probe(
+            parent,
+            position=plan["selection"]["position"],
+            sampler=override,
+            sampling={**baseline, **override},
+            max_new=_remaining_horizon(parent, plan["selection"]["position"]),
+            checkpoint=checkpoint,
+            runtime_identity=runtime_identity,
+            worker_identity=worker_identity,
+            substrate=sub,
+            run_loader=reload_parent,
+            observation_store=ObservationStore(),
+            cancel=cancel_check,
+        )
+    except Exception as exc:
+        return _time_travel_result(parent, plan, None, reason=_reason(
+            "sampler_probe_execution_failed", str(exc)), outcome="failed")
+    return _time_travel_result(parent, plan, travel)
+
+
+def _recorded_sampler(parent: Mapping) -> dict | None:
+    """The parent's recorded sampler in the exact-resume field names, or None."""
+    from clozn.experiments.execution_facts import recorded_sampler_state
+
+    return recorded_sampler_state(parent)
+
+
+def _remaining_horizon(parent: Mapping, position: int) -> int:
+    trace = parent.get("trace") if isinstance(parent.get("trace"), Mapping) else {}
+    tokens = trace.get("tokens") if isinstance(trace.get("tokens"), list) else []
+    return max(1, len(tokens) - int(position))
+
+
+def _capture_checkpoint(parent: Mapping, engine, *, runtime_identity, worker_identity):
+    """Capture the exact context this test resumes from, through the canonical capture seam."""
+    from clozn.replay.checkpoint_capture import capture_parent_checkpoint
 
     try:
-        capture = capture_exact_force_token_context(
-            parent, engine, runtime_identity=dict(runtime_identity), worker_identity=dict(worker_identity))
+        capture = capture_parent_checkpoint(
+            parent, engine,
+            runtime_identity=dict(runtime_identity), worker_identity=dict(worker_identity))
     except Exception:
-        capture = {"status": "ineligible", "reason": _reason(
-            "checkpoint_capture_unavailable", "an exact checkpoint could not be captured")}
-    if capture.get("status") != "available" or not isinstance(capture.get("checkpoint_reference"), Mapping):
-        return _single_result(parent, plan, {
-            "outcome": "unavailable",
-            "reasons": _public_reasons([capture.get("reason")]) or [
-                _reason("checkpoint_capture_unavailable", "an exact sampler checkpoint is unavailable")
-            ],
-        })
-
-    request = {
-        "position": plan["selection"]["position"],
-        "change": deepcopy(plan["resolved_test"]["change"]),
-    }
-    exact_plan = plan_exact_force_token(
-        parent,
-        request,
-        checkpoint_reference=dict(capture["checkpoint_reference"]),
-        runtime_identity=dict(runtime_identity),
-        worker_identity=dict(worker_identity),
-    )
-    if exact_plan.get("classification") != "exact_execution_fork":
-        return _single_result(parent, plan, {
-            "outcome": "unavailable",
-            "reasons": exact_plan.get("reasons") or [
-                _reason("exact_execution_unavailable", "the sampler change is not exact-executable")
-            ],
-            "exactness": exact_plan.get("exactness"),
-        })
-    execution = execute_exact_force_token(
-        parent,
-        exact_plan,
-        engine,
-        runtime_identity=dict(runtime_identity),
-        worker_identity=dict(worker_identity),
-        reload_parent=reload_parent,
-        cancel_check=cancel_check,
-    )
-    receipt = execution.get("receipt") or {}
-    child = execution.get("child")
-    if receipt.get("phase") == "completed" and isinstance(child, Mapping) and child.get("id"):
-        child = dict(child)
-        child["outcome"] = "exact_execution_fork"
-        child["execution_fork_execution_id"] = receipt.get("execution_id")
-        child["exactness"] = deepcopy(receipt.get("exactness") or {})
-        child["unchanged_control"] = deepcopy(receipt.get("unchanged_control") or {})
-        return _single_result(parent, plan, child)
-    failure = {
-        "outcome": "unavailable",
-        "reasons": receipt.get("reasons") or [_reason(
-            "exact_execution_failed", "the exact sampler execution did not complete")],
-        "execution_fork_execution_id": receipt.get("execution_id"),
-        "exactness": receipt.get("exactness"),
-        "unchanged_control": receipt.get("unchanged_control"),
-    }
-    return _single_result(parent, plan, failure)
+        return None, _reason("checkpoint_capture_unavailable", "an exact checkpoint could not be captured")
+    if not isinstance(capture, Mapping) or capture.get("status") != "available":
+        reasons = capture.get("reasons") if isinstance(capture, Mapping) else None
+        reason = reasons[0] if isinstance(reasons, list) and reasons and isinstance(reasons[0], Mapping) else {}
+        return None, _reason(
+            str(reason.get("code") or "checkpoint_capture_unavailable"),
+            str(reason.get("message") or "an exact sampler checkpoint is unavailable"))
+    reference = capture.get("checkpoint_reference")
+    if not isinstance(reference, Mapping):
+        return None, _reason("checkpoint_capture_unavailable", "an exact checkpoint reference was unavailable")
+    return deepcopy(dict(reference)), None
 
 
 def _fan_outcome(fan_result: Mapping) -> str:

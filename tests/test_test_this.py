@@ -223,13 +223,16 @@ def test_sampling_dispatch_requires_exact_and_never_uses_reconstructed_fork(monk
         "selection": {"kind": "sampling", "position": 0},
         "test": {"kind": "change_sampling", "changes": {"temperature": 0.2}},
     }
-    monkeypatch.setattr("clozn.replay.execution_fork.capture_exact_force_token_context", lambda *a, **k: {
-        "status": "ineligible", "reason": {"code": "checkpoint_unavailable", "message": "no checkpoint"}
-    })
+    monkeypatch.setattr(
+        "clozn.replay.checkpoint_capture.capture_parent_checkpoint",
+        lambda *a, **k: {"status": "unavailable",
+                          "reasons": [{"code": "checkpoint_unavailable", "message": "no checkpoint"}]})
     result = executor.execute_test_this(parent, type("Sub", (), {"engine": object()})(), request,
                                         runtime_identity={"x": 1}, worker_identity={"x": 1})
     assert result["outcome"] == "unavailable"
     assert result["operation"] == "sampling_fork"
+    # No exact context means no probe at all; it is never quietly reconstructed.
+    assert "child_run_id" not in result
 
 
 def test_result_does_not_embed_raw_generated_text(monkeypatch):
@@ -244,3 +247,154 @@ def test_result_does_not_embed_raw_generated_text(monkeypatch):
     monkeypatch.setattr(importlib.import_module("clozn.recipes.time_travel"), "run_time_travel", lambda *a, **k: FakeTravel())
     result = executor.execute_test_this(parent, object(), token_request())
     assert "SECRET ANSWER" not in str(result)
+
+
+# ------------------------------------------------------------- observation-first execution gates
+SAMPLER_RUNTIME = {
+    "model_sha256": "a" * 64,
+    "template_fingerprint": "b" * 16,
+    "engine_build": "test-this-fixture",
+    "context_size": 4096,
+    "backend": "cpu",
+    "adapter": {"present": False, "identity_sha256": None, "artifact_sha256": None, "scale": None},
+    "white_box_flags": {},
+}
+SAMPLER_WORKER = {"worker_id": "worker-a", "worker_generation_id": "generation-1", "protocol_version": "1.1"}
+
+
+def exact_sampled_run():
+    parent = run(sampling=True)
+    parent.update({
+        "substrate": "fixture",
+        "messages": [{"role": "user", "content": "question"}],
+        "assembled_messages": [{"role": "user", "content": "question"}],
+        "final_prompt": "<prompt>",
+        "identity": deepcopy(SAMPLER_RUNTIME),
+    })
+    parent["meta"].update({"n_ctx": 4096, "device": "cpu"})
+    parent["trace"]["steps"] = [
+        {"token_id": token_id, "piece": piece}
+        for token_id, piece in zip(parent["trace"]["token_ids"], parent["trace"]["tokens"])
+    ]
+    return parent
+
+
+class SamplerProbeEngine:
+    def __init__(self):
+        self.calls = []
+
+    def execution_fork(self, **kwargs):
+        self.calls.append(deepcopy(kwargs))
+        intervention = kwargs["intervention"]
+        recorded = {"temperature": 0.7, "top_p": 0.95, "top_k": 40, "rep_penalty": 1.0, "seed": 12}
+        if intervention["type"] == "none":
+            tokens, pieces, applied = [10, 11, 12], ["a", "b", "c"], {"type": "none"}
+        else:
+            applied = {"type": "sampling", **recorded,
+                       **{k: v for k, v in intervention.items() if k != "type"}}
+            tokens, pieces = [30, 11, 12], ["Z", "b", "c"]
+        return {
+            "worker_generation_id": SAMPLER_WORKER["worker_generation_id"],
+            "text": "".join(pieces), "tokens": tokens, "token_pieces": pieces,
+            "steps": [{"token_id": t, "piece": p} for t, p in zip(tokens, pieces)],
+            "restore_mode": "reprefill", "n_past_restored": 4,
+            "exactness": {"source": "reprefill", "boundary_shape_true": True},
+            "intervention_applied": applied, "finish_reason": "stop",
+            "sampler_state_preserved": True,
+        }
+
+
+class SamplerSub:
+    def __init__(self):
+        self.engine = SamplerProbeEngine()
+        self.runtime_identity = deepcopy(SAMPLER_RUNTIME)
+        self.worker_identity = deepcopy(SAMPLER_WORKER)
+
+
+@pytest.fixture
+def sampler_probe(tmp_path, monkeypatch):
+    from clozn.replay import execution_fork_results
+    from clozn.runs import store as runlog
+
+    monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setattr(execution_fork_results, "RESULTS_DIR", str(tmp_path / "execution-forks"))
+    runlog._schema_verified.clear()
+    monkeypatch.setattr(
+        "clozn.replay.checkpoint_capture.capture_parent_checkpoint",
+        lambda parent, engine, **kwargs: {
+            "status": "available",
+            "checkpoint_reference": {
+                "checkpoint_id": "checkpoint-1",
+                "worker_generation_id": SAMPLER_WORKER["worker_generation_id"],
+                "state": "available", "parent_run_id": parent["id"],
+                "prompt_tokens": 4, "n_past": 7,
+            },
+        })
+    return runlog, execution_fork_results
+
+
+def _sampling_request():
+    return {
+        "selection": {"kind": "sampling", "position": 0},
+        "test": {"kind": "change_sampling", "changes": {"temperature": 0.2}},
+    }
+
+
+def test_sampling_test_produces_an_observation_and_changes_no_run_count(sampler_probe):
+    runlog, execution_fork_results = sampler_probe
+    parent = exact_sampled_run()
+    sub = SamplerSub()
+    result = executor.execute_test_this(
+        parent, sub, _sampling_request(),
+        runtime_identity=SAMPLER_RUNTIME, worker_identity=SAMPLER_WORKER)
+
+    assert result["operation"] == "sampling_fork"
+    assert result["outcome"] == "completed"
+    assert result["result"]["observation_id"]
+    assert result["result"]["time_travel"]["operation"]["kind"] == "sample_with"
+    assert "child_run_id" not in result
+    # The hard gates: no Run, and no new legacy receipt.
+    assert runlog.list_runs(20) == []
+    assert execution_fork_results.list_for_parent(parent["id"]) == []
+
+
+def test_force_token_test_produces_an_observation_and_changes_no_run_count(sampler_probe):
+    runlog, _receipts = sampler_probe
+    parent = exact_sampled_run()
+    parent["meta"].pop("decode")            # a greedy parent, so ForceToken is plannable
+    sub = SamplerSub()
+    result = executor.execute_test_this(
+        parent, sub, token_request({"kind": "try_alternative", "token_id": 20}),
+        runtime_identity=SAMPLER_RUNTIME, worker_identity=SAMPLER_WORKER)
+
+    assert result["operation"] == "force_token"
+    assert result["result"]["observation_id"] or result["outcome"] != "completed"
+    assert "child_run_id" not in result
+    assert runlog.list_runs(20) == []
+
+
+def test_materializing_a_sampling_observation_creates_exactly_one_child_run(sampler_probe):
+    from clozn.experiments.materialize import materialize_generated_observation
+    from clozn.experiments.persistence import ObservationStore
+
+    runlog, _receipts = sampler_probe
+    parent = exact_sampled_run()
+    sub = SamplerSub()
+    result = executor.execute_test_this(
+        parent, sub, _sampling_request(),
+        runtime_identity=SAMPLER_RUNTIME, worker_identity=SAMPLER_WORKER)
+    assert result["outcome"] == "completed"
+    assert runlog.list_runs(20) == []
+    calls = len(sub.engine.calls)
+
+    materialized = materialize_generated_observation(
+        parent, result["result"]["experiment_id"], result["result"]["arm_id"],
+        observation_id=result["result"]["observation_id"],
+        observation_store=ObservationStore(),
+    )
+    assert materialized["state"] == "completed"
+    assert len(runlog.list_runs(20)) == 1
+    assert len(sub.engine.calls) == calls
+    child = runlog.get_run(materialized["child_run_id"])
+    assert child["parent_run_id"] == parent["id"]
+    assert child["changes_applied"]["experiment"]["operation"] == "sample_with"

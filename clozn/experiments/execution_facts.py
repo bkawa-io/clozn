@@ -305,6 +305,37 @@ def worker_identity_projection(value: Any) -> dict | None:
             "protocol_version": protocol}
 
 
+def recorded_sampler_state(parent_run: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The parent's recorded sampler in the exact-resume field names, or ``None``.
+
+    This never infers a sampler from a model default: an incomplete recorded state stays
+    unavailable.  Greedy runs resolve to the worker wire's stable defaults, so a requested
+    ``temperature: 0`` can be recognized as a no-op without starting an execution.
+    """
+    if not isinstance(parent_run, Mapping):
+        return None
+    # ``controlled.recorded_sampling_config`` is the existing behavior-bearing reader shared with
+    # checkpoint and controlled replay code.  Import lazily and do not create a second
+    # interpretation of a recorded sampler here.
+    from clozn.replay.controlled import recorded_sampling_config
+
+    config = recorded_sampling_config(dict(parent_run))
+    if config is False:
+        return {"temperature": 0.0, "top_k": 0, "top_p": 1.0, "seed": 0, "rep_penalty": 1.0}
+    if not isinstance(config, Mapping):
+        return None
+    rep_penalty = config.get("repeat_penalty", config.get("rep_penalty"))
+    if any(config.get(name) is None for name in ("temperature", "top_k", "top_p", "seed")) or rep_penalty is None:
+        return None
+    return {
+        "temperature": config.get("temperature"),
+        "top_k": config.get("top_k"),
+        "top_p": config.get("top_p"),
+        "seed": config.get("seed"),
+        "rep_penalty": rep_penalty,
+    }
+
+
 def resolve_exact_resume_facts(parent_run: Mapping[str, Any], *, position: int,
                                checkpoint: Mapping[str, Any],
                                runtime_identity: Mapping[str, Any] | None,
@@ -433,6 +464,7 @@ __all__ = [
     "KNOWN_CHANGES", "RECONSTRUCTED_CHANGES", "RECONSTRUCTION_DIFFERENCES",
     "finite_number", "is_int", "json_copy", "normalize_checkpoint_reference",
     "parent_execution_fingerprint", "parent_runtime_projection", "recorded_execution_prerequisites",
+    "recorded_sampler_state",
     "resolve_exact_resume_facts", "runtime_projection", "selection_identity_facts", "sha256",
     "worker_identity_projection",
 ]

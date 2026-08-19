@@ -456,7 +456,7 @@ def operation_readiness(
     """
     if not isinstance(resolved_state, ResolvedState):
         raise TypeError("operation_readiness requires a ResolvedState")
-    if operation not in {"continue", "force_token"}:
+    if operation not in {"continue", "force_token", "sample_with"}:
         raise StateRefError(f"unsupported time-travel operation: {operation!r}")
 
     classification = resolved_state.classification
@@ -474,6 +474,27 @@ def operation_readiness(
     if classification == "unavailable":
         base["reason_code"] = resolved_state.diagnostics.get("reason_code", "state_unavailable")
         base["reason"] = resolved_state.diagnostics.get("message", "the resolved state is unavailable")
+        return base
+
+    if operation == "sample_with":
+        # A sampler probe declares the regime its continuation runs under instead of inheriting the
+        # recorded one, so the recorded-sampler unboundness that blocks Continue and ForceToken is
+        # not a refusal here: nothing about this operation claims to reproduce the parent.  It does
+        # require a restored execution state, because reconstructed text replay cannot resume a
+        # sampler at a token boundary at all.
+        base["sampler"] = {"required": True, "mode": "sample", "status": "requires_control_proof"}
+        if classification != "exact_execution_fork":
+            base.update({
+                "available": False, "plannable": False, "state": "unavailable",
+                "reason_code": "sampler_probe_requires_exact_state",
+                "reason": "a sampler probe requires a restored exact execution state",
+                "sampler": {"required": True, "mode": "sample", "status": "unbound"},
+            })
+            return base
+        base.update({
+            "reason_code": "exact_control_required",
+            "reason": "an exact sampler probe requires a matching unchanged control before fidelity is confirmed",
+        })
         return base
 
     contract = resolved_state.execution.generation_contract

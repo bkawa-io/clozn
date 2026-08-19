@@ -357,66 +357,54 @@ def _response(run: Mapping) -> str | None:
     return None
 
 
-def _comparison(parent: Mapping, child: Mapping, position: int) -> dict:
-    from clozn.analysis.model_diff import diff_runs
-    from clozn.analysis.comparison_projection import comparison_projection_from_diff
+def _comparison(parent: Mapping, observation, position: int) -> dict:
+    """Project one probe's divergence from its observation, not from a second Run.
 
-    diff = diff_runs(dict(parent), dict(child))
-    if not diff.get("ok"):
+    A sampler probe's evidence is the generated suffix from the probe boundary onward, so its
+    divergence index is always at or after that boundary by construction.  The legacy whole-response
+    diff had to guard against a divergence before the boundary; that contract failure is now
+    unreachable rather than merely detected.
+    """
+    from clozn.experiments.observation_comparison import observation_comparison
+
+    projected = observation_comparison(parent, observation)
+    state = projected.get("state")
+    if state == "unavailable":
         return {"state": "comparison_unavailable"}
-    parent_text = _response(parent)
-    child_text = _response(child)
-    if parent_text is not None and child_text is not None and parent_text == child_text:
-        return {
-            "state": "identical",
-            "first_divergence_view": deepcopy(diff.get("first_divergence_view") or {
-                "schema_version": "clozn.first-divergence-view.v1", "state": "identical"
-            }),
-        }
-    if not diff.get("trace_available"):
-        return {
-            "state": "trace_unavailable" if parent_text is not None and child_text is not None
-            else "comparison_unavailable",
-            "first_divergence_view": deepcopy(diff.get("first_divergence_view") or {
-                "schema_version": "clozn.first-divergence-view.v1", "state": "trace_unavailable"
-            }),
-        }
-    first = diff.get("first_divergence")
-    if not isinstance(first, Mapping) or not _is_int(first.get("index"), 0):
+    if projected.get("identical_text") is True:
+        return {**projected, "state": "identical"}
+    if state == "token_evidence_unavailable":
+        return {**projected, "state": "trace_unavailable"}
+    first = projected.get("first_divergence")
+    if not isinstance(first, Mapping):
+        # Token streams agreed for their whole shared length and the texts matched above, so
+        # anything left here is a length-only difference we will not call a divergence position.
+        return {**projected, "state": "identical"}
+    absolute = first.get("answer_token_index")
+    if not _is_int(absolute, 0):
         return {"state": "comparison_unavailable"}
-    absolute = first["index"]
-    if absolute < position:
-        return {
-            "state": "comparison_unavailable",
-            "contract_failure": "divergence_before_probe_boundary",
-            "first_divergence_position": absolute,
-        }
-    projected = comparison_projection_from_diff(parent, child, diff)
-    projected.update({
+    return {
+        **projected,
         "state": "diverged",
         "first_divergence_position": absolute,
         "divergence_offset_from_probe": absolute - position,
-    })
-    return projected
-
-
-def _sampler_state(run: Mapping) -> dict | None:
-    config = recorded_sampling_config(dict(run))
-    if not isinstance(config, Mapping):
-        return None
-    return {
-        "temperature": config.get("temperature"),
-        "top_p": config.get("top_p"),
-        "top_k": config.get("top_k"),
-        "rep_penalty": config.get("repeat_penalty"),
-        "seed": config.get("seed"),
     }
 
 
-def _verify_sampler(baseline: Mapping, child: Mapping, probe: Mapping) -> tuple[bool, dict | None]:
-    actual = _sampler_state(child)
+def _resolved_sampler(observation) -> dict | None:
+    """The sampler the worker proved it applied, carried on the observation's fidelity."""
+    fidelity = getattr(observation, "fidelity", None)
+    resolved = fidelity.get("resolved_sampler") if isinstance(fidelity, Mapping) else None
+    if not isinstance(resolved, Mapping):
+        return None
+    return {name: resolved.get(name) for name in
+            ("temperature", "top_p", "top_k", "rep_penalty", "seed")}
+
+
+def _verify_sampler(baseline: Mapping, observation, probe: Mapping) -> tuple[bool, dict | None]:
+    actual = _resolved_sampler(observation)
     if actual is None:
-        return False, _reason("resolved_sampler_unavailable", "the child omitted resolved sampler evidence")
+        return False, _reason("resolved_sampler_unavailable", "the observation omitted resolved sampler evidence")
     change = probe["change"]
     axis = probe["axis"]
     for key in ("temperature", "top_p", "top_k", "rep_penalty", "seed"):
@@ -424,7 +412,7 @@ def _verify_sampler(baseline: Mapping, child: Mapping, probe: Mapping) -> tuple[
             if actual.get(key) == baseline.get(key):
                 return False, _reason("resolved_sampler_mismatch", "the requested sampler field did not change")
             if actual.get(key) != change.get(key):
-                return False, _reason("resolved_sampler_mismatch", "the child sampler did not apply the requested value")
+                return False, _reason("resolved_sampler_mismatch", "the probe sampler did not apply the requested value")
         elif actual.get(key) != baseline.get(key):
             return False, _reason("resolved_sampler_mismatch", "an unrelated sampler field changed")
     return True, None
@@ -479,6 +467,7 @@ def _base_result(plan: Mapping) -> dict:
             "fidelity": "exact_required",
             "order": "sequential",
             "checkpoint_reused": False,
+            "materialization": "explicit_choice_only",
             "checkpoint_capture": {"state": "not_attempted", "reused_for_probes": False},
         },
         "probes": [],
@@ -488,7 +477,7 @@ def _base_result(plan: Mapping) -> dict:
             "status": "unavailable",
             "planned_probes": len(plan.get("probes") or []),
             "completed_probes": 0,
-            "children_created": 0,
+            "observations_completed": 0,
             "parameter_probes": sum(p.get("kind") == "parameter" for p in plan.get("probes") or []),
             "seed_probes": sum(p.get("kind") == "seed" for p in plan.get("probes") or []),
             "not_attempted_probes": 0,
@@ -509,10 +498,82 @@ def _not_attempted(probe: Mapping, code: str, message: str) -> dict:
     }
 
 
+_SHARED_FAILURE_CODES = frozenset({
+    "base_run_unavailable", "checkpoint_expired", "checkpoint_missing", "checkpoint_parent_mismatch",
+    "checkpoint_range_mismatch", "exact_control_mismatch", "exact_control_unavailable",
+    "missing_prompt_boundary", "recorded_token_history_unavailable", "runtime_identity_mismatch",
+    "runtime_identity_unavailable", "stale_parent_execution", "stale_worker_generation",
+    "worker_identity_unavailable",
+})
+
+
+def _capture_checkpoint(parent_run: Mapping, engine, *, runtime_identity, worker_identity):
+    """Capture one exact checkpoint for the whole sweep through the canonical capture seam."""
+    from clozn.replay.checkpoint_capture import capture_parent_checkpoint
+
+    try:
+        capture = capture_parent_checkpoint(
+            parent_run, engine,
+            runtime_identity=dict(runtime_identity), worker_identity=dict(worker_identity))
+    except Exception:
+        return None, _reason("checkpoint_capture_unavailable", "an exact sampler checkpoint could not be captured")
+    if not isinstance(capture, Mapping) or capture.get("status") != "available":
+        reasons = capture.get("reasons") if isinstance(capture, Mapping) else None
+        reason = reasons[0] if isinstance(reasons, list) and reasons and isinstance(reasons[0], Mapping) else {}
+        return None, _reason(
+            str(reason.get("code") or "checkpoint_capture_unavailable"),
+            str(reason.get("message") or "an exact sampler checkpoint could not be captured"))
+    reference = capture.get("checkpoint_reference")
+    if not isinstance(reference, Mapping):
+        return None, _reason("checkpoint_capture_unavailable", "an exact sampler checkpoint reference was unavailable")
+    return deepcopy(dict(reference)), None
+
+
+def _unavailable_probe(probe: Mapping, reasons: list) -> dict:
+    item = _not_attempted(probe, "exact_execution_unavailable", "the sampler probe was unavailable")
+    item["state"] = "unavailable"
+    item["reasons"] = reasons
+    return item
+
+
+def _attach_observation_identity(item: dict, travel) -> None:
+    """Point the probe at its canonical evidence instead of at a child Run."""
+    for name in ("experiment_id", "arm_id", "observation_id"):
+        value = getattr(travel, name, None)
+        if isinstance(value, str) and value:
+            item[name] = value
+
+
+def _cancelled_probe(travel) -> bool:
+    diagnostics = travel.diagnostics if isinstance(getattr(travel, "diagnostics", None), Mapping) else {}
+    return diagnostics.get("cancelled") is True or diagnostics.get("reason") == "cancelled"
+
+
+def _completed_observation(store, travel):
+    """Re-read the persisted observation this probe produced; never re-execute to inspect it."""
+    from clozn.experiments.observations import GeneratedObservation
+
+    observation_id = getattr(travel, "observation_id", None)
+    if not isinstance(observation_id, str) or not observation_id:
+        return None
+    try:
+        observation = store.get_observation(observation_id)
+    except Exception:
+        return None
+    return observation if isinstance(observation, GeneratedObservation) else None
+
+
 def execute_sampler_sensitivity(parent_run: dict, sub, plan: Mapping, *, runtime_identity=None,
                                worker_identity=None, reload_parent=None,
-                               cancel_check: Callable[[], bool] | None = None) -> dict:
-    """Execute one exact fork per planned probe, sequentially, reusing one checkpoint."""
+                               cancel_check: Callable[[], bool] | None = None,
+                               checkpoint: Mapping | None = None, observation_store=None,
+                               execution_adapter=None) -> dict:
+    """Execute one canonical sampler probe per planned probe, sequentially, reusing one checkpoint.
+
+    Each probe resolves state canonically and stops at a GeneratedObservation.  The sweep creates
+    no Runs and writes no legacy execution-fork receipts; keeping a probe is a separate, explicit
+    materialization of its observation.
+    """
     if not isinstance(plan, Mapping) or plan.get("schema_version") != PLAN_SCHEMA_VERSION:
         raise ValueError("invalid sampler sensitivity plan")
     schemas.validate(dict(plan), PLAN_SCHEMA_VERSION)
@@ -551,9 +612,9 @@ def execute_sampler_sensitivity(parent_run: dict, sub, plan: Mapping, *, runtime
         schemas.validate(result, SCHEMA_VERSION)
         return result
 
-    from clozn.replay.execution_fork import (
-        capture_exact_force_token_context, execute_exact_force_token, plan_exact_force_token,
-    )
+    from clozn.experiments.generation import GenerateExecutionAdapter
+    from clozn.experiments.persistence import ObservationStore
+    from clozn.recipes.time_travel import TimeTravelError, run_sampler_probe
 
     engine = getattr(sub, "engine", None) if sub is not None else None
     if engine is None or not isinstance(runtime_identity, Mapping) or not isinstance(worker_identity, Mapping):
@@ -572,15 +633,13 @@ def execute_sampler_sensitivity(parent_run: dict, sub, plan: Mapping, *, runtime
         schemas.validate(result, SCHEMA_VERSION)
         return result
 
-    try:
-        capture = capture_exact_force_token_context(
-            parent_run, engine, runtime_identity=dict(runtime_identity), worker_identity=dict(worker_identity))
-    except Exception:
-        capture = {"status": "ineligible", "reason": _reason("checkpoint_capture_unavailable", "an exact sampler checkpoint could not be captured")}
-    checkpoint = capture.get("checkpoint_reference") if capture.get("status") == "available" else None
-    if not isinstance(checkpoint, Mapping):
-        reason = (capture.get("reason") if isinstance(capture, Mapping) else None) or _reason(
-            "checkpoint_capture_unavailable", "an exact sampler checkpoint could not be captured")
+    checkpoint_reference = dict(checkpoint) if isinstance(checkpoint, Mapping) else None
+    capture_reason = None
+    if checkpoint_reference is None:
+        checkpoint_reference, capture_reason = _capture_checkpoint(
+            parent_run, engine, runtime_identity=runtime_identity, worker_identity=worker_identity)
+    if checkpoint_reference is None:
+        reason = capture_reason or _reason("checkpoint_capture_unavailable", "an exact sampler checkpoint could not be captured")
         result["execution"].update({"state": "unavailable", "reason": reason.get("code")})
         result["execution"]["checkpoint_capture"] = {"state": "unavailable", "reused_for_probes": False}
         result["summary"]["reasons"] = [deepcopy(reason)]
@@ -596,9 +655,17 @@ def execute_sampler_sensitivity(parent_run: dict, sub, plan: Mapping, *, runtime
     result["execution"]["state"] = "available"
     result["execution"]["checkpoint_reused"] = True
     result["execution"]["checkpoint_capture"] = {"state": "available", "reused_for_probes": True}
+    result["execution"]["materialization"] = "explicit_choice_only"
     baseline = plan["baseline_sampler"]
-    import clozn.runs.store as runlog
-    reload_parent = reload_parent or runlog.get_run
+    position = plan["position"]
+    # One adapter and one store for the whole sweep: the unchanged exact control is proven once and
+    # reused by every later probe instead of being re-proven per probe.
+    adapter = execution_adapter or GenerateExecutionAdapter(
+        sub, run=parent_run, run_loader=reload_parent,
+        runtime_identity=runtime_identity, worker_identity=worker_identity)
+    durable = observation_store or ObservationStore()
+    # The probe's horizon is the parent's remaining recorded horizon from the probe boundary.
+    max_new = max(1, len(_trace_tokens(parent_run)) - position)
     stop_reason = None
     cancelled = False
     for index, probe in enumerate(plan["probes"]):
@@ -610,65 +677,61 @@ def execute_sampler_sensitivity(parent_run: dict, sub, plan: Mapping, *, runtime
             for remaining in plan["probes"][index:]:
                 result["probes"].append(_not_attempted(remaining, "sampler_sensitivity_cancelled", "sampler sensitivity was cancelled between probes"))
             break
-        request = {"position": plan["position"], "change": deepcopy(probe["change"])}
+        override = {name: value for name, value in probe["change"].items() if name != "type"}
         try:
-            exact_plan = plan_exact_force_token(
-                parent_run, request, checkpoint_reference=dict(checkpoint),
-                runtime_identity=dict(runtime_identity), worker_identity=dict(worker_identity))
-            if exact_plan.get("classification") != "exact_execution_fork":
-                item = _not_attempted(probe, "exact_execution_unavailable", "the sampler probe did not satisfy exact-fork prerequisites")
-                item["state"] = "unavailable"
-                item["reasons"] = _safe_reasons(exact_plan.get("reasons"), "exact_execution_unavailable", "the sampler probe did not satisfy exact-fork prerequisites")
-                result["probes"].append(item)
-                if item["reasons"][0]["code"] in {"checkpoint_expired", "stale_worker_generation", "runtime_identity_mismatch", "checkpoint_invalidated"}:
-                    stop_reason = ("shared_exact_precondition_failed", "later sampler probes were not attempted after a shared exact precondition failed")
-                continue
-            execution = execute_exact_force_token(
-                parent_run, exact_plan, engine,
-                runtime_identity=dict(runtime_identity), worker_identity=dict(worker_identity),
-                reload_parent=reload_parent, cancel_check=cancel_check)
-            receipt = execution.get("receipt") or {}
-            child = execution.get("child")
-            if receipt.get("phase") != "completed" or not isinstance(child, Mapping) or not child.get("id"):
-                item = _not_attempted(probe, "exact_execution_failed", "the exact sampler probe did not complete")
-                item["state"] = "unavailable"
-                item["reasons"] = _safe_reasons(receipt.get("reasons"), "exact_execution_failed", "the exact sampler probe did not complete")
-                item["execution"] = {"outcome": "unavailable", "proof_status": (receipt.get("exactness") or {}).get("proof_status", "failed")}
-                if receipt.get("execution_id"):
-                    item["execution"]["execution_id"] = receipt["execution_id"]
-                result["probes"].append(item)
-                failure_code = item["reasons"][0]["code"]
-                if failure_code in {"stale_plan", "checkpoint_expired", "stale_worker_generation", "worker_generation_changed", "checkpoint_invalidated", "execution_cancelled"}:
-                    if failure_code == "execution_cancelled":
-                        cancelled = True
-                        stop_reason = ("sampler_sensitivity_cancelled", "later sampler probes were not attempted after cancellation")
-                    else:
-                        stop_reason = ("shared_exact_precondition_failed", "later sampler probes were not attempted after a shared exact precondition failed")
-                continue
-            child = dict(child)
-            verification, verification_reason = _verify_sampler(baseline, child, probe)
-            item = {
-                "probe_id": probe["probe_id"],
-                "kind": probe["kind"],
-                "axis": probe["axis"],
-                **({"direction": probe["direction"]} if "direction" in probe else {}),
-                "requested_change": {k: v for k, v in probe["change"].items() if k != "type"},
-                "state": "completed" if verification else "unavailable",
-                "child_run_id": child["id"],
-                "execution": {
-                    "outcome": "exact_execution_fork",
-                    "proof_status": (receipt.get("exactness") or {}).get("proof_status", "confirmed"),
-                    "unchanged_control": (receipt.get("unchanged_control") or {}).get("status", "matched"),
-                },
-                "resolved_sampler": _sampler_state(child),
-                "reasons": [] if verification else [verification_reason],
-                "comparison": _comparison(parent_run, child, plan["position"]) if verification else None,
-            }
-            if receipt.get("execution_id"):
-                item["execution"]["execution_id"] = receipt["execution_id"]
+            travel = run_sampler_probe(
+                parent_run, position=position, sampler=override,
+                sampling={**dict(baseline), **override}, max_new=max_new,
+                checkpoint=checkpoint_reference, runtime_identity=runtime_identity,
+                worker_identity=worker_identity, execution_adapter=adapter,
+                run_loader=reload_parent, observation_store=durable, cancel=cancel_check,
+            )
+        except TimeTravelError as exc:
+            item = _unavailable_probe(probe, _safe_reasons([{"code": exc.code}], "exact_execution_unavailable", "the sampler probe did not satisfy exact-fork prerequisites"))
             result["probes"].append(item)
+            continue
         except Exception:
             result["probes"].append(_not_attempted(probe, "exact_execution_failed", "the exact sampler probe failed"))
+            continue
+
+        if travel.status != "completed":
+            code = travel.diagnostics.get("reason_code") if isinstance(travel.diagnostics, Mapping) else None
+            nested = travel.diagnostics.get("diagnostics") if isinstance(travel.diagnostics, Mapping) else None
+            if code is None and isinstance(nested, Mapping):
+                code = nested.get("reason_code")
+            item = _unavailable_probe(probe, _safe_reasons(
+                [{"code": code}] if code else None,
+                "exact_execution_failed", "the exact sampler probe did not complete"))
+            item["execution"] = {"outcome": "unavailable"}
+            _attach_observation_identity(item, travel)
+            result["probes"].append(item)
+            if _cancelled_probe(travel):
+                cancelled = True
+                stop_reason = ("sampler_sensitivity_cancelled", "later sampler probes were not attempted after cancellation")
+            elif item["reasons"][0]["code"] in _SHARED_FAILURE_CODES:
+                stop_reason = ("shared_exact_precondition_failed", "later sampler probes were not attempted after a shared exact precondition failed")
+            continue
+
+        observation = _completed_observation(durable, travel)
+        verification, verification_reason = _verify_sampler(baseline, observation, probe)
+        item = {
+            "probe_id": probe["probe_id"],
+            "kind": probe["kind"],
+            "axis": probe["axis"],
+            **({"direction": probe["direction"]} if "direction" in probe else {}),
+            "requested_change": {k: v for k, v in probe["change"].items() if k != "type"},
+            "state": "completed" if verification else "unavailable",
+            "execution": {
+                "outcome": "exact_execution_fork",
+                "proof_status": "confirmed",
+                "unchanged_control": "matched",
+            },
+            "resolved_sampler": _resolved_sampler(observation),
+            "reasons": [] if verification else [verification_reason],
+            "comparison": _comparison(parent_run, observation, position) if verification else None,
+        }
+        _attach_observation_identity(item, travel)
+        result["probes"].append(item)
 
     if cancelled:
         status = "partial_cancelled" if any(p.get("state") == "completed" for p in result["probes"]) else "cancelled"
@@ -686,11 +749,11 @@ def execute_sampler_sensitivity(parent_run: dict, sub, plan: Mapping, *, runtime
         if plan.get("seed_probes") else {"state": "not_requested", "requested": 0}
     )
     completed = sum(p.get("state") == "completed" for p in result["probes"])
-    children = sum(bool(p.get("child_run_id")) for p in result["probes"])
+    observations = sum(bool(p.get("observation_id")) for p in result["probes"])
     result["summary"].update({
         "status": status,
         "completed_probes": completed,
-        "children_created": children,
+        "observations_completed": observations,
         "not_attempted_probes": sum(p.get("state") == "not_attempted" for p in result["probes"]),
         "unavailable_probes": sum(p.get("state") == "unavailable" for p in result["probes"]),
     })

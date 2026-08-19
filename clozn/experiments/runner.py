@@ -9,7 +9,7 @@ from .batch import (
     ArmExecutionOutcome, ArmExecutionRequest, BatchExecutionError,
     BatchExecutionResult, scalar_batch,
 )
-from .interventions import DeleteSource, ForceToken, Intervention, intervention_from_dict
+from .interventions import DeleteSource, ForceToken, Intervention, SampleWith, intervention_from_dict
 from .kernel import Experiment
 from .observations import (
     Observation, ObservationError, ObservationIntegrityError, TokenScoreObservation,
@@ -87,7 +87,7 @@ class ExperimentResult:
         observations = tuple(arm_observations)
         if len(interventions) != len(observations):
             raise ValueError("ExperimentResult arm interventions must align with observations")
-        if any(item is not None and not isinstance(item, (DeleteSource, ForceToken)) for item in interventions):
+        if any(item is not None and not isinstance(item, (DeleteSource, ForceToken, SampleWith)) for item in interventions):
             raise TypeError("ExperimentResult arm interventions must be typed interventions or None")
         ids = tuple(arm_ids or [
             "arm_" + str(index) for index in range(len(interventions))

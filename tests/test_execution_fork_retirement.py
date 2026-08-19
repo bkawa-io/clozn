@@ -37,7 +37,11 @@ CANONICAL_MODULES = (
     "clozn/experiments",
     "clozn/recipes",
     "clozn/replay/branch_fan.py",
+    "clozn/replay/sampler_sensitivity.py",
+    "clozn/replay/test_this.py",
+    "clozn/replay/execution_fork.py",
     "clozn/server/routes/branch_fan.py",
+    "clozn/server/routes/sampler_sensitivity.py",
     "clozn/server/routes/time_travel_v1.py",
 )
 
@@ -49,8 +53,6 @@ LEGACY_EXECUTOR_CALLERS = {
     "clozn/server/routes/timetravel.py",
     # The canonical checkpoint capture seam proves its unchanged control with the executor's helper.
     "clozn/replay/checkpoint_capture.py",
-    # The legacy planner's own execute adapter, kept for the callers below.
-    "clozn/replay/execution_fork.py",
 }
 
 
@@ -133,3 +135,24 @@ def test_remaining_legacy_executor_callers_are_an_exact_inventory():
     assert found == LEGACY_EXECUTOR_CALLERS, (
         "the legacy executor caller inventory is stale -- update LEGACY_EXECUTOR_CALLERS when a "
         f"caller is migrated or added (found {sorted(found)})")
+
+
+# Modules that evaluate counterfactuals must not write legacy terminal receipts.  Reading historical
+# receipts stays allowed and is exercised by Rewind Fidelity and Run Diagnostics.
+NON_WRITING_EVALUATION_MODULES = (
+    "clozn/replay/branch_fan.py",
+    "clozn/replay/sampler_sensitivity.py",
+    "clozn/replay/test_this.py",
+    "clozn/experiments",
+    "clozn/recipes",
+)
+
+
+def test_evaluation_paths_never_write_legacy_execution_fork_receipts():
+    offenders = []
+    for relative in NON_WRITING_EVALUATION_MODULES:
+        for path in _python_files(relative):
+            if "clozn.replay.execution_fork_results" in _imports(path):
+                offenders.append(os.path.relpath(path, REPO_ROOT))
+    assert offenders == [], (
+        f"evaluation paths must not reach the legacy receipt store at all: {offenders}")

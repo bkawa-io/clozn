@@ -13,7 +13,8 @@ from typing import Any
 
 from .evaluators import Generate
 from .exact_execution import (
-    prove_unchanged_control, validate_worker_receipt, worker_generation_steps,
+    ExactExecutionError, prove_unchanged_control, resolved_sampler_receipt, validate_worker_receipt,
+    worker_generation_steps,
 )
 from .execution_facts import (
     parent_runtime_projection, resolve_exact_resume_facts,
@@ -21,7 +22,7 @@ from .execution_facts import (
 )
 from .execution import resolve_delete_source
 from .effective_prompt import resolve_effective_prompt
-from .interventions import DeleteSource, ForceToken
+from .interventions import DeleteSource, ForceToken, SampleWith
 from .observations import GeneratedObservation, execution_observation_identity
 from .reconstructed_execution import (
     complete_greedy, complete_traced, detect_retokenization, prompt_base,
@@ -186,6 +187,46 @@ def _worker_evidence(reply: Mapping[str, Any]) -> tuple[str, tuple[int, ...], li
                for step in steps):
             return "", (), None, "worker returned malformed generation steps"
     return text, tuple(ids), steps, None
+
+
+def evaluator_for_control(evaluator: Generate) -> Generate:
+    """The unchanged control is always a greedy re-derive of the recorded tokens.
+
+    A sampler probe declares a sampled contract for its own continuation, but the control it rests
+    on must still reproduce the parent's recorded tokens exactly, which is a greedy claim.
+    """
+    return Generate(max_new=evaluator.max_new, decode_mode="greedy", sampling=None, stop=evaluator.stop)
+
+
+def _declared_sampler(evaluator: Generate) -> dict[str, Any] | None:
+    sampling = evaluator.sampling
+    if not isinstance(sampling, Mapping):
+        return None
+    out = {}
+    for name, alias in (("temperature", "temperature"), ("top_p", "top_p"), ("top_k", "top_k"),
+                        ("seed", "seed"), ("repeat_penalty", "rep_penalty")):
+        if name in sampling:
+            out[alias] = sampling[name]
+        elif alias in sampling:
+            out[alias] = sampling[alias]
+    return out or None
+
+
+def _sampler_disagreement(declared: Mapping[str, Any] | None,
+                          resolved: Mapping[str, Any]) -> str | None:
+    """Report the first declared sampler field the worker did not actually apply."""
+    if not isinstance(declared, Mapping):
+        return None
+    for name, value in declared.items():
+        actual = resolved.get(name)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) \
+                and isinstance(actual, (int, float)) and not isinstance(actual, bool):
+            if float(value) != float(actual):
+                return f"the worker applied {name}={actual!r}, not the declared {value!r}"
+            continue
+        if value != actual:
+            return f"the worker applied {name}={actual!r}, not the declared {value!r}"
+    return None
 
 
 class GenerateExecutionAdapter:
@@ -356,6 +397,67 @@ class GenerateExecutionAdapter:
             diagnostics={"reason_code": "reconstructed_replay"},
         )
 
+    def _sampler_probe(self, state: ResolvedState, evaluator: Generate, intervention: SampleWith,
+                       run: Mapping[str, Any]) -> GeneratedObservation:
+        """Resume the exact state and continue under a declared sampler override.
+
+        This never claims to reproduce the parent: it is a counterfactual under a sampler the
+        caller declared.  What it does prove is which sampler actually ran, by requiring the
+        worker's own resolved-sampler echo to match the declared generation contract.  The evidence
+        stops at a GeneratedObservation; no Run and no legacy receipt are written.
+        """
+        proof = self._control_proofs.get(state.state_fingerprint)
+        if not isinstance(proof, Mapping) or proof.get("status") != "matched":
+            control = self._control_exact(state, evaluator_for_control(evaluator), run)
+            if not control.completed:
+                return _unavailable(state, evaluator, intervention, "exact_control_mismatch",
+                                    "the unchanged exact control did not establish fidelity")
+            proof = self._control_proofs.get(state.state_fingerprint)
+        change = intervention.wire_change()
+        plan = self._exact_plan(state, run, change)
+        if plan.get("classification") != "exact_execution_fork":
+            reason = (plan.get("reasons") or [{}])[0]
+            return _unavailable(state, evaluator, intervention, str(reason.get("code") or "exact_state_unavailable"),
+                                str(reason.get("message") or "exact execution is unavailable"))
+        try:
+            reply = self.engine.execution_fork(
+                checkpoint_id=plan["checkpoint_reference"]["checkpoint_id"],
+                worker_generation_id=plan["checkpoint_reference"]["worker_generation_id"],
+                truncate_to=plan["exactness"]["truncate_to"], max_tokens=evaluator.max_new,
+                intervention=deepcopy(change),
+            )
+            receipt = validate_worker_receipt(reply, plan, change)
+            resolved_sampler = resolved_sampler_receipt(reply)
+        except ExactExecutionError as exc:
+            return _failed(state, evaluator, intervention, "malformed_worker_sampler_evidence", str(exc))
+        except Exception as exc:
+            return _unavailable(state, evaluator, intervention, "exact_generation_unavailable", str(exc))
+        text, ids, steps, evidence_error = _worker_evidence(reply)
+        if evidence_error:
+            return _failed(state, evaluator, intervention, "malformed_worker_token_evidence", evidence_error)
+        declared = _declared_sampler(evaluator)
+        mismatch = _sampler_disagreement(declared, resolved_sampler)
+        if mismatch is not None:
+            # The declared contract is what the observation's identity is keyed on. Evidence
+            # produced under a different sampler is not that observation, so it is a failure
+            # rather than a relabelled result.
+            return _failed(state, evaluator, intervention, "resolved_sampler_mismatch", mismatch)
+        return GeneratedObservation(
+            **_identity_kwargs(state, evaluator, intervention), status="completed", state_ref=state.state_ref,
+            realization=state.realization,
+            fidelity={"classification": "exact_execution_fork", "proof_status": "confirmed",
+                      "exact_match": True, "unchanged_control": "matched",
+                      "sampler_state": "confirmed", "resolved_sampler": deepcopy(resolved_sampler),
+                      "declared_sampler_applied": True},
+            intervention=intervention, generated_suffix_text=text, generated_token_ids=ids,
+            generated_steps=steps, finish_reason=reply.get("finish_reason"),
+            generation_contract=evaluator.to_dict(),
+            runtime_provenance={"worker_receipt": receipt, "resolved_sampler": deepcopy(resolved_sampler)},
+            exact_control_proof=deepcopy(proof) if isinstance(proof, Mapping) else {},
+            execution_provenance={"adapter": "generate", "execution": "exact_sampler_probe"},
+            proof_grade="trusted", trusted=True, diagnostics={"reason_code": "exact_confirmed"},
+        )
+
     def execute_control(self, state: ResolvedState, *, evaluator: Generate | None = None) -> GeneratedObservation:
         evaluator = evaluator or Generate(max_new=1)
         if not isinstance(state, ResolvedState) or not isinstance(evaluator, Generate):
@@ -376,18 +478,20 @@ class GenerateExecutionAdapter:
             return self._control_exact(state, evaluator, run)
         return self._reconstructed(state, evaluator, None, run)
 
-    def execute(self, state: ResolvedState, intervention: ForceToken | None = None, *,
+    def execute(self, state: ResolvedState, intervention: ForceToken | SampleWith | None = None, *,
                 evaluator: Generate | None = None, arm_id: str | None = None) -> GeneratedObservation:
         evaluator = evaluator or Generate(max_new=1)
         if not isinstance(state, ResolvedState) or not isinstance(evaluator, Generate):
             raise TypeError("Generate execution requires ResolvedState and Generate")
-        if intervention is not None and not isinstance(intervention, ForceToken):
-            raise TypeError("Generate arms require ForceToken or an unchanged condition")
+        if intervention is not None and not isinstance(intervention, (ForceToken, SampleWith)):
+            raise TypeError("Generate arms require ForceToken, SampleWith, or an unchanged condition")
+        sampler_probe = isinstance(intervention, SampleWith)
         readiness = operation_readiness(
             state,
-            operation="force_token" if intervention is not None else "continue",
-            token_id=intervention.token_id if intervention is not None else None,
-            token_piece=intervention.token_piece if intervention is not None else None,
+            operation="sample_with" if sampler_probe else (
+                "force_token" if intervention is not None else "continue"),
+            token_id=intervention.token_id if isinstance(intervention, ForceToken) else None,
+            token_piece=intervention.token_piece if isinstance(intervention, ForceToken) else None,
             decode_mode=evaluator.decode_mode,
         )
         if not readiness.get("plannable", False):
@@ -395,6 +499,12 @@ class GenerateExecutionAdapter:
                 state, evaluator, intervention, str(readiness.get("reason_code") or "generation_unavailable"),
                 str(readiness.get("reason") or "the requested Generate operation is unavailable"),
             )
+        if sampler_probe:
+            try:
+                run = self._validated_run(state)
+            except Exception as exc:
+                return _unavailable(state, evaluator, intervention, "base_run_unavailable", str(exc))
+            return self._sampler_probe(state, evaluator, intervention, run)
         if evaluator.decode_mode == "sample":
             # Keep the adapter's eligibility boundary identical to operation_readiness even if a
             # caller reaches this method outside the ordinary runner.

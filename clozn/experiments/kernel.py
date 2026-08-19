@@ -6,7 +6,7 @@ import hashlib
 from typing import Any
 
 from .evaluators import Evaluator, ExactReferenceMatch, ScoreRecordedContinuation, Generate, evaluator_from_dict
-from .interventions import DeleteSource, ForceToken, Intervention, intervention_from_dict
+from .interventions import DeleteSource, ForceToken, Intervention, SampleWith, intervention_from_dict
 from .observations import Observation
 from .selections import ContextSelection
 from .state import ExecutionState, canonical_json
@@ -33,7 +33,7 @@ class ExperimentArm:
     def __init__(self, arm_id: str, intervention: Intervention | None):
         if not isinstance(arm_id, str) or not arm_id:
             raise ValueError("ExperimentArm.arm_id must be a non-empty string")
-        if intervention is not None and not isinstance(intervention, (DeleteSource, ForceToken)):
+        if intervention is not None and not isinstance(intervention, (DeleteSource, ForceToken, SampleWith)):
             raise TypeError("Experiment arms must be supported typed interventions or None")
         self.arm_id = arm_id
         self.intervention = intervention
@@ -63,14 +63,14 @@ class Experiment:
         if isinstance(arms, (str, bytes)):
             raise TypeError("Experiment.arms must be an iterable of interventions")
         raw_arms = list(arms)
-        expected_intervention = (ForceToken, DeleteSource) if isinstance(evaluator, Generate) else DeleteSource
+        expected_intervention = (ForceToken, DeleteSource, SampleWith) if isinstance(evaluator, Generate) else DeleteSource
         if not all(
             (arm is None and isinstance(evaluator, Generate))
             or isinstance(arm, expected_intervention)
             for arm in raw_arms
         ):
             suffix = " or an unchanged condition" if isinstance(evaluator, Generate) else ""
-            name = "ForceToken or DeleteSource" if isinstance(evaluator, Generate) else "DeleteSource"
+            name = "ForceToken, SampleWith, or DeleteSource" if isinstance(evaluator, Generate) else "DeleteSource"
             raise TypeError(f"{type(evaluator).__name__} experiments require {name} arms{suffix}")
         if isinstance(evaluator, Generate) and isinstance(base, ResolvedState) and base.classification == "unavailable":
             raise ValueError("Generate experiments cannot be created from an unavailable ResolvedState")
@@ -78,8 +78,8 @@ class Experiment:
             if any(arm is None or not isinstance(arm, DeleteSource) for arm in raw_arms):
                 raise TypeError("ExecutionState Generate experiments require DeleteSource arms")
         if isinstance(evaluator, Generate) and isinstance(base, ResolvedState):
-            if any(arm is not None and not isinstance(arm, ForceToken) for arm in raw_arms):
-                raise TypeError("ResolvedState Generate experiments require ForceToken or unchanged arms")
+            if any(arm is not None and not isinstance(arm, (ForceToken, SampleWith)) for arm in raw_arms):
+                raise TypeError("ResolvedState Generate experiments require ForceToken, SampleWith, or unchanged arms")
         arm_payload = [arm.to_dict() if arm is not None else None for arm in raw_arms]
         base_identity = _base_identity(base)
         binding = {

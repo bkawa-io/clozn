@@ -128,6 +128,40 @@ def validate_worker_receipt(reply: Mapping, plan: Mapping,
     return out
 
 
+SAMPLER_FIELDS = ("temperature", "top_p", "top_k", "rep_penalty", "seed")
+
+
+def resolved_sampler_receipt(reply: Mapping) -> dict:
+    """Return the fully resolved sampler the worker reports it actually applied.
+
+    A sampler override request names only the fields it changes, so the request alone never says
+    what regime produced the continuation.  The worker echoes all five resolved values in its
+    ``intervention_applied`` receipt, and that echo -- not a child Run's journal -- is the evidence
+    a sampled observation carries.  Raises rather than guessing when the echo is absent or invalid.
+    """
+    applied = reply.get("intervention_applied") if isinstance(reply, Mapping) else None
+    if not isinstance(applied, Mapping):
+        raise ExactExecutionError("worker omitted the resolved sampling receipt")
+    if any(name not in applied for name in SAMPLER_FIELDS):
+        raise ExactExecutionError("worker omitted resolved sampler fields")
+    temperature, top_p, top_k = applied["temperature"], applied["top_p"], applied["top_k"]
+    rep_penalty, seed = applied["rep_penalty"], applied["seed"]
+    if (isinstance(temperature, bool) or not isinstance(temperature, (int, float))
+            or not math.isfinite(float(temperature)) or temperature < 0
+            or isinstance(top_p, bool) or not isinstance(top_p, (int, float))
+            or not math.isfinite(float(top_p)) or not 0 <= top_p <= 1
+            or isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 0
+            or isinstance(rep_penalty, bool) or not isinstance(rep_penalty, (int, float))
+            or not math.isfinite(float(rep_penalty)) or rep_penalty <= 0
+            or isinstance(seed, bool) or not isinstance(seed, int) or seed < 0):
+        raise ExactExecutionError("worker returned invalid resolved sampler fields")
+    return {
+        "temperature": float(temperature), "top_p": float(top_p), "top_k": top_k,
+        "rep_penalty": float(rep_penalty), "seed": seed,
+        "mode": "sample" if float(temperature) > 0 else "greedy",
+    }
+
+
 def _boundary_stop_token_exempt(parent_run: Mapping, reply: Mapping,
                                 expected_tokens: list, expected_text: str,
                                 actual_tokens: list, actual_text: str) -> bool:
@@ -199,6 +233,6 @@ def wire_intervention(intervention: Mapping) -> dict:
 
 
 __all__ = [
-    "ExactExecutionError", "prove_unchanged_control", "validate_worker_receipt",
-    "wire_intervention", "worker_generation_steps",
+    "ExactExecutionError", "SAMPLER_FIELDS", "prove_unchanged_control", "resolved_sampler_receipt",
+    "validate_worker_receipt", "wire_intervention", "worker_generation_steps",
 ]

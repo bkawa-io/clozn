@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import math
 from typing import Any, Union
 
 from .selections import ContextSelection
@@ -9,6 +10,18 @@ from .selections import ContextSelection
 
 class InterventionError(ValueError):
     """A malformed typed intervention."""
+
+
+def _non_negative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _finite(value: Any, *, minimum: float | None = None, maximum: float | None = None) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        return False
+    if minimum is not None and value < minimum:
+        return False
+    return not (maximum is not None and value > maximum)
 
 
 class DeleteSource:
@@ -114,7 +127,80 @@ class ForceToken:
         return cls(token_id=value.get("token_id"), token_piece=value.get("token_piece"))
 
 
-Intervention = Union[DeleteSource, ForceToken]
+class SampleWith:
+    """Declare a sampler override for the continuation from a resolved state.
+
+    Like :class:`ForceToken`, this owns only the change, never the location.  It names the sampler
+    fields the caller wants changed relative to the recorded regime; the fully resolved five-field
+    sampler that actually ran is worker evidence, reported on the resulting observation rather than
+    assumed here.  Field names and ranges are the canonical exact-resume sampler contract.
+    """
+
+    __slots__ = ("temperature", "top_k", "top_p", "seed", "rep_penalty", "_sealed")
+
+    FIELDS = ("temperature", "top_k", "top_p", "seed", "rep_penalty")
+
+    def __setattr__(self, name, value):
+        if getattr(self, "_sealed", False):
+            raise AttributeError("SampleWith is immutable")
+        object.__setattr__(self, name, value)
+
+    def __init__(self, *, temperature=None, top_k=None, top_p=None, seed=None, rep_penalty=None):
+        supplied = {
+            "temperature": temperature, "top_k": top_k, "top_p": top_p,
+            "seed": seed, "rep_penalty": rep_penalty,
+        }
+        if all(value is None for value in supplied.values()):
+            raise InterventionError("SampleWith needs at least one sampler override")
+        if temperature is not None and not _finite(temperature, minimum=0):
+            raise InterventionError("SampleWith.temperature must be a finite number >= 0")
+        if top_p is not None and not _finite(top_p, minimum=0, maximum=1):
+            raise InterventionError("SampleWith.top_p must be a finite number in [0, 1]")
+        if top_k is not None and not _non_negative_int(top_k):
+            raise InterventionError("SampleWith.top_k must be a non-negative integer")
+        if seed is not None and not _non_negative_int(seed):
+            raise InterventionError("SampleWith.seed must be a non-negative integer")
+        if rep_penalty is not None and not (_finite(rep_penalty) and rep_penalty > 0):
+            raise InterventionError("SampleWith.rep_penalty must be a finite number > 0")
+        for name, value in supplied.items():
+            object.__setattr__(self, name, value)
+        self._sealed = True
+
+    @property
+    def overrides(self) -> dict[str, Any]:
+        return {name: getattr(self, name) for name in self.FIELDS if getattr(self, name) is not None}
+
+    def __repr__(self) -> str:
+        return f"SampleWith({self.overrides!r})"
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, SampleWith) and self.overrides == other.overrides
+
+    def __hash__(self) -> int:
+        return hash((type(self), tuple(sorted(self.overrides.items()))))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"kind": "sample_with", **self.overrides}
+
+    def to_json(self) -> str:
+        from .state import canonical_json
+        return canonical_json(self.to_dict())
+
+    def wire_change(self) -> dict[str, Any]:
+        """The override in the worker's own exact-resume intervention vocabulary."""
+        return {"type": "sampling", **self.overrides}
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "SampleWith":
+        if not isinstance(value, Mapping) or value.get("kind") != "sample_with":
+            raise InterventionError("expected a sample_with object")
+        unknown = set(value) - {"kind", *cls.FIELDS}
+        if unknown:
+            raise InterventionError("sample_with has unknown fields")
+        return cls(**{name: value.get(name) for name in cls.FIELDS})
+
+
+Intervention = Union[DeleteSource, ForceToken, SampleWith]
 
 
 def intervention_from_dict(value: Mapping[str, Any]) -> Intervention:
@@ -125,7 +211,10 @@ def intervention_from_dict(value: Mapping[str, Any]) -> Intervention:
         return DeleteSource.from_dict(value)
     if kind == "force_token":
         return ForceToken.from_dict(value)
+    if kind == "sample_with":
+        return SampleWith.from_dict(value)
     raise InterventionError(f"unsupported intervention kind: {kind!r}")
 
 
-__all__ = ["DeleteSource", "ForceToken", "Intervention", "InterventionError", "intervention_from_dict"]
+__all__ = ["DeleteSource", "ForceToken", "Intervention", "InterventionError", "SampleWith",
+           "intervention_from_dict"]

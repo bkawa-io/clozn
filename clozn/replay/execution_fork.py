@@ -192,41 +192,14 @@ def sampling_intervention_contract() -> dict:
 
 
 def recorded_sampling_state(parent_run: Mapping) -> dict | None:
-    """Return the parent's recorded sampler in Execution Fork field names, or ``None``.
+    """Deprecated alias for the neutral recorded-sampler projection.
 
-    This is only a read-side comparison aid for explicit sampler tests.  It does not infer a
-    sampler from a model default: an incomplete recorded state remains unavailable.  Greedy runs
-    use the worker wire's stable defaults so a requested ``temperature: 0`` can be recognized as
-    a no-op without starting an execution.
+    The immutable fact has one owner in the experimental kernel; this name stays only for the
+    existing planning callers that still import it from here.
     """
-    if not isinstance(parent_run, Mapping):
-        return None
-    # ``controlled.recorded_sampling_config`` is the existing behavior-bearing reader used by checkpoint
-    # and controlled replay code.  Import lazily to keep the planning module dependency-free at
-    # import time and avoid creating a new sampling-state interpretation here.
-    from clozn.replay.controlled import recorded_sampling_config
+    from clozn.experiments.execution_facts import recorded_sampler_state
 
-    config = recorded_sampling_config(dict(parent_run))
-    if config is False:
-        return {
-            "temperature": 0.0,
-            "top_k": 0,
-            "top_p": 1.0,
-            "seed": 0,
-            "rep_penalty": 1.0,
-        }
-    if not isinstance(config, Mapping):
-        return None
-    return {
-        "temperature": config.get("temperature"),
-        "top_k": config.get("top_k"),
-        "top_p": config.get("top_p"),
-        "seed": config.get("seed"),
-        "rep_penalty": config.get("repeat_penalty", config.get("rep_penalty")),
-    } if all(config.get(name) is not None for name in
-             ("temperature", "top_k", "top_p", "seed")) and (
-                 config.get("repeat_penalty", config.get("rep_penalty")) is not None
-             ) else None
+    return recorded_sampler_state(parent_run)
 
 
 def _artifact_base(parent_run_id: str, parent_fingerprint: str,
@@ -505,59 +478,3 @@ _runtime_projection = _neutral_runtime_projection
 recorded_fork_prerequisites = _neutral_recorded_execution_prerequisites
 _checkpoint_projection = _neutral_normalize_checkpoint_reference
 _worker_projection = _neutral_worker_identity_projection
-
-
-def capture_exact_force_token_context(
-    run: Mapping, engine, *, runtime_identity: Mapping, worker_identity: Mapping,
-) -> dict:
-    """Capture one exact execution context for Branch Fan and sampler probes.
-
-    This is an adapter around the canonical checkpoint-capture seam.  It contains no product
-    orchestration and deliberately returns eligibility rather than silently changing execution
-    regimes.
-    """
-    from copy import deepcopy
-
-    from clozn.replay.checkpoint_capture import CheckpointCaptureError, capture_parent_checkpoint
-
-    try:
-        capture = capture_parent_checkpoint(
-            run, engine, runtime_identity=runtime_identity, worker_identity=worker_identity)
-    except CheckpointCaptureError as exc:
-        return {"status": "ineligible", "reason": _reason(
-            "checkpoint_capture_request_invalid", str(exc))}
-    if capture.get("status") != "available":
-        reason = (capture.get("reasons") or [{}])[0]
-        return {"status": "ineligible", "reason": _reason(
-            reason.get("code", "checkpoint_unavailable"),
-            reason.get("message", "no exact checkpoint could be captured"))}
-    return {
-        "status": "available",
-        "checkpoint_reference": deepcopy(capture["checkpoint_reference"]),
-        "capture": capture,
-    }
-
-
-def plan_exact_force_token(
-    run: Mapping, request: Mapping, *, checkpoint_reference: Mapping,
-    runtime_identity: Mapping, worker_identity: Mapping,
-) -> dict:
-    """Plan a force-token execution against an already captured checkpoint."""
-    return plan_execution_fork(
-        run, request, checkpoint=checkpoint_reference,
-        runtime_identity=runtime_identity, worker_identity=worker_identity,
-    )
-
-
-def execute_exact_force_token(
-    run: Mapping, plan: Mapping, engine, *, runtime_identity: Mapping,
-    worker_identity: Mapping, reload_parent=None, cancel_check=None,
-) -> dict:
-    """Execute one planned exact force-token candidate through the canonical executor."""
-    from clozn.replay.execution_fork_execute import execute_exact_fork
-
-    return execute_exact_fork(
-        run, plan, engine,
-        runtime_identity=runtime_identity, worker_identity=worker_identity,
-        reload_parent=reload_parent, cancel_check=cancel_check,
-    )
