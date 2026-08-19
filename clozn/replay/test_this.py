@@ -50,7 +50,7 @@ def _single_artifact(child: Mapping | None, *, outcome: str, execution_id: str |
 
 def _single_result(parent: Mapping, plan: Mapping, child_result: Mapping | None) -> dict:
     """Project one existing fork result without embedding its full child run."""
-    from clozn.replay.branch_fan import comparison_projection
+    from clozn.analysis.comparison_projection import comparison_projection
 
     operation = plan["resolved_test"]["operation"]
     if child_result is None:
@@ -395,7 +395,7 @@ def execute_test_this(
             "operation": operation,
             "outcome": _fan_outcome(fan_result),
             "result": {"branch_fan": deepcopy(fan_result)},
-            "artifact": {"schema": "clozn.branch-fan.v1", "result": deepcopy(fan_result)},
+            "artifact": {"schema": "clozn.branch-fan.v2", "result": deepcopy(fan_result)},
             "comparison": None,
         }
         schemas.validate(document, RESULT_SCHEMA_VERSION)

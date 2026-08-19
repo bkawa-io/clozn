@@ -359,7 +359,7 @@ def _response(run: Mapping) -> str | None:
 
 def _comparison(parent: Mapping, child: Mapping, position: int) -> dict:
     from clozn.analysis.model_diff import diff_runs
-    from clozn.replay.branch_fan import comparison_projection_from_diff
+    from clozn.analysis.comparison_projection import comparison_projection_from_diff
 
     diff = diff_runs(dict(parent), dict(child))
     if not diff.get("ok"):

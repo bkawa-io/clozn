@@ -1,4 +1,4 @@
-"""POST /runs/<id>/branch-fan -- bounded execution over recorded alternatives."""
+"""POST /runs/<id>/branch-fan -- bounded observation-first fan over recorded alternatives."""
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -93,10 +93,12 @@ def try_post(h, p, body):
         h._json(500, _CONTRACT_ERROR)
         return True
 
+    # Success is generated evidence, not a created Run.  Branch Fan materializes nothing, so a
+    # completed fan is 200 (observations are addressable through their experiment/observation ids),
+    # never 201.  Creating a child Run is a separate, explicitly requested operation.
     summary = result.get("summary") or {}
-    children = summary.get("children_created", 0)
     status = (
-        201 if children else
+        200 if summary.get("observations_completed", 0) else
         409 if summary.get("status") == "cancelled" else
         422
     )

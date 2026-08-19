@@ -299,7 +299,7 @@ class GenerateExecutionAdapter:
             # adapter's local contract is (text, finish, steps).
             continuation, steps, finish = traced
             return continuation, finish, steps
-        text, finish = complete_greedy(self.engine, prompt, budget, extra)
+        text, finish = complete_greedy(self.engine, prompt, budget, {})
         return text, finish, None
 
     def _reconstructed(self, resolved: ResolvedState, evaluator: Generate,

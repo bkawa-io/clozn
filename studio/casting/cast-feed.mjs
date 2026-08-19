@@ -383,8 +383,8 @@ async function assembleRealCastUnsafe(run, state) {
   if (!traceTokens || !traceTokens.length) {
     state.castUnavailableReason = "this run has no recorded per-token trace"
       + (run.parent_run_id
-         ? " (a forked child only gets one when its spliced prefix verified token-exact -- this "
-           + "one's Branch Fan record says why: changes_applied.branch_fan.trace_provenance)"
+         ? " (a materialized child only gets one when its generated evidence carried per-token "
+           + "steps that decode to its own text -- see changes_applied.experiment)"
          : "");
     return null;
   }

@@ -190,17 +190,18 @@ def test_branch_fan_dispatches_directly_and_preserves_partial_result(monkeypatch
     parent = run()
     seen = {}
     fan_result = {
-        "schema_version": "clozn.branch-fan.v1",
+        "schema_version": "clozn.branch-fan.v2",
         "parent_run_id": parent["id"], "position": 1,
         "selection": {"source": "recorded_alternatives", "state": "available", "requested_limit": 3,
                        "recorded_alternatives": 2, "selected_alternatives": 2},
         "execution": {"policy": "exact_first", "order": "sequential",
+                       "materialization": "explicit_choice_only",
                        "checkpoint_capture": {"state": "available", "reused_for_exact_candidates": True},
                        "fidelity": "mixed"},
         "branches": [],
-        "summary": {"status": "partial", "requested_branches": 2, "attempted_branches": 2,
-                    "children_created": 1, "exact_children": 1, "reconstructed_children": 0,
-                    "unavailable_branches": 1, "not_attempted_branches": 0},
+        "summary": {"status": "partial", "requested": 2, "attempted": 2,
+                    "observations_completed": 1, "exact_observations": 1,
+                    "reconstructed_observations": 0, "unavailable": 1, "not_attempted": 0},
     }
 
     def fake_fan(*args, **kwargs):
@@ -211,7 +212,7 @@ def test_branch_fan_dispatches_directly_and_preserves_partial_result(monkeypatch
     request = token_request({"kind": "fan_alternatives", "limit": 2})
     result = executor.execute_test_this(parent, object(), request)
     assert result["outcome"] == "partial"
-    assert result["artifact"]["schema"] == "clozn.branch-fan.v1"
+    assert result["artifact"]["schema"] == "clozn.branch-fan.v2"
     assert seen["kwargs"]["limit"] == 2
     assert seen["args"][2] == 1
 

@@ -1,0 +1,103 @@
+{
+  "schema_version": "clozn.branch-fan.v2",
+  "parent_run_id": "run_123",
+  "position": 37,
+  "selection": {
+    "source": "recorded_alternatives",
+    "state": "available",
+    "recorded_alternatives": 3,
+    "selected_alternatives": 2,
+    "requested_limit": 2
+  },
+  "execution": {
+    "policy": "exact_first",
+    "order": "sequential",
+    "materialization": "explicit_choice_only",
+    "checkpoint_capture": {
+      "state": "available",
+      "reused_for_exact_candidates": true
+    },
+    "fidelity": "mixed"
+  },
+  "branches": [
+    {
+      "recorded_alternative": {"rank": 0, "token_id": 912, "probability": 0.39},
+      "state": "completed",
+      "outcome": "exact",
+      "resolution_policy": "exact_preferred",
+      "experiment_id": "exp_aaaaaaaaaaaaaaaaaaaaaaaa",
+      "arm_id": "arm_bbbbbbbbbbbbbbbbbbbbbbbb",
+      "observation_id": "obs_cccccccccccccccccccccccc",
+      "state_ref": {
+        "run_id": "run_123",
+        "execution_fingerprint": "d1d1d1d1",
+        "position": {"kind": "answer_token_boundary", "index": 37},
+        "state_fingerprint": "e2e2e2e2"
+      },
+      "fidelity": {
+        "classification": "exact_execution_fork",
+        "proof_status": "confirmed",
+        "exact_match": true,
+        "unchanged_control": "matched",
+        "sampler_state": "not_required"
+      },
+      "generated": {"text_chars": 24, "token_count": 6, "finish_reason": "stop"},
+      "reasons": [],
+      "comparison": {
+        "schema_version": "clozn.observation-comparison.v1",
+        "state": "available",
+        "basis": "recorded_suffix_vs_generated_suffix",
+        "branch_point": {"answer_token_index": 37},
+        "recorded_suffix": {"token_count": 6, "text_chars": 22},
+        "generated_suffix": {"token_count": 6, "text_chars": 24},
+        "identical_text": false,
+        "surface_similarity": {"value": 0.71, "label": "surface similarity — wording, not meaning"},
+        "common_suffix_prefix_len": 0,
+        "first_divergence": {
+          "answer_token_index": 37,
+          "suffix_index": 0,
+          "kind": "token_mismatch",
+          "recorded_piece": " the",
+          "generated_piece": " a"
+        }
+      }
+    },
+    {
+      "recorded_alternative": {"rank": 1, "probability": 0.12},
+      "state": "completed",
+      "outcome": "reconstructed",
+      "resolution_policy": "reconstructed_only",
+      "experiment_id": "exp_dddddddddddddddddddddddd",
+      "arm_id": "arm_eeeeeeeeeeeeeeeeeeeeeeee",
+      "observation_id": "obs_ffffffffffffffffffffffff",
+      "fidelity": {
+        "classification": "reconstructed_replay",
+        "proof_status": "not_applicable",
+        "retokenized_prefix": true,
+        "unavoidable_differences": ["kv_state_not_restored"]
+      },
+      "generated": {"text_chars": 19, "token_count": 0, "finish_reason": null},
+      "reasons": [],
+      "comparison": {
+        "schema_version": "clozn.observation-comparison.v1",
+        "state": "token_evidence_unavailable",
+        "basis": "recorded_suffix_vs_generated_suffix",
+        "branch_point": {"answer_token_index": 37},
+        "recorded_suffix": {"token_count": 6, "text_chars": 22},
+        "generated_suffix": {"token_count": null, "text_chars": 19},
+        "identical_text": false,
+        "surface_similarity": {"value": 0.55, "label": "surface similarity — wording, not meaning"}
+      }
+    }
+  ],
+  "summary": {
+    "status": "completed",
+    "requested": 2,
+    "attempted": 2,
+    "observations_completed": 2,
+    "exact_observations": 1,
+    "reconstructed_observations": 1,
+    "unavailable": 0,
+    "not_attempted": 0
+  }
+}

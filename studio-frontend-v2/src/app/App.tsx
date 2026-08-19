@@ -306,18 +306,23 @@ function TimeTravelDataSurface({ runId, mode, tokenPosition, breakpointId, rival
       } else throw new Error("This boundary has no declared intervention.");
       const nestedResult = asObject(result.result);
       const branchFan = asObject(nestedResult?.branch_fan);
-      const fanChildren = Array.isArray(branchFan?.branches) ? branchFan.branches.flatMap((raw): ChildForkResult[] => {
+      // Branch Fan is observation-first: it generates each recorded alternative as a
+      // GeneratedObservation and creates no child run. Materializing one is a separate choice.
+      const fanObservations = Array.isArray(branchFan?.branches) ? branchFan.branches.filter((raw) => {
         const branch = asObject(raw);
-        if (typeof branch?.child_run_id !== "string") return [];
-        return [{ runId: branch.child_run_id, intervention: proposal, exactness: branch.outcome === "exact_execution_fork" ? "verified_exact" : "reconstructed", summary: "Recorded child created by the bounded Branch Fan." }];
-      }) : [];
+        return branch?.state === "completed" && typeof branch?.observation_id === "string";
+      }).length : 0;
       const child = asObject(result.child);
       const childRunId = typeof result.child_run_id === "string" ? result.child_run_id : typeof nestedResult?.child_run_id === "string" ? nestedResult.child_run_id : typeof child?.id === "string" ? child.id : undefined;
-      if (!childRunId && !fanChildren.length) {
+      if (!childRunId && !fanObservations) {
         const reasons = Array.isArray(nestedResult?.reasons) ? nestedResult.reasons.map((reason) => asObject(reason)?.message).filter((value): value is string => typeof value === "string").join(" · ") : undefined;
-        throw new Error(reasons || "The intervention completed without a child run handoff.");
+        throw new Error(reasons || "The intervention completed without generated evidence.");
       }
-      const createdChildren = fanChildren.length ? fanChildren : [{ runId: childRunId!, intervention: proposal, exactness: action.mode === "exact" ? "verified_exact" as const : "reconstructed" as const, summary: "Recorded child created by Test This." }];
+      if (!childRunId) {
+        setLive((current) => ({ ...current, children: [], execution: { state: "completed", detail: `${fanObservations} alternative${fanObservations === 1 ? " was" : "s were"} generated. Materialize one to compare it as a child run.`, interventionRan: true } }));
+        return;
+      }
+      const createdChildren = [{ runId: childRunId, intervention: proposal, exactness: action.mode === "exact" ? "verified_exact" as const : "reconstructed" as const, summary: "Recorded child created by Test This." }];
       setLive((current) => ({ ...current, children: createdChildren, execution: { state: "completed", detail: `${createdChildren.length} child run${createdChildren.length === 1 ? " is" : "s are"} ready for comparison.`, interventionRan: true } }));
     } catch (error) {
       setLive((current) => ({ ...current, execution: { state: "failed", detail: error instanceof Error ? error.message : "Branch execution failed.", interventionRan: false } }));

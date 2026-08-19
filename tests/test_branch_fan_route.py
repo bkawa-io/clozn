@@ -1,4 +1,8 @@
-"""HTTP contract coverage for POST /runs/<id>/branch-fan."""
+"""HTTP contract coverage for POST /runs/<id>/branch-fan.
+
+The route's success signal is generated evidence, never a created Run: a completed fan is 200 with
+observation ids, and nothing on this route materializes a child.
+"""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -58,34 +62,37 @@ def _run():
     }
 
 
-def _document(*, status="completed", children=1):
+def _document(*, status="completed", observations=1):
     branches = []
-    for index in range(children):
+    for index in range(observations):
         branches.append({
             "recorded_alternative": {"rank": index, "token_id": 9 + index, "probability": 0.3},
             "state": "completed",
-            "outcome": "exact_execution_fork",
-            "child_run_id": f"child-{index}",
-            "execution_fork_execution_id": "fork_exec_" + ("a" * 20),
-            "exactness": {"proof_status": "confirmed"},
-            "unchanged_control": {"status": "matched"},
+            "outcome": "exact",
+            "resolution_policy": "exact_preferred",
+            "experiment_id": f"exp_{index}" + "a" * 20,
+            "arm_id": f"arm_{index}" + "b" * 20,
+            "observation_id": f"obs_{index}" + "c" * 20,
+            "fidelity": {"classification": "exact_execution_fork", "proof_status": "confirmed"},
+            "generated": {"text_chars": 8, "token_count": 2, "finish_reason": "stop"},
             "reasons": [],
-            "comparison": {"state": "trace_unavailable", "first_divergence_view": {"state": "trace_unavailable"}},
+            "comparison": None,
         })
     return {
-        "schema_version": "clozn.branch-fan.v1",
+        "schema_version": "clozn.branch-fan.v2",
         "parent_run_id": "run_branch_route",
         "position": 1,
         "selection": {"source": "recorded_alternatives", "state": "available",
-                       "recorded_alternatives": 1, "selected_alternatives": children,
+                       "recorded_alternatives": 1, "selected_alternatives": observations,
                        "requested_limit": 3},
         "execution": {"policy": "exact_first", "order": "sequential",
+                       "materialization": "explicit_choice_only",
                        "checkpoint_capture": {"state": "available", "reused_for_exact_candidates": True},
-                       "fidelity": "all_exact" if children else "none_completed"},
+                       "fidelity": "all_exact" if observations else "none_completed"},
         "branches": branches,
-        "summary": {"status": status, "requested_branches": children, "attempted_branches": children,
-                    "children_created": children, "exact_children": children, "reconstructed_children": 0,
-                    "unavailable_branches": 0, "not_attempted_branches": 0},
+        "summary": {"status": status, "requested": observations, "attempted": observations,
+                    "observations_completed": observations, "exact_observations": observations,
+                    "reconstructed_observations": 0, "unavailable": 0, "not_attempted": 0},
     }
 
 
@@ -103,7 +110,7 @@ def routed(monkeypatch):
     return run, seen
 
 
-def test_existing_parent_returns_201_and_uses_parent_model(monkeypatch, routed):
+def test_existing_parent_returns_200_and_uses_parent_model(monkeypatch, routed):
     run, seen = routed
     called = {}
 
@@ -114,8 +121,8 @@ def test_existing_parent_returns_201_and_uses_parent_model(monkeypatch, routed):
     monkeypatch.setattr(fan, "branch_fan", fake)
     h = Handler(f"/runs/{run['id']}/branch-fan")
     assert route.try_post(h, f"/runs/{run['id']}/branch-fan", {"position": 1}) is True
-    assert h.status == 201
-    schemas.validate(h.body, "clozn.branch-fan.v1")
+    assert h.status == 200
+    schemas.validate(h.body, "clozn.branch-fan.v2")
     assert seen == {"model": "parent-model", "route": "/runs/<id>/branch-fan"}
     assert called["position"] == 1
     assert called["limit"] == 3
@@ -151,7 +158,7 @@ def test_custom_limit_is_forwarded(routed, monkeypatch):
     monkeypatch.setattr(fan, "branch_fan", fake)
     h = Handler()
     route.try_post(h, f"/runs/{run['id']}/branch-fan", {"position": 1, "limit": 4})
-    assert h.status == 201
+    assert h.status == 200
     assert seen["limit"] == 4
 
 
@@ -195,14 +202,14 @@ def test_structurally_valid_position_failure_is_400(monkeypatch, routed):
     assert h.body["code"] == "invalid_position"
 
 
-def test_no_children_is_422_and_cancellation_without_children_is_409(monkeypatch, routed):
+def test_no_observations_is_422_and_cancellation_without_observations_is_409(monkeypatch, routed):
     run, _ = routed
-    monkeypatch.setattr(fan, "branch_fan", lambda *_args, **_kwargs: _document(status="unavailable", children=0))
+    monkeypatch.setattr(fan, "branch_fan", lambda *_args, **_kwargs: _document(status="unavailable", observations=0))
     h = Handler()
     route.try_post(h, f"/runs/{run['id']}/branch-fan", {"position": 1})
     assert h.status == 422
 
-    cancelled = _document(status="cancelled", children=0)
+    cancelled = _document(status="cancelled", observations=0)
     monkeypatch.setattr(fan, "branch_fan", lambda *_args, **_kwargs: cancelled)
     h2 = Handler()
     route.try_post(h2, f"/runs/{run['id']}/branch-fan", {"position": 1})
@@ -244,7 +251,7 @@ def test_route_does_not_start_analysis_or_model_generation(monkeypatch, routed):
     monkeypatch.setattr(fan, "branch_fan", lambda *_args, **_kwargs: _document())
     h = Handler()
     route.try_post(h, f"/runs/{run['id']}/branch-fan", {"position": 1})
-    assert h.status == 201
+    assert h.status == 200
 
 
 def test_route_is_autoloaded():

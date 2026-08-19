@@ -13,7 +13,7 @@ from clozn import schemas
 from clozn.analysis.model_diff import diff_runs
 from clozn.receipts.forced import matched_length_neutral_filler
 from clozn.replay import span_bridge
-from clozn.replay.branch_fan import comparison_projection_from_diff
+from clozn.analysis.comparison_projection import comparison_projection_from_diff
 from clozn.replay.execution_fork import (
     _runtime_projection,
     parent_execution_fingerprint,

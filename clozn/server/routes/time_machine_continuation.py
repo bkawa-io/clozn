@@ -96,10 +96,12 @@ def _identity_projection(
     health: Mapping,
     generation_settings_sha256: str,
 ) -> dict | None:
-    from clozn.replay.execution_fork import (
-        _runtime_projection,
-        _worker_projection,
+    # Identity projection is an immutable execution fact with one neutral kernel owner.  Time
+    # Machine's continuation semantics are unchanged; only the source of these helpers moves.
+    from clozn.experiments.execution_facts import (
         parent_runtime_projection,
+        runtime_projection as _runtime_projection,
+        worker_identity_projection as _worker_projection,
     )
 
     source_runtime = parent_runtime_projection(source_run)

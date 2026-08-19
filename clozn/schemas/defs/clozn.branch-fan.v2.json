@@ -1,0 +1,437 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.branch-fan.v2",
+  "title": "Branch Fan -- bounded observation-first fan over recorded alternatives",
+  "description": "A live orchestration projection over canonical ForceToken time-travel experiments. It selects only alternatives already recorded at one response-token boundary and executes each one through the shared StateRef/Generate kernel, stopping at a GeneratedObservation. Fanning N alternatives creates N observations and ZERO Runs; a child Run exists only after a caller explicitly materializes one selected observation, which is a separate operation with its own result. A branch therefore identifies its evidence by experiment/observation id, never by a child run id. It is not an experiment entity, attribution result, diagnosis, or semantic conclusion. Per-branch fidelity is the observation's own claim, restated here and never upgraded. Comparison is projected from the observation against the recorded parent suffix; no temporary Run is created to reach a two-Run diff. This response contains metadata, ids, probabilities, and compact evidence projections, never checkpoint bytes or worker-private paths.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "parent_run_id",
+    "position",
+    "selection",
+    "execution",
+    "branches",
+    "summary"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "clozn.branch-fan.v2"
+    },
+    "parent_run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "position": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Recorded response-token index. The state is addressed immediately before this token, matching the StateRef answer-token boundary."
+    },
+    "selection": {
+      "$ref": "#/$defs/selection"
+    },
+    "execution": {
+      "$ref": "#/$defs/execution"
+    },
+    "branches": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/branch"
+      }
+    },
+    "summary": {
+      "$ref": "#/$defs/summary"
+    }
+  },
+  "$defs": {
+    "selection": {
+      "type": "object",
+      "required": [
+        "source",
+        "state",
+        "requested_limit"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "const": "recorded_alternatives"
+        },
+        "state": {
+          "enum": [
+            "available",
+            "unavailable"
+          ]
+        },
+        "recorded_alternatives": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "selected_alternatives": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "requested_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4
+        },
+        "reason": {
+          "enum": [
+            "no_recorded_alternatives"
+          ]
+        }
+      }
+    },
+    "checkpoint_capture": {
+      "type": "object",
+      "required": [
+        "state",
+        "reused_for_exact_candidates"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "enum": [
+            "available",
+            "unavailable",
+            "not_attempted"
+          ]
+        },
+        "reused_for_exact_candidates": {
+          "type": "boolean"
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "required": [
+        "policy",
+        "order",
+        "materialization",
+        "checkpoint_capture",
+        "fidelity"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "policy": {
+          "const": "exact_first"
+        },
+        "order": {
+          "const": "sequential"
+        },
+        "materialization": {
+          "const": "explicit_choice_only",
+          "description": "Branch Fan never materializes a Run. Promoting one observation to a child Run is a separate, explicitly requested operation."
+        },
+        "checkpoint_capture": {
+          "$ref": "#/$defs/checkpoint_capture"
+        },
+        "fidelity": {
+          "enum": [
+            "all_exact",
+            "all_reconstructed",
+            "mixed",
+            "none_completed"
+          ]
+        }
+      }
+    },
+    "recorded_alternative": {
+      "type": "object",
+      "required": [
+        "rank"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "rank": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "token_id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "probability": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "reason": {
+      "type": "object",
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "state_ref": {
+      "type": "object",
+      "required": [
+        "run_id",
+        "execution_fingerprint",
+        "position",
+        "state_fingerprint"
+      ],
+      "additionalProperties": true,
+      "description": "The compact StateRef identity payload only. The full execution state is deliberately absent: it carries prompt material this response must not republish.",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "execution_fingerprint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "position": {
+          "type": "object"
+        },
+        "state_fingerprint": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "fidelity": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "The GeneratedObservation's own fidelity claim, restated verbatim. Never upgraded here.",
+      "properties": {
+        "classification": {
+          "enum": [
+            "exact_execution_fork",
+            "reconstructed_replay"
+          ]
+        },
+        "proof_status": {
+          "type": "string"
+        },
+        "exact_match": {
+          "type": "boolean"
+        },
+        "unchanged_control": {
+          "type": "string"
+        },
+        "sampler_state": {
+          "type": "string"
+        },
+        "retokenized_prefix": {
+          "type": "boolean"
+        },
+        "unavoidable_differences": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "generated": {
+      "type": "object",
+      "required": [
+        "text_chars",
+        "token_count"
+      ],
+      "additionalProperties": false,
+      "description": "Compact size facts about the observed continuation. The evidence itself lives in the GeneratedObservation, not on this wire.",
+      "properties": {
+        "text_chars": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "token_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "finish_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "comparison": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true,
+      "description": "An observation-aware projection against the parent's recorded suffix. Absent (null) rather than synthesized from a temporary Run.",
+      "properties": {
+        "schema_version": {
+          "const": "clozn.observation-comparison.v1"
+        },
+        "state": {
+          "enum": [
+            "available",
+            "token_evidence_unavailable",
+            "unavailable"
+          ]
+        },
+        "basis": {
+          "const": "recorded_suffix_vs_generated_suffix"
+        },
+        "branch_point": {
+          "type": "object"
+        },
+        "recorded_suffix": {
+          "type": "object"
+        },
+        "generated_suffix": {
+          "type": "object"
+        },
+        "identical_text": {
+          "type": "boolean"
+        },
+        "surface_similarity": {
+          "type": "object"
+        },
+        "common_suffix_prefix_len": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "first_divergence": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      }
+    },
+    "branch": {
+      "type": "object",
+      "required": [
+        "recorded_alternative",
+        "state",
+        "outcome",
+        "reasons",
+        "comparison"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "recorded_alternative": {
+          "$ref": "#/$defs/recorded_alternative"
+        },
+        "state": {
+          "enum": [
+            "completed",
+            "unavailable",
+            "not_attempted"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "exact",
+            "reconstructed",
+            "unavailable"
+          ]
+        },
+        "resolution_policy": {
+          "enum": [
+            "exact_preferred",
+            "reconstructed_only"
+          ],
+          "description": "The resolution this branch asked for. Absent when the branch was never attempted, so no policy was ever chosen."
+        },
+        "experiment_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "arm_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observation_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "state_ref": {
+          "$ref": "#/$defs/state_ref"
+        },
+        "fidelity": {
+          "$ref": "#/$defs/fidelity"
+        },
+        "generated": {
+          "$ref": "#/$defs/generated"
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reason"
+          }
+        },
+        "comparison": {
+          "$ref": "#/$defs/comparison"
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "status",
+        "requested",
+        "attempted",
+        "observations_completed",
+        "exact_observations",
+        "reconstructed_observations",
+        "unavailable",
+        "not_attempted"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "completed",
+            "partial",
+            "cancelled",
+            "partial_cancelled",
+            "unavailable"
+          ]
+        },
+        "requested": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "attempted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "observations_completed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "exact_observations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reconstructed_observations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unavailable": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "not_attempted": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

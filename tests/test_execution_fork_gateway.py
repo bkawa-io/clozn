@@ -10,7 +10,7 @@ import pytest
 from clozn import schemas
 import clozn.runs.store as runlog
 from clozn.replay.execution_fork import plan_execution_fork
-from clozn.replay.execution_fork_execute import execute_exact_fork
+from clozn.replay.execution_fork_execute import _exact_child_trace, execute_exact_fork
 from clozn.replay import execution_fork_results
 
 
@@ -506,3 +506,41 @@ def test_terminal_result_ids_are_immutable(stores):
         match="different immutable receipt",
     ):
         execution_fork_results.save(changed)
+
+
+# These two cover the executor's own child-trace assembly.  They lived beside Branch Fan while it
+# used this executor; Branch Fan no longer does, so they belong with the executor they describe.
+def test_exact_child_trace_uses_worker_steps_and_never_retokenizes():
+    parent = {
+        "id": "parent",
+        "response": "one two five",
+        "trace": {
+            "tokens": ["one", " two", " five"],
+            "token_ids": [11, 22, 55],
+            "alternatives": [[], [{"piece": " four", "token_id": 44, "prob": 0.41}], []],
+        },
+    }
+    plan = {"request": {"position": 1, "execution_change": {
+        "type": "force_token", "token_piece": " four", "token_id": 44,
+    }}}
+    reply = {
+        "text": " four five",
+        "tokens": [44, 55],
+        "steps": [
+            {"piece": " four", "id": 44},
+            {"piece": " five", "id": 55, "prob": 0.8},
+        ],
+    }
+    trace = _exact_child_trace(parent, plan, reply)
+    assert trace["tokens"] == ["one", " four", " five"]
+    assert trace["token_ids"] == [11, 44, 55]
+    assert trace["steps"][1]["prob"] == 0.41
+    assert "four" in "".join(trace["tokens"])
+
+
+def test_missing_worker_trace_evidence_does_not_falsify_exactness():
+    parent = {"id": "parent", "trace": {"tokens": ["a"], "token_ids": [1]}}
+    plan = {"request": {"position": 0, "execution_change": {
+        "type": "force_token", "token_piece": " b", "token_id": 2,
+    }}}
+    assert _exact_child_trace(parent, plan, {"text": " b", "tokens": [2]}) is None

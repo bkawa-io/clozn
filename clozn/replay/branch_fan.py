@@ -1,344 +1,31 @@
-"""Sequential execution of a bounded fan over a run's recorded token alternatives.
+"""Bounded orchestration of canonical ForceToken time-travel experiments.
 
-Branch Fan is deliberately an orchestration layer.  It selects only alternatives already recorded on
-the immutable parent, delegates exactness to the existing execution-fork policy, delegates
-reconstruction to its retained Branch Fan child seam, and delegates comparison to ``diff_runs``.  It does not
-create a fan/experiment object and does not perform a new model-analysis operation.
+Branch Fan is deliberately an orchestration layer and nothing else.  It owns candidate discovery
+over the immutable parent's recorded alternatives, the bounded fan size, the sequential order,
+cancellation, and the composed summary.  It does not own exactness, reconstruction, generation, or
+child creation.
+
+Every selected alternative executes as one canonical ForceToken through the same
+StateRef -> resolve_state -> Generate -> GenerateExecutionAdapter path Time Travel already uses, and
+stops at a :class:`GeneratedObservation`.  Fanning N alternatives therefore produces N observations
+and zero Runs; a Run appears only when a caller explicitly materializes one selected observation.
+
+The fan carries no bespoke reconstruction, no prompt splicing, and no child persistence.  It also
+never asks for a comparison that would require a second Run to exist: comparison against the
+recorded parent is projected directly from the observation.
 """
 from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
 import math
-import time
 
 from clozn import schemas
-import clozn.runs.store as runlog
-from clozn.runs.think_tags import sanitize_messages
 
-SCHEMA_VERSION = "clozn.branch-fan.v1"
+SCHEMA_VERSION = "clozn.branch-fan.v2"
 DEFAULT_LIMIT = 3
 MIN_LIMIT = 1
 MAX_LIMIT = 4
-MAX_NEW = 256
-
-FORK_NOTE = ("greedy continuation (sample=false): a deterministic what-if from the forced token "
-             "onward, not a sample from the original decode regime; the kept prefix and the forced "
-             "token are spliced as text, the rest is the model's own greedy path")
-
-_UNVERIFIED_NOTE = ("; retokenization could not be verified on this substrate (no score seam), so "
-                    "the spliced prefix is conservatively flagged retokenized")
-
-
-# ------------------------------------------------------------------------------- pure validation
-def _alt_pairs(trace: dict, position: int) -> list[tuple[str, int | None]]:
-    """The recorded alternatives at `position` as (piece, token_id|None) pairs; [] when absent.
-    Reads the v1 parallel array (trace.alternatives[position]) -- the shape runlog._clean_alts pins."""
-    alts = trace.get("alternatives") or []
-    at = alts[position] if position < len(alts) and isinstance(alts[position], list) else []
-    out = []
-    for a in at:
-        if not isinstance(a, dict):
-            continue
-        piece = str(a.get("piece", a.get("text", "")))
-        tid = a.get("token_id", a.get("id"))
-        try:
-            tid = int(tid) if tid is not None else None
-        except (TypeError, ValueError):
-            tid = None
-        out.append((piece, tid))
-    return out
-
-
-def resolve_forced_token(trace: dict, position: int, token=None, token_id=None) -> tuple[str, bool]:
-    """(forced_piece, was_recorded_alternative) for the caller's choice at `position`. PURE; raises
-    ValueError on anything unresolvable (the route's 400).
-
-    `token` (piece text) wins when both are given: ANY non-empty piece is allowed -- a free token is a
-    legitimate what-if -- but only a piece matching a RECORDED alternative earns
-    was_recorded_alternative=True (the honest distinction the response carries). `token_id` alone can
-    only resolve against the recorded alternatives (or the committed token itself -- a re-derive, not
-    an alternative, so False): with no tokenizer here, an arbitrary id has no text to splice."""
-    pairs = _alt_pairs(trace, position)
-    if token is not None:
-        piece = str(token)
-        if not piece:
-            raise ValueError("forced 'token' must be a non-empty piece string")
-        return piece, any(p == piece for p, _ in pairs)
-    if token_id is not None:
-        try:
-            tid = int(token_id)
-        except (TypeError, ValueError):
-            raise ValueError("token_id must be an integer")
-        for piece, aid in pairs:
-            if aid is not None and aid == tid:
-                return piece, True
-        ids = trace.get("token_ids") or []
-        if position < len(ids) and ids[position] == tid:      # the committed pick itself
-            return str((trace.get("tokens") or [])[position]), False
-        raise ValueError(f"token_id {tid} is not among the recorded alternatives at position "
-                         f"{position}; pass 'token' with the piece text to force a free token")
-    raise ValueError("need a forced 'token' (piece text) or 'token_id' (a recorded alternative's id)")
-
-
-# ------------------------------------------------------------------------------- prompt assembly
-def _inject_block(messages, block):
-    """`messages` with a memory block folded in as system context -- a faithful mirror of
-    clozn_server._inject_block (append to an existing system message, else prepend one), kept local so
-    this module never imports the server app. Only the no-final_prompt fallback path needs it."""
-    if not block:
-        return list(messages or [])
-    msgs = [dict(m) for m in (messages or [])]
-    for m in msgs:
-        if m.get("role") == "system":
-            m["content"] = (str(m.get("content") or "") + "\n\n" + block).strip()
-            return msgs
-    return [{"role": "system", "content": block}] + msgs
-
-
-def _prompt_base(run: dict, sub):
-    """(prompt_string, source) for the fork's generation base -- the text the model saw BEFORE the
-    reply began. Prefers the recorded final_prompt (exact); falls back to re-rendering rederive's
-    with-arm messages through the model's own chat template (engine.apply_template). (None, None)
-    when neither is possible (the caller turns that into a clean failure, never a guess)."""
-    fp = run.get("final_prompt")
-    if isinstance(fp, str) and fp:
-        return fp, "final_prompt"
-    from clozn.receipts import rederive
-    conditions = rederive.with_arm_conditions(run)
-    tmpl = getattr(getattr(sub, "engine", None), "apply_template", None)
-    if not callable(tmpl):
-        return None, None
-    try:
-        return str(tmpl(_inject_block(conditions["messages"], conditions["block"]))), "apply_template"
-    except Exception:
-        return None, None
-
-
-# ------------------------------------------------------------------------------- honesty: retokenization
-def _detect_retokenization(sub, run: dict, expected_pieces: list) -> bool | None:
-    """Re-tokenize the spliced prefix+forced text through the substrate's score seam and compare
-    piece-for-piece with what we spliced. True == a token boundary shifted (the continuation is NOT
-    running on the exact recorded pieces); False == verified identical; None == unverifiable here
-    (no score_tokens on this substrate, or the call failed) -- the caller flags None as retokenized,
-    since exactness can't be proven."""
-    score = getattr(sub, "score_tokens", None)
-    if not callable(score):
-        return None
-    expected = [str(p) for p in expected_pieces]
-    try:
-        from clozn.receipts import rederive
-        conditions = rederive.with_arm_conditions(run)
-        toks = score(conditions["messages"], None, continuation="".join(expected),
-                     block=conditions["block"])
-    except Exception:
-        return None
-    if not isinstance(toks, list) or not toks:
-        return None
-    got = [str(t.get("piece", "")) for t in toks if isinstance(t, dict)]
-    return got != expected
-
-
-# ------------------------------------------------------------------------------- generation (greedy)
-
-
-def _complete_greedy(engine, prompt: str, max_new: int, extra_kw: dict):
-    """One raw-prompt greedy completion on the engine -- temperature 0 / rep_penalty 1 / seed 0,
-    byte-identical to _engine_complete_traced's greedy fallback regime. Returns
-    (continuation_text, finish_reason) or (None, None) on an unparseable reply."""
-    r = engine.complete(prompt, max_tokens=int(max_new), temperature=0.0, rep_penalty=1.0, seed=0,
-                        **extra_kw)
-    ch = r.get("choices") if isinstance(r, dict) else None
-    if not (isinstance(ch, list) and ch and isinstance(ch[0], dict)):
-        return None, None
-    return str(ch[0].get("text", "")), ch[0].get("finish_reason")
-
-
-def _complete_traced(engine, prompt: str, max_new: int, extra_kw: dict):
-    """The same greedy completion, but through the server's traced seam so the child gets per-token
-    steps (the gap that left every forked child with trace {} -- unforkable-onward, uncastable,
-    invisible to the token timeline). Returns (continuation, steps, finish) or None when the seam is
-    unavailable or fails -- the caller then uses _complete_greedy, so a fork is NEVER lost to tracing.
-
-    The import is lazy and guarded: this module's contract is stdlib-only/unit-testable-with-a-fake-
-    substrate, and the server package imports THIS module, so a top-level import
-    would be a cycle. Under a fake substrate the import (or the seam itself) simply fails and the
-    plain path runs, exactly as before."""
-    try:
-        from clozn.server.substrates import _engine_complete_traced
-    except Exception:
-        return None
-    try:
-        reply, steps, finish, _div = _engine_complete_traced(
-            engine, prompt, int(max_new), dict(extra_kw), sample=None)
-    except Exception:
-        return None
-    if not isinstance(reply, str):
-        return None
-    return reply, steps, finish
-
-
-def _spliced_child_trace(parent_trace: dict, position: int, forced_piece: str, cont_steps) -> list | None:
-    """Assemble the CHILD's full-reply trace: parent's prefix steps + the forced step + the fresh
-    continuation steps. Returns a raw steps list for runlog.record(trace=...) or None when it cannot
-    be built honestly.
-
-    HONESTY PRECONDITIONS (the caller enforces the first):
-      * Only valid when the spliced prefix verified TOKEN-EXACT (retokenized is False): greedy decode
-        is deterministic, so an identical prompt + identical prefix tokens + the run's own dials
-        reproduce identical per-position distributions -- the parent's recorded measurements ARE the
-        child's, not an approximation of them.
-      * The forced step keeps the parent's distribution-level values (alternatives, topk_entropy):
-        the distribution at `position` depends only on the context BEFORE it, which is unchanged.
-        Its committed prob/token_id come from the parent's recorded alternative when the forced piece
-        is one; when it isn't (a custom token), they are simply ABSENT -- never invented."""
-    rich = parent_trace.get("steps")
-    if not isinstance(rich, list) or len(rich) <= position:
-        return None
-    out = []
-    for s in rich[:position]:
-        if not isinstance(s, dict):
-            return None
-        c = dict(s)
-        c.pop("pos", None)
-        out.append(c)
-    forced = dict(rich[position]) if isinstance(rich[position], dict) else {}
-    forced.pop("pos", None)
-    forced["piece"] = forced_piece
-    forced["text"] = forced_piece
-    for k in ("token_id", "prob", "confidence", "logprob"):   # the ORIGINAL committed token's, not ours
-        forced.pop(k, None)
-    for a in forced.get("alternatives") or []:
-        if isinstance(a, dict) and str(a.get("piece", a.get("text", ""))) == forced_piece:
-            if a.get("token_id") is not None:
-                forced["token_id"] = a["token_id"]
-            if a.get("prob") is not None:
-                forced["prob"] = a["prob"]
-            break
-    out.append(forced)
-    for s in cont_steps or []:
-        if isinstance(s, dict):
-            c = dict(s)
-            c.pop("pos", None)
-            out.append(c)
-    if len(out) <= position + 1:            # continuation contributed nothing usable
-        return None
-    for i, c in enumerate(out):             # one sequential index space; the parent's and the
-        c["index"] = i                      # continuation's own indices both restart at 0
-    return out
-
-
-# ------------------------------------------------------------------------------- the fork itself
-def reconstruct_branch_child(run: dict, sub, position, token=None, token_id=None, max_new: int = MAX_NEW) -> dict | None:
-    """Reconstruct one Branch Fan child from text and record the resulting child Run.
-
-    Returns the child run dict -- extended (NOT persisted; the same convention
-    as replay's generated_ids) with:
-
-      prefix_kept        -- the unchanged reply text [0..position) (the UI's divergence anchor)
-      forked_from_piece  -- the ORIGINAL committed piece at `position` (what the fork replaced)
-      retokenized        -- False only when the spliced prefix verified token-exact (see
-                            _detect_retokenization); True on a detected shift OR when unverifiable
-      note               -- the greedy-what-if honesty note
-
-    Raises ValueError on invalid input (no trace / position out of range / unresolvable token) -- the
-    Branch Fan maps validation failures to its typed unavailable result. After validation it NEVER
-    raises: any generation or persistence failure returns None."""
-    if not run or not isinstance(run, dict):
-        raise ValueError("run record is empty")
-    trace = run.get("trace") or {}
-    pieces = trace.get("tokens")
-    if not isinstance(pieces, list) or not pieces:
-        raise ValueError("run has no trace to fork from")
-    position = int(position)
-    if position < 0 or position >= len(pieces):
-        raise ValueError(f"fork position {position} out of range "
-                         f"(the reply has {len(pieces)} trace tokens)")
-    forced_piece, was_recorded = resolve_forced_token(trace, position, token=token, token_id=token_id)
-
-    try:
-        engine = getattr(sub, "engine", None)
-        if engine is None or not callable(getattr(engine, "complete", None)):
-            return None                                     # fork regenerates on the raw-prompt engine seam
-        prompt_base, prompt_source = _prompt_base(run, sub)
-        if prompt_base is None:
-            return None
-        prefix = "".join(str(p) for p in pieces[:position])
-        forked_prompt = prompt_base + prefix + forced_piece
-
-        retok = _detect_retokenization(
-            sub, run, [str(p) for p in pieces[:position]] + [forced_piece])
-
-        steer_kw = {}
-        t0 = time.time()
-        cont_steps = None
-        # Branch Fan's reconstructed horizon is the parent's remaining recorded horizon.  A final
-        # response token therefore has a truthful zero-token continuation; do not turn that
-        # boundary case into an unrelated extra model generation.
-        if int(max_new) == 0:
-            continuation, finish = "", "branch_horizon_exhausted"
-        else:
-            traced = _complete_traced(engine, forked_prompt, max_new, steer_kw)
-            if traced is not None:
-                continuation, cont_steps, finish = traced
-            else:
-                continuation, finish = _complete_greedy(engine, forked_prompt, max_new, steer_kw)
-        if continuation is None:
-            return None
-        reply = prefix + forced_piece + continuation
-
-        # The child's own per-token trace -- only when it can be assembled honestly: fresh steps for
-        # the continuation AND a token-exact-verified prefix (retok is False; True/None means the
-        # parent's measurements cannot be claimed for this child's prefix, so no trace at all).
-        child_trace = None
-        trace_provenance = None
-        if cont_steps and retok is False:
-            child_trace = _spliced_child_trace(trace, position, forced_piece, cont_steps)
-            if child_trace is not None:
-                trace_provenance = ("spliced: prefix steps are the parent's own records (valid -- the "
-                                    "prefix verified token-exact and greedy decode is deterministic); "
-                                    "the forced step keeps the parent's distribution with the recorded "
-                                    "alternative's probability (absent if the token wasn't recorded); "
-                                    "the continuation is measured fresh")
-        elif cont_steps:
-            trace_provenance = ("omitted: continuation steps were captured, but the spliced prefix did "
-                                "not verify token-exact, so the parent's prefix measurements cannot be "
-                                "claimed for this child")
-
-        changes = {"fork": {"position": position, "token": forced_piece,
-                            "was_recorded_alternative": bool(was_recorded),
-                            "trace_provenance": trace_provenance}}
-        mem = getattr(sub, "memory", None) or getattr(sub, "_mem", None)
-        rid = runlog.record(
-            source="fork", client="studio",
-            model=run.get("model"), substrate=run.get("substrate"),
-            messages=sanitize_messages(run.get("messages") or []), response=reply,
-            trace=child_trace,                              # None when it couldn't be built honestly
-            final_prompt=forked_prompt,                     # the exact spliced string this child saw
-            finish_reason=finish,
-            parent_run_id=run.get("id"), changes_applied=changes, started=t0,
-        )
-        if rid is None:
-            return None
-        child = runlog.get_run(rid)
-        if child is None:
-            child = {"id": rid, "response": reply, "parent_run_id": run.get("id"),
-                     "changes_applied": changes}
-        # response-only extensions (the same convention as replay's generated_ids): the UI's
-        # divergence-point rendering + the honesty flags.
-        child["prefix_kept"] = prefix
-        child["forked_from_piece"] = str(pieces[position])
-        child["retokenized"] = True if retok is None else bool(retok)
-        child["note"] = FORK_NOTE + (_UNVERIFIED_NOTE if retok is None else "")
-        child["prompt_source"] = prompt_source
-        return child
-    except Exception:
-        return None
-
-
-# ============================================================================== FORK-02: compatibility wrapper
-
-
 
 
 class BranchFanInputError(ValueError):
@@ -349,6 +36,7 @@ class BranchFanInputError(ValueError):
         self.code = code
 
 
+# ------------------------------------------------------------------ candidate discovery (pure)
 def _is_int(value) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
@@ -468,6 +156,7 @@ def recorded_alternative_candidates(parent: Mapping, position: int, *, limit: in
     return [dict(candidate) for candidate in candidates]
 
 
+# ------------------------------------------------------------------------------ typed reasons
 def _cancelled(cancel_check) -> bool:
     if not callable(cancel_check):
         return False
@@ -481,72 +170,60 @@ def _reason(code: str, message: str) -> dict:
     return {"code": code, "message": message}
 
 
+# Branch-level failures are reported with a stable code and a caller-safe message.  Kernel
+# diagnostics may quote worker text, so a code with no entry here degrades to the generic message
+# rather than forwarding whatever the substrate said.
 _SAFE_REASON_MESSAGES = {
-    "control_diverged": "the unchanged exact control did not match",
-    "stale_plan": "exact execution preconditions changed after planning",
+    "base_run_unavailable": "the parent run could not be re-read for execution",
+    "branch_fan_cancelled": "branch fan was cancelled",
     "checkpoint_expired": "the shared exact checkpoint expired",
+    "checkpoint_missing": "no exact checkpoint was available",
+    "checkpoint_parent_mismatch": "the exact checkpoint belongs to another parent run",
+    "checkpoint_range_mismatch": "the boundary is outside the exact checkpoint token history",
+    "exact_control_mismatch": "the unchanged exact control did not match",
+    "exact_control_unavailable": "the unchanged exact control could not be proven",
+    "exact_generation_unavailable": "exact execution was unavailable",
+    "exact_state_unavailable": "exact execution preconditions were unavailable",
+    "force_token_id_required": "exact execution requires a recorded numeric token id",
+    "force_token_mismatch": "the alternative disagrees with the recorded token evidence",
+    "generation_failed": "generation did not produce a usable continuation",
+    "generation_malformed": "generation returned no usable text",
+    "generation_unsupported": "the recorded generation contract is unsupported",
+    "malformed_worker_token_evidence": "the worker returned unusable token evidence",
+    "missing_prompt_boundary": "the exact checkpoint has no usable prompt boundary",
+    "position_out_of_range": "the boundary is outside the recorded token history",
+    "recorded_token_history_unavailable": "the parent has no aligned recorded token history",
+    "reconstruction_prompt_unavailable": "the parent has no exact rendered prompt to reconstruct from",
+    "reconstruction_token_piece_unavailable": "reconstruction requires the alternative's piece text",
+    "runtime_identity_mismatch": "the selected runtime does not match the recorded runtime",
+    "runtime_identity_unavailable": "runtime identity was unavailable",
+    "stale_parent_execution": "the parent execution changed after the fan began",
     "stale_worker_generation": "the exact checkpoint belongs to another worker generation",
-    "execution_cancelled": "exact execution was cancelled",
-    "intervention_failed": "the exact intervention failed",
-    "persistence_failed": "the completed child could not be persisted",
-    "reconstructed_execution_failed": "reconstructed replay did not produce a child",
-    "exact_execution_failed": "exact execution failed",
+    "state_unavailable": "the resolved execution state was unavailable",
+    "stochastic_execution_unbound": "the recorded sampled decode cannot be reproduced honestly",
+    "token_boundary_out_of_range": "the boundary is outside the recorded token history",
+    "token_trace_unavailable": "the parent has no usable recorded token trace",
+    "worker_identity_unavailable": "the selected worker identity was unavailable",
 }
 
-
-def _public_reasons(raw) -> list[dict]:
-    out = []
-    for item in raw or []:
-        if not isinstance(item, Mapping):
-            continue
-        code = item.get("code")
-        if isinstance(code, str) and code:
-            message = _SAFE_REASON_MESSAGES.get(code, "branch execution was unavailable")
-            out.append({"code": code, "message": message})
-    return out
+# Preconditions shared by every exact branch.  Once one of these fails, later branches would fail
+# identically, so the fan stops scheduling instead of repeating the same refused work.
+_SHARED_FAILURE_CODES = frozenset({
+    "base_run_unavailable", "checkpoint_expired", "checkpoint_missing", "checkpoint_parent_mismatch",
+    "checkpoint_range_mismatch", "exact_control_mismatch", "exact_control_unavailable",
+    "missing_prompt_boundary", "recorded_token_history_unavailable", "runtime_identity_mismatch",
+    "runtime_identity_unavailable", "stale_parent_execution", "stale_worker_generation",
+    "worker_identity_unavailable",
+})
 
 
-def comparison_projection_from_diff(parent: Mapping, child: Mapping, diff: Mapping) -> dict:
-    """Project only values returned by an already-computed canonical run diff."""
-    view = diff.get("first_divergence_view")
-    if not isinstance(view, Mapping):
-        view = {"schema_version": "clozn.first-divergence-view.v1", "state": "trace_unavailable"}
-    if not diff.get("trace_available"):
-        return {
-            "state": "trace_unavailable",
-            "first_divergence_view": deepcopy(dict(view)),
-        }
-    out = {"state": "available", "first_divergence_view": deepcopy(dict(view))}
-    for key in ("common_prefix_len", "first_divergence"):
-        if key in diff:
-            out[key] = deepcopy(diff[key])
-    summary = diff.get("summary")
-    if isinstance(summary, Mapping):
-        value = summary.get("char_similarity")
-        label = summary.get("char_similarity_label")
-        if value is not None or label is not None:
-            surface = {}
-            if value is not None:
-                surface["value"] = deepcopy(value)
-            if label is not None:
-                surface["label"] = deepcopy(label)
-            out["surface_similarity"] = surface
-    return out
+def _safe_reason(code, fallback_code: str = "branch_unavailable") -> dict:
+    if not isinstance(code, str) or not code:
+        code = fallback_code
+    return _reason(code, _SAFE_REASON_MESSAGES.get(code, "the branch could not be produced"))
 
 
-def comparison_projection(parent: Mapping, child: Mapping) -> dict:
-    """Compute and project one canonical run diff."""
-    from clozn.analysis.model_diff import diff_runs
-
-    return comparison_projection_from_diff(parent, child, diff_runs(parent, child))
-
-
-# Keep the original local name for older tests/callers while exposing one shared projection seam to
-# Test This.  Both features still call the canonical ``diff_runs`` implementation exactly once per
-# successful child; neither feature invents a second token diff.
-_comparison = comparison_projection
-
-
+# ------------------------------------------------------------------------- branch projections
 def _branch_alternative(candidate: Mapping) -> dict:
     return {"recorded_alternative": _candidate_projection(candidate)}
 
@@ -562,29 +239,119 @@ def _not_attempted(candidate: Mapping, code: str, message: str) -> dict:
     return out
 
 
-def _unavailable(candidate: Mapping, reasons, *, exactness=None, unchanged_control=None) -> dict:
+def _observation_identity(travel) -> dict:
+    identity = {}
+    for name in ("experiment_id", "arm_id", "observation_id"):
+        value = getattr(travel, name, None)
+        if isinstance(value, str) and value:
+            identity[name] = value
+    state_ref = getattr(travel, "state_ref", None)
+    if state_ref is not None:
+        # The compact identity payload only -- never the full execution state, which carries
+        # prompt material this response has no business republishing.
+        identity["state_ref"] = deepcopy(state_ref.identity_payload())
+    return identity
+
+
+def _fidelity_projection(observation_fidelity: Mapping) -> dict:
+    """Carry the observation's own fidelity claim without restating or upgrading it."""
+    out = {}
+    for name in ("classification", "proof_status", "exact_match", "unchanged_control",
+                 "sampler_state", "retokenized_prefix"):
+        if name in observation_fidelity:
+            out[name] = deepcopy(observation_fidelity[name])
+    differences = observation_fidelity.get("unavoidable_differences")
+    if isinstance(differences, list):
+        out["unavoidable_differences"] = [str(item) for item in differences]
+    return out
+
+
+def _completed(candidate: Mapping, travel, *, outcome: str, comparison, policy: str) -> dict:
     out = _branch_alternative(candidate)
+    out.update(_observation_identity(travel))
+    continuation = travel.continuation if isinstance(travel.continuation, Mapping) else {}
+    fidelity = continuation.get("fidelity")
+    out.update({
+        "state": "completed",
+        "outcome": outcome,
+        "resolution_policy": policy,
+        "fidelity": _fidelity_projection(fidelity if isinstance(fidelity, Mapping) else {}),
+        "generated": {
+            "text_chars": len(str(continuation.get("generated_suffix_text") or "")),
+            "token_count": len(continuation.get("generated_token_ids") or ()),
+            "finish_reason": continuation.get("finish_reason"),
+        },
+        "reasons": [],
+        "comparison": comparison,
+    })
+    return out
+
+
+def _diagnostic_reason_code(diagnostics: Mapping):
+    """The arm's reason code, whether reported flat or nested under the observation's diagnostics.
+
+    A durable store round-trips a refused arm's own diagnostics one level down, so both shapes are
+    the same fact and neither is a guess.
+    """
+    code = diagnostics.get("reason_code")
+    if isinstance(code, str) and code:
+        return code
+    nested = diagnostics.get("diagnostics")
+    code = nested.get("reason_code") if isinstance(nested, Mapping) else None
+    return code if isinstance(code, str) and code else None
+
+
+def _unavailable(candidate: Mapping, travel, *, policy: str, code=None) -> dict:
+    out = _branch_alternative(candidate)
+    out.update(_observation_identity(travel) if travel is not None else {})
+    diagnostics = travel.diagnostics if travel is not None and isinstance(travel.diagnostics, Mapping) else {}
+    if code is None:
+        code = _diagnostic_reason_code(diagnostics)
+    if code is None and diagnostics.get("reason") == "control_observation_not_available":
+        # The runner blocks an arm whose unchanged control did not hold.  A refused control is not
+        # reusable evidence, so it is never persisted and its specific reason is not readable from
+        # here.  Report the fact this branch can actually prove rather than claiming a mismatch.
+        code = "exact_control_unavailable"
     out.update({
         "state": "unavailable",
         "outcome": "unavailable",
-        "reasons": _public_reasons(reasons) or [_reason("branch_unavailable", "branch could not be produced")],
+        "resolution_policy": policy,
+        "reasons": [_safe_reason(code)],
         "comparison": None,
     })
-    if isinstance(exactness, Mapping):
-        out["exactness"] = deepcopy(dict(exactness))
-    if isinstance(unchanged_control, Mapping):
-        out["unchanged_control"] = {"status": unchanged_control.get("status", "unavailable")}
     return out
+
+
+def _outcome(travel) -> str:
+    continuation = travel.continuation if isinstance(travel.continuation, Mapping) else {}
+    fidelity = continuation.get("fidelity")
+    classification = fidelity.get("classification") if isinstance(fidelity, Mapping) else None
+    if classification == "exact_execution_fork":
+        return "exact"
+    if classification == "reconstructed_replay":
+        return "reconstructed"
+    return "unavailable"
+
+
+def _travel_cancelled(travel) -> bool:
+    diagnostics = travel.diagnostics if isinstance(travel.diagnostics, Mapping) else {}
+    return diagnostics.get("cancelled") is True or diagnostics.get("reason") == "cancelled"
+
+
+def _branch_failure_code(branch: Mapping):
+    reasons = branch.get("reasons")
+    if isinstance(reasons, list) and reasons and isinstance(reasons[0], Mapping):
+        code = reasons[0].get("code")
+        return code if isinstance(code, str) else None
+    return None
 
 
 def _fidelity(branches: list[Mapping]) -> str:
     outcomes = [branch.get("outcome") for branch in branches if branch.get("state") == "completed"]
     if not outcomes:
         return "none_completed"
-    exact = sum(outcome == "exact_execution_fork" for outcome in outcomes)
-    reconstructed = sum(outcome == "reconstructed_replay" for outcome in outcomes)
-    if exact and reconstructed:
-        return "mixed"
+    exact = sum(outcome == "exact" for outcome in outcomes)
+    reconstructed = sum(outcome == "reconstructed" for outcome in outcomes)
     if exact == len(outcomes):
         return "all_exact"
     if reconstructed == len(outcomes):
@@ -595,13 +362,13 @@ def _fidelity(branches: list[Mapping]) -> str:
 def _summary(branches: list[Mapping], requested: int, *, status: str) -> dict:
     return {
         "status": status,
-        "requested_branches": requested,
-        "attempted_branches": sum(branch.get("state") != "not_attempted" for branch in branches),
-        "children_created": sum(branch.get("state") == "completed" for branch in branches),
-        "exact_children": sum(branch.get("outcome") == "exact_execution_fork" for branch in branches),
-        "reconstructed_children": sum(branch.get("outcome") == "reconstructed_replay" for branch in branches),
-        "unavailable_branches": sum(branch.get("state") == "unavailable" for branch in branches),
-        "not_attempted_branches": sum(branch.get("state") == "not_attempted" for branch in branches),
+        "requested": requested,
+        "attempted": sum(branch.get("state") != "not_attempted" for branch in branches),
+        "observations_completed": sum(branch.get("state") == "completed" for branch in branches),
+        "exact_observations": sum(branch.get("outcome") == "exact" for branch in branches),
+        "reconstructed_observations": sum(branch.get("outcome") == "reconstructed" for branch in branches),
+        "unavailable": sum(branch.get("state") == "unavailable" for branch in branches),
+        "not_attempted": sum(branch.get("state") == "not_attempted" for branch in branches),
     }
 
 
@@ -612,79 +379,57 @@ def _execution_base(capture_state: str, *, reused: bool, fidelity: str, reason=N
     return {
         "policy": "exact_first",
         "order": "sequential",
+        "materialization": "explicit_choice_only",
         "checkpoint_capture": capture,
         "fidelity": fidelity,
     }
 
 
-def _completed_exact(candidate, child, receipt, parent) -> dict:
-    out = _branch_alternative(candidate)
-    out.update({
-        "state": "completed",
-        "outcome": "exact_execution_fork",
-        "child_run_id": child.get("id"),
-        "exactness": deepcopy(receipt.get("exactness") or {"proof_status": "confirmed"}),
-        "unchanged_control": {"status": (receipt.get("unchanged_control") or {}).get("status", "matched")},
-        "reasons": [],
-        "comparison": _comparison(parent, child),
-    })
-    if receipt.get("execution_id"):
-        out["execution_fork_execution_id"] = receipt["execution_id"]
-    return out
-
-
-def _completed_reconstructed(candidate, child, plan, parent) -> dict:
-    out = _branch_alternative(candidate)
-    out.update({
-        "state": "completed",
-        "outcome": "reconstructed_replay",
-        "child_run_id": child.get("id"),
-        "exactness": deepcopy(plan.get("exactness") or {
-            "regime": "reconstructed_text",
-            "proof_status": "not_applicable",
-        }),
-        "unavoidable_differences": deepcopy(plan.get("unavoidable_differences") or []),
-        "reasons": [],
-        "comparison": _comparison(parent, child),
-    })
-    return out
-
-
-_SHARED_FAILURE_CODES = frozenset({
-    "stale_plan", "checkpoint_expired", "stale_worker_generation", "runtime_identity_mismatch",
-    "worker_generation_changed", "checkpoint_invalidated", "execution_cancelled",
-})
-
-
-def _run_reconstructed(parent, sub, candidate, position, remaining, runtime_identity, worker_identity):
-    from clozn.replay.execution_fork import plan_execution_fork
-
-    request = {
+def _result(parent_id: str, position: int, selection: Mapping, execution: Mapping,
+            branches: list, summary: Mapping) -> dict:
+    result = {
+        "schema_version": SCHEMA_VERSION,
+        "parent_run_id": parent_id,
         "position": position,
-        "change": {"type": "force_token", "token_piece": candidate["piece"]},
+        "selection": deepcopy(dict(selection)),
+        "execution": deepcopy(dict(execution)),
+        "branches": branches,
+        "summary": deepcopy(dict(summary)),
     }
-    if candidate.get("token_id") is not None:
-        request["change"]["token_id"] = candidate["token_id"]
-    plan = plan_execution_fork(
-        parent, request, checkpoint=None,
-        runtime_identity=runtime_identity, worker_identity=worker_identity,
-    )
-    if plan.get("classification") != "reconstructed_replay":
-        return _unavailable(candidate, plan.get("reasons"), exactness=plan.get("exactness"))
-    child = reconstruct_branch_child(parent, sub, position, token=candidate["piece"], max_new=remaining)
-    if not isinstance(child, Mapping) or not child.get("id"):
-        return _unavailable(candidate, [_reason("reconstructed_execution_failed", "reconstructed replay did not produce a child")])
-    return _completed_reconstructed(candidate, child, plan, parent)
+    schemas.validate(result, SCHEMA_VERSION)
+    return result
 
 
-def _branch_failure_code(branch: Mapping) -> str | None:
-    reasons = branch.get("reasons")
-    if isinstance(reasons, list) and reasons and isinstance(reasons[0], Mapping):
-        code = reasons[0].get("code")
-        return code if isinstance(code, str) else None
-    return None
+# ------------------------------------------------------------------------ shared exact context
+def _capture_checkpoint(parent_run: Mapping, engine, *, runtime_identity, worker_identity):
+    """Capture one exact checkpoint for the whole fan through the canonical capture seam.
+
+    Capturing once and reusing it across every exact candidate is orchestration, which Branch Fan
+    keeps.  Deciding what an exact execution then means is not, so nothing here plans or executes.
+    """
+    from clozn.replay.checkpoint_capture import capture_parent_checkpoint
+
+    try:
+        capture = capture_parent_checkpoint(
+            parent_run, engine,
+            runtime_identity=dict(runtime_identity), worker_identity=dict(worker_identity))
+    except Exception:
+        # A capture that cannot even be requested is an unavailable exact context, not a fan failure:
+        # every candidate still gets its own typed reconstructed or refused result below.
+        return None, _reason("checkpoint_capture_unavailable", "an exact checkpoint could not be captured")
+    if not isinstance(capture, Mapping) or capture.get("status") != "available":
+        reasons = capture.get("reasons") if isinstance(capture, Mapping) else None
+        code = None
+        if isinstance(reasons, list) and reasons and isinstance(reasons[0], Mapping):
+            code = reasons[0].get("code")
+        return None, _safe_reason(code, "checkpoint_capture_unavailable")
+    reference = capture.get("checkpoint_reference")
+    if not isinstance(reference, Mapping):
+        return None, _reason("checkpoint_capture_unavailable", "an exact checkpoint reference was unavailable")
+    return deepcopy(dict(reference)), None
 
 
+# ------------------------------------------------------------------------------------ the fan
 def branch_fan(
     parent_run: dict,
     sub,
@@ -695,8 +440,15 @@ def branch_fan(
     worker_identity: dict | None = None,
     reload_parent=None,
     cancel_check=None,
+    checkpoint: Mapping | None = None,
+    observation_store=None,
+    execution_adapter=None,
 ) -> dict:
-    """Create bounded child forks for the parent's already-recorded alternatives."""
+    """Fan the parent's recorded alternatives into canonical ForceToken observations.
+
+    Creates no Runs.  Each branch reports the observation it produced; a caller materializes one
+    selected observation afterwards through the generic materializer.
+    """
     if not isinstance(parent_run, Mapping):
         raise BranchFanInputError("invalid_parent", "parent run must be an object")
     parent_id = parent_run.get("id")
@@ -718,77 +470,65 @@ def branch_fan(
     }
     if not candidates:
         selection.update({"state": "unavailable", "reason": "no_recorded_alternatives"})
-        result = {
-            "schema_version": SCHEMA_VERSION,
-            "parent_run_id": parent_id,
-            "position": position,
-            "selection": selection,
-            "execution": _execution_base("not_attempted", reused=False, fidelity="none_completed"),
-            "branches": [],
-            "summary": _summary([], 0, status="unavailable"),
-        }
-        schemas.validate(result, SCHEMA_VERSION)
-        return result
+        return _result(
+            parent_id, position, selection,
+            _execution_base("not_attempted", reused=False, fidelity="none_completed"),
+            [], _summary([], 0, status="unavailable"),
+        )
     selection["state"] = "available"
-
-    branches = []
-    capture_state = "not_attempted"
-    capture_reason = None
-    checkpoint_reference = None
-    exact_candidate_exists = any(candidate.get("token_id") is not None for candidate in candidates)
-    engine = getattr(sub, "engine", None) if sub is not None else None
-    exact_possible = (
-        exact_candidate_exists and callable(getattr(engine, "execution_fork", None))
-        and isinstance(runtime_identity, Mapping) and isinstance(worker_identity, Mapping)
-    )
 
     if _cancelled(cancel_check):
         branches = [_not_attempted(candidate, "branch_fan_cancelled", "branch fan cancelled before execution")
                     for candidate in candidates]
-        result = {
-            "schema_version": SCHEMA_VERSION, "parent_run_id": parent_id, "position": position,
-            "selection": selection,
-            "execution": _execution_base("not_attempted", reused=False, fidelity="none_completed"),
-            "branches": branches,
-            "summary": _summary(branches, len(candidates), status="cancelled"),
-        }
-        schemas.validate(result, SCHEMA_VERSION)
-        return result
+        return _result(
+            parent_id, position, selection,
+            _execution_base("not_attempted", reused=False, fidelity="none_completed"),
+            branches, _summary(branches, len(candidates), status="cancelled"),
+        )
 
-    if exact_possible:
-        from clozn.replay.execution_fork import capture_exact_force_token_context
-        try:
-            capture = capture_exact_force_token_context(
-                parent_run, engine, runtime_identity=dict(runtime_identity), worker_identity=dict(worker_identity))
-        except Exception:
-            capture = {
-                "status": "ineligible",
-                "reason": _reason("checkpoint_capture_unavailable", "an exact checkpoint could not be captured"),
-            }
-        if capture.get("status") == "available":
-            reference = capture.get("checkpoint_reference")
-            if isinstance(reference, Mapping):
-                capture_state = "available"
-                checkpoint_reference = deepcopy(dict(reference))
-            else:
-                capture_state = "unavailable"
-                capture_reason = _reason("checkpoint_capture_unavailable", "an exact checkpoint reference was unavailable")
+    engine = getattr(sub, "engine", None) if sub is not None else None
+    exact_candidate_exists = any(candidate.get("token_id") is not None for candidate in candidates)
+    capture_state = "not_attempted"
+    capture_reason = None
+    checkpoint_reference = deepcopy(dict(checkpoint)) if isinstance(checkpoint, Mapping) else None
+    if checkpoint_reference is not None:
+        capture_state = "available"
+    elif exact_candidate_exists:
+        exact_possible = (
+            callable(getattr(engine, "execution_fork", None))
+            and isinstance(runtime_identity, Mapping) and isinstance(worker_identity, Mapping)
+        )
+        if exact_possible:
+            checkpoint_reference, capture_reason = _capture_checkpoint(
+                parent_run, engine, runtime_identity=runtime_identity, worker_identity=worker_identity)
+            capture_state = "available" if checkpoint_reference is not None else "unavailable"
         else:
             capture_state = "unavailable"
-            capture_reason = (_public_reasons([capture.get("reason")]) or [
-                _reason("checkpoint_capture_unavailable", "an exact checkpoint could not be captured")
-            ])[0]
-    elif exact_candidate_exists:
-        capture_state = "unavailable"
-        capture_reason = _reason("exact_execution_unavailable", "exact checkpoint prerequisites were unavailable")
+            capture_reason = _reason("exact_execution_unavailable", "exact checkpoint prerequisites were unavailable")
 
-    from clozn.replay.execution_fork import execute_exact_force_token, plan_exact_force_token
-    import clozn.runs.store as runlog
-    reload_parent = reload_parent or runlog.get_run
-    remaining = max(0, len(tokens) - position - 1)
+    from clozn.experiments.generation import GenerateExecutionAdapter
+    from clozn.experiments.observation_comparison import observation_comparison
+    from clozn.experiments.persistence import ObservationStore
+    from clozn.recipes.time_travel import TimeTravelError, run_time_travel
+
+    adapter = execution_adapter
+    if adapter is None:
+        if sub is None:
+            raise BranchFanInputError("invalid_substrate", "branch fan requires a substrate to generate with")
+        # One adapter for the whole fan: the unchanged exact control is proven once and reused by
+        # every later exact branch instead of re-proving the same state per candidate.
+        adapter = GenerateExecutionAdapter(
+            sub, run=parent_run, run_loader=reload_parent,
+            runtime_identity=runtime_identity, worker_identity=worker_identity,
+        )
+    durable = observation_store or ObservationStore()
+    # The fan's horizon is the parent's remaining recorded horizon; the forced token consumes the
+    # first generated slot, exactly as Generate defines it.
+    max_new = len(tokens) - position
+
+    branches: list[dict] = []
     stop_scheduling = None
     cancelled = False
-
     for offset, candidate in enumerate(candidates):
         if stop_scheduling is not None:
             branches.append(_not_attempted(candidate, *stop_scheduling))
@@ -799,88 +539,92 @@ def branch_fan(
                 branches.append(_not_attempted(rest, "branch_fan_cancelled", "branch fan cancelled between branches"))
             break
 
+        # Branch Fan chooses the resolution policy; the resolver still owns what each policy means.
+        # An alternative with no recorded numeric id can only be reconstructed, and a supplied or
+        # captured checkpoint is never silently downgraded for one that does have an id.
         exact_candidate = checkpoint_reference is not None and candidate.get("token_id") is not None
-        if exact_candidate:
-            request = {
-                "position": position,
-                "change": {
-                    "type": "force_token",
-                    "token_id": candidate["token_id"],
-                    "token_piece": candidate["piece"],
-                },
-            }
-            try:
-                plan = plan_exact_force_token(
-                    parent_run, request, checkpoint_reference=checkpoint_reference,
-                    runtime_identity=dict(runtime_identity), worker_identity=dict(worker_identity),
-                )
-                if plan.get("classification") != "exact_execution_fork":
-                    branch = _unavailable(candidate, plan.get("reasons"), exactness=plan.get("exactness"))
-                else:
-                    execution = execute_exact_force_token(
-                        parent_run, plan, engine,
-                        runtime_identity=dict(runtime_identity), worker_identity=dict(worker_identity),
-                        reload_parent=reload_parent, cancel_check=cancel_check,
-                    )
-                    receipt = execution.get("receipt") or {}
-                    child = execution.get("child")
-                    if receipt.get("phase") == "completed" and isinstance(child, Mapping) and child.get("id"):
-                        branch = _completed_exact(candidate, child, receipt, parent_run)
-                    else:
-                        branch = _unavailable(
-                            candidate, receipt.get("reasons"), exactness=receipt.get("exactness"),
-                            unchanged_control=receipt.get("unchanged_control"),
-                        )
-                        if receipt.get("execution_id"):
-                            branch["execution_fork_execution_id"] = receipt["execution_id"]
-                        if receipt.get("phase") == "cancelled":
-                            cancelled = True
-            except Exception:
-                branch = _unavailable(candidate, [_reason("exact_execution_failed", "exact execution failed")])
-            branches.append(branch)
-            code = _branch_failure_code(branch)
+        policy = "exact_preferred" if exact_candidate else "reconstructed_only"
+        try:
+            travel = run_time_travel(
+                parent_run,
+                position=position,
+                token_id=candidate.get("token_id"),
+                token_piece=candidate["piece"],
+                max_new=max_new,
+                policy=policy,
+                checkpoint=checkpoint_reference if exact_candidate else None,
+                runtime_identity=runtime_identity,
+                worker_identity=worker_identity,
+                execution_adapter=adapter,
+                run_loader=reload_parent,
+                observation_store=durable,
+                cancel=cancel_check,
+            )
+        except TimeTravelError as exc:
+            branches.append(_unavailable(candidate, None, policy=policy, code=exc.code))
+            code = _branch_failure_code(branches[-1])
             if code in _SHARED_FAILURE_CODES:
-                stop_scheduling = ("shared_exact_precondition_failed", "later branches were not attempted after a shared exact precondition failed")
-            if cancelled:
-                for rest in candidates[offset + 1:]:
-                    branches.append(_not_attempted(rest, "branch_fan_cancelled", "branch fan cancelled after a child attempt"))
-                break
+                stop_scheduling = ("shared_exact_precondition_failed",
+                                   "later branches were not attempted after a shared precondition failed")
+            continue
+        except Exception:
+            branches.append(_unavailable(candidate, None, policy=policy, code="branch_execution_failed"))
             continue
 
-        # Missing numeric ids (or an unavailable shared checkpoint) take the same reconstructed
-        # planner/reconstructed path. No candidate is invented or rescored here.
-        try:
-            branch = _run_reconstructed(
-                parent_run, sub, candidate, position, remaining, runtime_identity, worker_identity)
-        except Exception:
-            branch = _unavailable(candidate, [_reason("reconstructed_execution_failed", "reconstructed replay failed")])
-        branches.append(branch)
+        if travel.status == "completed":
+            observation = _completed_observation(durable, travel)
+            comparison = observation_comparison(parent_run, observation) if observation is not None else None
+            branches.append(_completed(candidate, travel, outcome=_outcome(travel),
+                                       comparison=comparison, policy=policy))
+            continue
+        if _travel_cancelled(travel):
+            cancelled = True
+            for rest in candidates[offset:]:
+                branches.append(_not_attempted(rest, "branch_fan_cancelled", "branch fan cancelled during a branch"))
+            break
+        branches.append(_unavailable(candidate, travel, policy=policy))
+        code = _branch_failure_code(branches[-1])
+        if code in _SHARED_FAILURE_CODES:
+            stop_scheduling = ("shared_exact_precondition_failed",
+                               "later branches were not attempted after a shared precondition failed")
 
+    completed = any(branch.get("state") == "completed" for branch in branches)
     if cancelled:
-        status = "partial_cancelled" if any(branch.get("state") == "completed" for branch in branches) else "cancelled"
+        status = "partial_cancelled" if completed else "cancelled"
     elif any(branch.get("state") == "not_attempted" for branch in branches):
-        status = "partial" if any(branch.get("state") == "completed" for branch in branches) else "unavailable"
-    elif any(branch.get("state") == "completed" for branch in branches):
+        status = "partial" if completed else "unavailable"
+    elif completed:
         status = "completed" if all(branch.get("state") == "completed" for branch in branches) else "partial"
     else:
         status = "unavailable"
-    result = {
-        "schema_version": SCHEMA_VERSION,
-        "parent_run_id": parent_id,
-        "position": position,
-        "selection": selection,
-        "execution": _execution_base(
-            capture_state, reused=checkpoint_reference is not None,
-            fidelity=_fidelity(branches), reason=capture_reason),
-        "branches": branches,
-        "summary": _summary(branches, len(candidates), status=status),
-    }
-    schemas.validate(result, SCHEMA_VERSION)
-    return result
+
+    return _result(
+        parent_id, position, selection,
+        _execution_base(capture_state, reused=checkpoint_reference is not None,
+                        fidelity=_fidelity(branches), reason=capture_reason),
+        branches, _summary(branches, len(candidates), status=status),
+    )
+
+
+def _completed_observation(store, travel):
+    """Re-read the persisted observation the branch just produced.
+
+    Comparison is a read over durable evidence, not a second execution.  A store miss simply
+    leaves the branch's comparison absent rather than inventing one.
+    """
+    observation_id = getattr(travel, "observation_id", None)
+    if not isinstance(observation_id, str) or not observation_id:
+        return None
+    try:
+        from clozn.experiments.observations import GeneratedObservation
+
+        observation = store.get_observation(observation_id)
+    except Exception:
+        return None
+    return observation if isinstance(observation, GeneratedObservation) else None
 
 
 __all__ = [
-    "DEFAULT_LIMIT", "MAX_LIMIT", "MIN_LIMIT", "BranchFanInputError", "branch_fan",
-    "comparison_projection", "comparison_projection_from_diff", "recorded_alternatives_available",
-    "recorded_alternative_candidates",
+    "DEFAULT_LIMIT", "MAX_LIMIT", "MIN_LIMIT", "SCHEMA_VERSION", "BranchFanInputError", "branch_fan",
+    "recorded_alternatives_available", "recorded_alternative_candidates",
 ]

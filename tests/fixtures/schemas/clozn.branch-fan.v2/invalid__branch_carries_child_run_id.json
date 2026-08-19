@@ -1,0 +1,43 @@
+{
+  "schema_version": "clozn.branch-fan.v2",
+  "parent_run_id": "run_123",
+  "position": 37,
+  "selection": {
+    "source": "recorded_alternatives",
+    "state": "available",
+    "recorded_alternatives": 1,
+    "selected_alternatives": 1,
+    "requested_limit": 1
+  },
+  "execution": {
+    "policy": "exact_first",
+    "order": "sequential",
+    "materialization": "explicit_choice_only",
+    "checkpoint_capture": {"state": "available", "reused_for_exact_candidates": true},
+    "fidelity": "all_exact"
+  },
+  "branches": [
+    {
+      "recorded_alternative": {"rank": 0, "token_id": 912, "probability": 0.39},
+      "state": "completed",
+      "outcome": "exact",
+      "resolution_policy": "exact_preferred",
+      "experiment_id": "exp_aaaaaaaaaaaaaaaaaaaaaaaa",
+      "arm_id": "arm_bbbbbbbbbbbbbbbbbbbbbbbb",
+      "observation_id": "obs_cccccccccccccccccccccccc",
+      "child_run_id": "run_456",
+      "reasons": [],
+      "comparison": null
+    }
+  ],
+  "summary": {
+    "status": "completed",
+    "requested": 1,
+    "attempted": 1,
+    "observations_completed": 1,
+    "exact_observations": 1,
+    "reconstructed_observations": 0,
+    "unavailable": 0,
+    "not_attempted": 0
+  }
+}
