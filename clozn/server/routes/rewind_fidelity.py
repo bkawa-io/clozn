@@ -6,7 +6,7 @@ READ-ONLY AND OFFLINE-SAFE, ABSOLUTELY
 This route must never start a worker, cold-load a model, select/load a control model, capture or
 hydrate a checkpoint, call `execution_fork(...)`/`execution_fork_checkpoint(...)`, run an unchanged
 control, regenerate text, or score tokens. It imports only `clozn.runs.store` (to load the immutable
-parent run), `clozn.replay.execution_fork_results` (a pure SQLite READ that creates nothing on a miss --
+parent run), `clozn.experiments.historical_evidence` (a pure READ of persisted observations --
 see that module's own `list_for_parent` docstring), and `clozn.replay.rewind_fidelity` (pure planning-
 adjacent logic, no engine/worker import anywhere in its own dependency chain). It does NOT import
 `clozn.server.app` (no `SUB`/`ENGINE` access) -- a fidelity indicator must be drawable while the runtime
@@ -59,16 +59,16 @@ def try_get(h, p):
         return True
 
     from clozn import schemas
-    from clozn.replay import execution_fork_results
+    from clozn.experiments.historical_evidence import load_exact_evidence
     from clozn.replay.rewind_fidelity import build_rewind_fidelity
 
     try:
-        historical_receipts = execution_fork_results.list_for_parent(run_id)
-        document = build_rewind_fidelity(run, historical_receipts=historical_receipts)
+        historical_observations = load_exact_evidence(run_id)
+        document = build_rewind_fidelity(run, historical_observations=historical_observations)
     except (ValueError, TypeError, UnicodeError, schemas.ValidationError):
         # Metadata-only route with no per-request input, so there is no legitimate 400 case here. An
-        # exception raised while reading malformed legacy run or receipt data may itself contain
-        # private evidence, so the public failure stays generic and text-free.
+        # exception raised while reading malformed recorded evidence may itself contain private
+        # material, so the public failure stays generic and text-free.
         h._json(500, _CONTRACT_ERROR)
         return True
 

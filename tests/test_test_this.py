@@ -313,11 +313,9 @@ class SamplerSub:
 
 @pytest.fixture
 def sampler_probe(tmp_path, monkeypatch):
-    from clozn.replay import execution_fork_results
     from clozn.runs import store as runlog
 
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(execution_fork_results, "RESULTS_DIR", str(tmp_path / "execution-forks"))
     runlog._schema_verified.clear()
     monkeypatch.setattr(
         "clozn.replay.checkpoint_capture.capture_parent_checkpoint",
@@ -330,7 +328,7 @@ def sampler_probe(tmp_path, monkeypatch):
                 "prompt_tokens": 4, "n_past": 7,
             },
         })
-    return runlog, execution_fork_results
+    return runlog
 
 
 def _sampling_request():
@@ -341,7 +339,7 @@ def _sampling_request():
 
 
 def test_sampling_test_produces_an_observation_and_changes_no_run_count(sampler_probe):
-    runlog, execution_fork_results = sampler_probe
+    runlog = sampler_probe
     parent = exact_sampled_run()
     sub = SamplerSub()
     result = executor.execute_test_this(
@@ -353,13 +351,12 @@ def test_sampling_test_produces_an_observation_and_changes_no_run_count(sampler_
     assert result["result"]["observation_id"]
     assert result["result"]["time_travel"]["operation"]["kind"] == "sample_with"
     assert "child_run_id" not in result
-    # The hard gates: no Run, and no new legacy receipt.
+    # The hard gate: no Run is created by evaluating.
     assert runlog.list_runs(20) == []
-    assert execution_fork_results.list_for_parent(parent["id"]) == []
 
 
 def test_force_token_test_produces_an_observation_and_changes_no_run_count(sampler_probe):
-    runlog, _receipts = sampler_probe
+    runlog = sampler_probe
     parent = exact_sampled_run()
     parent["meta"].pop("decode")            # a greedy parent, so ForceToken is plannable
     sub = SamplerSub()
@@ -377,7 +374,7 @@ def test_materializing_a_sampling_observation_creates_exactly_one_child_run(samp
     from clozn.experiments.materialize import materialize_generated_observation
     from clozn.experiments.persistence import ObservationStore
 
-    runlog, _receipts = sampler_probe
+    runlog = sampler_probe
     parent = exact_sampled_run()
     sub = SamplerSub()
     result = executor.execute_test_this(

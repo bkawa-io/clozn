@@ -1,6 +1,6 @@
 """Route coverage for GET /runs/<id>/rewind-fidelity (clozn/server/routes/rewind_fidelity.py) --
 read-only, offline-safe rewind fidelity, served fresh on every request from the immutable run plus its
-already-persisted terminal execution-fork receipts. Mirrors tests/test_context_utilization_route.py's
+already-persisted canonical GeneratedObservation evidence. Mirrors tests/test_context_utilization_route.py's
 Handler stub, autoload-registration, and contract-failure patterns.
 
 Model-free: nothing here touches clozn/engine, a worker, or a model file. `build_rewind_fidelity` is a
@@ -18,7 +18,7 @@ sys.path.insert(0, REPO_ROOT)
 
 import clozn.runs.store as runlog  # noqa: E402
 from clozn import schemas  # noqa: E402
-from clozn.replay import execution_fork, execution_fork_results  # noqa: E402
+from clozn.experiments import historical_evidence  # noqa: E402
 from clozn.server.routes import rewind_fidelity as route  # noqa: E402
 
 
@@ -60,46 +60,53 @@ def _run(*, run_id="run_x", tokens=("one", " two", " three"), token_ids=(11, 22,
     return out
 
 
-def _receipt(run, *, execution_id, position=1):
-    fingerprint = execution_fork.parent_execution_fingerprint(run)
-    return {
-        "schema_version": "clozn.execution-fork.v1",
-        "plan_id": "fork_plan_" + ("0" * 20),
-        "execution_id": execution_id,
-        "phase": "completed",
-        "classification": "exact_execution_fork",
-        "parent_run_id": run["id"],
-        "parent_fingerprint_sha256": fingerprint,
-        "request": {"position": position, "change": {"type": "none"},
-                   "execution_change": {"type": "none"}, "change_sha256": "b" * 64},
-        "identity": {"parent_runtime": {
-            "runtime_key_sha256": "c" * 64, "model_sha256": "a" * 64,
-            "template_fingerprint": "b" * 16, "engine_build": "x", "context_size": 4096,
-            "backend": "cpu",
-            "adapter": {"present": False, "identity_sha256": None, "artifact_sha256": None, "scale": None},
-            "white_box_flags": {},
-        }},
-        "exactness": {"regime": "generated_token_live_kv", "source": "live_kv",
-                     "proof_status": "confirmed", "truncate_to": 11, "boundary_shape_true": True},
-        "unavoidable_differences": [],
-        "unchanged_control": {"required": True, "status": "matched",
-                              "result": {"status": "matched", "exact_match": True}},
-        "child_lineage": {"parent_run_id": run["id"], "source": "fork",
-                          "change_sha256": "b" * 64, "receipt_status": "created"},
-        "execution": {"status": "succeeded", "started_ts": 1.0, "ended_ts": 2.0},
-        "reasons": [{"code": "execution_succeeded", "message": "ok"}],
-    }
+def _observation(run, *, position=1):
+    from clozn.experiments.evaluators import Generate
+    from clozn.experiments.observations import GeneratedObservation, execution_observation_identity
+    from clozn.experiments.state_ref import ResolvedState, StateRef
+
+    ref = StateRef.before_answer_token(run, position)
+    realization = {"regime": "generated_token_live_kv", "source": "live_kv",
+                   "runtime_identity": {"runtime_key_sha256": "c" * 64}}
+    resolved = ResolvedState(state_ref=ref, classification="exact_execution_fork",
+                             proof_status="planned", realization=realization, diagnostics={})
+    evaluator = Generate(max_new=2)
+    identity = execution_observation_identity(resolved, evaluator, None)
+    key = identity["observation_key"]
+    return GeneratedObservation(
+        observation_id=identity["observation_id"],
+        observation_key_sha256=identity["observation_key_sha256"], observation_key=key,
+        run_id=resolved.run_id, base_execution_fingerprint=resolved.execution_fingerprint,
+        evaluator=key["evaluator"], condition=key["condition"], contract=key["contract"],
+        status="completed", state_ref=ref, realization=resolved.realization,
+        fidelity={"classification": "exact_execution_fork", "proof_status": "confirmed",
+                  "exact_match": True, "unchanged_control": "matched"},
+        intervention=None, generated_suffix_text=" two three", generated_token_ids=(22, 33),
+        execution_provenance={"adapter": "generate"}, runtime_provenance={},
+        generation_contract=evaluator.to_dict(),
+        exact_control_proof={"status": "matched", "result": {"status": "matched", "exact_match": True}},
+        proof_grade="trusted", trusted=True, diagnostics={})
+
+
+def _no_evidence(monkeypatch):
+    """The route's evidence read finds nothing -- the ordinary case for a run never time-travelled."""
+    monkeypatch.setattr(historical_evidence, "load_exact_evidence", lambda _run_id, **_kw: [])
+
+
+def _evidence(monkeypatch, observations):
+    monkeypatch.setattr(historical_evidence, "load_exact_evidence",
+                        lambda _run_id, **_kw: list(observations))
 
 
 def test_route_200_full_capability(monkeypatch, tmp_path):
     run = _run()
     monkeypatch.setattr(runlog, "get_run", lambda rid: run if rid == run["id"] else None)
-    monkeypatch.setattr(execution_fork_results, "RESULTS_DIR", str(tmp_path / "execution-forks"))
+    _no_evidence(monkeypatch)
 
     h = Handler(f"/runs/{run['id']}/rewind-fidelity")
     assert route.try_get(h, f"/runs/{run['id']}/rewind-fidelity") is True
     assert h.status == 200
-    schemas.validate(h.body, "clozn.rewind-fidelity.v1")
+    schemas.validate(h.body, "clozn.rewind-fidelity.v2")
     assert h.body["recorded_capability"]["state"] == "available"
     assert h.body["recorded_capability"]["exact_rewind"]["state"] == "requires_live_plan"
 
@@ -107,13 +114,12 @@ def test_route_200_full_capability(monkeypatch, tmp_path):
 def test_route_200_historically_verified_proof(monkeypatch, tmp_path):
     run = _run()
     monkeypatch.setattr(runlog, "get_run", lambda rid: run if rid == run["id"] else None)
-    monkeypatch.setattr(execution_fork_results, "RESULTS_DIR", str(tmp_path / "execution-forks"))
-    execution_fork_results.save(_receipt(run, execution_id="fork_exec_" + "a" * 20))
+    _evidence(monkeypatch, [_observation(run)])
 
     h = Handler(f"/runs/{run['id']}/rewind-fidelity")
     route.try_get(h, f"/runs/{run['id']}/rewind-fidelity")
     assert h.status == 200
-    schemas.validate(h.body, "clozn.rewind-fidelity.v1")
+    schemas.validate(h.body, "clozn.rewind-fidelity.v2")
     boundaries = h.body["historical_proof"]["verified_boundaries"]
     assert len(boundaries) == 1
     assert boundaries[0]["position"] == 1
@@ -125,7 +131,7 @@ def test_route_200_historically_verified_proof(monkeypatch, tmp_path):
 def test_route_200_reconstructed_only(monkeypatch, tmp_path):
     run = _run(identity=False)
     monkeypatch.setattr(runlog, "get_run", lambda rid: run if rid == run["id"] else None)
-    monkeypatch.setattr(execution_fork_results, "RESULTS_DIR", str(tmp_path / "execution-forks"))
+    _no_evidence(monkeypatch)
 
     h = Handler(f"/runs/{run['id']}/rewind-fidelity")
     route.try_get(h, f"/runs/{run['id']}/rewind-fidelity")
@@ -160,16 +166,16 @@ def test_route_does_not_match_unrelated_paths():
     assert route.try_get(h, "/other") is False
 
 
-def test_route_creates_no_execution_fork_db_when_history_is_absent(monkeypatch, tmp_path):
+def test_route_serves_a_run_with_no_recorded_evidence(monkeypatch, tmp_path):
+    """A run nobody has time-travelled still gets a document, with an empty historical proof."""
     run = _run()
     monkeypatch.setattr(runlog, "get_run", lambda rid: run if rid == run["id"] else None)
-    results_dir = tmp_path / "execution-forks"
-    monkeypatch.setattr(execution_fork_results, "RESULTS_DIR", str(results_dir))
+    _no_evidence(monkeypatch)
 
     h = Handler(f"/runs/{run['id']}/rewind-fidelity")
     route.try_get(h, f"/runs/{run['id']}/rewind-fidelity")
     assert h.status == 200
-    assert not results_dir.exists()
+    assert h.body["historical_proof"] == {"state": "available", "verified_boundaries": []}
 
 
 def test_route_never_imports_server_app_worker_state(monkeypatch, tmp_path):
@@ -177,7 +183,7 @@ def test_route_never_imports_server_app_worker_state(monkeypatch, tmp_path):
     own docstring. Patch app.ENGINE/app.SUB to explode if ever touched and prove the route still works."""
     run = _run()
     monkeypatch.setattr(runlog, "get_run", lambda rid: run if rid == run["id"] else None)
-    monkeypatch.setattr(execution_fork_results, "RESULTS_DIR", str(tmp_path / "execution-forks"))
+    _no_evidence(monkeypatch)
 
     from clozn.server import app as ctx
 
@@ -195,7 +201,7 @@ def test_route_never_imports_server_app_worker_state(monkeypatch, tmp_path):
 def test_route_response_is_metadata_only(monkeypatch, tmp_path):
     run = _run()
     monkeypatch.setattr(runlog, "get_run", lambda rid: run if rid == run["id"] else None)
-    monkeypatch.setattr(execution_fork_results, "RESULTS_DIR", str(tmp_path / "execution-forks"))
+    _no_evidence(monkeypatch)
 
     h = Handler(f"/runs/{run['id']}/rewind-fidelity")
     route.try_get(h, f"/runs/{run['id']}/rewind-fidelity")
@@ -205,7 +211,7 @@ def test_route_response_is_metadata_only(monkeypatch, tmp_path):
 def test_route_contract_failure_does_not_echo_private_exception_text(monkeypatch, tmp_path):
     run = _run()
     monkeypatch.setattr(runlog, "get_run", lambda _rid: run)
-    monkeypatch.setattr(execution_fork_results, "RESULTS_DIR", str(tmp_path / "execution-forks"))
+    _no_evidence(monkeypatch)
     monkeypatch.setattr(
         "clozn.replay.rewind_fidelity.build_rewind_fidelity",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(TypeError("PRIVATE MALFORMED SOURCE")),
@@ -221,13 +227,10 @@ def test_route_contract_failure_does_not_echo_private_exception_text(monkeypatch
     assert "PRIVATE MALFORMED SOURCE" not in repr(h.body)
 
 
-def test_route_malformed_historical_receipt_does_not_crash(monkeypatch, tmp_path):
+def test_route_non_canonical_evidence_does_not_crash(monkeypatch, tmp_path):
     run = _run()
     monkeypatch.setattr(runlog, "get_run", lambda rid: run if rid == run["id"] else None)
-    monkeypatch.setattr(execution_fork_results, "RESULTS_DIR", str(tmp_path / "execution-forks"))
-    monkeypatch.setattr(
-        execution_fork_results, "list_for_parent", lambda _parent_run_id: [{"not": "a valid receipt"}],
-    )
+    _evidence(monkeypatch, [{"not": "a canonical observation"}])
 
     h = Handler(f"/runs/{run['id']}/rewind-fidelity")
     route.try_get(h, f"/runs/{run['id']}/rewind-fidelity")
@@ -240,7 +243,7 @@ def test_route_run_not_mutated(monkeypatch, tmp_path):
     run = _run()
     before = copy.deepcopy(run)
     monkeypatch.setattr(runlog, "get_run", lambda rid: run if rid == run["id"] else None)
-    monkeypatch.setattr(execution_fork_results, "RESULTS_DIR", str(tmp_path / "execution-forks"))
+    _no_evidence(monkeypatch)
 
     h = Handler(f"/runs/{run['id']}/rewind-fidelity")
     route.try_get(h, f"/runs/{run['id']}/rewind-fidelity")

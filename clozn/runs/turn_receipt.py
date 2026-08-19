@@ -459,12 +459,18 @@ def _comparison(run: dict, parent_run: dict | None) -> dict | None:
     return {"state": "available", "parent_run_id": parent_id, "first_divergence": divergence}
 
 
-def _rewind(run: dict, rewind_history=()) -> dict:
+# A run recorded before the evidence convergence may carry a stored v1 rewind-fidelity document.
+# Its shape is read-compatible here, so an older receipt keeps rendering rather than silently
+# rebuilding a projection over evidence that no longer exists for it.
+_STORED_REWIND_VERSIONS = {"clozn.rewind-fidelity.v1", "clozn.rewind-fidelity.v2"}
+
+
+def _rewind(run: dict, historical_observations=()) -> dict:
     stored = run.get("rewind_fidelity")
-    if not (isinstance(stored, dict) and stored.get("schema_version") == "clozn.rewind-fidelity.v1"):
+    if not (isinstance(stored, dict) and stored.get("schema_version") in _STORED_REWIND_VERSIONS):
         try:
             from clozn.replay.rewind_fidelity import build_rewind_fidelity
-            stored = build_rewind_fidelity(run, historical_receipts=list(rewind_history or ()))
+            stored = build_rewind_fidelity(run, historical_observations=list(historical_observations or ()))
         except Exception:
             stored = {}
     capability = _dict(stored.get("recorded_capability"))
@@ -576,7 +582,7 @@ def _technical(run: dict) -> dict:
     return result
 
 
-def build_turn_receipt(run, *, parent_run=None, rewind_history=()) -> dict:
+def build_turn_receipt(run, *, parent_run=None, historical_observations=()) -> dict:
     """Build one deterministic, metadata-only ``clozn.turn-receipt.v1`` document.
 
     The function accepts the recorded run and optional already-loaded parent/rewind evidence.  It does
@@ -591,7 +597,7 @@ def build_turn_receipt(run, *, parent_run=None, rewind_history=()) -> dict:
     tension_artifact = _context_tension_artifact(record)
     tension = _context_tension(record, artifact=tension_artifact)
     comparison = _comparison(record, parent_run if isinstance(parent_run, dict) else None)
-    rewind = _rewind(record, rewind_history=rewind_history)
+    rewind = _rewind(record, historical_observations=historical_observations)
     performance = _performance(record, context, outcome)
 
     # signals.py owns the registry and detector.  The footer consumes this exact list rather than

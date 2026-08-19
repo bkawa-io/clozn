@@ -5,7 +5,7 @@ import copy
 
 import clozn.runs.store as runlog
 from clozn import schemas
-from clozn.replay import execution_fork_results
+from clozn.experiments import historical_evidence
 from clozn.server.routes import turn_receipt as route
 
 
@@ -44,7 +44,7 @@ def test_json_route_composes_from_recorded_evidence(monkeypatch):
     run = _run()
     before = copy.deepcopy(run)
     monkeypatch.setattr(runlog, "get_run", lambda _rid: run)
-    monkeypatch.setattr(execution_fork_results, "list_for_parent", lambda _rid: [])
+    monkeypatch.setattr(historical_evidence, "load_exact_evidence", lambda _rid, **_kw: [])
 
     h = Handler("/runs/run_route/turn-receipt")
     assert route.try_get(h, "/runs/run_route/turn-receipt") is True
@@ -58,7 +58,7 @@ def test_json_route_composes_from_recorded_evidence(monkeypatch):
 def test_markdown_route_is_immediately_shareable(monkeypatch):
     run = _run()
     monkeypatch.setattr(runlog, "get_run", lambda _rid: run)
-    monkeypatch.setattr(execution_fork_results, "list_for_parent", lambda _rid: [])
+    monkeypatch.setattr(historical_evidence, "load_exact_evidence", lambda _rid, **_kw: [])
 
     h = Handler("/runs/run_route/turn-receipt?format=md")
     assert route.try_get(h, "/runs/run_route/turn-receipt") is True
@@ -79,7 +79,7 @@ def test_route_does_not_start_any_expensive_analysis(monkeypatch):
     """The route succeeds even when every model/scoring/live-execution seam is booby-trapped."""
     run = _run()
     monkeypatch.setattr(runlog, "get_run", lambda _rid: run)
-    monkeypatch.setattr(execution_fork_results, "list_for_parent", lambda _rid: [])
+    monkeypatch.setattr(historical_evidence, "load_exact_evidence", lambda _rid, **_kw: [])
 
     def explode(*_args, **_kwargs):
         raise AssertionError("Turn Receipt triggered expensive analysis")

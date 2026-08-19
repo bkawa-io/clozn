@@ -1,9 +1,9 @@
 """Tests for clozn.replay.rewind_fidelity -- the read-only Rewind Fidelity projection (E10).
 
-No model, no network, no filesystem outside `tmp_path` (and this file touches none at all --
-`build_rewind_fidelity` takes `historical_receipts` as a plain argument). Fixtures mirror
-tests/test_execution_fork_planner.py's and tests/test_execution_fork_gateway.py's own conventions so a
-reader familiar with those files recognizes these immediately.
+No model, no network, no filesystem at all: `build_rewind_fidelity` takes already-loaded canonical
+`GeneratedObservation` evidence as a plain argument. The fixtures construct real observations through
+the kernel's own identity machinery, so an observation that would not be accepted by the store is not
+accepted here either.
 """
 from __future__ import annotations
 
@@ -12,7 +12,11 @@ import copy
 import pytest
 
 from clozn import schemas
-from clozn.replay import execution_fork, rewind_fidelity
+from clozn.experiments.evaluators import Generate
+from clozn.experiments.observations import GeneratedObservation, execution_observation_identity
+from clozn.experiments.state_ref import ResolvedState, StateRef
+from clozn.experiments import execution_facts
+from clozn.replay import rewind_fidelity
 from clozn.replay.rewind_fidelity import build_rewind_fidelity
 
 
@@ -47,52 +51,42 @@ def _run(*, run_id="run_parent", tokens=("one", " two", " three"), token_ids=(11
     return out
 
 
-_RUNTIME_KEY_SHA256 = None  # filled lazily below via execution_fork's own projection
-
-
-def _receipt(run, *, execution_id, position=1, phase="completed", proof_status="confirmed",
-            control_status="matched", exact_match=True, parent_run_id=None, fingerprint=None,
-            regime="generated_token_live_kv", ended_ts=2.0):
-    parent_run_id = parent_run_id if parent_run_id is not None else run["id"]
-    fingerprint = fingerprint if fingerprint is not None else execution_fork.parent_execution_fingerprint(run)
-    return {
-        "schema_version": "clozn.execution-fork.v1",
-        "plan_id": "fork_plan_" + ("0" * 20),
-        "execution_id": execution_id,
-        "phase": phase,
-        "classification": "exact_execution_fork",
-        "parent_run_id": parent_run_id,
-        "parent_fingerprint_sha256": fingerprint,
-        "request": {
-            "position": position, "change": {"type": "none"},
-            "execution_change": {"type": "none"}, "change_sha256": "b" * 64,
-        },
-        "identity": {
-            "parent_runtime": {
-                "runtime_key_sha256": "c" * 64, "model_sha256": "a" * 64,
-                "template_fingerprint": "b" * 16, "engine_build": "x", "context_size": 4096,
-                "backend": "cpu",
-                "adapter": {"present": False, "identity_sha256": None, "artifact_sha256": None,
-                           "scale": None},
-                "white_box_flags": {},
-            },
-        },
-        "exactness": {
-            "regime": regime, "source": "live_kv" if regime == "generated_token_live_kv" else "reprefill",
-            "proof_status": proof_status, "truncate_to": 11, "boundary_shape_true": True,
-        },
-        "unavoidable_differences": [],
-        "unchanged_control": {
-            "required": True, "status": control_status,
-            "result": {"status": control_status if control_status != "required_not_run" else "failed",
-                      "exact_match": exact_match},
-        },
-        "child_lineage": {"parent_run_id": parent_run_id, "source": "fork",
-                          "change_sha256": "b" * 64, "receipt_status": "created"},
-        "execution": {"status": "succeeded" if phase == "completed" else "control_failed",
-                     "started_ts": 1.0, "ended_ts": ended_ts},
-        "reasons": [{"code": "execution_succeeded", "message": "ok"}],
-    }
+def _observation(run, *, position=1, classification="exact_execution_fork",
+                 proof_status="confirmed", control_status="matched", exact_match=True,
+                 control_proof=True, status="completed", run_id=None, stale=False,
+                 regime="generated_token_live_kv", max_new=2):
+    """One canonical GeneratedObservation, built through the kernel's own identity machinery."""
+    source = dict(run)
+    if stale:
+        # A different recorded continuation is a different execution fingerprint, which is exactly
+        # what "evidence recorded against a run that has since changed" means. The alternate run is
+        # itself well-formed, so this tests staleness rather than malformedness.
+        pieces = ["one", " two", " four"]
+        source = {**source, "response": "".join(pieces),
+                  "trace": {"tokens": pieces, "token_ids": [11, 22, 44]}}
+    ref = StateRef.before_answer_token(source, position)
+    realization = {"regime": regime, "source": "live_kv" if regime == "generated_token_live_kv" else "reprefill",
+                   "runtime_identity": {"runtime_key_sha256": "c" * 64}}
+    resolved = ResolvedState(state_ref=ref, classification=classification, proof_status="planned",
+                             realization=realization, diagnostics={})
+    evaluator = Generate(max_new=max_new)
+    identity = execution_observation_identity(resolved, evaluator, None)
+    key = identity["observation_key"]
+    fidelity = {"classification": classification, "proof_status": proof_status,
+                "exact_match": exact_match, "unchanged_control": control_status}
+    proof = ({"status": "matched", "result": {"status": "matched", "exact_match": True}}
+             if control_proof else {})
+    return GeneratedObservation(
+        observation_id=identity["observation_id"],
+        observation_key_sha256=identity["observation_key_sha256"], observation_key=key,
+        run_id=run_id if run_id is not None else resolved.run_id,
+        base_execution_fingerprint=resolved.execution_fingerprint,
+        evaluator=key["evaluator"], condition=key["condition"], contract=key["contract"],
+        status=status, state_ref=ref, realization=resolved.realization, fidelity=fidelity,
+        intervention=None, generated_suffix_text=" two three", generated_token_ids=(22, 33),
+        execution_provenance={"adapter": "generate"}, runtime_provenance={},
+        generation_contract=evaluator.to_dict(), exact_control_proof=proof,
+        proof_grade="trusted", trusted=True, diagnostics={})
 
 
 def _validated(run, **kwargs) -> dict:
@@ -120,7 +114,7 @@ def test_fully_recorded_run_is_requires_live_plan_not_exact_available():
 def test_builder_has_no_worker_or_engine_parameter():
     import inspect
     params = set(inspect.signature(build_rewind_fidelity).parameters)
-    assert params == {"run", "historical_receipts"}
+    assert params == {"run", "historical_observations"}
 
 
 # ======================================================================================================
@@ -184,7 +178,7 @@ def test_reconstructed_replay_available_with_canonical_differences():
     doc = _validated(_run())
     reconstructed = doc["recorded_capability"]["reconstructed_replay"]
     assert reconstructed["state"] == "available"
-    assert reconstructed["unavoidable_differences"] == execution_fork.RECONSTRUCTION_DIFFERENCES
+    assert reconstructed["unavoidable_differences"] == execution_facts.RECONSTRUCTION_DIFFERENCES
 
 
 # ======================================================================================================
@@ -194,7 +188,7 @@ def test_reconstructed_replay_available_with_canonical_differences():
 def test_reconstructed_supported_changes_match_canonical_planner_definition():
     doc = _validated(_run())
     reconstructed = doc["recorded_capability"]["reconstructed_replay"]
-    assert set(reconstructed["supported_change_types"]) == execution_fork.RECONSTRUCTED_CHANGES
+    assert set(reconstructed["supported_change_types"]) == execution_facts.RECONSTRUCTED_CHANGES
 
 
 # ======================================================================================================
@@ -204,7 +198,7 @@ def test_reconstructed_supported_changes_match_canonical_planner_definition():
 def test_exact_conditional_supported_changes_match_canonical_planner_definition():
     doc = _validated(_run())
     exact = doc["recorded_capability"]["exact_rewind"]
-    assert set(exact["supported_change_types_if_live_plan_succeeds"]) == execution_fork.KNOWN_CHANGES
+    assert set(exact["supported_change_types_if_live_plan_succeeds"]) == execution_facts.KNOWN_CHANGES
 
 
 # ======================================================================================================
@@ -213,9 +207,9 @@ def test_exact_conditional_supported_changes_match_canonical_planner_definition(
 
 def test_planned_exact_fork_is_not_proof():
     run = _run()
-    receipt = _receipt(run, execution_id="fork_exec_" + "a" * 20, phase="planned",
-                       proof_status="planned", control_status="required_not_run", exact_match=False)
-    doc = _validated(run, historical_receipts=[receipt])
+    observation = _observation(run, proof_status="planned", control_status="required_not_run",
+                               exact_match=False, control_proof=False)
+    doc = _validated(run, historical_observations=[observation])
     assert doc["historical_proof"]["verified_boundaries"] == []
 
 
@@ -225,8 +219,8 @@ def test_planned_exact_fork_is_not_proof():
 
 def test_completed_exact_with_matched_control_is_verified():
     run = _run()
-    receipt = _receipt(run, execution_id="fork_exec_" + "a" * 20, position=1)
-    doc = _validated(run, historical_receipts=[receipt])
+    observation = _observation(run, position=1)
+    doc = _validated(run, historical_observations=[observation])
     boundaries = doc["historical_proof"]["verified_boundaries"]
     assert len(boundaries) == 1
     assert boundaries[0]["position"] == 1
@@ -242,9 +236,9 @@ def test_completed_exact_with_matched_control_is_verified():
 
 def test_diverged_control_is_not_verified():
     run = _run()
-    receipt = _receipt(run, execution_id="fork_exec_" + "a" * 20, phase="failed",
-                       proof_status="failed", control_status="diverged", exact_match=False)
-    doc = _validated(run, historical_receipts=[receipt])
+    observation = _observation(run, proof_status="failed", control_status="diverged",
+                               exact_match=False, control_proof=False)
+    doc = _validated(run, historical_observations=[observation])
     assert doc["historical_proof"]["verified_boundaries"] == []
 
 
@@ -254,17 +248,18 @@ def test_diverged_control_is_not_verified():
 
 def test_failed_execution_is_not_verified():
     run = _run()
-    receipt = _receipt(run, execution_id="fork_exec_" + "a" * 20, phase="failed",
-                       proof_status="failed", control_status="failed", exact_match=False)
-    doc = _validated(run, historical_receipts=[receipt])
+    observation = _observation(run, status="failed", proof_status="failed",
+                               control_status="failed", exact_match=False, control_proof=False)
+    doc = _validated(run, historical_observations=[observation])
     assert doc["historical_proof"]["verified_boundaries"] == []
 
 
 def test_cancelled_execution_is_not_verified():
     run = _run()
-    receipt = _receipt(run, execution_id="fork_exec_" + "a" * 20, phase="cancelled",
-                       proof_status="failed", control_status="cancelled", exact_match=False)
-    doc = _validated(run, historical_receipts=[receipt])
+    observation = _observation(run, classification="reconstructed_replay",
+                               proof_status="not_applicable", control_status="not_required",
+                               exact_match=False, control_proof=False)
+    doc = _validated(run, historical_observations=[observation])
     assert doc["historical_proof"]["verified_boundaries"] == []
 
 
@@ -274,8 +269,8 @@ def test_cancelled_execution_is_not_verified():
 
 def test_receipt_for_a_different_parent_is_ignored():
     run = _run()
-    receipt = _receipt(run, execution_id="fork_exec_" + "a" * 20, parent_run_id="someone_else")
-    doc = _validated(run, historical_receipts=[receipt])
+    observation = _observation(run, run_id="someone_else")
+    doc = _validated(run, historical_observations=[observation])
     assert doc["historical_proof"]["verified_boundaries"] == []
 
 
@@ -285,8 +280,8 @@ def test_receipt_for_a_different_parent_is_ignored():
 
 def test_fingerprint_mismatch_is_not_surfaced_as_verified():
     run = _run()
-    receipt = _receipt(run, execution_id="fork_exec_" + "a" * 20, fingerprint="f" * 64)
-    doc = _validated(run, historical_receipts=[receipt])
+    observation = _observation(run, stale=True)
+    doc = _validated(run, historical_observations=[observation])
     assert doc["historical_proof"]["verified_boundaries"] == []
 
 
@@ -296,14 +291,16 @@ def test_fingerprint_mismatch_is_not_surfaced_as_verified():
 
 def test_multiple_verified_executions_at_one_position_aggregate():
     run = _run()
-    r1 = _receipt(run, execution_id="fork_exec_" + "a" * 20, position=1, ended_ts=1.0)
-    r2 = _receipt(run, execution_id="fork_exec_" + "b" * 20, position=1, ended_ts=2.0)
-    r3 = _receipt(run, execution_id="fork_exec_" + "c" * 20, position=1, ended_ts=1.5)
-    doc = _validated(run, historical_receipts=[r1, r2, r3])
+    # Distinct budgets are distinct conditions, so these are three separate observations at one
+    # boundary. The loader returns newest-first, so the first entry is the latest evidence.
+    newest = _observation(run, position=1, max_new=2)
+    middle = _observation(run, position=1, max_new=3)
+    oldest = _observation(run, position=1, max_new=4)
+    doc = _validated(run, historical_observations=[newest, middle, oldest])
     boundaries = doc["historical_proof"]["verified_boundaries"]
     assert len(boundaries) == 1
-    assert boundaries[0]["verified_execution_count"] == 3
-    assert boundaries[0]["latest_execution_id"] == "fork_exec_" + "b" * 20  # highest ended_ts
+    assert boundaries[0]["verified_observation_count"] == 3
+    assert boundaries[0]["latest_observation_id"] == newest.observation_id
 
 
 # ======================================================================================================
@@ -312,9 +309,9 @@ def test_multiple_verified_executions_at_one_position_aggregate():
 
 def test_multiple_positions_produce_a_sparse_deterministically_ordered_list():
     run = _run(tokens=["t"] * 50, token_ids=list(range(50)))
-    r_high = _receipt(run, execution_id="fork_exec_" + "a" * 20, position=37)
-    r_low = _receipt(run, execution_id="fork_exec_" + "b" * 20, position=2)
-    doc = _validated(run, historical_receipts=[r_high, r_low])
+    r_high = _observation(run, position=37)
+    r_low = _observation(run, position=2)
+    doc = _validated(run, historical_observations=[r_high, r_low])
     positions = [b["position"] for b in doc["historical_proof"]["verified_boundaries"]]
     assert positions == [2, 37]
 
@@ -325,12 +322,12 @@ def test_multiple_positions_produce_a_sparse_deterministically_ordered_list():
 
 def test_historical_verification_never_upgrades_live_state():
     run = _run()
-    receipt = _receipt(run, execution_id="fork_exec_" + "a" * 20, position=1)
-    doc = _validated(run, historical_receipts=[receipt])
+    observation = _observation(run, position=1)
+    doc = _validated(run, historical_observations=[observation])
     assert doc["historical_proof"]["verified_boundaries"], "fixture must actually produce proof"
     assert doc["recorded_capability"]["exact_rewind"]["state"] == "requires_live_plan"
     assert doc["live_execution"] == {
-        "state": "not_checked", "reason": "read_only_projection", "authority": "execution_fork_plan",
+        "state": "not_checked", "reason": "read_only_projection", "authority": "exact_state_resolution",
     }
 
 
@@ -345,19 +342,17 @@ def test_coordinate_range_matches_the_planners_own_token_boundary_contract():
         "kind": "recorded_response_token_boundary", "index_base": 0,
         "start": 0, "end_exclusive": 3, "recorded_token_count": 3,
     }
-    # cross-check against the planner's own boundary: position 3 must be out of range, 2 must be valid
-    in_range = execution_fork.plan_execution_fork(
-        run, {"position": 2, "change": {"type": "none"}},
-        worker_identity={"worker_id": "w", "worker_generation_id": "g", "protocol_version": "1.1"},
-        runtime_identity=_identity(),
-    )
-    assert in_range["reasons"][0]["code"] != "position_out_of_range"
-    out_of_range = execution_fork.plan_execution_fork(
-        run, {"position": 3, "change": {"type": "none"}},
-        worker_identity={"worker_id": "w", "worker_generation_id": "g", "protocol_version": "1.1"},
-        runtime_identity=_identity(),
-    )
-    assert out_of_range["reasons"][0]["code"] == "position_out_of_range"
+    # Cross-check against the canonical exact-resume resolver's own boundary: position 3 must be out
+    # of range, 2 must be valid. That resolver, not a fork planner, is the boundary authority now.
+    checkpoint = {"checkpoint_id": "c", "worker_generation_id": "g", "state": "available",
+                  "parent_run_id": run["id"], "prompt_tokens": 4, "n_past": 12}
+    worker = {"worker_id": "w", "worker_generation_id": "g", "protocol_version": "1.1"}
+    _plan, in_range = execution_facts.resolve_exact_resume_facts(
+        run, position=2, checkpoint=checkpoint, worker_identity=worker, runtime_identity=_identity())
+    assert in_range["code"] != "position_out_of_range"
+    _plan, out_of_range = execution_facts.resolve_exact_resume_facts(
+        run, position=3, checkpoint=checkpoint, worker_identity=worker, runtime_identity=_identity())
+    assert out_of_range["code"] == "position_out_of_range"
 
 
 def test_coordinates_omitted_when_no_valid_token_boundary_exists():
@@ -376,12 +371,12 @@ def test_run_is_never_mutated():
     assert run == before
 
 
-def test_historical_receipts_are_never_mutated():
+def test_historical_observations_are_never_mutated():
     run = _run()
-    receipt = _receipt(run, execution_id="fork_exec_" + "a" * 20)
-    before = copy.deepcopy(receipt)
-    build_rewind_fidelity(run, historical_receipts=[receipt])
-    assert receipt == before
+    observation = _observation(run)
+    before = observation.to_json()
+    build_rewind_fidelity(run, historical_observations=[observation])
+    assert observation.to_json() == before
 
 
 # ======================================================================================================
@@ -390,9 +385,9 @@ def test_historical_receipts_are_never_mutated():
 
 def test_deterministic_output():
     run = _run()
-    receipt = _receipt(run, execution_id="fork_exec_" + "a" * 20)
-    first = build_rewind_fidelity(copy.deepcopy(run), historical_receipts=[copy.deepcopy(receipt)])
-    second = build_rewind_fidelity(copy.deepcopy(run), historical_receipts=[copy.deepcopy(receipt)])
+    observation = _observation(run)
+    first = build_rewind_fidelity(copy.deepcopy(run), historical_observations=[observation])
+    second = build_rewind_fidelity(copy.deepcopy(run), historical_observations=[observation])
     assert first == second
 
 
@@ -420,9 +415,9 @@ def test_no_engine_or_worker_access(monkeypatch):
 
 def test_malformed_historical_receipts_degrade_state_without_raising():
     run = _run()
-    doc = _validated(run, historical_receipts=[{"not": "a receipt"}, "garbage", None, 42])
+    doc = _validated(run, historical_observations=[{"not": "a receipt"}, "garbage", None, 42])
     assert doc["historical_proof"]["state"] == "partially_unavailable"
-    assert doc["historical_proof"]["malformed_receipt_count"] == 4
+    assert doc["historical_proof"]["rejected_evidence_count"] == 4
     assert doc["historical_proof"]["verified_boundaries"] == []
 
 

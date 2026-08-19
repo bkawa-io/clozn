@@ -44,21 +44,21 @@ def try_get(h, p):
         # only a persisted first-divergence view is eligible for comparison.
         parent = runlog.get_run(parent_id)
 
-    historical_receipts = ()
+    historical_observations = ()
     try:
-        # The results store performs a read-only query and creates no checkpoint/worker on a miss.  A
-        # receipt must remain useful even when that optional history store is unavailable.
-        from clozn.replay import execution_fork_results
-        historical_receipts = execution_fork_results.list_for_parent(run_id)
+        # A read-only evidence query that creates no checkpoint or worker on a miss.  A receipt must
+        # remain useful even when no canonical evidence has been recorded for this run.
+        from clozn.experiments.historical_evidence import load_exact_evidence
+        historical_observations = load_exact_evidence(run_id)
     except Exception:
-        historical_receipts = ()
+        historical_observations = ()
 
     from clozn.runs.turn_receipt import build_turn_receipt, to_markdown
     try:
         receipt = build_turn_receipt(
             run,
             parent_run=parent,
-            rewind_history=historical_receipts,
+            historical_observations=historical_observations,
         )
     except Exception:
         # Recorded evidence can be from an older or partially migrated run.  Do not expose source text or

@@ -22,11 +22,11 @@ def try_get(h, p):
         h._json(404, {"error": "run not found"})
         return True
 
-    from clozn.replay import execution_fork_results
+    from clozn.experiments.historical_evidence import load_exact_evidence
     try:
-        historical_receipts = execution_fork_results.list_for_parent(run_id)
+        historical_observations = load_exact_evidence(run_id)
     except Exception:
-        historical_receipts = []
+        historical_observations = []
     try:
         from clozn.replay.checkpoint_pin_store import resolve_pin
         checkpoint_pin = resolve_pin(run_id)
@@ -36,7 +36,7 @@ def try_get(h, p):
     document = build_run_diagnostics(
         run,
         related_runs=runlog.iter_runs(limit=200),
-        historical_receipts=historical_receipts,
+        historical_observations=historical_observations,
         checkpoint_pin=checkpoint_pin,
     )
     h._json(200, document)

@@ -7,7 +7,6 @@ import pytest
 
 from clozn import schemas
 from clozn.experiments.persistence import ObservationStore
-from clozn.replay import execution_fork_results
 from clozn.replay.controlled import _sampling_config, recorded_sampling_config
 from clozn.replay.sampler_sensitivity import (
     SamplerSensitivityInputError,
@@ -201,7 +200,6 @@ class Sub:
 @pytest.fixture
 def isolated_store(tmp_path, monkeypatch):
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(execution_fork_results, "RESULTS_DIR", str(tmp_path / "execution-forks"))
     runlog._schema_verified.clear()
     return tmp_path
 
@@ -227,7 +225,6 @@ def test_sweep_produces_observations_and_changes_no_run_count(isolated_store):
         assert "child_run_id" not in probe
     # The hard gate: evaluating sampler sensitivity creates nothing.
     assert runlog.list_runs(20) == []
-    assert execution_fork_results.list_for_parent(run["id"]) == []
 
 
 def test_checkpoint_is_captured_once_and_control_proven_once(isolated_store):

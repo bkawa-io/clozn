@@ -53,25 +53,27 @@ negative claim).
 NO WORKER, NO CHECKPOINT, EVER
 -----------------------------------
 This module imports NOTHING that can reach a worker, an engine, model routing, or checkpoint capture --
-its only execution dependency is the neutral model-free facts module. The receipt store is READ ONLY
-consulted by the caller (route), never imported here.
-`build_rewind_fidelity` takes `historical_receipts` as a plain argument specifically so this module never
-needs to know how they were loaded (filesystem access stays in the route/results-store layer).
+its only execution dependencies are the neutral model-free facts module and the canonical historical
+evidence projection. The observation store is READ ONLY consulted by the caller (route), never here.
+`build_rewind_fidelity` takes `historical_observations` as a plain argument specifically so this module
+never needs to know how they were loaded (I/O stays in the route layer).
 
 DETERMINISM
 -----------
-Pure function of `(run, historical_receipts)`: no randomness, no wall-clock, no model/engine access.
-Neither `run` nor any receipt in `historical_receipts` is ever mutated.
+Pure function of `(run, historical_observations)`: no randomness, no wall-clock, no model/engine access.
+Neither `run` nor any observation is ever mutated.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from clozn.experiments.execution_facts import (
     KNOWN_CHANGES, RECONSTRUCTED_CHANGES, RECONSTRUCTION_DIFFERENCES,
-    parent_execution_fingerprint,
     recorded_execution_prerequisites,
 )
+from clozn.experiments.historical_evidence import verified_exact_boundaries
 
-SCHEMA_VERSION = "clozn.rewind-fidelity.v1"
+SCHEMA_VERSION = "clozn.rewind-fidelity.v2"
 
 RECORDED_CAPABILITY_STATES = frozenset({"available", "limited", "unavailable"})
 RECONSTRUCTED_REPLAY_STATES = frozenset({"available", "unavailable"})
@@ -85,9 +87,6 @@ _LIVE_REQUIREMENTS = [
     "unchanged_control",
 ]
 
-_PROOF = {"proof_status": "confirmed", "unchanged_control_status": "matched", "exact_match": True}
-
-
 def _state(available: bool) -> str:
     return "available" if available else "unavailable"
 
@@ -96,108 +95,23 @@ def _identity_dict(value) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def _is_verified_exact(receipt: dict) -> bool:
-    """All FOUR conditions, explicitly -- never inferred from just one. See the module docstring's
-    "EXACT IS A PROOF STATE" section for why each is checked independently rather than trusted to imply
-    the others."""
-    if receipt.get("phase") != "completed":
-        return False
-    if receipt.get("classification") != "exact_execution_fork":
-        return False
-    exactness = _identity_dict(receipt.get("exactness"))
-    if exactness.get("proof_status") != "confirmed":
-        return False
-    control = _identity_dict(receipt.get("unchanged_control"))
-    if control.get("status") != "matched":
-        return False
-    result = _identity_dict(control.get("result"))
-    if result.get("exact_match") is not True:
-        return False
-    return True
-
-
-def _boundary_sort_key(receipt: dict) -> tuple:
-    execution = _identity_dict(receipt.get("execution"))
-    ended = execution.get("ended_ts")
-    ended = ended if isinstance(ended, (int, float)) and not isinstance(ended, bool) else 0.0
-    execution_id = receipt.get("execution_id")
-    return (-ended, execution_id if isinstance(execution_id, str) else "")
-
-
-def _historical_proof(run_id: str, run: dict, historical_receipts) -> dict:
-    from clozn import schemas
-
-    fingerprint = parent_execution_fingerprint(run)
-    malformed = 0
-    verified_by_position: dict[int, list[dict]] = {}
-
-    for receipt in list(historical_receipts or ()):
-        if not isinstance(receipt, dict):
-            malformed += 1
-            continue
-        try:
-            schemas.validate(receipt, "clozn.execution-fork.v1")
-        except (schemas.ValidationError, schemas.SchemaError):
-            malformed += 1
-            continue
-        if receipt.get("parent_run_id") != run_id:
-            continue
-        if receipt.get("parent_fingerprint_sha256") != fingerprint:
-            # Stale relative to the CURRENT immutable parent state -- never attached as proof of
-            # rewind fidelity for a run that has since changed identity/trace/response.
-            continue
-        if not _is_verified_exact(receipt):
-            continue
-        position = _identity_dict(receipt.get("request")).get("position")
-        if not isinstance(position, int) or isinstance(position, bool):
-            continue
-        verified_by_position.setdefault(position, []).append(receipt)
-
-    boundaries = []
-    for position in sorted(verified_by_position):
-        group = sorted(verified_by_position[position], key=_boundary_sort_key)
-        latest = group[0]
-        regimes = sorted({
-            _identity_dict(receipt.get("exactness")).get("regime") for receipt in group
-        } - {None})
-        entry = {
-            "position": position,
-            "state": "historically_verified_exact",
-            "verified_execution_count": len(group),
-            "latest_execution_id": latest.get("execution_id"),
-            "parent_fingerprint_sha256": fingerprint,
-            "regimes": regimes,
-            "proof": dict(_PROOF),
-        }
-        runtime_key = _identity_dict(
-            _identity_dict(latest.get("identity")).get("parent_runtime")
-        ).get("runtime_key_sha256")
-        if isinstance(runtime_key, str) and runtime_key:
-            entry["runtime_key_sha256"] = runtime_key
-        boundaries.append(entry)
-
-    out = {
-        "state": "partially_unavailable" if malformed else "available",
-        "verified_boundaries": boundaries,
-    }
-    if malformed:
-        out["malformed_receipt_count"] = malformed
-    return out
-
-
-def build_rewind_fidelity(run: dict, *, historical_receipts: list = ()) -> dict:
+def build_rewind_fidelity(run: dict, *, historical_observations: Sequence = ()) -> dict:
     """Build and validate one derived `clozn.rewind-fidelity.v1` document.
 
-    Pure function of its arguments: reads only `run` and `historical_receipts` (neither mutated).
+    Pure function of its arguments: reads only `run` and `historical_observations` (neither mutated).
     Never imports an engine client, worker, model-routing module, or checkpoint primitive -- works
     identically with no active worker attached (see tests/test_rewind_fidelity.py's
-    `test_no_engine_or_worker_access`). `historical_receipts` should be every terminal execution-fork
-    receipt already known for this run's id (typically `execution_fork_results.list_for_parent(run_id)`,
-    loaded by the caller -- this function performs no I/O itself).
+    `test_no_engine_or_worker_access`). `historical_observations` should be the persisted canonical
+    GeneratedObservation evidence for this run's id (typically
+    `clozn.experiments.historical_evidence.load_exact_evidence(run_id)`, loaded by the caller -- this
+    function performs no I/O itself).
+
+    Historical proof does not require materialization: a completed, exact, control-confirmed
+    observation IS the historical execution evidence. It also never implies live availability.
 
     Raises `ValueError` only for a structurally invalid `run` (missing/empty id) -- there is no other
-    caller-supplied input to validate; malformed entries in `historical_receipts` degrade
-    `historical_proof.state` to `"partially_unavailable"` rather than raising (see `_historical_proof`).
+    caller-supplied input to validate; non-canonical entries in `historical_observations` degrade
+    `historical_proof.state` to `"partially_unavailable"` rather than raising.
     """
     run = run if isinstance(run, dict) else {}
     run_id = str(run.get("id") or "")
@@ -235,7 +149,7 @@ def build_rewind_fidelity(run: dict, *, historical_receipts: list = ()) -> dict:
             "static_prerequisites": static_prerequisites,
             "supported_change_types_if_live_plan_succeeds": sorted(KNOWN_CHANGES),
             "live_requirements": list(_LIVE_REQUIREMENTS),
-            "authority": "execution_fork_plan",
+            "authority": "exact_state_resolution",
         }
     else:
         reasons = []
@@ -262,11 +176,11 @@ def build_rewind_fidelity(run: dict, *, historical_receipts: list = ()) -> dict:
             "reconstructed_replay": reconstructed_replay,
             "exact_rewind": exact_rewind,
         },
-        "historical_proof": _historical_proof(run_id, run, historical_receipts),
+        "historical_proof": verified_exact_boundaries(run, historical_observations),
         "live_execution": {
             "state": "not_checked",
             "reason": "read_only_projection",
-            "authority": "execution_fork_plan",
+            "authority": "exact_state_resolution",
         },
         "privacy": "metadata_only",
     }

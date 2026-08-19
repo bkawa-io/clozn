@@ -13,7 +13,6 @@ import pytest
 from clozn import schemas
 from clozn.experiments.persistence import ObservationStore
 from clozn.replay import branch_fan as fan
-from clozn.replay import execution_fork_results
 from clozn.runs import store as runlog
 
 
@@ -37,13 +36,8 @@ ALTERNATIVES = [
 
 @pytest.fixture
 def isolated_store(tmp_path, monkeypatch):
-    """Isolate the Run store (which the observation store shares) and the legacy receipt store.
-
-    The legacy receipt directory is redirected too, so "the fan wrote no ExecutionForkResult" is a
-    hermetic claim about this fan rather than a read of the developer's own ~/.clozn.
-    """
+    """Isolate the Run store, which the observation store shares."""
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(execution_fork_results, "RESULTS_DIR", str(tmp_path / "execution-forks"))
     runlog._schema_verified.clear()
     return tmp_path
 
@@ -232,8 +226,6 @@ def test_exact_alternative_completes_without_a_child_run_or_legacy_receipt(isola
         assert branch["fidelity"]["proof_status"] == "confirmed"
         assert store.get_observation(branch["observation_id"]).status == "completed"
     assert runlog.list_runs(20) == []
-    # The retired executor was the only writer of these receipts; the kernel writes none.
-    assert execution_fork_results.list_for_parent(parent["id"]) == []
     # The unchanged control is proven once for the whole fan, not per candidate.
     control_calls = [call for call in sub.engine.calls if call["intervention"]["type"] == "none"]
     assert len(control_calls) == 1

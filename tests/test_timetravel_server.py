@@ -723,9 +723,6 @@ def _install_exact_branch_worker(monkeypatch, source_id, engine):
 
 
 def test_time_machine_exact_branch_materializes_one_child_from_an_observation(iso, monkeypatch):
-    from clozn.replay import execution_fork_results
-
-    monkeypatch.setattr(execution_fork_results, "RESULTS_DIR", str(iso / "execution-forks"))
     rid = _seed_exact_branch_source()
     engine = _ExactBranchEngine()
     _install_exact_branch_worker(monkeypatch, rid, engine)
@@ -765,15 +762,11 @@ def test_time_machine_exact_branch_materializes_one_child_from_an_observation(is
     # The generated observation existed before the child, and materializing it called no worker.
     from clozn.experiments.persistence import ObservationStore
     assert ObservationStore().get_observation(out["observation_id"]).status == "completed"
-    assert execution_fork_results.list_for_parent(rid) == []
     # One unchanged-control proof; materialization added no further worker call.
     assert [call["intervention"] for call in engine.calls] == [{"type": "none"}]
 
 
 def test_time_machine_exact_branch_creates_no_child_when_the_control_diverges(iso, monkeypatch):
-    from clozn.replay import execution_fork_results
-
-    monkeypatch.setattr(execution_fork_results, "RESULTS_DIR", str(iso / "execution-forks"))
     rid = _seed_exact_branch_source()
     engine = _ExactBranchEngine(control_diverges=True)
     _install_exact_branch_worker(monkeypatch, rid, engine)
@@ -785,7 +778,6 @@ def test_time_machine_exact_branch_creates_no_child_when_the_control_diverges(is
     assert out["exact_replay"] is False
     assert "child_run_id" not in out
     assert {run["id"] for run in runlog.iter_runs()} == before
-    assert execution_fork_results.list_for_parent(rid) == []
     schemas.validate(out, "clozn.time-machine-branch.v2")
 
 

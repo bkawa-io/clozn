@@ -373,7 +373,6 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
            project_key: str | None = None,
            output_contract: dict | None = None,
            sections: list | None = None,
-           execution_fork_receipt: dict | None = None,
            time_machine_continuation_receipt: dict | None = None,
            _reserved_run_id: str | None = None) -> str | None:
     """Persist a completed run and return its id. Logging failures remain non-fatal.
@@ -499,20 +498,6 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
         rec["context_units"] = context_unit_manifest
         if sections:
             rec["sections"] = list(sections)
-        if execution_fork_receipt is not None:
-            # FORK-01: the generated run id is allocated inside this transaction boundary, so only the
-            # store can put that exact id into the immutable receipt before its first (and only) write.
-            # Failed controls are not runs and use execution_fork_results instead; this seam is for a
-            # real, successfully-generated intervention child only.
-            receipt = deepcopy(execution_fork_receipt)
-            lineage = receipt.get("child_lineage")
-            if not isinstance(lineage, dict) or receipt.get("phase") != "completed":
-                raise ValueError("execution_fork_receipt must describe a completed child")
-            lineage["child_run_id"] = rid
-            lineage["receipt_status"] = "created"
-            from clozn import schemas
-            schemas.validate(receipt, "clozn.execution-fork.v1")
-            rec["execution_fork"] = receipt
         if time_machine_continuation_receipt is not None:
             # ADR 010: the continuation child and its terminal exactness receipt are one immutable
             # write.  The orchestrator reserves the run ID before generation so the schema-valid

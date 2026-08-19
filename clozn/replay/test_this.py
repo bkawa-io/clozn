@@ -1,10 +1,10 @@
 """Execution dispatcher for the explicit Test This action.
 
 There is intentionally very little execution logic here.  The module resolves the pure plan again,
-then hands the request to the canonical Time Travel recipe, Branch Fan orchestrator, or exact
-Execution Fork executor.  Force-token generation is evidence-first; child materialization is a
-separate explicit operation. Child persistence, exactness proof, checkpoint handling, and diff
-calculation remain owned by those lower-level primitives.
+then hands the request to the canonical Time Travel recipe or the Branch Fan orchestrator.  Every
+operation is evidence-first: generation stops at a GeneratedObservation, and child materialization is
+a separate explicit operation.  Exactness proof, checkpoint handling, and comparison remain owned by
+those lower-level primitives.
 """
 from __future__ import annotations
 
@@ -22,106 +22,6 @@ from clozn.runs.test_this import (
 
 def _reason(code: str, message: str) -> dict:
     return {"code": str(code or "test_unavailable"), "message": str(message or "test unavailable")}
-
-
-def _public_reasons(raw) -> list[dict]:
-    out = []
-    for item in raw or []:
-        if not isinstance(item, Mapping):
-            continue
-        code = item.get("code")
-        if isinstance(code, str) and code:
-            out.append(_reason(code, item.get("message") or "the requested test was unavailable"))
-    return out
-
-
-def _single_artifact(child: Mapping | None, *, outcome: str, execution_id: str | None = None) -> dict:
-    receipt = child.get("execution_fork") if isinstance(child, Mapping) else None
-    artifact = {
-        "schema": "clozn.execution-fork.v1",
-        "classification": outcome,
-    }
-    if execution_id:
-        artifact["execution_id"] = execution_id
-    if isinstance(receipt, Mapping):
-        artifact["receipt"] = deepcopy(dict(receipt))
-    return artifact
-
-
-def _single_result(parent: Mapping, plan: Mapping, child_result: Mapping | None) -> dict:
-    """Project one existing fork result without embedding its full child run."""
-    from clozn.analysis.comparison_projection import comparison_projection
-
-    operation = plan["resolved_test"]["operation"]
-    if child_result is None:
-        document = {
-            "schema_version": RESULT_SCHEMA_VERSION,
-            "run_id": parent["id"],
-            "selection": deepcopy(dict(plan["selection"])),
-            "test": deepcopy(dict(plan["test"])),
-            "operation": operation,
-            "outcome": "failed",
-            "result": {"reasons": [_reason("child_result_unavailable", "the fork returned no child result")]},
-            "artifact": None,
-            "comparison": None,
-        }
-        schemas.validate(document, RESULT_SCHEMA_VERSION)
-        return document
-
-    outcome = child_result.get("outcome")
-    if outcome in {"exact_execution_fork", "reconstructed_replay"} and child_result.get("id"):
-        comparison = comparison_projection(parent, child_result)
-        result = {
-            "child_run_id": child_result["id"],
-            "backend_outcome": outcome,
-            "reasons": _public_reasons(child_result.get("reasons")),
-        }
-        for key in ("exactness", "unchanged_control", "unavoidable_differences", "execution_fork_execution_id"):
-            if key in child_result:
-                result[key] = deepcopy(child_result[key])
-        document = {
-            "schema_version": RESULT_SCHEMA_VERSION,
-            "run_id": parent["id"],
-            "selection": deepcopy(dict(plan["selection"])),
-            "test": deepcopy(dict(plan["test"])),
-            "operation": operation,
-            "outcome": "completed",
-            "result": result,
-            "artifact": _single_artifact(
-                child_result,
-                outcome=outcome,
-                execution_id=child_result.get("execution_fork_execution_id"),
-            ),
-            "comparison": comparison,
-            "child_run_id": child_result["id"],
-        }
-    else:
-        reasons = _public_reasons(child_result.get("reasons")) or [
-            _reason("test_unavailable", "the selected fork could not be produced")
-        ]
-        document = {
-            "schema_version": RESULT_SCHEMA_VERSION,
-            "run_id": parent["id"],
-            "selection": deepcopy(dict(plan["selection"])),
-            "test": deepcopy(dict(plan["test"])),
-            "operation": operation,
-            "outcome": "unavailable",
-            "result": {
-                "reasons": reasons,
-                **({"exactness": deepcopy(child_result["exactness"])}
-                   if isinstance(child_result.get("exactness"), Mapping) else {}),
-                **({"unchanged_control": deepcopy(child_result["unchanged_control"])}
-                   if isinstance(child_result.get("unchanged_control"), Mapping) else {}),
-            },
-            "artifact": _single_artifact(
-                child_result,
-                outcome=outcome or "unavailable",
-                execution_id=child_result.get("execution_fork_execution_id"),
-            ),
-            "comparison": None,
-        }
-    schemas.validate(document, RESULT_SCHEMA_VERSION)
-    return document
 
 
 def _execute_force_token(parent: Mapping, sub, plan: Mapping, *, runtime_identity,

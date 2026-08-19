@@ -409,7 +409,7 @@ def _removable_candidates(run: Mapping[str, Any]) -> tuple[list[str], str | None
     return valid, first_reason
 
 
-def _capability_projection(run: Mapping[str, Any], *, historical_receipts: list,
+def _capability_projection(run: Mapping[str, Any], *, historical_observations: list,
                            checkpoint_pin: Mapping[str, Any] | None) -> dict[str, Any]:
     from clozn.recipes.context_effects import plan_context_effects
     from clozn.recipes.context_counterfactual import plan_context_counterfactual
@@ -507,7 +507,7 @@ def _capability_projection(run: Mapping[str, Any], *, historical_receipts: list,
         time_travel = {"state": "unavailable", "reason_code": "time_travel_capabilities_unavailable",
                        "reason": type(exc).__name__}
     try:
-        rewind = build_rewind_fidelity(run, historical_receipts=historical_receipts)
+        rewind = build_rewind_fidelity(run, historical_observations=historical_observations)
     except Exception as exc:
         rewind = {"state": "unavailable", "reason_code": "rewind_fidelity_unavailable",
                   "reason": type(exc).__name__}
@@ -525,7 +525,7 @@ def _evidence_inventory(run: Mapping[str, Any], input_projection: Mapping[str, A
                         generation: Mapping[str, Any], output: Mapping[str, Any],
                         model_runtime: Mapping[str, Any], health: Mapping[str, Any],
                         checkpoint_pin: Mapping[str, Any] | None,
-                        historical_receipts: list) -> dict[str, Any]:
+                        verified_boundaries: list) -> dict[str, Any]:
     timing_state = output.get("timing_evidence", {}).get("state")
     pin_state = "unavailable"
     pin_reason = "checkpoint_pin_not_loaded"
@@ -554,10 +554,12 @@ def _evidence_inventory(run: Mapping[str, Any], input_projection: Mapping[str, A
         "timing": _state(timing_state or "unavailable", reason_code="timing_unavailable"
                           if timing_state in {None, "unavailable"} else None),
         "checkpoint_pin": _state(pin_state, reason_code=pin_reason),
+        # Count VERIFIED exact boundaries, not whatever evidence happened to load.  Evidence that
+        # exists but fails verification is not a proof and must never be reported as one.
         "historical_exact_proofs": _state(
-            "available" if historical_receipts else "unavailable",
-            reason_code=None if historical_receipts else "historical_exact_proofs_not_loaded",
-            count=len(historical_receipts),
+            "available" if verified_boundaries else "unavailable",
+            reason_code=None if verified_boundaries else "no_verified_historical_exact_proofs",
+            count=len(verified_boundaries),
         ),
         "execution_health": _state(
             "available" if health.get("state") == "available" else "partial",
@@ -568,7 +570,7 @@ def _evidence_inventory(run: Mapping[str, Any], input_projection: Mapping[str, A
 
 def build_run_diagnostics(
     run: Mapping[str, Any], *, related_runs: Iterable[Mapping[str, Any]] = (),
-    historical_receipts: Sequence[Mapping[str, Any]] = (),
+    historical_observations: Sequence[Any] = (),
     checkpoint_pin: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build one deterministic, read-only ``clozn.run-diagnostics.v1`` document."""
@@ -580,13 +582,19 @@ def build_run_diagnostics(
     generation = _generation_projection(run)
     output = _output_projection(run, receipt_view)
     health = _health_projection(run, related_runs)
-    receipts = [deepcopy(dict(item)) for item in historical_receipts if isinstance(item, Mapping)]
+    # Observations are immutable evidence objects; pass them through without copying, and derive the
+    # inventory count from the same verified projection Rewind Fidelity reports.
+    observations = list(historical_observations or ())
     capabilities = _capability_projection(
-        run, historical_receipts=receipts, checkpoint_pin=checkpoint_pin,
+        run, historical_observations=observations, checkpoint_pin=checkpoint_pin,
+    )
+    verified = (
+        capabilities.get("time_travel", {}).get("rewind_fidelity", {}).get("historical_proof", {})
+        .get("verified_boundaries", [])
     )
     evidence = _evidence_inventory(
         run, input_projection, generation, output, model_runtime, health,
-        checkpoint_pin, receipts,
+        checkpoint_pin, list(verified),
     )
     document = {
         "schema_version": SCHEMA_VERSION,

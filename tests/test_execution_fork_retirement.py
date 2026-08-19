@@ -171,31 +171,29 @@ def test_public_execution_fork_routes_are_not_registered():
     assert "execution_fork" not in route_modules
 
 
-def test_no_production_code_writes_the_legacy_receipt_store():
-    """Every active write to ExecutionForkResult is gone; only historical reads remain.
+def test_the_legacy_receipt_store_is_gone():
+    """ExecutionForkResult is retired outright: no module, no readers, no on-disk store.
 
-    Rewind Fidelity, Run Diagnostics, and the turn receipt still READ this store for historical
-    proof, which is deliberate and is the subject of a separate cleanup.  What must never come back
-    is a new write: nothing in the product produces terminal fork receipts any more.
+    Historical exact proof is now canonical GeneratedObservation evidence, so there is nothing left
+    for a compatibility adapter to convert and no reason to keep the old evidence model alive.
     """
-    writers = []
+    assert not os.path.exists(os.path.join(PACKAGE_ROOT, "replay", "execution_fork_results.py"))
+    importers = [
+        os.path.relpath(path, REPO_ROOT) for path in _all_package_files()
+        if "clozn.replay.execution_fork_results" in _imports(path)
+    ]
+    assert importers == [], f"nothing may import the retired receipt store: {importers}"
+
+
+def test_no_package_code_touches_the_legacy_results_database():
+    """Not even by path: the ~/.clozn/execution-forks store is not read or written anywhere."""
+    offenders = []
     for path in _all_package_files():
-        relative = os.path.relpath(path, REPO_ROOT)
-        if relative == "clozn/replay/execution_fork_results.py":
-            continue                              # the store's own implementation
         with open(path, encoding="utf-8-sig") as handle:
-            tree = ast.parse(handle.read(), filename=path)
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
-                continue
-            if node.func.attr not in {"save", "write_on_terminal"}:
-                continue
-            target = node.func.value
-            if isinstance(target, ast.Name) and "execution_fork_results" in target.id:
-                writers.append((relative, node.func.attr))
-            elif isinstance(target, ast.Attribute) and target.attr == "execution_fork_results":
-                writers.append((relative, node.func.attr))
-    assert writers == [], f"production code must not write ExecutionForkResult receipts: {writers}"
+            source = handle.read()
+        if "execution-forks" in source or "execution_fork_results" in source:
+            offenders.append(os.path.relpath(path, REPO_ROOT))
+    assert offenders == [], f"the retired results database is still referenced: {offenders}"
 
 
 def test_legacy_planner_module_is_not_dead_yet_and_is_not_silently_deleted():

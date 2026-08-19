@@ -330,6 +330,45 @@ class ObservationStore:
                 return prior.observation_id
         return observation.observation_id
 
+    def list_observations(self, *, run_id: str, evaluator_kind: str | None = None,
+                          status: str | None = "completed", limit: int = 500) -> list[Observation]:
+        """Load persisted observations bound to one recorded run, newest first.
+
+        A narrow, read-only evidence query: it opens the store, reads rows, and rehydrates their
+        artifacts.  It resolves no state, selects no worker, creates no checkpoint, and executes no
+        experiment, so it is safe on a read-only product surface with no worker attached.
+
+        Ordering is newest-first and then by observation id, so callers that want "the most recent
+        evidence for a condition" get a deterministic answer without re-sorting on a timestamp the
+        Observation itself does not carry.
+        """
+        if not isinstance(run_id, str) or not run_id:
+            return []
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+            return []
+        self._ensure()
+        query = "SELECT * FROM observations WHERE run_id = ?"
+        parameters: list[Any] = [run_id]
+        if evaluator_kind is not None:
+            query += " AND evaluator_kind = ?"
+            parameters.append(evaluator_kind)
+        if status is not None:
+            query += " AND status = ?"
+            parameters.append(status)
+        query += " ORDER BY created_ts DESC, id ASC LIMIT ?"
+        parameters.append(int(limit))
+        with closing(self.runs_store._connect()) as db:
+            rows = db.execute(query, tuple(parameters)).fetchall()
+        loaded: list[Observation] = []
+        for row in rows:
+            try:
+                loaded.append(self._load_observation_row(row))
+            except Exception:
+                # A row whose artifact is missing or unreadable is not evidence.  Skip it rather
+                # than letting one damaged blob fail an entire read-only projection.
+                continue
+        return loaded
+
     def _arm_row(self, experiment_id: str, arm_id: str):
         self._ensure()
         with closing(self.runs_store._connect()) as db:
