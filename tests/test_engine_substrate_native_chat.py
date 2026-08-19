@@ -92,43 +92,8 @@ def _substrate(engine, steer=None):
 
 
 
-def test_private_native_chat_greedy_and_missing_native_trace_stay_explicitly_empty(monkeypatch):
-    monkeypatch.setattr(cs, "_disk_dials", lambda: {})
-    engine = _AtomicEngine(_native_response(trace=False))
-    sub = _substrate(engine)
-    trace_out = []
-
-    result = sub._complete_chat_native(
-        [{"role": "user", "content": "Weather?"}],
-        json_schema={"type": "object"},
-        sample=False,
-        trace_out=trace_out,
-    )
-
-    assert engine.calls[0]["options"] | {} == {
-        "tools": None,
-        "tool_choice": "auto",
-        "json_schema": {"type": "object"},
-        "parallel_tool_calls": False,
-        "add_generation_prompt": True,
-        "enable_thinking": True,
-        "reasoning_format": "none",
-        "max_tokens": 256,
-        "temperature": 0.0,
-        "rep_penalty": 1.0,
-        "top_k": 0,
-        "top_p": 1.0,
-        "seed": 0,
-    }
-    assert result["trace"] == trace_out == sub._request.trace == []
-    assert sub._request.sampling is None
-    assert sub._request.memory_manifest["assembled_messages"] == [
-        {"role": "user", "content": "Weather?"}
-    ]
-
 
 def test_private_native_chat_retains_raw_trace_and_usage_when_native_parse_fails(monkeypatch):
-    monkeypatch.setattr(cs, "_disk_dials", lambda: {})
     parse_error = {"code": "native_parse_failed", "message": "expected a tool close tag"}
     engine = _AtomicEngine(_native_response(parse_error=parse_error))
     sub = _substrate(engine)
@@ -152,19 +117,3 @@ def test_private_native_chat_retains_raw_trace_and_usage_when_native_parse_fails
     assert sub._request.prompt_tokens == 18
 
 
-def test_private_native_chat_keeps_request_memory_manifest_when_worker_fails(monkeypatch):
-    monkeypatch.setattr(cs, "_disk_dials", lambda: {})
-    sub = _substrate(_AtomicEngine(error=RuntimeError("native parse failed")))
-    mem_out = {}
-
-    with pytest.raises(RuntimeError, match="native parse failed"):
-        sub._complete_chat_native(
-            [{"role": "user", "content": "hello"}],
-            json_schema={"type": "object"},
-            mem_out=mem_out,
-        )
-
-    assert sub._request.memory_manifest == mem_out
-    assert sub._request.finish_reason is None
-    assert sub._request.prompt_tokens is None
-    assert sub._request.trace == []

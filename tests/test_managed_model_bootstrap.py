@@ -353,7 +353,7 @@ def test_legacy_engine_substrate_identity_is_exact_fork_eligible(
         def load_calibration(self, _value):
             return None
 
-    sub = EngineSubstrate(engine=Engine(), steer=Steer())
+    sub = EngineSubstrate(engine=Engine())
     meta = sub.run_meta()
     identity = sub.identity_meta()
     assert identity["template_fingerprint"] == template

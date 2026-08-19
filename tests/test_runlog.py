@@ -76,7 +76,7 @@ def test_record_schema_fields(store):
                        messages=[{"role": "user", "content": "what is 2+2?"}], response="4")
     rec = store.get_run(rid)
     for k in ("id", "created_at", "created_ts", "source", "client", "model", "substrate",
-              "prompt_summary", "response_summary", "messages", "response", "memory", "behavior",
+              "prompt_summary", "response_summary", "messages", "response",
               "assembled_messages", "final_prompt", "trace", "timing", "parent_run_id",
               "changes_applied", "error", "project_key", "output_contract", "flags"):
         assert k in rec, f"missing schema field {k}"
@@ -202,31 +202,10 @@ def test_log_run_forwards_final_prompt_to_the_record(store, monkeypatch):
 
 
 
-def test_log_run_honors_surface_reported_dials_instead_of_claiming_live_state(store, monkeypatch):
-    """Raw completion reports what actually reached the worker, even if a live dial is configured."""
-    import time
-    from clozn.server import app as cs
-
-    class Steer:
-        def active(self):
-            return {"warm": 0.8}
-
-    class Sub:
-        steer = Steer()
-
-    monkeypatch.setattr(cs, "SUB", Sub())
-    h = object.__new__(cs.make_handler())
-    h.headers = {"User-Agent": "pytest"}
-    rid = h._log_run(
-        "openai_completion", [{"role": "user", "content": "raw"}], "reply", "model", time.time(),
-        mem_out={"mode": "prompt", "applied": [], "active_dials": {}, "final_prompt": "raw"},
-    )
-    assert store.get_run(rid)["behavior"]["active_dials"] == {}
-
 
 def test_no_loop_guard_flag_when_the_guard_never_fired(store):
     rid = store.record(source="openai_api", messages=[{"role": "user", "content": "q"}], response="a",
-                       memory={"cards_applied": ["x"]})
+)
     flags = store.get_run(rid)["flags"]
     assert "memory-retried" not in flags
     assert "memory-loop-guard" not in flags
@@ -241,22 +220,7 @@ def test_prompt_summary_uses_last_user_message(store):
     assert store.get_run(rid)["prompt_summary"] == "second"
 
 
-def test_flag_memory(store):
-    rid = store.record(source="studio_chat", messages=[{"role": "user", "content": "q"}],
-                       response="a", memory={"cards_applied": ["mem_1"]})
-    assert "memory" in store.get_run(rid)["flags"]
 
-
-def test_flag_pending_memory(store):
-    rid = store.record(source="studio_chat", messages=[{"role": "user", "content": "q"}],
-                       response="a", memory={"proposed_cards": ["mem_2"]})
-    assert "pending-memory" in store.get_run(rid)["flags"]
-
-
-def test_flag_steered(store):
-    rid = store.record(source="studio_chat", messages=[{"role": "user", "content": "q"}],
-                       response="a", behavior={"active_dials": {"concise": 0.4}})
-    assert "steered" in store.get_run(rid)["flags"]
 
 
 def test_flag_low_confidence(store):

@@ -81,7 +81,7 @@ def _seed_drill_run(section_name="rag_context", source="auto", extra_sections=No
     if extra_sections:
         sections.extend(extra_sections)
     return runlog.record(source="studio_chat", client="studio", model="clozn-qwen", substrate="engine",
-                         messages=messages, response="dawn", behavior={"active_dials": {}},
+                         messages=messages, response="dawn", 
                          trace={"token_ids": [1]}, sections=sections)
 
 
@@ -190,7 +190,7 @@ def test_route_multipart_section_is_declined_with_an_honest_note_not_wrong_offse
                          {"message_index": 1, "start": 0, "end": len("second part text here")}],
                 "char_count": 40, "preview": "first part text heresecond part text he"}]
     rid = runlog.record(source="cli", messages=messages, response="ok",
-                        behavior={"active_dials": {}}, trace={"token_ids": [1]}, sections=sections)
+trace={"token_ids": [1]}, sections=sections)
     out = _post(f"/runs/{rid}/section-drill", {"section": "multi"})
     assert out["run_id"] == rid
     assert out["parent_section"] == "multi"
@@ -222,7 +222,7 @@ def test_route_unsplittable_section_returns_a_single_honest_subsection(iso, monk
                 "parts": [{"message_index": 0, "start": 0, "end": len(short_text)}],
                 "char_count": len(short_text), "preview": short_text}]
     rid = runlog.record(source="cli", messages=messages, response="nine",
-                        behavior={"active_dials": {}}, trace={"token_ids": [1]}, sections=sections)
+trace={"token_ids": [1]}, sections=sections)
     out = _post(f"/runs/{rid}/section-drill", {"section": "short_sec"})
     assert out["parent_section"] == "short_sec"
     assert len(out["sub_sections"]) == 1
@@ -299,7 +299,7 @@ def test_offset_remapping_ablated_prompt_has_exactly_the_sub_span_removed(iso, m
                 "parts": [{"message_index": 1, "start": part_start, "end": part_end}],
                 "char_count": len(section_text), "preview": section_text[:20]}]
     rid = runlog.record(source="cli", messages=messages, response="ok",
-                        behavior={"active_dials": {}}, trace={"token_ids": [1]}, sections=sections)
+trace={"token_ids": [1]}, sections=sections)
 
     # ground truth: the SAME drill_split function the route uses, called directly on the section's own text
     spans = clozn_sections.drill_split(section_text)

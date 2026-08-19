@@ -65,7 +65,7 @@ def try_get(h, p):
     from clozn import schemas
 
     try:
-        registry = corrective_flow.registry_for_run(run, steer=getattr(sub, "steer", None))
+        registry = corrective_flow.registry_for_run(run)
         investigation_doc = investigation.build(
             run, related_runs=related, corrective_registry=registry, scoring_available=scoring_available)
         schemas.validate(investigation_doc, "clozn.run-investigation.v1")

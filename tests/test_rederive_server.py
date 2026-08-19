@@ -88,7 +88,7 @@ def iso(tmp_path, monkeypatch):
 def _seed_run():
     return runlog.record(source="engine_chat", client="studio", model="clozn-engine", substrate="engine",
                          messages=[{"role": "user", "content": "hi"}], response="Hello there",
-                         behavior={"active_dials": {"warm": 0.5}}, trace={"token_ids": [11, 22]})
+trace={"token_ids": [11, 22]})
 
 
 def test_rederive_missing_run_is_a_clean_404(iso):
@@ -123,7 +123,6 @@ def test_rederive_happy_path_over_http(iso):
         {"piece": " there", "token_id": 22, "logprob": -0.2, "conf": pytest.approx(math.exp(-0.2))},
     ]
     assert out["meta"]["retokenized"] is False
-    assert out["meta"]["dials"] == {"warm": 0.5}
 
 
 def test_rederive_scores_the_runs_own_messages_and_token_ids(iso, monkeypatch):

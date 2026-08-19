@@ -174,10 +174,6 @@ def _materialize_context_generated_observation(
             "intervention": arm.intervention.to_dict(),
         },
     }
-    behavior = deepcopy(current_parent.get("behavior") or {})
-    controls = snapshot.get("execution_controls")
-    if isinstance(controls, Mapping) and isinstance(controls.get("active_dials"), Mapping):
-        behavior["active_dials"] = deepcopy(dict(controls["active_dials"]))
     captured_runtime = snapshot.get("runtime_identity")
     child_identity = (
         deepcopy(dict(captured_runtime))
@@ -190,7 +186,6 @@ def _materialize_context_generated_observation(
         messages=deepcopy(snapshot.get("messages") or []),
         assembled_messages=deepcopy(snapshot.get("assembled_messages") or []),
         final_prompt=final_prompt, response=response,
-        memory=deepcopy(current_parent.get("memory") or {}), behavior=behavior,
         trace=child_trace, finish_reason=observation.finish_reason,
         parent_run_id=current_parent["id"], changes_applied=changes,
         meta=deepcopy(current_parent.get("meta") or {}),
@@ -320,12 +315,6 @@ def materialize_arm(
         if not isinstance(materialization_context, Mapping):
             raise MaterializationError("materialization_context must be an object")
         changes["experiment"]["derived_provenance"] = deepcopy(dict(materialization_context))
-    behavior = current_parent.get("behavior")
-    active_dials = behavior.get("active_dials") if isinstance(behavior, Mapping) else None
-    if isinstance(active_dials, Mapping) and active_dials:
-        changes["behavior_off"] = True
-        changes["behavior_overrides"] = deepcopy(dict(active_dials))
-
     contract = result.base.generation_contract or {}
     decode_mode = contract.get("decode_mode") if isinstance(contract, Mapping) else None
     if decode_mode == "greedy":
@@ -484,8 +473,7 @@ def materialize_generated_observation(
         source="experiment", client="experimental_kernel",
         model=current_parent.get("model", ""), substrate=current_parent.get("substrate", ""),
         messages=deepcopy(current_parent.get("messages") or []), response=response,
-        memory=deepcopy(current_parent.get("memory") or {}),
-        behavior=deepcopy(current_parent.get("behavior") or {}), trace=child_trace,
+        trace=child_trace,
         final_prompt=current_parent.get("final_prompt"), finish_reason=observation.finish_reason,
         parent_run_id=current_parent["id"], changes_applied=changes,
         meta=deepcopy(current_parent.get("meta") or {}),

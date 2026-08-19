@@ -205,7 +205,6 @@ _REFUSAL_CASES = [
     (influence_map, "try_post", "/influence-map", {}),
     (influence_map, "try_post", "/influence-map/jobs", {}),
     (replay, "try_post", "/replay", {}),
-    (replay, "try_post", "/counterfactual", {"behavior_overrides": {"warmth": 0.5}}),
     (timetravel, "try_post", "/branch", {"turn": 0}),
     (corrective_retries, "try_post", "/retry", {"preset": "less-verbose"}),
     (receipts, "try_post", "/receipts", {}),

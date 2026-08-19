@@ -132,21 +132,6 @@ def test_forced_receipt_section_no_manifest_is_an_honest_note(iso):
     assert "no section manifest" in rec["note"]
 
 
-def test_forced_receipt_declines_a_memory_card_sourced_section(iso):
-    """A 'memory_card' section is the SAME fired influence already covered (more richly) by a card_id
-    receipt, AND its offsets are into assembled_messages -- not the raw list this splice uses -- so it's
-    declined with an honest note rather than silently mis-splicing against the wrong list."""
-    run = dict(SECTION_RUN)
-    run["sections"] = [{"id": "sec_card_1", "name": "card_1", "source": "memory_card",
-                        "parts": [{"message_index": 1, "start": 0, "end": 5}],
-                        "char_count": 5, "preview": "RAG: "}]
-    sub = SectionForcedFakeSub(["a"], "x", present_lp=[-0.1], absent_lp=[-0.1])
-    rec = receipts.forced_receipt(run, {"section": "card_1", "source": "memory_card"}, sub)
-    assert rec["causal_verified"] is False
-    assert "memory-card" in rec["note"]
-    assert sub.calls == []
-
-
 RAG_SEGMENT = "RAG: whales are mammals."
 RAWPROMPT_FINAL_PROMPT = "SYSTEM\n" + RAG_SEGMENT + "\nQ: what are whales?"
 _RAG_START = RAWPROMPT_FINAL_PROMPT.index(RAG_SEGMENT)
@@ -347,7 +332,7 @@ def _seed_two_section_run():
          "char_count": len(FEWSHOT_TEXT), "preview": FEWSHOT_TEXT[:20]},
     ]
     return runlog.record(source="studio_chat", client="studio", model="clozn-qwen", substrate="engine",
-                         messages=messages, response="mammals", behavior={"active_dials": {}},
+                         messages=messages, response="mammals", 
                          trace={"token_ids": [1]}, sections=sections)
 
 

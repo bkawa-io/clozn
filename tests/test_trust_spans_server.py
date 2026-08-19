@@ -37,7 +37,6 @@ def run_id(tmp_path, monkeypatch):
     return runlog.record(source="openai_api", model="m1",
                          messages=[{"role": "user", "content": "where?"}],
                          response="Kyoto gardens.",
-                         memory={"cards_applied": ["Kyoto has quiet gardens"]},
                          trace={"tokens": ["Kyoto", " gardens", "."],
                                 "confidence": [.9, .8, .95]})
 

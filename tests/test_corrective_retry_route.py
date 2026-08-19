@@ -87,22 +87,6 @@ def test_omitted_backend_is_not_forwarded_as_a_string(monkeypatch):
     assert seen["backend"] is None
 
 
-def test_explicit_control_vector_backend_is_forwarded(monkeypatch):
-    monkeypatch.setattr(runlog, "get_run", lambda rid: {
-        "id": rid, "messages": [{"role": "user", "content": "x"}], "identity": {},
-    })
-    seen = {}
-
-    def fake_retry_compare(run, preset, sub, backend=None):
-        seen["backend"] = backend
-        return comparison()
-    monkeypatch.setattr(corrective, "retry_compare", fake_retry_compare)
-    handler = Handler()
-    route.try_post(handler, "/runs/run_x/retry",
-                   {"preset": "less-verbose", "backend": "control_vector"})
-    assert handler.status == 200
-    assert seen["backend"] == "control_vector"
-
 
 def test_no_undo_route_survives_for_persistent_activation():
     """`/corrective-retries/<id>/undo` only ever existed to reverse a persistent session/profile

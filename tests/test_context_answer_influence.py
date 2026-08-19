@@ -136,50 +136,6 @@ def test_source_aware_segmentation_is_bounded_deterministic_and_exact():
     assert [span["parent_id"] for span in one["spans"]] == ["p.m000"]
 
 
-def test_one_baseline_exact_continuation_assembled_preference_and_bidirectional_links():
-    run = _run()
-    sub = FakeScoreSub(_influence_scores)
-    out = context_answer_influence(run, sub, clock=StepClock())
-
-    assert out["schema"] == SCHEMA
-    assert out["status"] == "ok" and out["available"] is True
-    assert out["identity"]["prompt_view"] == "assembled_messages"
-    assert out["method"]["generation_used"] is False
-    assert out["matrix_shape"] == [3, 2]
-    assert out["matrix"] == [[0.1, 0.05], [1.0, -0.1], [0.0, 1.0]]
-
-    # One baseline plus one matched-control score per selected prompt span, plus one bounded
-    # joint-ablation call since the sky and grass spans both clear the floor here (redundant-pair check).
-    assert out["redundancy_check"]["performed"] is True
-    assert len(sub.calls) == 1 + len(out["prompt_spans"]) + 1
-    assert out["timing"]["score_calls"] == len(sub.calls)
-    assert all(call["continuation_ids"] == [101, 102] for call in sub.calls)
-    assert all(call["continuation"] is None for call in sub.calls)
-    assert all("RAW_ONLY" not in str(call["messages"]) for call in sub.calls)
-    assert sub.calls[0]["messages"] == run["assembled_messages"]
-    assert all(call["steer_strengths"] == {"careful": 0.5} for call in sub.calls)
-
-    # Every matrix cell is retained as one signed link.  The same link IDs drive
-    # answer -> context and context -> answer reads without a second attribution.
-    assert len(out["links"]) == 3 * 2
-    blue = out["summary"]["answer_to_context"][0]
-    sky_id = next(span["id"] for span in out["prompt_spans"] if "sky" in span["text"])
-    assert blue["top_context_span_ids"][0] == sky_id
-    sky_read = next(
-        row for row in out["summary"]["context_to_answer"]
-        if row["context_span_id"] == sky_id
-    )
-    assert sky_read["top_answer_span_ids"][0] == out["answer_spans"][0]["id"]
-    link = next(
-        item for item in out["links"]
-        if item["context_span_id"] == sky_id
-        and item["answer_span_id"] == out["answer_spans"][0]["id"]
-    )
-    assert link["delta_nats"] == 1.0 and link["effect"] == "supports"
-    assert link["clears_floor"] is True
-    assert link["evidence_state"] == EVIDENCE_STATE_CAUSALLY_SUPPORTED
-    assert out["controls"][1]["length_preserved"] is True
-
 
 def test_below_floor_is_explicitly_no_clear_source():
     run = _run()

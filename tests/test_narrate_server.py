@@ -89,7 +89,7 @@ def _seed_run():
     return runlog.record(source="studio_chat", client="studio", model="clozn-qwen", substrate="QwenSubstrate",
                          messages=[{"role": "user", "content": "Explain TCP vs UDP."}],
                          response="TCP is reliable; UDP is fast.",
-                         behavior={"active_dials": {"warm": 0.2}})
+)
 
 
 def test_narrate_missing_run_is_a_clean_404(iso):

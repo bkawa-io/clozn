@@ -42,14 +42,13 @@ def test_full_run_ordered_events_with_pluralization_and_hesitations(store):
         messages=[{"role": "user", "content": "what color is the sky?"}],
         response="The sky is blue.",
         trace={"tokens": tokens, "confidence": confidence, "alternatives": alternatives},
-        behavior={"active_dials": {"concise": 0.5, "warm": -0.2}},
         finish_reason="length",
     )
     run = store.get_run(rid)
 
     events = run_timeline.timeline(run)
     types = [e["type"] for e in events]
-    assert types == ["run_started", "dials_applied", "generation",
+    assert types == ["run_started", "generation",
                       "hesitation", "hesitation", "finished"]
 
     started = events[0]
@@ -58,16 +57,12 @@ def test_full_run_ordered_events_with_pluralization_and_hesitations(store):
     assert started["label"] == "Run started"
 
 
-    dial_ev = events[1]
-    assert dial_ev["label"] == "2 behavior dials"              # pluralized
-    assert dial_ev["dials"] == {"concise": 0.5, "warm": -0.2}
-
-    gen_ev = events[2]
+    gen_ev = events[1]
     assert gen_ev["label"] == "Generated 5 tokens"
     assert gen_ev["n_tokens"] == 5
     assert gen_ev["duration_ms"] == run["timing"]["duration_ms"]
 
-    h1, h2 = events[3], events[4]
+    h1, h2 = events[2], events[3]
     assert h1["index"] == 1 and h1["token"] == " sky" and h1["confidence"] == 0.30
     assert h1["prob"] == 0.30 and h1["logprob"] == -1.203973
     assert h1["alternatives"] == [{"piece": " sea", "text": " sea", "prob": 0.22, "logprob": -1.514128}]
@@ -78,7 +73,7 @@ def test_full_run_ordered_events_with_pluralization_and_hesitations(store):
     # the two mid-confidence tokens (0.92, 0.95, 0.99) never cross LOW_CONF -- no hesitation for them
     assert {h1["index"], h2["index"]} == {1, 3}
 
-    finished = events[5]
+    finished = events[4]
     assert finished == {"type": "finished", "label": "Finished (length)",
                         "finish_reason": "length", "truncated": True}
 
@@ -117,13 +112,6 @@ def test_hesitation_events_omit_new_fields_on_a_legacy_trace(store):
     # schema isn't optional infrastructure, it's math on a number the run already had.
     assert hesitation.get("logprob") is not None
 
-
-def test_singular_card_and_dial_labels_are_not_pluralized(store):
-    rid = store.record(source="cli", messages=[{"role": "user", "content": "q"}], response="a",
-                       behavior={"active_dials": {"warm": 0.2}})
-    events = run_timeline.timeline(store.get_run(rid))
-    dial_ev = next(e for e in events if e["type"] == "dials_applied")
-    assert dial_ev["label"] == "1 behavior dial"
 
 
 # ---------------------------------------------------------------------------------------- fixture: minimal run
@@ -187,7 +175,7 @@ def test_a_run_with_no_parent_has_no_branched_from_event(store):
 def test_no_trace_run_has_no_hesitations_and_a_word_count_not_a_fabricated_token_count(store):
     rid = store.record(source="studio_chat", messages=[{"role": "user", "content": "hi"}],
                        response="hey there friend",
-                       behavior={"active_dials": {"concise": 0.4}})
+)
     run = store.get_run(rid)
     assert run["trace"] == {}                                     # confirms runlog really stored nothing
 

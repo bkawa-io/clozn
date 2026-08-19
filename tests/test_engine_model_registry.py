@@ -55,17 +55,16 @@ def test_engine_model_info_known_family():
     fam, info = cs._engine_model_info("/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf")
     assert fam == "llama-3.2-1b"
     assert info["model_id"] == "meta-llama/Llama-3.2-1B-Instruct"
-    assert info["steer_layer"] == 8
 
     fam, info = cs._engine_model_info("/models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf")
     assert fam == "llama-3.1-8b"
-    assert info == {"model_id": "meta-llama/Llama-3.1-8B-Instruct", "steer_layer": None}
+    assert info == {"model_id": "meta-llama/Llama-3.1-8B-Instruct"}
 
 
 def test_engine_model_info_unknown_returns_default():
     fam, info = cs._engine_model_info("mistral-7b-instruct-q4_k_m.gguf")
     assert fam is None
-    assert info == {"model_id": None, "steer_layer": None}
+    assert info == {"model_id": None}
 
 
 # ==================================================================================== derive-from-engine at construction
@@ -90,15 +89,6 @@ class _HealthSteerEngine:
         return {"choices": [{"text": "ok", "finish_reason": "stop"}]}
 
 
-class _FakeSteerLayer:
-    """Minimal SteeringControl stand-in: just a .layer the registry may re-pin (+ .strength). The
-    load_library/load_custom/load_state calls the constructor makes are absent on purpose -- __init__
-    wraps them in try/except, so their AttributeError is swallowed, exactly as a partial steer would be."""
-
-    def __init__(self, layer=14):
-        self.layer = layer
-        self.strength = {}
-
 
 @pytest.fixture
 def iso(tmp_path, monkeypatch):
@@ -107,37 +97,17 @@ def iso(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _make_sub(monkeypatch, model, steer_layer=14):
+def _make_sub(monkeypatch, model):
     eng = _HealthSteerEngine(model)
-    steer = _FakeSteerLayer(layer=steer_layer)
     monkeypatch.setattr(cs, "ENGINE", eng)
-    monkeypatch.setattr(cs, "_engine_steer", lambda: steer)
-    return cs.EngineSubstrate(), steer
+    return cs.EngineSubstrate()
 
 
-def test_construction_pins_steer_layer_for_llama(iso, monkeypatch):
-    sub, steer = _make_sub(monkeypatch, r"C:\models\Llama-3.2-1B-Instruct-Q4_K_M.gguf")
-    assert sub.model_family == "llama-3.2-1b"
-    assert sub.model_id == "meta-llama/Llama-3.2-1B-Instruct"
-    assert steer.layer == 8            # re-pinned to Llama-1B mid-depth, NOT the Qwen 14 default
 
-
-def test_construction_keeps_qwen_layer_unchanged(iso, monkeypatch):
-    sub, steer = _make_sub(monkeypatch, "/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf")
-    assert sub.model_family == "qwen2.5-7b"
-    assert sub.model_id == "Qwen/Qwen2.5-7B-Instruct"
-    assert steer.layer == 14           # unchanged -- the Qwen-7B lab footnote is preserved exactly
-
-
-def test_construction_unknown_model_leaves_default_layer(iso, monkeypatch):
-    sub, steer = _make_sub(monkeypatch, "/models/mistral-7b-instruct-q4_k_m.gguf")
-    assert sub.model_family is None
-    assert sub.model_id is None
-    assert steer.layer == 14           # unrecognized GGUF -> steer_layer None -> EngineSteer's default left alone
 
 
 def test_run_meta_reports_family_and_model_id(iso, monkeypatch):
-    sub, _ = _make_sub(monkeypatch, "/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf")
+    sub = _make_sub(monkeypatch, "/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf")
     meta = sub.run_meta()
     assert meta["family"] == "llama-3.2-1b"
     assert meta["model_id"] == "meta-llama/Llama-3.2-1B-Instruct"
@@ -145,7 +115,7 @@ def test_run_meta_reports_family_and_model_id(iso, monkeypatch):
 
 
 def test_run_meta_omits_family_for_unknown_model(iso, monkeypatch):
-    sub, _ = _make_sub(monkeypatch, "/models/mistral-7b-instruct-q4_k_m.gguf")
+    sub = _make_sub(monkeypatch, "/models/mistral-7b-instruct-q4_k_m.gguf")
     meta = sub.run_meta()
     assert "family" not in meta        # unrecognized -> omitted, not guessed
     assert "model_id" not in meta

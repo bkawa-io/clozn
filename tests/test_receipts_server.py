@@ -128,7 +128,7 @@ def _seed_run():
     return runlog.record(source="studio_chat", client="studio", model="clozn-qwen", substrate="QwenSubstrate",
                          messages=[{"role": "user", "content": "hi there"}],
                          response="THE SAMPLED reply -- must never come back as a baseline",
-                         behavior={"active_dials": {"warm": 0.5}})
+)
 
 
 # ============================================================================================ /receipt (one)
@@ -203,25 +203,6 @@ def test_receipt_bad_spec_keeps_the_generic_500_when_the_engine_is_fine(iso, mon
     assert out == {"error": "receipt failed (bad influence spec, or the replay could not be generated)"}
 
 
-def test_receipt_happy_path_dial_ablation_over_http(iso):
-    rid = _seed_run()
-    out = _post(f"/runs/{rid}/receipt", {"influence": {"dial": "warm"}})
-    assert "error" not in out
-    assert out["causal_verified"] is True                 # JSON true, round-tripped from Python True
-    assert out["has_effect"] is True
-    assert out["baseline_reply"] == "A much longer rambling reply. Warmly!"
-    assert out["ablated_reply"] == "A much longer rambling reply."
-    assert out["changes_applied"] == {"behavior_overrides": {"warm": 0.0}}
-    # the stored sampled reply never shows up as either arm, and the receipt says so
-    stored = runlog.get_run(rid)["response"]
-    assert stored not in (out["baseline_reply"], out["ablated_reply"])
-    assert "sampled" in out["note"].lower() and "baseline" in out["note"].lower()
-    assert "cost_note" in out
-
-
-
-
-# =========================================================================================== /receipts (all)
 
 def test_receipts_missing_run_is_a_clean_404(iso):
     out = _post("/runs/run_does_not_exist/receipts", {})
@@ -245,9 +226,7 @@ def test_receipts_omits_coalitions_key_by_default(iso, monkeypatch):
     rid = runlog.record(source="studio_chat", client="studio", model="clozn-qwen", substrate="QwenSubstrate",
                         messages=[{"role": "user", "content": "how's it going"}],
                         response="SAMPLED, never a baseline",
-                        memory={"cards_applied": ["Be concise.", "Keep it short."],
-                               "applied_ids": [card_a, card_b], "mode": "prompt", "gate": 0.8},
-                        behavior={"active_dials": {"warm": 0.5}})
+)
     out = _post(f"/runs/{rid}/receipts", {})
     assert "coalitions" not in out
 
@@ -320,47 +299,7 @@ def test_receipts_mode_forced_does_not_need_the_qwen_substrate_gate(iso, monkeyp
     assert out["mode"] == "forced"
 
 
-def test_receipt_mode_forced_happy_path_over_http(iso, monkeypatch):
-    fake = FakeEngineSub(tokens=[{"id": 1, "piece": "hi", "logprob": -0.1},
-                                {"id": 2, "piece": " there", "logprob": -0.2}])
-    monkeypatch.setattr(cs, "SUB", fake)
-    rid = runlog.record(source="studio_chat", client="studio", model="clozn-qwen", substrate="engine",
-                        messages=[{"role": "user", "content": "hi"}], response="hi there",
-                        behavior={"active_dials": {"warm": 0.5}}, trace={"token_ids": [1, 2]})
-    out = _post(f"/runs/{rid}/receipt", {"influence": {"dial": "warm"}, "mode": "forced"})
-    assert "error" not in out
-    assert out["mode"] == "forced"
-    assert out["causal_verified"] is True
-    assert out["deltas"] == [0.0, 0.0]                      # WITH == WITHOUT here (fake ignores steer args)
-    assert fake.calls == 0                                  # forced mode never called .chat()
 
-
-def test_receipt_mode_both_over_http_includes_forced_and_regen_fields(iso, monkeypatch):
-    fake = FakeEngineSub(reply="Warmly!", tokens=[{"id": 1, "piece": "Warmly", "logprob": -0.1},
-                                                  {"id": 2, "piece": "!", "logprob": -0.2}])
-    monkeypatch.setattr(cs, "SUB", fake)
-    rid = runlog.record(source="studio_chat", client="studio", model="clozn-qwen", substrate="engine",
-                        messages=[{"role": "user", "content": "hi"}], response="Warmly!",
-                        behavior={"active_dials": {"warm": 0.5}}, trace={"token_ids": [1, 2]})
-    out = _post(f"/runs/{rid}/receipt", {"influence": {"dial": "warm"}, "mode": "both"})
-    assert "error" not in out
-    assert out["mode"] == "both"
-    assert "baseline_reply" in out                          # regen fields present at the top level
-    assert "forced" in out and out["forced"]["mode"] == "forced"
-    assert "silent_influence" in out
-
-
-# ============================================================================================================
-# ============================================================= POST /runs/<id>/swap_receipt ==================
-# ============================================================================================================
-# The THIN endpoint wiring only -- clozn.receipts.swap_receipt's own math/degrade-paths are exhaustively
-# unit-tested model-free in test_swap_receipt.py. Here: the route matches, a missing run is a clean 404, no
-# engine/jlens substrate is a clean 503, a missing to_concept is a clean 400, and a real request's swap
-# receipt comes back over HTTP with `causal_verified` intact. dir(c) needs a REAL (tiny, on-disk, fixture)
-# J-lens + unembed export -- mirrors test_swap_receipt.py / test_concept_dir.py's own orthogonal-J /
-# orthonormal-W_U construction -- pointed at via CLOZN_JLENS_DIR / CLOZN_DIRC_UNEMBED_DIR (the route itself
-# builds a bare concept_dir.ConceptSteer(engine, layer=...) with no fixture wiring of its own, exactly as
-# swap_receipt(run, from_hint, to_concept, ctx.SUB) is documented to be called -- see swap_receipt.py).
 
 def _orthogonal(seed, n):
     rng = np.random.default_rng(seed)

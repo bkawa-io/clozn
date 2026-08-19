@@ -35,10 +35,7 @@ def try_get(h, p):
     from clozn.runs.investigation import build
     from clozn import schemas
 
-    registry = corrective_flow.registry_for_run(
-        run,
-        steer=getattr(sub, "steer", None),
-    )
+    registry = corrective_flow.registry_for_run(run)
     try:
         document = build(
             run,

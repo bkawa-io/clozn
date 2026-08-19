@@ -25,7 +25,6 @@ from .interventions import DeleteSource, ForceToken
 from .observations import GeneratedObservation, execution_observation_identity
 from .reconstructed_execution import (
     complete_greedy, complete_traced, detect_retokenization, prompt_base,
-    recorded_steer_kwargs,
 )
 from .state import ExecutionState, digest
 from .state_ref import (
@@ -294,8 +293,7 @@ class GenerateExecutionAdapter:
     def _reconstructed_completion(self, run: Mapping[str, Any], prompt: str, budget: int):
         if budget <= 0:
             return "", "branch_horizon_exhausted", None
-        extra = recorded_steer_kwargs(self.substrate, dict(run))
-        traced = complete_traced(self.engine, prompt, budget, extra)
+        traced = complete_traced(self.engine, prompt, budget, {})
         if traced is not None:
             # The shared fork seam returns (text, steps, finish), while this
             # adapter's local contract is (text, finish, steps).
@@ -542,45 +540,7 @@ class DeleteSourceGenerateAdapter:
             raise GenerateExecutionError(f"{code}: the selected worker does not match the recorded runtime")
         return deepcopy(recorded), deepcopy(current)
 
-    @staticmethod
-    def _recorded_dials(run: Mapping[str, Any]) -> dict[str, float]:
-        behavior = run.get("behavior")
-        raw = behavior.get("active_dials") if isinstance(behavior, Mapping) else {}
-        if raw is None:
-            return {}
-        if not isinstance(raw, Mapping):
-            raise GenerateExecutionError("recorded steering controls are malformed")
-        result: dict[str, float] = {}
-        for name, value in raw.items():
-            if (not isinstance(name, str) or not name or isinstance(value, bool)
-                    or not isinstance(value, (int, float)) or not math.isfinite(float(value))):
-                raise GenerateExecutionError("recorded steering controls are malformed")
-            result[name] = float(value)
-        return result
 
-    @staticmethod
-    def _steering_snapshot(steer: Any) -> tuple[dict[str, Any], Any]:
-        if steer is None:
-            return {}, None
-        current = getattr(steer, "strength", {})
-        if not isinstance(current, Mapping):
-            raise GenerateExecutionError("live steering state is unavailable")
-        return deepcopy(dict(current)), getattr(steer, "_engaged", None)
-
-    @staticmethod
-    def _set_strength(steer: Any, values: Mapping[str, Any]) -> None:
-        try:
-            steer.strength = dict(values)
-            return
-        except Exception:
-            pass
-        clear = getattr(steer, "clear", None)
-        set_value = getattr(steer, "set", None)
-        if not callable(clear) or not callable(set_value):
-            raise GenerateExecutionError("steering state cannot be applied exactly")
-        clear()
-        for name, value in values.items():
-            set_value(str(name), float(value))
 
     def _generate(self, run: Mapping[str, Any], state: ExecutionState,
                   evaluator: Generate, intervention: DeleteSource) -> GeneratedObservation:
@@ -600,21 +560,11 @@ class DeleteSourceGenerateAdapter:
                                     "the evaluator does not match the recorded generation contract")
         try:
             runtime, actual_runtime = self._runtime_binding(run)
-            recorded_dials = self._recorded_dials(run)
             resolved = resolve_delete_source(run, intervention)
             prompt = resolve_effective_prompt(run, intervention)
         except Exception as exc:
             code = getattr(exc, "reason", None) or "context_generation_unavailable"
             return _unavailable(state, evaluator, intervention, code, str(exc))
-
-        steer = getattr(self.substrate, "steer", None)
-        if recorded_dials and steer is None:
-            return _unavailable(state, evaluator, intervention, "recorded_steering_unavailable",
-                                "the recorded steering controls cannot be applied by this worker")
-        try:
-            saved_strength, saved_engaged = self._steering_snapshot(steer)
-        except GenerateExecutionError as exc:
-            return _unavailable(state, evaluator, intervention, "live_steering_unavailable", str(exc))
 
         messages = prompt.rendered_messages()
         trace_steps: list[dict[str, Any]] = []
@@ -622,31 +572,14 @@ class DeleteSourceGenerateAdapter:
         sample = False if evaluator.decode_mode == "greedy" else deepcopy(dict(evaluator.sampling or {}))
         reply = None
         generation_error: Exception | None = None
-        restore_error: Exception | None = None
         try:
-            if steer is not None:
-                self._set_strength(steer, recorded_dials)
             reply = self.substrate.chat(
                 deepcopy(messages), max_new=evaluator.max_new, sample=sample,
                 trace_out=trace_steps, mem_out=mem_out, stop=list(evaluator.stop),
             )
         except Exception as exc:
             generation_error = exc
-        finally:
-            if steer is not None:
-                try:
-                    self._set_strength(steer, saved_strength)
-                    if saved_engaged is not None:
-                        steer._engaged = saved_engaged
-                except Exception as exc:
-                    restore_error = exc
 
-        if restore_error is not None:
-            return _failed(
-                state, evaluator, intervention, "steering_restore_failed",
-                f"live steering controls could not be restored: {restore_error}",
-                diagnostics={"generation_error": str(generation_error) if generation_error else None},
-            )
         if generation_error is not None:
             return _failed(state, evaluator, intervention, "generation_failed", str(generation_error))
 
@@ -703,7 +636,6 @@ class DeleteSourceGenerateAdapter:
             "runtime_identity": runtime,
             "actual_runtime_identity": actual_runtime,
             "execution_controls": {
-                "active_dials": deepcopy(recorded_dials),
                 "generation_contract": _plain(contract),
             },
             "context_receipt_digest": state.context_receipt_digest,
@@ -718,7 +650,6 @@ class DeleteSourceGenerateAdapter:
             generated_steps=normalized_steps, finish_reason=finish_reason,
             generation_contract=_plain(contract), runtime_provenance={
                 "runtime_identity": runtime, "actual_runtime_identity": actual_runtime,
-                "recorded_active_dials": deepcopy(recorded_dials),
             }, exact_control_proof={}, input_snapshot=input_snapshot,
             execution_provenance={"adapter": "delete_source_generate", "execution": "direct_generation",
                                   "source_basis": resolved.get("basis"),

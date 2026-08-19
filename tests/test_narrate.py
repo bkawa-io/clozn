@@ -88,14 +88,6 @@ class BoomSub:
 
 # ============================================================================================ lexical_default
 
-def test_lexical_default_clear_match_against_card_text_and_quote():
-    explanation = {"influences_active": {"cards": [
-        {"id": "mem_1", "text": "Keep answers short.", "quoted_span": "please keep it short"}], "dials": []}}
-    result = narrate.lexical_default("I kept the answer short because you asked me to.", explanation)
-    assert result["supported"] is True
-    assert result["matched_ids"] == ["mem_1"]
-    assert "short" in result["matched_terms"]
-
 
 def test_lexical_default_clear_miss_on_a_wholly_unrelated_claim():
     explanation = {"influences_active": {"cards": [
@@ -105,13 +97,6 @@ def test_lexical_default_clear_miss_on_a_wholly_unrelated_claim():
     assert result["matched_ids"] == []
     assert result["matched_terms"] == []
 
-
-def test_lexical_default_matches_against_a_dial_name():
-    explanation = {"influences_active": {"cards": [],
-                                         "dials": [{"name": "warm", "value": 0.5, "causal_verified": None}]}}
-    result = narrate.lexical_default("The warm tone shaped this reply.", explanation)
-    assert result["supported"] is True
-    assert result["matched_ids"] == ["dial:warm"]
 
 
 def test_lexical_default_never_raises_on_empty_or_garbage_input():
@@ -239,26 +224,6 @@ def test_confabulation_diff_claim_splitter_is_pluggable():
 
 # ==================================================================================== constrained_narration
 
-def test_constrained_narration_only_returns_receipt_ids_that_actually_exist_in_the_manifest():
-    explanation = {
-        "influences_active": {
-            "cards": [{"id": "mem_real1", "text": "Be nice.", "quoted_span": "", "causal_verified": None}],
-            "dials": [{"name": "concise", "value": 0.4, "causal_verified": None}]},
-    }
-    reply = "I was nice [mem_real1] and concise [dial:concise], and also used [totally_made_up_id]."
-    sub = FakeSub([reply])
-
-    out = narrate.constrained_narration(explanation, sub)
-    assert out["narration"] == reply
-    assert set(out["receipt_ids"]) == {"mem_real1", "dial:concise"}
-    assert "totally_made_up_id" not in out["receipt_ids"]
-
-
-def test_constrained_narration_dedupes_a_citation_used_more_than_once():
-    explanation = {"influences_active": {"cards": [{"id": "mem_1", "text": "x"}], "dials": []}}
-    sub = FakeSub(["Used it here [mem_1] and again here [mem_1]."])
-    out = narrate.constrained_narration(explanation, sub)
-    assert out["receipt_ids"] == ["mem_1"]
 
 
 def test_constrained_narration_with_no_citations_returns_an_empty_receipt_id_list():

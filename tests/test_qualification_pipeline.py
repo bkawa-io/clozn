@@ -33,7 +33,6 @@ def test_build_run_is_honest_without_live_or_lab_evidence():
     by_id = {step["id"]: step for step in report["steps"]}
     assert by_id["core.identity"]["status"] == "passed"
     assert by_id["core.smoke"]["status"] == "not_run"
-    assert by_id["dials"]["status"] == "not_run"
     assert report["receipt_sha256"] == pipeline._sha256_json({**report, "receipt_sha256": None})
 
 
@@ -42,14 +41,12 @@ def test_build_run_can_accept_an_injected_live_probe_and_lab_steps():
         "fixture.gguf", identity=_identity(), live=True,
         live_smoke=lambda _model: {"status": "passed", "run_id": "run_fixture",
                                    "receipt_shape": "new", "elapsed_ms": 4.0},
-        calibration={"status": "passed", "evidence": {"artifact": "dial.json"}},
         jlens={"status": "passed", "evidence": {"artifact": "jlens"}},
         batteries=[{"id": "basic", "status": "passed"}],
     )
     by_id = {step["id"]: step for step in report["steps"]}
     assert report["claims"]["qualification_status"] == "core_passed"
     assert by_id["core.context_receipt"]["status"] == "passed"
-    assert by_id["dials"]["status"] == "passed"
     assert by_id["batteries"]["status"] == "passed"
 
 
@@ -147,16 +144,6 @@ def test_acceptance_fixture_requires_all_supplied_stages_to_pass():
     assert rejected["claims"]["qualification_status"] == "failed"
 
 
-def test_record_dial_calibration_preserves_negative_evidence():
-    receipt = lab.record_dial_calibration(
-        _identity(),
-        {"warm": {"works": False, "usable_range": None, "note": "no clearing band"},
-         "tender": {"works": False, "usable_range": None, "note": "no clearing band"}},
-    )
-    assert receipt["status"] == "failed"
-    assert receipt["evidence"]["usable_dials"] == []
-    assert receipt["evidence"]["unusable_dials"] == ["warm", "tender"]
-
 
 def test_acceptance_fixture_rejects_cross_model_stage_receipts():
     identity = _identity()
@@ -174,48 +161,5 @@ def test_acceptance_fixture_rejects_cross_model_stage_receipts():
     assert result["steps"][1]["evidence"]["identity_mismatch"] == ["d" * 64]
 
 
-def test_install_dial_calibration_requires_usable_model_bound_report(tmp_path):
-    identity = _identity()
-    report = {"warm": {"usable_max": 0.5, "usable_range": [0.25, 0.5],
-                        "derail_point": None, "works": True}}
-    transaction = lab.install_dial_calibration(identity, report, root=str(tmp_path))
-    assert transaction["status"] == "installed"
-    target = tmp_path / "models" / identity["sha256"] / "dial_calibration.json"
-    saved = json.loads(target.read_text(encoding="utf-8"))
-    schemas.validate(saved, lab.DIAL_SCHEMA)
-    assert saved["model_sha256"] == identity["sha256"]
-
-    with pytest.raises(ValueError, match="no dial cleared"):
-        lab.install_dial_calibration(
-            {**identity, "sha256": "d" * 64},
-            {"warm": {"usable_max": None, "usable_range": None,
-                      "derail_point": None, "works": False}},
-            root=str(tmp_path / "negative"),
-        )
 
 
-def test_install_dial_calibration_normalizes_legacy_range_valid_reports(tmp_path):
-    identity = _identity()
-    report = {"warm": {"usable_max": 0.5, "usable_range": [0.25, 0.5],
-                        "derail_point": None, "range_valid": True}}
-    receipt = lab.install_dial_calibration(identity, report, root=str(tmp_path))
-    assert receipt["status"] == "installed"
-    saved = json.loads((tmp_path / "models" / identity["sha256"] / "dial_calibration.json").read_text())
-    assert saved["dials"]["warm"]["works"] is True
-    schemas.validate(saved, lab.DIAL_SCHEMA)
-
-
-def test_rollback_dial_calibration_is_model_scoped_and_reversible(tmp_path):
-    identity = _identity()
-    report = {"warm": {"usable_max": 0.5, "usable_range": [0.25, 0.5],
-                        "derail_point": None, "works": True}}
-    transaction = lab.install_dial_calibration(identity, report, root=str(tmp_path))
-    target = tmp_path / "models" / identity["sha256"] / "dial_calibration.json"
-    assert target.exists()
-    rolled_back = lab.rollback_dial_calibration(transaction)
-    assert rolled_back["status"] == "rolled_back"
-    assert rolled_back["artifact_type"] == "dials"
-    assert not target.exists()
-
-    with pytest.raises(ValueError, match="recognized model-scoped"):
-        lab.rollback_dial_calibration({**transaction, "path": str(tmp_path / "dial_calibration.json")})

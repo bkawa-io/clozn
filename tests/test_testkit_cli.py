@@ -111,14 +111,6 @@ def test_any_fail_is_exit_1(iso, capsys):
     assert "1 fail" in out
 
 
-def test_skip_alone_is_still_exit_0(iso):
-    """A causal assertion with no --live is an honest skip -- skips alone must not fail the run."""
-    _make_run()
-    spec = {"tests": [{"name": "leans on memory", "run": "latest",
-                      "assert": [{"check": "leans_on", "dial": "warm"}]}]}
-    p = _write_spec(iso, spec)
-    assert cli.cmd_test(_args(p)) == 0
-
 
 def test_run_not_found_is_exit_1_not_2():
     """A spec-shape problem is exit 2; a run that fails to RESOLVE is a per-test 'error', which is exit 1
@@ -134,23 +126,6 @@ def test_run_not_found_is_exit_1_not_2():
 
 
 # ============================================================================================== causal honesty
-def test_causal_assertion_without_live_is_skipped_never_a_silent_pass(iso, capsys):
-    _make_run()
-    spec = {"tests": [{"name": "leans on warm dial", "run": "latest",
-                      "assert": [{"check": "leans_on", "dial": "warm", "min_effect": 0.0}]}]}
-    p = _write_spec(iso, spec)
-    rc = cli.cmd_test(_args(p))
-    out = capsys.readouterr().out
-    assert rc == 0
-    assert "--live" in out
-    assert "causal" in out and "leans_on" in out
-
-
-# ================================================== --live's _fetch_live_receipt (engine-down pressure test #3)
-# _fetch_live_receipt talks HTTP to a running product gateway's POST /runs/<id>/receipt; these tests fake
-# urllib.request.urlopen directly (no real socket) so the gateway's THREE distinct outcomes -- connection
-# refused, a 502/503 "engine not reachable", and an ordinary 4xx bad request -- are each driven exactly,
-# fast and deterministically (no dependence on this host's real connect-refused timing).
 
 def test_fetch_live_receipt_returns_a_sentinel_on_502_engine_not_reachable(monkeypatch):
     """The gateway's own /runs/<id>/receipt now answers 502 "engine not reachable ..." when ITS engine is

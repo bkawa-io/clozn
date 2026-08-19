@@ -140,27 +140,6 @@ def _detect_retokenization(sub, run: dict, expected_pieces: list) -> bool | None
 
 
 # ------------------------------------------------------------------------------- generation (greedy)
-def _steer_kwargs(sub, run: dict) -> dict:
-    """The engine steer kwargs reconstructing the run's RECORDED dials (behavior.active_dials) --
-    the same explicit-conditions construction EngineSubstrate.score_tokens uses, never the live dial
-    state. {} when there are no dials, no steer, or the vector can't be built (best-effort: a fork
-    without dials is still an honest greedy continuation; the dials recorded on the child are the
-    ones actually applied)."""
-    try:
-        strengths = dict(((run.get("behavior") or {}).get("active_dials")) or {})
-    except Exception:
-        strengths = {}
-    steer = getattr(sub, "steer", None)
-    if steer is None or not strengths or not any(strengths.values()):
-        return {}
-    try:
-        sv = steer.steer_vector(strengths)
-    except Exception:
-        return {}
-    if not sv:
-        return {}
-    return {"steer_vec": sv, "steer": {"coef": 1.0, "layer": getattr(steer, "layer", 0)},
-            "_dials": strengths}
 
 
 def _complete_greedy(engine, prompt: str, max_new: int, extra_kw: dict):
@@ -290,8 +269,7 @@ def reconstruct_branch_child(run: dict, sub, position, token=None, token_id=None
         retok = _detect_retokenization(
             sub, run, [str(p) for p in pieces[:position]] + [forced_piece])
 
-        steer_kw = _steer_kwargs(sub, run)
-        applied_dials = steer_kw.pop("_dials", {})
+        steer_kw = {}
         t0 = time.time()
         cont_steps = None
         # Branch Fan's reconstructed horizon is the parent's remaining recorded horizon.  A final
@@ -331,19 +309,10 @@ def reconstruct_branch_child(run: dict, sub, position, token=None, token_id=None
                             "was_recorded_alternative": bool(was_recorded),
                             "trace_provenance": trace_provenance}}
         mem = getattr(sub, "memory", None) or getattr(sub, "_mem", None)
-        try:
-            strength = float(getattr(mem, "memory_strength", 1.0)) if mem is not None else 1.0
-        except (TypeError, ValueError):
-            strength = 1.0
-        memd = {"strength": strength,                        # a fork never touches the live knobs --
-                "has_prefix": (getattr(mem, "prefix", None) is not None) if mem is not None else False,
-                "cards_applied": [], "proposed_cards": []}   # whatever memory rode the parent is baked
-        #                                                      into its final_prompt already
         rid = runlog.record(
             source="fork", client="studio",
             model=run.get("model"), substrate=run.get("substrate"),
             messages=sanitize_messages(run.get("messages") or []), response=reply,
-            memory=memd, behavior={"active_dials": applied_dials},
             trace=child_trace,                              # None when it couldn't be built honestly
             final_prompt=forked_prompt,                     # the exact spliced string this child saw
             finish_reason=finish,

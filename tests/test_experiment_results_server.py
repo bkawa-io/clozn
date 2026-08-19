@@ -216,12 +216,3 @@ def test_artifact_like_path_is_an_ordinary_route_miss(iso):
 
 # --------------------------------------------------------------------------- the existing drawer catalog is untouched
 
-def test_experiments_types_drawer_catalog_is_unaffected_by_the_new_namespace(iso):
-    """Regression guard for the one explicit constraint on this route family: do not repurpose
-    GET /experiments/types (the single-run 'change one thing' drawer catalog, clozn/experiments/
-    experiment.py + clozn/server/routes/receipts.py). /experiment-results is a fully distinct top-level
-    segment, so this must still answer exactly as it did before this module existed."""
-    head, body = _get("/experiments/types")
-    assert "200" in head
-    assert "types" in body
-    assert "ablate_dial" in body["types"]

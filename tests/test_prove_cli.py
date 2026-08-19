@@ -165,25 +165,9 @@ def iso(tmp_path, monkeypatch):
 def _seed_run():
     return runlog.record(source="studio_chat", client="studio", model="clozn-qwen", substrate="QwenSubstrate",
                          messages=[{"role": "user", "content": "hi"}],
-                         response="SAMPLED, never a baseline", behavior={"active_dials": {"warm": 0.4}})
+                         response="SAMPLED, never a baseline", )
 
 
-def test_format_prove_renders_a_genuine_server_response(iso):
-    rid = _seed_run()
-    out_json = _post(f"/runs/{rid}/receipts", {})
-    assert "error" not in out_json
-    out = explain_cmd.format_prove(out_json)
-    assert isinstance(out, str) and out
-    assert rid in out
-    assert "dial warm" in out
-
-
-def test_format_prove_renders_the_coalitions_report_over_a_genuine_response(iso):
-    rid = _seed_run()
-    out_json = _post(f"/runs/{rid}/receipts", {"coalitions": True})
-    assert "error" not in out_json and out_json["coalitions"]["available"] is True
-    out = explain_cmd.format_prove(out_json)
-    assert "coalition/Shapley credit" in out
 
 
 def test_format_prove_renders_a_genuine_404_shape(iso):

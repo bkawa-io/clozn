@@ -58,9 +58,6 @@ def _a_run():
                    "top_readouts": [{"label": "force_relation", "score": 0.74}],
                    "entropy": 0.31,
                }]},
-        memory={"cards_applied": ["Keep it brief."], "applied_ids": ["c1"], "relevance": [0.81],
-                "gate": 0.77, "strength": 1.0, "mode": "prompt"},
-        behavior={"active_dials": {"concise": 0.5}},
         finish_reason="length",
         meta={"model_file": "qwen2.5-0.5b-instruct-q4_k_m.gguf", "quant": "Q4_K_M",
               "mode": "autoregressive", "sampler_mode": "greedy", "sampling": "greedy",
@@ -78,42 +75,6 @@ def test_export_missing_run_is_a_clean_404(iso):
     assert json.loads(body) == {"error": "run not found"}
 
 
-def test_export_json_bundles_run_and_explain(iso):
-    rid = _a_run()
-    head, body = _get(f"/runs/{rid}/export")
-    data = json.loads(body)
-    assert data["schema_version"] == "receipt_bundle.v1"
-    assert data["run"]["id"] == rid
-    assert data["run"]["finish_reason"] == "length"
-    assert data["run"]["meta"]["quant"] == "Q4_K_M"
-    assert data["repro"]["run_id"] == rid
-    assert data["repro"]["temperature"] == 0.0
-    assert data["repro"]["max_tokens"] == 64
-    assert data["repro"]["meta"]["quant"] == "Q4_K_M"
-    assert data["trace"]["tokens"][1] == " attracts"
-    assert data["memory"]["cards_applied"] == ["Keep it brief."]
-    assert data["explain"]["run_id"] == rid               # M1 explain rides along (the receipts summary)
-    assert data["receipts"] is None
-    assert data["workspace_readouts"][0]["provider"] == "engine_concepts"
-    assert data["workspace_readouts"][0]["provider_type"] == "engine_concepts"
-    assert data["workspace_readouts"][0]["readout_kind"] == "concept"
-    assert data["workspace_readouts"][0]["run_id"] == rid
-    assert data["tiny_tests"] is None
-    assert 'filename="' + rid + '.json"' in head          # download disposition
-
-
-def test_export_markdown_variant_renders_the_receipt(iso):
-    rid = _a_run()
-    head, body = _get(f"/runs/{rid}/export?format=md")
-    assert "text/markdown" in head
-    md = body.decode("utf-8")
-    assert md.startswith("# Run ")
-    assert "explain gravity" in md and "Mass attracts mass." in md
-    assert "Keep it brief." in md and "relevance 0.81" in md
-    assert "truncated" in md                               # finish_reason == length
-    assert "Q4_K_M" in md and "temperature=0.0" in md and "max_tokens=64" in md
-    assert "concise: 0.5" in md
-    assert "Workspace readouts" in md and "engine_concepts" in md
 
 
 # --- _export_markdown (pure) -------------------------------------------------------------------------------

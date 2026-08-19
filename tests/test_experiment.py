@@ -105,7 +105,6 @@ def _seed_run(**kw):
     defaults = dict(source="studio_chat", client="studio", model="clozn-qwen", substrate="QwenSubstrate",
                     messages=[{"role": "user", "content": "tell me about your day"}],
                     response="THE STORED SAMPLED REPLY -- never a baseline",
-                    behavior={"active_dials": {"warm": 0.5}},
                     started=1000.0, ended=1000.0)   # duration_ms == 0 by default -- no est_seconds grounding
     defaults.update(kw)
     rid = runlog.record(**defaults)
@@ -156,84 +155,7 @@ def swap_stub(monkeypatch):
 
 
 
-def test_ablate_receipt_modes_all_share_the_same_envelope_shape(iso):
-    run = _seed_run()
-    sub = FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.5}))
-    for mode in ("regen", "forced", "both"):
-        out = experiment.run_experiment(run, {"type": "ablate_dial", "dial": "warm"}, mode, sub)
-        assert out is not None, mode
-        _assert_envelope_shape(out)
-        assert out["method"] == f"receipt:{mode}"
 
-
-# =========================================================================================== registry dispatch
-
-
-
-
-
-def test_set_dial_passes_the_dial_value_override_through(iso, monkeypatch):
-    seen = {}
-
-    def fake_cf(run, overrides, sub):
-        seen["overrides"] = overrides
-        return {"overrides_applied": overrides, "baseline_reply": "b", "counterfactual_reply": "c",
-               "delta": {}, "has_effect": False, "causal_verified": True,
-               "coherence": {"degenerate": False, "reason": ""}, "note": "n", "cost_note": "c"}
-
-    monkeypatch.setattr(experiment, "_counterfactual", fake_cf)
-    run = _seed_run()
-    experiment.run_experiment(run, {"type": "set_dial", "dial": "warm", "value": 1.7}, None, object())
-    assert seen["overrides"] == {"warm": 1.7}
-
-
-# =========================================================================================== honesty invariants
-
-def test_ablate_regen_has_effect_and_causal_verified_carry_through_exactly_and_null_is_honestly_absent(iso):
-    run = _seed_run()
-    sub = FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.5}))
-    out = experiment.run_experiment(run, {"type": "ablate_dial", "dial": "warm"}, "regen", sub)
-    raw = out["result"]["receipt"]
-    assert out["result"]["has_effect"] == raw["has_effect"] is True
-    assert out["result"]["causal_verified"] == raw["causal_verified"] is True
-    # regen mode has no null control AT ALL -- must read as missing, never as "no effect"
-    assert out["result"]["null"] is None
-
-
-def test_ablate_forced_null_floor_carries_through_untouched_when_present(iso, monkeypatch):
-    def fake_receipt(run, influence, sub, *, mode="regen"):
-        assert mode == "forced"
-        return {"influence": influence, "mode": "forced", "retokenized": False, "causal_verified": True,
-               "answer_tokens": ["hi"], "deltas": [0.4], "sum_nats": 0.4, "mean_nats_per_token": 0.4,
-               "top_dependent": [], "has_effect": True,
-               "threshold": {"mean_abs_nats_per_token": 0.05, "abs_sum_nats": 2.0}, "note": "n",
-               "caveat": "cv",
-               "null_floor": {"kind": "dial_random_vector", "deltas": [0.01], "sum_nats": 0.01,
-                              "mean_nats_per_token": 0.01, "ratio_real_over_floor": 40.0,
-                              "exceeds_floor_by_order_of_magnitude": True}}
-
-    monkeypatch.setattr(experiment, "_receipt", fake_receipt)
-    run = _seed_run()
-    out = experiment.run_experiment(run, {"type": "ablate_dial", "dial": "warm"}, "forced", object())
-    raw = out["result"]["receipt"]
-    assert out["result"]["null"] == raw["null_floor"]                 # preserved VERBATIM, not dropped
-    assert out["result"]["has_effect"] is True and out["result"]["causal_verified"] is True
-    assert out["result"]["changed_reply"] is None                     # forced mode never generates new text
-
-
-def test_ablate_forced_missing_null_floor_reads_as_none_not_as_no_effect(iso, monkeypatch):
-    def fake_receipt(run, influence, sub, *, mode="regen"):
-        return {"influence": influence, "mode": "forced", "retokenized": False, "causal_verified": True,
-               "answer_tokens": ["hi"], "deltas": [0.4], "sum_nats": 0.4, "mean_nats_per_token": 0.4,
-               "top_dependent": [], "has_effect": True,
-               "threshold": {"mean_abs_nats_per_token": 0.05, "abs_sum_nats": 2.0}, "note": "n",
-               "caveat": "cv"}   # no null_floor key at all -- e.g. steer had no .steer_vector
-
-    monkeypatch.setattr(experiment, "_receipt", fake_receipt)
-    run = _seed_run()
-    out = experiment.run_experiment(run, {"type": "ablate_dial", "dial": "warm"}, "forced", object())
-    assert out["result"]["null"] is None
-    assert out["result"]["has_effect"] is True   # a real effect DID fire -- null being absent must not hide it
 
 
 
@@ -276,27 +198,6 @@ def test_swap_concept_blocked_response_still_shapes_cleanly(iso, monkeypatch):
     assert "not verified as applied" in out["result"]["plain"]
 
 
-def test_set_dial_has_no_null_control(iso):
-    run = _seed_run()
-    sub = FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.5}))
-    out = experiment.run_experiment(run, {"type": "set_dial", "dial": "warm", "value": 0.0}, None, sub)
-    assert out["result"]["null"] is None
-    assert out["result"]["has_effect"] == out["result"]["receipt"]["has_effect"]
-    assert out["result"]["causal_verified"] == out["result"]["receipt"]["causal_verified"]
-
-
-@pytest.mark.parametrize("change", [{"type": "edit_turn", "turn": 0}, {"type": "reroll"},
-                                    {"type": "toggle_greedy"}])
-def test_branch_and_replay_ops_never_invent_a_verdict(iso, change):
-    run = _seed_run()
-    sub = FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.5}))
-    out = experiment.run_experiment(run, change, None, sub)
-    assert out["result"]["has_effect"] is None
-    assert out["result"]["causal_verified"] is None
-    assert out["result"]["null"] is None
-    assert out["result"]["changed_reply"] is not None
-    assert out["result"]["receipt"] is not None       # full raw child run record preserved
-
 
 def test_cost_est_seconds_omitted_when_run_has_no_timing(iso):
     run = _seed_run()   # default started == ended -> duration_ms == 0 -> nothing to ground an estimate in
@@ -313,19 +214,6 @@ def test_cost_est_seconds_grounded_in_the_runs_own_recorded_duration(iso):
     assert out["cost"]["est_seconds"] == pytest.approx(2.0)   # 1 pass * 2000ms
 
 
-def test_forced_mode_never_fabricates_est_seconds(iso, monkeypatch):
-    def fake_receipt(run, influence, sub, *, mode="regen"):
-        return {"influence": influence, "mode": "forced", "causal_verified": True, "has_effect": False,
-               "deltas": [0.0], "sum_nats": 0.0, "mean_nats_per_token": 0.0, "answer_tokens": [],
-               "top_dependent": [], "threshold": {}, "note": "n", "caveat": "cv"}
-
-    monkeypatch.setattr(experiment, "_receipt", fake_receipt)
-    run = _seed_run(started=1.0, ended=3.0)   # -> timing.duration_ms == 2000, but forced mode must ignore it
-    out = experiment.run_experiment(run, {"type": "ablate_dial", "dial": "warm"}, "forced", object())
-    assert "est_seconds" not in out["cost"]   # scoring cost != generation cost -- never grounded that way
-
-
-# ============================================================================================ clean degrades
 
 def test_unknown_change_type_raises_value_error(iso):
     run = _seed_run()
@@ -376,19 +264,9 @@ def test_bad_method_raises_value_error_for_edit_turn(iso):
         experiment.run_experiment(run, {"type": "edit_turn", "turn": 0}, "bogus", object())
 
 
-def test_underlying_op_returning_none_degrades_to_none_not_an_exception(iso, monkeypatch):
-    monkeypatch.setattr(experiment, "_receipt", lambda *a, **k: None)
-    run = _seed_run()
-    out = experiment.run_experiment(run, {"type": "ablate_dial", "dial": "warm"}, None, object())
-    assert out is None
-
-
-# =========================================================================================== substrate_ok / catalog
 
 def test_substrate_ok_checks_the_registered_requirement(iso):
     run = _seed_run()
-    assert experiment.substrate_ok("ablate_dial", None) is False
-    assert experiment.substrate_ok("ablate_dial", FakeSub()) is True
     assert experiment.substrate_ok("swap_concept", FakeSub()) is False   # no .engine/.jlens
 
     class EngineJlensSub:

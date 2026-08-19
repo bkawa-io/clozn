@@ -171,15 +171,6 @@ def test_score_tokens_forwards_continuation_ids_as_ints_and_topk():
     assert fe.calls[-1]["topk"] == 5
 
 
-def test_score_tokens_forwards_steer_vec_from_explicit_strengths():
-    fe = _FakeScoreEngine()
-    steer = _FakeScoreSteer(vec=[0.1, 0.2], layer=14)
-    sub = _bare_engine_substrate(fe, steer)
-    sub.score_tokens([{"role": "user", "content": "hi"}], [1], block=None, steer_strengths={"warm": 1.0})
-    assert steer.vector_calls == [{"warm": 1.0}]
-    assert fe.calls[-1]["steer_vec"] == [0.1, 0.2]
-    assert fe.calls[-1]["steer"] == {"coef": 1.0, "layer": 14}
-
 
 def test_score_tokens_skips_steer_vec_when_strengths_all_zero():
     fe = _FakeScoreEngine()
@@ -245,11 +236,3 @@ def test_score_tokens_steer_vec_used_alone_without_steer_strengths():
     assert fe.calls[-1]["steer"] == {"coef": 1.0, "layer": 0}
 
 
-def test_score_tokens_steer_vec_added_on_top_of_steer_strengths():
-    fe = _FakeScoreEngine()
-    steer = _FakeScoreSteer(vec=[1.0, 2.0], layer=9)
-    sub = _bare_engine_substrate(fe, steer)
-    sub.score_tokens([{"role": "user", "content": "hi"}], [1], block=None,
-                     steer_strengths={"warm": 1.0}, steer_vec=[0.5, -0.5])
-    assert fe.calls[-1]["steer_vec"] == [1.5, 1.5]                 # elementwise sum, not a replacement
-    assert fe.calls[-1]["steer"] == {"coef": 1.0, "layer": 9}

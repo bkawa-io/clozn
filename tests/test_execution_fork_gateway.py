@@ -323,58 +323,6 @@ def test_child_journal_rebinds_restarted_worker_and_sampling_regime(stores):
     schemas.validate(routing)
 
 
-def test_raw_steer_child_clears_parent_dial_claim_and_records_exact_vector(stores):
-    parent = _parent()
-    parent = deepcopy(parent)
-    parent["behavior"]["active_dials"] = {"warm": 0.7}
-    parent["meta"]["execution_fork_steering"] = {
-        "source": "recorded_raw_vector",
-        "steer_vec": [9.0, 9.0],
-        "steer_layer": 3,
-        "steer_coef": 0.5,
-        "active_dials_sha256": _sha(parent["behavior"]["active_dials"]),
-    }
-    change = {
-        "type": "steer",
-        "steer_vec": [0.25, -0.5],
-        "steer_layer": 4,
-        "steer_coef": 0.75,
-    }
-    plan = _plan(parent, change=change)
-    engine = FakeEngine([
-        _reply(plan, tokens=[22, 33], text=" two three", intervention_type="none"),
-        _reply(
-            plan,
-            tokens=[66, 77],
-            text=" steered",
-            intervention_type="steer",
-            applied={
-                "type": "steer",
-                "steer_layer_lo": 4,
-                "steer_layer_hi": 4,
-                "steer_coef": 0.75,
-            },
-        ),
-    ])
-
-    child = execute_exact_fork(
-        parent,
-        plan,
-        engine,
-        runtime_identity=RUNTIME,
-        worker_identity=WORKER,
-    )["child"]
-
-    assert child["behavior"]["active_dials"] == {}
-    assert child["meta"]["execution_fork_steering"] == {
-        "source": "recorded_raw_vector",
-        "steer_vec": [0.25, -0.5],
-        "steer_layer": 4,
-        "steer_coef": 0.75,
-        "active_dials_sha256": _sha({}),
-        "intervention_sha256": _sha(change),
-    }
-
 
 def test_diverged_control_is_terminal_evidence_and_never_runs_or_stores_intervention(stores):
     parent = _parent()

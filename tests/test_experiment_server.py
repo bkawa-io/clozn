@@ -108,7 +108,7 @@ def _seed_run():
     return runlog.record(source="studio_chat", client="studio", model="clozn-qwen", substrate="QwenSubstrate",
                          messages=[{"role": "user", "content": "hi there"}],
                          response="THE SAMPLED reply -- must never come back as a baseline",
-                         behavior={"active_dials": {"warm": 0.5}})
+)
 
 
 # ==================================================================================================== GET
@@ -168,30 +168,6 @@ def test_experiment_bad_method_is_a_clean_400(iso):
     assert "error" in out
 
 
-def test_experiment_happy_path_ablate_dial_over_http(iso):
-    rid = _seed_run()
-    out = _post(f"/runs/{rid}/experiment", {"change": {"type": "ablate_dial", "dial": "warm"}})
-    assert "error" not in out
-    assert out["run_id"] == rid
-    assert out["change"] == {"type": "ablate_dial", "target": "warm", "label": "zeroing the 'warm' dial"}
-    assert out["method"] == "receipt:regen"
-    assert out["result"]["has_effect"] is True                # JSON true, round-tripped from Python True
-    assert out["result"]["causal_verified"] is True
-    assert out["result"]["null"] is None                      # JSON null -- regen mode has no null control
-    assert out["baseline"]["reply"] == "A much longer rambling reply. Warmly!"
-    assert out["result"]["changed_reply"] == "A much longer rambling reply."
-    assert "cost_note" not in out["cost"]                      # cost shape is {passes, note[, est_seconds]}
-    assert out["cost"]["passes"] == 2
-    assert "note" in out["cost"]
-
-
-def test_experiment_happy_path_set_dial_over_http(iso):
-    rid = _seed_run()
-    out = _post(f"/runs/{rid}/experiment", {"change": {"type": "set_dial", "dial": "warm", "value": 0.0}})
-    assert "error" not in out
-    assert out["method"] == "counterfactual"
-    assert out["result"]["null"] is None
-    assert out["result"]["changed_reply"] == "A much longer rambling reply."
 
 
 def test_experiment_happy_path_reroll_over_http(iso):

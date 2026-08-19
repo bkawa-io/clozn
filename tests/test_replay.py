@@ -108,40 +108,12 @@ def test_memory_off_restores_nonstandard_strength(store):
 
 # --- (b) behavior_off: dials cleared during chat, restored after ------------------------------------------
 
-def test_behavior_off_clears_then_restores(store):
-    sub = FakeSub(steer=FakeSteer({"concise": 0.8, "warm": 0.3}))
-    child = replay.replay(RUN, {"behavior_off": True}, sub)
-    assert child is not None
-    assert sub.seen["dials"] == {}                         # neutral DURING generation
-    assert sub.steer.strength == {"concise": 0.8, "warm": 0.3}   # restored EXACTLY afterward
-    assert child["behavior"]["active_dials"] == {}
-    assert sub.steer.saved is False                        # temp dials were NOT persisted
-
 
 # --- nudge: bump one dial toward + pole, capped, on top of current, then restore --------------------------
 
-def test_nudge_bumps_capped_and_restores(store):
-    sub = FakeSub(steer=FakeSteer({"concise": 0.3}))
-    child = replay.replay(RUN, {"nudge": "concise"}, sub)
-    assert sub.seen["dials"]["concise"] == pytest.approx(0.8)    # 0.3 + 0.5 step
-    assert child["behavior"]["active_dials"]["concise"] == pytest.approx(0.8)
-    assert sub.steer.strength == {"concise": 0.3}          # restored
-
-
-def test_nudge_respects_axis_cap(store):
-    sub = FakeSub(steer=FakeSteer({"candid": 0.4}))        # candid caps at 0.45
-    child = replay.replay(RUN, {"nudge": "candid"}, sub)
-    assert sub.seen["dials"]["candid"] == pytest.approx(0.45)    # 0.4 + 0.5 -> capped to 0.45
 
 
 # --- behavior_overrides: set specific dials for this run, restore after -----------------------------------
-
-def test_behavior_overrides_set_then_restore(store):
-    sub = FakeSub(steer=FakeSteer({"warm": 0.2}))
-    child = replay.replay(RUN, {"behavior_overrides": {"concise": 0.8}}, sub)
-    assert sub.seen["dials"]["concise"] == pytest.approx(0.8)
-    assert child["behavior"]["active_dials"]["concise"] == pytest.approx(0.8)
-    assert sub.steer.strength == {"warm": 0.2}             # restored to the ORIGINAL, override gone
 
 
 # --- plain re-roll: unchanged, still a child run ----------------------------------------------------------
@@ -191,13 +163,6 @@ class _ScopedSub(FakeSub):
 
 
 # --- best-effort card toggles: no-op with a note ----------------------------------------------------------
-
-def test_disabled_memory_ids_is_noted_stub(store):
-    sub = FakeSub(mem=FakeMem(strength=1.0))
-    child = replay.replay(RUN, {"disabled_memory_ids": ["mem_1"]}, sub)
-    assert child is not None
-    assert sub.seen["memory_strength"] == 1.0            # unchanged (string-based cards -> best-effort no-op)
-    assert "disabled_memory_ids" in child["memory"].get("notes", {})
 
 
 # --- linkage + child is a real, fetchable run --------------------------------------------------------------
@@ -332,7 +297,7 @@ def test_exclude_sections_removes_a_whole_tagged_message(store):
                                  {"role": "user", "content": "What is the answer?"}]
     assert child["changes_applied"] == {"exclude_sections": ["rag_context"]}
     assert child["sections_excluded"] == ["rag_context"]
-    assert "notes" not in child["memory"]                  # fully applied -> no honesty note needed
+    assert "section_notes" not in child                  # fully applied -> no honesty note needed
 
 
 def test_exclude_sections_splices_a_mid_message_span(store):
@@ -347,7 +312,7 @@ def test_exclude_sections_splices_a_mid_message_span(store):
     child = replay.replay(run, {"exclude_sections": ["rag_context"]}, FakeSub())
     assert child is not None
     assert child["messages"] == [{"role": "user", "content": prefix + suffix}]
-    assert "notes" not in child["memory"]
+    assert "section_notes" not in child
 
 
 def test_exclude_sections_removes_multiple_parts_right_to_left(store):
@@ -377,7 +342,7 @@ def test_exclude_sections_unknown_name_is_a_graceful_skip(store):
     assert child is not None
     assert child["messages"] == run["messages"]             # unchanged -- nothing matched
     assert "sections_excluded" in child and child["sections_excluded"] == []
-    note = child["memory"]["notes"]["exclude_sections"]["not_a_real_section"]
+    note = child["section_notes"]["not_a_real_section"]
     assert "not_a_real_section" in note and "no section named" in note
 
 
@@ -387,7 +352,7 @@ def test_exclude_sections_on_a_run_with_no_manifest_is_a_graceful_noop(store):
     child = replay.replay(RUN, {"exclude_sections": ["rag_context"]}, FakeSub())
     assert child is not None
     assert child["messages"] == RUN["messages"]
-    note = child["memory"]["notes"]["exclude_sections"]["rag_context"]
+    note = child["section_notes"]["rag_context"]
     assert "no section manifest" in note
 
 

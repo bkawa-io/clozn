@@ -591,10 +591,9 @@ def _child_journal(
     receipt: Mapping,
     *,
     current_worker: Mapping,
-) -> tuple[dict, dict, dict]:
-    """Return truthful child meta, behavior, and reproduction identity."""
+) -> tuple[dict, dict]:
+    """Return truthful child meta and reproduction identity."""
     meta = deepcopy(parent.get("meta") or {})
-    behavior = deepcopy(parent.get("behavior") or {})
     identity = deepcopy(parent.get("identity") or {})
     selected_runtime = plan["identity"]["selected_runtime"]
     selected_worker = plan["identity"]["selected_worker"]
@@ -641,7 +640,7 @@ def _child_journal(
                 "steer_coef": float(change.get("steer_coef", 1.0)),
                 "intervention_sha256": _sha(change),
             }
-    return meta, behavior, identity
+    return meta, identity
 
 
 def _record_child(parent: Mapping, plan: Mapping, reply: Mapping, receipt: dict,
@@ -652,7 +651,7 @@ def _record_child(parent: Mapping, plan: Mapping, reply: Mapping, receipt: dict,
     pieces = parent["trace"]["tokens"]
     prefix = "".join(pieces[:position])
     response = prefix + reply["text"]
-    meta, behavior, identity = _child_journal(
+    meta, identity = _child_journal(
         parent, plan, reply, receipt, current_worker=current_worker)
     changes = {
         "execution_fork": {
@@ -674,8 +673,6 @@ def _record_child(parent: Mapping, plan: Mapping, reply: Mapping, receipt: dict,
         messages=deepcopy(parent.get("messages") or []),
         assembled_messages=deepcopy(parent.get("assembled_messages")),
         response=response,
-        memory=deepcopy(parent.get("memory") or {}),
-        behavior=behavior,
         trace=child_trace,
         started=started,
         parent_run_id=parent["id"],

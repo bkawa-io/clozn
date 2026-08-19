@@ -89,29 +89,6 @@ def test_context_generate_matrix_is_narrow_and_plan_is_model_free():
     assert plan.arm_id == experiment.arms[0].arm_id
 
 
-def test_context_generate_captures_observation_and_restores_live_controls(isolated_runs):
-    run, source_ids = _context_run()
-    substrate = _ChatSubstrate(run["identity"])
-    store = ObservationStore()
-
-    result = generate_without_source(
-        run, source_ids[1], substrate=substrate, observation_store=store,
-    )
-
-    assert result.state == "completed"
-    assert len(substrate.calls) == 1
-    assert substrate.calls[0]["dials"] == {}
-    assert substrate.steer.strength == {"live": 2.0}
-    observation = result.arms[0].observation
-    assert observation.status == "completed"
-    assert observation.state_ref is None
-    assert observation.intervention["target"]["source_ids"] == [source_ids[1]]
-    assert observation.generated_suffix_text == "new answer"
-    assert observation.generated_token_ids == (20, 21)
-    assert observation.input_snapshot["final_prompt"] == "exact counterfactual prompt"
-    assert observation.input_snapshot["source_ids"] == [source_ids[1]]
-    assert run_store.list_runs(20) == []
-
 
 def test_context_generate_failure_restores_live_controls_and_is_not_reusable(isolated_runs):
     run, source_ids = _context_run()

@@ -55,23 +55,6 @@ def detect_retokenization(substrate, run: Mapping, expected_pieces: list[str]) -
     return actual != expected
 
 
-def recorded_steer_kwargs(substrate, run: Mapping) -> dict:
-    """Build raw-engine steering kwargs from the recorded, not live, dial state."""
-    try:
-        strengths = dict(((run.get("behavior") or {}).get("active_dials")) or {})
-    except Exception:
-        strengths = {}
-    steer = getattr(substrate, "steer", None)
-    if steer is None or not strengths or not any(strengths.values()):
-        return {}
-    try:
-        vector = steer.steer_vector(strengths)
-    except Exception:
-        return {}
-    if not vector:
-        return {}
-    return {"steer_vec": vector, "steer": {"coef": 1.0, "layer": getattr(steer, "layer", 0)}}
-
 
 def complete_greedy(engine, prompt: str, max_new: int, extra_kwargs: Mapping):
     reply = engine.complete(prompt, max_tokens=int(max_new), temperature=0.0,
@@ -96,5 +79,5 @@ def complete_traced(engine, prompt: str, max_new: int, extra_kwargs: Mapping):
 
 __all__ = [
     "complete_greedy", "complete_traced", "detect_retokenization",
-    "prompt_base", "recorded_steer_kwargs",
+    "prompt_base",
 ]

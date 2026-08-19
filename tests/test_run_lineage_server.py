@@ -48,7 +48,7 @@ def test_lineage_endpoint_needs_no_substrate(iso):
                          started=1000.0, ended=1000.1)
     child = runlog.record(source="replay", client="studio",
                           messages=[{"role": "user", "content": "child"}], response="child",
-                          parent_run_id=root, changes_applied={"memory_off": True},
+                          parent_run_id=root, changes_applied={"plain": True},
                           started=1001.0, ended=1001.2)
 
     assert cs.SUB is None
@@ -61,4 +61,4 @@ def test_lineage_endpoint_needs_no_substrate(iso):
     assert data["current"]["id"] == child
     assert data["ancestors"][0]["id"] == root
     assert data["tree"]["children"][0]["id"] == child
-    assert data["tree"]["children"][0]["change_label"] == "memory off"
+    assert data["tree"]["children"][0]["change_label"] == "re-roll"

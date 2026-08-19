@@ -343,17 +343,6 @@ class FakeSteer:
         return self._vec
 
 
-def test_chat_stream_forwards_the_active_dials_steer_vec(iso, monkeypatch, fake_urlopen):
-    steer = FakeSteer(strength={"warm": 1.0}, vec=[0.1, 0.2, 0.3], layer=14)
-    sub = _bare_engine_substrate(FakeEngine(), steer=steer)
-
-    list(sub.chat_stream([{"role": "user", "content": "hi"}]))
-
-    assert steer.vector_calls == [{"warm": 1.0}]
-    body = json.loads(fake_urlopen[-1]["req"].data.decode("utf-8"))
-    assert body["steer_vec"] == [0.1, 0.2, 0.3]
-    assert body["steer"] == {"coef": 1.0, "layer": 14}
-
 
 def test_chat_stream_skips_steer_vec_when_no_dial_is_active(iso, monkeypatch, fake_urlopen):
     steer = FakeSteer(strength={"warm": 0.0}, vec=None)      # present, but every value is falsy

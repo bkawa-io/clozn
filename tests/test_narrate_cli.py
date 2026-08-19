@@ -201,7 +201,7 @@ def _seed_run():
     return runlog.record(source="studio_chat", client="studio", model="clozn-qwen", substrate="QwenSubstrate",
                          messages=[{"role": "user", "content": "Tell me about dragons, briefly."}],
                          response="Dragons are mythical reptilian creatures.",
-                         behavior={"active_dials": {"warm": 0.2}})
+)
 
 
 def test_format_narrate_renders_a_genuine_server_response(iso):

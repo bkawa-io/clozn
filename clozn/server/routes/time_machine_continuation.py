@@ -328,8 +328,6 @@ def _persist_child_callback(
             messages=deepcopy(messages),
             assembled_messages=deepcopy(messages),
             response=worker_result.get("text", ""),
-            memory=deepcopy(source_run.get("memory") or {}),
-            behavior=deepcopy(source_run.get("behavior") or {}),
             trace={"tokens": list(pieces), "token_ids": list(tokens)},
             started=started,
             ended=ended,

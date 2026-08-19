@@ -89,11 +89,6 @@ def test_with_arm_conditions_no_block_at_all():
     assert c["raw_block"] is None
 
 
-def test_with_arm_conditions_reads_dials_from_behavior_active_dials():
-    run = {"messages": [], "behavior": {"active_dials": {"warm": 0.5}}, "response": "x"}
-    assert rederive.with_arm_conditions(run)["steer_strengths"] == {"warm": 0.5}
-    assert rederive.with_arm_conditions({"messages": []})["steer_strengths"] == {}
-
 
 def test_with_arm_conditions_continuation_ids_from_v1_token_ids():
     run = {"messages": [], "response": "x", "trace": {"token_ids": [11, 22]}}
@@ -226,11 +221,9 @@ def test_rederive_happy_path_builds_text_steps_and_meta():
         {"piece": " there", "token_id": 22, "logprob": -0.2, "conf": math.exp(-0.2)},
     ]
     assert out["meta"]["retokenized"] is False
-    assert out["meta"]["dials"] == {"warm": 0.5}
     assert out["meta"]["n_tokens"] == 2
     # the WITH arm scores under the run's own recorded conditions -- same messages/ids/dials
     assert sub.calls[-1]["continuation_ids"] == [11, 22]
-    assert sub.calls[-1]["steer_strengths"] == {"warm": 0.5}
 
 
 def test_rederive_flags_retokenized_when_trace_lacks_ids():

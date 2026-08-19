@@ -21,8 +21,7 @@ def try_get(h, p):
     from clozn.behavior import corrective_flow, registry
 
     if p == "/actions/registry":
-        sub = ctx.active_sub(h)
-        h._json(200, registry.build_registry(steer=getattr(sub, "steer", None)))
+        h._json(200, registry.build_registry())
         return True
 
     if p.startswith("/runs/") and p.endswith("/corrective-actions"):
@@ -36,10 +35,7 @@ def try_get(h, p):
         # same "compose, don't block" contract investigation.py uses for the identical reason.
         from clozn.server.model_routing import peek_control_model_for_run
         sub = peek_control_model_for_run(h, run.get("model"), route="/runs/<id>/corrective-actions")
-        h._json(200, corrective_flow.registry_for_run(
-            run,
-            steer=getattr(sub, "steer", None),
-        ))
+        h._json(200, corrective_flow.registry_for_run(run))
         return True
 
     if p.startswith("/corrective-results/"):
@@ -78,7 +74,6 @@ def try_post(h, p, body):
                 run,
                 str(body.get("action_id") or ""),
                 str(body.get("requested_backend") or "prompt_policy"),
-                steer=getattr(sub, "steer", None),
             )
         except corrective_flow.CorrectiveFlowError as exc:
             return _error(h, exc, status=400)

@@ -52,13 +52,6 @@ def test_build_plan_is_model_free_and_distinguishes_boundaries():
     assert "PyTorch" in report["steps"][5]["reason"]
 
 
-def test_present_lab_dependencies_leave_calibration_planned_not_passed():
-    report = planner.build_plan("demo.gguf", _header(), lab_dependencies=_deps(True))
-    by_id = {step["id"]: step for step in report["steps"]}
-    assert by_id["dials"]["status"] == "planned"
-    assert by_id["jlens"]["status"] == "planned"
-    assert report["claims"]["qualification_status"] == "not_qualified"
-
 
 def test_plan_from_model_reads_header_only(monkeypatch):
     seen = []

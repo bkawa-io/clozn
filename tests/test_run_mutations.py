@@ -28,8 +28,6 @@ def _record(*, prompt="private prompt", response="private response", trace=None,
                             {"role": "user", "content": prompt}],
         final_prompt="rendered private prompt", response=response,
         reasoning={"blocks": [{"text": "private reasoning"}]},
-        memory={"cards_applied": ["private preference"]},
-        behavior={"tool": {"arguments": "private tool argument"}},
         trace=trace or {"tokens": ["private", " token"], "confidence": [0.9, 0.8]},
         meta={"max_tokens": 32, "private_extension": "private meta"},
         identity={"model_path": "C:/Users/private-name/models/model.gguf",
@@ -239,7 +237,6 @@ def test_redact_literal_scrubs_only_matching_text_and_leaves_trace_alone(isolate
     assert redacted["response"] == "ok [REDACTED] noted"
     # Everything else about the run survives -- this is not a tombstone.
     assert redacted["client"] == "private-client-label"
-    assert redacted["memory"] == {"cards_applied": ["private preference"]}
     encoded = json.dumps(redacted)
     assert "sk-super-secret-999" not in encoded
 

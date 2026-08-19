@@ -71,7 +71,6 @@ def test_timeline_happy_path_returns_ordered_events_over_http(iso):
         response="Mass attracts mass.",
         trace={"tokens": ["Mass", " attracts", " mass", "."], "confidence": [0.95, 0.2, 0.9, 0.99],
                "alternatives": [[], [{"piece": " pulls", "prob": 0.4}], [], []]},
-        behavior={"active_dials": {"concise": 0.5}},
         finish_reason="stop",
     )
     head, body = _get(f"/runs/{rid}/timeline")
@@ -79,7 +78,7 @@ def test_timeline_happy_path_returns_ordered_events_over_http(iso):
     data = json.loads(body)
     assert data["run_id"] == rid
     types = [e["type"] for e in data["events"]]
-    assert types == ["run_started", "dials_applied", "generation", "hesitation", "finished"]
+    assert types == ["run_started", "generation", "hesitation", "finished"]
     # spot-check a couple of fields actually round-tripped over the wire (JSON null, floats intact)
     hes = data["events"][types.index("hesitation")]
     assert hes["token"] == " attracts"

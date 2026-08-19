@@ -156,7 +156,7 @@ def store(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _parent(*, sampled=True, active_dials=None, steering=None, **overrides):
+def _parent(*, sampled=True, steering=None, **overrides):
     decode = (
         {
             "mode": "sample",
@@ -188,7 +188,6 @@ def _parent(*, sampled=True, active_dials=None, steering=None, **overrides):
         "response": "one two three",
         "final_prompt": "<prompt>",
         "trace": {"tokens": ["one", " two", " three"], "token_ids": [11, 22, 33]},
-        "behavior": {"active_dials": dict(active_dials or {})},
         "meta": meta,
         "identity": {
             "model_sha256": "a" * 64,
@@ -375,8 +374,6 @@ def test_schema_binds_sampler_steering_and_lifecycle_to_their_modes(store):
         (lambda run: run["meta"].pop("prompt_tokens"), "missing_prompt_boundary"),
         (lambda run: run["meta"]["decode"].pop("seed"), "sampler_provenance_missing"),
         (lambda run: run["meta"].pop("stream"), "unsupported_execution_shape"),
-        (lambda run: run["behavior"].update(active_dials={"warm": 0.5}),
-         "steering_provenance_missing"),
         (lambda run: run.update(reasoning={"private_text": "not retained"}),
          "unsupported_execution_shape"),
         (lambda run: run.update(output_contract={"activated": True}),
@@ -424,28 +421,6 @@ def test_runtime_mismatch_is_planner_unavailable_before_tokenization(store):
     assert artifact["reasons"][0]["code"] == "runtime_identity_mismatch"
     assert engine.calls == []
 
-
-def test_exact_raw_steering_provenance_is_replayed_but_dial_names_are_not_rederived(store):
-    dials = {"warm": 0.5}
-    steering = {
-        "source": "recorded_raw_vector",
-        "steer_vec": [0.25, -0.5],
-        "steer_layer": 4,
-        "steer_coef": 1.25,
-        "active_dials_sha256": _sha(dials),
-    }
-    parent = _parent(active_dials=dials, steering=steering)
-    engine = CaptureEngine()
-
-    artifact = capture_parent_checkpoint(
-        parent, engine, runtime_identity=RUNTIME, worker_identity=WORKER)
-
-    assert artifact["status"] == "available"
-    assert artifact["steering"]["mode"] == "raw_vector"
-    checkpoint = next(call for name, call in engine.calls if name == "checkpoint")
-    assert checkpoint["steer_vec"] == [0.25, -0.5]
-    assert checkpoint["steer_layer"] == 4
-    assert checkpoint["steer_coef"] == 1.25
 
 
 def test_diverged_control_leaves_real_checkpoint_visible_but_unusable(store):

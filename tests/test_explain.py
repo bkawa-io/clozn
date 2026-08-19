@@ -127,18 +127,6 @@ def test_confidence_tolerates_a_token_with_no_alternatives_recorded(store):
 
 # ---------------------------------------------------------------------------------------- fixture: with-dials
 
-def test_influences_active_lists_active_dials_with_values_and_unverified_causality(store):
-    rid = store.record(source="studio_chat", messages=[{"role": "user", "content": "q"}], response="a",
-                       behavior={"active_dials": {"concise": 0.4, "warm": -0.2}})
-    dials = explain.explain(store.get_run(rid))["influences_active"]["dials"]
-    by_name = {d["name"]: d for d in dials}
-    assert by_name["concise"] == {"name": "concise", "value": 0.4, "causal_verified": None}
-    assert by_name["warm"] == {"name": "warm", "value": -0.2, "causal_verified": None}
-
-
-def test_influences_active_no_dials_active(store):
-    rid = store.record(source="cli", messages=[{"role": "user", "content": "q"}], response="a")
-    assert explain.explain(store.get_run(rid))["influences_active"]["dials"] == []
 
 
 # --------------------------------------------------------------------------------------- fixture: sections
@@ -261,8 +249,7 @@ def test_concepts_available_when_the_run_carries_sae_readouts(store):
     dict(source="cli", messages=[{"role": "user", "content": "q"}], response="a",
          trace={"tokens": ["a", "b"], "confidence": [0.1, 0.9]}),
     dict(source="studio_chat", messages=[{"role": "user", "content": "q"}], response="a",
-         memory={"cards_applied": ["x"], "gate": 0.5, "mode": "prompt"},
-         behavior={"active_dials": {"warm": 0.3}}),
+),
     dict(source="cli", messages=[{"role": "user", "content": "q"}], response="a"),
 ])
 def test_no_aggregate_confidence_field_ever_appears(store, run_kwargs):
