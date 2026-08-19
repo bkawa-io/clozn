@@ -106,3 +106,25 @@ def test_list_for_parent_rejects_non_string_and_empty_parent_id(tmp_path, monkey
     monkeypatch.setattr(efr, "RESULTS_DIR", str(tmp_path / "execution-forks"))
     assert efr.list_for_parent("") == []
     assert efr.list_for_parent(None) == []
+
+
+def test_same_execution_id_never_overwrites_a_different_immutable_receipt(tmp_path, monkeypatch):
+    """The store's write path stays immutable even though nothing writes to it any more.
+
+    Production has no writers left: every counterfactual surface now stops at a GeneratedObservation.
+    This store survives only so Rewind Fidelity and Run Diagnostics can read historical proof, so the
+    guard is asserted directly against the store rather than through a retired executor.
+    """
+    from copy import deepcopy
+
+    import pytest
+
+    monkeypatch.setattr(efr, "RESULTS_DIR", str(tmp_path / "execution-forks"))
+    receipt = _receipt("fork_exec_" + ("0" * 20), "run_parent")
+    assert efr.save(receipt) == receipt
+    assert efr.save(deepcopy(receipt)) == receipt          # identical bytes are idempotent
+
+    changed = deepcopy(receipt)
+    changed["execution"]["ended_ts"] = 99.0
+    with pytest.raises(efr.ExecutionForkResultError, match="different immutable receipt"):
+        efr.save(changed)

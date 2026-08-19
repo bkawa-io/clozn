@@ -7,9 +7,9 @@ Two separate claims are asserted here:
     Exact execution is allowed to reach the worker's low-level ``engine.execution_fork`` RPC, but
     only underneath the neutral GenerateExecutionAdapter.
 
-2.  The remaining legacy callers are an explicit, exact inventory.  ``clozn.replay.execution_fork_execute``
-    cannot be deleted while these exist, so the inventory names them.  It is shrink-only: removing a
-    caller must update this list, and adding one fails the test.
+2.  Nothing imports ``clozn.replay.execution_fork_execute`` at all, because the module is gone.  The
+    inventory that tracked its remaining callers is now empty and stays that way: reintroducing the
+    old "execute a preflighted fork and persist terminal evidence" owner fails these tests.
 """
 from __future__ import annotations
 
@@ -37,6 +37,7 @@ CANONICAL_MODULES = (
     "clozn/experiments",
     "clozn/recipes",
     "clozn/replay/branch_fan.py",
+    "clozn/replay/checkpoint_capture.py",
     "clozn/replay/sampler_sensitivity.py",
     "clozn/replay/test_this.py",
     "clozn/replay/execution_fork.py",
@@ -46,15 +47,11 @@ CANONICAL_MODULES = (
     "clozn/server/routes/timetravel.py",
 )
 
-# Every production module that still imports the legacy executor, and why it is still here.
-# Retiring clozn/replay/execution_fork_execute.py requires this to become empty.
-LEGACY_EXECUTOR_CALLERS = {
-    # The canonical checkpoint capture seam still proves its unchanged control with the executor's
-    # helper, and still builds legacy placeholder plans around that call.  Moving it onto
-    # execution_facts.resolve_exact_resume_facts plus experiments.exact_execution is the last step
-    # before clozn/replay/execution_fork_execute.py can be deleted outright.
-    "clozn/replay/checkpoint_capture.py",
-}
+# The deprecated executor has no callers left anywhere in the package, and the module itself is
+# deleted.  Exact resume now runs through execution_facts.resolve_exact_resume_facts and
+# experiments.exact_execution.prove_unchanged_control, straight onto the worker's own
+# execution_fork RPC, with no product executor in between.
+LEGACY_EXECUTOR_CALLERS: set[str] = set()
 
 
 def _python_files(relative: str) -> list[str]:
@@ -134,8 +131,8 @@ def test_remaining_legacy_executor_callers_are_an_exact_inventory():
         if LEGACY_EXECUTOR_MODULE in _imports(path):
             found.add(os.path.relpath(path, REPO_ROOT))
     assert found == LEGACY_EXECUTOR_CALLERS, (
-        "the legacy executor caller inventory is stale -- update LEGACY_EXECUTOR_CALLERS when a "
-        f"caller is migrated or added (found {sorted(found)})")
+        "nothing may import the deprecated execution-fork executor again "
+        f"(found {sorted(found)})")
 
 
 # Modules that evaluate counterfactuals must not write legacy terminal receipts.  Reading historical
@@ -157,3 +154,67 @@ def test_evaluation_paths_never_write_legacy_execution_fork_receipts():
                 offenders.append(os.path.relpath(path, REPO_ROOT))
     assert offenders == [], (
         f"evaluation paths must not reach the legacy receipt store at all: {offenders}")
+
+
+def test_the_legacy_executor_module_is_gone():
+    """The old "execute a preflighted fork and persist terminal evidence" owner no longer exists."""
+    assert not os.path.exists(os.path.join(PACKAGE_ROOT, "replay", "execution_fork_execute.py"))
+
+
+def test_public_execution_fork_routes_are_not_registered():
+    from clozn.server import app as server
+
+    route_modules = [
+        getattr(item, "__name__", "")
+        for item in (*server._POST_ROUTES, *server._GET_ROUTES)
+    ]
+    assert "execution_fork" not in route_modules
+
+
+def test_no_production_code_writes_the_legacy_receipt_store():
+    """Every active write to ExecutionForkResult is gone; only historical reads remain.
+
+    Rewind Fidelity, Run Diagnostics, and the turn receipt still READ this store for historical
+    proof, which is deliberate and is the subject of a separate cleanup.  What must never come back
+    is a new write: nothing in the product produces terminal fork receipts any more.
+    """
+    writers = []
+    for path in _all_package_files():
+        relative = os.path.relpath(path, REPO_ROOT)
+        if relative == "clozn/replay/execution_fork_results.py":
+            continue                              # the store's own implementation
+        with open(path, encoding="utf-8-sig") as handle:
+            tree = ast.parse(handle.read(), filename=path)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr not in {"save", "write_on_terminal"}:
+                continue
+            target = node.func.value
+            if isinstance(target, ast.Name) and "execution_fork_results" in target.id:
+                writers.append((relative, node.func.attr))
+            elif isinstance(target, ast.Attribute) and target.attr == "execution_fork_results":
+                writers.append((relative, node.func.attr))
+    assert writers == [], f"production code must not write ExecutionForkResult receipts: {writers}"
+
+
+def test_legacy_planner_module_is_not_dead_yet_and_is_not_silently_deleted():
+    """A truthful record of what still imports the legacy planner, and for what.
+
+    clozn/replay/execution_fork.py is NOT dead: four modules still import small helpers from it.
+    Deleting it needs its own audit and its own change, so this test states the remaining surface
+    rather than letting it rot unnoticed.
+    """
+    importers = set()
+    for path in _all_package_files():
+        relative = os.path.relpath(path, REPO_ROOT)
+        if relative in {"clozn/replay/execution_fork.py", "clozn/replay/execution_fork_results.py"}:
+            continue
+        if "clozn.replay.execution_fork" in _imports(path):
+            importers.add(relative)
+    assert importers == {
+        "clozn/replay/context_bisect.py",           # parent_execution_fingerprint
+        "clozn/replay/influence_counterfactual.py",  # runtime projections + fingerprint
+        "clozn/runs/selection_inspection.py",        # sampling_intervention_contract
+        "clozn/runs/test_this.py",                   # normalize_intervention + fingerprint
+    }, f"the legacy planner's remaining helper surface changed: {sorted(importers)}"

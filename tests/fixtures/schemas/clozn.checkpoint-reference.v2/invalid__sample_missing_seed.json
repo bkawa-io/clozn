@@ -1,5 +1,5 @@
 {
-  "schema_version": "clozn.checkpoint-reference.v1",
+  "schema_version": "clozn.checkpoint-reference.v2",
   "checkpoint_reference_id": "checkpoint_ref_0123456789abcdefabcd",
   "parent_run_id": "run_parent",
   "parent_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -12,14 +12,28 @@
     "eviction_policy": "bounded_fifo",
     "validity_scope": "worker_process_generation",
     "observed_state": "not_created",
-    "expires_when": ["worker_restart", "fifo_eviction", "gateway_shutdown"]
+    "expires_when": [
+      "worker_restart",
+      "fifo_eviction",
+      "gateway_shutdown"
+    ]
   },
   "identity": {
     "parent_runtime_key_sha256": null,
-    "selected_runtime_key_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "selected_runtime_key_sha256": null,
     "worker_id": "generation-a",
     "worker_generation_id": "generation-a",
     "protocol_version": "1.1"
+  },
+  "sampler": {
+    "mode": "sample",
+    "provenance": "recorded_run_decode",
+    "rng_draws": 3,
+    "config_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "temperature": 0.8,
+    "top_k": 40,
+    "top_p": 0.9,
+    "rep_penalty": 1.1
   },
   "proof": {
     "status": "not_run"
@@ -27,7 +41,7 @@
   "reasons": [
     {
       "code": "missing_output_token_history",
-      "message": "the parent has no exact response token history"
+      "message": "not available"
     }
   ]
 }

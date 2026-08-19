@@ -478,7 +478,9 @@ def test_boundary_stop_token_is_exempted_when_both_sides_agree_finish_reason_sto
     assert artifact["proof"]["status"] == "matched"
     assert artifact["proof"]["control_result"]["exact_match"] is True
     note = artifact["proof"]["control_result"]["note"]
-    assert "stop token" in note and "exempted" in note
+    # The canonical proof states the exemption as what it is: everything matched except the
+    # recorded trailing stop token.
+    assert "stop token" in note and "matched except" in note
     # The exemption is disclosed, not hidden: the two suffix hashes genuinely differ (the parent's
     # recorded suffix really is one token longer) even though exact_match is True.
     assert (artifact["proof"]["control_result"]["parent_suffix_sha256"]

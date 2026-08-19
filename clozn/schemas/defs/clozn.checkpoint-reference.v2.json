@@ -1,0 +1,835 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.checkpoint-reference.v2",
+  "title": "Recorded-parent execution checkpoint reference",
+  "description": "A fail-closed receipt for reconstructing one immutable run as a generation-scoped worker checkpoint. Available references have passed an unchanged exact-execution-fork control. They remain bounded in-memory FIFO state, are never durable or pinned in v1, and are valid only for the recorded worker process generation. Its unchanged-control proof is stated in canonical exact-resume terms: the resolved exact execution state and its content digest, never a legacy execution-fork plan identity. Checkpoint capture is a checkpoint/proof facility and creates no Run.",
+  "type": "object",
+  "oneOf": [
+    {
+      "required": [
+        "status",
+        "checkpoint_reference",
+        "token_history",
+        "sampler",
+        "steering",
+        "proof"
+      ],
+      "properties": {
+        "status": {
+          "const": "available"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/AvailableLifecycle"
+        },
+        "proof": {
+          "$ref": "#/$defs/MatchedProof"
+        }
+      }
+    },
+    {
+      "required": [
+        "status",
+        "proof"
+      ],
+      "properties": {
+        "status": {
+          "const": "unavailable"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/UnavailableLifecycle"
+        },
+        "proof": {
+          "$ref": "#/$defs/NotRunProof"
+        }
+      }
+    },
+    {
+      "required": [
+        "status",
+        "proof"
+      ],
+      "properties": {
+        "status": {
+          "const": "failed"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/FailedLifecycle"
+        },
+        "proof": {
+          "$ref": "#/$defs/IncompleteProof"
+        }
+      }
+    }
+  ],
+  "required": [
+    "schema_version",
+    "checkpoint_reference_id",
+    "parent_run_id",
+    "parent_fingerprint_sha256",
+    "captured_ts",
+    "status",
+    "lifecycle",
+    "identity",
+    "reasons"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "clozn.checkpoint-reference.v2"
+    },
+    "checkpoint_reference_id": {
+      "type": "string",
+      "pattern": "^checkpoint_ref_[0-9a-f]{20}$"
+    },
+    "parent_run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parent_fingerprint_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "captured_ts": {
+      "type": "number",
+      "minimum": 0
+    },
+    "status": {
+      "enum": [
+        "available",
+        "unavailable",
+        "failed"
+      ]
+    },
+    "lifecycle": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AvailableLifecycle"
+        },
+        {
+          "$ref": "#/$defs/UnavailableLifecycle"
+        },
+        {
+          "$ref": "#/$defs/FailedLifecycle"
+        }
+      ]
+    },
+    "identity": {
+      "$ref": "#/$defs/Identity"
+    },
+    "checkpoint_reference": {
+      "$ref": "#/$defs/CheckpointReference"
+    },
+    "token_history": {
+      "$ref": "#/$defs/TokenHistory"
+    },
+    "sampler": {
+      "$ref": "#/$defs/Sampler"
+    },
+    "steering": {
+      "$ref": "#/$defs/Steering"
+    },
+    "proof": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/MatchedProof"
+        },
+        {
+          "$ref": "#/$defs/IncompleteProof"
+        }
+      ]
+    },
+    "reasons": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/Reason"
+      }
+    }
+  },
+  "$defs": {
+    "AvailableLifecycle": {
+      "type": "object",
+      "required": [
+        "storage",
+        "durability",
+        "pinned",
+        "eviction_policy",
+        "validity_scope",
+        "observed_state",
+        "size_bytes",
+        "expires_when"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "storage": {
+          "const": "worker_memory"
+        },
+        "durability": {
+          "const": "ephemeral"
+        },
+        "pinned": {
+          "const": false
+        },
+        "eviction_policy": {
+          "const": "bounded_fifo"
+        },
+        "validity_scope": {
+          "const": "worker_process_generation"
+        },
+        "observed_state": {
+          "const": "available"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "expires_when": {
+          "const": [
+            "worker_restart",
+            "fifo_eviction",
+            "gateway_shutdown"
+          ]
+        }
+      }
+    },
+    "UnavailableLifecycle": {
+      "type": "object",
+      "required": [
+        "storage",
+        "durability",
+        "pinned",
+        "eviction_policy",
+        "validity_scope",
+        "observed_state",
+        "expires_when"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "storage": {
+          "const": "worker_memory"
+        },
+        "durability": {
+          "const": "ephemeral"
+        },
+        "pinned": {
+          "const": false
+        },
+        "eviction_policy": {
+          "const": "bounded_fifo"
+        },
+        "validity_scope": {
+          "const": "worker_process_generation"
+        },
+        "observed_state": {
+          "const": "not_created"
+        },
+        "expires_when": {
+          "const": [
+            "worker_restart",
+            "fifo_eviction",
+            "gateway_shutdown"
+          ]
+        }
+      }
+    },
+    "FailedLifecycle": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/UnavailableLifecycle"
+        },
+        {
+          "type": "object",
+          "required": [
+            "storage",
+            "durability",
+            "pinned",
+            "eviction_policy",
+            "validity_scope",
+            "observed_state",
+            "size_bytes",
+            "expires_when"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "storage": {
+              "const": "worker_memory"
+            },
+            "durability": {
+              "const": "ephemeral"
+            },
+            "pinned": {
+              "const": false
+            },
+            "eviction_policy": {
+              "const": "bounded_fifo"
+            },
+            "validity_scope": {
+              "const": "worker_process_generation"
+            },
+            "observed_state": {
+              "const": "unusable"
+            },
+            "size_bytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "expires_when": {
+              "const": [
+                "worker_restart",
+                "fifo_eviction",
+                "gateway_shutdown"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "GreedySampler": {
+      "type": "object",
+      "required": [
+        "mode",
+        "provenance",
+        "rng_draws",
+        "config_sha256"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "const": "greedy"
+        },
+        "provenance": {
+          "const": "recorded_run_decode"
+        },
+        "rng_draws": {
+          "const": 0
+        },
+        "config_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "SampledSampler": {
+      "type": "object",
+      "required": [
+        "mode",
+        "provenance",
+        "rng_draws",
+        "config_sha256",
+        "temperature",
+        "top_k",
+        "top_p",
+        "rep_penalty",
+        "seed"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "const": "sample"
+        },
+        "provenance": {
+          "const": "recorded_run_decode"
+        },
+        "rng_draws": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "config_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0
+        },
+        "top_k": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "top_p": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "rep_penalty": {
+          "type": "number",
+          "minimum": 0
+        },
+        "seed": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "NoSteering": {
+      "type": "object",
+      "required": [
+        "mode",
+        "provenance"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "const": "none"
+        },
+        "provenance": {
+          "const": "recorded_none"
+        }
+      }
+    },
+    "RawVectorSteering": {
+      "type": "object",
+      "required": [
+        "mode",
+        "provenance",
+        "vector_sha256",
+        "vector_elements",
+        "steer_layer",
+        "steer_coef"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "const": "raw_vector"
+        },
+        "provenance": {
+          "const": "recorded_raw_vector"
+        },
+        "vector_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "vector_elements": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "steer_layer": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "steer_coef": {
+          "type": "number"
+        }
+      }
+    },
+    "Identity": {
+      "type": "object",
+      "required": [
+        "parent_runtime_key_sha256",
+        "selected_runtime_key_sha256",
+        "worker_id",
+        "worker_generation_id",
+        "protocol_version"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "parent_runtime_key_sha256": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "selected_runtime_key_sha256": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worker_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "worker_generation_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "protocol_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
+    "CheckpointReference": {
+      "type": "object",
+      "required": [
+        "checkpoint_id",
+        "worker_generation_id",
+        "state",
+        "parent_run_id",
+        "prompt_tokens",
+        "n_past",
+        "size_bytes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "checkpoint_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "worker_generation_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "state": {
+          "const": "available"
+        },
+        "parent_run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prompt_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "n_past": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "TokenHistory": {
+      "type": "object",
+      "required": [
+        "prompt_source",
+        "continuation_source",
+        "boundary_handling",
+        "prompt_tokens",
+        "output_tokens",
+        "total_tokens",
+        "original_prefill_boundary",
+        "prompt_token_ids_sha256",
+        "output_token_ids_sha256",
+        "full_token_ids_sha256",
+        "execution_shape"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "prompt_source": {
+          "const": "identity_qualified_worker_score"
+        },
+        "continuation_source": {
+          "const": "recorded_trace_token_ids"
+        },
+        "boundary_handling": {
+          "const": "prompt_text_and_continuation_ids_separate"
+        },
+        "prompt_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "total_tokens": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "original_prefill_boundary": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "prompt_token_ids_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "output_token_ids_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "full_token_ids_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "execution_shape": {
+          "const": "prompt_batch_then_single_token_decode"
+        }
+      }
+    },
+    "Sampler": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/GreedySampler"
+        },
+        {
+          "$ref": "#/$defs/SampledSampler"
+        }
+      ]
+    },
+    "Steering": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/NoSteering"
+        },
+        {
+          "$ref": "#/$defs/RawVectorSteering"
+        }
+      ]
+    },
+    "ControlResult": {
+      "type": "object",
+      "required": [
+        "status",
+        "exact_match",
+        "parent_suffix_sha256",
+        "control_suffix_sha256",
+        "note"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "matched",
+            "diverged"
+          ]
+        },
+        "exact_match": {
+          "type": "boolean"
+        },
+        "parent_suffix_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "control_suffix_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "WorkerReceipt": {
+      "type": "object",
+      "required": [
+        "worker_generation_id",
+        "restore_mode",
+        "exactness_source",
+        "boundary_shape_true",
+        "n_past_restored",
+        "token_count",
+        "token_ids_sha256",
+        "text_sha256",
+        "intervention_type",
+        "intervention_sha256"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "worker_generation_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "restore_mode": {
+          "enum": [
+            "live_kv_truncated",
+            "reprefill"
+          ]
+        },
+        "exactness_source": {
+          "enum": [
+            "live_kv",
+            "reprefill"
+          ]
+        },
+        "boundary_shape_true": {
+          "const": true
+        },
+        "n_past_restored": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "token_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "token_ids_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "text_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "intervention_type": {
+          "const": "none"
+        },
+        "intervention_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "finish_reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sampler_source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "steer_source": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "MatchedProof": {
+      "type": "object",
+      "required": [
+        "status",
+        "exact_state_sha256",
+        "exact_state",
+        "exactness_regime",
+        "control_result",
+        "worker_receipt"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "const": "matched"
+        },
+        "exact_state_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "exact_state": {
+          "$ref": "#/$defs/ExactState"
+        },
+        "exactness_regime": {
+          "const": "prompt_boundary_reprefill"
+        },
+        "control_result": {
+          "$ref": "#/$defs/ControlResult"
+        },
+        "worker_receipt": {
+          "$ref": "#/$defs/WorkerReceipt"
+        }
+      }
+    },
+    "NotRunProof": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "const": "not_run"
+        }
+      }
+    },
+    "IncompleteProof": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/NotRunProof"
+        },
+        {
+          "type": "object",
+          "required": [
+            "status",
+            "exact_state_sha256",
+            "exact_state",
+            "exactness_regime"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": [
+                "diverged",
+                "failed"
+              ]
+            },
+            "exact_state_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "exact_state": {
+              "$ref": "#/$defs/ExactState"
+            },
+            "exactness_regime": {
+              "const": "prompt_boundary_reprefill"
+            },
+            "control_result": {
+              "$ref": "#/$defs/ControlResult"
+            },
+            "worker_receipt": {
+              "$ref": "#/$defs/WorkerReceipt"
+            },
+            "error_code": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    },
+    "Reason": {
+      "type": "object",
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "ExactState": {
+      "type": "object",
+      "required": [
+        "classification",
+        "position",
+        "regime",
+        "source",
+        "truncate_to",
+        "boundary_shape_true"
+      ],
+      "additionalProperties": true,
+      "description": "The canonical exact-resume state resolution this proof rests on. It addresses a state; it is not a fork request and names no lifecycle object.",
+      "properties": {
+        "classification": {
+          "const": "exact_execution_fork"
+        },
+        "position": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "regime": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "truncate_to": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "boundary_shape_true": {
+          "const": true
+        }
+      }
+    }
+  }
+}

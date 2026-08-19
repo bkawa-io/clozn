@@ -429,17 +429,14 @@ def test_materializing_one_fan_observation_creates_exactly_one_child_run(isolate
 
 # ------------------------------------------------------------------------------ safety envelope
 def test_branch_execution_never_reaches_the_retired_child_creating_executor(isolated_store, monkeypatch):
-    """Branch Fan must not call the old fork executor, directly or through its adapters."""
+    """Branch Fan must not reach the legacy planner, directly or through an adapter."""
     import clozn.replay.execution_fork as execution_fork
-    import clozn.replay.execution_fork_execute as execution_fork_execute
 
     def forbidden(name):
         def _explode(*_args, **_kwargs):
-            raise AssertionError(f"Branch Fan called the retired executor seam {name}")
+            raise AssertionError(f"Branch Fan called the retired planner seam {name}")
         return _explode
 
-    for name in ("execute_exact_fork", "prove_unchanged_control"):
-        monkeypatch.setattr(execution_fork_execute, name, forbidden(name), raising=False)
     for name in ("plan_execution_fork", "capture_exact_force_token_context",
                  "plan_exact_force_token", "execute_exact_force_token"):
         monkeypatch.setattr(execution_fork, name, forbidden(name), raising=False)

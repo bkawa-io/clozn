@@ -1,5 +1,5 @@
 {
-  "schema_version": "clozn.checkpoint-reference.v1",
+  "schema_version": "clozn.checkpoint-reference.v2",
   "checkpoint_reference_id": "checkpoint_ref_0123456789abcdefabcd",
   "parent_run_id": "run_parent",
   "parent_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -8,15 +8,19 @@
   "lifecycle": {
     "storage": "worker_memory",
     "durability": "ephemeral",
-    "pinned": true,
+    "pinned": false,
     "eviction_policy": "bounded_fifo",
     "validity_scope": "worker_process_generation",
     "observed_state": "not_created",
-    "expires_when": ["worker_restart", "fifo_eviction", "gateway_shutdown"]
+    "expires_when": [
+      "worker_restart",
+      "fifo_eviction",
+      "gateway_shutdown"
+    ]
   },
   "identity": {
     "parent_runtime_key_sha256": null,
-    "selected_runtime_key_sha256": null,
+    "selected_runtime_key_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "worker_id": "generation-a",
     "worker_generation_id": "generation-a",
     "protocol_version": "1.1"

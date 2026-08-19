@@ -1,5 +1,5 @@
 {
-  "schema_version": "clozn.checkpoint-reference.v1",
+  "schema_version": "clozn.checkpoint-reference.v2",
   "checkpoint_reference_id": "checkpoint_ref_0123456789abcdefabcd",
   "parent_run_id": "run_parent",
   "parent_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -13,7 +13,11 @@
     "validity_scope": "worker_process_generation",
     "observed_state": "available",
     "size_bytes": 4096,
-    "expires_when": ["worker_restart", "fifo_eviction", "gateway_shutdown"]
+    "expires_when": [
+      "worker_restart",
+      "fifo_eviction",
+      "gateway_shutdown"
+    ]
   },
   "identity": {
     "parent_runtime_key_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -61,7 +65,6 @@
   },
   "proof": {
     "status": "matched",
-    "execution_fork_plan_id": "fork_plan_0123456789abcdefabcd",
     "exactness_regime": "prompt_boundary_reprefill",
     "control_result": {
       "status": "matched",
@@ -83,6 +86,15 @@
       "intervention_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
       "sampler_source": "checkpoint",
       "steer_source": "none"
+    },
+    "exact_state_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "exact_state": {
+      "classification": "exact_execution_fork",
+      "position": 0,
+      "regime": "prompt_boundary_reprefill",
+      "source": "reprefill",
+      "truncate_to": 3,
+      "boundary_shape_true": true
     }
   },
   "reasons": [

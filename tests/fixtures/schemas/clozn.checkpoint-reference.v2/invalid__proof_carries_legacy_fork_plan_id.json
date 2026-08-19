@@ -1,0 +1,107 @@
+{
+  "schema_version": "clozn.checkpoint-reference.v2",
+  "checkpoint_reference_id": "checkpoint_ref_0123456789abcdefabcd",
+  "parent_run_id": "run_parent",
+  "parent_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "captured_ts": 1785369600.0,
+  "status": "available",
+  "lifecycle": {
+    "storage": "worker_memory",
+    "durability": "ephemeral",
+    "pinned": false,
+    "eviction_policy": "bounded_fifo",
+    "validity_scope": "worker_process_generation",
+    "observed_state": "available",
+    "size_bytes": 4096,
+    "expires_when": [
+      "worker_restart",
+      "fifo_eviction",
+      "gateway_shutdown"
+    ]
+  },
+  "identity": {
+    "parent_runtime_key_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "selected_runtime_key_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "worker_id": "generation-a",
+    "worker_generation_id": "generation-a",
+    "protocol_version": "1.1"
+  },
+  "checkpoint_reference": {
+    "checkpoint_id": "ckpt-generation-a-9",
+    "worker_generation_id": "generation-a",
+    "state": "available",
+    "parent_run_id": "run_parent",
+    "prompt_tokens": 2,
+    "n_past": 5,
+    "size_bytes": 4096
+  },
+  "token_history": {
+    "prompt_source": "identity_qualified_worker_score",
+    "continuation_source": "recorded_trace_token_ids",
+    "boundary_handling": "prompt_text_and_continuation_ids_separate",
+    "prompt_tokens": 2,
+    "output_tokens": 3,
+    "total_tokens": 5,
+    "original_prefill_boundary": 2,
+    "prompt_token_ids_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "output_token_ids_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "full_token_ids_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "execution_shape": "prompt_batch_then_single_token_decode"
+  },
+  "sampler": {
+    "mode": "sample",
+    "provenance": "recorded_run_decode",
+    "rng_draws": 3,
+    "config_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "temperature": 0.8,
+    "top_k": 40,
+    "top_p": 0.9,
+    "rep_penalty": 1.1,
+    "seed": 7
+  },
+  "steering": {
+    "mode": "none",
+    "provenance": "recorded_none"
+  },
+  "proof": {
+    "status": "matched",
+    "exactness_regime": "prompt_boundary_reprefill",
+    "control_result": {
+      "status": "matched",
+      "exact_match": true,
+      "parent_suffix_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "control_suffix_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "note": "parent suffix token ids and text matched exactly"
+    },
+    "worker_receipt": {
+      "worker_generation_id": "generation-a",
+      "restore_mode": "reprefill",
+      "exactness_source": "reprefill",
+      "boundary_shape_true": true,
+      "n_past_restored": 2,
+      "token_count": 3,
+      "token_ids_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "text_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "intervention_type": "none",
+      "intervention_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "sampler_source": "checkpoint",
+      "steer_source": "none"
+    },
+    "exact_state_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "exact_state": {
+      "classification": "exact_execution_fork",
+      "position": 0,
+      "regime": "prompt_boundary_reprefill",
+      "source": "reprefill",
+      "truncate_to": 3,
+      "boundary_shape_true": true
+    },
+    "execution_fork_plan_id": "fork_plan_00000000000000000000"
+  },
+  "reasons": [
+    {
+      "code": "exact_checkpoint_captured",
+      "message": "the ephemeral checkpoint matched its unchanged exact-fork control"
+    }
+  ]
+}

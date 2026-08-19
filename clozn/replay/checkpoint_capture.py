@@ -25,17 +25,21 @@ import uuid
 
 from clozn import schemas
 from clozn.replay.controlled import recorded_sampling_config
-from clozn.replay.execution_fork import (
-    _runtime_projection,
-    _worker_projection,
+# Checkpoint capture is exact-resume infrastructure, not a product counterfactual workflow.  It
+# addresses and proves an execution state through the neutral kernel owners and never plans, executes,
+# or persists anything resembling a fork lifecycle.
+from clozn.experiments.exact_execution import prove_unchanged_control
+from clozn.experiments.execution_facts import (
     parent_execution_fingerprint,
     parent_runtime_projection,
-    plan_execution_fork,
+    resolve_exact_resume_facts,
+    runtime_projection as _runtime_projection,
+    sha256 as _facts_sha256,
+    worker_identity_projection as _worker_projection,
 )
-from clozn.replay.execution_fork_execute import prove_unchanged_control
 
 
-SCHEMA_VERSION = "clozn.checkpoint-reference.v1"
+SCHEMA_VERSION = "clozn.checkpoint-reference.v2"
 _EXPIRES_WHEN = ["worker_restart", "fifo_eviction", "gateway_shutdown"]
 
 
@@ -258,6 +262,23 @@ def _checkpoint_reference(parent_id: str, response: Mapping,
     }
 
 
+def _exact_state_projection(resolution: Mapping) -> dict:
+    """The compact exact-state facts the receipt publishes.
+
+    This names a resolved state, not a lifecycle object: there is deliberately no plan or execution
+    identity here, because capture neither plans a fork nor creates a Run.
+    """
+    exactness = resolution.get("exactness") if isinstance(resolution.get("exactness"), Mapping) else {}
+    return {
+        "classification": resolution.get("classification"),
+        "position": resolution.get("position"),
+        "regime": exactness.get("regime"),
+        "source": exactness.get("source"),
+        "truncate_to": exactness.get("truncate_to"),
+        "boundary_shape_true": exactness.get("boundary_shape_true"),
+    }
+
+
 def capture_parent_checkpoint(
     parent_run: Mapping,
     engine,
@@ -371,7 +392,9 @@ def capture_parent_checkpoint(
                 "steered parents require their exact recorded raw vector, layer, and coefficient"))
     steering_artifact, steering_wire = steering_pair
 
-    placeholder = {
+    # Check exact eligibility against a provisional reference before paying for tokenization and a
+    # real checkpoint.  This resolves a state address; it does not reserve or plan anything.
+    provisional = {
         "checkpoint_id": "checkpoint-preflight",
         "worker_generation_id": worker["worker_generation_id"],
         "state": "available",
@@ -380,21 +403,15 @@ def capture_parent_checkpoint(
         "n_past": prompt_tokens + len(output_ids),
         "size_bytes": 0,
     }
-    preflight = plan_execution_fork(
-        parent_run,
-        {"position": 0, "change": {"type": "none"}},
-        checkpoint=placeholder,
-        runtime_identity=runtime_identity,
-        worker_identity=worker_identity,
+    preflight, preflight_reason = resolve_exact_resume_facts(
+        parent_run, position=0, checkpoint=provisional,
+        runtime_identity=runtime_identity, worker_identity=worker_identity,
     )
-    if preflight.get("classification") != "exact_execution_fork":
-        reason = (preflight.get("reasons") or [_reason(
-            "exact_preconditions_unavailable",
-            "the execution-fork planner rejected the parent and selected worker")])[0]
+    if preflight is None:
         return _finish(
             artifact, status="unavailable",
-            code=str(reason.get("code") or "exact_preconditions_unavailable"),
-            message=str(reason.get("message") or "exact preconditions are unavailable"))
+            code=str(preflight_reason.get("code") or "exact_preconditions_unavailable"),
+            message=str(preflight_reason.get("message") or "exact preconditions are unavailable"))
 
     try:
         prompt_ids = _score_prompt_ids(
@@ -476,37 +493,38 @@ def capture_parent_checkpoint(
     artifact["lifecycle"] = _lifecycle(
         "unusable", size_bytes=reference["size_bytes"])
 
-    plan = plan_execution_fork(
-        parent_run,
-        {"position": 0, "change": {"type": "none"}},
-        checkpoint=reference,
-        runtime_identity=runtime_identity,
-        worker_identity=worker_identity,
+    resolution, resolution_reason = resolve_exact_resume_facts(
+        parent_run, position=0, checkpoint=reference,
+        runtime_identity=runtime_identity, worker_identity=worker_identity,
     )
-    if plan.get("classification") != "exact_execution_fork":
-        reason = (plan.get("reasons") or [{}])[0]
+    if resolution is None:
         return _finish(
             artifact, status="failed",
-            code="checkpoint_plan_failed",
-            message=str(reason.get("message") or "captured checkpoint failed exact planning"))
+            code="checkpoint_state_unresolved",
+            message=str(resolution_reason.get("message")
+                        or "the captured checkpoint did not resolve to an exact execution state"))
+    state_projection = _exact_state_projection(resolution)
+    state_sha256 = _facts_sha256(resolution)
 
     try:
-        evidence = prove_unchanged_control(parent_run, plan, engine)
+        evidence = prove_unchanged_control(parent_run, resolution, engine)
     except Exception as exc:
         return _finish(
             artifact, status="failed",
             code="unchanged_control_failed",
-            message=f"unchanged exact-fork control failed: {type(exc).__name__}: {exc}",
+            message=f"the unchanged exact-resume control failed: {type(exc).__name__}: {exc}",
             proof={
                 "status": "failed",
-                "execution_fork_plan_id": plan["plan_id"],
+                "exact_state_sha256": state_sha256,
+                "exact_state": state_projection,
                 "exactness_regime": "prompt_boundary_reprefill",
                 "error_code": type(exc).__name__,
             })
 
     proof = {
         "status": evidence["status"],
-        "execution_fork_plan_id": plan["plan_id"],
+        "exact_state_sha256": state_sha256,
+        "exact_state": state_projection,
         "exactness_regime": "prompt_boundary_reprefill",
         "control_result": deepcopy(evidence["result"]),
         "worker_receipt": deepcopy(evidence["worker_receipt"]),
@@ -547,6 +565,6 @@ def capture_parent_checkpoint(
                 "eligible until worker restart, FIFO eviction, or gateway shutdown"
                 if checkpoint_envelope is not None
                 else
-                "the ephemeral checkpoint matched its unchanged exact-fork control and is eligible "
+                "the ephemeral checkpoint matched its unchanged exact-resume control and is eligible "
                 "until worker restart, FIFO eviction, or gateway shutdown")),
         proof=proof)
