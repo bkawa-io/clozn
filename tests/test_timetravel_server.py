@@ -637,24 +637,76 @@ def test_time_machine_exact_branch_rejects_an_edited_question(iso):
 def test_time_machine_exact_branch_reports_missing_historical_source(iso):
     rid = _seed_parent()
     out = _post("/runs/" + rid + "/time-machine/branch", {"turn": 0})
-    assert out["schema_version"] == "clozn.time-machine-branch.v1"
+    assert out["schema_version"] == "clozn.time-machine-branch.v2"
     assert out["status"] == "unavailable"
     assert out["exact_replay"] is False
-    schemas.validate(out, "clozn.time-machine-branch.v1")
+    schemas.validate(out, "clozn.time-machine-branch.v2")
 
 
-def test_time_machine_exact_branch_persists_a_same_prompt_child(iso, monkeypatch):
-    rid = _seed_parent()
-    from clozn.replay import checkpoint_capture, execution_fork, execution_fork_execute
+_BRANCH_RUNTIME = {
+    "model_sha256": "a" * 64,
+    "template_fingerprint": "b" * 16,
+    "engine_build": "branch-fixture",
+    "context_size": 4096,
+    "backend": "cpu",
+    "adapter": {"present": False, "identity_sha256": None, "artifact_sha256": None, "scale": None},
+    "white_box_flags": {},
+}
+_BRANCH_WORKER = {
+    "worker_id": "worker-a", "worker_generation_id": "worker-generation-test", "protocol_version": "1.1",
+}
+
+
+def _seed_exact_branch_source():
+    """A recorded turn-2 source complete enough for canonical exact state resolution."""
+    from copy import deepcopy
+
+    return runlog.record(
+        source="studio_chat", client="studio", model="clozn-qwen", substrate="QwenSubstrate",
+        messages=CONV, response="a2", final_prompt="<prompt>",
+        identity=deepcopy(_BRANCH_RUNTIME), meta={"n_ctx": 4096, "device": "cpu"},
+        trace={"steps": [{"token_id": 41, "piece": "a"}, {"token_id": 42, "piece": "2"}]},
+    )
+
+
+class _ExactBranchEngine:
+    """A worker exposing only the low-level exact-resume RPC."""
+
+    def __init__(self, *, control_diverges=False):
+        self.calls = []
+        self.control_diverges = control_diverges
+
+    def execution_fork(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        tokens, pieces = ([99], ["wrong"]) if self.control_diverges else ([41, 42], ["a", "2"])
+        return {
+            "worker_generation_id": _BRANCH_WORKER["worker_generation_id"],
+            "text": "".join(pieces), "tokens": tokens, "token_pieces": pieces,
+            "steps": [{"token_id": t, "piece": p} for t, p in zip(tokens, pieces)],
+            "restore_mode": "reprefill", "n_past_restored": 3,
+            "exactness": {"source": "reprefill", "boundary_shape_true": True},
+            "intervention_applied": {"type": "none"}, "finish_reason": "stop",
+        }
+
+
+class _ExactBranchSub:
+    def __init__(self, engine):
+        self.engine = engine
+
+
+def _install_exact_branch_worker(monkeypatch, source_id, engine):
+    from copy import deepcopy
+    from clozn.replay import checkpoint_capture
+    from clozn.server import model_routing
+
     monkeypatch.setattr(
-        checkpoint_capture,
-        "capture_parent_checkpoint",
+        checkpoint_capture, "capture_parent_checkpoint",
         lambda parent, *args, **kwargs: {
             "status": "available",
             "parent_run_id": parent["id"],
             "checkpoint_reference": {
                 "checkpoint_id": "ckpt-test",
-                "worker_generation_id": "worker-generation-test",
+                "worker_generation_id": _BRANCH_WORKER["worker_generation_id"],
                 "state": "available",
                 "parent_run_id": parent["id"],
                 "prompt_tokens": 3,
@@ -664,37 +716,137 @@ def test_time_machine_exact_branch_persists_a_same_prompt_child(iso, monkeypatch
         },
     )
     monkeypatch.setattr(
-        execution_fork,
-        "plan_execution_fork",
-        lambda *args, **kwargs: {
-            "classification": "exact_execution_fork",
-            "plan_id": "fork_plan_0123456789abcdef0123",
-        },
+        model_routing, "select_run_model_facts",
+        lambda *args, **kwargs: (deepcopy(_BRANCH_RUNTIME), deepcopy(_BRANCH_WORKER),
+                                  engine, _ExactBranchSub(engine)),
     )
-    monkeypatch.setattr(
-        execution_fork_execute,
-        "execute_exact_fork",
-        lambda *args, **kwargs: {
-            "receipt": {
-                "phase": "completed",
-                "execution_id": "fork_exec_0123456789abcdef0123",
-            },
-            "child": {"id": "run_exact_child_0123456789"},
-        },
-    )
-    from clozn.server import model_routing
-    monkeypatch.setattr(
-        model_routing,
-        "select_run_model_facts",
-        lambda *args, **kwargs: ({"runtime": "facts"}, {"worker": "facts"}, object(), object()),
-    )
+
+
+def test_time_machine_exact_branch_materializes_one_child_from_an_observation(iso, monkeypatch):
+    from clozn.replay import execution_fork_results
+
+    monkeypatch.setattr(execution_fork_results, "RESULTS_DIR", str(iso / "execution-forks"))
+    rid = _seed_exact_branch_source()
+    engine = _ExactBranchEngine()
+    _install_exact_branch_worker(monkeypatch, rid, engine)
+    before = {run["id"] for run in runlog.iter_runs()}
+
     out = _post("/runs/" + rid + "/time-machine/branch", {"turn": 2})
+
+    assert out["schema_version"] == "clozn.time-machine-branch.v2"
     assert out["status"] == "completed"
     assert out["exact_replay"] is True
     assert out["source_run_id"] == rid
-    assert out["child_run_id"] == "run_exact_child_0123456789"
-    assert out["execution_fork_execution_id"] == "fork_exec_0123456789abcdef0123"
-    schemas.validate(out, "clozn.time-machine-branch.v1")
+    schemas.validate(out, "clozn.time-machine-branch.v2")
+
+    # Evidence is canonical experiment/observation identity, never a legacy fork receipt.
+    assert out["experiment_id"] and out["arm_id"] and out["observation_id"]
+    assert "execution_fork" not in out
+    assert "execution_fork_execution_id" not in out
+    assert out["evidence"]["operation"] == "continue"
+    assert out["evidence"]["resolved_classification"] == "exact_execution_fork"
+    assert out["evidence"]["fidelity"]["unchanged_control"] == "matched"
+    assert out["materialization"]["regenerated"] is False
+
+    # Exactly one child Run, whose parent is the resolved historical source.
+    created = {run["id"] for run in runlog.iter_runs()} - before
+    assert created == {out["child_run_id"]}
+    child = runlog.get_run(out["child_run_id"])
+    assert child["parent_run_id"] == rid
+    assert child["response"] == "a2"
+
+    # Provenance is experiment evidence, not an ExecutionForkResult.
+    lineage = child["changes_applied"]["experiment"]
+    assert lineage["operation"] == "continue"
+    assert lineage["observation_id"] == out["observation_id"]
+    assert lineage["base_state"]["state_ref"]["position"]["index"] == 0
+    assert "execution_fork" not in child["changes_applied"]
+
+    # The generated observation existed before the child, and materializing it called no worker.
+    from clozn.experiments.persistence import ObservationStore
+    assert ObservationStore().get_observation(out["observation_id"]).status == "completed"
+    assert execution_fork_results.list_for_parent(rid) == []
+    # One unchanged-control proof; materialization added no further worker call.
+    assert [call["intervention"] for call in engine.calls] == [{"type": "none"}]
+
+
+def test_time_machine_exact_branch_creates_no_child_when_the_control_diverges(iso, monkeypatch):
+    from clozn.replay import execution_fork_results
+
+    monkeypatch.setattr(execution_fork_results, "RESULTS_DIR", str(iso / "execution-forks"))
+    rid = _seed_exact_branch_source()
+    engine = _ExactBranchEngine(control_diverges=True)
+    _install_exact_branch_worker(monkeypatch, rid, engine)
+    before = {run["id"] for run in runlog.iter_runs()}
+
+    out = _post("/runs/" + rid + "/time-machine/branch", {"turn": 2})
+
+    assert out["status"] in {"unavailable", "failed"}
+    assert out["exact_replay"] is False
+    assert "child_run_id" not in out
+    assert {run["id"] for run in runlog.iter_runs()} == before
+    assert execution_fork_results.list_for_parent(rid) == []
+    schemas.validate(out, "clozn.time-machine-branch.v2")
+
+
+def test_time_machine_exact_branch_parents_the_child_on_the_resolved_source_turn(iso, monkeypatch):
+    """Requesting an earlier turn parents the child on that turn's source, not on the request."""
+    from copy import deepcopy
+
+    session = "session_0123456789abcdef01234567"
+    ids = []
+    for index, (messages, response, pieces) in enumerate((
+        (CONV[:1], "a0", [("a", 41), ("0", 40)]),
+        (CONV[:3], "a1", [("a", 41), ("1", 43)]),
+        (CONV[:5], "a2", [("a", 41), ("2", 42)]),
+    )):
+        ids.append(runlog.record(
+            source="studio_chat", client="studio", model="clozn-qwen", substrate="engine",
+            messages=messages, response=response, session_key=session, started=100.0 + index,
+            final_prompt=f"<prompt-{index}>", identity=deepcopy(_BRANCH_RUNTIME),
+            meta={"n_ctx": 4096, "device": "cpu"},
+            trace={"steps": [{"token_id": tid, "piece": piece} for piece, tid in pieces]},
+        ))
+    requested_id, turn_zero_id = ids[-1], ids[0]
+
+    class TurnZeroEngine(_ExactBranchEngine):
+        def execution_fork(self, **kwargs):
+            self.calls.append(dict(kwargs))
+            tokens, pieces = [41, 40], ["a", "0"]
+            return {
+                "worker_generation_id": _BRANCH_WORKER["worker_generation_id"],
+                "text": "".join(pieces), "tokens": tokens, "token_pieces": pieces,
+                "steps": [{"token_id": t, "piece": p} for t, p in zip(tokens, pieces)],
+                "restore_mode": "reprefill", "n_past_restored": 3,
+                "exactness": {"source": "reprefill", "boundary_shape_true": True},
+                "intervention_applied": {"type": "none"}, "finish_reason": "stop",
+            }
+
+    engine = TurnZeroEngine()
+    _install_exact_branch_worker(monkeypatch, turn_zero_id, engine)
+    before = {run["id"] for run in runlog.iter_runs()}
+
+    out = _post("/runs/" + requested_id + "/time-machine/branch", {"turn": 0})
+
+    assert out["status"] == "completed"
+    assert out["requested_run_id"] == requested_id
+    assert out["source_run_id"] == turn_zero_id
+    created = {run["id"] for run in runlog.iter_runs()} - before
+    assert created == {out["child_run_id"]}
+    child = runlog.get_run(out["child_run_id"])
+    # The resolved historical source is the parent, matching the retired executor's lineage.
+    assert child["parent_run_id"] == turn_zero_id
+    assert child["response"] == "a0"
+    schemas.validate(out, "clozn.time-machine-branch.v2")
+
+
+def test_time_machine_exact_branch_route_owns_no_legacy_executor_import():
+    """The route may reach the worker RPC, but only underneath the canonical adapter."""
+    import clozn.server.routes.timetravel as route
+
+    source = open(route.__file__, encoding="utf-8").read()
+    assert "execution_fork" not in source
+    assert "run_time_travel" in source and "materialize_time_travel" in source
 
 
 def test_time_machine_missing_run_404s(iso):

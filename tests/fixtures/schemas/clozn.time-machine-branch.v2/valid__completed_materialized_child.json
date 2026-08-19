@@ -1,0 +1,29 @@
+{
+  "schema_version": "clozn.time-machine-branch.v2",
+  "requested_run_id": "run_time_machine",
+  "source_run_id": "run_source",
+  "source_turn": 2,
+  "status": "completed",
+  "exact_replay": true,
+  "fidelity": "exact_replay_eligible",
+  "child_run_id": "run_child",
+  "experiment_id": "exp_aaaaaaaaaaaaaaaaaaaaaaaa",
+  "arm_id": "arm_bbbbbbbbbbbbbbbbbbbbbbbb",
+  "observation_id": "obs_cccccccccccccccccccccccc",
+  "reasons": [{"code": "exact_child_replay_completed", "message": "the unchanged control matched"}],
+  "capture": {"status": "available"},
+  "evidence": {
+    "operation": "continue",
+    "state": "completed",
+    "resolved_classification": "exact_execution_fork",
+    "state_ref": {"run_id": "run_source", "execution_fingerprint": "ab", "position": {"kind": "answer_token_boundary", "index": 0}, "state_fingerprint": "cd"},
+    "fidelity": {"classification": "exact_execution_fork", "proof_status": "confirmed", "unchanged_control": "matched"}
+  },
+  "materialization": {
+    "state": "completed",
+    "child_run_id": "run_child",
+    "realized_fidelity": "exact_execution_fork",
+    "trace_state": "available",
+    "regenerated": false
+  }
+}

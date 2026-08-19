@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.time-machine-branch.v2",
+  "title": "Answer Time Machine exact child replay",
+  "description": "A terminal receipt for an explicit same-prompt child replay from a verified prompt-boundary checkpoint. An alternate question is not an exact child replay and must use the structural branch path. The replay is a canonical unchanged Continue experiment at the prompt boundary: generation stops at a GeneratedObservation, and the child Run is an explicit materialization of that immutable evidence. The receipt therefore identifies its proof by experiment/arm/observation, never by a legacy execution-fork receipt, and this route writes no ExecutionForkResult.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "requested_run_id",
+    "source_turn",
+    "status",
+    "exact_replay",
+    "fidelity",
+    "reasons",
+    "capture",
+    "evidence"
+  ],
+  "oneOf": [
+    {
+      "required": ["status", "source_run_id", "child_run_id", "experiment_id", "observation_id", "materialization"],
+      "properties": {"status": {"const": "completed"}}
+    },
+    {
+      "required": ["status", "source_run_id"],
+      "properties": {"status": {"const": "failed"}}
+    },
+    {
+      "required": ["status"],
+      "properties": {"status": {"const": "unavailable"}}
+    }
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "clozn.time-machine-branch.v2"},
+    "requested_run_id": {"type": "string", "minLength": 1},
+    "source_run_id": {"type": "string", "minLength": 1},
+    "source_turn": {"type": "integer", "minimum": 0},
+    "status": {"enum": ["completed", "unavailable", "failed"]},
+    "exact_replay": {"type": "boolean"},
+    "fidelity": {"enum": ["exact_replay_eligible", "unavailable"]},
+    "child_run_id": {"type": "string", "minLength": 1},
+    "experiment_id": {"type": "string", "minLength": 1},
+    "arm_id": {"type": "string", "minLength": 1},
+    "observation_id": {"type": "string", "minLength": 1},
+    "reasons": {"type": "array", "items": {"$ref": "#/$defs/Reason"}},
+    "capture": {"type": "object", "additionalProperties": true},
+    "evidence": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "The canonical experiment evidence this replay rests on: the resolved state, the operation that produced it, and the observation's own fidelity claim. Never a legacy execution-fork artifact.",
+      "properties": {
+        "operation": {"const": "continue"},
+        "state": {"enum": ["completed", "unavailable", "failed", "not_attempted"]},
+        "resolved_classification": {"type": "string"},
+        "state_ref": {"type": "object"},
+        "fidelity": {"type": "object"},
+        "reason_code": {"type": ["string", "null"]}
+      }
+    },
+    "materialization": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "How the immutable observation became a child Run. Materialization performs no model or worker work.",
+      "properties": {
+        "state": {"type": "string", "minLength": 1},
+        "child_run_id": {"type": "string", "minLength": 1},
+        "realized_fidelity": {"type": "string"},
+        "trace_state": {"type": "string"},
+        "regenerated": {"const": false}
+      }
+    }
+  },
+  "$defs": {
+    "Reason": {
+      "type": "object",
+      "required": ["code", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {"type": "string", "minLength": 1},
+        "message": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

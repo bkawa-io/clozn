@@ -1,0 +1,14 @@
+{
+  "schema_version": "clozn.time-machine-branch.v2",
+  "requested_run_id": "run_time_machine",
+  "source_run_id": "run_source",
+  "source_turn": 0,
+  "status": "completed",
+  "exact_replay": true,
+  "fidelity": "exact_replay_eligible",
+  "child_run_id": "run_child",
+  "reasons": [{"code": "completed", "message": "completed"}],
+  "capture": {},
+  "evidence": {"operation": "continue", "state": "completed"},
+  "materialization": {"state": "completed", "child_run_id": "run_child", "regenerated": false}
+}

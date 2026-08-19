@@ -43,15 +43,16 @@ CANONICAL_MODULES = (
     "clozn/server/routes/branch_fan.py",
     "clozn/server/routes/sampler_sensitivity.py",
     "clozn/server/routes/time_travel_v1.py",
+    "clozn/server/routes/timetravel.py",
 )
 
 # Every production module that still imports the legacy executor, and why it is still here.
 # Retiring clozn/replay/execution_fork_execute.py requires this to become empty.
 LEGACY_EXECUTOR_CALLERS = {
-    # Time Machine still creates its continuation child through the legacy executor.  Its lifecycle
-    # redesign is deliberately a separate change.
-    "clozn/server/routes/timetravel.py",
-    # The canonical checkpoint capture seam proves its unchanged control with the executor's helper.
+    # The canonical checkpoint capture seam still proves its unchanged control with the executor's
+    # helper, and still builds legacy placeholder plans around that call.  Moving it onto
+    # execution_facts.resolve_exact_resume_facts plus experiments.exact_execution is the last step
+    # before clozn/replay/execution_fork_execute.py can be deleted outright.
     "clozn/replay/checkpoint_capture.py",
 }
 

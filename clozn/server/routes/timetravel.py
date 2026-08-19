@@ -8,6 +8,7 @@ extraction of clozn.server.app's old `_timetravel` handler method + the matching
 behavior unchanged. -> clozn.replay (timetravel.py).
 """
 from collections.abc import Mapping
+from copy import deepcopy
 
 from clozn.server import app as ctx
 
@@ -21,13 +22,21 @@ def _exact_branch_receipt(
     reasons: list[dict],
     source_run_id: str | None = None,
     child_run_id: str | None = None,
-    execution_fork_execution_id: str | None = None,
     capture: Mapping | None = None,
-    execution_fork: Mapping | None = None,
+    evidence: Mapping | None = None,
+    experiment_id: str | None = None,
+    arm_id: str | None = None,
+    observation_id: str | None = None,
+    materialization: Mapping | None = None,
 ) -> dict:
-    """Build the closed Time Machine exact-child envelope without inventing missing lineage."""
+    """Build the closed Time Machine exact-child envelope without inventing missing lineage.
+
+    The proof this receipt carries is canonical experiment evidence -- which experiment, arm, and
+    observation produced the replay -- not a legacy execution-fork artifact.  The child Run is named
+    only once that evidence has been explicitly materialized.
+    """
     artifact = {
-        "schema_version": "clozn.time-machine-branch.v1",
+        "schema_version": "clozn.time-machine-branch.v2",
         "requested_run_id": requested_run_id,
         "source_turn": int(turn),
         "status": status,
@@ -35,18 +44,49 @@ def _exact_branch_receipt(
         "fidelity": "exact_replay_eligible" if exact_replay else "unavailable",
         "reasons": list(reasons),
         "capture": dict(capture) if isinstance(capture, Mapping) else {},
-        "execution_fork": dict(execution_fork) if isinstance(execution_fork, Mapping) else {},
+        "evidence": dict(evidence) if isinstance(evidence, Mapping) else {},
     }
     for name, value in (
         ("source_run_id", source_run_id),
         ("child_run_id", child_run_id),
-        ("execution_fork_execution_id", execution_fork_execution_id),
+        ("experiment_id", experiment_id),
+        ("arm_id", arm_id),
+        ("observation_id", observation_id),
     ):
         if isinstance(value, str) and value:
             artifact[name] = value
+    if isinstance(materialization, Mapping):
+        artifact["materialization"] = dict(materialization)
     from clozn import schemas
-    schemas.validate(artifact, "clozn.time-machine-branch.v1")
+    schemas.validate(artifact, "clozn.time-machine-branch.v2")
     return artifact
+
+
+def _travel_evidence(travel, *, reason_code: str | None = None) -> dict:
+    """Project the canonical evidence identity from one TimeTravelResult."""
+    if travel is None:
+        return {"operation": "continue", "state": "not_attempted", "reason_code": reason_code}
+    continuation = travel.continuation if isinstance(travel.continuation, Mapping) else {}
+    fidelity = continuation.get("fidelity")
+    diagnostics = travel.diagnostics if isinstance(travel.diagnostics, Mapping) else {}
+    evidence = {
+        "operation": "continue",
+        "state": travel.status,
+        "resolved_classification": travel.resolved_state.classification,
+        "state_ref": travel.state_ref.identity_payload(),
+        "reason_code": reason_code or diagnostics.get("reason_code"),
+    }
+    if isinstance(fidelity, Mapping):
+        evidence["fidelity"] = deepcopy(dict(fidelity))
+    return evidence
+
+
+def _travel_reason(travel, *, default_code: str, default_message: str) -> dict:
+    diagnostics = travel.diagnostics if travel is not None and isinstance(travel.diagnostics, Mapping) else {}
+    nested = diagnostics.get("diagnostics") if isinstance(diagnostics.get("diagnostics"), Mapping) else {}
+    code = diagnostics.get("reason_code") or nested.get("reason_code") or default_code
+    message = diagnostics.get("message") or nested.get("message") or default_message
+    return {"code": str(code), "message": str(message)}
 
 
 def try_get(h, p):
@@ -152,7 +192,7 @@ def try_post(h, p, body):
         facts = select_run_model_facts(h, source_run, route="/runs/<id>/time-machine/branch")
         if facts is None:
             return True
-        runtime, worker, engine, _sub = facts
+        runtime, worker, engine, sub = facts
         if engine is None or runtime is None or worker is None:
             h._json(503, {
                 "error": "exact Time Machine child replay requires a ready identity-qualified product worker",
@@ -206,7 +246,7 @@ def try_post(h, p, body):
                     "message": f"exact child replay capture failed: {type(exc).__name__}: {exc}",
                 }],
                 capture=capture if isinstance(capture, Mapping) else {},
-                execution_fork={"phase": "failed"},
+                evidence=_travel_evidence(None, reason_code="checkpoint_capture_failed"),
             )
             h._json(422, artifact)
             return True
@@ -227,58 +267,112 @@ def try_post(h, p, body):
             h._json(422, artifact)
             return True
 
-        from clozn.replay.execution_fork import plan_execution_fork
-        try:
-            plan = plan_execution_fork(
-                source_run,
-                {"position": 0, "change": {"type": "none"}},
-                checkpoint=capture.get("checkpoint_reference"),
-                runtime_identity=runtime,
-                worker_identity=worker,
-            )
-        except Exception as exc:
-            artifact = _exact_branch_receipt(
-                rid,
-                turn,
-                status="unavailable",
-                exact_replay=False,
-                source_run_id=source_run.get("id"),
-                reasons=[{
-                    "code": "exact_plan_failed",
-                    "message": f"exact child replay planning failed: {type(exc).__name__}: {exc}",
-                }],
-                capture=capture,
-            )
-            h._json(422, artifact)
+        # The replay itself is a canonical unchanged Continue experiment at the prompt boundary.
+        # Generation stops at a GeneratedObservation; the child Run below is an explicit
+        # materialization of that immutable evidence, not a side effect of generating it.
+        from clozn.experiments.persistence import ObservationStore
+        from clozn.recipes.time_travel import (
+            TimeTravelError, materialize_time_travel, run_time_travel,
+        )
+
+        if sub is None:
+            h._json(503, {
+                "error": "exact Time Machine child replay requires a ready product substrate",
+                "code": "time_machine_branch_worker_unavailable",
+            })
             return True
-        if plan.get("classification") != "exact_execution_fork":
-            reason = (plan.get("reasons") or [{}])[0]
+        recorded_tokens = ((source_run.get("trace") or {}).get("tokens")
+                           if isinstance(source_run.get("trace"), Mapping) else None)
+        horizon = len(recorded_tokens) if isinstance(recorded_tokens, list) and recorded_tokens else 0
+        if horizon <= 0:
             artifact = _exact_branch_receipt(
-                rid,
-                turn,
-                status="unavailable",
-                exact_replay=False,
+                rid, turn, status="unavailable", exact_replay=False,
                 source_run_id=source_run.get("id"),
                 reasons=[{
-                    "code": str(reason.get("code") or "exact_plan_unavailable"),
-                    "message": str(reason.get("message") or "the exact plan was unavailable"),
+                    "code": "token_trace_unavailable",
+                    "message": "the historical source has no recorded answer tokens to replay",
                 }],
                 capture=capture,
-                execution_fork=plan,
+                evidence=_travel_evidence(None, reason_code="token_trace_unavailable"),
             )
             h._json(422, artifact)
             return True
 
-        from clozn.replay.execution_fork_execute import execute_exact_fork
+        store = ObservationStore()
         try:
-            result = execute_exact_fork(
+            travel = run_time_travel(
                 source_run,
-                plan,
-                engine,
+                position=0,
+                max_new=horizon,
+                policy="exact_required",
+                checkpoint=capture.get("checkpoint_reference"),
                 runtime_identity=runtime,
                 worker_identity=worker,
-                reload_parent=runlog.get_run,
+                substrate=sub,
+                run_loader=runlog.get_run,
+                observation_store=store,
             )
+        except TimeTravelError as exc:
+            artifact = _exact_branch_receipt(
+                rid, turn, status="unavailable", exact_replay=False,
+                source_run_id=source_run.get("id"),
+                reasons=[{"code": exc.code, "message": str(exc)}],
+                capture=capture,
+                evidence=_travel_evidence(None, reason_code=exc.code),
+            )
+            h._json(422, artifact)
+            return True
+        except Exception as exc:
+            artifact = _exact_branch_receipt(
+                rid, turn, status="failed", exact_replay=False,
+                source_run_id=source_run.get("id"),
+                reasons=[{
+                    "code": "exact_child_replay_failed",
+                    "message": f"exact child replay generation failed: {type(exc).__name__}: {exc}",
+                }],
+                capture=capture,
+                evidence=_travel_evidence(None, reason_code="exact_child_replay_failed"),
+            )
+            h._json(422, artifact)
+            return True
+
+        if travel.status != "completed":
+            # An unavailable or refused control never becomes a child.  Nothing is materialized and
+            # nothing is persisted beyond the observation evidence the kernel already recorded.
+            status = "failed" if travel.status == "failed" else "unavailable"
+            artifact = _exact_branch_receipt(
+                rid, turn, status=status, exact_replay=False,
+                source_run_id=source_run.get("id"),
+                experiment_id=travel.experiment_id, arm_id=travel.arm_id,
+                observation_id=travel.observation_id,
+                reasons=[_travel_reason(
+                    travel, default_code="exact_child_replay_unavailable",
+                    default_message="the exact child replay did not produce confirmed evidence")],
+                capture=capture,
+                evidence=_travel_evidence(travel),
+            )
+            h._json(422, artifact)
+            return True
+
+        # The product contract here is one request, one child, so the materialization the kernel
+        # keeps explicit is performed immediately -- still as its own step over evidence that
+        # already exists, and still without any further model or worker work.
+        try:
+            materialized = materialize_time_travel(
+                source_run, travel, observation_store=store, reload_parent=runlog.get_run,
+            )
+        except TimeTravelError as exc:
+            artifact = _exact_branch_receipt(
+                rid, turn, status="failed", exact_replay=False,
+                source_run_id=source_run.get("id"),
+                experiment_id=travel.experiment_id, arm_id=travel.arm_id,
+                observation_id=travel.observation_id,
+                reasons=[{"code": exc.code, "message": str(exc)}],
+                capture=capture,
+                evidence=_travel_evidence(travel),
+            )
+            h._json(409 if exc.code == "observation_stale" else 422, artifact)
+            return True
         except Exception as exc:
             h._json(500, {
                 "error": f"exact child replay could not be persisted: {type(exc).__name__}: {exc}",
@@ -286,47 +380,46 @@ def try_post(h, p, body):
             })
             return True
 
-        receipt = result.get("receipt") if isinstance(result, Mapping) else None
-        child = result.get("child") if isinstance(result, Mapping) else None
-        phase = receipt.get("phase") if isinstance(receipt, Mapping) else None
-        if phase == "completed" and isinstance(child, Mapping) and isinstance(child.get("id"), str):
+        child_run_id = materialized.get("child_run_id") if isinstance(materialized, Mapping) else None
+        if materialized.get("state") != "completed" or not isinstance(child_run_id, str) or not child_run_id:
             artifact = _exact_branch_receipt(
-                rid,
-                turn,
-                status="completed",
-                exact_replay=True,
+                rid, turn, status="failed", exact_replay=False,
                 source_run_id=source_run.get("id"),
-                child_run_id=child.get("id"),
-                execution_fork_execution_id=receipt.get("execution_id"),
+                experiment_id=travel.experiment_id, arm_id=travel.arm_id,
+                observation_id=travel.observation_id,
                 reasons=[{
-                    "code": "exact_child_replay_completed",
-                    "message": (
-                        "the unchanged control matched and an exact same-prompt child replay "
-                        "was persisted"),
+                    "code": str(materialized.get("reason") or "materialization_failed"),
+                    "message": "the confirmed observation could not be materialized into a child run",
                 }],
                 capture=capture,
-                execution_fork=receipt,
+                evidence=_travel_evidence(travel),
             )
-            h._json(201, artifact)
+            h._json(422, artifact)
             return True
 
-        reason = (receipt.get("reasons") or [{}])[0] if isinstance(receipt, Mapping) else {}
         artifact = _exact_branch_receipt(
-            rid,
-            turn,
-            status="failed",
-            exact_replay=False,
+            rid, turn, status="completed", exact_replay=True,
             source_run_id=source_run.get("id"),
-            execution_fork_execution_id=(
-                receipt.get("execution_id") if isinstance(receipt, Mapping) else None),
+            child_run_id=child_run_id,
+            experiment_id=travel.experiment_id, arm_id=travel.arm_id,
+            observation_id=travel.observation_id,
             reasons=[{
-                "code": str(reason.get("code") or "exact_child_replay_failed"),
-                "message": str(reason.get("message") or "the exact child replay did not complete"),
+                "code": "exact_child_replay_completed",
+                "message": (
+                    "the unchanged control matched and the confirmed observation was materialized "
+                    "into an exact same-prompt child replay"),
             }],
             capture=capture,
-            execution_fork=receipt if isinstance(receipt, Mapping) else {},
+            evidence=_travel_evidence(travel),
+            materialization={
+                "state": "completed",
+                "child_run_id": child_run_id,
+                "realized_fidelity": materialized.get("realized_fidelity"),
+                "trace_state": materialized.get("trace_state"),
+                "regenerated": False,
+            },
         )
-        h._json(422, artifact)
+        h._json(201, artifact)
         return True
     if p.startswith("/runs/") and p.endswith("/time-machine/verify"):
         rid = p[len("/runs/"):-len("/time-machine/verify")]
@@ -373,7 +466,7 @@ def try_post(h, p, body):
             route="/runs/<id>/time-machine/verify")
         if facts is None:
             return True
-        runtime, worker, engine, _sub = facts
+        runtime, worker, engine, sub = facts
         if engine is None or runtime is None or worker is None:
             h._json(503, {
                 "error": "exact Time Machine verification requires a ready identity-qualified product worker",
