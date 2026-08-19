@@ -200,6 +200,27 @@ class SampleWith:
         return cls(**{name: value.get(name) for name in cls.FIELDS})
 
 
+def sampler_override_contract() -> dict[str, Any]:
+    """Describe the sampler fields :class:`SampleWith` accepts, for read-side affordances.
+
+    Metadata, not a second validator: the ranges below are the ones ``SampleWith.__init__`` actually
+    enforces, so an Inspector client can render the contract without maintaining a parallel table
+    that could drift from the rule it describes.
+    """
+    return {
+        "type": "object",
+        "properties": {
+            "temperature": {"type": "number", "minimum": 0},
+            "top_k": {"type": "integer", "minimum": 0},
+            "top_p": {"type": "number", "minimum": 0, "maximum": 1},
+            "seed": {"type": "integer", "minimum": 0},
+            "rep_penalty": {"type": "number", "exclusiveMinimum": 0},
+        },
+        "required": [],
+        "min_fields": 1,
+    }
+
+
 Intervention = Union[DeleteSource, ForceToken, SampleWith]
 
 
@@ -217,4 +238,4 @@ def intervention_from_dict(value: Mapping[str, Any]) -> Intervention:
 
 
 __all__ = ["DeleteSource", "ForceToken", "Intervention", "InterventionError", "SampleWith",
-           "intervention_from_dict"]
+           "intervention_from_dict", "sampler_override_contract"]

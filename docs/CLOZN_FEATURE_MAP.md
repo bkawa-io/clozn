@@ -837,7 +837,8 @@ CLOZN supports:
 It does not silently downgrade an invalid exact continuation into ordinary text replay.
 
 Primary implementations: [`replay.py`](../clozn/replay/replay.py),
-[`execution_fork.py`](../clozn/replay/execution_fork.py),
+[`state_ref.py`](../clozn/experiments/state_ref.py),
+[`execution_facts.py`](../clozn/experiments/execution_facts.py),
 [`checkpoint_pin_store.py`](../clozn/replay/checkpoint_pin_store.py),
 [`timetravel.py`](../clozn/replay/timetravel.py), and
 [`time_machine_continuation.py`](../clozn/replay/time_machine_continuation.py).

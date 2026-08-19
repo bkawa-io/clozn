@@ -15,7 +15,7 @@ from clozn.receipts.forced import matched_length_neutral_filler
 from clozn.replay import influence_counterfactual as counterfactual
 from clozn.replay import span_bridge
 from clozn.replay.controlled import ExecutionBudget
-from clozn.replay.execution_fork import parent_execution_fingerprint
+from clozn.experiments.execution_facts import parent_execution_fingerprint
 from clozn.replay.replay import replay as replay_run
 from clozn.runs.context_bisect import (
     FILLER_RECIPE,

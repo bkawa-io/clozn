@@ -420,30 +420,13 @@ def test_materializing_one_fan_observation_creates_exactly_one_child_run(isolate
 
 
 # ------------------------------------------------------------------------------ safety envelope
-def test_branch_execution_never_reaches_the_retired_child_creating_executor(isolated_store, monkeypatch):
-    """Branch Fan must not reach the legacy planner, directly or through an adapter."""
-    import clozn.replay.execution_fork as execution_fork
-
-    def forbidden(name):
-        def _explode(*_args, **_kwargs):
-            raise AssertionError(f"Branch Fan called the retired planner seam {name}")
-        return _explode
-
-    for name in ("plan_execution_fork", "capture_exact_force_token_context",
-                 "plan_exact_force_token", "execute_exact_force_token"):
-        monkeypatch.setattr(execution_fork, name, forbidden(name), raising=False)
-
-    parent = _parent()
-    result = fan.branch_fan(parent, Sub(ExactEngine()), 1, limit=3, runtime_identity=RUNTIME,
-                            worker_identity=WORKER, checkpoint=_checkpoint(parent))
-    assert result["summary"]["observations_completed"] == 3
-    assert runlog.list_runs(20) == []
-
-
 def test_branch_fan_module_declares_no_legacy_fork_dependency():
+    """The retired names cannot be patched any more -- their modules are gone -- so this asserts the
+    stronger property directly: Branch Fan's source never mentions them, and never records a Run."""
     import clozn.replay.branch_fan as module
 
     source = open(module.__file__, encoding="utf-8").read()
-    for name in ("execution_fork_execute", "plan_execution_fork", "capture_exact_force_token_context",
-                 "plan_exact_force_token", "execute_exact_force_token", "runlog.record"):
+    for name in ("execution_fork_execute", "execution_fork_results", "plan_execution_fork",
+                 "capture_exact_force_token_context", "plan_exact_force_token",
+                 "execute_exact_force_token", "runlog.record"):
         assert name not in source, f"branch_fan.py still references {name}"

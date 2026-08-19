@@ -11,7 +11,7 @@ from collections.abc import Mapping
 import math
 
 from clozn.experiments.execution_facts import parent_execution_fingerprint, parent_runtime_projection
-from clozn.replay.execution_fork import sampling_intervention_contract
+from clozn.experiments.interventions import sampler_override_contract
 from clozn.replay.controlled import recorded_sampling_config
 from clozn.runs import close_calls
 from clozn.runs import context_tension
@@ -523,7 +523,7 @@ def _sampling(run: Mapping, selection: dict) -> dict:
                           reason="sampler_provenance_unavailable" if config is None else None)]
     tests = [_test_descriptor(run_id, "change_sampling", "Change sampling", selection,
                               {"kind": "change_sampling", "changes": {}}, state="requires_input",
-                              input_contract=sampling_intervention_contract())]
+                              input_contract=sampler_override_contract())]
     if isinstance(config, Mapping):
         tests.append(_test_descriptor(run_id, "probe_sampler_sensitivity", "Probe sampler sensitivity", selection,
                                       {"kind": "probe_sensitivity", "recipe": "nearby_v1"}))

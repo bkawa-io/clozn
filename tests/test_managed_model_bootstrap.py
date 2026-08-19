@@ -312,11 +312,11 @@ def test_managed_active_substrate_never_falls_back_to_control_worker():
 def test_legacy_engine_substrate_identity_is_exact_fork_eligible(
     monkeypatch, tmp_path
 ):
-    from clozn.replay.execution_fork import (
-        _runtime_projection,
+    from clozn.experiments.execution_facts import (
         parent_runtime_projection,
+        runtime_projection as _runtime_projection,
+        selection_identity_facts,
     )
-    from clozn.experiments.execution_facts import selection_identity_facts
     from clozn.server.substrates import EngineSubstrate
 
     model_sha = hashlib.sha256(b"legacy-model").hexdigest()

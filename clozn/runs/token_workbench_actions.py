@@ -74,9 +74,9 @@ def _sha(value: Any) -> str:
 # ==================================================================================== cache-by-identity
 def _run_fingerprint(run: Mapping[str, Any]) -> str:
     """A stable digest over the run's IMMUTABLE content relevant to action caching. Deliberately NOT
-    clozn.replay.execution_fork's own parent_execution_fingerprint -- that module is under concurrent
-    development this wave (see this file's module docstring); a small, independent, equally honest
-    proxy that needs no import from it."""
+    clozn.experiments.execution_facts.parent_execution_fingerprint: this is a cache key over the
+    fields that matter to an action's result, not an execution-identity fact, and conflating the two
+    would make a cache decision look like a fidelity claim."""
     trace = run.get("trace") if isinstance(run.get("trace"), Mapping) else {}
     identity = run.get("identity") if isinstance(run.get("identity"), Mapping) else {}
     payload = {

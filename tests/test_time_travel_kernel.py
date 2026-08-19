@@ -23,7 +23,6 @@ from clozn.recipes.time_travel import (
     run_time_travel, time_travel_capabilities,
 )
 from clozn.runs import store as run_store
-from clozn.replay.execution_fork import plan_execution_fork
 
 
 RUNTIME = {
@@ -176,12 +175,18 @@ def test_state_ref_rejects_stale_execution_and_exact_planning_is_not_confirmatio
     )
     assert resolved.classification == "exact_execution_fork"
     assert resolved.proof_status == "planned"
-    oracle = plan_execution_fork(
-        run, {"position": 1, "change": {"type": "none"}}, checkpoint=_exact_checkpoint(run),
+    # The canonical exact-resume resolver is the authority for these facts; there is no second
+    # planner left to cross-check against, so assert the resolution itself.
+    from clozn.experiments.execution_facts import resolve_exact_resume_facts
+
+    facts, reason = resolve_exact_resume_facts(
+        run, position=1, checkpoint=_exact_checkpoint(run),
         runtime_identity=RUNTIME, worker_identity=WORKER,
     )
-    assert resolved.plan["classification"] == oracle["classification"]
-    assert resolved.plan["exactness"] == oracle["exactness"]
+    assert reason["code"] == "exact_preconditions_met"
+    assert resolved.plan["classification"] == facts["classification"] == "exact_execution_fork"
+    assert resolved.plan["exactness"] == facts["exactness"]
+    assert facts["exactness"]["boundary_shape_true"] is True
 
 
 def test_capabilities_are_model_free_pin_aware_and_do_not_claim_exact_proof(monkeypatch):

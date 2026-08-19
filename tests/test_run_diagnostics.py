@@ -6,7 +6,10 @@ from copy import deepcopy
 import pytest
 
 from clozn import schemas
-from clozn.replay.execution_fork import parent_runtime_projection, recorded_fork_prerequisites
+from clozn.experiments.execution_facts import (
+    parent_runtime_projection,
+    recorded_execution_prerequisites as recorded_fork_prerequisites,
+)
 from clozn.recipes.context_effects import plan_context_effects
 from clozn.recipes.time_travel import time_travel_capabilities
 from clozn.runs.run_diagnostics import build_run_diagnostics

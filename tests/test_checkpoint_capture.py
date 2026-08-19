@@ -10,7 +10,7 @@ import pytest
 from clozn import schemas
 from clozn.cli.worker_registry import AdapterRuntimeIdentity, RuntimeKey
 from clozn.replay.checkpoint_capture import capture_parent_checkpoint
-from clozn.replay.execution_fork import parent_runtime_projection
+from clozn.experiments.execution_facts import parent_runtime_projection
 import clozn.runs.store as runlog
 from clozn.server.model_routing import (
     PreloadedModelBinding,

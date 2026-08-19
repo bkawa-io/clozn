@@ -6,7 +6,7 @@
   "operation": "force_token",
   "outcome": "completed",
   "result": {"child_run_id": "run_child", "backend_outcome": "exact_execution_fork"},
-  "artifact": {"schema": "clozn.execution-fork.v1", "execution_id": "fork_exec_123"},
+  "artifact": {"schema": "clozn.time-travel-result.v1", "observation_id": "obs_123"},
   "comparison": {"state": "trace_unavailable"},
   "child_run_id": "run_child"
 }

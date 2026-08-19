@@ -1,4 +1,7 @@
-"""Source-level guards for retiring the child-creating execution-fork executor.
+"""Source-level guards for the retired Execution Fork product vertical.
+
+"Execution fork" now means exactly one thing internally: the low-level worker resume RPC. It is no
+longer a planner, a product concept, a result type, or a helper namespace.
 
 Two separate claims are asserted here:
 
@@ -20,6 +23,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PACKAGE_ROOT = os.path.join(REPO_ROOT, "clozn")
 
 LEGACY_EXECUTOR_MODULE = "clozn.replay.execution_fork_execute"
+LEGACY_PLANNER_MODULE = "clozn.replay.execution_fork"
 
 # The legacy planner surface that plans or performs a child-creating exact fork.  Identity and
 # runtime-projection helpers are deliberately NOT listed: those are immutable execution facts whose
@@ -32,20 +36,9 @@ LEGACY_CHILD_CREATING_NAMES = (
     "execute_exact_fork",
 )
 
-# Canonical product code: the kernel, the recipes over it, and the features already converged onto it.
-CANONICAL_MODULES = (
-    "clozn/experiments",
-    "clozn/recipes",
-    "clozn/replay/branch_fan.py",
-    "clozn/replay/checkpoint_capture.py",
-    "clozn/replay/sampler_sensitivity.py",
-    "clozn/replay/test_this.py",
-    "clozn/replay/execution_fork.py",
-    "clozn/server/routes/branch_fan.py",
-    "clozn/server/routes/sampler_sensitivity.py",
-    "clozn/server/routes/time_travel_v1.py",
-    "clozn/server/routes/timetravel.py",
-)
+# Canonical product code is now simply the whole package: there is no legacy fork vertical left for
+# any module to depend on.
+CANONICAL_MODULES = ("clozn",)
 
 # The deprecated executor has no callers left anywhere in the package, and the module itself is
 # deleted.  Exact resume now runs through execution_facts.resolve_exact_resume_facts and
@@ -196,23 +189,45 @@ def test_no_package_code_touches_the_legacy_results_database():
     assert offenders == [], f"the retired results database is still referenced: {offenders}"
 
 
-def test_legacy_planner_module_is_not_dead_yet_and_is_not_silently_deleted():
-    """A truthful record of what still imports the legacy planner, and for what.
+def test_the_legacy_planner_module_is_gone():
+    """The Execution Fork namespace is retired outright: no module, no importers."""
+    assert not os.path.exists(os.path.join(PACKAGE_ROOT, "replay", "execution_fork.py"))
+    importers = [
+        os.path.relpath(path, REPO_ROOT) for path in _all_package_files()
+        if LEGACY_PLANNER_MODULE in _imports(path)
+    ]
+    assert importers == [], f"nothing may import the retired planner namespace: {importers}"
 
-    clozn/replay/execution_fork.py is NOT dead: four modules still import small helpers from it.
-    Deleting it needs its own audit and its own change, so this test states the remaining surface
-    rather than letting it rot unnoticed.
+
+def test_plan_execution_fork_is_defined_and_called_nowhere():
+    """The old planner abstraction is gone, not renamed.
+
+    State addressing belongs to StateRef/resolve_state and exact resume to
+    execution_facts.resolve_exact_resume_facts. A module reintroducing this name -- under any
+    namespace -- would be that duplicate planner coming back.
     """
-    importers = set()
+    offenders = []
     for path in _all_package_files():
         relative = os.path.relpath(path, REPO_ROOT)
-        if relative in {"clozn/replay/execution_fork.py", "clozn/replay/execution_fork_results.py"}:
-            continue
-        if "clozn.replay.execution_fork" in _imports(path):
-            importers.add(relative)
-    assert importers == {
-        "clozn/replay/context_bisect.py",           # parent_execution_fingerprint
-        "clozn/replay/influence_counterfactual.py",  # runtime projections + fingerprint
-        "clozn/runs/selection_inspection.py",        # sampling_intervention_contract
-        "clozn/runs/test_this.py",                   # normalize_intervention + fingerprint
-    }, f"the legacy planner's remaining helper surface changed: {sorted(importers)}"
+        with open(path, encoding="utf-8-sig") as handle:
+            tree = ast.parse(handle.read(), filename=path)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "plan_execution_fork":
+                offenders.append((relative, "definition"))
+            elif isinstance(node, ast.Name) and node.id == "plan_execution_fork":
+                offenders.append((relative, "reference"))
+            elif isinstance(node, ast.Attribute) and node.attr == "plan_execution_fork":
+                offenders.append((relative, "reference"))
+    assert offenders == [], f"the retired fork planner is back: {offenders}"
+
+
+def test_the_worker_resume_rpc_is_still_reachable_from_the_canonical_path():
+    """What survives is the low-level primitive, exactly as intended.
+
+    The canonical Generate adapter and unchanged-control proof both call engine.execution_fork(...)
+    directly. Retiring the product vertical must never be mistaken for removing that RPC.
+    """
+    for relative in ("clozn/experiments/generation.py", "clozn/experiments/exact_execution.py"):
+        with open(os.path.join(REPO_ROOT, relative), encoding="utf-8") as handle:
+            assert "execution_fork(" in handle.read(), (
+                f"{relative} must still reach the low-level worker resume RPC")

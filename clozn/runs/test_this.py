@@ -18,11 +18,11 @@ from clozn.replay.branch_fan import (
     MIN_LIMIT,
     recorded_alternatives_available,
 )
-from clozn.replay.execution_fork import (
-    normalize_intervention,
+from clozn.experiments.execution_facts import (
     parent_execution_fingerprint,
-    recorded_sampling_state,
+    recorded_sampler_state,
 )
+from clozn.experiments.interventions import InterventionError, SampleWith
 
 SCHEMA_VERSION = "clozn.test-this-plan.v1"
 RESULT_SCHEMA_VERSION = "clozn.test-this-result.v1"
@@ -217,14 +217,13 @@ def _sampling_test(run: Mapping, selection: Mapping, raw: Mapping) -> tuple[dict
     changes = raw.get("changes")
     if not isinstance(changes, Mapping) or not changes:
         raise TestThisInputError("invalid_intervention", "change_sampling needs at least one sampler change")
-    normalized, reason = normalize_intervention({"type": "sampling", **dict(changes)})
-    if reason is not None or normalized is None:
-        raise TestThisInputError(
-            str((reason or {}).get("code") or "invalid_intervention"),
-            str((reason or {}).get("message") or "sampling change is invalid"),
-        )
-    normalized_changes = {key: value for key, value in normalized.items() if key != "type"}
-    state = recorded_sampling_state(run)
+    # The typed sampler intervention owns which fields exist and what ranges they accept, so
+    # normalization here is that one rule rather than a second table beside it.
+    try:
+        normalized_changes = SampleWith.from_dict({"kind": "sample_with", **dict(changes)}).overrides
+    except InterventionError as exc:
+        raise TestThisInputError("invalid_intervention", str(exc)) from exc
+    state = recorded_sampler_state(run)
     if isinstance(state, Mapping) and all(
         key in state and state[key] == value for key, value in normalized_changes.items()
     ):

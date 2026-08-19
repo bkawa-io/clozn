@@ -14,10 +14,10 @@ from clozn.analysis.model_diff import diff_runs
 from clozn.receipts.forced import matched_length_neutral_filler
 from clozn.replay import span_bridge
 from clozn.analysis.comparison_projection import comparison_projection_from_diff
-from clozn.replay.execution_fork import (
-    _runtime_projection,
+from clozn.experiments.execution_facts import (
     parent_execution_fingerprint,
     parent_runtime_projection,
+    runtime_projection as _runtime_projection,
 )
 from clozn.replay.replay import replay as replay_run
 from clozn.runs.influence_counterfactual import (

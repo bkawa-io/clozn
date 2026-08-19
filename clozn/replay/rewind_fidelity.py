@@ -26,13 +26,14 @@ THREE CONCEPTS, NEVER COLLAPSED
 
 EXACT IS A PROOF STATE, NOT A PLANNING CLASSIFICATION
 -----------------------------------------------------------
-`plan_execution_fork` can return `classification == "exact_execution_fork"` with
-`exactness.proof_status == "planned"` -- that means preflight eligibility passed, nothing more. Only a
-TERMINAL receipt (`phase == "completed"`) whose `exactness.proof_status == "confirmed"` AND
-`unchanged_control.status == "matched"` AND `unchanged_control.result.exact_match is True` counts as
-proof (`_is_verified_exact` below checks all four explicitly, never inferring one from another). A
-`planned` plan, a `diverged`/`failed`/`cancelled` execution, or `unchanged_control.status ==
-"required_not_run"` never produces a verified boundary -- see the failed-attempt language rule below.
+`resolve_state` can return `classification == "exact_execution_fork"` with
+`proof_status == "planned"` -- that means preflight eligibility passed, nothing more. Only a COMPLETED
+`GeneratedObservation` whose `fidelity.proof_status == "confirmed"` AND
+`fidelity.unchanged_control == "matched"` AND `fidelity.exact_match is True`, backed by a consistent
+`exact_control_proof`, counts as proof (`clozn.experiments.historical_evidence.is_verified_exact`
+checks each explicitly, never inferring one from another). A merely planned resolution, an
+unavailable or failed observation, or a reconstructed realization never produces a verified boundary
+-- see the failed-attempt language rule below.
 
 REUSE, NEVER A SECOND DEFINITION
 -------------------------------------
