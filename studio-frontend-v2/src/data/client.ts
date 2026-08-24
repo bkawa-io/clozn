@@ -1,9 +1,12 @@
 import {
   ContractError,
   decodeContextTension,
+  decodeJobSnapshot,
   decodeInfluenceQuery,
   decodeJsonObject,
   decodeLiveness,
+  decodeMinimalContextResult,
+  decodeMinimalContextResultsDocument,
   decodeReadiness,
   decodeRewindFidelity,
   decodeRunComparison,
@@ -13,9 +16,12 @@ import {
   decodeSpanAddressDocument,
   decodeSuggestedBreakpoints,
   type ContextTension,
+  type JobSnapshot,
   type HealthStatus,
   type InfluenceQuery,
   type JsonObject,
+  type MinimalContextResult,
+  type MinimalContextResultSummary,
   type RunRecord,
   type RunComparison,
   type RewindFidelity,
@@ -118,6 +124,29 @@ export const studioApi = {
   async suggestedBreakpoints(runId: string, signal?: AbortSignal): Promise<SuggestedBreakpoints> {
     const endpoint = `${runPath(runId, "/suggested-breakpoints")}?limit=50`;
     return decodeSuggestedBreakpoints(await getJson(endpoint, signal), endpoint);
+  },
+  async minimalContextResults(runId: string, signal?: AbortSignal): Promise<readonly MinimalContextResultSummary[]> {
+    const endpoint = runPath(runId, "/minimal-context/results");
+    return decodeMinimalContextResultsDocument(await getJson(endpoint, signal), endpoint);
+  },
+  async minimalContextResult(runId: string, resultId: string, signal?: AbortSignal): Promise<MinimalContextResult> {
+    if (!resultId.trim()) throw new ContractError("client", "Minimal Context result id must not be blank");
+    const endpoint = runPath(runId, `/minimal-context/results/${encodeURIComponent(resultId)}`);
+    return decodeMinimalContextResult(await getJson(endpoint, signal), endpoint);
+  },
+  async startMinimalContext(runId: string, signal?: AbortSignal): Promise<JobSnapshot<MinimalContextResult>> {
+    const endpoint = runPath(runId, "/minimal-context/jobs");
+    return decodeJobSnapshot(await postJson(endpoint, {}, signal, [200, 202]), endpoint, decodeMinimalContextResult);
+  },
+  async minimalContextJob(runId: string, jobId: string, signal?: AbortSignal): Promise<JobSnapshot<MinimalContextResult>> {
+    if (!jobId.trim()) throw new ContractError("client", "Minimal Context job id must not be blank");
+    const endpoint = runPath(runId, `/minimal-context/jobs/${encodeURIComponent(jobId)}`);
+    return decodeJobSnapshot(await getJson(endpoint, signal), endpoint, decodeMinimalContextResult);
+  },
+  async cancelMinimalContext(runId: string, jobId: string, signal?: AbortSignal): Promise<JobSnapshot<MinimalContextResult>> {
+    if (!jobId.trim()) throw new ContractError("client", "Minimal Context job id must not be blank");
+    const endpoint = runPath(runId, `/minimal-context/jobs/${encodeURIComponent(jobId)}/cancel`);
+    return decodeJobSnapshot(await postJson(endpoint, {}, signal), endpoint, decodeMinimalContextResult);
   },
   async testThis(runId: string, request: JsonObject, signal?: AbortSignal): Promise<JsonObject> {
     const endpoint = runPath(runId, "/test-this");

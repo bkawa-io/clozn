@@ -157,4 +157,45 @@ describe("Studio v2 data clients", () => {
     expect(fetch).toHaveBeenCalledWith("/runs/run-1/suggested-breakpoints?limit=50", expect.any(Object));
     expect(result.breakpoints).toEqual([expect.objectContaining({ position: 7, tokenInterval: { start: 10, end: 14 }, closeCall: expect.objectContaining({ rivalTokenId: 11, meaningful: false }) })]);
   });
+
+  it("loads Minimal Context history and starts the shared job with canonical defaults", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({ results: [] }))
+      .mockResolvedValueOnce(json({
+        schema_version: "clozn.influence-map-job.v1",
+        job_id: "infjob_minimal",
+        run_id: "run / α",
+        kind: "minimal_context",
+        state: "queued",
+        progress: { phase: "queued", completed_units: 0, total_units: 0, percent: 0 },
+        cancel_requested: false,
+        cancellable: true,
+        cached: false,
+      }, 202));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await studioApi.minimalContextResults("run / α")).toEqual([]);
+    const job = await studioApi.startMinimalContext("run / α");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/runs/run%20%2F%20%CE%B1/minimal-context/results", expect.any(Object));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/runs/run%20%2F%20%CE%B1/minimal-context/jobs", expect.objectContaining({ method: "POST", body: "{}" }));
+    expect(job.state).toBe("queued");
+    expect(job.progress.totalUnits).toBe(0);
+  });
+
+  it("rejects malformed Minimal Context job progress instead of inventing a safe empty state", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({
+      schema_version: "clozn.influence-map-job.v1",
+      job_id: "infjob_minimal",
+      run_id: "run-1",
+      kind: "minimal_context",
+      state: "running",
+      progress: { phase: "searching", completed_units: "unknown", total_units: 4, percent: 25 },
+      cancel_requested: false,
+      cancellable: true,
+      cached: false,
+    })));
+
+    await expect(studioApi.minimalContextJob("run-1", "infjob_minimal")).rejects.toBeInstanceOf(ContractError);
+  });
 });

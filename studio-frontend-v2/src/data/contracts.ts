@@ -25,6 +25,7 @@ const spanIdPattern = /^span_[0-9a-f]{24}$/;
 const relationIdPattern = /^rel_[0-9a-f]{24}$/;
 const tensionIdPattern = /^tension_[0-9a-f]{24}$/;
 const breakpointIdPattern = /^breakpoint_[0-9a-f]{24}$/;
+const minimalContextResultIdPattern = /^mcres_[0-9a-f]{24}$/;
 const hashPattern = /^[0-9a-f]{64}$/;
 
 function fail(endpoint: string, detail: string): never {
@@ -864,4 +865,346 @@ export function decodeSpanAddressDocument(value: unknown, endpoint: string): Spa
     return { addressId: spanId(required(row, "address_id", endpoint, `$.addresses[${index}]`), endpoint, `$.addresses[${index}].address_id`), runId: nonEmptyString(required(row, "run_id", endpoint, `$.addresses[${index}]`), endpoint, `$.addresses[${index}].run_id`), kind: enumValue(required(row, "kind", endpoint, `$.addresses[${index}]`), kinds, endpoint, `$.addresses[${index}].kind`), relationKey, nativeRef: { artifactSchema: nonEmptyString(required(native, "artifact_schema", endpoint, "native_ref"), endpoint, `$.addresses[${index}].native_ref.artifact_schema`), collection: nonEmptyString(required(native, "collection", endpoint, "native_ref"), endpoint, `$.addresses[${index}].native_ref.collection`), id: nonEmptyString(required(native, "id", endpoint, "native_ref"), endpoint, `$.addresses[${index}].native_ref.id`), parentId: optional(native, "parent_id", (v, p) => nonEmptyString(v, endpoint, p), endpoint, `$.addresses[${index}].native_ref`), segmentId: optional(native, "segment_id", (v, p) => nonEmptyString(v, endpoint, p), endpoint, `$.addresses[${index}].native_ref`), clientSourceId: optional(native, "client_source_id", (v, p) => nonEmptyString(v, endpoint, p), endpoint, `$.addresses[${index}].native_ref`), sourceLabel: optional(native, "source_label", (v, p) => string(v, endpoint, p), endpoint, `$.addresses[${index}].native_ref`), selected: optional(native, "selected", (v, p) => boolean(v, endpoint, p), endpoint, `$.addresses[${index}].native_ref`) }, resolution: { state, reason, canonical } };
   });
   return { runId: nonEmptyString(required(item, "run_id", endpoint, "$"), endpoint, "$.run_id"), privacy, addresses };
+}
+
+export type MinimalContextCertificate = "EXACT_MINIMUM" | "INCLUSION_MINIMUM" | "BEST_VERIFIED";
+export type MinimalContextResultStatus = "completed" | "unavailable" | "cancelled";
+export type MinimalContextStoppingReason =
+  | "exact_minimum_proven"
+  | "inclusion_minimum_proven"
+  | "budget_exhausted"
+  | "search_policy_complete"
+  | "control_unavailable"
+  | "search_unavailable"
+  | "cancelled";
+
+export interface MinimalContextWinningCandidate {
+  retainedSourceIds: readonly string[];
+  removedSourceIds: readonly string[];
+  renderedPromptTokenCost: number;
+  experimentId: string | null;
+  armId: string | null;
+  observationId: string | null;
+  observationStatus: string | null;
+}
+
+export interface MinimalContextReduction {
+  objective?: string;
+  originalPromptTokenCost?: number;
+  retainedPromptTokenCost?: number;
+  removedSourceCount?: number;
+  retainedSourceCount?: number;
+  fraction?: number;
+  percent?: number;
+}
+
+export interface MinimalContextSourceInspection {
+  sourceId: string;
+  segmentId: string | null;
+  messageIndex: number | null;
+  label: string | null;
+  provenanceKind: string | null;
+  parentSourceId: string | null;
+  unicodeRange: readonly [number, number] | null;
+  byteRange: readonly [number, number] | null;
+  granularity: string;
+  text: string | null;
+  disposition: "retained" | "removed";
+}
+
+export interface MinimalContextBinding {
+  status: "current" | "stale" | "run_unavailable";
+  reason: string | null;
+}
+
+export interface MinimalContextBudget {
+  maxNewExecutions: number;
+  usedNewExecutions: number;
+  reusedObservationCount: number;
+  exhausted: boolean;
+  blockedByBudget?: boolean;
+}
+
+export interface MinimalContextInclusionCheck {
+  attempted: boolean;
+  complete: boolean;
+  testedChildCount: number;
+  totalChildCount: number;
+  allChildrenFailed: boolean;
+}
+
+export interface MinimalContextUniverse {
+  sourceIds: readonly string[];
+  sourceCount?: number;
+  policy?: JsonObject;
+}
+
+export interface MinimalContextResultSummary {
+  resultId: string;
+  runId: string;
+  searchId: string;
+  status: MinimalContextResultStatus;
+  searchStatus?: string | null;
+  certificate: MinimalContextCertificate | null;
+  stoppingReason: MinimalContextStoppingReason;
+  best: MinimalContextWinningCandidate | null;
+  reduction: MinimalContextReduction;
+  baseExecutionFingerprint: string;
+  currentBinding: MinimalContextBinding;
+}
+
+export interface MinimalContextResult extends MinimalContextResultSummary {
+  schemaVersion: "clozn.minimal-context-search-result.v2";
+  reason?: string | null;
+  reasonCode?: string | null;
+  controlObservationId: string | null;
+  universe: MinimalContextUniverse;
+  objective: { kind: "rendered_prompt_tokens"; version: "rendered_prompt_tokens.v1" };
+  trials: readonly JsonObject[];
+  trajectory: readonly JsonObject[];
+  original: JsonObject;
+  experimentAccounting: JsonObject;
+  sourceInspection: readonly MinimalContextSourceInspection[];
+  proof: JsonObject;
+  policy: JsonObject;
+  budget: MinimalContextBudget;
+  inclusionCheck: MinimalContextInclusionCheck;
+}
+
+export type JobState = "queued" | "running" | "persisting" | "cancelling" | "completed" | "failed" | "cancelled";
+
+export interface JobProgress {
+  phase: string;
+  completedUnits: number;
+  totalUnits: number;
+  percent: number;
+  bestRetainedSourceCount?: number;
+  certificateCandidateKind?: MinimalContextCertificate;
+}
+
+export interface JobSnapshot<T = unknown> {
+  schemaVersion: string;
+  jobId: string;
+  runId: string;
+  kind: string;
+  state: JobState;
+  progress: JobProgress;
+  cancelRequested: boolean;
+  cancellable: boolean;
+  cached: boolean;
+  cancelAccepted?: boolean;
+  error?: { code?: string; message: string };
+  result?: T;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+function nullableString(value: unknown, endpoint: string, path: string): string | null {
+  return value === null ? null : string(value, endpoint, path);
+}
+
+function stringArray(value: unknown, endpoint: string, path: string): readonly string[] {
+  return array(value, endpoint, path).map((entry, index) => nonEmptyString(entry, endpoint, `${path}[${index}]`));
+}
+
+function sourceRange(value: unknown, endpoint: string, path: string): readonly [number, number] | null {
+  if (value === null) return null;
+  const parsed = array(value, endpoint, path);
+  if (parsed.length !== 2) fail(endpoint, `${path} must contain exactly two offsets`);
+  const start = nonNegativeInteger(parsed[0], endpoint, `${path}[0]`);
+  const end = nonNegativeInteger(parsed[1], endpoint, `${path}[1]`);
+  if (end < start) fail(endpoint, `${path}[1] must not precede ${path}[0]`);
+  return [start, end];
+}
+
+function decodeMinimalContextCertificate(value: unknown, endpoint: string, path: string): MinimalContextCertificate | null {
+  return value === null ? null : enumValue(value, ["EXACT_MINIMUM", "INCLUSION_MINIMUM", "BEST_VERIFIED"] as const, endpoint, path);
+}
+
+function decodeMinimalContextCandidate(value: unknown, endpoint: string, path: string): MinimalContextWinningCandidate | null {
+  if (value === null) return null;
+  const item = object(value, endpoint, path);
+  return {
+    retainedSourceIds: stringArray(required(item, "retained_source_ids", endpoint, path), endpoint, `${path}.retained_source_ids`),
+    removedSourceIds: stringArray(required(item, "removed_source_ids", endpoint, path), endpoint, `${path}.removed_source_ids`),
+    renderedPromptTokenCost: nonNegativeInteger(required(item, "rendered_prompt_token_cost", endpoint, path), endpoint, `${path}.rendered_prompt_token_cost`),
+    experimentId: nullableString(required(item, "experiment_id", endpoint, path), endpoint, `${path}.experiment_id`),
+    armId: nullableString(required(item, "arm_id", endpoint, path), endpoint, `${path}.arm_id`),
+    observationId: nullableString(required(item, "observation_id", endpoint, path), endpoint, `${path}.observation_id`),
+    observationStatus: nullableString(required(item, "observation_status", endpoint, path), endpoint, `${path}.observation_status`),
+  };
+}
+
+function decodeMinimalContextReduction(value: unknown, endpoint: string, path: string): MinimalContextReduction {
+  const item = object(value, endpoint, path);
+  return {
+    objective: optional(item, "objective", (v, p) => string(v, endpoint, p), endpoint, path),
+    originalPromptTokenCost: optional(item, "original_prompt_token_cost", (v, p) => nonNegativeInteger(v, endpoint, p), endpoint, path),
+    retainedPromptTokenCost: optional(item, "retained_prompt_token_cost", (v, p) => nonNegativeInteger(v, endpoint, p), endpoint, path),
+    removedSourceCount: optional(item, "removed_source_count", (v, p) => nonNegativeInteger(v, endpoint, p), endpoint, path),
+    retainedSourceCount: optional(item, "retained_source_count", (v, p) => nonNegativeInteger(v, endpoint, p), endpoint, path),
+    fraction: optional(item, "fraction", (v, p) => {
+      const parsed = number(v, endpoint, p);
+      if (parsed < 0 || parsed > 1) fail(endpoint, `${p} must be in [0, 1]`);
+      return parsed;
+    }, endpoint, path),
+    percent: optional(item, "percent", (v, p) => {
+      const parsed = number(v, endpoint, p);
+      if (parsed < 0 || parsed > 100) fail(endpoint, `${p} must be in [0, 100]`);
+      return parsed;
+    }, endpoint, path),
+  };
+}
+
+function decodeMinimalContextBudget(value: unknown, endpoint: string, path: string): MinimalContextBudget {
+  const item = object(value, endpoint, path);
+  return {
+    maxNewExecutions: nonNegativeInteger(required(item, "max_new_executions", endpoint, path), endpoint, `${path}.max_new_executions`),
+    usedNewExecutions: nonNegativeInteger(required(item, "used_new_executions", endpoint, path), endpoint, `${path}.used_new_executions`),
+    reusedObservationCount: nonNegativeInteger(required(item, "reused_observation_count", endpoint, path), endpoint, `${path}.reused_observation_count`),
+    exhausted: boolean(required(item, "exhausted", endpoint, path), endpoint, `${path}.exhausted`),
+    blockedByBudget: optional(item, "blocked_by_budget", (v, p) => boolean(v, endpoint, p), endpoint, path),
+  };
+}
+
+function decodeMinimalContextInclusion(value: unknown, endpoint: string, path: string): MinimalContextInclusionCheck {
+  const item = object(value, endpoint, path);
+  return {
+    attempted: boolean(required(item, "attempted", endpoint, path), endpoint, `${path}.attempted`),
+    complete: boolean(required(item, "complete", endpoint, path), endpoint, `${path}.complete`),
+    testedChildCount: nonNegativeInteger(required(item, "tested_child_count", endpoint, path), endpoint, `${path}.tested_child_count`),
+    totalChildCount: nonNegativeInteger(required(item, "total_child_count", endpoint, path), endpoint, `${path}.total_child_count`),
+    allChildrenFailed: boolean(required(item, "all_children_failed", endpoint, path), endpoint, `${path}.all_children_failed`),
+  };
+}
+
+function decodeMinimalContextBinding(value: unknown, endpoint: string, path: string): MinimalContextBinding {
+  const item = object(value, endpoint, path);
+  return {
+    status: enumValue(required(item, "status", endpoint, path), ["current", "stale", "run_unavailable"] as const, endpoint, `${path}.status`),
+    reason: nullableString(required(item, "reason", endpoint, path), endpoint, `${path}.reason`),
+  };
+}
+
+function decodeMinimalContextSource(value: unknown, endpoint: string, path: string): MinimalContextSourceInspection {
+  const item = object(value, endpoint, path);
+  const messageIndex = item.message_index === null ? null : optional(item, "message_index", (v, p) => nonNegativeInteger(v, endpoint, p), endpoint, path) ?? null;
+  return {
+    sourceId: nonEmptyString(required(item, "source_id", endpoint, path), endpoint, `${path}.source_id`),
+    segmentId: item.segment_id === null ? null : optional(item, "segment_id", (v, p) => nonEmptyString(v, endpoint, p), endpoint, path) ?? null,
+    messageIndex,
+    label: item.label === null ? null : optional(item, "label", (v, p) => string(v, endpoint, p), endpoint, path) ?? null,
+    provenanceKind: item.provenance_kind === null ? null : optional(item, "provenance_kind", (v, p) => string(v, endpoint, p), endpoint, path) ?? null,
+    parentSourceId: item.parent_source_id === null ? null : optional(item, "parent_source_id", (v, p) => nonEmptyString(v, endpoint, p), endpoint, path) ?? null,
+    unicodeRange: sourceRange(required(item, "unicode_range", endpoint, path), endpoint, `${path}.unicode_range`),
+    byteRange: sourceRange(required(item, "byte_range", endpoint, path), endpoint, `${path}.byte_range`),
+    granularity: nonEmptyString(required(item, "granularity", endpoint, path), endpoint, `${path}.granularity`),
+    text: item.text === null ? null : optional(item, "text", (v, p) => string(v, endpoint, p), endpoint, path) ?? null,
+    disposition: enumValue(required(item, "disposition", endpoint, path), ["retained", "removed"] as const, endpoint, `${path}.disposition`),
+  };
+}
+
+function decodeMinimalContextSummaryFields(item: JsonRecord, endpoint: string, path: string, requireBinding = true): MinimalContextResultSummary {
+  const resultId = nonEmptyString(required(item, "result_id", endpoint, path), endpoint, `${path}.result_id`);
+  if (!minimalContextResultIdPattern.test(resultId)) fail(endpoint, `${path}.result_id is invalid`);
+  return {
+    resultId,
+    runId: nonEmptyString(required(item, "run_id", endpoint, path), endpoint, `${path}.run_id`),
+    searchId: nonEmptyString(required(item, "search_id", endpoint, path), endpoint, `${path}.search_id`),
+    status: enumValue(required(item, "status", endpoint, path), ["completed", "unavailable", "cancelled"] as const, endpoint, `${path}.status`),
+    searchStatus: optional(item, "search_status", (v, p) => nullableString(v, endpoint, p), endpoint, path),
+    certificate: decodeMinimalContextCertificate(required(item, "certificate", endpoint, path), endpoint, `${path}.certificate`),
+    stoppingReason: enumValue(required(item, "stopping_reason", endpoint, path), ["exact_minimum_proven", "inclusion_minimum_proven", "budget_exhausted", "search_policy_complete", "control_unavailable", "search_unavailable", "cancelled"] as const, endpoint, `${path}.stopping_reason`),
+    best: decodeMinimalContextCandidate(required(item, "best", endpoint, path), endpoint, `${path}.best`),
+    reduction: decodeMinimalContextReduction(required(item, "reduction", endpoint, path), endpoint, `${path}.reduction`),
+    baseExecutionFingerprint: nonEmptyString(required(item, "base_execution_fingerprint", endpoint, path), endpoint, `${path}.base_execution_fingerprint`),
+    currentBinding: item.current_binding === undefined && !requireBinding
+      ? { status: "current", reason: null }
+      : decodeMinimalContextBinding(required(item, "current_binding", endpoint, path), endpoint, `${path}.current_binding`),
+  };
+}
+
+export function decodeMinimalContextResultSummary(value: unknown, endpoint: string, path = "$"): MinimalContextResultSummary {
+  const item = object(value, endpoint, path);
+  return decodeMinimalContextSummaryFields(item, endpoint, path);
+}
+
+export function decodeMinimalContextResultsDocument(value: unknown, endpoint = "/runs/<id>/minimal-context/results"): readonly MinimalContextResultSummary[] {
+  const item = object(value, endpoint, "$");
+  closed(item, ["results"], endpoint, "$");
+  return array(required(item, "results", endpoint, "$"), endpoint, "$.results").map((entry, index) => decodeMinimalContextResultSummary(entry, endpoint, `$.results[${index}]`));
+}
+
+export function decodeMinimalContextResult(value: unknown, endpoint: string): MinimalContextResult {
+  const item = object(value, endpoint, "$");
+  closed(item, ["schema_version", "result_id", "run_id", "search_id", "status", "search_status", "reason", "reason_code", "base_execution_fingerprint", "universe", "objective", "control_observation_id", "trials", "trajectory", "original", "best", "reduction", "certificate", "stopping_reason", "experiment_accounting", "source_inspection", "proof", "policy", "budget", "inclusion_check", "current_binding"], endpoint, "$");
+  if (required(item, "schema_version", endpoint, "$") !== "clozn.minimal-context-search-result.v2") fail(endpoint, "$.schema_version is invalid");
+  const summary = decodeMinimalContextSummaryFields(item, endpoint, "$", false);
+  const universe = object(required(item, "universe", endpoint, "$"), endpoint, "$.universe");
+  const objective = object(required(item, "objective", endpoint, "$"), endpoint, "$.objective");
+  if (required(objective, "kind", endpoint, "$.objective") !== "rendered_prompt_tokens" || required(objective, "version", endpoint, "$.objective") !== "rendered_prompt_tokens.v1") fail(endpoint, "$.objective is invalid");
+  const trials = array(required(item, "trials", endpoint, "$"), endpoint, "$.trials").map((entry, index) => object(entry, endpoint, `$.trials[${index}]`));
+  const trajectory = array(required(item, "trajectory", endpoint, "$"), endpoint, "$.trajectory").map((entry, index) => object(entry, endpoint, `$.trajectory[${index}]`));
+  const currentBinding = item.current_binding === undefined ? { status: "current" as const, reason: null } : decodeMinimalContextBinding(item.current_binding, endpoint, "$.current_binding");
+  return {
+    ...summary,
+    schemaVersion: "clozn.minimal-context-search-result.v2",
+    currentBinding,
+    reason: optional(item, "reason", (v, p) => nullableString(v, endpoint, p), endpoint, "$"),
+    reasonCode: optional(item, "reason_code", (v, p) => nullableString(v, endpoint, p), endpoint, "$"),
+    controlObservationId: optional(item, "control_observation_id", (v, p) => nullableString(v, endpoint, p), endpoint, "$") ?? null,
+    universe: {
+      sourceIds: stringArray(required(universe, "source_ids", endpoint, "$.universe"), endpoint, "$.universe.source_ids"),
+      sourceCount: optional(universe, "source_count", (v, p) => nonNegativeInteger(v, endpoint, p), endpoint, "$.universe"),
+      policy: optional(universe, "policy", (v, p) => jsonObject(v, endpoint, p), endpoint, "$.universe"),
+    },
+    objective: { kind: "rendered_prompt_tokens", version: "rendered_prompt_tokens.v1" },
+    trials,
+    trajectory,
+    original: jsonObject(required(item, "original", endpoint, "$"), endpoint, "$.original"),
+    experimentAccounting: jsonObject(required(item, "experiment_accounting", endpoint, "$"), endpoint, "$.experiment_accounting"),
+    sourceInspection: array(required(item, "source_inspection", endpoint, "$"), endpoint, "$.source_inspection").map((entry, index) => decodeMinimalContextSource(entry, endpoint, `$.source_inspection[${index}]`)),
+    proof: jsonObject(required(item, "proof", endpoint, "$"), endpoint, "$.proof"),
+    policy: jsonObject(required(item, "policy", endpoint, "$"), endpoint, "$.policy"),
+    budget: decodeMinimalContextBudget(required(item, "budget", endpoint, "$"), endpoint, "$.budget"),
+    inclusionCheck: decodeMinimalContextInclusion(required(item, "inclusion_check", endpoint, "$"), endpoint, "$.inclusion_check"),
+  };
+}
+
+function decodeJobProgress(value: unknown, endpoint: string, path: string): JobProgress {
+  const item = object(value, endpoint, path);
+  closed(item, ["phase", "completed_units", "total_units", "percent", "best_retained_source_count", "certificate_candidate_kind"], endpoint, path);
+  return {
+    phase: nonEmptyString(required(item, "phase", endpoint, path), endpoint, `${path}.phase`),
+    completedUnits: nonNegativeInteger(required(item, "completed_units", endpoint, path), endpoint, `${path}.completed_units`),
+    totalUnits: nonNegativeInteger(required(item, "total_units", endpoint, path), endpoint, `${path}.total_units`),
+    percent: number(required(item, "percent", endpoint, path), endpoint, `${path}.percent`),
+    bestRetainedSourceCount: optional(item, "best_retained_source_count", (v, p) => nonNegativeInteger(v, endpoint, p), endpoint, path),
+    certificateCandidateKind: optional(item, "certificate_candidate_kind", (v, p) => enumValue(v, ["EXACT_MINIMUM", "INCLUSION_MINIMUM", "BEST_VERIFIED"] as const, endpoint, p), endpoint, path),
+  };
+}
+
+export function decodeJobSnapshot<T = unknown>(value: unknown, endpoint: string, decodeResult?: (value: unknown, endpoint: string) => T): JobSnapshot<T> {
+  const item = object(value, endpoint, "$");
+  closed(item, ["schema_version", "job_id", "run_id", "kind", "state", "progress", "cancel_requested", "cancellable", "cached", "cancel_accepted", "error", "result", "created_at", "updated_at"], endpoint, "$");
+  const error = item.error === undefined ? undefined : (() => {
+    const row = object(item.error, endpoint, "$.error");
+    return { code: optional(row, "code", (v, p) => string(v, endpoint, p), endpoint, "$.error"), message: nonEmptyString(required(row, "message", endpoint, "$.error"), endpoint, "$.error.message") };
+  })();
+  return {
+    schemaVersion: nonEmptyString(required(item, "schema_version", endpoint, "$"), endpoint, "$.schema_version"),
+    jobId: nonEmptyString(required(item, "job_id", endpoint, "$"), endpoint, "$.job_id"),
+    runId: nonEmptyString(required(item, "run_id", endpoint, "$"), endpoint, "$.run_id"),
+    kind: nonEmptyString(required(item, "kind", endpoint, "$"), endpoint, "$.kind"),
+    state: enumValue(required(item, "state", endpoint, "$"), ["queued", "running", "persisting", "cancelling", "completed", "failed", "cancelled"] as const, endpoint, "$.state"),
+    progress: decodeJobProgress(required(item, "progress", endpoint, "$"), endpoint, "$.progress"),
+    cancelRequested: boolean(required(item, "cancel_requested", endpoint, "$"), endpoint, "$.cancel_requested"),
+    cancellable: boolean(required(item, "cancellable", endpoint, "$"), endpoint, "$.cancellable"),
+    cached: boolean(required(item, "cached", endpoint, "$"), endpoint, "$.cached"),
+    cancelAccepted: optional(item, "cancel_accepted", (v, p) => boolean(v, endpoint, p), endpoint, "$"),
+    error,
+    result: item.result === undefined ? undefined : decodeResult ? decodeResult(item.result, endpoint) : item.result as T,
+    createdAt: optional(item, "created_at", (v, p) => string(v, endpoint, p), endpoint, "$"),
+    updatedAt: optional(item, "updated_at", (v, p) => string(v, endpoint, p), endpoint, "$"),
+  };
 }

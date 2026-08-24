@@ -5,6 +5,7 @@ import { CompareSurface, projectComparisonSpecimen, recordedStructureFromCompari
 import { LinkedEvidenceReader } from "../features/inspect/LinkedEvidenceReader";
 import { locusQueryRange, projectDecisionLoci, projectInfluenceSelection, projectLinkedReader, projectTensionSelections } from "../features/inspect/fromContracts";
 import type { InfluenceSelection, TextLocus } from "../features/inspect/model";
+import { MinimalContextPanel } from "../features/minimalContext";
 import { ModelMriSurface, projectRecordedMriSpecimen } from "../features/mri";
 import { toJournalRuns } from "../features/runs/fromContracts";
 import { RunsJournal } from "../features/runs/RunsJournal";
@@ -93,7 +94,7 @@ function InspectSurface({ runId, comparison }: Extract<StudioRoute, { surface: "
       <a className="primary-action" href="#/runs">Back to Runs</a>
     </section>
   );
-  return <LinkedEvidenceReader specimen={projection!.specimen} loadSelection={loadSelection} loadTensionSelection={loadTensionSelection} tensionSelections={tensionSelections} decisionLoci={decisionLoci} initialLocusId={initialLocusId} />;
+  return <div className="inspect-surface"><MinimalContextPanel runId={runId} /><LinkedEvidenceReader specimen={projection!.specimen} loadSelection={loadSelection} loadTensionSelection={loadTensionSelection} tensionSelections={tensionSelections} decisionLoci={decisionLoci} initialLocusId={initialLocusId} /></div>;
 }
 
 function RuntimeDataSurface() {
