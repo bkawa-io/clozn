@@ -1,0 +1,146 @@
+/*
+ * CLOZN v3 theme layers:
+ * reference values -> semantic material/state values -> component aliases.
+ * Feature CSS consumes only the semantic and component layers below.
+ */
+:root {
+  color-scheme: light;
+
+  /* Reference: Lunar Nacre */
+  --ref-lunar-outer: #fbfcff;
+  --ref-lunar-transition: #f4f6ff;
+  --ref-lunar-edge: #eaedf8;
+  --ref-lunar-workspace: #ffffff;
+  --ref-lunar-bay: #f4fbff;
+  --ref-lunar-well: #eaf7fb;
+  --ref-lunar-ink: #151725;
+  --ref-lunar-muted: #697086;
+
+  /* Reference: Black Pearl */
+  --ref-pearl-outer: #06080d;
+  --ref-pearl-transition: #0a0d14;
+  --ref-pearl-edge: #03050a;
+  --ref-pearl-workspace: #10131a;
+  --ref-pearl-bay: #151a21;
+  --ref-pearl-well: #090d12;
+  --ref-pearl-ink: #f5f4fa;
+  --ref-pearl-muted: #999dab;
+
+  /* Reference: semantic materials and visualization series */
+  --ref-blue-ion-core: #087f92;
+  --ref-blue-ion-bright: #3bc7d8;
+  --ref-blue-ion-deep: #075e6d;
+  --ref-mineral-mint: #2f9e78;
+  --ref-burnished-amber: #b97922;
+  --ref-spectrometer-magenta: #c13f7a;
+  --ref-cold-crimson: #c44354;
+  --ref-silver-blue: #747d96;
+  --ref-cryogenic-cyan: #4bb9c7;
+  --ref-lunar-violet: #7775b5;
+  --ref-series-silver: #7890a8;
+
+  /* Reference: geometry and type */
+  --ref-space-micro: 4px;
+  --ref-space-tight: 8px;
+  --ref-space-control: 12px;
+  --ref-space-component: 16px;
+  --ref-space-group: 24px;
+  --ref-space-section: 32px;
+  --ref-space-major: 48px;
+  --ref-radius-data: 4px;
+  --ref-radius-control: 7px;
+  --ref-radius-panel: 10px;
+  --ref-radius-shell: 16px;
+  --ref-control-compact: 30px;
+  --ref-control-standard: 36px;
+  --ref-target-min: 32px;
+  --ref-font-sans: "Spline Sans", "Avenir Next", Avenir, "Segoe UI", sans-serif;
+  --ref-font-mono: "Spline Sans Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+[data-theme="lunar"],
+:root:not([data-theme]) {
+  color-scheme: light;
+  --surface-shell: var(--ref-lunar-outer);
+  --surface-shell-transition: var(--ref-lunar-transition);
+  --surface-edge: var(--ref-lunar-edge);
+  --surface-workspace: var(--ref-lunar-workspace);
+  --surface-bay: var(--ref-lunar-bay);
+  --surface-well: var(--ref-lunar-well);
+  --text-primary: var(--ref-lunar-ink);
+  --text-secondary: var(--ref-lunar-muted);
+  --text-tertiary: var(--ref-silver-blue);
+  --text-inverse: var(--ref-lunar-workspace);
+  --border-etched: rgb(64 74 124 / 29%);
+  --border-subtle: rgb(70 80 132 / 16%);
+  --border-strong: rgb(49 61 111 / 42%);
+  --surface-selection: rgb(8 127 146 / 10%);
+  --shell-highlight: rgb(255 255 255 / 88%);
+  --shell-cast: linear-gradient(115deg, rgb(75 185 199 / 8%), transparent 28%, rgb(119 117 181 / 6%) 64%, transparent 86%);
+  --action-primary: var(--ref-blue-ion-core);
+  --action-hover: var(--ref-blue-ion-deep);
+  --action-bright: var(--ref-blue-ion-bright);
+  --focus-outer: var(--ref-lunar-workspace);
+}
+
+[data-theme="pearl"] {
+  color-scheme: dark;
+  --surface-shell: var(--ref-pearl-outer);
+  --surface-shell-transition: var(--ref-pearl-transition);
+  --surface-edge: var(--ref-pearl-edge);
+  --surface-workspace: var(--ref-pearl-workspace);
+  --surface-bay: var(--ref-pearl-bay);
+  --surface-well: var(--ref-pearl-well);
+  --text-primary: var(--ref-pearl-ink);
+  --text-secondary: var(--ref-pearl-muted);
+  --text-tertiary: var(--ref-silver-blue);
+  --text-inverse: var(--ref-pearl-edge);
+  --border-etched: rgb(177 190 223 / 30%);
+  --border-subtle: rgb(177 190 223 / 15%);
+  --border-strong: rgb(196 208 238 / 44%);
+  --surface-selection: rgb(59 199 216 / 13%);
+  --shell-highlight: rgb(245 244 250 / 7%);
+  --shell-cast: linear-gradient(110deg, rgb(75 185 199 / 8%), transparent 28%, rgb(119 117 181 / 10%) 62%, rgb(193 63 122 / 4%) 100%);
+  --action-primary: var(--ref-blue-ion-bright);
+  --action-hover: var(--ref-blue-ion-core);
+  --action-bright: var(--ref-blue-ion-bright);
+  --focus-outer: var(--ref-pearl-edge);
+}
+
+:root {
+  /* Semantic state layer */
+  --status-info: var(--action-primary);
+  --status-success: var(--ref-mineral-mint);
+  --status-warning: var(--ref-burnished-amber);
+  --status-anomaly: var(--ref-spectrometer-magenta);
+  --status-failure: var(--ref-cold-crimson);
+  --status-unknown: var(--ref-silver-blue);
+  --viz-primary: var(--action-primary);
+  --viz-secondary: var(--ref-cryogenic-cyan);
+  --viz-tertiary: var(--ref-lunar-violet);
+  --font-sans: var(--ref-font-sans);
+  --font-mono: var(--ref-font-mono);
+  --space-micro: var(--ref-space-micro);
+  --space-tight: var(--ref-space-tight);
+  --space-control: var(--ref-space-control);
+  --space-component: var(--ref-space-component);
+  --space-group: var(--ref-space-group);
+  --space-section: var(--ref-space-section);
+  --space-major: var(--ref-space-major);
+  --radius-data: var(--ref-radius-data);
+  --radius-control: var(--ref-radius-control);
+  --radius-panel: var(--ref-radius-panel);
+
+  /* Component layer */
+  --component-card-padding: var(--space-component);
+  --component-panel-padding: var(--space-group);
+  --component-seam: 1px solid var(--border-etched);
+  --component-control-height: var(--ref-control-standard);
+  --component-target-min: var(--ref-target-min);
+  --component-scrubber-width: 40px;
+  --component-scrubber-mark: 32px;
+  --component-shadow: 0 12px 30px rgb(31 41 78 / 10%), 0 2px 6px rgb(31 41 78 / 7%);
+}
+
+@font-face { font-family: "Spline Sans"; src: local("Spline Sans"); font-display: swap; }
+@font-face { font-family: "Spline Sans Mono"; src: local("Spline Sans Mono"); font-display: swap; }

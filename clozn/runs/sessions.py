@@ -398,6 +398,31 @@ def list_sessions(*, limit: int = 50, include_hidden: bool = False) -> list:
             "SELECT session_key, MIN(recorded_ts) AS first_ts, MAX(recorded_ts) AS last_ts, "
             "COUNT(*) AS n FROM runs WHERE session_key IS NOT NULL GROUP BY session_key"
         ).fetchall()
+        preview_rows = db.execute(
+            "SELECT session_key, payload_json FROM runs "
+            "WHERE session_key IS NOT NULL AND source NOT IN (?, ?, ?) "
+            "ORDER BY recorded_ts ASC, id ASC",
+            _DERIVED_SOURCES,
+        ).fetchall()
+    previews = {}
+    for row in preview_rows:
+        key = row["session_key"]
+        if key in previews:
+            continue
+        try:
+            summary = _summary(json.loads(row["payload_json"]))
+        except Exception:
+            continue
+        run_id = summary.get("id")
+        prompt_summary = summary.get("prompt_summary")
+        response_summary = summary.get("response_summary")
+        if not all(isinstance(value, str) for value in (run_id, prompt_summary, response_summary)):
+            continue
+        previews[key] = {
+            "run_id": run_id,
+            "prompt_summary": prompt_summary,
+            "response_summary": response_summary,
+        }
     agg_by_key = {r["session_key"]: r for r in agg_rows}
     seen = set()
     out = []
@@ -408,6 +433,8 @@ def list_sessions(*, limit: int = 50, include_hidden: bool = False) -> list:
             doc["first_activity_ts"] = float(agg["first_ts"])
             doc["last_activity_ts"] = float(agg["last_ts"])
             doc["run_count"] = int(agg["n"])
+        if doc["id"] in previews:
+            doc["preview"] = previews[doc["id"]]
         seen.add(doc["id"])
         out.append(doc)
     for key, agg in agg_by_key.items():
@@ -420,6 +447,8 @@ def list_sessions(*, limit: int = 50, include_hidden: bool = False) -> list:
         }
         doc = _lazy_document(key, derived)
         doc.update(derived)
+        if key in previews:
+            doc["preview"] = previews[key]
         out.append(doc)
     if not include_hidden:
         out = [d for d in out if d.get("privacy", {}).get("visibility") != "hidden"]
