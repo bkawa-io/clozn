@@ -1,0 +1,30 @@
+{
+  "name": "clozn-studio-v3",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "pnpm check:colors && pnpm check:copy && tsc -b && vite build",
+    "check": "pnpm check:colors && pnpm check:copy && tsc -b --pretty false && vitest run",
+    "check:colors": "node scripts/check-raw-colors.mjs",
+    "check:copy": "node scripts/check-copy.mjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.4",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "jsdom": "^30.0.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10"
+  }
+}

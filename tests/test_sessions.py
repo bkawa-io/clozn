@@ -386,6 +386,44 @@ def test_list_sessions_respects_limit(isolated):
     assert len(sessions.list_sessions(limit=2)) == 2
 
 
+def test_list_sessions_adds_earliest_ordinary_run_preview_without_derived_runs(isolated):
+    sessions.create_session("thread-preview", title="A conversation")
+    first = _run(session="thread-preview", prompt="First question", response="First answer")
+    _run(session="thread-preview", source="branch", prompt="Derived branch", response="Not a session preview")
+    listed = next(item for item in sessions.list_sessions() if item["id"] == session_key("thread-preview"))
+    assert listed["preview"] == {
+        "run_id": first,
+        "prompt_summary": "First question",
+        "response_summary": "First answer",
+    }
+
+
+def test_list_sessions_keeps_total_run_count_separate_from_ordinary_turn_count(isolated):
+    sessions.create_session("thread-counts")
+    for index in range(20):
+        _run(session="thread-counts", prompt=f"Question {index}")
+    for source in ("replay", "branch", "fork", "branch"):
+        _run(session="thread-counts", source=source, prompt=f"Derived {source}")
+
+    listed = next(item for item in sessions.list_sessions() if item["id"] == session_key("thread-counts"))
+    assert listed["run_count"] == 24
+    assert listed["turn_count"] == 20
+
+
+def test_list_sessions_reports_zero_ordinary_turns_for_an_empty_explicit_session(isolated):
+    created = sessions.create_session("empty-thread")
+    listed = next(item for item in sessions.list_sessions() if item["id"] == created["id"])
+    assert "run_count" not in listed
+    assert listed["turn_count"] == 0
+
+
+def test_list_sessions_omits_preview_when_session_has_only_derived_runs(isolated):
+    sessions.create_session("thread-derived-only")
+    _run(session="thread-derived-only", source="fork", prompt="Derived", response="Only derived")
+    listed = next(item for item in sessions.list_sessions() if item["id"] == session_key("thread-derived-only"))
+    assert "preview" not in listed
+
+
 # ======================================================================================= session-scoped runs
 
 def test_list_session_runs_unknown_or_empty_id(isolated):
