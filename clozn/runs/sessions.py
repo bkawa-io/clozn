@@ -390,13 +390,18 @@ def list_sessions(*, limit: int = 50, include_hidden: bool = False) -> list:
     that was never materialized), newest-activity-first. Bounded, not cursor-paginated -- unlike
     list_session_runs, where a SINGLE session can hold thousands of turns, the total number of distinct
     sessions on one install is already capped by store.KEEP (1000 total runs store-wide), so a bounded
-    query plus an in-Python merge/sort is the right amount of machinery, not premature."""
+    query plus an in-Python merge/sort is the right amount of machinery, not premature. `run_count` keeps
+    counting every member run, while `turn_count` counts only ordinary runs visible in the default trace;
+    derived replay/branch/fork runs therefore affect the former but never inflate the latter."""
     store._ensure()
     with closing(store._connect()) as db:
         explicit_rows = db.execute("SELECT * FROM sessions").fetchall()
         agg_rows = db.execute(
             "SELECT session_key, MIN(recorded_ts) AS first_ts, MAX(recorded_ts) AS last_ts, "
-            "COUNT(*) AS n FROM runs WHERE session_key IS NOT NULL GROUP BY session_key"
+            "COUNT(*) AS n, "
+            "SUM(CASE WHEN source NOT IN (?, ?, ?) THEN 1 ELSE 0 END) AS turn_n "
+            "FROM runs WHERE session_key IS NOT NULL GROUP BY session_key",
+            _DERIVED_SOURCES,
         ).fetchall()
         preview_rows = db.execute(
             "SELECT session_key, payload_json FROM runs "
@@ -433,6 +438,9 @@ def list_sessions(*, limit: int = 50, include_hidden: bool = False) -> list:
             doc["first_activity_ts"] = float(agg["first_ts"])
             doc["last_activity_ts"] = float(agg["last_ts"])
             doc["run_count"] = int(agg["n"])
+            doc["turn_count"] = int(agg["turn_n"] or 0)
+        else:
+            doc["turn_count"] = 0
         if doc["id"] in previews:
             doc["preview"] = previews[doc["id"]]
         seen.add(doc["id"])
@@ -444,6 +452,7 @@ def list_sessions(*, limit: int = 50, include_hidden: bool = False) -> list:
             "first_activity_ts": float(agg["first_ts"]),
             "last_activity_ts": float(agg["last_ts"]),
             "run_count": int(agg["n"]),
+            "turn_count": int(agg["turn_n"] or 0),
         }
         doc = _lazy_document(key, derived)
         doc.update(derived)

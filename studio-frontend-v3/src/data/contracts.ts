@@ -107,6 +107,7 @@ export interface SessionRecord {
   firstActivityTs?: number;
   lastActivityTs?: number;
   runCount?: number;
+  turnCount?: number;
   preview?: SessionPreview;
 }
 
@@ -124,7 +125,7 @@ export function decodeSession(value: unknown, endpoint = "/sessions", path = "$"
   const row = object(value, endpoint, path);
   closed(row, [
     "schema_version", "id", "created_ts", "created_at", "client_key", "title", "privacy",
-    "materialized_from", "first_activity_ts", "last_activity_ts", "run_count", "preview",
+    "materialized_from", "first_activity_ts", "last_activity_ts", "run_count", "turn_count", "preview",
   ], endpoint, path);
   const schemaVersion = enumValue(required(row, "schema_version", endpoint, path), ["clozn.session.v1"], endpoint, `${path}.schema_version`);
   const id = nonEmptyString(required(row, "id", endpoint, path), endpoint, `${path}.id`);
@@ -155,6 +156,7 @@ export function decodeSession(value: unknown, endpoint = "/sessions", path = "$"
     firstActivityTs,
     lastActivityTs,
     runCount: optional(row, "run_count", (v, p) => nonNegativeInteger(v, endpoint, p), endpoint, path),
+    turnCount: optional(row, "turn_count", (v, p) => nonNegativeInteger(v, endpoint, p), endpoint, path),
     preview: optional(row, "preview", (v, p) => decodePreview(v, endpoint, p), endpoint, path),
   };
 }

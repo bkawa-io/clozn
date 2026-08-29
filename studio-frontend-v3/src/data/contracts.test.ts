@@ -30,11 +30,14 @@ describe("v3 read contracts", () => {
         privacy: { visibility: "visible" },
         materialized_from: "explicit",
         run_count: 2,
+        turn_count: 1,
         last_activity_ts: 20,
         preview: { run_id: "run_1", prompt_summary: "Question", response_summary: "Answer" },
       }],
     });
     expect(session.title).toBeUndefined();
+    expect(session.runCount).toBe(2);
+    expect(session.turnCount).toBe(1);
     expect(session.preview).toEqual({ runId: "run_1", promptSummary: "Question", responseSummary: "Answer" });
   });
 
