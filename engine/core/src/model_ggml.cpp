@@ -4,9 +4,11 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
+#include "clozn/target_logprob_reduction.hpp"
 #include "ggml-backend.h"
 #include "../third_party/llama.cpp/src/llama-ext.h"
 
@@ -16,6 +18,24 @@ namespace {
 // llama_backend_init/free are process-global and refcount-free; init once on first
 // adapter, never free (cheap, and freeing while another adapter lives would crash).
 bool g_backend_inited = false;
+
+class LlamaBatchGuard {
+public:
+    LlamaBatchGuard(int n_tokens, int embd, int n_seq_max)
+        : batch_(llama_batch_init(n_tokens, embd, n_seq_max)) {}
+
+    // The wrapper owns the allocation for its entire scope. Callers must not free get() manually;
+    // llama_batch is a shallow struct whose backing arrays are released here exactly once.
+    ~LlamaBatchGuard() { llama_batch_free(batch_); }
+
+    LlamaBatchGuard(const LlamaBatchGuard&) = delete;
+    LlamaBatchGuard& operator=(const LlamaBatchGuard&) = delete;
+
+    llama_batch& get() { return batch_; }
+
+private:
+    llama_batch batch_;
+};
 
 struct PrefixTrieNode {
     int token = -1;
@@ -31,6 +51,139 @@ struct TriePrefillRow {
     std::vector<int> seq_ids;
     std::vector<int> terminal_arms;
 };
+
+// llama.cpp's backend-sampler API is the only public path in this vendored revision that can
+// transform model-output logits before their automatic device-to-host copy.  This sampler computes
+// the full softmax where the output head lives, gathers one caller-selected vocabulary entry, and
+// exposes only that scalar through llama_get_sampled_logits_ith().  The host takes log(scalar);
+// importantly, it never receives or reduces the full vocabulary row when this graph is supported.
+struct TargetProbabilitySampler {
+    int32_t target_token = 0;
+    ggml_tensor* input_target = nullptr;
+};
+
+const char* target_probability_sampler_name(const llama_sampler*) {
+    return "clozn-target-probability";
+}
+
+void target_probability_sampler_apply(llama_sampler*, llama_token_data_array*) {}
+
+void target_probability_sampler_free(llama_sampler* sampler) {
+    delete static_cast<TargetProbabilitySampler*>(sampler->ctx);
+}
+
+void target_probability_sampler_backend_apply(
+        llama_sampler* sampler, ggml_context* context, ggml_cgraph*,
+        llama_sampler_data* data) {
+    auto* state = static_cast<TargetProbabilitySampler*>(sampler->ctx);
+    state->input_target = ggml_new_tensor_1d(context, GGML_TYPE_I32, 1);
+    ggml_set_name(state->input_target, "clozn_target_token");
+    ggml_set_input(state->input_target);
+
+    ggml_tensor* probabilities = ggml_soft_max(context, data->logits);
+    ggml_set_name(probabilities, "clozn_target_probabilities");
+    ggml_tensor* rows = ggml_reshape_2d(
+        context, probabilities, 1, ggml_nelements(probabilities));
+    ggml_tensor* selected = ggml_get_rows(context, rows, state->input_target);
+    data->logits = ggml_reshape_1d(context, selected, 1);
+    ggml_set_name(data->logits, "clozn_target_probability");
+}
+
+void target_probability_sampler_backend_set_input(llama_sampler* sampler) {
+    auto* state = static_cast<TargetProbabilitySampler*>(sampler->ctx);
+    if (!state->input_target)
+        throw std::runtime_error("target-probability sampler input is not allocated");
+    ggml_backend_tensor_set(
+        state->input_target, &state->target_token, 0, sizeof(state->target_token));
+}
+
+bool target_probability_sampler_backend_init(
+        llama_sampler* sampler, ggml_backend_buffer_type_t buffer_type) {
+    ggml_backend_dev_t device = ggml_backend_buft_get_device(buffer_type);
+    if (!device) return true;  // llama.cpp treats its CPU backend as universally supported.
+
+    ggml_init_params params = {
+        32 * ggml_tensor_overhead() + ggml_graph_overhead(), nullptr, true};
+    ggml_context* context = ggml_init(params);
+    if (!context) return false;
+    auto* state = static_cast<TargetProbabilitySampler*>(sampler->ctx);
+    llama_sampler_data data = {
+        ggml_new_tensor_1d(context, GGML_TYPE_F32, 1024), nullptr, nullptr, nullptr};
+    ggml_cgraph* graph = ggml_new_graph(context);
+    target_probability_sampler_backend_apply(sampler, context, graph, &data);
+    ggml_build_forward_expand(graph, data.logits);
+
+    bool supported = true;
+    for (int index = 0; index < ggml_graph_n_nodes(graph); ++index) {
+        if (!ggml_backend_dev_supports_op(device, ggml_graph_node(graph, index))) {
+            supported = false;
+            break;
+        }
+    }
+    state->input_target = nullptr;  // belonged to the temporary no-allocation context
+    ggml_free(context);
+    return supported;
+}
+
+llama_sampler_i target_probability_sampler_interface = {
+    target_probability_sampler_name,
+    nullptr,
+    target_probability_sampler_apply,
+    nullptr,
+    nullptr,
+    target_probability_sampler_free,
+    target_probability_sampler_backend_init,
+    nullptr,
+    target_probability_sampler_backend_apply,
+    target_probability_sampler_backend_set_input,
+};
+
+llama_sampler* make_target_probability_sampler(TargetProbabilitySampler** state_out) {
+    auto* state = new TargetProbabilitySampler();
+    *state_out = state;
+    return llama_sampler_init(&target_probability_sampler_interface, state);
+}
+
+double host_target_logprob(const float* row, int vocab, int target_token) {
+    float maximum = row[0];
+    for (int token = 1; token < vocab; ++token)
+        maximum = std::max(maximum, row[token]);
+    double sum_exp = 0.0;
+    for (int token = 0; token < vocab; ++token)
+        sum_exp += std::exp(static_cast<double>(row[token] - maximum));
+    const double value = static_cast<double>(row[target_token] - maximum) - std::log(sum_exp);
+    if (!std::isfinite(value))
+        throw std::runtime_error("target logprob reduction produced a non-finite value");
+    return value;
+}
+
+struct TargetLogprobRead {
+    double value = 0.0;
+    bool full_vocab_host_reduction = false;
+    long long host_output_floats = 0;
+};
+
+TargetLogprobRead read_target_logprob(
+        llama_context* context, int output_index, int vocab, int target_token) {
+    const uint32_t sampled_count =
+        llama_get_sampled_logits_count_ith(context, output_index);
+    const float* sampled = llama_get_sampled_logits_ith(context, output_index);
+    if (sampled && sampled_count == 1) {
+        const double probability = sampled[0];
+        if (!(probability > 0.0) || !std::isfinite(probability)) {
+            // Raw logits were intentionally not copied in this regime, so there is no honest host
+            // fallback after underflow. Fail closed; the scalar /score oracle remains available.
+            throw std::runtime_error(
+                "backend target probability was zero or non-finite");
+        }
+        return {std::log(probability), false, 1};
+    }
+
+    const float* logits = llama_get_logits_ith(context, output_index);
+    if (!logits)
+        throw std::runtime_error("target logprob reduction received no output row");
+    return {host_target_logprob(logits, vocab, target_token), true, vocab};
+}
 }  // namespace
 
 GgmlModel::GgmlModel(const std::string& model_path, int mask_token_id,
@@ -233,6 +386,7 @@ void GgmlAdapter::clear_ffn_write() {
 }
 
 GgmlAdapter::~GgmlAdapter() {
+    end_target_logprob_reduction();
     clear_lora();                // must run while ctx_ is alive: it detaches from the context first
     if (ctx_) llama_free(ctx_);  // the model is freed by GgmlModel when the last adapter releases it
     // backend intentionally left initialized (see note above).
@@ -665,7 +819,8 @@ ForwardResult GgmlAdapter::ar_forward_seq_segment(const std::vector<int>& board,
         write_from_ = chunk_from;
         tap_buf_.clear();
         tap_rows_ = 0;
-        llama_batch batch = llama_batch_init(chunk_rows, 0, 1);
+        LlamaBatchGuard owned_batch(chunk_rows, 0, 1);
+        llama_batch& batch = owned_batch.get();
         batch.n_tokens = chunk_rows;
         for (int i = 0; i < chunk_rows; ++i) {
             const int position = chunk_from + i;
@@ -676,7 +831,6 @@ ForwardResult GgmlAdapter::ar_forward_seq_segment(const std::vector<int>& board,
             batch.logits[i] = (need_last_logits && position == to - 1) ? 1 : 0;
         }
         const int rc = llama_decode(ctx_, batch);
-        llama_batch_free(batch);
         if (rc != 0)
             throw std::runtime_error("ar_forward_seq_segment: llama_decode failed (rc=" +
                                      std::to_string(rc) + ")");
@@ -758,7 +912,8 @@ ForwardResult GgmlAdapter::ar_forward(const std::vector<int>& tokens, int n_past
             cap_bufs_.clear();
             cap_rows_ = 0;
         }
-        llama_batch batch = llama_batch_init(chunk_rows, 0, 1);
+        LlamaBatchGuard owned_batch(chunk_rows, 0, 1);
+        llama_batch& batch = owned_batch.get();
         batch.n_tokens = chunk_rows;
         for (int i = 0; i < chunk_rows; ++i) {
             batch.token[i] = static_cast<llama_token>(tokens[chunk_from - n_past + i]);
@@ -768,7 +923,6 @@ ForwardResult GgmlAdapter::ar_forward(const std::vector<int>& tokens, int n_past
             batch.logits[i] = (chunk_from + i == n_past + len - 1) ? 1 : 0;
         }
         const int rc = llama_decode(ctx_, batch);
-        llama_batch_free(batch);
         if (rc != 0) throw std::runtime_error("ar_forward: llama_decode failed");
         ++last_decode_call_count_;
         if (aggregate_capture) {
@@ -1427,6 +1581,45 @@ void GgmlAdapter::branch_kv(int n_branches) {
     }
 }
 
+void GgmlAdapter::begin_target_logprob_reduction(int n_sequences) {
+    if (n_sequences <= 0 || n_sequences > 16)
+        throw std::invalid_argument("target logprob reduction sequence count must be in [1,16]");
+    if (!target_logprob_chains_.empty())
+        throw std::logic_error("target logprob reduction is already active");
+
+    target_logprob_chains_.reserve(static_cast<size_t>(n_sequences));
+    target_logprob_states_.reserve(static_cast<size_t>(n_sequences));
+    try {
+        for (int sequence = 0; sequence < n_sequences; ++sequence) {
+            TargetProbabilitySampler* state = nullptr;
+            llama_sampler* sampler = make_target_probability_sampler(&state);
+            llama_sampler* chain = llama_sampler_chain_init(
+                llama_sampler_chain_default_params());
+            llama_sampler_chain_add(chain, sampler);  // chain owns sampler and its state
+            target_logprob_chains_.push_back(chain);
+            target_logprob_states_.push_back(state);
+            // llama.cpp may decline backend sampling (notably tensor-split models). Keep the chain
+            // alive either way: the specialized readers detect the actual sampled row width and
+            // honestly fall back to full-vocabulary host reduction when it was not attached.
+            llama_set_sampler(ctx_, static_cast<llama_seq_id>(sequence), chain);
+        }
+    } catch (...) {
+        end_target_logprob_reduction();
+        throw;
+    }
+}
+
+void GgmlAdapter::end_target_logprob_reduction() noexcept {
+    if (ctx_) {
+        for (size_t sequence = 0; sequence < target_logprob_chains_.size(); ++sequence)
+            llama_set_sampler(ctx_, static_cast<llama_seq_id>(sequence), nullptr);
+    }
+    for (llama_sampler* chain : target_logprob_chains_)
+        llama_sampler_free(chain);
+    target_logprob_chains_.clear();
+    target_logprob_states_.clear();
+}
+
 std::vector<ForwardResult> GgmlAdapter::ar_forward_batch(
         const std::vector<int>& tokens_per_seq, int n_past,
         const std::vector<bool>& active) {
@@ -1451,7 +1644,6 @@ std::vector<ForwardResult> GgmlAdapter::ar_forward_batch_at(
             throw std::invalid_argument("ar_forward_batch: position outside context window");
     }
 
-    decoded_tokens_ += n_active;
     last_decode_call_count_ = 0;
 
     const int vocab = cfg_.vocab_size;
@@ -1462,7 +1654,8 @@ std::vector<ForwardResult> GgmlAdapter::ar_forward_batch_at(
     for (int begin = 0; begin < n_active; begin += n_batch_) {
         const int chunk_rows = std::min(n_batch_, n_active - begin);
         write_from_ = 0;
-        llama_batch batch = llama_batch_init(chunk_rows, 0, 1);
+        LlamaBatchGuard owned_batch(chunk_rows, 0, 1);
+        llama_batch& batch = owned_batch.get();
         batch.n_tokens = chunk_rows;
         for (int slot = 0; slot < chunk_rows; ++slot) {
             const int seq_i = active_indices[static_cast<size_t>(begin + slot)];
@@ -1474,15 +1667,14 @@ std::vector<ForwardResult> GgmlAdapter::ar_forward_batch_at(
         }
         const int rc = llama_decode(ctx_, batch);
         if (rc != 0) {
-            llama_batch_free(batch);
             throw std::runtime_error("ar_forward_batch: llama_decode failed (rc=" +
                                      std::to_string(rc) + ")");
         }
+        decoded_tokens_ += chunk_rows;
         ++last_decode_call_count_;
         for (int slot = 0; slot < chunk_rows; ++slot) {
             const float* logits = llama_get_logits_ith(ctx_, slot);
             if (!logits) {
-                llama_batch_free(batch);
                 throw std::runtime_error("ar_forward_batch: null logits for slot " +
                                          std::to_string(slot));
             }
@@ -1493,9 +1685,132 @@ std::vector<ForwardResult> GgmlAdapter::ar_forward_batch_at(
             out.kv = std::make_shared<GgmlKV>(positions[seq_i] + 1);
             out.logits.assign(logits, logits + vocab);
         }
-        llama_batch_free(batch);
     }
     return results;
+}
+
+TargetLogprobBatchResult GgmlAdapter::ar_forward_batch_at_target_logprobs(
+        const std::vector<int>& tokens_per_seq,
+        const std::vector<int>& positions,
+        const std::vector<bool>& active,
+        int target_token) {
+    const int n = static_cast<int>(tokens_per_seq.size());
+    if (n <= 0)
+        throw std::invalid_argument("ar_forward_batch_at_target_logprobs: empty tokens_per_seq");
+    if (static_cast<int>(positions.size()) != n || static_cast<int>(active.size()) != n)
+        throw std::invalid_argument("ar_forward_batch_at_target_logprobs: active size mismatch");
+    if (static_cast<int>(target_logprob_chains_.size()) != n)
+        throw std::logic_error(
+            "ar_forward_batch_at_target_logprobs: reduction scope sequence mismatch");
+    if (target_token < 0 || target_token >= cfg_.vocab_size)
+        throw std::invalid_argument("ar_forward_batch_at_target_logprobs: target outside vocab");
+
+    int n_active = 0;
+    for (int i = 0; i < n; ++i) if (active[i]) ++n_active;
+    TargetLogprobBatchResult result;
+    result.target_logprobs.assign(
+        static_cast<size_t>(n), std::numeric_limits<double>::quiet_NaN());
+    if (n_active == 0) return result;
+    for (int i = 0; i < n; ++i) {
+        if (active[i] && (positions[i] < 0 || positions[i] >= n_ctx_))
+            throw std::invalid_argument(
+                "ar_forward_batch_at_target_logprobs: position outside context window");
+        static_cast<TargetProbabilitySampler*>(
+            target_logprob_states_[static_cast<size_t>(i)])->target_token = target_token;
+    }
+
+    last_decode_call_count_ = 0;
+    std::vector<int> active_indices;
+    active_indices.reserve(static_cast<size_t>(n_active));
+    for (int i = 0; i < n; ++i) if (active[i]) active_indices.push_back(i);
+    for (int begin = 0; begin < n_active; begin += n_batch_) {
+        const int chunk_rows = std::min(n_batch_, n_active - begin);
+        write_from_ = 0;
+        LlamaBatchGuard owned_batch(chunk_rows, 0, 1);
+        llama_batch& batch = owned_batch.get();
+        batch.n_tokens = chunk_rows;
+        for (int slot = 0; slot < chunk_rows; ++slot) {
+            const int seq_i = active_indices[static_cast<size_t>(begin + slot)];
+            batch.token[slot] = static_cast<llama_token>(tokens_per_seq[seq_i]);
+            batch.pos[slot] = positions[seq_i];
+            batch.n_seq_id[slot] = 1;
+            batch.seq_id[slot][0] = static_cast<llama_seq_id>(seq_i);
+            batch.logits[slot] = 1;
+        }
+        const int rc = llama_decode(ctx_, batch);
+        if (rc != 0) {
+            throw std::runtime_error(
+                "ar_forward_batch_at_target_logprobs: llama_decode failed (rc=" +
+                std::to_string(rc) + ")");
+        }
+        decoded_tokens_ += chunk_rows;
+        ++last_decode_call_count_;
+        for (int slot = 0; slot < chunk_rows; ++slot) {
+            const int seq_i = active_indices[static_cast<size_t>(begin + slot)];
+            const TargetLogprobRead read = read_target_logprob(
+                ctx_, slot, cfg_.vocab_size, target_token);
+            result.target_logprobs[static_cast<size_t>(seq_i)] = read.value;
+            result.full_vocab_host_reduction |= read.full_vocab_host_reduction;
+            result.host_output_floats += read.host_output_floats;
+        }
+    }
+    return result;
+}
+
+TargetLogprobBatchResult GgmlAdapter::ar_forward_seq_segment_target_logprob(
+        const std::vector<int>& board, int from, int to, int seq_id, int target_token) {
+    if (!causal_)
+        throw std::invalid_argument(
+            "ar_forward_seq_segment_target_logprob requires causal attention");
+    if (seq_id < 0 || seq_id >= static_cast<int>(target_logprob_chains_.size()))
+        throw std::invalid_argument(
+            "ar_forward_seq_segment_target_logprob: seq_id outside reduction scope");
+    if (from < 0 || to <= from || to > n_ctx_ || to > static_cast<int>(board.size()))
+        throw std::invalid_argument(
+            "ar_forward_seq_segment_target_logprob: invalid segment");
+    if (target_token < 0 || target_token >= cfg_.vocab_size)
+        throw std::invalid_argument(
+            "ar_forward_seq_segment_target_logprob: target outside vocab");
+
+    static_cast<TargetProbabilitySampler*>(
+        target_logprob_states_[static_cast<size_t>(seq_id)])->target_token = target_token;
+    last_decode_call_count_ = 0;
+    TargetLogprobBatchResult result;
+    result.target_logprobs.assign(1, std::numeric_limits<double>::quiet_NaN());
+    const int decode_limit = n_batch_;
+    for (int chunk_from = from; chunk_from < to; chunk_from += decode_limit) {
+        const int chunk_rows = std::min(decode_limit, to - chunk_from);
+        write_from_ = chunk_from;
+        llama_batch batch = llama_batch_init(chunk_rows, 0, 1);
+        batch.n_tokens = chunk_rows;
+        for (int index = 0; index < chunk_rows; ++index) {
+            const int position = chunk_from + index;
+            batch.token[index] = static_cast<llama_token>(
+                board[static_cast<size_t>(position)]);
+            batch.pos[index] = position;
+            batch.n_seq_id[index] = 1;
+            batch.seq_id[index][0] = static_cast<llama_seq_id>(seq_id);
+            batch.logits[index] = position == to - 1 ? 1 : 0;
+        }
+        const int rc = llama_decode(ctx_, batch);
+        if (rc != 0)
+            throw std::runtime_error(
+                "ar_forward_seq_segment_target_logprob: llama_decode failed (rc=" +
+                std::to_string(rc) + ")");
+        decoded_tokens_ += chunk_rows;
+        ++last_decode_call_count_;
+        if (chunk_from + chunk_rows == to) {
+            const TargetLogprobRead read = read_target_logprob(
+                ctx_, -1, cfg_.vocab_size, target_token);
+            result.target_logprobs[0] = read.value;
+            result.full_vocab_host_reduction = read.full_vocab_host_reduction;
+            result.host_output_floats = read.host_output_floats;
+        }
+    }
+    if (!std::isfinite(result.target_logprobs[0]))
+        throw std::runtime_error(
+            "ar_forward_seq_segment_target_logprob: missing terminal score");
+    return result;
 }
 
 std::vector<ForwardResult> GgmlAdapter::ar_forward_prefill_batch(
@@ -1504,25 +1819,14 @@ std::vector<ForwardResult> GgmlAdapter::ar_forward_prefill_batch(
     if (n <= 0) throw std::invalid_argument("ar_forward_prefill_batch: empty prompts");
     if (n > 16) throw std::invalid_argument("ar_forward_prefill_batch: too many sequences");
 
-    int total = 0;
+    long long logical_rows = 0;
     for (int arm = 0; arm < n; ++arm) {
         if (prompts[static_cast<size_t>(arm)].empty())
             throw std::invalid_argument("ar_forward_prefill_batch: empty prompt");
         if (static_cast<int>(prompts[static_cast<size_t>(arm)].size()) > n_ctx_)
             throw std::invalid_argument("ar_forward_prefill_batch: prompt exceeds context window");
-        total += static_cast<int>(prompts[static_cast<size_t>(arm)].size());
-        if (total > n_ctx_)
-            throw std::invalid_argument("ar_forward_prefill_batch: physical prompt rows exceed n_ctx");
+        logical_rows += static_cast<long long>(prompts[static_cast<size_t>(arm)].size());
     }
-
-    llama_memory_clear(llama_get_memory(ctx_), true);
-    frozen_end_ = 0;
-    boundary_row_.clear();
-    write_from_ = 0;
-    last_decode_call_count_ = 0;
-    last_prefill_logical_rows_ = total;
-    last_prefill_physical_rows_ = 0;
-    last_prefill_reused_rows_ = 0;
 
     PrefixTrieNode root;
     for (int arm = 0; arm < n; ++arm) {
@@ -1543,7 +1847,7 @@ std::vector<ForwardResult> GgmlAdapter::ar_forward_prefill_batch(
     }
 
     std::vector<TriePrefillRow> rows;
-    rows.reserve(static_cast<size_t>(total));
+    rows.reserve(static_cast<size_t>(logical_rows));
     auto emit_rows = [&](auto&& self, const PrefixTrieNode& node) -> void {
         for (const auto& entry : node.children) {
             const PrefixTrieNode& child = *entry.second;
@@ -1555,21 +1859,33 @@ std::vector<ForwardResult> GgmlAdapter::ar_forward_prefill_batch(
     emit_rows(emit_rows, root);
     if (rows.empty())
         throw std::runtime_error("ar_forward_prefill_batch: trie produced no rows");
+    if (rows.size() > static_cast<size_t>(n_ctx_))
+        throw std::invalid_argument("ar_forward_prefill_batch: physical prompt rows exceed n_ctx");
+
+    // One trie edge becomes one physical KV cell even when that cell belongs to several sequence
+    // IDs. Charge capacity only after exact-prefix sharing has been materialized; a logical-row
+    // sum would reject related prompts whose shared physical representation does fit n_ctx.
+    llama_memory_clear(llama_get_memory(ctx_), true);
+    frozen_end_ = 0;
+    boundary_row_.clear();
+    write_from_ = 0;
+    last_decode_call_count_ = 0;
+    last_prefill_logical_rows_ = logical_rows;
+    last_prefill_physical_rows_ = 0;
+    last_prefill_reused_rows_ = 0;
 
     const long long physical_rows = static_cast<long long>(rows.size());
     last_prefill_physical_rows_ = 0;
     last_prefill_reused_rows_ = last_prefill_logical_rows_ - physical_rows;
-    decoded_tokens_ += physical_rows;
-
     const int vocab = cfg_.vocab_size;
     std::vector<std::vector<float>> final_logits(static_cast<size_t>(n));
     std::vector<ForwardResult> results(static_cast<size_t>(n));
 
     for (int chunk_from = 0; chunk_from < static_cast<int>(rows.size()); chunk_from += n_batch_) {
         const int chunk_rows = std::min(n_batch_, static_cast<int>(rows.size()) - chunk_from);
-        last_prefill_physical_rows_ += chunk_rows;
         write_from_ = 0;
-        llama_batch batch = llama_batch_init(chunk_rows, 0, n);
+        LlamaBatchGuard owned_batch(chunk_rows, 0, n);
+        llama_batch& batch = owned_batch.get();
         batch.n_tokens = chunk_rows;
         for (int i = 0; i < chunk_rows; ++i) {
             const TriePrefillRow& row = rows[static_cast<size_t>(chunk_from + i)];
@@ -1582,23 +1898,23 @@ std::vector<ForwardResult> GgmlAdapter::ar_forward_prefill_batch(
         }
         const int rc = llama_decode(ctx_, batch);
         if (rc != 0) {
-            llama_batch_free(batch);
             throw std::runtime_error("ar_forward_prefill_batch: trie llama_decode failed (rc=" +
                                      std::to_string(rc) + ")");
         }
+        decoded_tokens_ += chunk_rows;
+        last_prefill_physical_rows_ += chunk_rows;
         ++last_decode_call_count_;
         for (int i = 0; i < chunk_rows; ++i) {
             const TriePrefillRow& row = rows[static_cast<size_t>(chunk_from + i)];
             if (row.terminal_arms.empty()) continue;
             const float* logits = llama_get_logits_ith(ctx_, i);
             if (!logits) {
-                llama_batch_free(batch);
-                throw std::runtime_error("ar_forward_prefill_batch: missing trie terminal logits");
+                throw std::runtime_error(
+                    "ar_forward_prefill_batch: missing trie terminal logits");
             }
             for (int arm : row.terminal_arms)
                 final_logits[static_cast<size_t>(arm)].assign(logits, logits + vocab);
         }
-        llama_batch_free(batch);
     }
 
     for (int arm = 0; arm < n; ++arm) {
@@ -1612,6 +1928,138 @@ std::vector<ForwardResult> GgmlAdapter::ar_forward_prefill_batch(
         out.logits = std::move(final_logits[static_cast<size_t>(arm)]);
     }
     return results;
+}
+
+TargetLogprobBatchResult GgmlAdapter::ar_forward_prefill_batch_target_logprobs(
+        const std::vector<std::vector<int>>& prompts, int target_token) {
+    const int n = static_cast<int>(prompts.size());
+    if (n <= 0)
+        throw std::invalid_argument("ar_forward_prefill_batch_target_logprobs: empty prompts");
+    if (n > 16)
+        throw std::invalid_argument("ar_forward_prefill_batch_target_logprobs: too many sequences");
+    if (static_cast<int>(target_logprob_chains_.size()) != n)
+        throw std::logic_error(
+            "ar_forward_prefill_batch_target_logprobs: reduction scope sequence mismatch");
+    if (target_token < 0 || target_token >= cfg_.vocab_size)
+        throw std::invalid_argument(
+            "ar_forward_prefill_batch_target_logprobs: target outside vocab");
+
+    long long logical_rows = 0;
+    for (int arm = 0; arm < n; ++arm) {
+        if (prompts[static_cast<size_t>(arm)].empty())
+            throw std::invalid_argument(
+                "ar_forward_prefill_batch_target_logprobs: empty prompt");
+        if (static_cast<int>(prompts[static_cast<size_t>(arm)].size()) > n_ctx_)
+            throw std::invalid_argument(
+                "ar_forward_prefill_batch_target_logprobs: prompt exceeds context window");
+        logical_rows += static_cast<long long>(prompts[static_cast<size_t>(arm)].size());
+        static_cast<TargetProbabilitySampler*>(
+            target_logprob_states_[static_cast<size_t>(arm)])->target_token = target_token;
+    }
+
+    PrefixTrieNode root;
+    for (int arm = 0; arm < n; ++arm) {
+        PrefixTrieNode* node = &root;
+        const auto& prompt = prompts[static_cast<size_t>(arm)];
+        for (int pos = 0; pos < static_cast<int>(prompt.size()); ++pos) {
+            const int token = prompt[static_cast<size_t>(pos)];
+            auto& child = node->children[token];
+            if (!child) {
+                child = std::make_unique<PrefixTrieNode>();
+                child->token = token;
+                child->position = pos;
+            }
+            node = child.get();
+            node->seq_ids.push_back(arm);
+        }
+        node->terminal_arms.push_back(arm);
+    }
+
+    std::vector<TriePrefillRow> rows;
+    rows.reserve(static_cast<size_t>(logical_rows));
+    auto emit_rows = [&](auto&& self, const PrefixTrieNode& node) -> void {
+        for (const auto& entry : node.children) {
+            const PrefixTrieNode& child = *entry.second;
+            rows.push_back(TriePrefillRow{
+                child.token, child.position, child.seq_ids, child.terminal_arms});
+            self(self, child);
+        }
+    };
+    emit_rows(emit_rows, root);
+    if (rows.empty())
+        throw std::runtime_error(
+            "ar_forward_prefill_batch_target_logprobs: trie produced no rows");
+    if (rows.size() > static_cast<size_t>(n_ctx_))
+        throw std::invalid_argument(
+            "ar_forward_prefill_batch_target_logprobs: physical prompt rows exceed n_ctx");
+
+    llama_memory_clear(llama_get_memory(ctx_), true);
+    frozen_end_ = 0;
+    boundary_row_.clear();
+    write_from_ = 0;
+    last_decode_call_count_ = 0;
+    last_prefill_logical_rows_ = logical_rows;
+    last_prefill_physical_rows_ = 0;
+    last_prefill_reused_rows_ = logical_rows - static_cast<long long>(rows.size());
+
+    TargetLogprobBatchResult result;
+    result.target_logprobs.assign(
+        static_cast<size_t>(n), std::numeric_limits<double>::quiet_NaN());
+    std::vector<bool> received(static_cast<size_t>(n), false);
+    std::vector<std::vector<int>> output_sequence_ids;
+    output_sequence_ids.reserve(rows.size());
+    for (const auto& row : rows)
+        output_sequence_ids.push_back(row.terminal_arms.empty()
+                                          ? std::vector<int>{}
+                                          : row.seq_ids);
+    const auto decode_ranges = target_logprob_decode_ranges(
+        output_sequence_ids, static_cast<size_t>(n_batch_), n);
+    for (const auto& range : decode_ranges) {
+        const int chunk_from = static_cast<int>(range.first);
+        const int chunk_rows = static_cast<int>(range.second - range.first);
+        write_from_ = 0;
+        LlamaBatchGuard owned_batch(chunk_rows, 0, n);
+        llama_batch& batch = owned_batch.get();
+        batch.n_tokens = chunk_rows;
+        for (int i = 0; i < chunk_rows; ++i) {
+            const TriePrefillRow& row = rows[static_cast<size_t>(chunk_from + i)];
+            batch.token[i] = static_cast<llama_token>(row.token);
+            batch.pos[i] = row.position;
+            batch.n_seq_id[i] = static_cast<int32_t>(row.seq_ids.size());
+            for (int j = 0; j < batch.n_seq_id[i]; ++j)
+                batch.seq_id[i][j] =
+                    static_cast<llama_seq_id>(row.seq_ids[static_cast<size_t>(j)]);
+            batch.logits[i] = row.terminal_arms.empty() ? 0 : 1;
+        }
+        const int rc = llama_decode(ctx_, batch);
+        if (rc != 0) {
+            throw std::runtime_error(
+                "ar_forward_prefill_batch_target_logprobs: trie llama_decode failed (rc=" +
+                std::to_string(rc) + ")");
+        }
+        decoded_tokens_ += chunk_rows;
+        last_prefill_physical_rows_ += chunk_rows;
+        ++last_decode_call_count_;
+        for (int i = 0; i < chunk_rows; ++i) {
+            const TriePrefillRow& row = rows[static_cast<size_t>(chunk_from + i)];
+            if (row.terminal_arms.empty()) continue;
+            const TargetLogprobRead read = read_target_logprob(
+                ctx_, i, cfg_.vocab_size, target_token);
+            result.full_vocab_host_reduction |= read.full_vocab_host_reduction;
+            result.host_output_floats += read.host_output_floats;
+            for (const int arm : row.terminal_arms) {
+                result.target_logprobs[static_cast<size_t>(arm)] = read.value;
+                received[static_cast<size_t>(arm)] = true;
+            }
+        }
+    }
+    for (int arm = 0; arm < n; ++arm) {
+        if (!received[static_cast<size_t>(arm)])
+            throw std::runtime_error(
+                "ar_forward_prefill_batch_target_logprobs: missing terminal score for sequence " +
+                std::to_string(arm));
+    }
+    return result;
 }
 
 void GgmlAdapter::cleanup_seqs(int n_branches) {

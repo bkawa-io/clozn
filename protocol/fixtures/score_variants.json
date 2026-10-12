@@ -1,0 +1,83 @@
+{
+  "contract": {
+    "endpoint": "/v1/score-variants",
+    "capability": "score_variants",
+    "schema_version": "clozn.score-variants-worker.v1",
+    "limits": {
+      "max_variants": 64,
+      "max_variant_id_bytes": 128,
+      "max_prompt_rows_per_context": 16,
+      "max_checkpoint_id_bytes": 512,
+      "max_worker_generation_id_bytes": 128
+    },
+    "request_keys": ["variants", "continuation_ids", "generation_state"],
+    "variant_keys": ["id", "prompt_ids"],
+    "generation_state_keys": [
+      "checkpoint_id",
+      "worker_generation_id",
+      "baseline_variant_id"
+    ],
+    "top_statuses": ["completed", "partial", "failed", "cancelled"],
+    "row_statuses": ["completed", "failed", "cancelled", "not_started", "unsupported"],
+    "execution": {
+      "strategy_prefix": "native_",
+      "numerical_regime": "screening_unqualified",
+      "evidence_use": "screening",
+      "qualified": false
+    }
+  },
+  "conformance": {
+    "request": {
+      "variants": [
+        {"id": "baseline", "prompt_ids": [1, 2, 3]},
+        {"id": "without-source:a", "prompt_ids": [1, 2, 4]}
+      ],
+      "continuation_ids": [10, 11],
+      "generation_state": {
+        "checkpoint_id": "ckpt-worker-7",
+        "worker_generation_id": "worker-test",
+        "baseline_variant_id": "baseline"
+      }
+    },
+    "response": {
+      "schema_version": "clozn.score-variants-worker.v1",
+      "status": "completed",
+      "continuation_ids": [10, 11],
+      "results": [
+        {
+          "id": "baseline",
+          "status": "completed",
+          "prompt_token_count": 3,
+          "target_logprobs": [-0.1, -0.2]
+        },
+        {
+          "id": "without-source:a",
+          "status": "completed",
+          "prompt_token_count": 3,
+          "target_logprobs": [-0.3, -0.4]
+        }
+      ],
+      "execution": {
+        "strategy": "native_prefix_reuse_step_batch",
+        "numerical_regime": "screening_unqualified",
+        "evidence_use": "screening",
+        "qualified": false,
+        "execution_identity": {
+          "algorithm_id": "clozn.score-variants.fixture.v1",
+          "worker_generation_id": "worker-test"
+        },
+        "waves": [
+          {
+            "wave_index": 0,
+            "variant_ids": ["baseline", "without-source:a"],
+            "unique_prompt_count": 2,
+            "logical_prompt_rows": 6,
+            "physical_prompt_rows": 4,
+            "continuation_kv_rows": 2,
+            "required_kv_rows": 6
+          }
+        ]
+      }
+    }
+  }
+}

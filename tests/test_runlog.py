@@ -164,24 +164,6 @@ def test_record_final_prompt_defaults_to_none(store):
     assert rec["final_prompt"] is None
 
 
-def test_explicit_import_loads_legacy_run_without_final_prompt(store, tmp_path):
-    """Legacy JSON is imported once; normal reads never fall back to it implicitly."""
-    import json
-    legacy_dir = tmp_path / "legacy-runs"
-    legacy_dir.mkdir()
-    legacy = {"id": "run_legacy_000000", "source": "engine_chat",
-              "messages": [{"role": "user", "content": "hi"}], "response": "hey",
-              "assembled_messages": [{"role": "user", "content": "hi"}]}   # NOTE: no "final_prompt" key
-    with open(legacy_dir / "run_legacy_000000.json", "w", encoding="utf-8") as f:
-        json.dump(legacy, f)
-    assert store.get_run("run_legacy_000000") is None
-    assert store.import_json_dir(str(legacy_dir))["imported"] == 1
-    rec = store.get_run("run_legacy_000000")
-    assert rec is not None                                  # loads without crashing
-    assert rec.get("final_prompt") is None                 # absent -> None via .get(), the documented fallback
-    assert rec["assembled_messages"] == [{"role": "user", "content": "hi"}]
-
-
 def test_log_run_forwards_final_prompt_to_the_record(store, monkeypatch):
     """The handler glue (backlog #5): _log_run reads mem_out['final_prompt'] and persists it as
     run.final_prompt. Drives the REAL do_POST handler object with no socket + SUB=None (no engine, no

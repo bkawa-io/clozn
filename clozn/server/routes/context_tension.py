@@ -38,10 +38,10 @@ Wire shape:
       -> 400 {"error": ..., "code": "invalid_output_range"} -- malformed/negative/inverted start or
          end, or end beyond the recorded answer's length.
       -> 400 {"error": ..., "code": "invalid_limit"} -- limit outside [1, 100].
-      -> 500 {"error": ..., "code": "context_tension_contract_invalid"} -- a malformed legacy run/
+      -> 500 {"error": ..., "code": "context_tension_contract_invalid"} -- a malformed run or
          influence artifact could not be composed into a valid response. Text-free (mirrors
          influence_query.py's, claim_support.py's, and span_addresses.py's own contract-failure
-         handlers): an exception raised while reading malformed legacy data may itself carry private
+         handlers): an exception raised while reading malformed data may itself carry private
          source literals.
 
 `start`/`end` are Unicode code-point offsets, half-open `[start, end)`, into the exact recorded answer
@@ -136,7 +136,7 @@ def try_get(h, p):
         h._json(400, {"error": str(exc), "code": "invalid_output_range"})
         return True
     except (TypeError, UnicodeError, schemas.ValidationError):
-        # Metadata-only route. An exception raised while reading a malformed legacy run or influence
+        # Metadata-only route. An exception raised while reading a malformed run or influence
         # artifact may itself contain private source literals, so the public failure stays generic and
         # text-free (mirrors influence_query.py's, claim_support.py's, and span_addresses.py's own
         # contract-failure handlers).

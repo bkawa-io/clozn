@@ -844,6 +844,10 @@
     ]
   },
   "manifest_sha256": "fece449ee89062f5bee67a4840c7879d230b43596f321961f22875cc806aaa59",
+  "suite_fingerprint": {
+    "algorithm": "canonical-json-v1",
+    "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
   "name": "tone-warmth-v3",
   "schema_version": "clozn.experiment.result.v0",
   "seeds": [

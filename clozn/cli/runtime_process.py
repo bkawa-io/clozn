@@ -24,6 +24,8 @@ from clozn.cli.worker_handle import (
     terminate_process as _terminate,
 )
 from clozn.cli.worker_registry import (
+    AdapterRuntimeIdentity,
+    RuntimeKey,
     WorkerDefinition,
     WorkerRegistry,
     WorkerRegistryConfigError,
@@ -123,6 +125,124 @@ def _selected_engine_discovery(prefer_gpu: bool) -> tuple[object, str]:
 
     discovery = find_engine_ex(prefer_gpu=prefer_gpu)
     return discovery, sha256_file(os.path.abspath(discovery.exe))
+
+
+def _engine_artifact_context(discovery, executable_sha256: str) -> dict:
+    """Identity facts owned by executable selection rather than the worker."""
+    return {
+        key: value
+        for key, value in {
+            "discovery_source": getattr(discovery, "discovery_source", None),
+            "backend": getattr(discovery, "backend", None),
+            "artifact_sha256": executable_sha256,
+            "engine_version": getattr(discovery, "engine_version", None),
+            "build_id": getattr(discovery, "build_id", None),
+            "llama_cpp_commit": getattr(discovery, "llama_cpp_commit", None),
+        }.items()
+        if value not in (None, "")
+    }
+
+
+def _single_model_router(config, *, engine, sub, health, discovery, executable_sha256, worker_port):
+    """Build the same exact router used by configured multi-model serving."""
+    from clozn.artifacts.contracts import sha256_file
+    from clozn.server.model_routing import PreloadedModelBinding, PreloadedModelRouter
+    from clozn.server.request_gate import WorkerGateRegistry
+
+    model_sha256 = health.get("model_sha256")
+    context_size = health.get("n_ctx")
+    protocol_version = health.get("protocol_version")
+    worker_id = health.get("worker_generation_id")
+    capabilities = health.get("capabilities")
+    if not isinstance(model_sha256, str) or len(model_sha256) != 64:
+        raise WorkerRegistryConfigError("worker health omitted the model SHA-256")
+    if isinstance(context_size, bool) or not isinstance(context_size, int) or context_size < 1:
+        raise WorkerRegistryConfigError("worker health omitted the context size")
+    if not isinstance(protocol_version, str) or not protocol_version:
+        raise WorkerRegistryConfigError("worker health omitted the protocol version")
+    if not isinstance(worker_id, str) or not worker_id:
+        raise WorkerRegistryConfigError("worker health omitted the process generation")
+    if not isinstance(capabilities, dict):
+        raise WorkerRegistryConfigError("worker health omitted capabilities")
+
+    adapter_path = config.flags.get("adapter")
+    if adapter_path:
+        lora = health.get("lora")
+        if not isinstance(lora, dict):
+            raise WorkerRegistryConfigError("worker health omitted the configured adapter")
+        scale = lora.get("scale")
+        if isinstance(scale, bool) or not isinstance(scale, (int, float)):
+            raise WorkerRegistryConfigError("worker health omitted the adapter scale")
+        artifact_sha256 = sha256_file(str(adapter_path))
+        identity_source = json.dumps(
+            {"artifact_sha256": artifact_sha256, "scale": float(scale)},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        adapter = AdapterRuntimeIdentity(
+            present=True,
+            identity_sha256=hashlib.sha256(identity_source).hexdigest(),
+            artifact_sha256=artifact_sha256,
+            scale=float(scale),
+        )
+    else:
+        if health.get("lora") is not None:
+            raise WorkerRegistryConfigError("worker attached an unconfigured adapter")
+        adapter = AdapterRuntimeIdentity.absent()
+
+    template_fingerprint = _worker_template_fingerprint(worker_port)
+    backend = discovery.backend or ("gpu" if discovery.gpu else "cpu")
+    white_box = {}
+    for name in ("sae", "jlens", "attn_knockout"):
+        value = capabilities.get(name)
+        if type(value) is not bool:
+            raise WorkerRegistryConfigError(
+                f"worker health omitted boolean capability {name!r}"
+            )
+        white_box[name] = value
+    runtime_key = RuntimeKey(
+        gguf_artifact_sha256=model_sha256,
+        context_size=context_size,
+        backend=backend,
+        adapter=adapter,
+        template_fingerprint=template_fingerprint,
+        engine_build=f"sha256:{executable_sha256}",
+        white_box_flags=white_box,
+    )
+    health_model = str(health.get("model") or config.model)
+    model_id = config.public_model_id or os.path.basename(health_model).removesuffix(".gguf")
+    model_id = model_id or "clozn-local"
+    worker_identity = {
+        "worker_id": worker_id,
+        "worker_generation_id": worker_id,
+        "worker_generation": 1,
+        "runtime_key_sha256": runtime_key.key_sha256,
+        "protocol_version": protocol_version,
+        "engine_build": runtime_key.engine_build,
+        "backend": backend,
+    }
+    binding = PreloadedModelBinding(
+        model_id=model_id,
+        resolved_artifact={
+            "model_id": model_id,
+            "format": "gguf",
+            "artifact_sha256": model_sha256,
+        },
+        runtime_key=runtime_key.as_dict(),
+        adapter=adapter.as_dict(),
+        state="ready",
+        worker_identity=worker_identity,
+        sub=sub,
+        engine=engine,
+        preloaded=True,
+    )
+    return PreloadedModelRouter(
+        (binding,),
+        default_model_id=model_id,
+        preload_model_ids=(model_id,),
+        max_loaded_workers=1,
+        gate=WorkerGateRegistry((model_id,)),
+    )
 
 
 @dataclass(frozen=True)
@@ -412,12 +532,12 @@ def _start_registry_maintenance(stack: RuntimeStack, *, poll_interval: float = 0
     thread.start()
 
 
-def _spawn_managed_runtime_inprocess(
+def _spawn_managed_runtime(
     config: RuntimeConfig,
     *,
     worker_log=None,
 ) -> RuntimeStack:
-    """ADR 008 Stage 2/3: managed workers plus the in-process gateway and cold loader.
+    """Start managed workers, the gateway, and the cold loader.
 
     The registry remains supervisor-owned and the gateway receives an in-memory
     projection source plus the live cold-loader and busy-call adapters.
@@ -463,6 +583,7 @@ def _spawn_managed_runtime_inprocess(
         port_factory=lambda: _free_port(),
         busy_tracking_wired=True,
     )
+    definitions_by_id = {definition.model_id: definition for definition in definitions}
     gateway = None
     try:
         status = registry.start_preloaded()
@@ -481,7 +602,30 @@ def _spawn_managed_runtime_inprocess(
             client_type = getattr(server_app, "EngineClient", None)
             if client_type is None:
                 raise RuntimeError("the private worker client is unavailable")
-            return client_type(port=port)
+            engine = client_type(port=port)
+            worker = next(
+                (
+                    item for item in registry.status()["workers"]
+                    if item.get("worker_port") == port
+                ),
+                None,
+            )
+            if worker is not None:
+                model_id = worker["model_id"]
+                definition = definitions_by_id[model_id]
+                discovery = discoveries[model_id]
+                engine._clozn_artifact_context = _engine_artifact_context(
+                    discovery,
+                    definition.runtime_key.engine_build.removeprefix("sha256:"),
+                )
+            return engine
+
+        def substrate_factory(engine):
+            sub = server_app.EngineSubstrate(engine=engine)
+            sub._engine_artifact_context = getattr(
+                engine, "_clozn_artifact_context", {}
+            )
+            return sub
 
         def registry_cold_loader(model_id: str, timeout: float) -> ColdLoadOutcome:
             result = registry.ensure_loaded(model_id, timeout=timeout)
@@ -505,7 +649,7 @@ def _spawn_managed_runtime_inprocess(
         router = InMemoryProjectionRouter(
             registry.routing_projection,
             engine_factory=engine_factory,
-            substrate_factory=lambda engine: server_app.EngineSubstrate(engine=engine),
+            substrate_factory=substrate_factory,
             loader=registry_cold_loader,
             worker_call_tracker=registry.track_call,
         )
@@ -570,7 +714,7 @@ def _spawn_managed_runtime_inprocess(
         raise
 
 
-def _spawn_legacy_runtime_inprocess(
+def _spawn_single_model_runtime(
     config: RuntimeConfig,
     *,
     worker_log=None,
@@ -583,8 +727,8 @@ def _spawn_legacy_runtime_inprocess(
     worker_handle = None
     gateway = None
     try:
-        discovery, _executable_sha256 = _selected_engine_discovery(config.prefer_gpu)
-        legacy_spawn = lambda *args, **kwargs: spawn_engine(
+        discovery, executable_sha256 = _selected_engine_discovery(config.prefer_gpu)
+        selected_spawn = lambda *args, **kwargs: spawn_engine(
             *args, engine_discovery=discovery, **kwargs
         )
         worker_handle = WorkerHandle.start(
@@ -596,18 +740,30 @@ def _spawn_legacy_runtime_inprocess(
             boot_timeout=config.worker_boot_timeout,
             restart_limit=config.restart_limit,
             restart_window=config.restart_window,
-            spawn=legacy_spawn,
+            spawn=selected_spawn,
         )
         client_type = getattr(server_app, "EngineClient", None)
         if client_type is None:
             raise ctx.CloznError("the private worker client is unavailable")
         engine = client_type(port=worker_port)
         sub = server_app.EngineSubstrate(engine=engine)
+        sub._engine_artifact_context = _engine_artifact_context(
+            discovery, executable_sha256
+        )
+        router = _single_model_router(
+            config,
+            engine=engine,
+            sub=sub,
+            health=worker_handle.health,
+            discovery=discovery,
+            executable_sha256=executable_sha256,
+            worker_port=worker_port,
+        )
         server = server_app.build_server(
             host=config.host,
             port=config.public_port,
             engine=engine,
-            sub=sub,
+            model_router=router,
             public_model_id=config.public_model_id,
             structured_mode=config.structured_mode,
         )
@@ -646,29 +802,6 @@ def _spawn_legacy_runtime_inprocess(
         raise
 
 
-def _spawn_runtime_inprocess(
-    config: RuntimeConfig,
-    *,
-    worker_log=None,
-) -> RuntimeStack:
-    if config.managed_models:
-        return _spawn_managed_runtime_inprocess(
-            config, worker_log=worker_log
-        )
-    return _spawn_legacy_runtime_inprocess(
-        config, worker_log=worker_log
-    )
-
-
-def spawn_runtime_inprocess(
-    config: RuntimeConfig, *, worker_log=None
-) -> RuntimeStack:
-    """Explicit entry point for the merged in-process runtime."""
-    return _spawn_runtime_inprocess(
-        config, worker_log=worker_log
-    )
-
-
 def spawn_runtime(config: RuntimeConfig, *, worker_log=None) -> RuntimeStack:
     """Launch the private worker(s) and serve the public API in this process."""
     from clozn.cli import main as ctx
@@ -678,6 +811,8 @@ def spawn_runtime(config: RuntimeConfig, *, worker_log=None) -> RuntimeStack:
             f"port {config.public_port} is already in use. Pick another with --port."
         )
     try:
-        return spawn_runtime_inprocess(config, worker_log=worker_log)
+        if config.managed_models:
+            return _spawn_managed_runtime(config, worker_log=worker_log)
+        return _spawn_single_model_runtime(config, worker_log=worker_log)
     except WorkerRegistryConfigError as error:
         raise ctx.CloznError(str(error)) from None

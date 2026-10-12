@@ -1,19 +1,10 @@
-"""settings.py -- the product's persisted key/value store (~/.clozn/studio_settings.json).
+"""The product's persisted settings store (``~/.clozn/studio_settings.json``).
 
-This lived at `clozn/memory/mode.py` until the 2026-07-27 memory cut, which is why so much of the
-product reached into a module called "memory" to read things that have nothing to do with memory:
-`sampling` / `sample_top_k`, `timetravel_budget_mb` / `_cap` / enabled, the run-capture mode, the
-receipt-link setting. Memory cards are gone; the settings store they happened to share a file with
-is not, so it moved here under its real name.
+Only keys in :data:`SUPPORTED_KEYS` belong to the current product contract. Reads
+ignore unknown fields and writes reject unknown keys, so stale or misspelled
+configuration can never silently become behavior.
 
-`generation_guard` (a persisted server-wide guard default, retired -- Clozn's concept guard is now
-request-local only, via `clozn_guard`) and `selective_generation` (a persisted answer-rewriting default,
-retired -- selective-generation is calibration evidence only now, see
-`clozn.server.generation_gateway.policy_signal`) are RETIRED keys: no code reads or writes either, but
-this module never scrubs a key just because its feature retired, so a pre-retirement install may still
-carry it on disk, inertly, forever.
-
-Contract, inherited verbatim from the old module and depended on across the server:
+Contract:
   * IO NEVER RAISES. A missing, unreadable, or malformed settings file degrades to the default --
     never to a crashed request. Callers rely on this and do not wrap these calls.
   * WRITES ARE ATOMIC (clozn._io.atomic_write_json): temp-file-then-rename, and a non-serializable
@@ -21,8 +12,7 @@ Contract, inherited verbatim from the old module and depended on across the serv
     truncate or corrupt the store -- every already-persisted key survives untouched. This is not
     incidental: non-atomic writes to this file were a measured data-loss bug once already.
   * SETTINGS_PATH is a module global so tests can point it at a tmp dir. tests/conftest.py asserts
-    it is redirected during any test that writes, so a missed monkeypatch fails loudly instead of
-    quietly editing the developer's real ~/.clozn.
+    it is redirected during any test that writes.
 
 Stdlib only (torch-free), so every model-free consumer -- replay, receipts, the CLI -- can import it.
 """
@@ -35,6 +25,19 @@ from clozn._io import atomic_write_json
 
 _CLOZN = os.path.expanduser("~/.clozn")
 SETTINGS_PATH = os.path.join(_CLOZN, "studio_settings.json")
+SUPPORTED_KEYS = frozenset({
+    "capture_tier",
+    "receipt_footer_mode",
+    "receipt_privacy",
+    "sampling",
+    "sample_temperature",
+    "sample_top_p",
+    "sample_top_k",
+    "sample_repeat_penalty",
+    "timetravel_snapshots",
+    "timetravel_cap",
+    "timetravel_budget_mb",
+})
 
 
 def _load_settings() -> dict:
@@ -44,13 +47,17 @@ def _load_settings() -> dict:
             return {}
         with open(SETTINGS_PATH, encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        return {key: value for key, value in data.items() if key in SUPPORTED_KEYS}
     except Exception:
         return {}
 
 
 def get_setting(key: str, default=None):
     """Read one settings key; `default` when missing or unreadable."""
+    if key not in SUPPORTED_KEYS:
+        return default
     return _load_settings().get(key, default)
 
 
@@ -60,6 +67,8 @@ def set_setting(key: str, value) -> bool:
     Atomic -- see the module docstring. Other keys are always preserved: this is a read-merge-write,
     not a replace.
     """
+    if key not in SUPPORTED_KEYS:
+        return False
     try:
         settings = _load_settings()
         settings[key] = value

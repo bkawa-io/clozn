@@ -6,9 +6,8 @@ means it was absent. The distinction prevents missing instrumentation from readi
 health. No rule changes settings, and no correlation-only rule is upgraded to causal support.
 
 Slow-decode baselines match model identity plus recorded backend/offload shape, so CPU and GPU runs are
-not mixed. Large-context prefers the measured prefill phase and retains a clearly labeled legacy
-non-decode fallback for old workers. Startup, queue, stream-flush, and adapter rules only evaluate when
-their corresponding measured phase exists.
+not mixed. Large-context requires a measured prefill phase. Startup, queue, stream-flush, and adapter
+rules likewise evaluate only when their corresponding measured phase exists.
 """
 from __future__ import annotations
 
@@ -98,52 +97,36 @@ def _phase_ms(run: Mapping[str, Any], name: str) -> float | None:
 # ------------------------------------------------------------------------------------- large_context
 
 def _large_context(run: Mapping[str, Any], related_runs) -> dict:
-    limits = _object(_object(run.get("context_receipt")).get("limits"))
-    prompt_tokens = _integer(limits.get("prompt_tokens"))
-    context_window = _integer(limits.get("context_window_tokens"), minimum=1)
+    receipt = _object(run.get("context_receipt"))
+    prompt_tokens = _integer(_object(receipt.get("rendered")).get("tokens"))
+    context_window = _integer(receipt.get("context_window_tokens"), minimum=1)
     if prompt_tokens is None or context_window is None:
         return _entry(
             "large_context", status="unavailable",
-            reason="context_receipt.limits.prompt_tokens/context_window_tokens were not both recorded "
-                   "on this run")
+            reason="context_receipt.rendered.tokens and context_receipt.context_window_tokens were not "
+                   "both recorded on this run")
 
     timing = _object(run.get("timing"))
-    meta = _object(run.get("meta"))
     wall_ms = _number(timing.get("duration_ms"))
     prefill_ms = _phase_ms(run, "prefill")
-    decode_ms = _number(meta.get("generation_duration_ms"))
-    if wall_ms is None or (prefill_ms is None and decode_ms is None):
+    if wall_ms is None or prefill_ms is None:
         return _entry(
             "large_context", status="unavailable",
-            reason="timing.duration_ms and neither a measured prefill phase nor a legacy decode duration "
-                   "were recorded")
+            reason="timing.duration_ms and a measured prefill phase were not both recorded")
 
     occupancy = prompt_tokens / context_window
-    if prefill_ms is not None:
-        prompt_share = (prefill_ms / wall_ms) if wall_ms > 0 else 0.0
-        prompt_path = "phases.prefill.duration_ms"
-        prompt_duration_ms = prefill_ms
-    else:
-        nondecode_ms = max(0.0, wall_ms - decode_ms)
-        prompt_share = (nondecode_ms / wall_ms) if wall_ms > 0 else 0.0
-        prompt_path = "derived.non_decode_duration_ms"
-        prompt_duration_ms = nondecode_ms
+    prompt_share = (prefill_ms / wall_ms) if wall_ms > 0 else 0.0
     evidence = [
-        _evidence("context_receipt.limits.prompt_tokens", prompt_tokens),
-        _evidence("context_receipt.limits.context_window_tokens", context_window),
+        _evidence("context_receipt.rendered.tokens", prompt_tokens),
+        _evidence("context_receipt.context_window_tokens", context_window),
         _evidence("timing.duration_ms", wall_ms),
-        _evidence(prompt_path, round(prompt_duration_ms, 3)),
+        _evidence("phases.prefill.duration_ms", round(prefill_ms, 3)),
     ]
     if occupancy >= _CONTEXT_OCCUPANCY_THRESHOLD and prompt_share >= _NONDECODE_SHARE_THRESHOLD:
-        attribution = (
-            "measured prompt prefill"
-            if prefill_ms is not None
-            else "legacy non-decode time (this worker does not yet time prefill separately)"
-        )
         return _entry(
             "large_context", status="fired", evidence_state="correlated",
             likely_cause=(
-                f"The prompt used {occupancy * 100:.0f}% of the context window, and {attribution} "
+                f"The prompt used {occupancy * 100:.0f}% of the context window, and measured prompt prefill "
                 f"accounted for {prompt_share * 100:.0f}% of request wall time."),
             possible_fix="Reduce the prompt size or context window, or inspect what's being included "
                          "in context.",
@@ -329,21 +312,14 @@ def _adapter_reload(run: Mapping[str, Any], related_runs) -> dict:
 
 
 def _memory_pressure(run: Mapping[str, Any], related_runs) -> dict:
-    """The one always-unavailable-today rule with a real evidence check behind it: clozn.runs.diagnosis
-    already reads meta.cpu_spill_bytes/meta.cpu_spill (its own `cpu_spill` finding), so this rule reuses
-    that exact, already-established field contract rather than inventing a new one. No production code
-    path writes either field yet (same survey finding as the rest of this module), so in practice this
-    also reports `unavailable` against real traffic today -- but unlike cold_model_load/
-    client_backpressure/queue_contention/adapter_reload, it will correctly fire or not_fire the moment
-    a writer exists, with no further change needed here."""
+    """Evaluate the run's explicit CPU/offload spill measurement when present."""
     meta = _object(run.get("meta"))
     spill_bytes = _integer(meta.get("cpu_spill_bytes"))
     spill_flag = meta.get("cpu_spill") if isinstance(meta.get("cpu_spill"), bool) else None
     if spill_bytes is None and spill_flag is None:
         return _entry(
             "memory_pressure", status="unavailable",
-            reason="meta.cpu_spill_bytes/meta.cpu_spill are read by clozn.runs.diagnosis but no code "
-                   "path writes them yet")
+            reason="meta.cpu_spill_bytes/meta.cpu_spill were not recorded on this run")
 
     evidence = []
     if spill_bytes is not None:

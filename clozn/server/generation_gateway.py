@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-import os
 import secrets
 import time
 import urllib.error
@@ -198,17 +197,6 @@ def instrumented_chat(handler, messages: list, *, model: str, max_tokens: int = 
     )
 
 
-def model_id() -> str:
-    try:
-        if isinstance(getattr(ctx, "PUBLIC_MODEL_ID", None), str) and ctx.PUBLIC_MODEL_ID:
-            return ctx.PUBLIC_MODEL_ID
-        model = str((ctx.ENGINE.health() or {}).get("model") or "clozn-local")
-        name = os.path.basename(model).removesuffix(".gguf")
-        return name or "clozn-local"
-    except Exception:
-        return "clozn-local"
-
-
 _POLICY_NOTES = {
     "ask": ("confidence on this reply falls in the calibrated 'ask' band -- consider a "
             "clarifying follow-up rather than treating it as a confident answer (from "
@@ -221,8 +209,7 @@ _POLICY_NOTES = {
 
 def _policy_verdict(trace_steps, model: str | None, task: str | None = None) -> dict:
     """The RAW clozn.eval.policy.classify_run verdict for one just-completed reply, doing the SAME saved-
-    profile lookup policy_signal below has always used (exact model match, task-indexed when the store
-    supports it, the legacy single-report fallback otherwise). Shared by policy_signal and
+    profile lookup used by policy_signal below (exact model match, task-indexed when supplied). Shared by policy_signal and
     policy_meta_for_run (both read-only ANNOTATE views over the same verdict) so both read the identical
     provenance gate -- a live band can never be stronger than what the saved report actually backs up in
     either caller.
@@ -235,18 +222,7 @@ def _policy_verdict(trace_steps, model: str | None, task: str | None = None) -> 
     try:
         from clozn.eval import policy as eval_policy, store as eval_store
         import clozn.runs.store as runlog
-        load_profile = getattr(eval_store, "load_profile", None)
-        if callable(load_profile):
-            # The indexed store owns selection semantics: explicit task is exact;
-            # omitted task is the newest profile for the exact model.  A miss is
-            # final -- never borrow another task's thresholds.
-            saved = load_profile(model, task)
-        else:
-            saved = eval_store.load()
-            if task is not None:
-                legacy_task = (saved.get("task") or saved.get("set")) if isinstance(saved, dict) else None
-                if legacy_task != task:
-                    saved = None
+        saved = eval_store.load_profile(model, task)
         if not saved:
             return {"available": False,
                     "reason": "no calibration saved for this exact model/task -- run `clozn eval --save`"}
@@ -336,10 +312,6 @@ def policy_signal(trace_steps, model: str | None, task: str | None = None) -> di
         return None
 
 
-# Backward-compat alias: earlier callers imported this name back when only the 'ask' band was wired.
-ask_band_signal = policy_signal
-
-
 def policy_meta_for_run(trace_steps, model: str | None, task: str | None = None) -> dict | None:
     """The full, ALL-BANDS selective-generation verdict for one just-completed reply, shaped for
     persistence onto the run record (`meta.clozn_policy` -- see clozn.runs.attachments.
@@ -378,8 +350,8 @@ def policy_verdict_and_signal(trace_steps, model: str | None,
     return _signal_from_verdict(verdict), _meta_from_verdict(verdict)
 
 
-def _request(body: dict, handler=None):
-    engine = ctx.active_engine(handler) if handler is not None else ctx.ENGINE
+def _request(body: dict, handler):
+    engine = ctx.active_engine(handler)
     if engine is None:
         raise RuntimeError("model worker unavailable")
     worker_body = {key: value for key, value in body.items() if key != "model"}
@@ -486,7 +458,7 @@ def _native_log_run(handler, body: dict, frames: list[dict], started: float,
         model = (
             getattr(handler, "_selected_model_id", None)
             or body.get("model")
-            or model_id()
+            or "clozn-local"
         )
         return handler._log_run(
             "native_api", messages, response, str(model), started,
@@ -504,17 +476,7 @@ def native_completion(handler, body: dict) -> None:
     started = time.time()
     frames: list[dict] = []
     try:
-        # Keep the historical one-argument `_request` test/extension seam while
-        # the built-in implementation accepts the request handler needed for
-        # exact private-worker dispatch.
-        import inspect
-        request_params = inspect.signature(_request).parameters.values()
-        handler_aware = (
-            len(request_params) >= 2
-            or any(param.kind == inspect.Parameter.VAR_POSITIONAL
-                   for param in request_params)
-        )
-        response = _request(body, handler) if handler_aware else _request(body)
+        response = _request(body, handler)
     except Exception as exc:
         _native_log_run(handler, body, frames, started, error=str(exc))
         _error(handler, exc)

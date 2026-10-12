@@ -34,6 +34,7 @@
       "source_label": "system",
       "original_order": 0,
       "included": true,
+      "content_hash": "1a2b3c4d5e6f7081",
       "redaction_state": "full"
     },
     {
@@ -42,12 +43,13 @@
       "source_label": "user",
       "original_order": 1,
       "included": true,
+      "content_hash": "2b3c4d5e6f708192",
       "redaction_state": "full"
     }
   ],
   "rendered": {
     "sha256": "3f786850e387550fdab836ed7e6dc881de23001b3f5f1a0f1e9b0b6f4e9a2c17",
-    "token_count": 61,
+    "tokens": 61,
     "estimated": false
   },
   "omissions": [],

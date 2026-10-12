@@ -67,9 +67,7 @@ def _receipt_privacy(shape: str, receipt: dict) -> str:
     privacy = receipt.get("privacy")
     if privacy in {"full", "metadata_only", "hashes_only", "off"}:
         return privacy
-    # The pre-schema receipt had no privacy field.  Its labels were already part of the persisted
-    # metadata, so treating it as metadata-only preserves what that artifact actually exposed.
-    return "metadata_only" if shape == "legacy" else "off" if shape == "absent" else "metadata_only"
+    return "metadata_only" if shape == "recorded" else "off"
 
 
 def _project_segment(segment: dict, *, allow_labels: bool) -> dict | None:
@@ -96,20 +94,13 @@ def _context_projection(run: dict) -> dict:
 
     # Privacy=off is intentionally a hard boundary.  Do not reconstruct provenance from the run's
     # message list or restore labels from any other artifact when the authoritative receipt opted out.
-    if shape == "absent" or privacy == "off":
+    if shape != "recorded" or privacy == "off":
         context["provenance_state"] = "unavailable"
         return context
 
-    limits = _dict(receipt.get("limits"))
     rendered = _dict(receipt.get("rendered"))
-    prompt_tokens = _int(limits.get("prompt_tokens"))
-    if prompt_tokens is None:
-        prompt_tokens = _int(rendered.get("tokens"))
-    if prompt_tokens is None:
-        prompt_tokens = _int(rendered.get("token_count"))
+    prompt_tokens = _int(rendered.get("tokens"))
     window_tokens = _int(receipt.get("context_window_tokens"))
-    if window_tokens is None:
-        window_tokens = _int(limits.get("context_window_tokens"))
     if prompt_tokens is not None:
         context["prompt_tokens"] = prompt_tokens
     if window_tokens is not None:
@@ -122,21 +113,7 @@ def _context_projection(run: dict) -> dict:
     delivered = [item for item in delivered_raw if isinstance(item, dict)] if isinstance(delivered_raw, list) else []
     assembled = [item for item in assembled_raw if isinstance(item, dict)] if isinstance(assembled_raw, list) else []
 
-    legacy_delivered_count = None
-    if isinstance(delivered_raw, dict) and isinstance(delivered_raw.get("messages"), list):
-        legacy_delivered_count = sum(1 for item in delivered_raw["messages"] if isinstance(item, dict))
-
-    # The old receipt carried assembled_messages under survived.  Count them when possible, but never
-    # copy their contents into the Turn Receipt.
-    if not assembled:
-        survived = _dict(receipt.get("survived"))
-        old_assembled = survived.get("assembled_messages")
-        if isinstance(old_assembled, list):
-            assembled_count = sum(1 for item in old_assembled if isinstance(item, dict))
-        else:
-            assembled_count = None
-    else:
-        assembled_count = len(assembled)
+    assembled_count = len(assembled) if isinstance(assembled_raw, list) else None
 
     omitted_ids = {
         item.get("segment_id") for item in delivered
@@ -145,7 +122,7 @@ def _context_projection(run: dict) -> dict:
     for omission in receipt.get("omissions") if isinstance(receipt.get("omissions"), list) else []:
         if isinstance(omission, dict) and isinstance(omission.get("segment_id"), str):
             omitted_ids.add(omission["segment_id"])
-    sources = {"delivered": len(delivered) if delivered else (legacy_delivered_count or 0)}
+    sources = {"delivered": len(delivered)}
     if assembled_count is not None:
         sources["assembled"] = assembled_count
     sources["omitted"] = len(omitted_ids)
@@ -157,7 +134,7 @@ def _context_projection(run: dict) -> dict:
         projected = _project_segment(segment, allow_labels=allow_labels)
         if projected is not None:
             provenance.append(projected)
-    context["provenance_state"] = "unavailable" if shape == "legacy" else "available"
+    context["provenance_state"] = "available"
     if provenance:
         context["provenance"] = provenance
 
@@ -200,8 +177,6 @@ def _outcome(run: dict, context: dict) -> dict:
 
     generated = _int(termination.get("generated_tokens"))
     if generated is None:
-        generated = _int(_dict(receipt.get("limits")).get("generated_tokens"))
-    if generated is None:
         generated = _int(_dict(run.get("meta")).get("generation_tokens"))
     if generated is None:
         trace = _dict(run.get("trace"))
@@ -219,8 +194,8 @@ def _model(run: dict) -> dict:
     result: dict = {}
     name = _string(run.get("model")) or _string(meta.get("model"))
     if name:
-        # Model paths are runtime identity, not the everyday model name.  Keep a human-oriented basename
-        # when a legacy run recorded the path in its model field.
+        # Model paths are runtime identity, not the everyday model name. Keep a human-oriented basename
+        # if the stored value is a path.
         name = os.path.basename(name).removesuffix(".gguf") or name
         result["name"] = name
     quant = _string(meta.get("quant")) or _string(meta.get("quantization")) or _string(identity.get("quant"))

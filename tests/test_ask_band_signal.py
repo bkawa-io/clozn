@@ -1,11 +1,10 @@
-"""tests/test_ask_band_signal.py -- generation_gateway.ask_band_signal: the route-layer glue that turns a
+"""generation_gateway.policy_signal turns a completed reply trace and an exact calibration profile into
 just-completed reply's raw per-token trace + the saved calibration (clozn eval --save) into the metadata-
 only 'ask band' signal (calibration backlog: "a retrieval/clarify action wired to the policy's ask band").
 Both /v1/chat/completions (openai.py, non-streaming) and the SSE stream (sse.py) call this SAME function,
 so covering it here covers the one piece of logic both routes share.
 
-Pure-ish: the only I/O is clozn.eval.store.load(), isolated per test via monkeypatching eval_store._PATH
-(mirrors tests/test_journal_calibration.py's convention) -- never touches the real ~/.clozn.
+Pure-ish: the only I/O is the isolated calibration profile registry.
 """
 from __future__ import annotations
 
@@ -29,17 +28,10 @@ ANSWER_STEPS = [{"piece": "The", "conf": 0.97}, {"piece": " answer", "conf": 0.9
 ABSTAIN_STEPS = [{"piece": "The", "conf": 0.2}, {"piece": " answer", "conf": 0.1}]  # min 0.1 -> abstain
 
 
-@pytest.fixture(autouse=True)
-def legacy_loader(monkeypatch):
-    # These original cases continue to pin the single-file compatibility path.
-    # Dedicated tests below install the indexed loader explicitly.
-    monkeypatch.delattr(eval_store, "load_profile", raising=False)
-
-
 def _save(tmp_path, monkeypatch, payload):
-    path = str(tmp_path / "eval_report.json")
+    path = str(tmp_path / "calibration_profiles.json")
     monkeypatch.setattr(eval_store, "_PATH", path)
-    eval_store.save(dict(payload), path)
+    eval_store.save_profile(dict(payload), task=payload.get("task") or payload.get("set") or "general")
 
 
 def test_ask_band_returns_the_signal(tmp_path, monkeypatch):
@@ -89,17 +81,8 @@ def test_no_trace_returns_none(tmp_path, monkeypatch):
 
 
 def test_never_raises_on_malformed_saved_report(tmp_path, monkeypatch):
-    path = str(tmp_path / "eval_report.json")
-    monkeypatch.setattr(eval_store, "_PATH", path)
-    eval_store.save({"policy": "not-a-dict"}, path)
+    monkeypatch.setattr(eval_store, "load_profile", lambda *_args, **_kwargs: {"policy": "not-a-dict"})
     assert gw.policy_signal(ASK_STEPS, MODEL) is None
-
-
-def test_ask_band_signal_alias_still_works(tmp_path, monkeypatch):
-    """Backward compat: callers that imported the old name before the abstain band was wired in still work."""
-    assert gw.ask_band_signal is gw.policy_signal
-    _save(tmp_path, monkeypatch, SAVED)
-    assert gw.ask_band_signal(ASK_STEPS, MODEL)["band"] == "ask"
 
 
 def test_indexed_profile_selection_is_exact_and_never_falls_back(monkeypatch):
@@ -114,7 +97,6 @@ def test_indexed_profile_selection_is_exact_and_never_falls_back(monkeypatch):
         return profiles.get(task)
 
     monkeypatch.setattr(eval_store, "load_profile", load_profile, raising=False)
-    monkeypatch.setattr(eval_store, "load", lambda: (_ for _ in ()).throw(AssertionError("no fallback")))
 
     out = gw.policy_signal(ASK_STEPS, MODEL, task="medical")
     assert out["band"] == "abstain"
@@ -137,7 +119,7 @@ def test_indexed_no_task_asks_store_for_newest_exact_model(monkeypatch):
     assert calls == [(MODEL, None)]
 
 
-def test_legacy_explicit_task_requires_matching_saved_set(tmp_path, monkeypatch):
+def test_explicit_task_requires_an_exact_profile(tmp_path, monkeypatch):
     _save(tmp_path, monkeypatch, SAVED)
     assert gw.policy_signal(ASK_STEPS, MODEL, task="arith")["band"] == "ask"
     assert gw.policy_signal(ASK_STEPS, MODEL, task="medical") is None

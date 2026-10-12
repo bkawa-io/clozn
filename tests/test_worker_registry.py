@@ -242,7 +242,7 @@ def test_runtime_key_and_launch_facets_fail_closed():
         ),
         (
             [definition("a"), definition("b", model_sha=SHA_B)],
-            "a", ["b"], 1, "default model must be preloaded",
+            "a", ["b"], 1, "default model must be included in preload_model_ids",
         ),
         (
             [definition("a"), definition("b", model_sha=SHA_B)],
@@ -724,10 +724,7 @@ def test_idle_lru_eviction_picks_the_least_recently_used_idle_worker():
         preload_model_ids=["alpha", "beta"],
         max_loaded_workers=2,
         spawn=spawn,
-        # This test deliberately exercises the real idle-LRU ordering logic (not
-        # just the fail-closed refusal), so it must declare a trustworthy busy
-        # signal itself -- exactly the affirmative step production never takes.
-        # See UnverifiableWorkerStateError / ADR 006.
+        # Exercise idle-LRU ordering with an explicitly trustworthy busy signal.
         busy_tracking_wired=True,
     )
     registry.start_preloaded()
@@ -762,8 +759,7 @@ def test_eviction_never_picks_a_worker_with_active_generation_in_flight():
         preload_model_ids=["alpha", "beta"],
         max_loaded_workers=2,
         spawn=spawn,
-        # Real busy state is injected below via track_call(); tell the registry
-        # to trust it, matching how a real ADR-006 caller would.
+        # Real busy state is injected below via track_call().
         busy_tracking_wired=True,
     )
     registry.start_preloaded()
@@ -859,34 +855,7 @@ def test_evict_refuses_a_busy_worker_and_can_wait_for_it_honestly():
 
 
 def test_eviction_refuses_when_busy_state_cannot_be_verified():
-    """Reproduces the RT-04 vacuity directly, using production's actual default.
-
-    RT-04's idle-LRU eviction claims it never evicts a worker with in-flight work.
-    That guarantee was vacuous: eviction consulted ``handle.busy``, but nothing in
-    production ever entered :meth:`WorkerHandle.track_call` -- real generation
-    traffic flows gateway<->worker directly and never touches the supervisor
-    process at all (docs/design/006-cross-process-cold-load-protocol.md's Context
-    section). So ``handle.busy`` was always False in production, and every worker
-    always looked idle, whether or not it actually was.
-
-    This test's registry construction is deliberately the exact shape every real
-    caller uses -- ``clozn/cli/runtime_process.py`` and
-    ``clozn/cli/managed_models.py`` never pass ``busy_tracking_wired=True`` and
-    never call ``track_call()`` for real traffic, so neither does this test. On the
-    vacuous pre-fix code, that made ``_select_eviction_candidate`` treat alpha and
-    beta's permanently-False ``busy`` as "verified idle": loading a third model
-    over capacity silently evicted alpha (the least-recently-touched resident) and
-    reported ``outcome == "loaded"``, exactly as if idleness had been confirmed --
-    with zero evidence it actually was. Run against that code, every assertion
-    below fails: ``result.outcome`` is ``"loaded"`` (not ``"failed"``), alpha's
-    state is ``"unloaded"`` (not ``"ready"``), and gamma is ``"ready"`` (not
-    ``"failed"``).
-
-    After the fix, the same default, unmodified construction instead refuses with
-    the typed ``no_verifiable_idle_worker`` code and touches neither resident --
-    proving the fail-closed gate is live on the exact path production takes, not
-    just in tests that opt into ``busy_tracking_wired=True``.
-    """
+    """An isolated registry without router call tracking must fail closed."""
     definitions = [
         definition("alpha", model_sha=SHA_A, port=9681),
         definition("beta", model_sha=SHA_B, port=9682),
@@ -897,8 +866,7 @@ def test_eviction_refuses_when_busy_state_cannot_be_verified():
         selected = next(item for item in definitions if item.model == model)
         return FakeProcess(), handshake(selected, 1), False
 
-    # No busy_tracking_wired kwarg, and track_call() is never entered below for
-    # either resident -- this is production's real, unmodified construction shape.
+    # No busy_tracking_wired kwarg, and track_call() is never entered below.
     registry = WorkerRegistry(
         definitions,
         default_model_id="alpha",

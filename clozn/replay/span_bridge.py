@@ -1,7 +1,7 @@
 """span_bridge.py -- the arbitrary-span bridge (C3 core slice, item 3).
 
 B3 span addressing (`clozn.runs.text_span_addresses`) already gives every passage in a run a stable,
-content-addressed identity: an `address_id`, a `(message_index-shaped) native_ref`, and a
+content-addressed identity: an `address_id`, a receipt-segment native reference, and a
 `resolution.canonical` block carrying Unicode-code-point offsets plus SHA-256 hashes of both the
 canonical basis text and the selected span. What it does NOT do is turn that address back into
 something `clozn.replay.replay.replay()` can execute -- `replay()`'s only content-level ablation lever is
@@ -20,11 +20,9 @@ at this same logical spot moved" would need the relation_key reversed, which is 
 reversible from the id alone. Both cases are equally disqualifying, so a caller a re-run
 `clozn text-span-addresses RUN_ID` (or the investigation surface) gets a fresh id either way.
 
-Spans anchored to an ordinary chat message (`native_ref.collection` in `{"run.messages",
-"context_receipt.delivered"}`) resolve to a `message_index` this module can hand to `excise_spans()`,
-via either of the manifest's two native-id shapes: the positional `f"message-{index}"` fallback (parsed
-directly out of the id, no lookup needed -- pre-schema/legacy runs, which never stamp a `segment_id`), or
-an opaque `segment_id` -- looked up against a `segment_id -> (message_index, content_hash)` index this
+Spans anchored to an ordinary chat message (`native_ref.collection == "context_receipt.delivered"`)
+resolve to a `message_index` this module can hand to `excise_spans()` through the receipt's opaque
+`segment_id`, looked up against a `segment_id -> (message_index, content_hash)` index this
 module builds by READING the run's OWN context receipt (`_segment_id_index()`, via
 `clozn.runs.context_receipt.read_receipt`; the index reuses the receipt's own `original_order` field,
 which is a message-list position recorded once at delivery time -- see that module's "segment identity"
@@ -57,7 +55,7 @@ benefit). The result is an ordinary message list `clozn.replay.replay.replay()` 
 consume via its `messages_override` parameter -- no change to replay.py itself was needed.
 
 `pick_random_control_span()` builds the ONE piece of new machinery C3's five-arm-style discipline needs
-that `clozn.receipts.forced`'s existing `_matched_length_filler` does not cover: a same-LENGTH,
+that the plain-text neutral filler does not cover: a same-LENGTH,
 NON-OVERLAPPING window elsewhere in the SAME basis text, chosen deterministically (SHA-256 over canonical
 JSON, never Python's process-randomized `hash()` -- mirrors `clozn.analysis.causal_bisect.
 _derive_single_site_seed`'s own reasoning) so the "did ANY similarly-sized change do this" control is
@@ -83,16 +81,12 @@ def _reason(code: str, message: str) -> dict:
     return {"code": code, "message": message}
 
 
-_ID_MESSAGE_RE_PREFIX = "message-"
-
-
 class ContextReceiptSourceResolutionError(ValueError):
     """A canonical Context Receipt source set cannot be deleted faithfully.
 
-    This is intentionally separate from the older span/source bridge below.
-    ``resolve_source_spans`` is a best-effort bridge for legacy client source
-    IDs and may return the subset of occurrences it can splice.  Context
-    Dependence source deletion has the opposite contract: it either proves the
+    This is intentionally separate from the span/source bridge below.
+    ``resolve_source_spans`` may return the subset of client-source occurrences
+    it can splice. Context Dependence source deletion has the stricter contract: it proves the
     complete canonical receipt-to-message correspondence and deletes whole
     messages, or it refuses before handing anything to replay.
     """
@@ -322,14 +316,14 @@ def resolve_context_receipt_source_set(run: dict, removed_source_ids: Iterable[s
     """Strictly resolve canonical Context Receipt roots and exact span sources.
 
     This is the strict source-removal/regeneration seam.  It only accepts a
-    current, new-shape receipt whose delivered list completely verifies the raw
+    schema-governed receipt whose delivered list completely verifies the raw
     messages.  When a run records an assembled message basis (the prompt that
     generation actually received), that list and its receipt projection must
     be a trivial, one-to-one, same-order correspondence with delivery.  A
     transformed/inserted/omitted assembly is deliberately refused rather than
     translating IDs through text similarity or stale positions.
 
-    ``seg_`` roots retain their historical whole-message deletion semantics;
+    ``seg_`` roots have whole-message deletion semantics;
     ``src_`` descriptors delete only their proved exact range, right-to-left.
     The return includes a detached render-safe ``messages`` override, exact
     ranges, source catalog, and deterministic digest evidence.  No caller may
@@ -340,8 +334,8 @@ def resolve_context_receipt_source_set(run: dict, removed_source_ids: Iterable[s
     from clozn.runs.context_receipt import read_receipt
 
     receipt_view = read_receipt(run)
-    if receipt_view.get("shape") != "new":
-        raise ContextReceiptSourceResolutionError("a current schema-backed Context Receipt is required")
+    if receipt_view.get("shape") != "recorded":
+        raise ContextReceiptSourceResolutionError("a schema-backed Context Receipt is required")
     receipt = receipt_view.get("receipt")
     if not isinstance(receipt, dict) or receipt.get("schema_validation_error"):
         raise ContextReceiptSourceResolutionError("the Context Receipt is malformed or failed validation")
@@ -599,29 +593,26 @@ def neutralize_context_receipt_sources(run: dict, source_ids: Iterable[str]) -> 
 
 
 def _segment_id_index(run: dict) -> dict:
-    """`segment_id -> (message_index, content_hash)` for every delivered segment on a NEW-shape context
-    receipt (`clozn.runs.context_receipt.read_receipt` shape == "new"; legacy/absent/unrecognized shapes
-    return `{}` -- those never stamp a `segment_id` in the first place, see
+    """`segment_id -> (message_index, content_hash)` for every delivered segment on a recorded context
+    receipt. Other receipt states return `{}` because they provide no trusted `segment_id`; see
     `clozn.runs.text_span_addresses._context_projection`).
 
-    `message_index` reuses the receipt's own `original_order` (falling back to the segment's position
-    within `delivered` when `original_order` is missing/invalid), MIRRORING
-    `clozn.runs.text_span_addresses._context_projection`'s own identical fallback -- so this index agrees
-    with the message_index already baked into each address's canonical offsets, rather than computing a
-    second, independently-derived mapping that could silently drift from it.
+    `message_index` is the receipt's required `original_order`. Missing or invalid identity fields are
+    rejected rather than replaced with list positions, so this index agrees with the message index
+    already baked into each address's canonical offsets.
 
     `content_hash` is the segment's own recorded hash (`clozn.runs.context_receipt._content_hash`) -- kept
     alongside so `_resolved_span_from_address` can verify the message actually sitting at that index still
     matches before trusting this lookup. A lookup alone is not a proof (see this module's docstring)."""
     from clozn.runs.context_receipt import read_receipt
     view = read_receipt(run)
-    if view["shape"] != "new":
+    if view["shape"] != "recorded":
         return {}
     delivered = view["receipt"].get("delivered")
     if not isinstance(delivered, list):
         return {}
     index: dict = {}
-    for fallback_index, segment in enumerate(delivered):
+    for segment in delivered:
         if not isinstance(segment, dict):
             continue
         segment_id = segment.get("segment_id")
@@ -629,7 +620,7 @@ def _segment_id_index(run: dict) -> dict:
             continue
         message_index = segment.get("original_order")
         if not isinstance(message_index, int) or isinstance(message_index, bool) or message_index < 0:
-            message_index = fallback_index
+            continue
         content_hash = segment.get("content_hash")
         index[segment_id] = (
             message_index,
@@ -638,25 +629,13 @@ def _segment_id_index(run: dict) -> dict:
     return index
 
 
-def _parse_message_index(native_ref: dict, segment_index: dict) -> "int | None":
-    """`native_ref["id"]` -> a message-list index. Two native-id shapes: the manifest's own positional
-    fallback (`f"message-{index}"`, parsed directly, never present alongside a `segment_id`), or an opaque
-    `segment_id`, looked up in `segment_index` (built by `_segment_id_index()` from the run's OWN context
-    receipt -- see that function's and this module's docstrings). None when neither resolves, including a
-    malformed "message-" id or a `segment_id` this run's receipt does not (or no longer) recognize --
-    never guessed. Note this only resolves the INDEX; `_resolved_span_from_address` still verifies the
-    segment_id path's content_hash before trusting it -- this function alone is not the safety property."""
+def _message_index_for_segment(native_ref: dict, segment_index: dict) -> "int | None":
+    """Resolve the receipt-backed segment ID to its message-list index, or refuse."""
     segment_id = native_ref.get("segment_id")
     if isinstance(segment_id, str) and segment_id:
         entry = segment_index.get(segment_id)
         return entry[0] if entry is not None else None
-    raw_id = native_ref.get("id")
-    if not isinstance(raw_id, str) or not raw_id.startswith(_ID_MESSAGE_RE_PREFIX):
-        return None
-    tail = raw_id[len(_ID_MESSAGE_RE_PREFIX):]
-    if not tail.isdigit():
-        return None
-    return int(tail)
+    return None
 
 
 def _resolved_span_from_address(run: dict, address: dict, segment_index: dict) -> dict:
@@ -714,17 +693,16 @@ def _resolved_span_from_address(run: dict, address: dict, segment_index: dict) -
                 "span_message_index_unresolvable",
                 "the measured source span does not map to exactly one recorded message")}
         message_index = matches[0]
-    elif collection not in ("run.messages", "context_receipt.delivered"):
+    elif collection != "context_receipt.delivered":
         return {"ok": False, "reason": _reason(
             "span_basis_unsupported",
             f"native_ref.collection {collection!r} is not an ordinary chat message")}
     else:
-        message_index = _parse_message_index(native_ref, segment_index)
+        message_index = _message_index_for_segment(native_ref, segment_index)
     if message_index is None:
         return {"ok": False, "reason": _reason(
             "span_message_index_unresolvable",
-            "this span's native reference uses an opaque segment id (or an unrecognized id shape) that "
-            "this slice's bridge cannot map back to a message-list index")}
+            "this span's receipt segment id cannot be mapped back to a message-list index")}
 
     resolution = address.get("resolution") if isinstance(address.get("resolution"), dict) else {}
     state = resolution.get("state")
@@ -859,7 +837,7 @@ def resolve_source_spans(run: dict, source_id: str) -> dict:
 
 def excise_spans(messages: list, spans: list, *, replacement=None) -> list:
     """`messages` with every `ResolvedSpan`'s `[start, end)` removed (`replacement=None`) or replaced
-    (`replacement(n_chars) -> str`, e.g. `clozn.receipts.forced._matched_length_filler`). Multiple spans in
+    (`replacement(n_chars) -> str`, e.g. `clozn.receipts.forced.matched_length_neutral_filler`). Multiple spans in
     the SAME message are spliced right-to-left (highest start first) so an earlier span's offsets stay
     valid; spans in different messages are independent. Never raises: an out-of-range message index, or a
     non-dict message, is left untouched -- same "never take the rest of the list down with one bad entry"

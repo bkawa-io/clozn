@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "clozn.model-routing.v1",
   "title": "Immutable routing decision for one model-bound request",
-  "description": "Contract artifact for the future multi-model gateway. It records the request's literal model selection, the service policy applied, and either the exact resolved worker identity or a deterministic typed error. It does not make the current runtime multi-model. Successful generation runs retain result.receipt; load and eviction events are runtime events, never fabricated generation runs. v1 documents are immutable and are never reinterpreted after an alias changes.",
+  "description": "Immutable record of a request's literal model selection, the service policy applied, and either the exact resolved worker identity or a deterministic typed error. Successful generation runs retain result.receipt; load and eviction events are runtime events, never fabricated generation runs. Documents are never reinterpreted after an alias changes.",
   "type": "object",
   "required": ["schema_version", "protocol", "request", "policy", "result"],
   "properties": {
@@ -51,12 +51,9 @@
                 "/runs/<id>/swap_receipt",
                 "/runs/<id>/rederive",
                 "/runs/<id>/narrate",
-                "/runs/<id>/experiment",
                 "/runs/<id>/jlens",
                 "/runs/<id>/tokens/<index>/causal-trace",
-                "/runs/<id>/tokens/<index>/source-measure",
-                "/runs/<id>/second-opinion",
-                "/runs/<id>/second-opinion/candidates"
+                "/runs/<id>/tokens/<index>/source-measure"
               ]
             }
           }
@@ -66,7 +63,7 @@
           "required": ["surface", "route"],
           "properties": {
             "surface": {"const": "openai"},
-            "route": {"enum": ["/v1/chat/completions", "/v1/completions"]}
+            "route": {"enum": ["/v1/chat/completions", "/v1/responses", "/v1/completions"]}
           }
         },
         {

@@ -143,25 +143,18 @@ def _wizard(args) -> tuple[str, str, str, float, bool]:
 
 def _saved_paths(saved) -> str:
     if isinstance(saved, dict):
-        profile = (saved.get("profile_path") or saved.get("path") or saved.get("profile")
-                   or saved.get("task_path"))
-        active = saved.get("active_path") or saved.get("legacy_path") or saved.get("active")
-        if profile and active and str(profile) != str(active):
-            return f"{profile}  (active report -> {active})"
-        if profile or active:
-            return f"{profile or active}  (active report updated)"
         if saved.get("model") and saved.get("task"):
-            return f"{saved['model']} / {saved['task']}  (active report updated)"
-        return "model/task profile saved (active report updated)"
-    return f"{saved}  (active report updated)"
+            return f"{saved['model']} / {saved['task']}"
+        return "model/task profile saved"
+    return str(saved)
 
 
-# CRITICAL HONESTY LABEL (docs/RESEARCH_ROADMAP.md Killed: "White-box risk controller advantage" -- the
-# deployed selective-generation signal was proven bit-identical to exp(min(logprob)), i.e. exactly what any
+# CRITICAL HONESTY LABEL: the deployed selective-generation signal was proven bit-identical to
+# exp(min(logprob)), exactly what any
 # OpenAI-compatible black-box API already returns). Every surface this wizard/policy-show prints must say
 # so plainly, and must print the one band limitation that autopsy also found: the signal degrades sharply
 # on hard-tail / out-of-distribution inputs (dense multi-digit arithmetic in the measured case) -- never a
-# universal guarantee. Ship path (a), docs/PRODUCT_ROADMAP.md Phase 3.6.
+# universal guarantee.
 _SIGNAL_NOTE = ("Signal: token-probability based (answer-span token confidence, min or mean over content "
                "tokens) -- this is NOT an internal/white-box signal; it is bit-identical to the logprobs "
                "any OpenAI-compatible API already returns.")
@@ -262,8 +255,7 @@ def _cmd_policy_show(args) -> int:
 
     saved = None
     if model:
-        load_profile = getattr(eval_store, "load_profile", None)
-        saved = load_profile(model, task) if callable(load_profile) else eval_store.load()
+        saved = eval_store.load_profile(model, task)
     else:
         # No --model and no live gateway answered: only fall back when there is exactly ONE saved
         # profile total -- never guess among several, and never silently pick "the newest" across models.

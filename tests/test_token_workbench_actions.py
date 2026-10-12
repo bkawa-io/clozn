@@ -15,8 +15,7 @@ Covers, per the coordinator's contract:
     reports "completed" nor persists a result once cancelled, even though the underlying computation
     (which has no cooperative cancellation hook) keeps running in its own thread until it returns.
   * mechanistic-diff refuses with pair_compatibility's own typed reason when it does not permit the
-    comparison, and runs through the managed-router job/cache path when a model registry is supplied;
-    the legacy no-router case remains an honest typed unavailable response.
+    comparison, and runs through the model-router job/cache path when a model registry is supplied.
 """
 from __future__ import annotations
 
@@ -27,6 +26,7 @@ from types import SimpleNamespace
 import pytest
 
 import clozn.runs.store as runlog
+from clozn.server import app as server
 from clozn.server.influence_jobs import JOBS
 from clozn.server.routes import token_workbench_actions as route
 
@@ -47,6 +47,7 @@ WORKER = {
 }
 _METHOD_STUB = {
     "name": "teacher_forced_matched_context_replacement",
+    "version": "1",
     "mode": "forced_score_intervention",
     "claim_limit": "behavioral dependence under a controlled prompt intervention",
     "caveat": "Influence means this context changed the measured output under this intervention.",
@@ -75,7 +76,17 @@ def _organic_run(**overrides):
             "token_ids": [11, 22, 33],
             "alternatives": [[], [{"piece": " four", "token_id": 44, "prob": 0.02}], []],
         },
-        "meta": {"n_ctx": RUNTIME["context_size"], "device": RUNTIME["backend"]},
+        "meta": {
+            "n_ctx": RUNTIME["context_size"],
+            "device": RUNTIME["backend"],
+            "generation_contract": {
+                "decode_mode": "greedy",
+                "sampling": None,
+                "max_new": 3,
+                "stop": [],
+                "expected_termination": {"reason": "stop", "reason_raw": "stop"},
+            },
+        },
         "identity": {
             "model_sha256": RUNTIME["model_sha256"],
             "template_fingerprint": RUNTIME["template_fingerprint"],
@@ -112,8 +123,7 @@ class FakeSub:
 
 
 class Handler:
-    def __init__(self, sub=None, path=""):
-        self._inj_sub = sub
+    def __init__(self, path=""):
         self.path = path
         self.status = None
         self.body = None
@@ -123,9 +133,14 @@ class Handler:
 
 
 def _post(sub, run_id, index, action, body):
-    h = Handler(sub)
-    claimed = route.try_post(h, f"/runs/{run_id}/tokens/{index}/{action}", body)
-    return claimed, h
+    h = Handler()
+    previous = server.SUB
+    server.SUB = sub
+    try:
+        claimed = route.try_post(h, f"/runs/{run_id}/tokens/{index}/{action}", body)
+        return claimed, h
+    finally:
+        server.SUB = previous
 
 
 def _wait_for_job(run_id, job_id, states, timeout=2.0):
@@ -478,26 +493,6 @@ def test_mechanistic_diff_refuses_with_pair_compatibilitys_own_typed_reason(stor
     operations = h.body["pair_compatibility"]["verdict"]["operations"]
     assert operations["per_token_comparison"]["permitted"] is False
     assert operations["residual_transplant"]["permitted"] is False
-
-
-def test_mechanistic_diff_permitted_pair_is_still_honestly_unavailable_this_milestone(stores):
-    """A genuinely compatible pair (full GGUF-header identity, matching) is NOT refused by pair
-    compatibility -- but actually executing a cross-model diff needs infrastructure under concurrent
-    development this wave, so the honest outcome is still `unavailable`, with a DIFFERENT reason code
-    that says so explicitly rather than silently reusing the refusal code."""
-    gguf_identity = {
-        "architecture": "qwen2", "layer_count": 28, "hidden_size": 1536, "vocab_size": 151936,
-        "head_count": 12, "tokenizer_sha256": "e" * 64, "chat_template_sha256": "f" * 64,
-    }
-    run = _organic_run(identity=dict(gguf_identity))
-    reference = _organic_run(model="other-model", identity=dict(gguf_identity))
-
-    claimed, h = _post(FakeSub(), run["id"], 1, "mechanistic-diff", {"reference_run_id": reference["id"]})
-    assert claimed is True
-    assert h.status == 422
-    assert h.body["outcome"] == "unavailable"
-    assert h.body["reason"]["code"] == "cross_model_execution_not_wired"
-    assert h.body["pair_compatibility"]["verdict"]["operations"]["per_token_comparison"]["permitted"] is True
 
 
 def test_mechanistic_diff_managed_router_runs_sequential_capture_and_caches(stores, monkeypatch):

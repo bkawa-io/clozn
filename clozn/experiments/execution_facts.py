@@ -3,8 +3,7 @@
 This module is the kernel owner of the immutable facts shared by state
 addressing, exact resume, diagnostics, and read-only fidelity projections.
 It deliberately does not define a fork request, a fork plan, or any product
-orchestration.  The legacy replay planner may consume these helpers, but the
-experimental kernel does not depend on that planner.
+orchestration.
 """
 from __future__ import annotations
 
@@ -201,8 +200,8 @@ def parent_runtime_projection(parent_run: Mapping[str, Any]) -> dict | None:
     if authoritative is None or not (isinstance(resolved_model, str) and resolved_model
                                      and parent_run.get("model") == resolved_model):
         return None
-    complete_legacy = runtime_projection(identity, run_meta=meta)
-    if complete_legacy is not None and complete_legacy != authoritative:
+    recorded_runtime = runtime_projection(identity, run_meta=meta)
+    if recorded_runtime is not None and recorded_runtime != authoritative:
         return None
     expected = {name: authoritative[name] for name in
                 ("model_sha256", "template_fingerprint", "engine_build", "context_size", "backend")}

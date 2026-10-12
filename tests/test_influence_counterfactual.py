@@ -37,6 +37,7 @@ def _influence(*, link=None, status="ok", available=True):
         "available": available,
         "method": {
             "name": "teacher_forced_matched_context_replacement",
+            "version": "1",
             "mode": "forced_score_intervention",
             "claim_limit": "no percentage claim",
             "caveat": "measured effect only, not correctness",

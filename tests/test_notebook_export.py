@@ -20,7 +20,7 @@ def _manifest(**overrides):
         "generated_at": "2026-01-01T00:00:00+00:00",
         "clozn_version": "0.1.0",
         "identity": {"model_sha256": "a" * 64},
-        "method": {"name": "teacher_forced_matched_context_replacement"},
+        "method": {"name": "teacher_forced_matched_context_replacement", "version": "1"},
         "scope": "messages",
         "engine_url": None,
         "artifacts": [

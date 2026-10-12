@@ -10,10 +10,6 @@
 Transformers, or a live research model. Offline jobs may produce J-lenses or other artifacts, and the
 product applies them only after their identity and dimensions validate.
 
-The earlier prompt-card/learned-prefix memory system and its user-facing workbench were removed on
-2026-07-27. A few compatibility readers and archived research modules retain old field names; they do
-not make those features current.
-
 ## Deployed topology
 
 ```text
@@ -45,12 +41,12 @@ template · generate · sample · tap · score · steer · optional J-lens
 | Teacher-forced scoring | merged | `/score`, deep smoke, receipt tests |
 | LoRA attachment | merged, one adapter | fail-closed engine tests and three-arm live proof |
 | J-lens apply/read | merged when a qualified sidecar is loaded | contract tests; exact Qwen2.5 row qualified |
-| Continuous batching | not built | one active generation path |
+| Continuous batching | not built | one active generation path per worker |
 
 ### Product gateway — `clozn/server`
 
 - Strict OpenAI and Ollama envelopes, request admission, cancellation state, and worker supervision.
-- Run journaling, content-addressed trace blobs, migrations, privacy controls, and export.
+- Run journaling, content-addressed trace blobs, privacy controls, cleanup, and export.
 - Context receipts, source measurement, comparisons, experiments, replay planning, and corrective
   action/undo.
 - The one `EngineSubstrate` adapter used by product routes.
@@ -59,7 +55,7 @@ template · generate · sample · tap · score · steer · optional J-lens
 
 - Model qualification.
 - J-lens fitting and artifact export.
-- Research scripts and retained historical modules, with no public serving command.
+- Research scripts, with no public serving command.
 
 ## Artifact boundary
 
@@ -67,7 +63,7 @@ template · generate · sample · tap · score · steer · optional J-lens
 |---|---|---|---|
 | J-lens manifest and matrices | offline fit/export | engine `/jlens` | manifest, hashes, dimensions, exact qualified GGUF |
 | SAE bundle | external or offline export | engine readout | model/layer/dimension identity |
-| run rows and trace blobs | gateway | CLI, Studio, receipts | transactional migrations and digest verification |
+| run rows and trace blobs | gateway | CLI, Studio, receipts | transactional initialization and digest verification |
 | managed engine archive | release pipeline | setup installer | versioned manifest, checksum, embedded build identity |
 
 ## Remaining boundaries

@@ -1,12 +1,11 @@
 """tests/test_investigation_experiment_server.py -- the C3 HTTP surface (clozn/server/routes/
 investigation_experiment.py), route-level.
 
-Mirrors tests/test_token_workbench_actions.py's own conventions: a lightweight Handler with an
-injectable `_inj_sub` (legacy no-router path -- clozn.server.app.active_sub reads it), jobs run for
-real through clozn.server.influence_jobs.JOBS (a real bounded ThreadPoolExecutor -- that IS the job
+Mirrors tests/test_token_workbench_actions.py's own conventions: a lightweight Handler and a
+router-backed test worker; jobs run for real through clozn.server.influence_jobs.JOBS (a real bounded ThreadPoolExecutor -- that IS the job
 system under test), FakeSub.chat() is a pure deterministic function of (messages, sample), mirroring
 clozn.receipts.test_investigation_experiment.ExecFakeSub. Cross-model worker-routing correctness (the
-run's OWN model resolves the worker, never the default/legacy global) is covered separately in
+run's OWN model resolves the worker, never a process-wide default) is covered separately in
 tests/test_run_scoped_model_routing.py alongside every other run-scoped route -- this file is about
 THIS route's own contract: plan vs execute, the typed refusals, and the job lifecycle.
 
@@ -22,6 +21,7 @@ import time
 import pytest
 
 import clozn.runs.store as runlog
+from clozn.server import app as server
 from clozn.server.influence_jobs import JOBS
 from clozn.server.routes import investigation_experiment as route
 
@@ -49,8 +49,7 @@ class FakeSub:
 
 
 class Handler:
-    def __init__(self, sub=None, path=""):
-        self._inj_sub = sub
+    def __init__(self, path=""):
         self.path = path
         self.status = None
         self.body = None
@@ -64,18 +63,7 @@ def _user_content(messages):
 
 
 def _organic_run(**overrides):
-    """A realistically-recorded run (through the real clozn.runs.store.record(), which always
-    synthesizes a context_receipt -- see build_context_receipt). Every delivered segment in that
-    receipt carries a segment_id (clozn.runs.context_receipt.segment_id() is called unconditionally
-    for every message), so clozn.runs.text_span_addresses gives every span a
-    context_receipt.delivered/<segment_id>-anchored native_ref, never a run.messages/message-{index}
-    one. clozn.replay.span_bridge resolves this shape by reading the receipt's own original_order
-    field and self-verifying against the segment's content_hash (see
-    test_plan_realistic_run_resolves_span_kinds_via_segment_id below) -- fixed after this fixture's
-    own use once locked in the opposite, broken behavior; see that test's docstring for history.
-    `_span_addressable_run` below produces the OTHER native_ref shape span_bridge resolves (the
-    legacy/pre-schema positional `message-{index}` fallback, no receipt at all), for tests that want
-    to exercise that code path specifically rather than the segment_id one."""
+    """A run recorded through the real store and its canonical Context Receipt path."""
     values = {
         "source": "engine_chat",
         "client": "studio",
@@ -93,29 +81,23 @@ def _organic_run(**overrides):
     return runlog.get_run(run_id)
 
 
-def _span_addressable_run(**overrides):
-    """Like _organic_run, but with context_receipt stripped after recording -- the "pre-schema"/
-    legacy shape clozn.runs.text_span_addresses projects straight from run.messages
-    (run.messages/message-{index} native_refs), a SECOND, independent code path in
-    clozn.replay.span_bridge from the segment_id one _organic_run exercises. Used below where a test
-    wants a plain message-{index} address without depending on segment_id resolution."""
-    run = _organic_run(**overrides)
-    del run["context_receipt"]
-    assert runlog.replace_run(run)
-    return runlog.get_run(run["id"])
-
-
 def _address_id_for(run, message_index):
     from clozn.runs.text_span_addresses import build_persisted_text_span_addresses
     document = build_persisted_text_span_addresses(run)
+    target = run["context_receipt"]["delivered"][message_index]["segment_id"]
     return next(a["address_id"] for a in document["addresses"]
-                if a["native_ref"].get("id") == f"message-{message_index}")
+                if a["native_ref"].get("segment_id") == target)
 
 
 def _post(sub, run_id, suffix, body):
-    h = Handler(sub)
-    claimed = route.try_post(h, f"/runs/{run_id}/investigation-experiment{suffix}", body)
-    return claimed, h
+    h = Handler()
+    previous = server.SUB
+    server.SUB = sub
+    try:
+        claimed = route.try_post(h, f"/runs/{run_id}/investigation-experiment{suffix}", body)
+        return claimed, h
+    finally:
+        server.SUB = previous
 
 
 def _get(run_id, suffix):
@@ -144,7 +126,7 @@ def test_route_module_opts_into_autoload():
 def test_unrelated_paths_are_not_claimed(stores):
     h = Handler()
     assert route.try_get(h, "/runs/x/investigation") is False   # a DIFFERENT existing route's suffix
-    assert route.try_post(h, "/runs/x/experiment", {}) is False  # the unrelated "change one dial" route
+    assert route.try_post(h, "/runs/x/not-an-investigation", {}) is False
     assert route.try_get(h, "/health") is False
 
 
@@ -218,7 +200,7 @@ def test_plan_realistic_run_resolves_omit_source_via_segment_id(stores):
 
 
 def test_plan_eligible_is_200_planned_with_the_exact_arm_order(stores):
-    run = _span_addressable_run()
+    run = _organic_run()
     address_id = _address_id_for(run, 1)
     claimed, h = _post(None, run["id"], "/plan",
                         {"intervention": {"kind": "remove_span", "span_address_id": address_id}})
@@ -232,7 +214,7 @@ def test_plan_eligible_is_200_planned_with_the_exact_arm_order(stores):
 
 
 def test_plan_unknown_span_address_is_the_bridges_own_typed_reason(stores):
-    run = _span_addressable_run()
+    run = _organic_run()
     claimed, h = _post(None, run["id"], "/plan",
                         {"intervention": {"kind": "remove_span", "span_address_id": "invexp_bogus"}})
     assert claimed is True
@@ -270,7 +252,7 @@ def test_execute_refused_is_422_and_never_touches_the_worker_or_starts_a_job(sto
 
 
 def test_execute_no_worker_selectable_is_a_typed_503(stores):
-    run = _span_addressable_run()
+    run = _organic_run()
     address_id = _address_id_for(run, 1)
 
     class NoChatCapability:
@@ -284,7 +266,7 @@ def test_execute_no_worker_selectable_is_a_typed_503(stores):
 
 
 def test_execute_missing_sub_entirely_is_a_typed_503(stores):
-    run = _span_addressable_run()
+    run = _organic_run()
     address_id = _address_id_for(run, 1)
     claimed, h = _post(None, run["id"], "",
                         {"intervention": {"kind": "remove_span", "span_address_id": address_id}})
@@ -298,7 +280,7 @@ def test_execute_starts_a_job_that_completes_with_an_honest_uncontrolled_claim(s
     is always whole-message absent an influence map), so there is no disjoint window left for the
     random control -- effect_specific is honestly never computed and licensed stays False. Mirrors
     clozn/receipts/test_investigation_experiment.py's identical fixture end to end, through the route."""
-    run = _span_addressable_run()
+    run = _organic_run()
     address_id = _address_id_for(run, 1)
 
     def chat_fn(messages, sample):
@@ -324,7 +306,7 @@ def test_execute_starts_a_job_that_completes_with_an_honest_uncontrolled_claim(s
 
 
 def test_execute_generation_failure_marks_the_job_failed_but_the_plan_survives(stores):
-    run = _span_addressable_run()
+    run = _organic_run()
     address_id = _address_id_for(run, 1)
 
     def chat_fn(messages, sample):
@@ -343,7 +325,7 @@ def test_execute_generation_failure_marks_the_job_failed_but_the_plan_survives(s
 
 
 def test_execute_job_capacity_full_is_429(stores, monkeypatch):
-    run = _span_addressable_run()
+    run = _organic_run()
     address_id = _address_id_for(run, 1)
     from clozn.server.influence_jobs import JobCapacityError
 
@@ -371,7 +353,7 @@ def test_job_cancel_not_found_is_404(stores):
 
 
 def test_job_status_and_cancel_round_trip(stores):
-    run = _span_addressable_run()
+    run = _organic_run()
     address_id = _address_id_for(run, 1)
     sub = FakeSub(lambda m, s: "SAFE")
     claimed, h = _post(sub, run["id"], "",

@@ -50,6 +50,17 @@ int main() {
     CHECK(decimal_boundary.find_copy(latest).value() == 11);
     CHECK(!decimal_boundary.find_copy("ckpt-generation-c-9").has_value());
 
+    // Diagnostics borrow a value copy before acquiring a model context. Later FIFO eviction must
+    // not invalidate that in-flight request, and the copy must not pin the bounded store entry.
+    CheckpointStore<std::string> borrowed_store("generation-d", 1);
+    const std::string borrowed_id = borrowed_store.insert("borrowed checkpoint bytes");
+    const auto borrowed = borrowed_store.find_copy(borrowed_id);
+    CHECK(borrowed.has_value());
+    borrowed_store.insert("replacement");
+    CHECK(!borrowed_store.find_copy(borrowed_id).has_value());
+    CHECK(borrowed.value() == "borrowed checkpoint bytes");
+    CHECK(borrowed_store.size() == 1);
+
     std::puts("checkpoint store tests passed");
     return 0;
 }

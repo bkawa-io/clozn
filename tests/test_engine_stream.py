@@ -32,6 +32,7 @@ RESEARCH = os.path.dirname(HERE)
 sys.path.insert(0, RESEARCH)
 
 from clozn.server import app as cs          # noqa: E402
+from tests.chat_templates import render_qwen  # noqa: E402
 import clozn.settings as clozn_settings          # noqa: E402
 
 
@@ -60,7 +61,7 @@ class FakeEngine:
         self.timeout = 0.2
 
     def apply_template(self, messages, add_assistant=True):
-        return cs._qwen_tmpl(messages)
+        return render_qwen(messages)
 
 
 def _bare_engine_substrate(engine, steer=None, mem=None):
@@ -298,7 +299,7 @@ def test_chat_stream_samples_by_default(iso, monkeypatch, fake_urlopen):
     assert isinstance(body["seed"], int) and body["seed"] != 0
     assert body["top_k"] == 40 and body["top_p"] == 0.9
 
-    meta = sub._last_generation_meta
+    meta = sub._request.generation_meta
     assert meta["sampler_mode"] == "sample"
     assert meta["decode"]["top_p"] == 0.9 and meta["decode"]["top_k"] == 40
 
@@ -323,7 +324,9 @@ def test_chat_stream_sampling_off_is_byte_identical_to_pre_s5(iso, monkeypatch, 
 
     body = json.loads(fake_urlopen[-1]["req"].data.decode("utf-8"))
     assert body["temperature"] == 0.0 and body["rep_penalty"] == 1.0 and body["seed"] == 0
-    assert sub._last_generation_meta["decode"] == {"mode": "greedy", "temperature": 0.0, "seed": 0}
+    assert sub._request.generation_meta["decode"] == {
+        "mode": "greedy", "temperature": 0.0, "seed": 0,
+    }
 
 
 # ==================================================================================== dial forwarding parity with chat()
@@ -353,5 +356,3 @@ def test_chat_stream_skips_steer_vec_when_no_dial_is_active(iso, monkeypatch, fa
     assert steer.vector_calls == []                          # any(st.values()) is False -> never even asked
     body = json.loads(fake_urlopen[-1]["req"].data.decode("utf-8"))
     assert "steer_vec" not in body
-
-

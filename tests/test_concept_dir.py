@@ -650,9 +650,8 @@ def test_steer_vector_skips_a_concept_that_fails_to_build(tmp_path):
 
 
 # ==================================================================================== per-model concept-dial
-# calibration: the schema, the path convention, and the missing-file=no-op fallback discipline (mirroring
-# clozn.server.app._dial_calibration()'s tone-dial calibration file). All model-free -- the live
-# measurement sweep (scripts/calibration/concept_dial_autocalibrate.py) is deferred (needs a real engine).
+# calibration: the schema, exact-model path convention, and missing-file behavior. All model-free --
+# the live measurement sweep needs a real engine.
 
 def test_concept_calibration_path_scopes_per_exact_digest():
     p = cd.concept_calibration_path("abc123")
@@ -660,9 +659,13 @@ def test_concept_calibration_path_scopes_per_exact_digest():
                              "concept_dial_calibration.json")
 
 
-def test_concept_calibration_path_falls_back_to_legacy_root_without_a_digest():
-    p = cd.concept_calibration_path(None)
-    assert p == os.path.join(os.path.expanduser("~"), ".clozn", "concept_dial_calibration.json")
+def test_concept_calibration_path_requires_an_exact_model_digest():
+    with pytest.raises(ValueError, match="model_sha256"):
+        cd.concept_calibration_path(None)
+
+
+def test_load_without_a_path_or_model_digest_has_no_calibration():
+    assert cd.load_concept_dial_calibration() is None
 
 
 def test_load_concept_dial_calibration_missing_file_returns_none(tmp_path):
@@ -732,8 +735,7 @@ def test_load_concept_dial_calibration_skips_malformed_layer_entries_keeps_the_r
 # per-model calibration present -> used; absent -> global fallback; both cases say which source applied.
 
 def test_concept_steer_defaults_to_global_when_no_model_sha256_configured(tmp_path):
-    """No model_sha256/calibration passed at all -- existing callers must behave EXACTLY as before this
-    feature existed (Law #6)."""
+    """No model identity or explicit calibration selects the labelled validated constants."""
     steer, _ec = _steer_with_fixtures(tmp_path)   # layer=21 default
     assert steer.median_norm == cd.VALIDATED_MEDIAN_RESID_NORM[21]
     assert steer.median_norm_source == "global_default"

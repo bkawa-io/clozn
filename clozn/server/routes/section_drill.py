@@ -135,12 +135,9 @@ def try_post(h, p, body):
         return True
     real_name = entry.get("name") or requested
 
-    if entry.get("source") == "memory_card":
-        h._json(400, {"error": f"section '{real_name}' is memory-card-sourced -- drill-down only supports "
-                             "api/auto sections (its parts are anchored into assembled_messages, not the "
-                             "raw messages list this route splices against). Memory cards were removed "
-                             "from the product on 2026-07-27, so a legacy card-sourced section on an old "
-                             "run has no ablation path at all anymore."})
+    if entry.get("source") not in {"api", "auto"}:
+        h._json(400, {"error": f"section '{real_name}' has an unsupported source; "
+                             "section-drill accepts only api/auto sections"})
         return True
 
     parts = entry.get("parts")
@@ -181,8 +178,7 @@ def try_post(h, p, body):
     # deliberately redone rather than threaded through as a precomputed value).
     conditions = rederive.with_arm_conditions(run)
     with_tokens, with_ok = rederive.score_arm(
-        sub, conditions, messages=conditions["raw_messages"], block=conditions["raw_block"],
-        steer_strengths=conditions["steer_strengths"])
+        sub, conditions, messages=conditions["raw_messages"], block=conditions["raw_block"])
     if not with_ok:
         h._json(503, {"error": "section-drill requires worker token scoring"})
         return True

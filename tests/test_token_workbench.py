@@ -314,7 +314,7 @@ def test_source_measurement_available_when_investigation_reports_a_measured_effe
         "schema": "clozn.context_answer_influence.v1",
         "status": "ok",
         "available": True,
-        "method": {"name": "teacher_forced_matched_context_replacement"},
+        "method": {"name": "teacher_forced_matched_context_replacement", "version": "1"},
         "prompt_sources": [], "prompt_spans": [], "answer_spans": [],
         "thresholds": {}, "summary": {},
         "links": [{"evidence_state": "causally_supported"}],
@@ -430,6 +430,7 @@ class Handler:
 
 def test_route_happy_path_returns_a_valid_document(monkeypatch):
     run = _organic_run()
+    from clozn.server import app as server
 
     class Sub:
         steer = None
@@ -440,7 +441,8 @@ def test_route_happy_path_returns_a_valid_document(monkeypatch):
 
     monkeypatch.setattr(runlog, "get_run", lambda rid: run if rid == run["id"] else None)
     monkeypatch.setattr(runlog, "iter_runs", lambda limit=200: iter([run]))
-    h = Handler(Sub(), path=f"/runs/{run['id']}/tokens/1/workbench")
+    monkeypatch.setattr(server, "SUB", Sub())
+    h = Handler(path=f"/runs/{run['id']}/tokens/1/workbench")
 
     assert route.try_get(h, f"/runs/{run['id']}/tokens/1/workbench") is True
     assert h.status == 200
@@ -454,6 +456,7 @@ def test_route_never_calls_engine_or_scorer(monkeypatch):
     """The GET must not trigger expensive computation -- checking readiness is a local attribute
     lookup, never a call."""
     run = _organic_run()
+    from clozn.server import app as server
 
     class BoomEngine:
         def __getattr__(self, name):
@@ -468,7 +471,8 @@ def test_route_never_calls_engine_or_scorer(monkeypatch):
 
     monkeypatch.setattr(runlog, "get_run", lambda rid: run if rid == run["id"] else None)
     monkeypatch.setattr(runlog, "iter_runs", lambda limit=200: iter([run]))
-    h = Handler(Sub())
+    monkeypatch.setattr(server, "SUB", Sub())
+    h = Handler()
 
     assert route.try_get(h, f"/runs/{run['id']}/tokens/1/workbench") is True
     assert h.status == 200

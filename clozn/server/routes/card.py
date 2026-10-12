@@ -5,15 +5,8 @@ pure read of already-recorded runs, zero generation — so the card can draw its
 RENDERING of that bundle, never a new computation: receipts/lens data appear only if the record already
 carries them; otherwise the card states their honest absence.
 
-Registered in clozn/server/app.py: imported as `_card_routes` and placed in `_GET_ROUTES` BEFORE
-`_runs_fallback_routes` (the generic /runs/<id> fallback keeps last refusal, exactly like the other
-/runs/<id>/<suffix> families).
-
-HISTORY, so the next person does not re-delete it: this route and card_html.py were removed on
-2026-07-26 with the heavn shell, on the rationale "no caller in the current shell" -- and restored on
-2026-07-27 by explicit decision when the studio-next PR turned out to have restyled the card to the new
-instrument system. NO UI LINKS TO IT in either shell; it is reachable over HTTP and that is deliberate.
-Caller-less is not the same as unwanted. If it should go, that is a product call, not a dead-code sweep.
+Registered in clozn/server/app.py before the generic `/runs/<id>` fallback. The route is intentionally
+available over HTTP even though Studio does not link to it.
 """
 
 

@@ -136,8 +136,6 @@ class RuntimeBoundaryTests(unittest.TestCase):
         parser = cli_main.build_parser()
         args = parser.parse_args(["serve", "model.gguf"])
         self.assertFalse(hasattr(args, "gateway_python"))
-        with self.assertRaises(SystemExit):
-            parser.parse_args(["serve", "model.gguf", "--legacy-subprocess-gateway"])
 
     def test_worker_mode_is_explicit_not_inferred_from_vocabulary_tokens(self):
         ar = engine_process._launch_args("worker", "gemma.gguf", 9000, {"chat": True}, False)
@@ -306,6 +304,7 @@ class RuntimeBoundaryTests(unittest.TestCase):
             runtime_process.gateway_health,
             runtime_process.port_is_open,
             runtime_process._selected_engine_discovery,
+            runtime_process._worker_template_fingerprint,
             runtime_process.subprocess.Popen,
             app.EngineClient,
             app.EngineSubstrate,
@@ -327,20 +326,42 @@ class RuntimeBoundaryTests(unittest.TestCase):
                 pass
 
         fake_server = FakeServer()
+        worker_health = {
+            "status": "ok",
+            "mode": "autoregressive",
+            "model": "m.gguf",
+            "model_sha256": "a" * 64,
+            "n_ctx": 4096,
+            "protocol_version": "1.1",
+            "worker_generation_id": "worker-test-1",
+            "capabilities": {"sae": False, "jlens": False, "attn_knockout": False},
+            "device": "cpu",
+        }
         runtime_process.spawn_engine = lambda *args, **kwargs: (
-            worker, {"status": "ok", "mode": "autoregressive"}, False
+            worker,
+            worker_health,
+            False,
         )
         runtime_process.gateway_health = lambda _port: {"status": "ok"}
         runtime_process.port_is_open = lambda _port: False
         runtime_process._selected_engine_discovery = lambda _prefer_gpu: (
-            types.SimpleNamespace(exe="fake-engine"), "0" * 64
+            types.SimpleNamespace(exe="fake-engine", backend="cpu", gpu=False), "0" * 64
         )
+        runtime_process._worker_template_fingerprint = lambda _port: "1" * 16
         runtime_process.subprocess.Popen = lambda *args, **kwargs: self.fail(
             "the in-process runtime must not launch a gateway subprocess"
         )
-        app.EngineClient = lambda *, port: types.SimpleNamespace(port=port)
+        app.EngineClient = lambda *, port: types.SimpleNamespace(
+            port=port, health=lambda: dict(worker_health)
+        )
         app.EngineSubstrate = lambda *, engine: types.SimpleNamespace(engine=engine)
-        app.build_server = lambda **kwargs: fake_server
+        built = {}
+
+        def fake_build_server(**kwargs):
+            built.update(kwargs)
+            return fake_server
+
+        app.build_server = fake_build_server
         try:
             stack = runtime_process.spawn_runtime(runtime_process.RuntimeConfig(
                 model="m.gguf",
@@ -351,6 +372,8 @@ class RuntimeBoundaryTests(unittest.TestCase):
             self.assertEqual(stack.worker_port, 8457)
             self.assertEqual(stack.gateway.pid, os.getpid())
             self.assertIsNone(stack.gateway.poll())
+            self.assertEqual(built["model_router"].model_ids(), ["m"])
+            self.assertIs(built["model_router"].control_pair()[1], built["engine"])
         finally:
             if "stack" in locals():
                 stack.stop()
@@ -359,6 +382,7 @@ class RuntimeBoundaryTests(unittest.TestCase):
                 runtime_process.gateway_health,
                 runtime_process.port_is_open,
                 runtime_process._selected_engine_discovery,
+                runtime_process._worker_template_fingerprint,
                 runtime_process.subprocess.Popen,
                 app.EngineClient,
                 app.EngineSubstrate,
@@ -381,21 +405,17 @@ class RuntimeBoundaryTests(unittest.TestCase):
              engine_process._health) = originals
         self.assertTrue(worker.terminated)
 
-    def test_readiness_requires_the_one_worker(self):
-        class Worker:
-            def health(self):
-                return {"status": "ok", "model": "m.gguf", "mode": "autoregressive"}
-
-        old_engine, old_sub = app.ENGINE, app.SUB
+    def test_readiness_requires_the_model_router(self):
+        old_router = app.MODEL_ROUTER
         handler = CaptureHandler()
         try:
-            app.ENGINE, app.SUB = Worker(), object()
+            app.MODEL_ROUTER = None
             self.assertTrue(health.try_get(handler, "/readyz"))
         finally:
-            app.ENGINE, app.SUB = old_engine, old_sub
-        self.assertEqual(handler.code, 200)
-        self.assertEqual(handler.json["status"], "ok")
-        self.assertEqual(handler.json["active"], "engine")
+            app.MODEL_ROUTER = old_router
+        self.assertEqual(handler.code, 503)
+        self.assertEqual(handler.json["status"], "not_ready")
+        self.assertIn("model router unavailable", handler.json["reason"])
 
     def test_supervisor_restarts_an_unexpected_worker_exit(self):
         dead_worker = FakeProcess(code=1)
@@ -501,13 +521,29 @@ class RuntimeBoundaryTests(unittest.TestCase):
         handler = CaptureHandler()
         self.assertFalse(health.try_post(handler, "/substrate", {"name": "qwen"}))
 
+    def test_engine_health_is_the_explicit_router_projection(self):
+        projection = {
+            "default_model_id": "qwen",
+            "preload_model_ids": ["qwen"],
+            "max_loaded_models": 1,
+            "configured_count": 1,
+            "resident_count": 1,
+            "models": [],
+        }
+        router = types.SimpleNamespace(runtime_status=lambda: dict(projection))
+        handler = CaptureHandler()
+        with mock.patch.object(app, "MODEL_ROUTER", router):
+            self.assertTrue(health.try_get(handler, "/engine/health"))
+        self.assertEqual(handler.code, 200)
+        self.assertEqual(handler.json, {"engine": {"managed": True, **projection}})
+
 
 
     def test_native_stream_preserves_clozn_events(self):
         frame = b'data: {"type":"tokens_committed","items":[{"piece":"x"}]}\n\n'
         response = FakeResponse([frame])
         original = generation_gateway._request
-        generation_gateway._request = lambda body: response
+        generation_gateway._request = lambda body, handler: response
         handler = CaptureHandler()
         try:
             generation_gateway.native_completion(handler, {"prompt": "hi", "stream": True})
@@ -536,6 +572,7 @@ class RuntimeBoundaryTests(unittest.TestCase):
         old_sub = app.SUB
         handler = CaptureHandler()
         app.SUB = LensSubstrate()
+        handler._route_sub = app.SUB
         try:
             sse.sse_chat(handler, [{"role": "user", "content": "hi"}], 8, "m",
                          lens={"layer": 8})
@@ -644,7 +681,7 @@ class PostGateScopeTests(unittest.TestCase):
         self.assertEqual(json.loads(payload.decode("utf-8")), {"ok": True, "tier": "deep"})
         self.assertEqual(calls, [])                 # the gate was never even asked
 
-    def test_removed_substrate_post_uses_the_normal_gate_and_fallback(self):
+    def test_unknown_post_uses_the_normal_gate_and_returns_not_found(self):
         calls = []
         original = app.POST_GATE.acquire
         app.POST_GATE.acquire = lambda *a, **kw: calls.append(1) or original()
@@ -652,10 +689,10 @@ class PostGateScopeTests(unittest.TestCase):
             head, _, _ = raw_gateway_request("POST", path="/substrate", body=b'{}')
         finally:
             app.POST_GATE.acquire = original
-        self.assertIn(" 409 ", head)                 # ordinary unserved POST fallback
+        self.assertIn(" 404 ", head)
         self.assertEqual(calls, [1])
 
-    def test_removed_tombstones_are_ordinary_unserved_routes(self):
+    def test_unknown_routes_return_not_found(self):
         for path in ("/profiles/list", "/corrections"):
             head, _, _ = raw_gateway_request("GET", path=path)
             self.assertIn(" 404 ", head)
@@ -664,7 +701,7 @@ class PostGateScopeTests(unittest.TestCase):
             "/engine/steer/axes", "/engine/steer/check",
         ):
             head, _, _ = raw_gateway_request("POST", path=path, body=b"{}")
-            self.assertIn(" 409 ", head)
+            self.assertIn(" 404 ", head)
 
     def test_a_non_exempt_post_still_goes_through_the_gate(self):
         calls = []
@@ -845,20 +882,6 @@ class SQLiteRunStoreTests(unittest.TestCase):
             blobs.extend(os.path.join(root, name) for name in files if name.endswith(".json"))
         self.assertEqual(len(blobs), 1)
         self.assertFalse(glob_run_json(self.temp.name))
-
-    def test_legacy_json_requires_explicit_import(self):
-        legacy = tempfile.TemporaryDirectory(prefix="clozn-json-test-")
-        try:
-            path = os.path.join(legacy.name, "run_legacy_one.json")
-            with open(path, "w", encoding="utf-8") as handle:
-                json.dump({"id": "run_legacy_one", "source": "legacy", "response": "old"}, handle)
-            self.assertIsNone(store.get_run("run_legacy_one"))
-            result = store.import_json_dir(legacy.name)
-            self.assertEqual(result["imported"], 1)
-            self.assertEqual(store.get_run("run_legacy_one")["response"], "old")
-        finally:
-            legacy.cleanup()
-
 
 def glob_run_json(root: str) -> bool:
     return any(name.startswith("run_") and name.endswith(".json") for name in os.listdir(root))

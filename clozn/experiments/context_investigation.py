@@ -441,14 +441,28 @@ def _effect_status(row: ExperimentArmView) -> str:
     return "measured" if status == "measured" else status
 
 
+def _display_source_records(plan: Any, context: Mapping[str, Any]) -> list[dict[str, Any]]:
+    display_by_id = {
+        item.get("source_id"): item for item in context.get("catalog", [])
+        if isinstance(item, Mapping) and isinstance(item.get("source_id"), str)
+    }
+    display_ranges = context.get("source_display_ranges", {})
+    return [
+        _source_record(display_by_id[source_id], display_range=display_ranges[source_id])
+        for source_id in _plan_ids(plan, "display_source_ids")
+    ]
+
+
 def _base_document(*, run: Mapping[str, Any], plan: Any, context: dict[str, Any],
                    answer: dict[str, Any] | None, floor_nats: float, status: str,
                    measurement_status: str, reason: str | None = None,
+                   reason_code: str | None = None,
                    experiment_id: str | None = None) -> dict[str, Any]:
     measurement_ids = list(_plan_ids(plan, "measurement_source_ids"))
+    planned_experiment = _plan_field(plan, "experiment")
     measurement = {
         "status": measurement_status,
-        "experiment_id": experiment_id or getattr(_plan_experiment(plan), "experiment_id", None),
+        "experiment_id": experiment_id or getattr(planned_experiment, "experiment_id", None),
         "evaluator": "score_recorded_continuation",
         "intervention": "delete_source",
         "source_universe": measurement_ids,
@@ -480,7 +494,10 @@ def _base_document(*, run: Mapping[str, Any], plan: Any, context: dict[str, Any]
     }
     if reason:
         document["reason"] = reason
-        document["reason_code"] = "context_investigation_unavailable" if status == "unavailable" else "context_investigation_stale"
+        document["reason_code"] = reason_code or (
+            "context_investigation_unavailable"
+            if status == "unavailable" else "context_investigation_stale"
+        )
     return document
 
 
@@ -505,6 +522,31 @@ def build_context_investigation_reader(
             answer=None, floor_nats=floor, status="unavailable", measurement_status="unavailable", reason=str(exc),
         )
 
+    measurement_ids = _plan_ids(plan, "measurement_source_ids")
+    unavailable_reason = _plan_field(plan, "reason")
+    unavailable_reason_code = _plan_field(plan, "reason_code")
+    if not measurement_ids and unavailable_reason and unavailable_reason_code:
+        answer = None
+        try:
+            state = _plan_field(plan, "execution_state")
+            answer = _answer_from_baseline(
+                run, None, execution_fingerprint=state.execution_fingerprint,
+            )
+        except ContextInvestigationError:
+            pass
+        document = _base_document(
+            run=run, plan=plan, context=context,
+            answer=_answer_document(answer) if answer else None,
+            floor_nats=floor, status="unavailable", measurement_status="unavailable",
+            reason=str(unavailable_reason), reason_code=str(unavailable_reason_code),
+            experiment_id=None,
+        )
+        document["sources"] = _display_source_records(plan, context)
+        for source in document["sources"]:
+            source["measurement"]["status"] = "unavailable"
+        document["capabilities"]["context_effects"] = "unavailable"
+        return document
+
     experiment_id = _plan_experiment(plan).experiment_id
     try:
         view = observation_store.get_experiment(experiment_id)
@@ -524,11 +566,7 @@ def build_context_investigation_reader(
             run=run, plan=plan, context=context, answer=_answer_document(answer) if answer else None,
             floor_nats=floor, status="not_measured", measurement_status="not_measured", experiment_id=experiment_id,
         )
-        display_by_id = {item.get("source_id"): item for item in context["catalog"]}
-        document["sources"] = [
-            _source_record(display_by_id[source_id], display_range=context["source_display_ranges"][source_id])
-            for source_id in _plan_ids(plan, "display_source_ids")
-        ]
+        document["sources"] = _display_source_records(plan, context)
         return document
 
     try:

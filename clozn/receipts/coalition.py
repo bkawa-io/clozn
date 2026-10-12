@@ -1,7 +1,6 @@
-"""coalition.py -- batched coalition/Shapley causal credit (docs/PRODUCT_ROADMAP.md §8 tail engine-debt
-item: "batched causal credit (coalition/Shapley over teacher-forced arms -- the seam is in
-clozn/receipts/core.py, on top of the /v1/branch batched-decode primitive)"), built on top of core.py's
-leave-one-out (LOO) machinery.
+"""Batched coalition/Shapley causal credit over teacher-forced arms.
+
+Built on top of core.py's leave-one-out machinery and the branch batch primitive.
 
 WHY THIS EXISTS (this project's own causal-tracer autopsy -- the measured motivation, not a hunch): solo
 (leave-one-out) attribution systematically OVERCOUNTS a joint effect. The tracer study found a median

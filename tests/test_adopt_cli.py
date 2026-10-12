@@ -29,6 +29,13 @@ import pytest
 from clozn.cli.commands import adopt
 
 
+@pytest.fixture(autouse=True)
+def _isolate_ollama_storage(monkeypatch):
+    """Unit tests use only their explicit temporary Ollama fixtures."""
+    monkeypatch.setattr(adopt.discovery, "known_storage_paths", lambda: [])
+    monkeypatch.setattr(adopt.discovery.shutil, "which", lambda _name: None)
+
+
 # --------------------------------------------------------------------------------- synthetic GGUF bytes
 # Minimal hand-built GGUF (magic + version + counts + a few metadata KVs + one tensor info), same shape
 # tests/test_fit_planner.py's own _build_gguf_bytes produces -- reimplemented here in miniature so this
@@ -421,7 +428,7 @@ def test_qualify_success_is_recorded_after_safe_adoption(monkeypatch, home, olla
         "status": "passed",
         "capability": "core",
         "run_id": "run-qualified",
-        "receipt_shape": "new",
+        "receipt_shape": "recorded",
         "warnings": [],
     })
     args = _args(model=name, qualify=True)
@@ -620,72 +627,3 @@ def test_add_subparser_registers_expected_flags():
     assert args.yes is True
     assert args.qualify is True
     assert args.json is True
-    assert not hasattr(args, "connect")
-    assert not hasattr(args, "url")
-    assert not hasattr(args, "api_key")
-    assert not hasattr(args, "client_model_label")
-
-
-def test_add_subparser_no_longer_accepts_connect():
-    """`clozn adopt ollama --connect APP` (downstream client configuration) was retired -- the flag
-    must be rejected by the parser, not silently ignored."""
-    p = argparse.ArgumentParser()
-    sub = p.add_subparsers()
-    adopt.add_subparser(sub)
-    with pytest.raises(SystemExit):
-        p.parse_args(["adopt", "ollama", "--model", "x", "--connect", "aider"])
-
-
-# ------------------------------------------------------------------------ no downstream configuration
-
-def test_adoption_never_produces_a_connect_preview_or_client_transaction(monkeypatch, home, ollama_blob):
-    """Neither a dry-run plan nor an applied adoption document carries any connector-shaped field --
-    the concepts (connect_preview, client_transactions, connect) no longer exist anywhere in the
-    adoption pipeline."""
-    ollama = _FakeOllama()
-    ollama.add_model("qwen2.5:7b-instruct", blob_path=str(ollama_blob))
-    ollama.install(monkeypatch)
-
-    args = _args(model="qwen2.5:7b-instruct")
-    plan = adopt._build_plan(args)
-    assert "connect_preview" not in plan
-    assert "_connect_mutation" not in plan
-
-    dry = adopt._dry_run_report(plan)
-    assert "connect_preview" not in dry
-
-    report = adopt._apply(args, adopt._build_plan(args))
-    assert "connect" not in report
-    document = json.loads(Path(report["transaction_path"]).read_text(encoding="utf-8"))
-    assert "client_transactions" not in document
-    from clozn import schemas
-    schemas.validate(document, "clozn.adopt-ollama.v1")
-
-
-def test_adoption_has_no_side_effects_on_any_downstream_client_config(monkeypatch, home, ollama_blob, tmp_path):
-    """Adopting a model must never touch a third-party app's config, even when those configs exist on
-    disk and even when the (now-removed) apps would previously have been detected as installed."""
-    ollama = _FakeOllama()
-    ollama.add_model("qwen2.5:7b-instruct", blob_path=str(ollama_blob))
-    ollama.install(monkeypatch)
-    monkeypatch.setattr("shutil.which", lambda _n: "/usr/bin/aider")  # aider "installed"
-
-    aider_conf = tmp_path / ".aider.conf.yml"
-    aider_conf.write_text("dark-mode: true\n", encoding="utf-8")
-    open_webui_env = tmp_path / ".open-webui" / "clozn.env"
-    open_webui_env.parent.mkdir(parents=True)
-    open_webui_env.write_text("EXISTING=yes\n", encoding="utf-8")
-    openai_env = tmp_path / ".config" / "clozn" / "openai.env"
-    openai_env.parent.mkdir(parents=True)
-    openai_env.write_text("EXISTING=yes\n", encoding="utf-8")
-    ollama_sdk_env = tmp_path / ".config" / "clozn" / "ollama-sdk.env"
-    ollama_sdk_env.write_text("EXISTING=yes\n", encoding="utf-8")
-    before = {p: p.read_bytes() for p in (aider_conf, open_webui_env, openai_env, ollama_sdk_env)}
-
-    args = _args(model="qwen2.5:7b-instruct")
-    adopt._apply(args, adopt._build_plan(args))
-
-    for path, contents in before.items():
-        assert path.read_bytes() == contents, f"{path} was modified by adoption"
-    assert not (aider_conf.parent / (aider_conf.name + ".bak")).exists()
-    assert not any(p.name.startswith(".aider.conf.yml.bak") for p in tmp_path.iterdir())

@@ -30,16 +30,17 @@ def _run(run_id: str, secret: str) -> dict:
         "meta": {"temperature": 0.8, "seed": 7, "private": secret},
         "context_receipt": {
             "schema_version": "clozn.context-receipt.v1",
+            "run_id": run_id,
             "delivered": [{
-                "segment_id": "seg-1",
+                "segment_id": "seg_aaaaaaaaaaaaaaaa",
                 "source_type": "message",
-                "content": secret,
                 "source_label": secret,
-                "content_sha256": "c" * 64,
+                "original_order": 0,
+                "content_hash": "c" * 16,
                 "included": True,
             }],
-            "rendered": {"sha256": "d" * 64, "content": secret},
-            "survived": {"final_prompt": secret},
+            "rendered": {"sha256": "d" * 64},
+            "privacy": "full",
         },
         "output_contract": {
             "requested_schema": {"description": secret, "type": "object"},

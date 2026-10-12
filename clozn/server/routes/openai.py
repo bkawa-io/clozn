@@ -333,15 +333,14 @@ def _buffered_structured_sse(h, parsed: dict, *, model: str, run_id: str | None,
 
 def try_get(h, p):
     if p == "/v1/models":            # OpenAI-compatible model list (so OAI clients connect)
-        if ctx.MODEL_ROUTER is not None:
-            h._json(200, {"object": "list", "data": [
-                {"id": model_id, "object": "model", "owned_by": "clozn"}
-                for model_id in ctx.MODEL_ROUTER.model_ids()
-            ]})
+        router = getattr(ctx, "MODEL_ROUTER", None)
+        if router is None:
+            _api_error(h, 503, "model router unavailable", code="service_unavailable")
             return True
-        from clozn.server.generation_gateway import model_id
         h._json(200, {"object": "list", "data": [
-            {"id": model_id(), "object": "model", "owned_by": "clozn"}]})
+            {"id": model_id, "object": "model", "owned_by": "clozn"}
+            for model_id in router.model_ids()
+        ]})
         return True
     return False
 
@@ -391,7 +390,7 @@ def try_post(h, p, body):
     )
     if selection is None:
         return True
-    sub = ctx.active_sub(h)
+    sub = selection.sub
     if not (sub and getattr(sub, "chat", None)):
         h._json(503, {"error": {"message": "model worker unavailable", "type": "service_unavailable"}})
         return True
@@ -441,12 +440,6 @@ def try_post(h, p, body):
         # Source metadata belongs only to the journal copy.  ``msgs`` remains
         # exactly the client-visible message list handed to the chat template.
         journal_delivered_messages[index]["_clozn_sources"] = sources
-        # Preserve the old message-level receipt fields when the request used
-        # the legacy one-source form.  Exact ``src_`` spans are additive.
-        if len(sources) == 1 and isinstance(sources[0].get("source_id"), str):
-            journal_delivered_messages[index]["source_id"] = sources[0]["source_id"]
-            if sources[0].get("label"):
-                journal_delivered_messages[index]["source_label"] = sources[0]["label"]
 
     # EXPLICIT, REQUEST-LOCAL CONCEPT GUARD INTERVENTION (FRONTIER_BETS section 9.1 / experiment A1.1),
     # opt-in per request only -- see generation_guard.py's own module docstring for the full honesty
@@ -456,9 +449,7 @@ def try_post(h, p, body):
     # anything configured on any earlier request. Parsed here, before the structured-output/streaming
     # logic below, because a guarded generation bypasses ALL of that in this first cut (see the module
     # docstring's SCOPE LIMITS section) -- composing the guard with corrective retries or structured
-    # output is deferred, not silently dropped (named-dial personalization, the third surface this
-    # comment used to list, was cut from the product entirely; there is nothing left there to compose
-    # with). `guard_spec` is None whenever the request
+    # output is deferred, not silently dropped. `guard_spec` is None whenever the request
     # omits `clozn_guard`; every line below this block then runs completely unchanged, so the
     # byte-identical-when-absent contract holds regardless of where the guard sits in this function.
     from clozn.server import generation_guard
@@ -545,8 +536,8 @@ def try_post(h, p, body):
                         ),
                     )
                 plan = normalize_and_lower_messages(msgs, structured)
-                # Native llama-common receives the normalized OpenAI roles directly. The lowered
-                # synthetic envelope remains only for text-bypass history on the legacy chat seam.
+                # Native llama-common receives normalized OpenAI roles directly. Tool-history-only
+                # requests use the deterministic text envelope understood by the ordinary chat path.
                 native_structured = _native_generation_contract(structured)
                 output_processor = _native_structured_processor(structured, qualification)
             else:

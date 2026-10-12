@@ -28,9 +28,9 @@ Wire shape:
   GET /runs/<id>/claim-support
       -> 200 {"claims": <clozn.answer-claims.v1>, "support": <clozn.claim-support.v1>}
       -> 404 the run was not found
-      -> 500 the derived pair could not be composed for this run (malformed/legacy run data) --
+      -> 500 the derived pair could not be composed for this run (malformed recorded data) --
          a text-free, generic body; see _CONTRACT_ERROR below (same discipline as span_addresses.py's
-         own contract-failure handler, for the same reason: exception text from a malformed legacy
+         own contract-failure handler, for the same reason: exception text from a malformed
          artifact may itself contain private source literals).
 """
 from __future__ import annotations
@@ -64,7 +64,7 @@ def try_get(h, p):
         claims = build_answer_claims(run, privacy="metadata_only")
         support = build_claim_support(run, claims, privacy="metadata_only")
     except (TypeError, ValueError, UnicodeError, schemas.ValidationError):
-        # Metadata-only route. Validation exceptions raised while reading malformed legacy run data may
+        # Metadata-only route. Validation exceptions raised while reading malformed recorded data may
         # contain source literals, so the public failure stays generic and text-free (mirrors
         # span_addresses.py's own contract-failure handler for the identical reason).
         h._json(500, _CONTRACT_ERROR)

@@ -1,7 +1,6 @@
 # scripts/tracer — the causal-tracer validation + SAE feature studies
 
-Reproduction scripts for the numbers quoted in `notes/CIRCUIT_TRACER_DESIGN.md` §5b–§5h (local
-notes) and formerly tracked as `docs/BACKLOG.md` item 9 (retired — see `docs/PRODUCT_ROADMAP.md`).
+Reproduction scripts for the causal-tracing measurements quoted in the research notes.
 All of them drive a **live clozn-server** over HTTP; none of them need
 torch (the one exception is the W_dec export, which is a one-shot in `engine/core/tools/`).
 
@@ -65,10 +64,9 @@ mandatory (without it the position-0 sink ranks top at +0.717 — a pure amplitu
 greedy beats best-single +7.60 vs +0.11 (redundancy makes single positions score ~0). The
 scorecard caveat stands: 91.7% is accuracy at predicting *token flips*, not answer loss.
 
-## Remaining work (moved here from docs/BACKLOG.md item 9 when the backlog was retired)
+## Remaining research work
 
-Ordering and gates live in `docs/PRODUCT_ROADMAP.md` (lanes R1/R5, Phase 3/4 UI). The concrete
-items, closest to the code:
+Items closest to the code:
 
 1. **Genuine screen-null** — replace the target concept rather than diluting it; the one control
    that could still invalidate the S0 screen. Cheap. (R1)

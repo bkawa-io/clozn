@@ -16,6 +16,7 @@ from clozn.experiments.observations import TokenScoreObservation
 from clozn.experiments.persistence import ExperimentView, ObservationNotFound, ObservationStore
 from clozn.experiments.selections import AnswerSelection
 from clozn.recipes.context_effects import measure_context_effects, plan_context_effects
+from clozn.recipes.context_effects import plan_context_effects_reader
 from clozn.runs.context_receipt import build_context_receipt
 
 from tests.test_context_effects_kernel import ScoreSubstrate, _run
@@ -30,6 +31,23 @@ class MemoryStore(ObservationStore):
         if self.view is None:
             raise ObservationNotFound(experiment_id)
         return self.view
+
+
+def _protected_only_run():
+    run, _source_ids = _run()
+    messages = [{"role": "user", "content": "only current request"}]
+    run["id"] = "run_context_investigation_protected_only"
+    run["messages"] = deepcopy(messages)
+    run["assembled_messages"] = deepcopy(messages)
+    run["final_prompt"] = "only current request"
+    run["context_receipt"] = build_context_receipt(
+        messages=messages,
+        assembled_messages=messages,
+        final_prompt=run["final_prompt"],
+        run_id=run["id"],
+        privacy="full",
+    )
+    return run
 
 
 def _view(run, source_ids):
@@ -70,6 +88,55 @@ def test_reader_before_measurement_has_context_and_answer_without_model_work():
     ]
     assert document["answer"]["text"] == "same answer"
     assert document["loci"] == []
+    schemas.validate(document, "clozn.context-investigation-reader.v1")
+
+
+def test_reader_plan_preserves_prose_without_minting_an_empty_q2_experiment():
+    run = _protected_only_run()
+    with pytest.raises(ValueError, match="no automatically discovered sources are exactly removable"):
+        plan_context_effects(run)
+
+    plan = plan_context_effects_reader(run)
+    assert plan.measurement_source_ids == ()
+    assert plan.display_source_ids
+    assert not hasattr(plan, "experiment")
+
+    class NoExperimentStore(ObservationStore):
+        def get_experiment(self, _experiment_id):
+            raise AssertionError("an unavailable measurement must not look up an Experiment")
+
+    document = build_context_investigation_reader(
+        run, plan, observation_store=NoExperimentStore(),
+    )
+    assert document["status"] == "unavailable"
+    assert document["reason"] == "no canonical Context Receipt source is exactly removable"
+    assert document["reason_code"] == "context_investigation_no_exactly_removable_source"
+    assert document["measurement"] == {
+        "status": "unavailable",
+        "experiment_id": None,
+        "evaluator": "score_recorded_continuation",
+        "intervention": "delete_source",
+        "source_universe": [],
+        "source_universe_basis": "canonical_context_receipt",
+        "completed_source_count": 0,
+        "unavailable_source_count": 0,
+        "failed_source_count": 0,
+        "not_measured_source_count": 0,
+    }
+    assert [block["text"] for block in document["context"]["blocks"]] == [
+        "only current request",
+    ]
+    assert document["answer"]["text"] == run["response"]
+    assert document["sources"]
+    assert {source["measurement"]["status"] for source in document["sources"]} == {
+        "unavailable",
+    }
+    assert document["loci"] == []
+    assert document["capabilities"] == {
+        "context_effects": "unavailable",
+        "measurement": "unavailable",
+        "answer_selection_projection": "available",
+    }
     schemas.validate(document, "clozn.context-investigation-reader.v1")
 
 

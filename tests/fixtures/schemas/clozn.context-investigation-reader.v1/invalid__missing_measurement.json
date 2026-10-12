@@ -1,0 +1,15 @@
+{
+  "schema_version": "clozn.context-investigation-reader.v1",
+  "run_id": "run_reader_fixture",
+  "status": "not_measured",
+  "context": {"coordinate_basis": "context_display_unicode.v1", "blocks": []},
+  "answer": {"status": "unavailable"},
+  "sources": [],
+  "loci": [],
+  "presentation": {"measurement_floor_nats": 0.1},
+  "capabilities": {
+    "context_effects": "unavailable",
+    "measurement": "unavailable",
+    "answer_selection_projection": "unavailable"
+  }
+}

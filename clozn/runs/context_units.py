@@ -51,16 +51,7 @@ def protected_message_indices(messages: list[dict]) -> set[int]:
 def _has_explicit_sources(message: Any) -> bool:
     """Whether a message carries caller source metadata in the journal shape."""
     raw = message.get("_clozn_sources") if isinstance(message, dict) else None
-    if isinstance(raw, list) and bool(raw):
-        return True
-    # Direct receipt callers from the pre-exact-source API may still carry a
-    # message-level source identity without the normalized private list.  Keep
-    # that caller-defined root intact instead of adding auto children beside
-    # it.
-    return isinstance(message, dict) and any(
-        isinstance(message.get(key), str) and bool(message.get(key))
-        for key in ("source_id", "source_label")
-    )
+    return isinstance(raw, list) and bool(raw)
 
 
 def _partition(text: str, semantic_spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -317,10 +308,8 @@ def _explicit_partition(message: dict, spans: list[dict], length: int) -> list[d
     if not isinstance(raw, list) or not raw:
         return None
     exact_raw = [item for item in raw if isinstance(item, dict) and "unicode_range" in item]
-    if not exact_raw:
-        # Legacy clozn_sources names the existing whole-message root.  It has
-        # no exact src_ identity to preserve and is safely represented by seg_.
-        return []
+    if len(exact_raw) != len(raw):
+        return None
 
     matched: list[dict] = []
     for raw_item in exact_raw:

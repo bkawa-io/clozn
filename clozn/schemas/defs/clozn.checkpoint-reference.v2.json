@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "clozn.checkpoint-reference.v2",
   "title": "Recorded-parent execution checkpoint reference",
-  "description": "A fail-closed receipt for reconstructing one immutable run as a generation-scoped worker checkpoint. Available references have passed an unchanged exact-execution-fork control. They remain bounded in-memory FIFO state, are never durable or pinned in v1, and are valid only for the recorded worker process generation. Its unchanged-control proof is stated in canonical exact-resume terms: the resolved exact execution state and its content digest, never a legacy execution-fork plan identity. Checkpoint capture is a checkpoint/proof facility and creates no Run.",
+  "description": "A fail-closed receipt for reconstructing one immutable run as a generation-scoped worker checkpoint. Available references have passed an unchanged exact-execution-fork control. They remain bounded in-memory FIFO state, are never durable or pinned, and are valid only for the recorded worker process generation. Its unchanged-control proof is stated in canonical exact-resume terms: the resolved exact execution state and its content digest. Checkpoint capture is a checkpoint/proof facility and creates no Run.",
   "type": "object",
   "oneOf": [
     {

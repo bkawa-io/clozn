@@ -32,7 +32,7 @@ def _exact_branch_receipt(
     """Build the closed Time Machine exact-child envelope without inventing missing lineage.
 
     The proof this receipt carries is canonical experiment evidence -- which experiment, arm, and
-    observation produced the replay -- not a legacy execution-fork artifact.  The child Run is named
+    observation produced the replay. The child Run is named
     only once that evidence has been explicitly materialized.
     """
     artifact = {

@@ -20,7 +20,7 @@ class Handler:
 
 
 def _run(rid, **kw):
-    rec = {"id": rid, "identity": {}, "meta": {}, "messages": [], "response": "", "context_receipt": {},
+    rec = {"id": rid, "model": "test-model", "identity": {}, "meta": {}, "messages": [], "response": "", "context_receipt": {},
           "output_contract": {}, "trace": {}}
     rec.update(kw)
     return rec
@@ -127,13 +127,13 @@ def test_post_plan_is_model_free_and_schema_valid(monkeypatch):
 
 def test_post_execution_returns_real_runner_child_ids(monkeypatch):
     from clozn.replay import controlled
-    from clozn.server import app
 
     meta = {"sampling": "greedy", "temperature": 0.0}
     a = _run("run_a", response="good", messages=[{"role": "user", "content": "full"}], meta=meta)
     b = _run("run_b", response="bad", messages=[{"role": "user", "content": "short"}], meta=meta)
     monkeypatch.setattr(runlog, "get_run", lambda rid: {"run_a": a, "run_b": b}.get(rid))
-    monkeypatch.setattr(app, "active_sub", lambda _h: type("Sub", (), {"chat": lambda *_a, **_k: ""})())
+    from clozn.server import app
+    monkeypatch.setattr(app, "SUB", type("Sub", (), {"chat": lambda *_a, **_k: ""})())
 
     class FakeLiveRunner:
         def __init__(self, _sub):

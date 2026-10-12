@@ -97,6 +97,37 @@ add_executable(test_reference_match_plan tests/test_reference_match_plan.cpp)
 target_include_directories(test_reference_match_plan PRIVATE include)
 add_test(NAME reference_match_plan COMMAND test_reference_match_plan)
 
+# Related-prompt scoring needs a separate model-free plan: collapse exact duplicate requests,
+# account for physically shared prompt-prefix KV, and split distinct histories into bounded resident
+# waves.  Keep this runnable without llama.cpp or a GGUF so capacity and ordering invariants fail fast.
+add_executable(test_variant_score_plan tests/test_variant_score_plan.cpp)
+target_include_directories(test_variant_score_plan PRIVATE include)
+add_test(NAME variant_score_plan COMMAND test_variant_score_plan)
+
+# Generation-state reuse has stricter identity and capacity rules than request-local trie reuse:
+# the checkpoint must prove the baseline token history/regime, and a prompt ending at the retained
+# boundary forces a one-token rewind to recover its logits. Keep those lifecycle decisions model-free.
+add_executable(test_variant_score_checkpoint_reuse
+    tests/test_variant_score_checkpoint_reuse.cpp)
+target_include_directories(test_variant_score_checkpoint_reuse PRIVATE include)
+add_test(NAME variant_score_checkpoint_reuse COMMAND test_variant_score_checkpoint_reuse)
+
+# Strict score-variants wire preflight and result validation are model-free.  The parsed structs
+# retain JSON integer-vs-other type information so malformed ids fail before a route touches a model.
+add_executable(test_score_variants_protocol tests/test_score_variants_protocol.cpp)
+target_include_directories(test_score_variants_protocol PRIVATE
+    include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp/vendor)
+target_compile_definitions(test_score_variants_protocol PRIVATE
+    CLOZN_SCORE_VARIANTS_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/../../protocol/fixtures/score_variants.json")
+add_test(NAME score_variants_protocol COMMAND test_score_variants_protocol)
+
+# Backend target-logprob reduction has a llama.cpp-specific decode constraint: no sequence may
+# request two output rows in one decode. Keep the prefix-terminal chunk partition model-free.
+add_executable(test_target_logprob_reduction tests/test_target_logprob_reduction.cpp)
+target_include_directories(test_target_logprob_reduction PRIVATE include)
+add_test(NAME target_logprob_reduction COMMAND test_target_logprob_reduction)
+
 # --- On-device SAE readout (ROADMAP 3.3 wired into the engine) ---
 # clozn_sae (src/sae_encoder.cu + clozn/sae.hpp): the JumpReLU SAE encoder GEMV + the vendored
 # sae_topk kernel, behind a CUDA-free pimpl header so clozn-server links it untouched by nvcc.
@@ -273,6 +304,7 @@ if(CLOZN_BUILD_SERVE AND CLOZN_BUILD_GGML)
         serve/chat_template_renderer.cpp
         serve/routes_jlens.cpp
         serve/routes_whitebox.cpp
+        serve/routes_score_variants.cpp
         serve/routes_state.cpp
         serve/routes_reference_match.cpp
         ${_vendor}/cpp-httplib/httplib.cpp)

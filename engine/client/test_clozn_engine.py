@@ -10,10 +10,17 @@ Run with pytest (`pytest test_clozn_engine.py -q`) or directly (`python test_clo
 from __future__ import annotations
 
 import base64
+import json
+from pathlib import Path
 
 import numpy as np
 
 from clozn_engine import EngineClient, EngineError, Observation, decode_tensor, flatten_values
+
+
+SCORE_VARIANTS_FIXTURE = (
+    Path(__file__).resolve().parents[2] / "protocol/fixtures/score_variants.json"
+)
 
 
 def _wire(arr: np.ndarray) -> dict:
@@ -129,6 +136,167 @@ def test_score_omits_write_fields_when_absent():
     eng.score(prompt="hi", continuation_ids=[7])
     _method, _path, body = eng.calls[0]
     assert "write" not in body and "head_write" not in body and "ffn_write" not in body
+
+
+def _score_variants_response(ids=("baseline", "without-a"), *, status="completed"):
+    results = [
+        {"id": ids[0], "status": "completed", "prompt_token_count": 3,
+         "target_logprobs": [-0.25, -0.5]},
+        {"id": ids[1], "status": "completed", "prompt_token_count": 3,
+         "target_logprobs": [-0.75, -1.0]},
+    ]
+    return {
+        "schema_version": "clozn.score-variants-worker.v1",
+        "status": status,
+        "continuation_ids": [10, 11],
+        "results": results,
+        "execution": {
+            "strategy": "native_prefix_reuse_step_batch",
+            "numerical_regime": "screening_unqualified",
+            "evidence_use": "screening",
+            "qualified": False,
+            "execution_identity": {
+                "algorithm_id": "clozn.score-variants.native-prefix-trie-step-batch.v1",
+                "worker_generation_id": "worker-test",
+                "model_sha256": "a" * 64,
+                "tokenizer_sha256": "b" * 64,
+            },
+            "waves": [{
+                "wave_index": 0,
+                "variant_ids": list(ids),
+                "unique_prompt_count": 2,
+                "logical_prompt_rows": 6,
+                "physical_prompt_rows": 4,
+                "continuation_kv_rows": 2,
+                "required_kv_rows": 6,
+            }],
+        },
+        "future_additive_field": {"retained": True},
+    }
+
+
+def test_score_variants_accepts_shared_conformance_fixture():
+    fixture = json.loads(SCORE_VARIANTS_FIXTURE.read_text(encoding="utf-8"))["conformance"]
+    request = fixture["request"]
+    eng = _Stub([fixture["response"]])
+
+    result = eng.score_variants(
+        request["variants"],
+        request["continuation_ids"],
+        generation_state=request["generation_state"],
+    )
+
+    assert eng.calls == [("POST", "/v1/score-variants", request)]
+    assert result == fixture["response"]
+
+
+def test_score_variants_sends_exact_closed_body_and_preserves_caller_order():
+    response = _score_variants_response()
+    eng = _Stub([response])
+    variants = [
+        {"id": "baseline", "prompt_ids": [1, 2, 3]},
+        {"id": "without-a", "prompt_ids": [1, 2, 4]},
+    ]
+    result = eng.score_variants(variants, [10, 11])
+    method, path, body = eng.calls[0]
+    assert method == "POST" and path == "/v1/score-variants"
+    assert body == {"variants": variants, "continuation_ids": [10, 11]}
+    assert body["variants"] is not variants and body["variants"][0] is not variants[0]
+    assert [row["id"] for row in result["results"]] == ["baseline", "without-a"]
+    assert result["future_additive_field"] == {"retained": True}
+
+
+def test_score_variants_sends_closed_generation_state_reference():
+    eng = _Stub([_score_variants_response()])
+    variants = [
+        {"id": "baseline", "prompt_ids": [1, 2, 3]},
+        {"id": "without-a", "prompt_ids": [1, 2, 4]},
+    ]
+    generation_state = {
+        "checkpoint_id": "checkpoint-1",
+        "worker_generation_id": "worker-test",
+        "baseline_variant_id": "baseline",
+    }
+
+    eng.score_variants(variants, [10, 11], generation_state=generation_state)
+
+    assert eng.calls[0][2] == {
+        "variants": variants,
+        "continuation_ids": [10, 11],
+        "generation_state": generation_state,
+    }
+
+
+def test_score_variants_rejects_malformed_generation_state_before_transport():
+    variants = [{"id": "baseline", "prompt_ids": [1, 2, 3]}]
+    invalid = [
+        {},
+        {"checkpoint_id": "c", "worker_generation_id": "w",
+         "baseline_variant_id": "missing"},
+        {"checkpoint_id": "c", "worker_generation_id": "w",
+         "baseline_variant_id": "baseline", "extra": True},
+    ]
+    for generation_state in invalid:
+        eng = _Stub([])
+        try:
+            eng.score_variants(
+                variants, [10], generation_state=generation_state)
+        except ValueError:
+            assert not eng.calls
+        else:
+            raise AssertionError("score_variants accepted malformed generation_state")
+
+
+def test_score_variants_rejects_ambiguous_requests_before_transport():
+    bad_requests = [
+        ([{"id": "same", "prompt_ids": [1]}, {"id": "same", "prompt_ids": [2]}], [3]),
+        ([{"id": "x", "prompt_ids": [True]}], [3]),
+        ([{"id": "x", "prompt_ids": [1], "prompt": "not allowed"}], [3]),
+        ([{"id": "x", "prompt_ids": [1]}], []),
+    ]
+    for variants, continuation in bad_requests:
+        eng = _Stub([])
+        try:
+            eng.score_variants(variants, continuation)
+        except ValueError:
+            assert not eng.calls
+        else:
+            raise AssertionError("score_variants accepted an ambiguous request")
+
+
+def test_score_variants_accepts_typed_partial_without_fabricating_scores():
+    response = _score_variants_response(status="partial")
+    response["results"][1] = {
+        "id": "without-a", "status": "failed", "prompt_token_count": 3,
+        "error": "decode failed",
+    }
+    eng = _Stub([response])
+    result = eng.score_variants([
+        {"id": "baseline", "prompt_ids": [1, 2, 3]},
+        {"id": "without-a", "prompt_ids": [1, 2, 4]},
+    ], [10, 11])
+    assert result["status"] == "partial"
+    assert "target_logprobs" not in result["results"][1]
+
+
+def test_score_variants_rejects_missing_or_promoted_execution_metadata():
+    malformed = _score_variants_response()
+    del malformed["execution"]["execution_identity"]
+    promoted = _score_variants_response()
+    promoted["execution"]["qualified"] = True
+    bad_scores = _score_variants_response()
+    bad_scores["results"][0]["target_logprobs"] = [-0.25]
+    for response in (malformed, promoted, bad_scores):
+        eng = _Stub([response])
+        try:
+            eng.score_variants([
+                {"id": "baseline", "prompt_ids": [1, 2, 3]},
+                {"id": "without-a", "prompt_ids": [1, 2, 4]},
+            ], [10, 11])
+        except EngineError:
+            pass
+        else:
+            raise AssertionError("score_variants accepted a malformed evidence envelope")
 
 
 def test_score_head_capture_needs_both_layers_and_positions():

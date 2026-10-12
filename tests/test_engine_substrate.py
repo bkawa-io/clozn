@@ -15,14 +15,13 @@ Covers:
   * EngineSubstrate.__init__: builds when ENGINE is configured and raises when it is not; the lazy
     model_family/model_id/model_sha256 identity resolution (cooldown-gated retry while the engine is
     down at startup).
-  * EngineSubstrate.chat(): returns the engine's text (stripped); fills mem_out/trace_out exactly like
-    the historical contract; captures the exact rendered final_prompt.
+  * EngineSubstrate.chat(): returns the engine's text (stripped), fills request outputs, and captures
+    the exact rendered final_prompt.
   * run_meta() reproducibility metadata and S5 interactive-sampling resolution.
   * RequestContext: the per-call bundle chat()/chat_stream() publish as self._request (backlog #2).
 
-No tone dials, no memory cards, no EngineSteer: both were retired with the personalization cut (see
-RUNTIME_SPLIT.md). Raw-vector steering (steer_vec/steer_strengths on score_tokens, /intervene) survives
-as interpretability/causal-attribution machinery -- see test_engine_score.py / test_engine_stream.py.
+Explicit raw-vector steering remains available for interpretability and causal-attribution calls; see
+test_engine_score.py and test_engine_stream.py.
 """
 from __future__ import annotations
 
@@ -37,6 +36,7 @@ RESEARCH = os.path.dirname(HERE)
 sys.path.insert(0, RESEARCH)
 
 from clozn.server import app as cs          # noqa: E402
+from tests.chat_templates import render_qwen  # noqa: E402
 import clozn.settings as clozn_settings          # noqa: E402
 
 
@@ -59,7 +59,7 @@ class FakeEngine:
         # markers appear here; on a real engine the FORMAT follows the loaded GGUF (Llama-3 headers,
         # Gemma turns, ...), which the live cross-model proof covers -- not this model-free unit test.
         self.template_calls.append([dict(m) for m in messages])
-        return cs._qwen_tmpl(messages)
+        return render_qwen(messages)
 
     def complete(self, prompt, **params):
         self.calls.append({"prompt": prompt, "params": dict(params)})
@@ -88,11 +88,11 @@ def fake_engine(monkeypatch):
 def test_engine_substrate_needs_a_configured_engine(monkeypatch):
     monkeypatch.setattr(cs, "ENGINE", None)
     with pytest.raises(RuntimeError):
-        cs.EngineSubstrate()
+        cs.EngineSubstrate(engine=cs.ENGINE)
 
 
 def test_engine_substrate_builds_a_real_product_adapter(iso, fake_engine):
-    sub = cs.EngineSubstrate()
+    sub = cs.EngineSubstrate(engine=fake_engine)
     assert isinstance(sub, cs.EngineSubstrate)
     assert sub.name == "engine"
     assert sub.engine is fake_engine
@@ -129,7 +129,7 @@ class _FlakyHealthEngine(FakeEngine):
 def test_identity_stays_unresolved_when_the_engine_is_down_at_startup(iso, monkeypatch):
     fe = _FlakyHealthEngine(fail_times=99)              # never recovers within this test
     monkeypatch.setattr(cs, "ENGINE", fe)
-    sub = cs.EngineSubstrate()
+    sub = cs.EngineSubstrate(engine=fe)
     assert fe.health_calls == 1                          # one attempt, at construction
     assert sub.model_sha256 is None
     assert sub.model_family is None
@@ -141,7 +141,7 @@ def test_identity_retry_is_cooldown_gated_not_on_every_read(iso, monkeypatch):
     that would add the connect-refused tax to every ordinary request while the engine stays down."""
     fe = _FlakyHealthEngine(fail_times=99)
     monkeypatch.setattr(cs, "ENGINE", fe)
-    sub = cs.EngineSubstrate()
+    sub = cs.EngineSubstrate(engine=fe)
     assert fe.health_calls == 1
     for _ in range(10):
         assert sub.model_sha256 is None
@@ -152,7 +152,7 @@ def test_identity_retry_is_cooldown_gated_not_on_every_read(iso, monkeypatch):
 def test_identity_lazily_resolves_once_the_engine_comes_back(iso, monkeypatch):
     fe = _FlakyHealthEngine(fail_times=1)                # down for one attempt, then healthy
     monkeypatch.setattr(cs, "ENGINE", fe)
-    sub = cs.EngineSubstrate()
+    sub = cs.EngineSubstrate(engine=fe)
     assert sub.model_sha256 is None                      # unresolved right after construction
     assert fe.health_calls == 1
 
@@ -167,7 +167,7 @@ def test_identity_lazily_resolves_once_the_engine_comes_back(iso, monkeypatch):
 def test_identity_never_refetches_once_resolved(iso, monkeypatch):
     fe = _FlakyHealthEngine(fail_times=1)
     monkeypatch.setattr(cs, "ENGINE", fe)
-    sub = cs.EngineSubstrate()
+    sub = cs.EngineSubstrate(engine=fe)
     sub._identity_last_attempt -= (sub._IDENTITY_RETRY_COOLDOWN_S + 1)
     assert sub.model_sha256 == "deadbeef01"
     assert fe.health_calls == 2
@@ -182,7 +182,7 @@ def test_identity_never_refetches_once_resolved(iso, monkeypatch):
 
 def test_chat_returns_the_engines_text_stripped(iso, fake_engine, monkeypatch):
     fake_engine.text = "  hello there  "
-    sub = cs.EngineSubstrate()
+    sub = cs.EngineSubstrate(engine=fake_engine)
     assert sub.chat([{"role": "user", "content": "hi"}]) == "hello there"
     assert len(fake_engine.calls) == 1             # the .complete() fallback actually ran
 
@@ -192,7 +192,7 @@ def test_chat_returns_the_engines_text_stripped(iso, fake_engine, monkeypatch):
 def test_chat_records_the_rendered_final_prompt_in_mem_out(iso, fake_engine, monkeypatch):
     """mem_out.final_prompt is the EXACT rendered string the engine templated -- the same string that
     reached generation (fake_engine.calls[-1]['prompt']). _log_run persists it as run.final_prompt."""
-    sub = cs.EngineSubstrate()
+    sub = cs.EngineSubstrate(engine=fake_engine)
     mem_out = {}
     sub.chat([{"role": "user", "content": "hi"}], mem_out=mem_out)
     assert mem_out["final_prompt"] == fake_engine.calls[-1]["prompt"]   # exactly what generation saw
@@ -215,7 +215,7 @@ class _HealthEngine:
         return dict(self._h)
 
     def apply_template(self, messages, add_assistant=True):
-        return cs._qwen_tmpl(messages)   # chat() templates via the engine now (fake mimics a ChatML model)
+        return render_qwen(messages)
 
     def complete(self, prompt, **params):
         return {"choices": [{"text": "ok", "finish_reason": "stop"}]}
@@ -339,26 +339,20 @@ def test_engine_complete_traced_refuses_to_synthesize_text_from_a_malformed_repl
         cs._engine_complete_traced(NoChoicesButOtherwiseSane(), "hello", 16, {})
 
 
-# ==================================================================================== RequestContext (backlog #2: request isolation)
-# chat()'s piecemeal self._last_generation_meta/_last_finish_reason/_last_diverged/_last_diverged_at
-# writes were consolidated onto ONE clozn.server.request_context.RequestContext, published as
-# self._request in a single assignment (see substrates.py's EngineSubstrate._new_request). These tests
-# cover the consolidation itself -- the ALIASES' existing behavior is already exhaustively covered by
-# every test above (they all read sub._last_generation_meta / run_meta() / last_finish_reason() and never
-# noticed the change), so this section only tests what's NEW: the context object's identity/lifecycle.
+# ==================================================================================== RequestContext
+# Every chat publishes one clozn.server.request_context.RequestContext. These tests cover the current
+# request object's initial shape, identity, and lifecycle through its public accessors.
 
 def test_request_context_fields_are_none_shaped_before_any_chat_call(iso, fake_engine):
-    sub = cs.EngineSubstrate()
-    assert getattr(sub, "_request", None) is None
-    assert sub._last_generation_meta is None
-    assert sub._last_finish_reason is None
-    assert sub._last_diverged is None
-    assert sub._last_diverged_at is None
-    assert sub._last_stream_trace == []
+    sub = cs.EngineSubstrate(engine=fake_engine)
+    assert sub._request is None
+    assert sub.last_finish_reason() is None
+    assert sub.last_divergence() == (None, None)
+    assert sub.last_stream_trace() == []
 
 
 def test_chat_publishes_a_fresh_request_context_each_call(iso, fake_engine, monkeypatch):
-    sub = cs.EngineSubstrate()
+    sub = cs.EngineSubstrate(engine=fake_engine)
 
     sub.chat([{"role": "user", "content": "hi"}])
     first = sub._request
@@ -368,15 +362,14 @@ def test_chat_publishes_a_fresh_request_context_each_call(iso, fake_engine, monk
     assert first is not None and second is not None
     assert first is not second                      # a brand-new object every call, never mutated in place
     assert first.request_id != second.request_id     # a fresh id each call (new_request_id())
-    # the piecemeal aliases are VIEWS onto the CURRENT context -- identity, not a copy
-    assert sub._last_generation_meta is second.generation_meta
-    assert sub._last_finish_reason == second.finish_reason
+    assert sub.run_meta()["sampler_mode"] == second.generation_meta["sampler_mode"]
+    assert sub.last_finish_reason() == second.finish_reason
 
 
 def test_request_context_carries_sampling_and_trace(iso, fake_engine, monkeypatch):
     """The context's fields are actually POPULATED, not just plumbing -- sampling (the resolved regime)
     and trace (the per-token steps)."""
-    sub = cs.EngineSubstrate()
+    sub = cs.EngineSubstrate(engine=fake_engine)
     fake_engine.text = "hello there"
 
     sub.chat([{"role": "user", "content": "hi"}], sample=False)
@@ -387,27 +380,17 @@ def test_request_context_carries_sampling_and_trace(iso, fake_engine, monkeypatc
     assert isinstance(req.trace, list)
 
 
-def test_last_generation_meta_never_shows_a_stale_mix_across_calls(iso, fake_engine, monkeypatch):
-    """A sampled call followed by a forced-greedy call: the alias must show ONLY the second call's
+def test_request_generation_meta_never_shows_a_stale_mix_across_calls(iso, fake_engine, monkeypatch):
+    """A sampled call followed by a forced-greedy call: the request must show only the second call's
     complete, self-consistent meta -- never e.g. a leftover sampled seed next to a greedy temperature."""
     clozn_settings.set_setting("sampling", True)
-    sub = cs.EngineSubstrate()
+    sub = cs.EngineSubstrate(engine=fake_engine)
 
     sub.chat([{"role": "user", "content": "hi"}], sample=True)
-    assert sub._last_generation_meta["sampler_mode"] == "sample"
+    assert sub._request.generation_meta["sampler_mode"] == "sample"
 
     sub.chat([{"role": "user", "content": "hi"}], sample=False)
-    meta = sub._last_generation_meta
+    meta = sub._request.generation_meta
     assert meta["sampler_mode"] == "greedy"
     assert meta["temperature"] == 0.0
     assert "seed" not in meta or meta.get("seed") == 0   # no sampled-call seed bled into the greedy meta
-
-
-def test_the_piecemeal_aliases_are_read_only(iso, fake_engine):
-    """Hardening: the only legitimate writers are chat()/chat_stream() (through self._request); a stray
-    direct assignment must fail loudly instead of silently reintroducing the old piecemeal-write pattern."""
-    sub = cs.EngineSubstrate()
-    with pytest.raises(AttributeError):
-        sub._last_generation_meta = {"sampler_mode": "sample"}
-    with pytest.raises(AttributeError):
-        sub._last_finish_reason = "stop"

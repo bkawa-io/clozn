@@ -10,6 +10,10 @@ from .context_effects import (
     ContextEffectsPlan, context_effect_message, measure_context_effects, plan_context_effects,
     project_context_effects,
 )
+from .context_effects_search import (
+    ContextEffectsCoarseToFineResult, ContextEffectsScheduledArm,
+    ContextEffectsSearchBudget, measure_context_effects_coarse_to_fine,
+)
 from .minimal_context import MinimalContextResult, WinningCandidate, run_minimal_context
 from .time_travel import (
     TIME_TRAVEL_RESULT_SCHEMA_VERSION, TimeTravelError, TimeTravelResult,
@@ -24,6 +28,8 @@ __all__ = [
     "plan_context_counterfactual", "ContextEffectsPlan", "context_effect_message", "measure_context_effects",
     "plan_context_effects",
     "project_context_effects", "removability_message",
+    "ContextEffectsCoarseToFineResult", "ContextEffectsScheduledArm",
+    "ContextEffectsSearchBudget", "measure_context_effects_coarse_to_fine",
     "MinimalContextResult", "WinningCandidate", "run_minimal_context",
     "TIME_TRAVEL_RESULT_SCHEMA_VERSION", "TimeTravelError", "TimeTravelResult",
     "continue_from_here", "force_token_and_continue", "materialize_time_travel",

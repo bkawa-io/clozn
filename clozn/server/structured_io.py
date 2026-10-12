@@ -61,11 +61,6 @@ NATIVE_QUALIFICATION_PIPELINE = {
     "validator_id": NATIVE_MESSAGE_VALIDATOR_ID,
 }
 
-# Backward-compatible names for callers of the model-free Python envelope.  They
-# are deliberately not accepted by the v2 qualification registry.
-RENDERER_ID = PYTHON_ENVELOPE_RENDERER_ID
-PARSER_ID = PYTHON_ENVELOPE_PARSER_ID
-
 MAX_TOOLS = 32
 MAX_SCHEMA_DEPTH = 8
 MAX_SCHEMA_PROPERTIES = 128

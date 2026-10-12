@@ -1,0 +1,12 @@
+{
+  "schema_version": "clozn.experiment-materialization.v1",
+  "state": "failed",
+  "parent_run_id": "run_parent",
+  "experiment_id": "exp_exact",
+  "arm_id": "arm_delete",
+  "intervention": {
+    "kind": "delete_source",
+    "source_ids": ["src_context"]
+  },
+  "reason": "generation_failed"
+}

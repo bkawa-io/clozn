@@ -38,6 +38,7 @@ def _write_result(tmp_path):
     result = suite.validate_result({
         "schema_version": suite.RESULT_SCHEMA, "experiment_id": "exp_cli_check", "name": manifest["name"],
         "created_at": "2026-07-22T00:00:00Z", "manifest_sha256": suite._manifest_digest(manifest),
+        "suite_fingerprint": suite.suite_fingerprint(manifest, seeds=manifest["seeds"]),
         "manifest": manifest, "seeds": manifest["seeds"], "cells": cells,
         "summary": suite._summarize(cells, "base", ["base", "cand"]),
     })

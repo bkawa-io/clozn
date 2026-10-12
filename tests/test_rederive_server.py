@@ -37,7 +37,7 @@ class FakeScoreSub:
         self.calls = []
 
     def score_tokens(self, messages, continuation_ids, *, continuation=None, block=None,
-                     steer_strengths=None, steer_vec=None, topk=0):
+                     steer_vec=None, topk=0):
         self.calls.append({"messages": messages, "continuation_ids": continuation_ids})
         return self._tokens
 
@@ -171,11 +171,10 @@ class DownEngineScoreSub:
 def test_rederive_reports_engine_not_reachable_distinctly_from_a_bad_request(iso, monkeypatch):
     sub = DownEngineScoreSub()
     monkeypatch.setattr(cs, "SUB", sub)
-    monkeypatch.setattr(cs, "ENGINE", sub)     # ctx._engine_unreachable_message() reads ENGINE.base
     rid = _seed_run()
     status, out = _post_status(f"/runs/{rid}/rederive")
     assert status == 502
-    assert out == {"error": "engine not reachable at http://127.0.0.1:8080 -- is it running?"}
+    assert out == {"error": "selected model worker is not reachable"}
 
 
 def test_rederive_bad_request_keeps_the_generic_500_when_the_engine_is_fine(iso, monkeypatch):

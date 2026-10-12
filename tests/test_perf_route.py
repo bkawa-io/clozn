@@ -49,7 +49,17 @@ def test_performance_is_zero_generation_and_returns_a_valid_trace(iso):
         source="openai_api", client="pytest",
         messages=[{"role": "user", "content": "Explain gravity"}],
         response="Mass attracts mass.", finish_reason="stop",
-        meta={"generation_duration_ms": 250.0, "generation_tokens_per_second": 30.0},
+        meta={
+            "generation_duration_ms": 250.0, "generation_tokens_per_second": 30.0,
+            "worker_timing": {
+                "schema_version": "clozn.worker-timing.v1", "unit": "nanoseconds",
+                "clock": "steady_clock", "clock_owner": "clozn_worker",
+                "phases": [{
+                    "name": "decode", "owner": "clozn_worker", "duration_ns": 250_000_000,
+                    "measurement": "measured", "aggregation": "exclusive",
+                }],
+            },
+        },
         started=1000.0, ended=1000.4,
     )
     assert cs.SUB is None
@@ -58,7 +68,8 @@ def test_performance_is_zero_generation_and_returns_a_valid_trace(iso):
     assert "200" in head
     assert body["schema_version"] == "clozn.performance-trace.v1"
     assert body["run_id"] == target
-    assert body["phases"] == [{"name": "decode", "owner": "clozn_worker", "duration_ns": 250_000_000}]
+    assert body["phases"][0]["name"] == "decode"
+    assert body["phases"][0]["duration_ns"] == 250_000_000
     assert len(body["diagnoses"]) == 7
 
 

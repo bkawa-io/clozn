@@ -11,7 +11,10 @@ from clozn.experiments.interventions import DeleteSource
 from clozn.experiments.kernel import Experiment
 from clozn.experiments.projection import project_answer_effects
 from clozn.experiments.runner import ExperimentResult, run_experiment
-from clozn.experiments.scoring import DeleteSourceRecordedContinuationScoreAdapter
+from clozn.experiments.scoring import (
+    DeleteSourceRecordedContinuationScoreAdapter,
+    ScoreTokensRefinementPolicy,
+)
 from clozn.experiments.selections import (
     AnswerSelection, AnswerSelectionUnavailable, ContextSelection, resolve_answer_selection,
 )
@@ -68,7 +71,7 @@ class ScoreSubstrate:
         return {"n_ctx": 4096, "device": "cpu"}
 
     def score_tokens(self, messages, continuation_ids=None, *, continuation=None, block=None,
-                     steer_strengths=None, steer_vec=None, topk=0):
+                     steer_vec=None, topk=0):
         self.calls.append(deepcopy(messages))
         contents = [message.get("content") for message in messages]
         if "removable source" not in contents:
@@ -190,6 +193,18 @@ def test_measurement_forwards_cancellation_to_generic_runner(monkeypatch):
 
     assert result == "result"
     assert observed["cancel"] is cancel
+
+
+def test_context_measurement_never_silently_ignores_refinement_policy_on_custom_adapter():
+    run, source_ids = _run()
+
+    with pytest.raises(ValueError, match="custom execution_adapter"):
+        measure_context_effects(
+            run,
+            source_ids=source_ids[:1],
+            execution_adapter=object(),
+            refinement_policy=ScoreTokensRefinementPolicy(),
+        )
 
 
 def test_score_failure_is_typed_and_does_not_approximate_text():

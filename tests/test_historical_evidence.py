@@ -54,6 +54,13 @@ def _run(run_id="run_evidence", pieces=("zero", " one", " two"), token_ids=(10, 
         "response": "".join(pieces),
         "identity": deepcopy(RUNTIME),
         "meta": {"n_ctx": 4096, "device": "cpu"},
+        "generation_contract": {
+            "decode_mode": "greedy",
+            "sampling": None,
+            "max_new": len(pieces),
+            "stop": [],
+            "expected_termination": {"reason": "stop", "reason_raw": "stop"},
+        },
         "trace": {
             "tokens": list(pieces),
             "token_ids": list(token_ids),

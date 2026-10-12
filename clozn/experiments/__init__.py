@@ -1,20 +1,4 @@
-"""Experimental kernel exports plus lazy access to the legacy registry.
-
-The registry/dispatcher in :mod:`clozn.experiments.experiment` is retained as a
-temporary parity oracle.  It is deliberately lazy: importing a new-kernel
-module does not import or initialize that legacy API.
-"""
-from importlib import import_module
-
-
-_LEGACY_EXPORTS = frozenset({"REGISTRY", "catalog", "run_experiment", "substrate_ok"})
-
-
-def __getattr__(name):
-    if name in _LEGACY_EXPORTS:
-        legacy = import_module(".experiment", __name__)
-        return getattr(legacy, name)
-    raise AttributeError(name)
+"""The durable experiment kernel and its public data types."""
 
 
 from .evaluators import ExactReferenceMatch, ScoreRecordedContinuation, Generate
@@ -52,10 +36,11 @@ from .context_investigation import (
     build_context_investigation_reader, project_locus_details, project_source_loci,
     query_answer_effects,
 )
-from .runner import ExperimentResult, run_experiment as experimental_run_experiment
+from .runner import ExperimentResult, run_experiment
 from .scoring import (
     DeleteSourceRecordedContinuationScoreAdapter, DeleteSourceScoreAdapter,
     RecordedContinuationScoreAdapter, ScoreRecordedContinuationAdapter,
+    ScoreTokensRefinementPolicy,
 )
 from .selections import (
     AnswerSelection, AnswerSelectionUnavailable, ContextSelection, ResolvedAnswerSelection,
@@ -75,7 +60,7 @@ from .suite import (MANIFEST_SCHEMA, RESULT_SCHEMA, list_result_paths, load_mani
 
 ExperimentStore = ObservationStore
 
-__all__ = ["REGISTRY", "catalog", "run_experiment", "substrate_ok", "MANIFEST_SCHEMA",
+__all__ = ["MANIFEST_SCHEMA",
            "RESULT_SCHEMA", "list_result_paths", "load_manifest", "load_result", "results_directory",
            "run_manifest", "select_cells", "validate_manifest", "validate_result",
            "ExecutionState", "StateRef", "AnswerTokenBoundary", "RecordedAnswerBoundary", "ResolvedState", "StateRefError",
@@ -93,8 +78,9 @@ __all__ = ["REGISTRY", "catalog", "run_experiment", "substrate_ok", "MANIFEST_SC
            "ExecutionAdapter", "DeleteSourceExactReferenceAdapter", "ExactReferenceMatchAdapter",
            "DeleteSourceRecordedContinuationScoreAdapter", "ScoreRecordedContinuationAdapter",
            "DeleteSourceScoreAdapter", "RecordedContinuationScoreAdapter",
+           "ScoreTokensRefinementPolicy",
            "resolve_delete_source", "resolve_answer_selection", "project_answer_effects",
-           "project_answer_selection", "experimental_run_experiment", "materialize_arm",
+           "project_answer_selection", "run_experiment", "materialize_arm",
            "materialize_generated_observation", "MaterializeBranch", "GenerateExecutionAdapter",
            "DeleteSourceGenerateAdapter", "GenerateExecutionError", "BEST_VERIFIED", "INCLUSION_MINIMUM", "SearchBudget",
            "SearchEvidenceRef", "SearchResult", "SearchTrial", "SearchTrajectoryEntry",

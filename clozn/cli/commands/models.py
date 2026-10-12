@@ -379,14 +379,12 @@ def cmd_plan(args):
 
 
 def _cmd_plan_calibrate_stub(name: str):
-    """DEFERRED seam for `clozn plan --calibrate`: boot the engine on this GGUF, run a short fixed-length
+    """Unavailable `clozn plan --calibrate` seam: boot the engine on this GGUF, run a short fixed-length
     decode, measure the ACTUAL tok/s, and solve for this machine's real effective bandwidth
     (bandwidth_gb_s = measured_tok_s * total_bytes_per_token / 1e9) so future `clozn plan` calls on this
     machine can default to a calibrated constant instead of the generic RTX-5080-class guess.
 
-    Deliberately NOT implemented in this pass: the engine is being rebuilt in a concurrent workstream
-    (see docs/ROADMAP.md), and this predictor must stay pure-CPU / model-free until that lands. TODO
-    (next pass, once the engine is free):
+    This predictor stays pure-CPU and model-free. A live calibration implementation would:
       1. resolve_model(name) -> path, launch the engine the same way `clozn run` does (engine_process.py)
       2. run a short, fixed-length decode (e.g. 64-128 tokens, greedy, no --heat) and time it
       3. measured_tok_s = tokens_generated / wall_clock_seconds
@@ -395,8 +393,7 @@ def _cmd_plan_calibrate_stub(name: str):
       5. optionally cache the calibrated bandwidth_gb_s under ~/.clozn/config.json for future `plan` runs
     """
     print()
-    print(f"{fmt.BOLD}--calibrate: DEFERRED{fmt.RST} (not implemented in this pass)")
+    print(f"{fmt.BOLD}--calibrate: unavailable{fmt.RST}")
     print(f"{fmt.DIM}this would boot the engine on {name}, run a short live decode, measure the ACTUAL "
-          f"tok/s, and use it to correct the assumed bandwidth above for this machine. Left unwired "
-          f"deliberately -- the engine is being rebuilt in a concurrent workstream; see the TODO in "
-          f"cmd_plan._cmd_plan_calibrate_stub() for the plan once it's free.{fmt.RST}")
+          f"tok/s, and use it to correct the assumed bandwidth above for this machine. Live calibration "
+          f"is not part of the current plan command.{fmt.RST}")

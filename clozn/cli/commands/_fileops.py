@@ -1,17 +1,11 @@
-"""Generic, safe file-integrity primitives shared by commands that adopt files Clozn does not own.
+"""Safe file-integrity primitives for model adoption.
 
 `clozn adopt ollama` (clozn.cli.commands.adopt) is the one caller: it needs to hash a source blob it
 did not create (to verify what it adopts), and to copy that blob into Clozn's own model directory
 without ever holding a multi-gigabyte file in memory or leaving a partially-written target if the
 process is interrupted mid-copy.
 
-This module used to be `_connector.py`, home to a generic third-party-app "Connector" framework
-(detect/plan/apply/undo, transactional config-file mutation with backup and drift detection) that
-Clozn used to safely patch files like `.aider.conf.yml`. That framework -- and the product feature it
-served, `clozn connect` -- was retired: Clozn does not own another application's configuration, so it
-no longer edits it. See docs/CAPABILITIES.md. Only the two primitives below survive, because
-`clozn adopt ollama` still has a genuine, unrelated need for them: safely handling a *model file*
-Clozn itself is about to own a copy of, not mutating a file that belongs to another application.
+The primitives stream large model files and preserve atomicity without loading weights into memory.
 """
 from __future__ import annotations
 

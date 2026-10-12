@@ -62,7 +62,7 @@ def try_get(h, p):
         import dataclasses
         import time as _time
         from clozn.eval import store as eval_store
-        rep = eval_store.load()
+        rep = eval_store.load_latest_profile()
         if not rep:
             h._json(200, {"available": False,
                           "note": "no outcome-grounded calibration saved yet -- run `clozn eval --save` "
@@ -118,7 +118,9 @@ def try_post(h, p, body):
                   "note": calibrated_trust.NOTE})
 
         from clozn.eval import store as eval_store
-        mapped, truth = calibrated_trust.attach_truth(mapped, eval_store.load(), run.get("model"))
+        mapped, truth = calibrated_trust.attach_truth(
+            mapped, eval_store.load_profile(run.get("model")), run.get("model")
+        )
 
         support = {"requested": False, "available": False,
                    "reason": "not computed — pass support:true to run the optional independent NLI check",

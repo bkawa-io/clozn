@@ -1,11 +1,7 @@
 """Readable context-delivery receipts from the local run journal.
 
-Renders both receipt shapes a run can carry (clozn.runs.context_receipt.read_receipt): the pre-2026-07-27
-legacy delivered/survived object, unchanged, and the new clozn.context-receipt.v1 segment-array shape,
-whose compact view still leads with full message/prompt text (pulled from the run's own fields, not the
-receipt's metadata-only segments -- see clozn.runs.context_receipt's module docstring) so the everyday
-"what did the model see" question reads the same regardless of which shape produced it. --detailed adds
-the segment/omission/transformation/termination detail the new shape carries that the old one did not.
+The compact view leads with full message and prompt text from the run record; ``--detailed`` adds the
+receipt's segment, omission, transformation, and termination evidence.
 """
 from __future__ import annotations
 
@@ -15,28 +11,15 @@ from copy import deepcopy
 from pathlib import Path
 
 from clozn.cli import main as ctx
-from clozn.runs.context_receipt import _apply_privacy, build_context_receipt, read_receipt
+from clozn.runs.context_receipt import _apply_privacy, read_receipt
 import clozn.runs.store as runlog
 
 
 def _receipt(run: dict) -> dict:
     view = read_receipt(run)
-    if view["shape"] in ("new", "legacy"):
+    if view["shape"] == "recorded":
         return view["receipt"]
-    # absent (older-than-Phase-2.4 run, or context-receipt privacy was "off") or unrecognized (a future
-    # schema bump this build predates) -- reconstruct best-effort from the run's own raw fields rather
-    # than show nothing.
-    return build_context_receipt(
-        messages=run.get("messages"),
-        assembled_messages=run.get("assembled_messages"),
-        final_prompt=run.get("final_prompt"),
-        finish_reason=run.get("finish_reason"),
-        meta=run.get("meta"),
-        trace=run.get("trace"),
-        run_id=run.get("id"),
-        identity=run.get("identity"),
-        error=run.get("error"),
-    )
+    return {}
 
 
 def _message_lines(messages) -> list[str]:
@@ -53,51 +36,21 @@ def _message_lines(messages) -> list[str]:
     return lines or ["  (none captured)"]
 
 
-def _legacy_body(receipt: dict) -> list[str]:
-    """The pre-2026-07-27 shape's own rendering -- unchanged from before this feature's rewrite."""
-    delivered = receipt.get("delivered") or {}
-    survived = receipt.get("survived") or {}
-    lines = ["", "DELIVERED", str(delivered.get("meaning") or "")]
-    lines.extend(_message_lines(delivered.get("messages")))
-    lines.extend(["", "SURVIVED", str(survived.get("meaning") or "")])
-    assembled = survived.get("assembled_messages")
-    if isinstance(assembled, list):
-        lines.append("  assembled messages")
-        lines.extend(_message_lines(assembled))
-    else:
-        lines.append("  assembled messages: (not captured)")
-    final_prompt = survived.get("final_prompt")
-    if isinstance(final_prompt, str):
-        lines.append("  exact rendered prompt")
-        lines.extend("    " + line for line in final_prompt.splitlines() or [""])
-    else:
-        lines.append("  exact rendered prompt: (not captured)")
-    lines.extend(["", "input policy · " + str(receipt.get("input_policy") or "unknown")])
-    return lines
-
-
-def _new_body(run: dict, receipt: dict, *, detailed: bool) -> list[str]:
-    survived = receipt.get("survived") or {}
+def _body(run: dict, receipt: dict, *, detailed: bool) -> list[str]:
     lines = ["", "DELIVERED", "messages accepted by the gateway and handed to prompt assembly"]
     lines.extend(_message_lines(run.get("messages")))
-    lines.extend(["", "SURVIVED", "post-assembly input retained as evidence of what reached generation"])
-    assembled = survived.get("assembled_messages")
+    lines.extend(["", "ASSEMBLED", "messages passed to the model's prompt renderer"])
+    assembled = run.get("assembled_messages")
     if isinstance(assembled, list):
-        lines.append("  assembled messages")
         lines.extend(_message_lines(assembled))
-    elif survived.get("content_withheld_by_privacy_tier"):
-        lines.append(f"  assembled messages: withheld by receipt privacy tier "
-                     f"{survived['content_withheld_by_privacy_tier']!r}")
     else:
-        lines.append("  assembled messages: (not captured)")
-    final_prompt = survived.get("final_prompt")
+        lines.append("  (not captured)")
+    lines.extend(["", "RENDERED PROMPT"])
+    final_prompt = run.get("final_prompt")
     if isinstance(final_prompt, str):
-        lines.append("  exact rendered prompt")
         lines.extend("    " + line for line in final_prompt.splitlines() or [""])
-    elif survived.get("content_withheld_by_privacy_tier"):
-        lines.append("  exact rendered prompt: withheld by receipt privacy tier")
     else:
-        lines.append("  exact rendered prompt: (not captured)")
+        lines.append("  (not captured)")
 
     termination = receipt.get("termination")
     if termination:
@@ -108,8 +61,6 @@ def _new_body(run: dict, receipt: dict, *, detailed: bool) -> list[str]:
             "",
             "termination · " + str(termination.get("reason")) + raw_note + source_note,
         ])
-
-    lines.extend(["", "input policy · " + str(receipt.get("input_policy") or "unknown")])
 
     if detailed:
         lines.extend(["", f"SEGMENTS -- delivered ({len(receipt.get('delivered') or [])})"])
@@ -142,13 +93,9 @@ def _new_body(run: dict, receipt: dict, *, detailed: bool) -> list[str]:
                 lines.append(f"  sha256 {rendered['sha256'][:16]}...")
             if "bytes" in rendered:
                 lines.append(f"  bytes {rendered['bytes']}")
-            if "tokens" in rendered or "token_count" in rendered:
+            if "tokens" in rendered:
                 estimated = " (estimated)" if rendered.get("estimated") else ""
-                lines.append(
-                    f"  tokens {rendered.get('tokens', rendered.get('token_count'))}{estimated}"
-                )
-            if "content_available" in rendered:
-                lines.append(f"  content_available {str(rendered['content_available']).lower()}")
+                lines.append(f"  tokens {rendered['tokens']}{estimated}")
         privacy = receipt.get("privacy")
         if privacy:
             lines.append(f"receipt privacy · {privacy}")
@@ -157,27 +104,41 @@ def _new_body(run: dict, receipt: dict, *, detailed: bool) -> list[str]:
 
 def format_context(run: dict, *, detailed: bool = False) -> str:
     receipt = _receipt(run)
-    limits = receipt.get("limits") or {}
-    warnings = receipt.get("warnings") or []
+    if not receipt:
+        return f"context receipt · {run.get('id', '?')}\nstatus · no readable Context Receipt recorded"
+    rendered = receipt.get("rendered") if isinstance(receipt.get("rendered"), dict) else {}
+    termination = receipt.get("termination") if isinstance(receipt.get("termination"), dict) else {}
+    warnings = run.get("warnings") if isinstance(run.get("warnings"), list) else []
 
     lines = [f"context receipt · {run.get('id', '?')}"]
-    if warnings:
-        lines.append("WARNING · " + str(warnings[0].get("message") or "reply was cut off"))
+    cutoff = (
+        termination.get("reason") in {"max_tokens", "context_limit"}
+        or run.get("finish_reason") == "length"
+    )
+    if cutoff:
+        message = next(
+            (str(item.get("message")) for item in warnings
+             if isinstance(item, dict) and item.get("message")),
+            "generation stopped at a token budget; the reply may be incomplete",
+        )
+        lines.append("WARNING · " + message)
     else:
-        lines.append("status · no recorded input truncation or output cutoff")
+        lines.append("status · no token-budget cutoff recorded")
 
-    values = []
-    for key, label in (("prompt_tokens", "prompt"),
-                       ("context_window_tokens", "context window"),
-                       ("requested_max_tokens", "requested output"),
-                       ("generated_tokens", "generated")):
-        if isinstance(limits.get(key), int):
-            values.append(f"{label} {limits[key]} tok")
+    values = [
+        f"{label} {value} tok"
+        for label, value in (
+            ("prompt", rendered.get("tokens")),
+            ("context window", receipt.get("context_window_tokens")),
+            ("requested output", receipt.get("reserved_output_tokens")),
+            ("generated", termination.get("generated_tokens")),
+        )
+        if isinstance(value, int) and not isinstance(value, bool)
+    ]
     if values:
-        lines.append("limits · " + " · ".join(values))
+        lines.append("tokens · " + " · ".join(values))
 
-    is_new = isinstance(receipt.get("schema_version"), str)
-    lines.extend(_new_body(run, receipt, detailed=detailed) if is_new else _legacy_body(receipt))
+    lines.extend(_body(run, receipt, detailed=detailed))
     return "\n".join(lines)
 
 
@@ -211,10 +172,8 @@ def cmd_context_show(args):
 _PRIVACY_ORDER = {"full": 0, "metadata_only": 1, "hashes_only": 2, "off": 3}
 _OMITTED = {
     "full": [],
-    "metadata_only": ["survived.final_prompt", "survived.assembled_messages"],
+    "metadata_only": [],
     "hashes_only": [
-        "survived.final_prompt",
-        "survived.assembled_messages",
         "segments.source_label",
         "segments.client_source_id",
         "segments.delivered_bytes",
@@ -226,7 +185,7 @@ _OMITTED = {
 def export_context_receipt(run: dict, *, privacy: str) -> dict:
     """Derive a lower- or equal-disclosure export without mutating the stored run."""
     view = read_receipt(run)
-    if view["shape"] != "new":
+    if view["shape"] != "recorded":
         raise ValueError(
             f"privacy-safe export requires a clozn.context-receipt.v1 source; "
             f"this run's receipt shape is {view['shape']}"
@@ -279,7 +238,7 @@ def cmd_context_export(args):
 
 def add_subparser(subparsers):
     parser = subparsers.add_parser(
-        "context", help="inspect what a run delivered and what survived into generation")
+        "context", help="inspect what a run delivered, assembled, and rendered")
     commands = parser.add_subparsers(dest="context_cmd")
 
     last = commands.add_parser("last", help="show the latest organic run's context receipt")

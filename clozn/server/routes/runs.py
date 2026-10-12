@@ -1,13 +1,7 @@
-"""The Run Log: list runs, fetch one, and its structural GET-only views (timeline / lineage / family /
-confidence spans) -- all zero-generation reads over clozn.runs.store. Mechanical extraction of the
-matching `if p == ...` / `if p.startswith("/runs/") and p.endswith(...)` branches out of
-clozn.server.app's do_GET; behavior unchanged.
+"""The Run Log: list runs and compose zero-generation structural views over clozn.runs.store.
 
-NOTE on the generic "/runs/<id>" fallback: it is deliberately NOT here yet. GET /runs/<id>/export
-(receipts.py) is still checked in app.py's legacy dispatch until that family is split out, and a generic
-prefix match here would shadow it (both start with "/runs/"). The fallback moves into this module only
-once every more-specific /runs/<id>/<suffix> GET has its own registered family ahead of this one in the
-dispatch order -- see app.py's `_GET_ROUTES` comment.
+Specific ``/runs/<id>/<suffix>`` route families are dispatched before the generic run lookup so their
+contracts cannot be shadowed by an ID-shaped fallback.
 """
 from urllib.parse import parse_qs, urlsplit
 

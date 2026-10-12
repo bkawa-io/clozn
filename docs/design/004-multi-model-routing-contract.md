@@ -30,13 +30,11 @@ accepted for request selection but are not separate model objects. Alias configu
 one request resolves it once: its receipt retains the literal requested label, canonical resolved ID,
 and artifact digest. Historical receipts are never reinterpreted after an alias changes.
 
-An omitted `model` resolves the configured default. Legacy `clozn serve MODEL` is represented as one
-configured, preloaded default with a resident limit of one; omitted-model clients and clients using the
-ID returned by discovery remain compatible. `clozn-local` may be configured as a one-model alias.
+An omitted `model` resolves the configured default. A single-model configuration has one preloaded
+default and a resident limit of one. `clozn-local` may be configured as its alias.
 
 An explicit unknown label returns `unknown_model`. It must never run the default worker, reuse another
-worker's evidence, or merely relabel a response. This intentionally ends the current misleading behavior
-for arbitrary model strings.
+worker's evidence, or merely relabel a response.
 
 ### Immutable worker key
 

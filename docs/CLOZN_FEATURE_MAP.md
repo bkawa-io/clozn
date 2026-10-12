@@ -37,7 +37,7 @@ For every delivered message or source segment, CLOZN can retain:
 - Delivered byte and token counts, when available
 - Content SHA-256
 - Redaction state
-- Exact content, subject to receipt privacy settings
+- Content fingerprints; exact content remains on the Run under the run-level redaction lifecycle
 
 Callers can attach source identity separately from message text, so source metadata does not alter the
 rendered prompt.
@@ -121,15 +121,15 @@ The final user request is kept separate from surrounding context sections.
 
 ### Privacy levels
 
-Context receipts support four independent privacy levels:
+Context receipts support four metadata-disclosure levels:
 
 - `full`
 - `metadata_only`
 - `hashes_only`
 - `off`
 
-Changing receipt privacy supports preview, compare-and-swap application, and undo. Run-level redaction
-and deletion are separate operations.
+Changing receipt privacy supports preview, compare-and-swap application, and undo. These levels affect
+receipt metadata only; Run content redaction and deletion are separate operations.
 
 Primary implementations: [`context_receipt.py`](../clozn/runs/context_receipt.py),
 [`sections.py`](../clozn/runs/sections.py), [`openai_compat.py`](../clozn/server/openai_compat.py), and
@@ -613,21 +613,8 @@ CLOZN can test bounded context, template, or sampling changes against criteria s
 
 Arms report planned, available, unavailable, or completed states.
 
-### Second-model opinion
-
-A stored run can be used as an anchor and compared with a new execution from another already-ready model.
-Compatibility checks include:
-
-- Chat template
-- Context limit
-- Tools and schema contract
-- Qualified evidence availability
-
-Cross-model log probabilities are not treated as directly comparable.
-
 Primary implementations: [`run_diff.py`](../clozn/analysis/run_diff.py),
-[`controlled.py`](../clozn/replay/controlled.py), and
-[`second_opinion.py`](../clozn/runs/second_opinion.py).
+and [`controlled.py`](../clozn/replay/controlled.py).
 
 ## 11. Sessions and lineage
 
@@ -756,7 +743,7 @@ CLOZN can search coarse-to-fine across layer windows, heads, and FFN sites. Verd
 - Inconclusive
 - Unavailable
 
-Primary implementations: [`clozn_engine.py`](../engine/client/clozn_engine.py),
+Primary implementations: [`clozn_engine`](../engine/client/clozn_engine/__init__.py),
 [`routes_whitebox.cpp`](../engine/core/serve/routes_whitebox.cpp),
 [`mechanistic_diff.py`](../clozn/analysis/mechanistic_diff.py), [`tracer.py`](../clozn/analysis/tracer.py),
 [`transplant.py`](../clozn/analysis/transplant.py), and [`causal_bisect.py`](../clozn/analysis/causal_bisect.py).
@@ -1093,7 +1080,7 @@ CLOZN can produce:
 - Lighteval exports
 - Export validation
 
-Primary implementations: [`experiment.py`](../clozn/experiments/experiment.py),
+Primary implementations: [`kernel.py`](../clozn/experiments/kernel.py),
 [`stats.py`](../clozn/experiments/stats.py), [`promotion.py`](../clozn/experiments/promotion.py), and
 [`ci_check.py`](../clozn/cli/commands/ci_check.py).
 
@@ -1241,16 +1228,14 @@ CLOZN exposes:
 - Ollama-compatible chat, generation, tags, and version
 - GitHub Actions integration
 
-CLOZN does not configure downstream applications. Managing another application's configuration file
-(Aider's YAML, Open WebUI's environment, a generic OpenAI client's `.env`, an Ollama SDK environment)
-was retired -- see [CAPABILITIES.md](CAPABILITIES.md)'s Removed/Retired section. CLOZN documents the
-values an existing client needs (base URL, placeholder API key, model label; see
+CLOZN does not configure downstream applications. It documents the values an existing client needs
+(base URL, placeholder API key, model label; see
 [CLIENT_CONFORMANCE.md](CLIENT_CONFORMANCE.md)) and lets the user or the application own its own
 config.
 
 Ollama adoption can discover an existing local model, resolve its underlying GGUF artifact, register or
 copy it without downloading it again, and qualify it -- all inside Clozn's own model directory. It
-never mutates Ollama's storage and, as of this cut, never touches a downstream application either.
+never mutates Ollama's storage or a downstream application's configuration.
 
 Primary implementations: [`_fileops.py`](../clozn/cli/commands/_fileops.py),
 [`adopt.py`](../clozn/cli/commands/adopt.py),

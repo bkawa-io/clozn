@@ -1,4 +1,4 @@
-"""Tests for clozn.receipts.coalition (docs/PRODUCT_ROADMAP.md §8 tail: batched coalition/Shapley causal
+"""Tests for batched coalition/Shapley causal
 credit). Model-free: drives coalition_report()/exact_shapley()/shapley_taylor() against FAKE substrates
 whose chat() is a deterministic, hand-traceable function of exactly which influences are ablated at call
 time (mirrors tests/test_receipts.py's FakeSub convention) -- so every expected number here is computed

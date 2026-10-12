@@ -1,165 +1,121 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Icon } from "../components/Icon";
-import { loadRuntimeState } from "../data/api";
-import type { RuntimeState, Theme } from "../data/types";
-import { panelRegistry, resolveRoute } from "../panels/registry";
-import { TopbarProvider } from "../panels/topbar";
-import type { TopbarContent } from "../panels/topbar";
+import { useEffect, useState } from "react";
+import { routeHref, type InspectRoute, type InspectView } from "./router";
+import { useHashRoute } from "./useHashRoute";
+import { InspectSurface } from "../features/inspect/Inspect";
+import { SessionsSurface } from "../features/sessions/Sessions";
+import { RuntimeSurface } from "../features/runtime/Runtime";
+import { CompareSurface } from "../features/compare/Compare";
 
-/**
- * The shell: theme, runtime status, the inspector toggle, and the hash router. Everything surface-
- * specific lives in `src/panels/*.tsx` and is discovered at build time -- see `docs/SURFACES.md`.
- *
- * This file used to hold a hardcoded `nav` array, a `Route` union, a `readRoute()` chain, a JSX switch,
- * and the Scope surface's entire state. Adding a surface meant editing all five. It now holds none of
- * them, and adding a surface is adding one file.
- */
+type Theme = "lunar" | "pearl";
+
+type InspectDestinationView = Exclude<InspectView, "read">;
+
+const INSPECT_DESTINATIONS: ReadonlyArray<{ view: InspectDestinationView; label: string }> = [
+  { view: "context-effects", label: "Context effects" },
+  { view: "context", label: "Received context" },
+  { view: "receipt", label: "Context receipt" },
+  { view: "minimal-context", label: "Minimal context" },
+  { view: "actions", label: "Actions" },
+  { view: "claims", label: "Claims" },
+];
+
+function inspectDestination(route: InspectRoute, view: InspectDestinationView): InspectRoute {
+  const base = {
+    surface: "inspect" as const,
+    runId: route.runId,
+    ...(route.sessionId ? { sessionId: route.sessionId } : {}),
+  };
+  return view === "context-effects"
+    ? { ...base, view }
+    : { ...base, view };
+}
+
+function InspectNavigation({ route }: { route: InspectRoute }) {
+  const selected = !route.view || route.view === "read" ? "context-effects" : route.view;
+  return (
+    <nav className="inspect-view-nav" aria-label="Inspect views">
+      {INSPECT_DESTINATIONS.map(({ view, label }) => (
+        <a
+          key={view}
+          href={routeHref(inspectDestination(route, view))}
+          aria-current={selected === view ? "page" : undefined}
+        >
+          {label}
+        </a>
+      ))}
+    </nav>
+  );
+}
+
+function initialTheme(): Theme {
+  return localStorage.getItem("clozn.studio.theme") === "pearl" ? "pearl" : "lunar";
+}
+
 export function App() {
-  const [theme, setTheme] = useState<Theme>(() =>
-    localStorage.getItem("clozn.next.theme") === "cathedral" ? "cathedral" : "halo",
-  );
-  const [runtime, setRuntime] = useState<RuntimeState>({ status: "checking", runs: [] });
-  /* Open only when there is room for it. STUDIO_UI_REDESIGN 2.5: at 1000-1599px the inspector is a
-     drawer, and only at >=1600px do the browser, stage, and inspector all pin at once.
-     Measured, not assumed: at 1280 the ledger gets ~870px beside a pinned inspector while
-     `.runs-table` declares `min-width: 1059px`, so the table horizontally scrolls and the A/B column
-     is cut off the screen. Defaulting closed here is what makes the primary surface fit its own
-     viewport; the rail control still opens it deliberately. Read once at mount rather than on resize
-     so a user who opens it never has it yanked back shut by a window drag. */
-  const [inspectorOpen, setInspectorOpen] = useState(
-    () => typeof window === "undefined" || window.innerWidth >= 1600,
-  );
-  const [hash, setHash] = useState(() => location.hash);
-  const [published, setPublished] = useState<TopbarContent | null>(null);
-
+  const route = useHashRoute();
+  const [theme, setTheme] = useState<Theme>(initialTheme);
+  const sessionsHref = route.surface === "inspect" && route.sessionId
+    ? routeHref({ surface: "session", sessionId: route.sessionId, runId: route.runId })
+    : routeHref({ surface: "sessions" });
+  const inspectHref = route.surface === "inspect"
+    ? routeHref(route)
+    : route.surface === "session" && route.runId
+      ? routeHref({ surface: "inspect", runId: route.runId, sessionId: route.sessionId })
+      : undefined;
+  const surfaceLabel = route.surface === "inspect"
+    ? "Inspect"
+    : route.surface === "runtime"
+      ? "Runtime"
+      : route.surface === "compare"
+        ? "Compare"
+        : "Sessions";
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    localStorage.setItem("clozn.next.theme", theme);
+    localStorage.setItem("clozn.studio.theme", theme);
   }, [theme]);
-
   useEffect(() => {
-    const controller = new AbortController();
-    void loadRuntimeState(controller.signal).then((nextRuntime) => {
-      setRuntime(nextRuntime);
-    });
-    return () => controller.abort();
-  }, []);
-
-  useEffect(() => {
-    const onHashChange = () => setHash(location.hash);
-    window.addEventListener("hashchange", onHashChange);
-    return () => window.removeEventListener("hashchange", onHashChange);
-  }, []);
-
-  // Stable identity: a new object each render would re-run every panel's useTopbar effect forever.
-  const publish = useCallback((content: TopbarContent | null) => setPublished(content), []);
-  const topbar = useMemo(() => ({ publish }), [publish]);
-
-  const { panels, loadFailures } = panelRegistry;
-  const navPanels = panels.filter((item) => !item.hiddenFromNav);
-  const resolved = resolveRoute(panels, hash);
-
-  if (!resolved) {
-    // Only reachable if the panels directory is empty, which the registry test would have caught.
-    return <div className="studio"><main className="workspace">No Studio surfaces are registered.</main></div>;
-  }
-
-  const { panel, params } = resolved;
-  const ctx = { runtime, inspectorOpen, params };
-  const PanelComponent = panel.Component;
-
-  // A panel publishing through useTopbar wins over its own static fields -- a surface whose stats
-  // depend on internal state cannot express them statically, so the dynamic value is the truthful one.
-  const stats = published?.stats ?? panel.topStats?.(ctx);
-  const modeChip = published?.modeChip ?? panel.modeChip?.(ctx);
-
+    document.title = `CLOZN · ${surfaceLabel}`;
+  }, [surfaceLabel]);
   return (
-    <TopbarProvider value={topbar}>
-      <div className="studio">
-        <aside className="rail" aria-label="Primary navigation">
-          <div className="wordmark" aria-label="Clozn">C</div>
-          <nav className="rail-nav">
-            {navPanels.map((item) => (
-              <a
-                className={`rail-item ${item.id === panel.id ? "is-active" : ""}`}
-                href={`#/${item.id}`}
-                key={item.id}
-                aria-current={item.id === panel.id ? "page" : undefined}
-              >
-                {item.icon()}
-                <span>{item.navLabel}</span>
-              </a>
-            ))}
-            {loadFailures.map((failure) => (
-              <span className="rail-item is-failed" key={failure.path} title={failure.reason}>
-                <span>{failure.id} failed to load</span>
-              </span>
-            ))}
-          </nav>
-          <div className="rail-actions">
-            {panel.showInspectorToggle !== false && (
-              <button
-                className="rail-button"
-                type="button"
-                onClick={() => setInspectorOpen((open) => !open)}
-                aria-pressed={inspectorOpen}
-                aria-label="Toggle inspector"
-              >
-                <Icon name="inspector" />
-              </button>
-            )}
-            <button
-              className="rail-button"
-              type="button"
-              onClick={() => setTheme((value) => value === "halo" ? "cathedral" : "halo")}
-              aria-label="Toggle theme"
-            >
-              <Icon name="theme" />
-            </button>
-          </div>
-        </aside>
-
-        <header className="topbar">
-          <div className="brand-lockup">
-            <strong>CLOZN</strong>
-            <span>STUDIO</span>
-          </div>
-          <div className="top-divider" />
-          <span className="route-name">{panel.routeName(params)}</span>
-          <div className="topbar-spacer" />
-          <span className={`runtime-state is-${runtime.status}`}>
-            <i />
-            {runtime.status.toUpperCase()}
-          </span>
-          {stats}
-          {modeChip != null && <span className="mode-chip">{modeChip}</span>}
-          <div className="topbar-actions">
-            {panel.showInspectorToggle !== false && (
-              <button
-                type="button"
-                onClick={() => setInspectorOpen((open) => !open)}
-                aria-pressed={inspectorOpen}
-                aria-label="Toggle compact inspector"
-              >
-                <Icon name="inspector" />
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setTheme((value) => value === "halo" ? "cathedral" : "halo")}
-              aria-label="Toggle compact theme"
-            >
-              <Icon name="theme" />
-            </button>
-          </div>
-        </header>
-
-        <main className={`workspace is-${panel.id} ${inspectorOpen ? "" : "inspector-closed"}`}>
-          {/* Keyed by panel id so switching surfaces remounts rather than reusing state across them --
-              the old JSX switch got this for free by rendering different component types. */}
-          <PanelComponent key={panel.id} {...ctx} />
-        </main>
-      </div>
-    </TopbarProvider>
+    <div className="studio-shell">
+      <header className="studio-topbar">
+        <a className="studio-brand" href="#/sessions" aria-label={`CLOZN ${surfaceLabel}`}>
+          <strong>CLOZN</strong><span>{surfaceLabel.toUpperCase()}</span>
+        </a>
+        <span className="studio-topbar-seam" aria-hidden="true" />
+        <button className="theme-toggle" type="button" onClick={() => setTheme((current) => current === "lunar" ? "pearl" : "lunar")} aria-label={`Use ${theme === "lunar" ? "Black Pearl" : "Lunar Nacre"} theme`}>
+          {theme === "lunar" ? "LUNAR NACRE" : "BLACK PEARL"}
+        </button>
+      </header>
+      <nav className="studio-rail" aria-label="Primary navigation">
+        <a href={sessionsHref} className={route.surface === "sessions" || route.surface === "session" ? "is-active" : undefined} aria-current={route.surface === "sessions" || route.surface === "session" ? "page" : undefined}>
+          <span aria-hidden="true">S</span><b>Sessions</b>
+        </a>
+        <a
+          href={inspectHref ?? sessionsHref}
+          className={route.surface === "inspect" ? "is-active" : undefined}
+          aria-current={route.surface === "inspect" ? "page" : undefined}
+          aria-disabled={inspectHref ? undefined : "true"}
+          onClick={(event) => { if (!inspectHref) event.preventDefault(); }}
+        >
+          <span aria-hidden="true">I</span><b>Inspect</b>
+        </a>
+        <a href={routeHref({ surface: "runtime" })} className={route.surface === "runtime" ? "is-active" : undefined} aria-current={route.surface === "runtime" ? "page" : undefined}>
+          <span aria-hidden="true">R</span><b>Runtime</b>
+        </a>
+        <a href={routeHref({ surface: "compare" })} className={route.surface === "compare" ? "is-active" : undefined} aria-current={route.surface === "compare" ? "page" : undefined}>
+          <span aria-hidden="true">Δ</span><b>Compare</b>
+        </a>
+      </nav>
+      <main className="studio-workspace">
+        {route.surface === "inspect"
+          ? <><InspectNavigation route={route} /><InspectSurface route={route} /></>
+          : route.surface === "runtime"
+            ? <RuntimeSurface />
+            : route.surface === "compare"
+              ? <CompareSurface route={route} />
+              : <SessionsSurface route={route} />}
+      </main>
+    </div>
   );
 }

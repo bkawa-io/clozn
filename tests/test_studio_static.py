@@ -1,15 +1,13 @@
-"""Static-serving contract for the compiled Studio bundle (studio/next/).
+"""Static-serving contract for the compiled Studio bundle in ``studio/app/``.
 
-Unlike every frontend that came before it, the served app is BUILT output: `studio-frontend/` React
-source compiled by Vite into `studio/next/`. That introduces two failure modes no previous shell had,
-and both produce a blank page rather than an error, so neither is loud without a test:
+The bundle filenames are content-hashed and the app is served from a subdirectory, so two failures
+would otherwise produce a blank page rather than a useful error:
 
   1. The bundle filenames are content-hashed (index-BGckJFMk.js). A rebuild changes them. If
      index.html and the committed assets/ ever go out of sync -- one rebuilt, the other not -- the
      page loads and silently 404s its own script.
-  2. Vite's `base` controls whether index.html references its bundle relatively (./assets/...) or
-     absolutely (/assets/...). Only the relative form survives being served from /next/; the absolute
-     form resolves to /assets/*, outside studio/, and 404s.
+  2. Vite's ``base`` controls whether ``index.html`` references its bundle relatively or absolutely.
+     Asset URLs must stay relative to ``/app/``.
 
 So these tests assert what the browser actually does: read the committed index.html, resolve every
 asset it references the way a browser would, and require the static route to serve each one.
@@ -18,7 +16,9 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
 import unittest
+from unittest import mock
 
 from clozn.server import static as static_routes
 from clozn.server.config import DEMO
@@ -45,6 +45,13 @@ def _index_path():
 
 
 class StudioStaticTests(unittest.TestCase):
+    def test_the_studio_tree_contains_only_current_product_surfaces(self):
+        directories = {
+            name for name in os.listdir(DEMO)
+            if os.path.isdir(os.path.join(DEMO, name))
+        }
+        self.assertLessEqual(directories, {"app", "casting", "ext", "__pycache__"})
+
     def test_root_redirects_to_the_app_index(self):
         for path in ("/", "/index.html"):
             handled, sent = _serve(path)
@@ -66,6 +73,46 @@ class StudioStaticTests(unittest.TestCase):
         self.assertIn("text/html", content_type)
         self.assertIn("<div id=\"root\">", body)      # the React mount point
 
+    def test_app_short_paths_redirect_to_the_app_index(self):
+        for path in ("/app", "/app/"):
+            with self.subTest(path=path):
+                handled, sent = _serve(path)
+                self.assertTrue(handled)
+                self.assertEqual(sent[0], 302)
+                self.assertEqual(sent[3].get("Location"), static_routes.APP_INDEX)
+
+    def test_app_woff2_assets_are_served_as_binary_fonts(self):
+        assets = os.path.join(DEMO, "app", "assets")
+        fonts = sorted(name for name in os.listdir(assets) if name.endswith(".woff2"))
+        self.assertTrue(fonts, "the committed Studio bundle has no .woff2 asset to exercise")
+
+        filename = fonts[0]
+        expected_path = os.path.join(assets, filename)
+        with open(expected_path, "rb") as handle:
+            expected = handle.read()
+
+        handled, sent = _serve(f"/app/assets/{filename}")
+        self.assertTrue(handled)
+        status, body, content_type, _headers = sent
+        self.assertEqual(status, 200)
+        self.assertIsInstance(body, bytes)
+        self.assertEqual(body, expected)
+        self.assertEqual(content_type, "font/woff2")
+
+    def test_binary_asset_serving_does_not_weaken_path_containment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            demo = os.path.join(directory, "studio")
+            os.mkdir(demo)
+            outside = os.path.join(directory, "outside.woff2")
+            with open(outside, "wb") as handle:
+                handle.write(b"not a font")
+
+            with mock.patch.object(static_routes, "DEMO", demo):
+                handled, sent = _serve("/../outside.woff2")
+
+            self.assertFalse(handled)
+            self.assertIsNone(sent)
+
     def test_every_asset_the_index_references_is_relative_and_servable(self):
         """Parse the committed index.html and resolve its refs like a browser would.
 
@@ -80,7 +127,7 @@ class StudioStaticTests(unittest.TestCase):
         local = [r for r in refs if not r.startswith(("http://", "https://", "//", "data:"))]
         self.assertTrue(local, "index.html references no local assets -- did the build emit anything?")
 
-        index_dir = os.path.dirname(static_routes.APP_INDEX)          # "/next"
+        index_dir = os.path.dirname(static_routes.APP_INDEX)
         for ref in local:
             with self.subTest(ref=ref):
                 self.assertFalse(
@@ -96,15 +143,7 @@ class StudioStaticTests(unittest.TestCase):
                 self.assertEqual(sent[0], 200, f"{resolved} did not return 200")
 
     def test_the_casting_is_served_and_self_contained(self):
-        """The casting is the project's art half, and it has no callers -- which is exactly how it got
-        deleted once: it lived inside the studio/app/ shell, and when that shell was retired the
-        "does anything break if this goes?" check came back clean, because nothing imports art.
-
-        This test IS its caller. It fails if the casting stops being served, so the next frontend
-        retirement cannot quietly take it along. Kept deliberately strict about the entry point and
-        its module graph; the demo page's one dangling href (casting-optics.css, never committed) is
-        pre-existing and not asserted on.
-        """
+        """The casting is an independent project surface with its own entry point and module graph."""
         handled, sent = _serve("/casting")
         self.assertTrue(handled, "/casting is not routed")
         self.assertEqual(sent[0], 302)
@@ -120,13 +159,6 @@ class StudioStaticTests(unittest.TestCase):
                 handled, sent = _serve(module)
                 self.assertTrue(handled, f"{module} is not served")
                 self.assertEqual(sent[0], 200, f"{module} did not return 200")
-
-    def test_the_retired_shell_is_gone(self):
-        """studio/app/ was the previous frontend. Its absence is the point of the cutover; if it
-        reappears, two apps are shipping and "/" is ambiguous again."""
-        self.assertFalse(os.path.isdir(os.path.join(DEMO, "app")),
-                         "studio/app/ is back -- the retired shell should not be shipping")
-
 
 if __name__ == "__main__":
     unittest.main()

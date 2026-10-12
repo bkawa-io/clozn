@@ -29,11 +29,14 @@ def _curve():
 @pytest.fixture
 def run_id(tmp_path, monkeypatch):
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.setattr(eval_store, "_PATH", str(tmp_path / "eval_report.json"))
+    monkeypatch.setattr(eval_store, "_PATH", str(tmp_path / "calibration_profiles.json"))
     monkeypatch.setattr(journal, "_report", lambda: (SimpleNamespace(calibration=_curve()), .2))
-    eval_store.save({"model": "m1", "set": "arith", "score": "mean", "n": 80,
-                     "report": {"temperature_scaling": {
-                         "available": True, "temperature": 2.0, "n": 80}}})
+    eval_store.save_profile(
+        {"model": "m1", "set": "arith", "score": "mean", "n": 80,
+         "report": {"temperature_scaling": {
+             "available": True, "temperature": 2.0, "n": 80}}},
+        task="arith",
+    )
     return runlog.record(source="openai_api", model="m1",
                          messages=[{"role": "user", "content": "where?"}],
                          response="Kyoto gardens.",
@@ -77,10 +80,10 @@ def test_support_true_runs_injected_nli_and_keeps_it_separate(run_id, monkeypatc
     assert out["spans"][0]["truth_correctness_estimate"] is not None
 
 
-def test_model_mismatch_refuses_truth_mapping_but_keeps_proxy(run_id):
-    saved = eval_store.load()
+def test_model_mismatch_refuses_truth_mapping_but_keeps_proxy(run_id, monkeypatch):
+    saved = eval_store.load_profile("m1", "arith")
     saved["model"] = "other-model"
-    eval_store.save(saved)
+    monkeypatch.setattr(eval_store, "load_profile", lambda *_args, **_kwargs: saved)
     out = _post(run_id, {})
     assert out["truth"]["available"] is False and "does not match" in out["truth"]["reason"]
     assert "truth_correctness_estimate" not in out["spans"][0]

@@ -1,0 +1,33 @@
+{
+  "schema_version": "clozn.context-investigation-reader.v1",
+  "run_id": "run_reader_fixture",
+  "status": "unavailable",
+  "reason": "no canonical Context Receipt source is exactly removable",
+  "reason_code": "context_investigation_measurement_unavailable",
+  "measurement": {
+    "status": "unavailable",
+    "experiment_id": null,
+    "evaluator": "score_recorded_continuation",
+    "intervention": "delete_source",
+    "source_universe": [],
+    "source_universe_basis": "canonical_context_receipt",
+    "completed_source_count": 0,
+    "unavailable_source_count": 0,
+    "failed_source_count": 0,
+    "not_measured_source_count": 0
+  },
+  "context": {
+    "coordinate_basis": "context_display_unicode.v1",
+    "separator": "\n\n",
+    "blocks": []
+  },
+  "answer": {"status": "unavailable"},
+  "sources": [],
+  "loci": [],
+  "presentation": {"measurement_floor_nats": 0.1},
+  "capabilities": {
+    "context_effects": "unavailable",
+    "measurement": "unavailable",
+    "answer_selection_projection": "unavailable"
+  }
+}

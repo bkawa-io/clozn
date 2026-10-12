@@ -186,11 +186,10 @@ class DownEngineSub:
 def test_receipt_reports_engine_not_reachable_distinctly_from_a_bad_spec(iso, monkeypatch):
     sub = DownEngineSub()
     monkeypatch.setattr(cs, "SUB", sub)
-    monkeypatch.setattr(cs, "ENGINE", sub)     # ctx._engine_unreachable_message() reads ENGINE.base
     rid = _seed_run()
     status, out = _post_status(f"/runs/{rid}/receipt", {"influence": {"dial": "warm"}})
     assert status == 502
-    assert out == {"error": "engine not reachable at http://127.0.0.1:8080 -- is it running?"}
+    assert out == {"error": "selected model worker is not reachable"}
 
 
 def test_receipt_bad_spec_keeps_the_generic_500_when_the_engine_is_fine(iso, monkeypatch):
@@ -219,7 +218,7 @@ def test_receipts_needs_the_substrate_503(iso, monkeypatch):
 
 
 def test_receipts_omits_coalitions_key_by_default(iso, monkeypatch):
-    """The opt-in flag (docs/PRODUCT_ROADMAP.md §8 tail) must never change the default response shape."""
+    """The coalition opt-in must never change the default response shape."""
     card_a, card_b = "mem_a", "mem_b"
     monkeypatch.setattr(cs, "SUB", FakeSub(mem=FakeMem(1.0), steer=FakeSteer({"warm": 0.5}),
                                           concise_card_ids=[card_a, card_b]))
@@ -273,7 +272,7 @@ class FakeEngineSub:
         return self.reply
 
     def score_tokens(self, messages, continuation_ids, *, continuation=None, block=None,
-                     steer_strengths=None, steer_vec=None, topk=0):
+                     steer_vec=None, topk=0):
         return self._tokens
 
 
@@ -473,7 +472,6 @@ class DownSwapEngine:
 def test_swap_receipt_total_failure_is_a_clean_502_when_the_engine_is_down(iso, monkeypatch):
     down_engine = DownSwapEngine()
     monkeypatch.setattr(cs, "SUB", FakeSwapSub(down_engine))
-    monkeypatch.setattr(cs, "ENGINE", down_engine)     # ctx._engine_unreachable_message() reads ENGINE.base
     rid = _seed_run()
     status, out = _post_status(f"/runs/{rid}/swap_receipt", {"to_concept": "ocean"})
     assert status == 502

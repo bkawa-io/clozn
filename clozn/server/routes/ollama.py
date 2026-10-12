@@ -4,8 +4,8 @@ Covers just enough of Ollama's HTTP surface (`GET /api/tags`, `GET /api/version`
 `POST /api/generate`, `POST /api/chat`) that a client built against the Ollama wire
 protocol (e.g. the `ollama` Python/JS client libraries, or tools that hardcode
 `http://localhost:11434`) can point at clozn's engine instead and get back
-Ollama-shaped JSON. There is no model pull/push, no multi-model registry, no
-embeddings endpoint.
+Ollama-shaped JSON. There is no model pull/push or embeddings endpoint; `/api/tags` projects Clozn's
+configured model router.
 
 This module is a DROP-IN convenience layered on the same instrumented substrate the
 OpenAI-compatible chat route uses. The wire serializers remain independent because
@@ -16,7 +16,7 @@ path either way (Gate-0 §3.1). `GET /api/version` always answers "0.0.0-clozn" 
 honest string so a client (or a human) can tell at a glance this is clozn wearing an
 Ollama-shaped socket, not real Ollama.
 
-STREAMING (roadmap PRODUCT_ROADMAP.md §5.1): `stream: true` on `/api/chat` or `/api/generate`
+STREAMING: `stream: true` on `/api/chat` or `/api/generate`
 now returns Ollama-shaped NDJSON (Content-Type `application/x-ndjson`, one JSON object per
 line) via clozn.server.ndjson.ndjson_stream -- the NDJSON twin of clozn.server.sse's SSE
 stream, over the exact same Substrate.chat_stream() generation seam. DEFAULT-STREAM
@@ -26,7 +26,7 @@ substrate must also expose `chat_stream`; a substrate that only implements `chat
 test double -- degrades to one non-streaming JSON response even for a stream-requesting
 client, the same fallback clozn.server.routes.openai's SSE branch already uses.)
 
-GATE-0 / EXPLICIT-OR-REJECTED FIELDS (roadmap §5.2): behavior-bearing Ollama fields clozn
+EXPLICIT-OR-REJECTED FIELDS: behavior-bearing Ollama fields Clozn
 cannot honor are REJECTED with a named, typed HTTP 400 rather than silently ignored --
 `raw`, `template`, `format`, `suffix`, `context`, `think`, `images` (each accepted only at
 its neutral/absent value: `false`/`None` for the booleans, `None`/empty-string/empty-list
@@ -36,15 +36,12 @@ gateway's own sampling contract are accepted (`temperature`, `top_p`, `top_k`,
 `repeat_penalty`, `seed`, `num_predict` -> `max_tokens`); any other `options` key is rejected
 the same way, including `stop` -- the instrumented gateway has no stop-sequence support to
 forward it to (see clozn/server/openai_compat.py's own `stop` policy on the strict OpenAI
-surface). `keep_alive` is accepted and silently ignored: clozn's engine is one always-
-resident worker process with no per-request unload/reload lifecycle, so no value of
-`keep_alive` can change behavior either way -- it is not a "silently ignored" behavior-bearing
-field in the Gate-0 sense, it is a field with nothing to opt into on this runtime.
+surface). `keep_alive` is accepted and ignored because worker residency is governed by the configured
+router, not by an individual compatibility request.
 
 `clozn.server.app` is imported inside each function body (not at module level) to
 avoid circular imports at module load time.
 """
-import os
 import time
 
 
@@ -63,7 +60,7 @@ class OllamaCompatibilityError(ValueError):
         self.field = field
 
 
-# ---- Gate-0 field policy (roadmap §5.2) -----------------------------------------------------------
+# ---- explicit field policy ----------------------------------------------------------------------
 # Each predicate answers "is this value NEUTRAL" (i.e. carries no actual request) for its field -- a
 # behavior-bearing value fails with the field named in the 400. Modeled on
 # clozn/server/openai_compat.py's CHAT_NEUTRAL_FIELDS table (same idiom, distinct field set: Ollama's
@@ -105,8 +102,7 @@ def _validate_request(body: dict) -> None:
     for field, is_neutral in _REJECTED_FIELD_NEUTRAL.items():
         if field in body and not is_neutral(body[field]):
             raise OllamaCompatibilityError(
-                field, f"clozn does not support Ollama's '{field}' field yet "
-                       "(see docs/PRODUCT_ROADMAP.md Phase 2 item 2)")
+                field, f"clozn does not support Ollama's '{field}' field")
 
 
 def _generation_options(options) -> tuple[int, dict | bool]:
@@ -122,8 +118,7 @@ def _generation_options(options) -> tuple[int, dict | bool]:
         if key not in _MAPPED_SAMPLE_OPTION_KEYS and key != "num_predict":
             field = f"options.{key}"
             raise OllamaCompatibilityError(
-                field, f"clozn does not support Ollama's '{field}' option yet "
-                       "(see docs/PRODUCT_ROADMAP.md Phase 2 item 2)")
+                field, f"clozn does not support Ollama's '{field}' option")
     max_tokens = 256
     if options.get("num_predict") is not None:
         try:
@@ -165,40 +160,20 @@ def _thinking_text(result) -> str | None:
 def try_get(h, p):
     if p == "/api/tags":
         import clozn.server.app as ctx
-        if ctx.MODEL_ROUTER is not None:
-            models = []
-            for item in ctx.MODEL_ROUTER.catalog():
-                entry = {
-                    "name": item["model_id"],
-                    "model": item["model_id"],
-                    "size": 0,
-                    "modified_at": _iso_now(),
-                    "digest": f"sha256:{item['artifact_sha256']}",
-                    "clozn_state": item["state"],
-                }
-                models.append(entry)
-            h._json(200, {"models": models})
+        router = getattr(ctx, "MODEL_ROUTER", None)
+        if router is None:
+            h._json(503, {"error": "model router unavailable"})
             return True
         models = []
-        if ctx.ENGINE is not None:
-            try:
-                info = ctx.ENGINE.health() or {}
-                model_path = str(info.get("model") or "")
-                name = os.path.basename(model_path).removesuffix(".gguf") or "clozn-local"
-                entry = {"name": name, "model": name, "size": 0, "modified_at": _iso_now()}
-                # Gate-0 (roadmap §5.2): no placeholder digest. Prefer the active substrate's own
-                # already-resolved+cached model_sha256 (EngineSubstrate._resolve_identity, computed once
-                # at boot from this SAME /health round trip -- zero marginal cost here); fall back to the
-                # raw health field when the active substrate doesn't expose one (e.g. a bare engine
-                # client with no EngineSubstrate wrapper). Omitted entirely -- never an empty-string
-                # placeholder -- when neither source has it (engine down/old, or unresolved so far).
-                sub = ctx.active_sub(h)
-                digest = getattr(sub, "model_sha256", None) or info.get("model_sha256")
-                if digest:
-                    entry["digest"] = f"sha256:{digest}"
-                models.append(entry)
-            except Exception:
-                pass    # no reachable engine -- an empty list is the honest answer, not an error
+        for item in router.catalog():
+            models.append({
+                "name": item["model_id"],
+                "model": item["model_id"],
+                "size": 0,
+                "modified_at": _iso_now(),
+                "digest": f"sha256:{item['artifact_sha256']}",
+                "clozn_state": item["state"],
+            })
         h._json(200, {"models": models})
         return True
     if p == "/api/version":
@@ -229,7 +204,7 @@ def try_post(h, p, body):
         )
         if selection is None:
             return True
-        sub = ctx.active_sub(h)
+        sub = selection.sub
         if not (sub and getattr(sub, "chat", None)):
             h._json(502, {"error": "no engine configured"})
             return True
@@ -277,7 +252,7 @@ def try_post(h, p, body):
         )
         if selection is None:
             return True
-        sub = ctx.active_sub(h)
+        sub = selection.sub
         if not (sub and getattr(sub, "chat", None)):
             h._json(502, {"error": "no engine configured"})
             return True

@@ -19,7 +19,7 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(engine_process, "ENGINE_CORE", str(tmp_path / "engine_core"))
     from clozn.cli import main as cli
     monkeypatch.setattr(cli, "HOME", str(tmp_path / ".clozn"))
-    for var in ("CLOZN_ENGINE", "CLOZN_ENGINE_BIN", "CLOZN_ENGINE_GPU"):
+    for var in ("CLOZN_ENGINE", "CLOZN_ENGINE_GPU"):
         monkeypatch.delenv(var, raising=False)
     return tmp_path
 

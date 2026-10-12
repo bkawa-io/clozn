@@ -187,6 +187,7 @@ def test_discover_falls_back_to_default_endpoint_when_no_env_or_executable(monke
 def test_discover_falls_back_to_storage_when_nothing_reachable(monkeypatch, tmp_path):
     monkeypatch.delenv("OLLAMA_HOST", raising=False)
     monkeypatch.setattr(urllib.request, "urlopen", _urlopen_raising(urllib.error.URLError("refused")))
+    monkeypatch.setattr(od.shutil, "which", lambda _name: None)
     storage = tmp_path / "models"
     storage.mkdir()
     monkeypatch.setenv("OLLAMA_MODELS", str(storage))
@@ -203,6 +204,7 @@ def test_discover_falls_back_to_storage_when_nothing_reachable(monkeypatch, tmp_
 def test_discover_reports_not_found_when_nothing_exists(monkeypatch, tmp_path):
     monkeypatch.delenv("OLLAMA_HOST", raising=False)
     monkeypatch.setattr(urllib.request, "urlopen", _urlopen_raising(urllib.error.URLError("refused")))
+    monkeypatch.setattr(od.shutil, "which", lambda _name: None)
     monkeypatch.setattr(od, "known_storage_path", lambda: None)
 
     result = od.discover(exe_path=None)

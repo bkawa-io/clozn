@@ -21,7 +21,7 @@ for boundaries.
 
 → **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — the design, the layers, the state-stream protocol.
 → **[docs/CAPABILITIES.md](docs/CAPABILITIES.md)** — what is merged, released, qualified, and limited.
-→ **[docs/ROADMAP.md](docs/ROADMAP.md)** — the consolidated map: what's done, the v1 cut, what's next.
+→ **[docs/STUDIO_RELEASE_CHECKLIST.md](docs/STUDIO_RELEASE_CHECKLIST.md)** — current release gates.
 
 ## Quickstart
 
@@ -127,7 +127,7 @@ expose a post-generation run id in already-committed headers; the terminal chat 
 concepts locally, falling back to a running gateway only when the id is not in this journal.
 Queryable run
 metadata lives in `~/.clozn/runs/runs.sqlite3`; large traces are immutable, content-addressed blobs under
-`~/.clozn/runs/blobs/sha256`. Schema migrations apply automatically whenever the store is opened.
+`~/.clozn/runs/blobs/sha256`. The current database schema is created and verified automatically.
 `clozn test` runs user-authored checks against a stored run; model-free assertions such as `contains`,
 `finish_reason`, and `min_confidence` read the run alone, while live checks honestly skip when their
 measurement prerequisite is unavailable. Point any OpenAI client at `clozn serve`; pass

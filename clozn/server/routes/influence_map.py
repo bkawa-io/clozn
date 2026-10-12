@@ -196,7 +196,7 @@ def _start_job(h, rid: str, body: dict) -> bool:
     cached = run.get("influence_map")
     try:
         if cache_matches(run, cached) and not body.get("refresh"):
-            job = JOBS.start(rid, cached=True)
+            job = JOBS.start(rid, kind="influence_map", cached=True)
             h._json(202, job, extra_headers={"X-Clozn-Influence-Cache": "hit"})
             return True
         from clozn.server.model_routing import select_control_model_for_run
@@ -208,7 +208,11 @@ def _start_job(h, rid: str, body: dict) -> bool:
         if not (sub and callable(getattr(sub, "score_tokens", None))):
             h._json(503, {"error": "influence-map requires worker token scoring"})
             return True
-        job = JOBS.start(rid, _job_worker(run, sub, max_spans))
+        job = JOBS.start(
+            rid,
+            _job_worker(run, sub, max_spans),
+            kind="influence_map",
+        )
     except JobCapacityError as exc:
         h._json(429, {"error": str(exc)})
         return True

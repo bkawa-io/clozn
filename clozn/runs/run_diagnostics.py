@@ -142,31 +142,30 @@ def _input_projection(run: Mapping[str, Any], receipt_view: Mapping[str, Any]) -
     messages = run.get("messages")
     assembled = run.get("assembled_messages")
     final_prompt = run.get("final_prompt")
-    memory = _mapping(run.get("memory"))
-    limits = _mapping(receipt.get("limits"))
 
     receipt_state = (
         _state("available", shape=shape)
-        if shape == "new" else
-        _state("partial", shape=shape, reason_code="legacy_context_receipt")
-        if shape == "legacy" else
+        if shape == "recorded" else
         _state("malformed", shape=shape, reason_code="context_receipt_unrecognized")
         if shape == "unrecognized" else
         _state("unavailable", shape="absent", reason_code="context_receipt_absent")
     )
-    input_truncated = receipt.get("input_truncated") if isinstance(receipt.get("input_truncated"), bool) else None
-    output_cut_off = receipt.get("output_cut_off") if isinstance(receipt.get("output_cut_off"), bool) else None
-    truncation = {
-        "state": "available" if input_truncated is not None or output_cut_off is not None else "unavailable",
-        "input_truncated": input_truncated,
-        "output_cut_off": output_cut_off,
-        "warnings": deepcopy(receipt.get("warnings")) if isinstance(receipt.get("warnings"), list) else [],
-    }
-    if truncation["state"] == "unavailable":
-        truncation["reason_code"] = "truncation_evidence_unrecorded"
-
-    prompt_tokens = _integer(limits.get("prompt_tokens"))
-    context_window = _integer(limits.get("context_window_tokens"), minimum=1)
+    termination = _mapping(receipt.get("termination"))
+    termination_projection = (
+        _state(
+            "available", value=termination, include_value=True,
+            token_budget_stop=termination.get("reason") in {"max_tokens", "context_limit"},
+            warnings=deepcopy(run.get("warnings")) if isinstance(run.get("warnings"), list) else [],
+        )
+        if _string(termination.get("reason")) else
+        _state("unavailable", reason_code="termination_evidence_unrecorded")
+    )
+    omitted = [
+        deepcopy(item) for item in receipt.get("omissions", []) if isinstance(item, Mapping)
+    ] if isinstance(receipt.get("omissions"), list) else []
+    prompt_tokens = _integer(_mapping(receipt.get("rendered")).get("tokens"))
+    context_window = _integer(receipt.get("context_window_tokens"), minimum=1)
+    reserved_output = _integer(receipt.get("reserved_output_tokens"))
     return {
         "state": "available" if receipt_state["state"] in {"available", "partial"} else "partial",
         "messages": _state("available", value=messages, include_value=True)
@@ -175,15 +174,19 @@ def _input_projection(run: Mapping[str, Any], receipt_view: Mapping[str, Any]) -
         if isinstance(assembled, list) else _state("unavailable", reason_code="assembled_messages_unrecorded"),
         "final_prompt": _state("available", value=final_prompt, include_value=True)
         if isinstance(final_prompt, str) else _state("unavailable", reason_code="final_prompt_unrecorded"),
-        "memory_prompt_block": _state("available", value=memory.get("prompt_block"), include_value=True)
-        if isinstance(memory.get("prompt_block"), str) else _state(
-            "unavailable", reason_code="memory_prompt_block_unrecorded"),
         "context_receipt": receipt_state,
         "prompt_tokens": _state("available", value=prompt_tokens, include_value=True)
         if prompt_tokens is not None else _state("unavailable", reason_code="prompt_token_count_unrecorded"),
         "context_window_tokens": _state("available", value=context_window, include_value=True)
         if context_window is not None else _state("unavailable", reason_code="context_window_unrecorded"),
-        "truncation": truncation,
+        "reserved_output_tokens": _state("available", value=reserved_output, include_value=True)
+        if reserved_output is not None else _state(
+            "unavailable", reason_code="reserved_output_token_count_unrecorded"),
+        "omissions": _state(
+            "available", value=omitted, include_value=True, count=len(omitted),
+        ) if receipt_state["state"] == "available" else _state(
+            "unavailable", reason_code="context_receipt_unavailable"),
+        "termination": termination_projection,
     }
 
 

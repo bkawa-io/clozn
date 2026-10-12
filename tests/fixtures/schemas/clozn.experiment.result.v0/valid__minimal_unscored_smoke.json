@@ -113,6 +113,10 @@
     ]
   },
   "manifest_sha256": "60d2a82d5b9bcbf6616e6efbcd516b0a8fa807c1bb1ac4365c807b6b67eb538a",
+  "suite_fingerprint": {
+    "algorithm": "canonical-json-v1",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
   "name": "minimal-smoke",
   "schema_version": "clozn.experiment.result.v0",
   "seeds": [

@@ -1,6 +1,4 @@
-"""generation_guard.py -- closed-loop disposition guardrails, an OPT-IN, DEFAULT-OFF generation mode
-(FRONTIER_BETS section 9.1 / experiment A1.1, docs/RESEARCH_ROADMAP.md's A1.1 row + docs/PRODUCT_ROADMAP.md's
-R3 lane).
+"""Closed-loop disposition guardrails: an opt-in, default-off generation mode.
 
 ===============================================================================================
 HONESTY LAW -- read this before touching ANY user-facing string in this module. It governs every label.
@@ -17,9 +15,8 @@ Every user-facing string, docstring, and receipt field in this module MUST say "
 during generation" (or an equivalent present-tense framing) and MUST NOT claim lead-time, prediction,
 "before it's said", or "acts on intent". GUARD_CAVEAT below is the one canonical copy of this framing --
 every surface that reports on a firing guard reuses it verbatim rather than re-deriving its own wording.
-This mirrors the house rule that killed every predictive-interior claim (docs/RESEARCH_ROADMAP.md's Killed
-list: "White-box risk controller advantage" -- the deployed selective-generation score turned out
-bit-identical to a black-box logprob; internal state added nothing there either).
+The deployed selective-generation score was bit-identical to a black-box logprob; internal state added
+nothing there either.
 
 ===============================================================================================
 2026-07-23 UPDATE: the 9B defaults do not transfer -- two model-specific assumptions, now fixed
@@ -66,7 +63,7 @@ precedence:
   2. the matched calibration's `default_layer`, IF the engine actually reports that layer as available
      right now (`engine_jlens_layers`, straight off /health's `jlens.layers` -- the one source of truth for
      "is this layer even fitted on this engine").
-  3. the AVAILABLE layer numerically nearest to the legacy default (DEFAULT_LAYER=16) -- `_nearest_layer`.
+  3. the available layer numerically nearest to the baseline target (DEFAULT_LAYER=16).
   4. (None, "unavailable") when the engine reports no J-lens layers at all -- the caller must fail closed;
      there is no hardcoded fallback left that could silently 400.
 `layer_source` ("explicit" | "calibration_default" | "discovered_valid") rides the receipt so a caller can
@@ -161,22 +158,10 @@ own "no_norm_calibration" block. Confirmed live: Qwen2.5-7B-Instruct Q4_K_M's gu
 fires "violence" at layer 14 (guard_threshold_calibration.json), but neither VALIDATED_MEDIAN_RESID_NORM
 (only 16/21/25) nor a per-model concept_dial_calibration.json (none exists at all under this model's
 ~/.clozn/models/<sha>/ as of this pass) covers layer 14 on this model -- so every real fire on this model/
-concept hits this exact gap. The tool that used to close it (scripts/calibration/
-concept_dial_autocalibrate.py, which measured median_resid_norm per layer and wrote
-~/.clozn/models/<model_sha256>/concept_dial_calibration.json via concept_dir.save_concept_dial_calibration)
-was removed with the rest of the tone-dial calibration tooling in the personalization cut; nothing in this
-tree currently regenerates that file for an uncovered layer. ConceptSteer would still read it automatically
-the moment a file existed there -- there is just no producer for one today -- so this gap stays open (a
-calibrated concept whose layer isn't in VALIDATED_MEDIAN_RESID_NORM will keep hitting "no_norm_calibration"
-on its first real fire) until a replacement measurement path exists. See the counter-injection degrade
-below for how this module survives that honestly instead of crashing.
-
-Before this update, that failure was an uncaught RuntimeError inside build_counter(), propagating out of
-run_guarded_generation and guarded_chat_completion into clozn.server.app's top-level dispatcher guard
-(commit 509dc2b) as a bare 500 -- the WHOLE reply lost (already-generated chunks discarded) over one
-concept's missing SCALE calibration, even though its dir(c) DIRECTION was perfectly fine.
-
-RESOLUTION: this is a MID-GENERATION failure, not a setup-time one -- by the time it happens, real tokens
+concept hits this exact gap. This tree has no producer for per-layer median-residual-norm calibration,
+so an uncovered layer stays unavailable. ConceptSteer reads a model-bound calibration when present; a
+calibrated concept whose layer isn't in VALIDATED_MEDIAN_RESID_NORM reports "no_norm_calibration" when
+it fires. This is a mid-generation failure, not a setup-time one: by the time it happens, real tokens
 already exist, so refusing the whole request is no longer free the way it is at setup. GUARD_CAP_NOTE
 already establishes this module's answer to "the guard can't do everything it promised for the rest of
 this reply": say so honestly and keep going, never silently and never by crashing. run_guarded_generation
@@ -192,16 +177,11 @@ before any token is generated, where refusing costs nothing; this is the one nar
 caught at setup (see above) and must be handled once generation is already in flight.
 
 ===============================================================================================
-2026-07-25 UPDATE: guarded generation now carries a real per-token trace
+GUARDED GENERATION CARRIES A COMPLETE PER-TOKEN TRACE
 ===============================================================================================
-Before this update, guarded_chat_completion's chunk loop drove the engine through plain, untraced
-engine.complete()/.intervene() calls, so `handler._log_run(...)` was called with no `trace` at all --
-EVERY reply generated while the guard was on recorded trace {}: the spans lens came back empty, fork
-refused ("no trace to fork from"), and nothing in the response signaled the gap.
-
-generate_chunk's two engine calls now go through this module's own traced seams, `_traced_complete` /
+generate_chunk's two engine calls go through this module's traced seams, `_traced_complete` /
 `_traced_intervene` -- the SAME streaming-then-plain-fallback shape as substrates.py's
-_engine_complete_traced (prior art, not reinvented): each attempts the engine's own SSE stream first
+_engine_complete_traced: each attempts the engine's own SSE stream first
 (POST .../v1/completions or .../intervene with stream:true, folded via runlog.accumulate_ar_events /
 finish_reason_from_frames -- the identical Event/tokens_committed/step_lens frames either route emits),
 and falls back to the plain call on ANY hiccup (no `engine.base`, a bad response, a network error) so a
@@ -242,9 +222,7 @@ SCOPE LIMITS OF THIS FIRST CUT (said honestly, not silently)
   * NOT YET COMPOSED with corrective-retry policies or structured output -- a guarded generation renders
     the chat messages through the model's own template (clozn.server.app._engine_tmpl, the same renderer
     chat() uses) and generates directly against the raw engine client, bypassing that machinery entirely
-    for this first cut. Composing them is future work, not silently dropped. (Prompt-card memory and
-    named-dial personalization, the other two surfaces this bullet used to list, were cut from the
-    product entirely -- there is nothing left there to compose with.)
+    for this path. Composing them is future work, not silently dropped.
   * Coherence is a light, cheap NOTE (clozn.replay.coherence._coherence's pure text-counting check,
     over the corrected chunks only), not a hard gate -- see `_coherence_note`.
   * The calibration itself is a SMALL-BATTERY presence separation (6 banned + 6 clean prompts on Qwen2.5-
@@ -331,14 +309,12 @@ GUARD_TRACE_STEERING_NOTE = (
 
 # -- opt-in wiring -----------------------------------------------------------------------------------
 GUARD_FIELD = "clozn_guard"                 # request-body extension field (an object, not a boolean) --
-                                            # the ONLY way a request is guarded; there is no persisted
-                                            # server-wide default (retired -- see docs/CAPABILITIES.md).
+                                            # the only way a request is guarded.
 
 # -- defaults, documented as placeholders where calibration doesn't exist yet ------------------------
 DEFAULT_COUNTER_STRENGTH = -0.5             # A1.1's own validated counter_strength (steers AWAY -- negative)
 DEFAULT_MAX_FIRES = 3
-DEFAULT_LAYER = 16                          # the LEGACY target for nearest-valid-layer discovery only --
-                                            # NEVER used directly as a poll layer anymore; see LAYER SELECTION.
+DEFAULT_LAYER = 16                          # target for nearest-valid-layer discovery; never used directly.
 DEFAULT_CHUNK_TOKENS = 24
 DEFAULT_TOPK = 8
 # See the module docstring's TOPK FLOOR section: guard_signal_calibrate.py measured its separation at

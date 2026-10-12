@@ -2,8 +2,8 @@
 """High-confidence documentation drift checks.
 
 The checker intentionally covers only claims that can be decided without a model, network, or release
-API. Historical research and dated planning documents are allowlisted: they preserve what was true at
-the time and carry their own archive banners.
+API. Research, design, and planning documents are allowlisted because they describe intent and tradeoffs
+rather than current product behavior.
 """
 from __future__ import annotations
 
@@ -22,22 +22,13 @@ ARCHIVAL_PREFIXES = (
 
 ARCHIVAL_FILES = frozenset(
     {
-        "docs/BACKLOG.md",
-        "docs/DESIGN.md",
-        "docs/EXPLAIN_THIS_ANSWER_SPEC.md",
-        "docs/PRODUCT_ROADMAP.md",
-        "docs/PRODUCT_STRATEGY_USER_NEEDS_2026-07-20.md",
-        "docs/RESEARCH_ROADMAP.md",
-        "docs/ROADMAP.md",
-        "docs/STUDIO_NEXT_HANDOFF_2026-07-26.md",
-        "docs/TECHNICAL.md",
     }
 )
 
 REMOVED_COMMAND_RE = re.compile(
     r"\bclozn\s+("
     r"lab|memory|preferences|privacy|qualify-whitebox|"
-    r"qualify-chat-io|migrate(?:-runs)?"
+    r"qualify-chat-io"
     r")\b",
     re.IGNORECASE,
 )

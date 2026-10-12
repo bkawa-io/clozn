@@ -7,6 +7,7 @@ from clozn.recipes.minimal_context import MinimalContextUnavailable, run_minimal
 from clozn.recipes.minimal_context_result_store import (
     MinimalContextResultStore, MinimalContextResultStoreError, current_binding,
 )
+from clozn import schemas
 
 CLOZN_ROUTE_AUTOLOAD = True
 
@@ -234,7 +235,7 @@ def try_get(h, path):
             return False
         from clozn.server.influence_jobs import JOBS
         job = JOBS.get(run_id, job_id)
-        if job is None:
+        if job is None or job.get("kind") != _KIND:
             h._json(404, {"error": "Minimal Context job not found", "code": "minimal_context_job_not_found"})
         else:
             h._json(200, job)
@@ -256,10 +257,14 @@ def try_post(h, path, body):
         if not job_id or "/" in job_id:
             return False
         from clozn.server.influence_jobs import JOBS
-        job = JOBS.cancel(run_id, job_id)
-        if job is None:
+        current = JOBS.get(run_id, job_id)
+        if current is None or current.get("kind") != _KIND:
             h._json(404, {"error": "Minimal Context job not found", "code": "minimal_context_job_not_found"})
         else:
+            job = JOBS.cancel(run_id, job_id)
+            if job is None or job.get("kind") != _KIND:
+                h._json(404, {"error": "Minimal Context job not found", "code": "minimal_context_job_not_found"})
+                return True
             h._json(200, job)
         return True
     return False
@@ -373,6 +378,7 @@ def _materialize_result(h, run_id: str, result_id: str, body: object) -> bool:
     except MaterializationError as exc:
         h._json(409, {"error": str(exc), "code": "minimal_context_materialization_rejected"})
         return True
+    schemas.validate(outcome, "clozn.experiment-materialization.v1")
     h._json(201 if outcome.get("state") == "completed" else 409, outcome)
     return True
 

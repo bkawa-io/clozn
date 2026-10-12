@@ -30,7 +30,7 @@ def try_get(h, p):
         schemas.validate(document, "clozn.text-span-addresses.v1")
     except (TypeError, ValueError, UnicodeError, schemas.ValidationError):
         # This is a metadata-only route. Validation exceptions raised while
-        # reading malformed legacy artifacts may contain source literals, so
+        # reading malformed artifacts may expose source literals, so
         # keep the public failure stable and text-free.
         h._json(500, {
             "error": "run span addresses could not be composed",

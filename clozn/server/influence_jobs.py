@@ -1,7 +1,6 @@
-"""Bounded local lifecycle for background jobs -- originally influence-map only, now the ONE shared job
-registry every bounded async action in the gateway uses (Milestone F: the token-workbench action
-endpoints reuse this verbatim rather than forking a parallel registry/cancellation story -- see
-clozn/runs/token_workbench_actions.py and clozn/server/routes/token_workbench_actions.py).
+"""Bounded local lifecycle for background gateway jobs.
+
+Every bounded async action uses this shared registry, capacity budget, and cancellation lifecycle.
 
 Jobs are process-local convenience state, not durable evidence.  A computed result is attached to its
 run (or wherever its own producer persists it) only at that artifact's OWN existing persistence
@@ -10,8 +9,7 @@ lifecycle (queued/running/persisting/completed/failed/cancelled) is tracked and 
 Cancellation and persistence share one per-job lock: once a cancel response acknowledges cancellation,
 that job cannot subsequently enter its commit.
 
-`kind` (added for Milestone F, additive/backward-compatible: defaults to "influence_map" so every
-existing caller/snapshot shape is unchanged) distinguishes which action a job belongs to
+`kind` distinguishes which action a job belongs to
 ("influence_map" | "causal_trace" | "fork" | ...) purely for observability -- it changes no lifecycle
 behavior. One registry, one `JOBS` singleton, one capacity budget shared across every kind: a causal-
 trace job and an influence-map job compete for the SAME bounded thread pool and job-table slots, which
@@ -43,7 +41,7 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _safe_error(exc: Exception, *, kind: str = "influence_map") -> dict:
+def _safe_error(exc: Exception, *, kind: str) -> dict:
     return {
         "code": f"{kind}_job_failed",
         "message": f"{type(exc).__name__}: {exc}",
@@ -70,7 +68,7 @@ def _progress(phase: str, completed: int, total: int) -> dict:
 class _Job:
     job_id: str
     run_id: str
-    kind: str = "influence_map"
+    kind: str
     state: str = "queued"
     created_at: str = field(default_factory=_now_iso)
     updated_at: str = field(default_factory=_now_iso)
@@ -104,6 +102,23 @@ class JobControl:
             if self._job.cancel_event.is_set() and not self._job.persisted:
                 raise JobCancelled("job cancelled before its result was attached")
             self._job.result = dict(payload) if isinstance(payload, dict) else payload
+
+    def attach_cancellation_result(self, payload: dict) -> None:
+        """Attach non-authoritative accounting to an acknowledged cancellation.
+
+        This is intentionally separate from :meth:`attach_result`.  It may be
+        used only after cancellation and before persistence, so a worker can
+        report work already dispatched without turning a cancelled artifact
+        into committed product evidence.
+        """
+        with self._job.lock:
+            if not self._job.cancel_event.is_set() or self._job.persisted:
+                raise RuntimeError(
+                    "cancellation result requires an unpersisted cancelled job"
+                )
+            self._job.result = (
+                dict(payload) if isinstance(payload, dict) else payload
+            )
 
     def checkpoint(self, *, phase: str, completed: int, total: int,
                    best_retained_source_count: int | None = None,
@@ -171,14 +186,16 @@ class InfluenceJobRegistry:
             if len(self._jobs) < self.max_jobs:
                 return
 
-    def start(self, run_id: str, worker=None, *, cached: bool = False, kind: str = "influence_map",
+    def start(self, run_id: str, worker=None, *, kind: str, cached: bool = False,
               cached_result: dict | None = None) -> dict:
+        if not isinstance(kind, str) or not kind.strip():
+            raise ValueError("job kind must be a non-empty string")
         with self._lock:
             self._prune_locked()
             if len(self._jobs) >= self.max_jobs:
                 raise JobCapacityError("job capacity is full")
             job = _Job(
-                job_id=f"infjob_{uuid.uuid4().hex}", run_id=run_id, kind=str(kind or "influence_map"),
+                job_id=f"infjob_{uuid.uuid4().hex}", run_id=run_id, kind=kind.strip(),
                 cached=bool(cached))
             if isinstance(cached_result, dict):
                 job.result = dict(cached_result)

@@ -2,9 +2,8 @@
 
 Stage 0 of ``docs/design/008-single-process-runtime.md`` (ADR 008 section 3.3) is implemented. It
 protects every spawned C++ worker. The Python gateway shares the supervisor lifetime, while each worker
-still holds GPU VRAM and binds a private loopback port; an unguarded worker after an abnormal supervisor death
-would be invisible and useless. This has happened four separate times on this project (see
-``docs/HANDOFF_2026-07-30.md``'s process-lessons section).
+still holds GPU VRAM and binds a private loopback port; an unguarded worker after an abnormal supervisor
+death would be invisible and useless.
 
 This module is exclusively about that UNGRACEFUL case. The graceful path -- ``RuntimeStack.stop()``
 calling ``worker_registry.stop_all()`` / terminating the gateway from ``cmd_serve``'s ``finally``

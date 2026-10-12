@@ -32,8 +32,8 @@ def _run():
         "trace": {"tokens": ["hello"]},
         "context_receipt": {
             "schema_version": "clozn.context-receipt.v1", "run_id": "run_route",
-            "privacy": "metadata_only", "limits": {"prompt_tokens": 100, "context_window_tokens": 1000,
-                                                        "generated_tokens": 1},
+            "privacy": "metadata_only", "rendered": {"tokens": 100},
+            "context_window_tokens": 1000,
             "delivered": [], "assembled": [], "omissions": [], "transformations": [],
             "termination": {"reason": "eos", "generated_tokens": 1},
         },

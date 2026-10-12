@@ -8,6 +8,9 @@
 // ctx.pool / ctx.jlens / ... (each register fn re-binds local aliases so the moved body stays verbatim).
 #pragma once
 
+#include <functional>
+#include <optional>
+
 #include "server_shared.hpp"            // GgmlModel, ContextPool, ConceptProbes, SaeServe, JlensServe, json
 #include "chat_template_renderer.hpp"   // isolated full-GGUF Jinja renderer
 
@@ -35,11 +38,16 @@ struct ServerContext {
     std::string worker_generation_id;
     std::string model_sha256;
     std::string tokenizer_sha256;
+    // Bounded worker-local checkpoint lookup. The store owns records; callers receive a copy, so
+    // no request pins FIFO capacity or a pooled context after lookup. Empty until main constructs
+    // the generation-scoped store, then valid for the full server listen lifetime.
+    std::function<std::optional<EngineCheckpoint>(const std::string&)> find_checkpoint;
 };
 
 // Route-family registrars (one per routes_*.cpp). server_main.cpp calls each after building the context.
 void register_jlens_routes(httplib::Server& svr, ServerContext& ctx);
 void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx);  // /harvest, /harvest/layers, /score, /apply_template
+void register_score_variants_routes(httplib::Server& svr, ServerContext& ctx); // private screening-only native scorer
 void register_state_routes(httplib::Server& svr, ServerContext& ctx);     // /state, /intervene
 void register_reference_match_routes(httplib::Server& svr, ServerContext& ctx); // private native-many probe
 

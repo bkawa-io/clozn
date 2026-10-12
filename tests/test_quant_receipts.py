@@ -3,7 +3,7 @@ model?"
 
 Model-free throughout, on FIXTURE /score-shaped arrays (`[{"id","piece","logprob","topk"?}, ...]` --
 exactly what engine/core/serve/routes_whitebox.cpp's /score handler and
-engine/client/clozn_engine.py's score() return) -- no C++ engine, no GPU, no real socket. The live-path
+engine/client/clozn_engine's score() return) -- no C++ engine, no GPU, no real socket. The live-path
 seam (`quant_receipt_for_run`) is exercised only against a FakeScoreSub (mirrors test_rederive.py's own
 fake), never against a real engine -- the two-real-quant-files run stays deferred.
 
@@ -46,11 +46,11 @@ class FakeScoreSub:
         self._raises = raises
 
     def score_tokens(self, messages, continuation_ids, *, continuation=None, block=None,
-                     steer_strengths=None, steer_vec=None, topk=0):
+                     steer_vec=None, topk=0):
         if self._raises:
             raise RuntimeError("boom")
         self.calls.append({"messages": messages, "continuation_ids": continuation_ids, "topk": topk,
-                           "block": block, "steer_strengths": steer_strengths})
+                           "block": block})
         return self._tokens
 
 

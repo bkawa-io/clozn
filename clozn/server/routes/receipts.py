@@ -9,10 +9,6 @@ from clozn.server import app as ctx
 
 
 def try_get(h, p):
-    if p == "/experiments/types":   # the experiment-type registry, for a UI "Experiment drawer" catalog
-        from clozn.experiments import experiment as clozn_experiment
-        h._json(200, {"types": clozn_experiment.catalog()})
-        return True
     if (p.startswith("/runs/") and p.endswith("/export")
             and "/" not in p[len("/runs/"):-len("/export")]):
         # one-call download: run + M1 explain + trace.  Do not greedily
@@ -96,7 +92,7 @@ def try_post(h, p, body):
             return True
         from clozn import receipts
         try:
-            # `coalitions` (opt-in, default False -- see docs/PRODUCT_ROADMAP.md §8 tail): pairwise
+            # `coalitions` (opt-in, default False): pairwise
             # coalition deltas + a Shapley approximation + the interaction gap, alongside the default
             # leave-one-out receipts above. Never changes the default response shape when omitted.
             h._json(200, receipts.prove_all(run, sub, mode=mode,
@@ -175,10 +171,7 @@ def try_post(h, p, body):
         if not out.get("causal_verified"):
             # swap_receipt() never raises -- a total failure (no engine, template render, generation, ...)
             # degrades to causal_verified:false + blocked/note explaining why, all other fields null. That
-            # used to still ship as HTTP 200, so a caller checking response.ok alone would read a complete
-            # failure as a success (unlike the sibling /receipt and /rederive routes, both non-2xx on the
-            # equivalent condition). Body is left intact -- unlike those siblings, swap_receipt's own
-            # blocked/note already self-describe the failure; only the status code was wrong.
+            # is a transport failure. Keep the body's own blocked/note detail and use a non-2xx status.
             status = 502 if not ctx._engine_reachable(sub) else 500
             h._json(status, out)
             return True
@@ -231,11 +224,21 @@ def try_post(h, p, body):
         if topk is None:
             return True
         want_protocol = bool(body.get("protocol", False))
-        if not (ctx.active_sub(h) and getattr(ctx.active_sub(h), "jlens", None)):
+        from clozn.server.model_routing import select_for_handler
+        selection = select_for_handler(
+            h,
+            body,
+            surface="native",
+            route="/jlens",
+        )
+        if selection is None:
+            return True
+        sub = selection.sub
+        if not (sub and getattr(sub, "jlens", None)):
             h._json(200, {"available": False, "run_id": None,
                          "reason": "the product model worker has no J-lens"})
             return True
-        res = ctx.active_sub(h).jlens(text, layer=layer, topk=topk)
+        res = sub.jlens(text, layer=layer, topk=topk)
         h._json(200, ctx._jlens_envelope(res, run_id=None, text_source="input", want_protocol=want_protocol))
         return True
     if p.startswith("/runs/") and p.endswith("/jlens"):   # J3: the Run Inspector J-lens feed for a run
@@ -300,50 +303,6 @@ def try_post(h, p, body):
             out = narrate.narrate(run, sub, support_matcher=matcher)
         except Exception as e:
             h._json(500, {"error": f"narrate failed: {type(e).__name__}: {e}"})
-            return True
-        h._json(200, out)
-        return True
-    if p.startswith("/runs/") and p.endswith("/experiment"):   # ONE experiment primitive over replay/
-        # counterfactual/receipt/branch/swap_receipt -- dispatches on change.type, returns ONE envelope.
-        rid = p[len("/runs/"):-len("/experiment")]
-        import clozn.runs.store as runlog
-        run = runlog.get_run(rid)
-        if run is None:
-            h._json(404, {"error": "run not found"})
-            return True
-        from clozn.experiments import experiment as clozn_experiment
-        change = body.get("change")
-        ctype = change.get("type") if isinstance(change, dict) else None
-        if not isinstance(change, dict) or not ctype:
-            h._json(400, {"error": "need a change spec: {type, ...}"})
-            return True
-        if ctype not in clozn_experiment.REGISTRY:
-            h._json(400, {"error": f"unknown change.type: {ctype!r} (know: "
-                         f"{sorted(clozn_experiment.REGISTRY)})"})
-            return True
-        from clozn.server.model_routing import select_control_model_for_run
-        selection = select_control_model_for_run(h, run.get("model"), route="/runs/<id>/experiment")
-        if selection is None:
-            return True   # typed clozn.model-routing.v1 refusal already written
-        sub = selection.sub
-        if not clozn_experiment.substrate_ok(ctype, sub):
-            needs = clozn_experiment.REGISTRY[ctype]["substrate"]
-            msg = ("experiment requires a ready product model worker" if needs == "chat" else
-                   "experiment requires the product worker with J-lens enabled")
-            h._json(503, {"error": msg})
-            return True
-        method = body.get("method")
-        try:
-            out = clozn_experiment.run_experiment(run, change, method, sub)
-        except ValueError as e:
-            h._json(400, {"error": str(e)})
-            return True
-        except Exception as e:
-            h._json(500, {"error": f"experiment failed: {type(e).__name__}: {e}"})
-            return True
-        if out is None:
-            h._json(500, {"error": "experiment failed (bad change spec, or the underlying "
-                         "op could not be generated)"})
             return True
         h._json(200, out)
         return True

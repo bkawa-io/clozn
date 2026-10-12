@@ -11,7 +11,10 @@ from clozn.experiments.kernel import Experiment
 from clozn.experiments.multi_arm import BatchCancelled, MultiArmError
 from clozn.experiments.persistence import ObservationStore
 from clozn.experiments.runner import run_experiment
-from clozn.experiments.scoring import DeleteSourceRecordedContinuationScoreAdapter
+from clozn.experiments.scoring import (
+    DeleteSourceRecordedContinuationScoreAdapter,
+    ScoreTokensRefinementPolicy,
+)
 from clozn.experiments.selections import ContextSelection
 from clozn.experiments.state import ExecutionState
 from clozn.recipes.minimal_context import run_minimal_context
@@ -146,6 +149,7 @@ def test_score_adapter_translates_partial_batch_without_losing_completed_vector(
 
     class PartialScore(ScoreSubstrate):
         score_tokens_many_proof_grade = True
+        score_tokens_many_execution_strategy = "native_prefix_reuse"
 
         def __init__(self):
             super().__init__()
@@ -179,10 +183,268 @@ def test_score_adapter_translates_partial_batch_without_losing_completed_vector(
     assert substrate.native_calls == 1
     assert len(substrate.calls) == 1  # control only
     assert result.state == "failed"
-    assert result.arms[0].status == "completed"
-    assert result.arms[0].observation_id is not None
+    assert result.arms[0].status == "unavailable"
+    assert result.arms[0].observation.trusted is False
+    assert result.arms[0].observation.diagnostics["reason"] == "unqualified_scoring_execution"
+    assert result.arms[0].observation_id is None
     assert result.arms[1].state == "failed"
     assert result.arm_dispositions == ("executed", "executed")
+
+
+def test_score_batch_reports_scalar_http_concurrency_and_preserves_observation_identity():
+    run, source_ids = _score_run()
+
+    class ConcurrentScalar(ScoreSubstrate):
+        score_tokens_many_proof_grade = True
+        score_tokens_many_execution_strategy = "scalar_http_concurrent"
+
+        def score_tokens_many(self, arms, *, cancel=None):
+            return [self.score_tokens(**arm) for arm in arms]
+
+    experiment = Experiment(
+        base=ExecutionState.from_run(run), evaluator=ScoreRecordedContinuation(),
+        arms=[
+            DeleteSource(ContextSelection([source_ids[0]])),
+            DeleteSource(ContextSelection([source_ids[1]])),
+        ],
+    )
+    serial = run_experiment(
+        experiment, DeleteSourceRecordedContinuationScoreAdapter(ScoreSubstrate(), run=run),
+    )
+    concurrent = run_experiment(
+        experiment, DeleteSourceRecordedContinuationScoreAdapter(ConcurrentScalar(), run=run),
+    )
+
+    assert concurrent.diagnostics["execution_strategy"] == "scalar_http_concurrent"
+    assert concurrent.diagnostics["numerical_regime"] == "scalar_reference"
+    assert concurrent.diagnostics["qualified"] is True
+    assert [row.observation_id for row in concurrent.arms] == [row.observation_id for row in serial.arms]
+    assert all(row.observation.trusted is True for row in concurrent.arms)
+    assert all(
+        row.observation.execution_provenance["execution_strategy"] == "scalar_http_concurrent"
+        for row in concurrent.arms
+    )
+
+
+def test_successful_native_score_batch_without_metadata_is_quarantined():
+    run, source_ids = _score_run()
+
+    class UnqualifiedNative(ScoreSubstrate):
+        score_tokens_many_proof_grade = True
+        score_tokens_many_execution_strategy = "native_multisequence"
+
+        def score_tokens_many(self, arms, *, cancel=None):
+            return [self.score_tokens(**arm) for arm in arms]
+
+    experiment = Experiment(
+        base=ExecutionState.from_run(run), evaluator=ScoreRecordedContinuation(),
+        arms=[DeleteSource(ContextSelection([source_ids[0]]))],
+    )
+    result = run_experiment(
+        experiment, DeleteSourceRecordedContinuationScoreAdapter(UnqualifiedNative(), run=run),
+    )
+
+    assert result.state == "failed"
+    assert result.diagnostics["execution_strategy"] == "native_multisequence"
+    assert result.diagnostics["qualified"] is False
+    assert result.arms[0].status == "unavailable"
+    assert result.arms[0].observation_id is None
+    assert result.arms[0].observation.trusted is False
+    assert result.arms[0].observation.diagnostics["reason"] == "unqualified_scoring_execution"
+
+
+def test_qualified_native_score_batch_is_reported_but_quarantined_from_scalar_observation_key():
+    run, source_ids = _score_run()
+
+    class QualifiedNative(ScoreSubstrate):
+        score_tokens_many_proof_grade = True
+        score_tokens_many_execution_strategy = "native_prefix_reuse"
+
+        def score_tokens_many(self, arms, *, cancel=None):
+            return {
+                "results": [self.score_tokens(**arm) for arm in arms],
+                "execution_metadata": {
+                    "execution_strategy": "native_prefix_reuse",
+                    "numerical_regime": "prefix_reuse_fp32_v1",
+                    "evidence_use": "trusted",
+                    "qualified": True,
+                    "execution_identity": {"implementation": "fixture", "version": 1},
+                },
+                "metrics": {"shared_prefix_tokens": 9},
+            }
+
+    experiment = Experiment(
+        base=ExecutionState.from_run(run), evaluator=ScoreRecordedContinuation(),
+        arms=[DeleteSource(ContextSelection([source_ids[0]]))],
+    )
+    result = run_experiment(
+        experiment, DeleteSourceRecordedContinuationScoreAdapter(QualifiedNative(), run=run),
+    )
+
+    assert result.state == "failed"
+    assert result.diagnostics["execution_strategy"] == "native_prefix_reuse"
+    assert result.diagnostics["numerical_regime"] == "prefix_reuse_fp32_v1"
+    assert result.diagnostics["qualified"] is True
+    assert result.diagnostics["execution_metadata"]["metrics"] == {"shared_prefix_tokens": 9}
+    assert result.arms[0].status == "unavailable"
+    assert result.arms[0].observation_id is None
+    assert result.arms[0].observation.trusted is False
+    assert result.arms[0].observation.proof_grade == "unqualified"
+    assert result.arms[0].observation.diagnostics["reason"] == "unqualified_scoring_execution"
+
+
+def test_native_screen_scalar_refinement_persists_only_explicit_scalar_arm_evidence(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(run_store, "RUNS_DIR", str(tmp_path / "runs"))
+    run_store._schema_verified.clear()
+    run, source_ids = _score_run()
+
+    class ScreeningNative(ScoreSubstrate):
+        score_tokens_many_proof_grade = True
+        # Capability and rollout policy are separate.  This fixture mirrors a
+        # real EngineSubstrate with automatic native admission disabled.
+        score_tokens_many_execution_strategy = "scalar_serial"
+        native_score_variants_available = True
+
+        def __init__(self):
+            super().__init__()
+            self.native_calls = 0
+
+        def score_tokens_many(
+            self, arms, *, cancel=None, require_native_screening=False,
+        ):
+            assert require_native_screening is True
+            self.native_calls += 1
+            return {
+                "results": [
+                    [
+                        {"id": token_id, "logprob": -(arm_index + token_index + 1.0)}
+                        for token_index, token_id in enumerate(arm["continuation_ids"])
+                    ]
+                    for arm_index, arm in enumerate(arms)
+                ],
+                "execution_metadata": {
+                    "execution_strategy": "native_prefix_reuse_step_batch",
+                    "numerical_regime": "screening_unqualified",
+                    "evidence_use": "screening",
+                    "qualified": False,
+                    "execution_identity": {"implementation": "screen-fixture", "version": 1},
+                },
+            }
+
+    experiment = Experiment(
+        base=ExecutionState.from_run(run), evaluator=ScoreRecordedContinuation(),
+        arms=[
+            DeleteSource(ContextSelection([source_ids[0]])),
+            DeleteSource(ContextSelection([source_ids[1]])),
+        ],
+    )
+    substrate = ScreeningNative()
+    policy = ScoreTokensRefinementPolicy(
+        proof_critical_arm_ids=(experiment.arms[0].arm_id,),
+        borderline_selector=lambda _rows: (),
+    )
+    store = ObservationStore()
+    result = run_experiment(
+        experiment,
+        DeleteSourceRecordedContinuationScoreAdapter(
+            substrate, run=run, refinement_policy=policy,
+        ),
+        observation_store=store,
+    )
+
+    assert substrate.native_calls == 1
+    assert len(substrate.calls) == 2  # scalar control + one scalar refinement
+    assert result.state == "failed"
+    refined, screened = result.arms
+    assert refined.status == "completed"
+    assert refined.observation.trusted is True
+    assert refined.observation.proof_grade == "trusted"
+    assert refined.observation.execution_provenance["numerical_regime"] == "scalar_reference"
+    assert refined.observation.execution_provenance["execution_identity"] == {
+        "kind": "clozn.score-tokens-scalar-reference.v1",
+    }
+    assert "screening_execution" not in refined.observation.execution_provenance
+    assert refined.observation_id is not None
+    assert screened.status == "unavailable"
+    assert screened.observation is None
+    assert screened.diagnostics["observation_status"] == "unavailable"
+    assert screened.diagnostics["diagnostics"]["reason"] == (
+        "screening_not_selected_for_scalar_refinement"
+    )
+    assert screened.observation_id is None
+    assert result.diagnostics["execution_strategy"] == "native_screen_then_scalar_refine"
+    assert result.diagnostics["screening_execution"]["numerical_regime"] == (
+        "screening_unqualified"
+    )
+    assert result.diagnostics["scalar_refinement_execution"]["numerical_regime"] == (
+        "scalar_reference"
+    )
+    assert "numerical_regime" not in result.diagnostics
+
+
+def test_native_screen_refinement_rejects_unknown_proof_arm_before_native_dispatch():
+    run, source_ids = _score_run()
+
+    class ScreeningNative(ScoreSubstrate):
+        score_tokens_many_proof_grade = True
+        score_tokens_many_execution_strategy = "native_prefix_reuse"
+
+        def __init__(self):
+            super().__init__()
+            self.native_calls = 0
+
+        def score_tokens_many(self, arms, *, cancel=None):
+            self.native_calls += 1
+            raise AssertionError("native screen must not be dispatched")
+
+    experiment = Experiment(
+        base=ExecutionState.from_run(run), evaluator=ScoreRecordedContinuation(),
+        arms=[DeleteSource(ContextSelection([source_ids[0]]))],
+    )
+    substrate = ScreeningNative()
+    result = run_experiment(
+        experiment,
+        DeleteSourceRecordedContinuationScoreAdapter(
+            substrate,
+            run=run,
+            refinement_policy=ScoreTokensRefinementPolicy(
+                proof_critical_arm_ids=("unknown-arm",),
+            ),
+        ),
+    )
+
+    assert substrate.native_calls == 0
+    assert len(substrate.calls) == 1  # validated scalar control only
+    assert result.state == "failed"
+    assert result.arms[0].observation_id is None
+
+
+def test_refinement_policy_does_not_change_default_scalar_execution():
+    run, source_ids = _score_run()
+    experiment = Experiment(
+        base=ExecutionState.from_run(run), evaluator=ScoreRecordedContinuation(),
+        arms=[
+            DeleteSource(ContextSelection([source_ids[0]])),
+            DeleteSource(ContextSelection([source_ids[1]])),
+        ],
+    )
+    substrate = ScoreSubstrate()
+    result = run_experiment(
+        experiment,
+        DeleteSourceRecordedContinuationScoreAdapter(
+            substrate,
+            run=run,
+            refinement_policy=ScoreTokensRefinementPolicy(
+                proof_critical_arm_ids=(experiment.arms[0].arm_id,),
+            ),
+        ),
+    )
+
+    assert len(substrate.calls) == 3  # scalar control + both scalar arms
+    assert result.state == "completed"
+    assert result.diagnostics["execution_strategy"] == "scalar_serial"
+    assert all(row.observation.trusted is True for row in result.arms)
 
 
 class _SharedEngine:

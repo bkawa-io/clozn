@@ -1,14 +1,11 @@
-"""stats.py -- Phase 4.4 statistical rigor layer (docs/PRODUCT_ROADMAP.md §7 item 4, "statistical rigor +
-evidence labels as product") over :mod:`clozn.experiments.suite`'s case x variant x seed result artifacts
+"""Statistical rigor layer over :mod:`clozn.experiments.suite` case × variant × seed artifacts
 (``clozn.experiment.result.v0``). This module never re-derives suite.py's own validation or per-cell
 status; it only aggregates and analyzes an already-validated result (``suite.validate_result``).
 
 What this gives an experiment report, and nothing more:
 
   * ``paired_bootstrap_ci`` -- a paired bootstrap confidence interval on per-case deltas (resample CASES,
-    not raw cells, with replacement -- mirrors the paired-bootstrap convention this project already uses
-    for its own probe analysis; see docs/RESEARCH_ROADMAP.md's Killed autopsy: "paired bootstrap -0.138
-    [-0.265, -0.029]").
+    not raw cells, with replacement.
   * ``case_aggregates`` -- replicate/seed aggregation: one row per case, collapsed across every seed run
     for it, never one row per raw cell.
   * ``stats_report`` -- multiple-comparison honesty: it reports exactly how many (suite, variant)
@@ -44,9 +41,8 @@ def replay_class_for_meta(meta: dict | None) -> str:
     ``clozn.testkit.runner.REPRO_META_KEYS``; ``sampler_mode``/``temperature`` are set in
     ``clozn.server.app``'s decode-block construction).
 
-      * A teacher-forced RE-SCORE of an already-fixed continuation -- no new tokens decoded at all, e.g. a
-        forced-mode ablation receipt (see ``clozn.experiments.experiment``'s "forced mode never generates
-        new text -- it re-scores the SAME committed continuation") -- is marked here by the caller setting
+      * A teacher-forced RE-SCORE of an already-fixed continuation -- no new tokens decoded at all -- is
+        marked here by the caller setting
         ``meta["forced_rescore"] = True``. -> ``"re_prefilled"``: deterministic given the same fixed
         tokens (one more forward pass over an unchanged prefix), but this recomputes scores over EXISTING
         text, not a fresh decode.

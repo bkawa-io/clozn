@@ -39,6 +39,17 @@ struct GgmlKV : KVState {
     int seq_len() const override { return n; }
 };
 
+// Target-token scoring result for the native related-prompt path.  The adapter reports whether
+// llama.cpp's backend-sampler graph reduced every full-vocabulary row to one probability before
+// device-to-host transfer.  A backend that cannot run the required softmax/gather ops falls back
+// to the ordinary host log-softmax and marks full_vocab_host_reduction=true; callers must surface
+// that distinction rather than inferring it from the small wire response.
+struct TargetLogprobBatchResult {
+    std::vector<double> target_logprobs;
+    bool full_vocab_host_reduction = false;
+    long long host_output_floats = 0;
+};
+
 // The loaded model weights + vocab + ModelConfig, shareable across contexts. llama_model is
 // read-only after load, so N contexts can share ONE GgmlModel — essential for serving
 // concurrency: the weights (the bulk of VRAM) are loaded once; only the per-context KV/compute
@@ -471,13 +482,31 @@ public:
     std::vector<ForwardResult> ar_forward_batch(
         const std::vector<int>& tokens_per_seq, int n_past,
         const std::vector<bool>& active);
-    // Prefill independent prompt token sequences, reusing their literal common token prefix through
-    // a seq-0 KV fan-out, then chunking the remaining per-sequence suffix rows at n_batch. Each
-    // sequence has its own llama sequence id and only its final prompt row emits logits. The caller
-    // must keep the logical prompt rows within the existing n_ctx admission rule and the number of
+    // Prefill independent prompt token sequences through an exact-token trie. Shared edges carry all
+    // descendant sequence IDs and are decoded once; divergent suffix edges keep their own sequence
+    // membership. Only each sequence's final prompt row emits logits. The trie charges each shared
+    // prefix edge once, so the caller must keep PHYSICAL prompt rows within n_ctx and the number of
     // resident sequences within the worker's sequence capacity.
     std::vector<ForwardResult> ar_forward_prefill_batch(
         const std::vector<std::vector<int>>& prompts);
+    // Scoped backend target reduction for score-variants.  begin installs one experimental
+    // llama.cpp backend sampler per resident sequence; end always detaches and frees them.  While
+    // the scope is active, use only the two *_target_logprobs methods below: ordinary ForwardResult
+    // methods require full vocabulary rows and intentionally do not understand reduced outputs.
+    void begin_target_logprob_reduction(int n_sequences);
+    void end_target_logprob_reduction() noexcept;
+    TargetLogprobBatchResult ar_forward_prefill_batch_target_logprobs(
+        const std::vector<std::vector<int>>& prompts, int target_token);
+    TargetLogprobBatchResult ar_forward_batch_at_target_logprobs(
+        const std::vector<int>& tokens_per_seq,
+        const std::vector<int>& positions,
+        const std::vector<bool>& active,
+        int target_token);
+    // Checkpoint-prefix sibling of ar_forward_seq_segment. The final suffix row is reduced through
+    // the active backend sampler, so original-generation reuse does not reintroduce a full-vocabulary
+    // host transfer for continuation token 0.
+    TargetLogprobBatchResult ar_forward_seq_segment_target_logprob(
+        const std::vector<int>& board, int from, int to, int seq_id, int target_token);
     // Decode board[from,to) into seq 0, preserving the caller's existing [0,from) KV.  Only the
     // final row emits logits when requested; all rows use absolute positions and one sequence ID.
     ForwardResult ar_forward_seq0_segment(const std::vector<int>& board,
@@ -618,6 +647,10 @@ private:
     long long last_prefill_logical_rows_ = 0;
     long long last_prefill_physical_rows_ = 0;
     long long last_prefill_reused_rows_ = 0;
+    // Each chain owns a target-probability sampler. target_logprob_states_ aliases the sampler
+    // contexts so the requested token can be updated between continuation steps.
+    std::vector<llama_sampler*> target_logprob_chains_;
+    std::vector<void*> target_logprob_states_;
 };
 
 }  // namespace clozn

@@ -1,23 +1,12 @@
 """Canonical reconstructed normal-generation seams.
 
-These helpers retain the old raw-prompt generation behavior without importing
-the legacy child-creating fork module.  They always derive steering from the
-recorded run and never read or mutate live steering controls.
+These helpers derive every condition from the recorded run and never read or mutate live steering
+controls.
 """
 from __future__ import annotations
 
 from collections.abc import Mapping
-
-
-def _inject_block(messages, block):
-    if not block:
-        return list(messages or [])
-    result = [dict(message) for message in (messages or [])]
-    for message in result:
-        if message.get("role") == "system":
-            message["content"] = (str(message.get("content") or "") + "\n\n" + block).strip()
-            return result
-    return [{"role": "system", "content": block}] + result
+from clozn.experiments.effective_prompt import inject_block
 
 
 def prompt_base(run: Mapping, substrate):
@@ -31,7 +20,7 @@ def prompt_base(run: Mapping, substrate):
     if not callable(template):
         return None, None
     try:
-        return str(template(_inject_block(conditions["messages"], conditions["block"]))), "apply_template"
+        return str(template(inject_block(conditions["messages"], conditions["block"]))), "apply_template"
     except Exception:
         return None, None
 

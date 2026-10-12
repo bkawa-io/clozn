@@ -539,14 +539,6 @@ class SectionsFromNativeTests(unittest.TestCase):
         self.assertEqual(clozn_sections.sections_from_native(self.PROMPT, {"x": "not a dict"}), [])
 
 
-# NOTE: MemoryCardSectionsTests lived here on feat/prompt-section-influence, directly exercising
-# clozn.runs.sections.memory_card_sections. Dropped during the 342-commit-stale merge (2026-07-29):
-# memory cards were cut from the product on 2026-07-27, memory_card_sections was removed along with them
-# (see sections.py's module docstring), and there is no replacement producer to test -- a run recorded
-# before the cut may still carry a "memory_card"-sourced entry in its stored manifest, but nothing in this
-# codebase creates one anymore.
-
-
 # ======================================================================================================
 class ResolveTests(unittest.TestCase):
     def test_resolves_by_id_or_by_name(self):
@@ -725,6 +717,7 @@ class _StreamSubstrate:
 class _StreamHandler:
     def __init__(self):
         import io
+        self._route_sub = app.SUB
         self.wfile = io.BytesIO()
         self.headers = {}
         self.logged_calls = []
@@ -755,17 +748,6 @@ class SSEWiringTests(unittest.TestCase):
         finally:
             app.SUB = old_sub
         self.assertEqual(handler.logged_calls[0]["sections"], manifest)
-
-
-# NOTE: LogRunMemoryCardWiringTests lived here on feat/prompt-section-influence, driving
-# clozn.server.app._log_run directly (via app.make_handler()) to prove memory cards that rode a turn got
-# folded into the section manifest. Dropped during the 342-commit-stale merge (2026-07-29): memory cards
-# (and the mem_out kwarg / clozn.memory.facts_mode module this class mocked) were cut from the product on
-# 2026-07-27, and _log_run's memory_card_sections() call was removed along with them -- there is no card
-# wiring left to prove. The explicit-manifest passthrough this class also incidentally covered (a caller-
-# supplied `sections=` list riding straight through to the stored run) is exercised end to end by
-# tests/test_section_influence.py and tests/test_section_drill.py's route-level `iso`/`_post` fixtures,
-# which record real runs through the live request path.
 
 
 if __name__ == "__main__":

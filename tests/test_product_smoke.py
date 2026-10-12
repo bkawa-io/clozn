@@ -55,7 +55,8 @@ class SmokeGatewayHandler(BaseHTTPRequestHandler):
             self._send(200, {"status": "ok", "service": "clozn"})
         elif self.path == "/readyz":
             self._send(200, {"status": "ok", "active": "engine", "model": "fake.gguf",
-                             "mode": "autoregressive", "worker": {"status": "ok"},
+                             "models": {"default_model_id": "fake", "configured_count": 1,
+                                        "resident_count": 1},
                              "queue": {"active": 0, "waiting": 0, "capacity": 32}})
         elif self.path == "/":
             self._send(200, "<!doctype html><title>Clozn</title>", "text/html; charset=utf-8")
@@ -192,6 +193,46 @@ class FakeProductSub:
         return {"model_file": "fake.gguf", "mode": "autoregressive"}
 
 
+class FakeModelRouter:
+    """One-model router fixture matching the product gateway's required architecture."""
+
+    gate = None
+    worker_call_tracker = None
+
+    def __init__(self, sub, engine):
+        self.sub = sub
+        self.engine = engine
+
+    def model_ids(self):
+        return ["fake"]
+
+    def catalog(self):
+        return [{
+            "model_id": "fake", "artifact_sha256": "a" * 64, "state": "ready",
+        }]
+
+    def runtime_status(self):
+        return {
+            "default_model_id": "fake",
+            "preload_model_ids": ["fake"],
+            "max_loaded_models": 1,
+            "configured_count": 1,
+            "resident_count": 1,
+            "models": [{"model_id": "fake", "state": "ready", "default": True}],
+        }
+
+    def control_pair(self):
+        return self.sub, self.engine
+
+    def select(self, *_args, **_kwargs):
+        from clozn.server.model_routing import ModelSelection
+        return ModelSelection("fake", self.sub, self.engine, None)
+
+    def select_control_model(self, *_args, **_kwargs):
+        from clozn.server.model_routing import ModelSelection
+        return ModelSelection("fake", self.sub, self.engine, None)
+
+
 class ProductSmokeTests(unittest.TestCase):
     def setUp(self):
         self.old_runs = store.RUNS_DIR
@@ -261,10 +302,14 @@ class ProductSmokeTests(unittest.TestCase):
         # the gateway no longer redirects to (which fails as an opaque smoke-report assertion).
         _seed_studio_index(studio)
 
-        old = (gateway_app.ENGINE, gateway_app.SUB, gateway_app.SUBNAME, static_routes.DEMO)
+        old = (
+            gateway_app.ENGINE, gateway_app.SUB, gateway_app.SUBNAME,
+            gateway_app.MODEL_ROUTER, static_routes.DEMO,
+        )
         gateway_app.ENGINE = FakeEngine(f"http://127.0.0.1:{worker.server_address[1]}")
         gateway_app.SUB = FakeProductSub()
         gateway_app.SUBNAME = "engine"
+        gateway_app.MODEL_ROUTER = FakeModelRouter(gateway_app.SUB, gateway_app.ENGINE)
         static_routes.DEMO = studio
         gateway = ThreadingHTTPServer(("127.0.0.1", 0), gateway_app.make_handler())
         gateway_thread = threading.Thread(target=gateway.serve_forever, daemon=True)
@@ -283,7 +328,10 @@ class ProductSmokeTests(unittest.TestCase):
             worker.shutdown()
             worker.server_close()
             worker_thread.join(timeout=2)
-            gateway_app.ENGINE, gateway_app.SUB, gateway_app.SUBNAME, static_routes.DEMO = old
+            (
+                gateway_app.ENGINE, gateway_app.SUB, gateway_app.SUBNAME,
+                gateway_app.MODEL_ROUTER, static_routes.DEMO,
+            ) = old
 
     def test_managed_smoke_owns_restarts_and_cleans_the_real_process_tree(self):
         worker_script = os.path.join(self.temp.name, "fake-clozn-server.py")
@@ -303,6 +351,7 @@ class ProductSmokeTests(unittest.TestCase):
             parser.add_argument("--gpu-layers")
             parser.add_argument("--mask-token")
             parser.add_argument("--eos")
+            parser.add_argument("--model-sha256")
             args, _ = parser.parse_known_args()
 
             class Server(ThreadingHTTPServer):
@@ -323,9 +372,14 @@ class ProductSmokeTests(unittest.TestCase):
                 def do_GET(self):
                     if self.path == "/health":
                         self.send_json(200, {"status": "ok", "model": args.model,
+                                             "model_sha256": args.model_sha256,
                                              "protocol_version": "__PROTOCOL_VERSION__",
-                                             "capabilities": {"streaming": True, "sampling": True},
-                                             "mode": "autoregressive", "n_ctx": 2048})
+                                             "worker_generation_id": "smoke-worker-1",
+                                             "capabilities": {"streaming": True, "sampling": True,
+                                                              "sae": False, "jlens": False,
+                                                              "attn_knockout": False},
+                                             "mode": "autoregressive", "device": "cpu",
+                                             "n_ctx": 2048})
                     else:
                         self.send_json(404, {"error": self.path})
 
@@ -334,7 +388,8 @@ class ProductSmokeTests(unittest.TestCase):
                     body = json.loads(self.rfile.read(size) or b"{}")
                     if self.path == "/apply_template":
                         text = "\n".join(str(m.get("content") or "") for m in body.get("messages", []))
-                        self.send_json(200, {"prompt": text + "\nassistant:"})
+                        self.send_json(200, {"prompt": text + "\nassistant:",
+                                             "prompt_tokens": max(1, len(text.split()))})
                         return
                     if self.path != "/v1/completions":
                         self.send_json(404, {"error": self.path})
@@ -390,7 +445,7 @@ class ProductSmokeTests(unittest.TestCase):
         env.update({
             "HOME": home,
             "USERPROFILE": home,
-            "CLOZN_ENGINE_BIN": worker_path,
+            "CLOZN_ENGINE": worker_path,
             "CLOZN_STUDIO_DIR": studio,
             "NO_COLOR": "1",
         })

@@ -1,10 +1,8 @@
 """Prompt-first corrective retry: a request-local counterfactual debugging route.
 
 ``POST /runs/<id>/retry`` regenerates a matched greedy baseline and a corrected candidate (baseline
-plus one bounded system instruction) and returns the comparison. Nothing here persists a policy for a
-later, unrelated request to pick up -- durable, auto-applied corrections (session/profile scope,
-persistent activation, explicit undo) were retired; see docs/CAPABILITIES.md. ``policy.status`` is
-always ``"request_local"``, kept as a small compatibility field for existing consumers.
+plus one bounded system instruction) and returns the comparison. The correction is request-local;
+nothing here persists a policy for a later request. ``policy.status`` is always ``"request_local"``.
 """
 from __future__ import annotations
 
@@ -42,10 +40,7 @@ def try_post(h, p, body):
             h._json(503, {"error": "corrective retry requires a ready product model worker"})
             return True
         preset = str(body.get("preset") or "")
-        # Optional -- absent/omitted keeps the default prompt_policy behavior byte-for-byte (spec:
-        # "must not expose raw scientific dials as the default interaction"). A calibrated named-dial
-        # backend ("control_vector") existed here before named-dial personalization was retired; the
-        # corrected arm is prompt_policy-only now -- see retry_compare's docstring.
+        # The corrected arm is prompt-policy only. Omitting the field selects that default.
         backend = body.get("backend")
         from clozn.replay.corrective import CORRECTION_PRESETS, retry_compare
         if preset not in CORRECTION_PRESETS:

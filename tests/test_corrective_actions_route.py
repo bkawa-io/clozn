@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from clozn.behavior import corrective_flow as flow
 from clozn.replay import corrective
+from clozn.server import app as server
 from clozn.server.routes import corrective_actions as route
 import clozn.runs.store as runlog
 
@@ -68,6 +69,7 @@ def test_route_registry_preview_confirm_keep_and_undo(tmp_path, monkeypatch):
 
     monkeypatch.setattr(runlog, "replace_run", replace_run)
     monkeypatch.setattr(corrective, "retry_compare", _comparison)
+    monkeypatch.setattr(server, "SUB", Handler()._inj_sub)
 
     handler = Handler()
     assert route.try_get(handler, "/runs/run_parent/corrective-actions")

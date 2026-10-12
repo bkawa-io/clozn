@@ -1,5 +1,4 @@
-"""NDJSON streaming for clozn's Ollama-shaped shim (roadmap PRODUCT_ROADMAP.md Phase 2 item 1:
-"Ollama NDJSON streaming").
+"""NDJSON streaming for Clozn's Ollama-shaped API.
 
 Ollama's streamed wire is newline-delimited JSON (Content-Type ``application/x-ndjson``) -- one JSON
 object per line, no ``data:``/``[DONE]`` SSE framing. This module is the NDJSON twin of

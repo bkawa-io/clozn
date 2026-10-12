@@ -28,13 +28,12 @@ class FakeScoreSub:
         self.fail_after = fail_after
 
     def score_tokens(self, messages, continuation_ids, *, continuation=None, block=None,
-                     steer_strengths=None, steer_vec=None, topk=0):
+                     steer_vec=None, topk=0):
         self.calls.append({
             "messages": deepcopy(messages),
             "continuation_ids": deepcopy(continuation_ids),
             "continuation": continuation,
             "block": block,
-            "steer_strengths": deepcopy(steer_strengths),
         })
         if self.fail_after is not None and len(self.calls) > self.fail_after:
             raise RuntimeError("controlled arm failure")
@@ -352,7 +351,6 @@ def test_redundant_pair_check_is_honest_when_fewer_than_two_spans_clear():
     }
     assert len(sub.calls) == 1 + len(out["prompt_spans"])
 
-
 def test_redundant_pair_check_can_be_disabled():
     run = _run()
     sub = FakeScoreSub(_influence_scores)
@@ -362,22 +360,3 @@ def test_redundant_pair_check_can_be_disabled():
         "reason": "redundant-pair check disabled for this call",
     }
     assert len(sub.calls) == 1 + len(out["prompt_spans"])
-
-
-def test_legacy_prompt_block_is_a_real_replaceable_source():
-    run = _run()
-    run.pop("assembled_messages")
-    run["messages"] = [{"role": "user", "content": "Question."}]
-    run["memory"] = {"prompt_block": "Remember the sky is blue."}
-
-    def scores(_messages, block):
-        return [-0.1, -0.2] if block and "sky is blue" in block else [-1.0, -0.2]
-
-    out = context_answer_influence(run, FakeScoreSub(scores), clock=StepClock())
-    assert out["status"] == "ok"
-    assert out["identity"]["prompt_view"] == "messages_plus_prompt_block"
-    block_source = next(source for source in out["prompt_sources"] if source["id"] == "p.b000")
-    assert block_source["source_kind"] == "prompt_block"
-    block_span = next(span for span in out["prompt_spans"] if span["parent_id"] == "p.b000")
-    row = out["matrix"][out["prompt_spans"].index(block_span)]
-    assert row == [0.9, 0.0]

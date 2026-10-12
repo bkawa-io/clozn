@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "clozn.text-span-addresses.v1",
   "title": "Stable run-scoped addresses for prompt, source, answer, and claim text spans",
-  "description": "A read-only projection over immutable run artifacts. Resolved addresses use Unicode-code-point half-open offsets into one exact canonical string and SHA-256 hashes for both that basis and the selected span. Metadata-only projections retain offsets and hashes but omit text. Redacted or legacy evidence that cannot prove those fields remains an unresolved reference; byte counts and truncated legacy hashes are never promoted into exact offsets or SHA-256. Source artifact methods and statuses remain native and no cross-method score is introduced.",
+  "description": "A read-only projection over immutable run artifacts. Resolved addresses use Unicode-code-point half-open offsets into one exact canonical string and SHA-256 hashes for both that basis and the selected span. Metadata-only projections retain offsets and hashes but omit text. Evidence that cannot prove those fields remains an unresolved reference; byte counts and truncated hashes are never promoted into exact offsets or SHA-256. Source artifact methods and statuses remain native and no cross-method score is introduced.",
   "type": "object",
   "required": [
     "schema_version",

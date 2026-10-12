@@ -34,7 +34,7 @@ _ERRORS = {
     # RT-05: the generation-concurrency gate's own admission outcomes.  Reuses
     # the exact RequestGate vocabulary ("full"/"timeout"/"cancelled") --
     # see _GATE_OUTCOME_CODES below -- mapped onto clozn.model-routing.v1's
-    # pre-existing generation_queue/request phases.
+    # generation_queue/request phases.
     "generation_queue_full": (429, True, "generation_queue"),
     "queue_timeout": (504, True, "generation_queue"),
     "request_cancelled": (499, False, "request"),
@@ -307,7 +307,7 @@ class ModelSelection:
     runtime_key: dict | None = None
     worker_identity: dict | None = None
     # RT-05: the per-worker generation-concurrency permit this selection is
-    # already holding, if any (None for a legacy/no-gate selection). apply()
+    # already holding, if any (None for an explicitly ungated test selection). apply()
     # stashes it on the handler so do_POST's existing clear_handler_selection
     # release path returns it, exactly once, regardless of which route ran or
     # whether it raised.
@@ -416,8 +416,7 @@ class PreloadedModelRouter:
             "load_timeout_ms": load_timeout_ms,
             "queue_timeout_ms": queue_timeout_ms,
         }
-        # RT-04: optional cold-load capability.  None preserves RT-03's exact
-        # original behavior -- a not-ready model fails immediately, no wait.
+        # Optional cold-load capability. None means a not-ready model fails immediately.
         self._loader = loader
         self._engine_factory = engine_factory
         self._substrate_factory = substrate_factory
@@ -426,10 +425,8 @@ class PreloadedModelRouter:
         # same successful cold load don't each redundantly rebuild the
         # engine/substrate pair; the first to arrive wins and the rest reuse it.
         self._upgrade_lock = threading.Lock()
-        # RT-05: optional per-worker generation-concurrency gate.  None (the
-        # default) preserves RT-04's exact original behavior -- select()
-        # returns a ready ModelSelection with no gate_release and nobody
-        # queues.  When configured, generation on one worker no longer
+        # Optional per-worker generation-concurrency gate. None returns an
+        # ungated selection. When configured, generation on one worker no longer
         # contends with generation on a different one -- see
         # request_gate.WorkerGateRegistry's module docstring for the full
         # safety argument (why this is sound given the engine's single
@@ -1044,17 +1041,15 @@ class PreloadedModelRouter:
 
 
 class InMemoryProjectionRouter:
-    """Routing projection refreshed from a callable rather than a file.
+    """Routing projection refreshed from a supervisor-owned callable.
 
-    This is the construction seam for ADR 008's merged runtime.  The
-    callable is owned by the supervisor and normally returns
+    The callable normally returns
     ``WorkerRegistry.routing_projection()``; the server package only sees a
     JSON-shaped projection and never imports ``clozn.cli``. It retains the
     long-lived gate across projection refreshes.
 
-    ``loader`` remains optional for compatibility, but the merged runtime now
-    supplies the live registry adapter so configured cold models can load on
-    demand without crossing a process boundary.
+    ``loader`` is optional; the product runtime supplies the live registry
+    adapter so configured cold models can load on demand.
     """
 
     def __init__(
@@ -1232,10 +1227,8 @@ def select_for_handler(
 ) -> ModelSelection | None:
     """Select and apply one binding, or serialize a protocol-specific refusal.
 
-    When no router is configured this is a strict compatibility shim over the
-    process's original single substrate.  That path deliberately creates no
-    synthetic runtime receipt because the legacy supervisor did not provide an
-    ADR 004 key; existing one-model clients keep their historical behavior.
+    Product startup configures a router. A missing router is a gateway readiness failure, never an
+    alternate selection mode.
 
     RT-05: this is also where generation-concurrency gating happens now --
     NOT in do_POST before dispatch.  Gating here, after selection succeeds,
@@ -1247,50 +1240,28 @@ def select_for_handler(
     """
     from clozn.server import app as ctx
     from clozn.server.http_policy import client_gone
-    from clozn.server.request_gate import rejection_response
 
     clear_handler_selection(handler)
     router = getattr(ctx, "MODEL_ROUTER", None)
     if router is None:
-        from clozn.server.generation_gateway import model_id
-        requested = body.get("model") if "model" in body else None
-        selected = str(requested or model_id())
-        sub = ctx.active_sub(handler)
-        engine = ctx.active_engine(handler)
-        if sub is None or engine is None:
-            return ModelSelection(
-                model_id=selected, sub=sub, engine=engine, artifact=None
-            )
-        # Legacy (no managed router) mode has exactly one worker, so it
-        # reuses ctx.POST_GATE itself as that one worker's generation gate --
-        # the SAME object app.py's do_POST already uses for every other POST
-        # in this mode, preserving today's exact full serialization (no
-        # regression, no new parallelism: there is only ever one worker
-        # here). do_POST skips its own pre-dispatch POST_GATE acquisition
-        # for the known generation paths precisely so this is the only
-        # acquisition, never a double one.
-        gate = getattr(ctx, "POST_GATE", None)
-        gate_release = None
-        if gate is not None:
-            queue_started_ns = time.monotonic_ns()
-            outcome = gate.acquire(cancel_check=lambda: client_gone(handler))
-            record_phase = getattr(handler, "_record_gateway_phase", None)
-            if record_phase is not None:
-                record_phase(
-                    "gateway_queue", time.monotonic_ns() - queue_started_ns,
-                    aggregation="exclusive",
-                )
-            if outcome is not None:
-                status, payload, extra_headers = rejection_response(outcome)
-                handler._json(status, payload, extra_headers=extra_headers)
-                return None
-            gate_release = gate.release
-        selection = ModelSelection(
-            model_id=selected, sub=sub, engine=engine, artifact=None,
-            gate_release=gate_release,
-        )
-        selection.apply(handler)
-        return selection
+        if surface == "openai":
+            handler._json(503, {"error": {
+                "message": "model router unavailable",
+                "type": "service_unavailable",
+                "param": "model",
+                "code": "model_router_unavailable",
+            }})
+        elif surface == "ollama":
+            handler._json(503, {
+                "error": "model router unavailable",
+                "code": "model_router_unavailable",
+            })
+        else:
+            handler._json(503, {
+                "error": "model router unavailable",
+                "code": "model_router_unavailable",
+            })
+        return None
     # Times the whole call (resolution + any cold-load wait + generation-gate
     # admission) as one "gateway_queue" phase -- everything here happens
     # before generation starts, so it is queue time, not model execution
@@ -1335,7 +1306,7 @@ def select_control_model_for_run(
     """Resolve the exact preloaded worker for a RUN-SCOPED control-plane operation -- receipts,
     replay, influence, investigation, causal-trace, corrective actions/retries, and their kin.
     The run-scoped model selection and identity composition is centralized here so every route can
-    share the router/no-router branch instead of importing another product vertical.
+    share one selection path instead of importing route-local worker logic.
 
     ``model`` MUST be read from the run's own immutable stored record (``run.get("model")``),
     NEVER a client-supplied parameter: the entire point of per-run selection is that a caller
@@ -1344,37 +1315,26 @@ def select_control_model_for_run(
     never a borrowed or approximated one -- see :meth:`PreloadedModelRouter.select_control_model`'s
     own docstring for why that matters.
 
-    Returns a ``ModelSelection`` on success. Its ``.sub`` is a drop-in replacement for
-    ``ctx.active_sub(handler)`` -- every existing capability check (``getattr(sub, "chat", None)``,
-    the ``if not (sub and ...): 503`` guards, etc.) and its 503 stays exactly as it was; only
-    WHERE ``sub`` comes from changes. ``.engine``/``.runtime_key``/``.worker_identity`` are also
-    present for the minority of callers that need exact runtime/worker identity (snapshot pin,
-    controlled replay, and per-token causal-trace actions) -- on the legacy no-router path those
-    two are left ``None`` here, matching ``select_for_handler``'s own legacy shim, rather than pay
-    a live ``engine.health()`` probe on every run-scoped READ that never asked for one (e.g.
-    investigation/workbench composition, which is documented to touch no engine at all). A caller
-    that needs them even in legacy mode can use ``select_run_model_facts`` below.
+    Returns a ``ModelSelection`` on success. ``.sub`` and ``.engine`` identify the selected worker;
+    ``.runtime_key``/``.worker_identity`` are also present for
+    callers that need exact runtime/worker identity (snapshot pin, controlled replay, and per-token
+    causal-trace actions). A caller that needs normalized facts can use ``select_run_model_facts`` below.
 
     Returns ``None`` when no worker could be resolved: a typed ``clozn.model-routing.v1`` refusal
     has already been written to ``handler`` via ``_emit_error``. Callers must return immediately
-    in that case and must NEVER fall back to ``ctx.SUB`` -- that is precisely the ambient-default
-    failure mode ``ctx.active_sub``'s own docstring (clozn/server/app.py) forbids.
+    in that case and must not substitute another worker.
 
-    When no managed router is configured this is a strict, zero-cost compatibility shim over the
-    process's original single substrate (mirrors ``select_for_handler``'s own no-router path):
-    legacy one-worker serving keeps its exact historical ``active_sub``/``active_engine`` behavior,
-    unchanged and unregressed.
+    Product serving always has a router.
     """
     from clozn.server import app as ctx
 
     router = getattr(ctx, "MODEL_ROUTER", None)
     if router is None:
-        return ModelSelection(
-            model_id=model if isinstance(model, str) else None,
-            sub=ctx.active_sub(handler),
-            engine=ctx.active_engine(handler),
-            artifact=None,
-        )
+        handler._json(503, {
+            "error": "model router unavailable",
+            "code": "model_router_unavailable",
+        })
+        return None
     try:
         return router.select_control_model(model, route=route)
     except ModelRoutingError as error:
@@ -1382,12 +1342,46 @@ def select_control_model_for_run(
         return None
 
 
+def select_control_model_for_request(
+    handler,
+    requested_model,
+    *,
+    field_present: bool,
+    route: str,
+) -> "ModelSelection | None":
+    """Resolve a non-generation control request without taking a generation permit.
+
+    Control endpoints such as cancellation must remain reachable while generation owns the selected
+    worker's permit. An omitted model targets the configured default; an explicit model must be a
+    canonical configured ID. The successful selection is attached to ``handler`` just like generation
+    routing so downstream helpers see only the chosen worker.
+    """
+    from clozn.server import app as ctx
+
+    clear_handler_selection(handler)
+    router = getattr(ctx, "MODEL_ROUTER", None)
+    if router is None:
+        handler._json(503, {
+            "error": "model router unavailable",
+            "code": "model_router_unavailable",
+        })
+        return None
+    model = requested_model if field_present else getattr(router, "default_model_id", None)
+    try:
+        selection = router.select_control_model(model, route=route)
+    except ModelRoutingError as error:
+        _emit_error(handler, error, "native")
+        return None
+    selection.apply(handler)
+    return selection
+
+
 def select_run_model_facts(handler, run: Mapping, *, route: str):
     """Resolve an immutable run to ``(runtime, worker, engine, substrate)`` facts.
 
     Run-scoped execution features must select the model recorded on the run before asking for
-    live identity facts.  Keeping this composition here makes snapshot pinning, historical
-    replay, and other controlled operations independent of any one retired HTTP product route.
+    live identity facts. Keeping this composition here makes snapshot pinning,
+    replay, and other controlled operations independent of any one HTTP route.
     ``None`` means the existing routing layer has already shaped an unavailable-model response.
     """
     if not isinstance(run, Mapping):
@@ -1407,10 +1401,9 @@ def peek_control_model_for_run(handler, model, *, route: str):
     unresolvable worker is not a request failure for them, it is simply a fact to report.
 
     Never writes a refusal to ``handler`` and never raises ``ModelRoutingError`` -- an unknown/
-    not-ready model (or no managed router and no legacy substrate) degrades to a plain ``None``,
-    exactly mirroring these routes' own pre-existing "worker unavailable -> capability unavailable,
-    still 200" contract (the same thing legacy mode has always done when the one engine is simply
-    down). Returns the resolved ``sub`` directly (not a ``ModelSelection``), since these callers
+    not-ready model (or no injected test substrate) degrades to a plain ``None`` under these routes'
+    "worker unavailable -> capability unavailable, still 200" contract. Returns the resolved ``sub``
+    directly (not a ``ModelSelection``), since these callers
     only ever consult capability attributes on it (``score_tokens``, ``steer``, ``engine``, ...).
 
     Do NOT reach for this in a route that actually performs a generation/scoring/fork/capture
@@ -1421,7 +1414,7 @@ def peek_control_model_for_run(handler, model, *, route: str):
 
     router = getattr(ctx, "MODEL_ROUTER", None)
     if router is None:
-        return ctx.active_sub(handler)
+        return None
     try:
         return router.select_control_model(model, route=route).sub
     except ModelRoutingError:

@@ -61,8 +61,7 @@ def try_get(h, p):
             historical_observations=historical_observations,
         )
     except Exception:
-        # Recorded evidence can be from an older or partially migrated run.  Do not expose source text or
-        # internal parser details in a contract-failure response.
+        # Recorded evidence may be incomplete or malformed. Do not expose source text or parser details.
         h._json(500, _CONTRACT_ERROR)
         return True
 

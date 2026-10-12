@@ -55,6 +55,10 @@ def _parent(*, alternatives=None, tokens=None):
         "response": "".join(tokens),
         "identity": deepcopy(RUNTIME),
         "meta": {"n_ctx": 4096, "device": "cpu"},
+        "generation_contract": {
+            "decode_mode": "greedy", "sampling": None, "max_new": len(tokens), "stop": [],
+            "expected_termination": {"reason": "stop", "reason_raw": "stop"},
+        },
         "trace": {
             "tokens": list(tokens),
             "token_ids": token_ids,

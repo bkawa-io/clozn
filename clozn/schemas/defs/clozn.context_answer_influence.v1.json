@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "clozn.context_answer_influence.v1",
   "title": "Context <-> answer influence evidence (Sources evidence lens, feature 07)",
-  "description": "The versioned artifact clozn.receipts.context_answer_influence.context_answer_influence() returns and clozn/server/routes/influence_map.py persists at run['influence_map']. Measures the spec's forced_score_intervention mode ONLY -- never attention_proxy, never a percentage, never a claim about document correctness or hidden reasoning (see method.caveat, present on every shape below). schema/status/available/method/identity are the only keys guaranteed on every call, success or failure -- everything else is present only when it was actually produced, per the project's omit-never-null-pad rule. This retrofits Seam 2 onto an artifact that shipped before clozn/schemas/ existed; the field name is 'schema', not 'schema_version' -- callers must pass the schema name explicitly to clozn.schemas.validate() rather than relying on inference.",
+  "description": "The versioned artifact clozn.receipts.context_answer_influence.context_answer_influence() returns and clozn/server/routes/influence_map.py persists at run['influence_map']. Measures forced_score_intervention only -- never attention_proxy, never a percentage, never a claim about document correctness or hidden reasoning (see method.caveat, present on every shape below). schema/status/available/method/identity are guaranteed on every call; everything else is present only when it was produced.",
 
   "type": "object",
   "required": ["schema", "status", "available", "method", "identity"],
@@ -61,7 +61,7 @@
         "type": "array",
         "items": { "type": "number" }
       },
-      "description": "The complete measured [prompt_span x answer_span] signed-delta matrix. 'links' below is the same data flattened with per-cell evidence_state; matrix is retained so the interactive lens's sparse top-link view is never mistaken for the whole measured surface (docs/PRODUCT_ROADMAP.md item 7)."
+      "description": "The complete measured [prompt_span x answer_span] signed-delta matrix. 'links' below is the same data flattened with per-cell evidence_state; matrix is retained so the interactive lens's sparse top-link view is never mistaken for the whole measured surface."
     },
     "matrix_shape": {
       "type": "array",
@@ -93,9 +93,10 @@
   "$defs": {
     "Method": {
       "type": "object",
-      "required": ["name", "mode", "claim_limit", "caveat"],
+      "required": ["name", "version", "mode", "claim_limit", "caveat"],
       "properties": {
         "name": { "type": "string" },
+        "version": { "const": "1" },
         "mode": {
           "type": "string",
           "enum": [

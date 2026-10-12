@@ -110,7 +110,7 @@ RUNNING TOTALS ARE SESSION-WIDE, NOT PAGE-LOCAL
 ----------------------------------------------------
 Each turn's `cumulative` block is the running total from the SESSION's first linear turn through THIS
 turn, regardless of which page it appears on -- computed by summing every prior linear turn's
-`duration_ms` (a real SQLite column) and `context_receipt.limits.{prompt,generated}_tokens` (parsed from
+`duration_ms` (a real SQLite column) and canonical Context Receipt token facts (parsed from
 `payload_json`, no blob I/O) up to the page's cursor boundary (`_prior_totals`), then accumulating forward
 across the page itself. This costs one aggregate query plus one payload scan over every run PRECEDING the
 requested page -- bounded by `store.KEEP` (1000 runs store-wide), and pure arithmetic, not model work.
@@ -134,7 +134,6 @@ SCHEMA_VERSION = "clozn.session-trace.v1"
 DEFAULT_LIMIT = 50
 _CANDIDATE_KINDS = ("first_finding", "first_settings_drift", "first_failed_run")
 _FAILURE_TERMINATION_REASONS = ("client_cancelled", "worker_error")
-_CONTEXT_USAGE_KEYS = ("prompt_tokens", "context_window_tokens", "requested_max_tokens", "generated_tokens")
 _TOKEN_TOTAL_KEYS = ("prompt_tokens", "generated_tokens")
 _CANDIDATE_SCAN_PAGE = 200   # internal walk chunk size for _first_went_wrong_candidates -- see its docstring
 
@@ -196,10 +195,17 @@ def _raw_run(rid: "str | None") -> "dict | None":
 # ------------------------------------------------------------------------------------- per-turn projections
 
 def _context_usage(run: Mapping[str, Any]) -> dict:
-    limits = _object(_object(run.get("context_receipt")).get("limits"))
-    out = {}
-    for key in _CONTEXT_USAGE_KEYS:
-        value = _int_or_none(limits.get(key))
+    receipt = _object(run.get("context_receipt"))
+    rendered = _object(receipt.get("rendered"))
+    termination = _object(receipt.get("termination"))
+    out: dict[str, int] = {}
+    for key, raw in (
+        ("prompt_tokens", rendered.get("tokens")),
+        ("context_window_tokens", receipt.get("context_window_tokens")),
+        ("requested_max_tokens", receipt.get("reserved_output_tokens")),
+        ("generated_tokens", termination.get("generated_tokens")),
+    ):
+        value = _int_or_none(raw)
         if value is not None:
             out[key] = value
     return out
@@ -452,17 +458,14 @@ def _session_projection(session_document: dict) -> dict:
 # ---------------------------------------------------------------------------------------------- public API
 
 def build_trace(session_id, *, cursor: "str | None" = None, limit: int = DEFAULT_LIMIT,
-                generated_at: "str | None" = None, materialize: bool = True) -> "dict | None":
+                generated_at: "str | None" = None) -> "dict | None":
     """The full `clozn.session-trace.v1` document for one page of one session's turns, or None when the
-    session honestly does not exist (no explicit `sessions` row AND no member run -- see
-    `clozn.runs.sessions.get_session`). `materialize=True` (the default, matching F1's own GET
-    /sessions/<id> route) persists a legacy session's identity row on first view; it is a single cheap
-    SQLite write, never measurement or model work.
+    session honestly does not exist (see `clozn.runs.sessions.get_session`).
 
     Deterministic given a fixed `generated_at` and unchanged underlying data -- see the module docstring's
     "DETERMINISM" section. Never touches a live substrate/engine -- see "COMPOSITION, NEVER RE-DERIVATION".
     """
-    session_document = sessions.get_session(session_id, materialize=materialize)
+    session_document = sessions.get_session(session_id)
     if session_document is None:
         return None
     key = session_document["id"]

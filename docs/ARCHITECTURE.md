@@ -5,21 +5,20 @@ generation recorded as an inspectable run. The product is built to compare behav
 context and runtime evidence, apply bounded interventions, and fail closed when evidence or a qualified
 artifact is missing.
 
-The engine began as a diffusion-language-model project. That lineage explains some protocol vocabulary
-and the archived design documents, but diffusion and the former PyTorch workbench are not current
-product surfaces. The [capability matrix](CAPABILITIES.md) is authoritative for user-visible status.
+The [capability matrix](CAPABILITIES.md) is authoritative for user-visible status.
 
 ## Layers and dependency direction
 
 ```text
-clozn/ + studio/  →  protocol/  →  engine/
-product/API/UI       shared seam    C++ runtime
+clozn/ + studio-frontend/  →  protocol/  →  engine/
+product/API/UI                shared seam    C++ runtime
 ```
 
 - `clozn/` owns the CLI, OpenAI-compatible gateway, run journal, context receipts, comparisons,
   experiments, corrective actions, steering, readouts, and setup logic. The installed product remains
   stdlib-only.
-- `studio/` is the UI served by the gateway. It reads the same run and evidence APIs as the CLI.
+- `studio-frontend/` is the Studio source and `studio/app/` is its compiled application. Studio reads
+  the same run and evidence APIs as the CLI.
 - `protocol/` defines the worker/gateway state-event and handshake contract.
 - `engine/core/` owns GGUF loading, chat-template rendering, generation, sampling, scoring, activation
   taps, steering writes, and optional qualified readout application.
@@ -29,18 +28,20 @@ may use heavier dependencies, but they communicate with the product only through
 
 ## Process model
 
-`clozn serve MODEL --port 8080` supervises exactly two processes:
+`clozn serve MODEL --port 8080` runs the public gateway in the supervisor process and owns one or more
+private model workers:
 
-1. a public loopback Python gateway on the requested port; and
-2. a private C++ model worker on a random loopback port.
+1. one public loopback Python gateway on the requested port; and
+2. private C++ GGUF workers on random loopback ports, selected through the model router.
 
 The gateway is the only public URL. It owns API compatibility, Studio, journaling, receipts, run
 comparison, and action orchestration. The worker is replaceable: the gateway negotiates protocol
 compatibility, reports the exact worker identity, and restarts it after an unexpected exit.
 
-State-changing POST operations pass through a bounded serialized gate because generation evidence and
-steering state are not yet safe for unrestricted concurrent mutation. Health, static Studio assets, and
-read-only run inspection remain concurrent.
+Generation requests acquire the selected worker's bounded gate, so different workers may execute
+concurrently while one worker remains isolated. Operations whose worker scope cannot be proven acquire
+the gateway mutation gate and drain worker generation gates. Health, Studio assets, and read-only run
+inspection remain concurrent.
 
 ## Public and native APIs
 
@@ -57,14 +58,11 @@ read-only run inspection remain concurrent.
 ## Runs, identity, and persistence
 
 SQLite is authoritative for queryable run metadata, lineage, status, and the complete run document.
-Large normalized traces are immutable SHA-256-addressed blobs. Schema migrations run transactionally
-whenever the store opens; there is no user migration command.
+Large normalized traces are immutable SHA-256-addressed blobs. The complete current SQLite schema is
+created transactionally when the store first opens and verified on subsequent process starts.
 
 A run records the messages delivered to the renderer, exact rendered prompt when available, response,
 trace, finish or failure state, behavior settings, model/engine identity, and additive identity facets.
-Current runs do not apply or record prompt-card memory. Readers can still tolerate old optional fields
-for compatibility, but historical shape is not current capability.
-
 Every persisted artifact gets a versioned schema before it is written. Unknown values are omitted, not
 null-padded, and optional identity providers may lose only their own namespace when unavailable.
 
@@ -75,7 +73,7 @@ The engine provides measurements; the Python layer composes them into bounded cl
 | Evidence | Source | Claim boundary |
 |---|---|---|
 | Token confidence and alternatives | native generation trace | commitment, not correctness |
-| Delivered context receipt | recorded pre-template messages and truncation metadata | what was delivered/survived, not what caused output |
+| Context Receipt | delivered/assembled segment metadata, rendered prompt facts, and termination evidence | what reached the model, not what caused output |
 | Teacher-forced score differences | `/score` interventions | local effect under the stated counterfactual |
 | Source influence map | bounded source ablations and thresholds | measured spans only; omissions remain visible |
 | Run comparison | stored run identity/context/settings/output | structural difference, not causal attribution |

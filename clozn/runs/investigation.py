@@ -96,23 +96,10 @@ def _context_section(run: Mapping[str, Any]) -> dict:
             "state": "failed",
             "reason": "the stored context receipt is not an object",
         }
-
-    if shape == "legacy":
-        delivered = receipt.get("delivered")
-        messages = delivered.get("messages") if isinstance(delivered, Mapping) else None
+    if shape != "recorded":
         return {
-            "state": "delivered_not_measured",
-            "artifact": _artifact(
-                str(receipt.get("schema") or "clozn.context_receipt.v1"),
-                method="legacy_gateway_capture",
-                native_status="legacy",
-            ),
-            "delivered_count": len(messages) if isinstance(messages, list) else 0,
-            "privacy": "legacy_unspecified",
-            "reason": (
-                "legacy context evidence proves delivery but has no normalized segment projection; "
-                "raw message content is not duplicated into this investigation response"
-            ),
+            "state": "failed",
+            "reason": "the stored context receipt is not schema-governed evidence",
         }
 
     delivered = _segments(receipt.get("delivered"))
@@ -130,8 +117,7 @@ def _context_section(run: Mapping[str, Any]) -> dict:
             if isinstance(item, Mapping)
         )
 
-    # The exact rendered prompt can be obtained from the dedicated context-receipt route under its
-    # privacy rules.  The investigation endpoint carries only metadata, never a second raw-text copy.
+    # The investigation endpoint carries receipt metadata, never run content.
     return {
         "state": "delivered_not_measured",
         "artifact": _artifact(
@@ -145,7 +131,8 @@ def _context_section(run: Mapping[str, Any]) -> dict:
         "omitted": omitted,
         "rendered": deepcopy(receipt.get("rendered") or {}),
         "termination": deepcopy(receipt.get("termination") or {}),
-        "limits": deepcopy(receipt.get("limits") or {}),
+        "context_window_tokens": receipt.get("context_window_tokens"),
+        "reserved_output_tokens": receipt.get("reserved_output_tokens"),
         "transformations": deepcopy(receipt.get("transformations") or []),
     }
 

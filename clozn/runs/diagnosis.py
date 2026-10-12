@@ -118,26 +118,26 @@ def _slow_findings(run: Mapping[str, Any]) -> list[dict[str, Any]]:
                 [_evidence("trace.steps[*].dt_ms", {"covered": covered, "steps": total_steps,
                                                      "sum_ms": interval_ms})]))
         else:
-            token_count = _integer(_object(_object(run.get("context_receipt")).get("limits")).get(
-                "generated_tokens"))
-            evidence = ([_evidence("context_receipt.limits.generated_tokens", token_count)]
+            token_count = _integer(_object(
+                _object(run.get("context_receipt")).get("termination")
+            ).get("generated_tokens"))
+            evidence = ([_evidence("context_receipt.termination.generated_tokens", token_count)]
                         if token_count is not None else [])
             findings.append(_finding(
                 "generation", "unavailable",
                 "The journal has no generation-phase duration or per-token interval timing.", evidence))
 
     receipt = _object(run.get("context_receipt"))
-    limits = _object(receipt.get("limits"))
-    prompt_tokens = _integer(limits.get("prompt_tokens"))
-    n_ctx = _integer(limits.get("context_window_tokens"))
+    prompt_tokens = _integer(_object(receipt.get("rendered")).get("tokens"))
+    n_ctx = _integer(receipt.get("context_window_tokens"))
     if prompt_tokens is not None and n_ctx and prompt_tokens <= n_ctx:
         ratio = prompt_tokens * 100.0 / n_ctx
         findings.append(_finding(
             "context_pressure", "observed",
             f"The prompt occupied {prompt_tokens} of {n_ctx} context tokens ({ratio:.1f}%); this measures "
             "capacity, not allocation time or a latency contribution.",
-            [_evidence("context_receipt.limits.prompt_tokens", prompt_tokens),
-             _evidence("context_receipt.limits.context_window_tokens", n_ctx)]))
+            [_evidence("context_receipt.rendered.tokens", prompt_tokens),
+             _evidence("context_receipt.context_window_tokens", n_ctx)]))
     else:
         findings.append(_finding(
             "context_pressure", "unavailable",
@@ -186,14 +186,17 @@ def _cutoff_finding(run: Mapping[str, Any]) -> dict[str, Any]:
     finish = run.get("finish_reason")
     error = run.get("error")
     receipt = _object(run.get("context_receipt"))
-    limits = _object(receipt.get("limits"))
-    prompt = _integer(limits.get("prompt_tokens"))
-    generated = _integer(limits.get("generated_tokens"))
-    context = _integer(limits.get("context_window_tokens"))
-    maximum = _integer(limits.get("requested_max_tokens"))
+    termination = _object(receipt.get("termination"))
+    termination_reason = termination.get("reason")
+    prompt = _integer(_object(receipt.get("rendered")).get("tokens"))
+    generated = _integer(termination.get("generated_tokens"))
+    context = _integer(receipt.get("context_window_tokens"))
+    maximum = _integer(receipt.get("reserved_output_tokens"))
     evidence = [_evidence("finish_reason", finish)] if isinstance(finish, str) else []
 
-    if finish == "length" or receipt.get("output_cut_off") is True:
+    if termination_reason in {"max_tokens", "context_limit"} or finish == "length":
+        if isinstance(termination_reason, str):
+            evidence.append(_evidence("context_receipt.termination.reason", termination_reason))
         hit_context = (prompt is not None and generated is not None and context is not None
                        and prompt + generated >= context)
         hit_max = generated is not None and maximum is not None and generated >= maximum
@@ -205,10 +208,14 @@ def _cutoff_finding(run: Mapping[str, Any]) -> dict[str, Any]:
             cause = "the requested output-token limit was reached"
         else:
             cause = "the worker reported a token-budget stop, but the journal cannot separate output from context budget"
-        for key, value in (("prompt_tokens", prompt), ("generated_tokens", generated),
-                           ("context_window_tokens", context), ("requested_max_tokens", maximum)):
+        for path, value in (
+            ("context_receipt.rendered.tokens", prompt),
+            ("context_receipt.termination.generated_tokens", generated),
+            ("context_receipt.context_window_tokens", context),
+            ("context_receipt.reserved_output_tokens", maximum),
+        ):
             if value is not None:
-                evidence.append(_evidence(f"context_receipt.limits.{key}", value))
+                evidence.append(_evidence(path, value))
         return _finding("output_cutoff", "observed", f"The reply was cut off: {cause}.", evidence)
     if error == "client_disconnected":
         return _finding(

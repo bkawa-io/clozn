@@ -1,14 +1,9 @@
-"""Model-free registry for configured, preloaded private workers.
+"""Process lifecycle registry for configured private model workers.
 
-This module is the process-lifecycle half of ADR 004.  It deliberately does
-not select a worker for a request, discover models, cold-load on demand, evict,
-or admit generations.  It gives the future router one exact, immutable key for
-every configured worker and keeps failures isolated between preloaded handles.
-
-The current ``clozn serve MODEL`` path remains unchanged.  It is the
-one-definition/one-preload compatibility case that a later supervisor wiring
-ticket can express through this registry once the gateway can consume more than
-one private worker.
+The registry owns exact runtime identities, preload and cold-load transitions,
+failure recovery, call tracking, and verified-idle eviction. Request selection
+stays in :mod:`clozn.server.model_routing`; the runtime connects both components
+in process so every public request resolves one immutable worker binding.
 """
 from __future__ import annotations
 
@@ -58,8 +53,8 @@ class WorkerRegistryConfigError(ValueError):
 class UnknownWorkerModelError(KeyError):
     """A caller named no configured canonical model ID.
 
-    There is intentionally no alias/default recovery here.  Request routing is
-    a later layer and must resolve aliases exactly once before registry lookup.
+    There is intentionally no alias/default recovery here. Request routing
+    resolves aliases exactly once before registry lookup.
     """
 
 
@@ -79,20 +74,10 @@ class WorkerBusyError(RuntimeError):
 class UnverifiableWorkerStateError(RuntimeError):
     """An explicit ``evict()`` was refused because busy/idle state is not verifiable.
 
-    ``WorkerHandle.busy`` is real, correctly implemented, and unit tested -- but in
-    production nothing ever enters :meth:`WorkerHandle.track_call`, because real
-    generation traffic flows gateway<->worker directly and never touches the
-    supervisor process at all (docs/design/006-cross-process-cold-load-protocol.md's
-    Context section). That makes ``busy`` permanently and silently ``False`` whether
-    or not a worker is actually mid-generation: correct machinery wired to nothing.
-    Treating that silence as "verified idle" would be exactly the assumption
-    docs/SEAMS.md forbids ("a value that cannot be honestly measured is absent, never
-    assumed"). ``WorkerRegistry`` only trusts ``busy`` when it was constructed with
-    ``busy_tracking_wired=True`` -- an explicit declaration, never a default -- and
-    this error is what a caller gets instead of a silent, unverified eviction when it
-    was not. See ADR 006 for the design of a real, live cross-process signal; until
-    something wires it and flips this flag for real, refusing is the only honest
-    outcome.
+    ``WorkerRegistry`` trusts ``WorkerHandle.busy`` only when the runtime explicitly
+    wires every routed worker call through :meth:`track_call`. The managed product
+    runtime does this. Isolated registries that omit that integration fail closed
+    instead of treating an unobserved worker as idle.
     """
 
 
@@ -396,11 +381,9 @@ class WorkerRegistry:
 
     Eviction (the idle-LRU capacity path inside ``ensure_loaded``, and the explicit
     ``evict()`` method) never picks a victim on an unverified assumption of idleness.
-    Both consult ``busy_tracking_wired`` -- False by default, matching production,
-    where nothing calls ``WorkerHandle.track_call()`` -- and refuse with a typed
-    outcome rather than trusting a busy signal that was never actually wired. See
-    ``busy_tracking_wired``'s parameter doc, ``UnverifiableWorkerStateError``, and
-    ADR 006 (docs/design/006-cross-process-cold-load-protocol.md).
+    Both consult ``busy_tracking_wired`` and refuse with a typed outcome rather
+    than trusting a busy signal that was never wired. The managed runtime supplies
+    ``registry.track_call`` to its router and sets this flag true.
     """
 
     def __init__(
@@ -484,7 +467,7 @@ class WorkerRegistry:
             )
         if default_model_id not in preload_model_ids:
             raise WorkerRegistryConfigError(
-                "the default model must be preloaded until load-on-demand exists"
+                "the default model must be included in preload_model_ids"
             )
 
         self.default_model_id = default_model_id
@@ -496,16 +479,8 @@ class WorkerRegistry:
         self._health_probe = health_probe
         self._template_probe = template_probe
         self._port_factory = port_factory
-        # Fail-closed gate for every eviction decision below (explicit evict() and
-        # the idle-LRU capacity path alike). Defaults to False -- untrusted -- because
-        # that is what production actually is today: nothing in clozn/cli/runtime_process.py
-        # or clozn/cli/managed_models.py's WorkerRegistry(...) construction sites passes
-        # busy_tracking_wired=True, and real generation traffic never calls track_call()
-        # (see UnverifiableWorkerStateError's docstring and ADR 006's Context section).
-        # Only test code that deliberately drives track_call() to simulate real in-flight
-        # work sets this True. When ADR 006 wires a real cross-process busy signal, the
-        # eviction code below does not need to change -- only this flag's value at the
-        # construction site does.
+        # Fail-closed gate for explicit and LRU eviction. Product construction sets
+        # this true only alongside the router's worker_call_tracker integration.
         self._busy_tracking_wired = busy_tracking_wired
         # Guards the "count residents, maybe evict one" decision across
         # concurrent ensure_loaded() calls for *different* cold models so two
@@ -920,13 +895,8 @@ class WorkerRegistry:
         this honestly blocks for the call to finish instead of pretending to
         cancel it; a timeout raises rather than silently proceeding.
 
-        Before any of that, refuses (``UnverifiableWorkerStateError``) outright if
-        this registry's busy signal is not ``busy_tracking_wired`` -- production's
-        actual state today. ``handle.busy`` reading False because nobody is watching
-        is not the same fact as ``handle.busy`` reading False because a real call
-        count was checked and is genuinely zero; only the latter is safe to act on,
-        and there is no way to tell them apart from the boolean alone. See
-        ``UnverifiableWorkerStateError`` and ADR 006.
+        Before any of that, refuses (``UnverifiableWorkerStateError``) if this
+        registry's busy signal is not wired. An unobserved worker is not safely idle.
         """
         entry = self._entry(model_id)
         with entry.condition:
@@ -940,7 +910,7 @@ class WorkerRegistry:
                 raise UnverifiableWorkerStateError(
                     f"{model_id!r}'s busy/idle state cannot be verified -- this "
                     "registry's busy signal is not wired (busy_tracking_wired=False); "
-                    "refusing rather than assuming idle -- see ADR 006"
+                    "refusing rather than assuming idle"
                 )
             if handle.busy:
                 if not wait_for_inflight:
@@ -969,18 +939,9 @@ class WorkerRegistry:
           state (``handle.busy``), never a timestamp alone: a worker with active
           generation or mutation work is never a candidate, no matter how long ago
           its load event started.
-        * ``"no_verifiable_idle_worker"`` -- there is at least one other resident
-          worker whose busy/idle state cannot be trusted, because this registry was
-          not constructed with ``busy_tracking_wired=True``. That is production's
-          actual state today: real generation traffic flows gateway<->worker
-          directly, bypassing the supervisor entirely, so nothing ever calls
-          ``WorkerHandle.track_call()`` and ``busy`` would read False whether or not
-          the worker is mid-generation. Treating that silence as "verified idle"
-          would be exactly the silent-fallback docs/SEAMS.md forbids -- a value that
-          cannot be honestly measured must stay absent, never assumed. ADR 006
-          designs the real cross-process signal that would let this registry
-          honestly flip ``busy_tracking_wired`` to True; until something does, this
-          method must never pick a victim on an unverified assumption.
+        * ``"no_verifiable_idle_worker"`` -- resident busy/idle state is unavailable
+          because this registry was not constructed with ``busy_tracking_wired=True``.
+          The method never picks a victim on an unverified assumption.
         """
         ready_siblings = [
             other for other in self._by_id.values()
@@ -1122,8 +1083,7 @@ class WorkerRegistry:
                     capacity_error = RuntimeError(
                         f"no resident worker's busy/idle state could be verified to "
                         f"free capacity for {model_id!r}; this registry's busy "
-                        "signal is not wired (busy_tracking_wired=False) -- see "
-                        "docs/design/006-cross-process-cold-load-protocol.md"
+                        "signal is not wired (busy_tracking_wired=False)"
                     )
                 else:
                     capacity_error = RuntimeError(

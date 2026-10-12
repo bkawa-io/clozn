@@ -56,6 +56,7 @@ def _influence() -> dict:
         "available": True,
         "method": {
             "name": "teacher_forced_matched_context_replacement",
+            "version": "1",
             "mode": "forced_score_intervention",
             "claim_limit": "the recorded continuation under this exact intervention",
             "caveat": "does not prove source correctness or reveal hidden reasoning",
@@ -141,16 +142,11 @@ def test_route_redacted_run_leaks_no_text_and_keeps_unresolved_refs(monkeypatch)
     assert h.body["source_artifacts"][0]["privacy"] == "redacted"
 
 
-def test_route_projects_legacy_messages_without_rewriting_them(monkeypatch):
+def test_route_rejects_a_non_schema_receipt_without_rewriting_the_run(monkeypatch):
     run = {
-        "id": "run_legacy",
-        "messages": [{"role": "user", "content": "OLD PRIVATE PROMPT"}],
-        "context_receipt": {
-            "schema": "clozn.context_receipt.v1",
-            "delivered": {
-                "messages": [{"role": "user", "content": "OLD PRIVATE PROMPT"}],
-            },
-        },
+        "id": "run_unrecognized",
+        "messages": [{"role": "user", "content": "PRIVATE PROMPT"}],
+        "context_receipt": {"unexpected": True},
     }
     before = copy.deepcopy(run)
     monkeypatch.setattr(runlog, "get_run", lambda rid: run if rid == run["id"] else None)
@@ -160,8 +156,9 @@ def test_route_projects_legacy_messages_without_rewriting_them(monkeypatch):
 
     assert h.status == 200
     assert run == before
-    assert h.body["addresses"][0]["native_ref"]["collection"] == "run.messages"
-    assert "OLD PRIVATE PROMPT" not in repr(h.body)
+    assert h.body["addresses"] == []
+    assert h.body["source_artifacts"][0]["native_status"] == "failed"
+    assert "PRIVATE PROMPT" not in repr(h.body)
 
 
 @pytest.mark.parametrize(

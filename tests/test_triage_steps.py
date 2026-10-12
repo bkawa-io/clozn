@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from clozn.triage.status import STATES
+from clozn.runs.context_receipt import build_context_receipt
 from clozn.triage.steps import (
     context_diff_steps,
     identity_diff_steps,
@@ -98,16 +99,19 @@ def test_every_identity_step_status_is_in_the_controlled_enum():
 # ============================================================================================= step 2 ===
 
 def _run_with_context_receipt(*, delivered=None, assembled=None, final_prompt=None):
-    receipt = {}
-    if delivered is not None:
-        receipt["delivered"] = {"messages": delivered}
-    if assembled is not None or final_prompt is not None:
-        receipt["survived"] = {}
-        if assembled is not None:
-            receipt["survived"]["assembled_messages"] = assembled
-        if final_prompt is not None:
-            receipt["survived"]["final_prompt"] = final_prompt
-    return {"context_receipt": receipt}
+    messages = delivered if delivered is not None else assembled if assembled is not None else []
+    receipt = build_context_receipt(
+        messages=messages,
+        assembled_messages=assembled,
+        final_prompt=final_prompt,
+        run_id="run_triage",
+        privacy="full",
+    )
+    return {
+        "context_receipt": receipt,
+        **({"assembled_messages": assembled} if assembled is not None else {}),
+        **({"final_prompt": final_prompt} if final_prompt is not None else {}),
+    }
 
 
 def test_identical_rendered_prompt_matches():
@@ -125,7 +129,8 @@ def test_different_rendered_prompt_mismatches_and_never_embeds_raw_text():
     assert step["status"] == "mismatched"
     dumped = str(step)
     assert "hello world" not in dumped, "raw prompt content must never be embedded in the artifact"
-    assert step["observations"][0]["baseline_length"] == len("hello world")
+    assert step["observations"][0]["baseline_length"] is None
+    assert step["observations"][0]["baseline_sha256"]
 
 
 def test_assembled_messages_digest_is_order_and_content_sensitive():

@@ -1,9 +1,7 @@
 """Versioned case x variant x seed experiments for model developers.
 
-This is deliberately separate from :mod:`clozn.experiments.experiment`, which is the
-single-run "change one thing" receipt API used by Studio.  A suite experiment composes
-many ordinary, fully instrumented OpenAI-compatible calls and keeps their run records.
-It never calls a model engine directly.
+A suite experiment composes ordinary, fully instrumented OpenAI-compatible calls,
+keeps their run records, and never calls a model engine directly.
 """
 from __future__ import annotations
 
@@ -25,7 +23,7 @@ RESULT_SCHEMA = "clozn.experiment.result.v0"
 FINGERPRINT_ALGORITHM = "canonical-json-v1"
 VARIANT_KINDS = frozenset({"base", "tuned", "quant", "prompt"})
 DEFAULT_URL = "http://127.0.0.1:8080"
-# Phase 4.4 (docs/PRODUCT_ROADMAP.md §7 item 4, "statistical rigor + evidence labels as product"): the one
+# The one
 # metric a manifest author predeclares as their primary comparison BEFORE looking at results, so a stats
 # report (clozn.experiments.stats) can honestly separate "the one test we said mattered" from every other
 # exploratory comparison. 'pass_rate' is the only kind for now (suite._summarize's own aggregate metric);
@@ -100,10 +98,8 @@ def validate_manifest(raw: dict) -> dict:
         raise ManifestError("baseline_variant must name one of variants")
     manifest["baseline_variant"] = baseline
 
-    # Backward compatibility: only touch the key when the author actually declared it. Every manifest
-    # saved before this field existed has no "primary_metric" key at all; leaving the key absent (rather
-    # than defaulting it to None here) keeps _manifest_digest identical for those old manifests, so an
-    # already-saved clozn.experiment.result.v0 artifact's manifest_sha256 still validates after this change.
+    # A primary metric is optional, but when present it must be declared before the run and must use
+    # the closed comparison vocabulary below.
     if "primary_metric" in manifest:
         primary_metric = manifest["primary_metric"]
         if primary_metric is not None:
@@ -220,11 +216,11 @@ def suite_fingerprint(raw_manifest: dict, *, seeds: list[int] | None = None) -> 
 
 
 def result_fingerprint(result: dict) -> dict:
-    """Return and verify a result's fingerprint, deriving it for legacy artifacts."""
+    """Return and verify a result's required behavior fingerprint."""
     expected = suite_fingerprint(result.get("manifest"), seeds=result.get("seeds"))
     claimed = result.get("suite_fingerprint")
     if claimed is None:
-        return expected
+        raise ManifestError("experiment result requires suite_fingerprint")
     if claimed != expected:
         raise ManifestError("experiment result suite_fingerprint does not match behavior-bearing content")
     return copy.deepcopy(claimed)

@@ -139,3 +139,66 @@ def test_full_context_winner_is_a_typed_noop_for_materialization(tmp_path, monke
     assert handler.status == 409
     assert handler.body["code"] == "no_reduction_to_materialize"
     assert run_store.list_runs(20) == []
+
+
+def test_job_routes_refuse_another_instruments_job_without_cancelling_it(monkeypatch):
+    from clozn.server import influence_jobs
+    from clozn.server.routes import minimal_context as route
+
+    foreign_job = {
+        "job_id": "infjob_foreign",
+        "run_id": "run-minimal",
+        "kind": "context_investigation_remove_test",
+    }
+
+    class Jobs:
+        cancel_calls = []
+
+        @staticmethod
+        def get(run_id, job_id):
+            assert (run_id, job_id) == ("run-minimal", "infjob_foreign")
+            return dict(foreign_job)
+
+        @classmethod
+        def cancel(cls, run_id, job_id):
+            cls.cancel_calls.append((run_id, job_id))
+            return dict(foreign_job)
+
+    class Handler:
+        status = None
+        body = None
+
+        def _json(self, status, body, **_kwargs):
+            self.status, self.body = status, body
+
+    monkeypatch.setattr(influence_jobs, "JOBS", Jobs())
+
+    handler = Handler()
+    assert route.try_get(
+        handler, "/runs/run-minimal/minimal-context/jobs/infjob_foreign",
+    ) is True
+    assert handler.status == 404
+    assert handler.body["code"] == "minimal_context_job_not_found"
+
+    handler = Handler()
+    assert route.try_post(
+        handler, "/runs/run-minimal/minimal-context/jobs/infjob_foreign/cancel", {},
+    ) is True
+    assert handler.status == 404
+    assert handler.body["code"] == "minimal_context_job_not_found"
+    assert Jobs.cancel_calls == []
+
+    foreign_job["kind"] = "minimal_context"
+    handler = Handler()
+    assert route.try_get(
+        handler, "/runs/run-minimal/minimal-context/jobs/infjob_foreign",
+    ) is True
+    assert handler.status == 200
+    assert handler.body["kind"] == "minimal_context"
+
+    handler = Handler()
+    assert route.try_post(
+        handler, "/runs/run-minimal/minimal-context/jobs/infjob_foreign/cancel", {},
+    ) is True
+    assert handler.status == 200
+    assert Jobs.cancel_calls == [("run-minimal", "infjob_foreign")]

@@ -97,7 +97,7 @@ class DrillFakeSub:
         self.calls: list = []
 
     def score_tokens(self, messages, continuation_ids, *, continuation=None, block=None,
-                     steer_strengths=None, steer_vec=None, topk=0):
+                     steer_vec=None, topk=0):
         self.calls.append({"messages": messages})
         text = " ".join(str((m or {}).get("content", "")) for m in (messages or []) if isinstance(m, dict))
         has_dawn = "dawn" in text
@@ -125,7 +125,7 @@ class RecorderFakeSub:
         self.calls: list = []
 
     def score_tokens(self, messages, continuation_ids, *, continuation=None, block=None,
-                     steer_strengths=None, steer_vec=None, topk=0):
+                     steer_vec=None, topk=0):
         self.calls.append(messages)
         return [{"id": 1, "piece": "x", "logprob": -0.2}]
 
@@ -158,10 +158,10 @@ def test_route_unknown_section_is_a_clean_400(iso):
     assert "no section named 'not_a_real_section'" in out["error"]
 
 
-def test_route_memory_card_section_is_declined_with_honest_400(iso):
-    rid = _seed_drill_run(section_name="card_1", source="memory_card")
-    out = _post(f"/runs/{rid}/section-drill", {"section": "card_1"})
-    assert "memory-card" in out["error"]
+def test_route_rejects_a_noncanonical_section_source(iso):
+    rid = _seed_drill_run(section_name="bad_source", source="unknown")
+    out = _post(f"/runs/{rid}/section-drill", {"section": "bad_source"})
+    assert "unsupported source" in out["error"]
 
 
 def test_route_no_parts_is_a_clean_400(iso):
@@ -206,7 +206,7 @@ def test_route_unsplittable_section_returns_a_single_honest_subsection(iso, monk
         name = "engine"
 
         def score_tokens(self, messages, continuation_ids, *, continuation=None, block=None,
-                         steer_strengths=None, steer_vec=None, topk=0):
+                         steer_vec=None, topk=0):
             text = " ".join(str((m or {}).get("content", "")) for m in (messages or []) if isinstance(m, dict))
             lp = -0.1 if "nine" in text else -2.0
             return [{"id": 1, "piece": "p", "logprob": lp}]

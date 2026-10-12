@@ -1,6 +1,6 @@
 # engine/client — Python SDK for the clozn-server white-box API
 
-`clozn_engine.py` is the thin Python seam over the C++ engine's HTTP interface
+`clozn_engine` is the thin Python seam over the C++ engine's HTTP interface
 (`engine/core/serve/clozn_server.cpp`). It exists so the research stack (SAE discovery,
 feature circuits, concept probes, all numpy already) can read from and write into the
 **live** ggml/llama.cpp model instead of a separate HF copy.
@@ -46,8 +46,8 @@ print(obs.summary())     # moved_l2, baseline top-3, edited top-3, whether the t
 ## Validate
 
 ```
-python clozn_engine.py --selftest    # offline: the wire codec is exact, no server needed
-python clozn_engine.py --demo --port 8091   # live: a full round-trip against a running server
+python -m clozn_engine --selftest    # offline: the wire codec is exact, no server needed
+python -m clozn_engine --demo --port 8091   # live: a full round-trip against a running server
 ```
 
 The `--demo` prints an **identity-write control** next to the real edit: writing the

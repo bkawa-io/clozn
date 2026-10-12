@@ -132,7 +132,7 @@ def build(run: dict | None, explain: dict | None = None, receipts=None) -> dict:
                                  "influence_map"}}
     # output_contract is already part of the stored run evidence, so the JSON receipt retains one
     # object-shaped copy under bundle["run"] rather than promoting/duplicating its raw model output at
-    # another top-level export key.  A malformed legacy value degrades to {}.  Association fingerprints
+    # another top-level export key. A malformed value degrades to {}. Association fingerprints
     # remain governed by the top-level filter above; never recursively redact identically named user/tool
     # fields, which would alter the evidence itself.
     if "output_contract" in portable_run:
@@ -163,50 +163,40 @@ def build(run: dict | None, explain: dict | None = None, receipts=None) -> dict:
 
 
 def _context_receipt_markdown(run: dict) -> str:
-    """Feature 06: summarize the run's context receipt (either shape -- see
-    clozn.runs.context_receipt's module docstring) so an export states plainly whether content is
-    included or withheld, not just that a receipt exists. Empty string when there is nothing recorded --
-    omit, never render a hollow section."""
+    """Summarize the run's schema-governed, metadata-only Context Receipt."""
     from clozn.runs.context_receipt import read_receipt
     view = read_receipt(run)
-    if view["shape"] in ("absent", "unrecognized"):
+    if view["shape"] != "recorded":
         return ""
     receipt = view["receipt"]
     lines = ["\n## Context receipt"]
+    lines.append(f"schema: {receipt.get('schema_version')}")
+    privacy = receipt.get("privacy")
+    if privacy:
+        lines.append(f"metadata disclosure: **{privacy}**")
+    termination = receipt.get("termination")
+    if termination:
+        raw = termination.get("reason_raw")
+        raw_note = f" (raw: `{raw}`)" if raw and raw != termination.get("reason") else ""
+        lines.append(f"termination: **{termination.get('reason')}**{raw_note}")
+    delivered = receipt.get("delivered") or []
+    omitted = [seg for seg in delivered if seg.get("included") is False]
+    lines.append(f"segments: {len(delivered)} delivered, {len(omitted)} did not survive to assembly")
+    for seg in omitted:
+        reason = seg.get("reason") or "no reason recorded"
+        lines.append(f"  - {seg.get('segment_id')} ({seg.get('source_label', '?')}): {reason}")
+    rendered = receipt.get("rendered") or {}
+    if rendered.get("sha256"):
+        lines.append(f"rendered sha256: `{rendered['sha256'][:16]}...`")
 
-    if view["shape"] == "legacy":
-        lines.append("_pre-2026-07-27 receipt shape (clozn.context_receipt.v1); segment ids and "
-                     "termination normalization are unavailable for this run._")
-    else:
-        lines.append(f"schema: {receipt.get('schema_version')}")
-        privacy = receipt.get("privacy")
-        if privacy:
-            lines.append(f"privacy tier: **{privacy}**"
-                         + (" -- content below is redacted, not omitted by oversight"
-                            if privacy != "full" else ""))
-        termination = receipt.get("termination")
-        if termination:
-            raw = termination.get("reason_raw")
-            raw_note = f" (raw: `{raw}`)" if raw and raw != termination.get("reason") else ""
-            lines.append(f"termination: **{termination.get('reason')}**{raw_note}")
-        delivered = receipt.get("delivered") or []
-        omitted = [seg for seg in delivered if seg.get("included") is False]
-        lines.append(f"segments: {len(delivered)} delivered, {len(omitted)} did not survive to assembly")
-        for seg in omitted:
-            reason = seg.get("reason") or "no reason recorded"
-            lines.append(f"  - {seg.get('segment_id')} ({seg.get('source_label', '?')}): {reason}")
-        rendered = receipt.get("rendered") or {}
-        if rendered.get("sha256"):
-            lines.append(f"rendered sha256: `{rendered['sha256'][:16]}...`")
-
-    survived = receipt.get("survived") or {}
-    content_present = bool(survived.get("final_prompt")) or bool(survived.get("assembled_messages"))
-    withheld = survived.get("content_withheld_by_privacy_tier")
-    if withheld:
-        lines.append(f"_full assembled/rendered text withheld by receipt privacy tier {withheld!r} -- "
-                     "not omitted by oversight._")
-    elif not content_present:
-        lines.append("_full assembled/rendered text not captured for this run._")
+    content_present = isinstance(run.get("final_prompt"), str) or isinstance(
+        run.get("assembled_messages"), list
+    )
+    lines.append(
+        "_assembled/rendered text is retained on the run, not duplicated in this receipt._"
+        if content_present else
+        "_assembled/rendered text is not retained on this run._"
+    )
 
     return "\n".join(lines)
 

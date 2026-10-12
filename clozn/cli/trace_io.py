@@ -73,42 +73,18 @@ def _runlog_trace_steps(run: dict) -> list[dict]:
     trace = run.get("trace") if isinstance(run, dict) else {}
     trace = trace if isinstance(trace, dict) else {}
     rich = trace.get("steps") if isinstance(trace.get("steps"), list) else []
-    if rich:
-        out = []
-        for i, s in enumerate(rich):
-            if not isinstance(s, dict):
-                continue
-            piece = s.get("piece", s.get("text", ""))
-            conf = s.get("prob", s.get("conf", s.get("confidence")))
-            alts = s.get("alts", s.get("alternatives", []))
-            step = {"index": s.get("index", s.get("pos", i)), "piece": str(piece),
-                    "conf": fmt._num(conf, 1.0), "alts": alts if isinstance(alts, list) else []}
-            for k in ("token_id", "logprob", "entropy", "topk_entropy", "wall_ms", "dt_ms"):
-                if s.get(k) is not None:
-                    step[k] = s.get(k)
-            out.append(step)
-        return out
-    # legacy v1-array reconstruction (no `steps` on this trace) -- also folds in the v2 parallel arrays
-    # (token_ids/logprobs/topk_entropy) when a trace happens to carry them without a `steps` list; absent
-    # on any trace persisted before this change, so every lookup below is a guarded .get()/length check.
-    tokens = trace.get("tokens") if isinstance(trace.get("tokens"), list) else []
-    confidence = trace.get("confidence") if isinstance(trace.get("confidence"), list) else []
-    alternatives = trace.get("alternatives") if isinstance(trace.get("alternatives"), list) else []
-    token_ids = trace.get("token_ids") if isinstance(trace.get("token_ids"), list) else []
-    logprobs = trace.get("logprobs") if isinstance(trace.get("logprobs"), list) else []
-    topk_entropy = trace.get("topk_entropy") if isinstance(trace.get("topk_entropy"), list) else []
     out = []
-    for i, piece in enumerate(tokens):
-        alts = alternatives[i] if i < len(alternatives) and isinstance(alternatives[i], list) else []
-        step = {"pos": i, "piece": str(piece),
-                "conf": fmt._num(confidence[i], 1.0) if i < len(confidence) else 1.0,
-                "alts": alts}
-        if i < len(token_ids) and token_ids[i] is not None:
-            step["token_id"] = token_ids[i]
-        if i < len(logprobs) and logprobs[i] is not None:
-            step["logprob"] = logprobs[i]
-        if i < len(topk_entropy) and topk_entropy[i] is not None:
-            step["topk_entropy"] = topk_entropy[i]
+    for i, s in enumerate(rich):
+        if not isinstance(s, dict):
+            continue
+        piece = s.get("piece", s.get("text", ""))
+        conf = s.get("prob", s.get("conf", s.get("confidence")))
+        alts = s.get("alts", s.get("alternatives", []))
+        step = {"index": s.get("index", s.get("pos", i)), "piece": str(piece),
+                "conf": fmt._num(conf, 1.0), "alts": alts if isinstance(alts, list) else []}
+        for k in ("token_id", "logprob", "entropy", "topk_entropy", "wall_ms", "dt_ms"):
+            if s.get(k) is not None:
+                step[k] = s.get(k)
         out.append(step)
     return out
 

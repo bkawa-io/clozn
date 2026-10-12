@@ -1,13 +1,13 @@
 """Stable, privacy-safe text-span addresses derived from existing run evidence.
 
-``clozn.text-span-addresses.v1`` is a projection, never a run migration.  It
-gives context receipts and context-answer influence maps one address shape
+``clozn.text-span-addresses.v1`` projects existing evidence without mutating it. It gives Context
+Receipts and context-answer influence maps one address shape
 without changing either artifact's native identifiers, status, method, or
 measurement semantics.
 
 Offsets are always half-open Unicode code-point offsets into one exact string.
 The basis and selected span each carry an exact UTF-8 SHA-256.  A byte count or
-the context receipt's historical 16-hex content hash is useful integrity
+the Context Receipt's truncated 16-hex content hash is useful integrity
 evidence, but is not enough to invent code-point offsets or a full digest after
 text has been removed.  Such references remain explicitly redacted or
 unavailable.
@@ -22,7 +22,6 @@ from typing import Any
 
 SCHEMA_VERSION = "clozn.text-span-addresses.v1"
 CONTEXT_SCHEMA = "clozn.context-receipt.v1"
-LEGACY_CONTEXT_SCHEMA = "clozn.context_receipt.v1"
 INFLUENCE_SCHEMA = "clozn.context_answer_influence.v1"
 INFLUENCE_EXPORT_SCHEMA = "clozn.context-answer-influence-export.v1"
 
@@ -339,15 +338,22 @@ def _context_projection(run: dict, *, privacy: str) -> tuple[list[dict], dict]:
     run_id = str(run.get("id") or "")
     if not run_id:
         raise ValueError("run.id must be a non-empty string")
-    receipt = run.get("context_receipt")
-    receipt = receipt if isinstance(receipt, dict) else {}
-    schema = (
-        receipt.get("schema_version")
-        if isinstance(receipt.get("schema_version"), str) else
-        receipt.get("schema")
-        if isinstance(receipt.get("schema"), str) else
-        "clozn.run-record.legacy"
-    )
+    from clozn.runs.context_receipt import read_receipt
+
+    receipt_view = read_receipt(run)
+    shape = receipt_view["shape"]
+    receipt = receipt_view["receipt"]
+    schema = receipt.get("schema_version") if shape == "recorded" else CONTEXT_SCHEMA
+    if shape != "recorded":
+        return [], {
+            "schema": schema,
+            "native_status": "not_recorded" if shape == "absent" else "failed",
+            "reason": (
+                "no Context Receipt was recorded"
+                if shape == "absent" else
+                "the stored Context Receipt is not schema-governed evidence"
+            ),
+        }
     messages = run.get("messages")
     messages = messages if isinstance(messages, list) else []
     redacted = _run_is_redacted(run)
@@ -359,14 +365,17 @@ def _context_projection(run: dict, *, privacy: str) -> tuple[list[dict], dict]:
     addresses: list[dict] = []
 
     delivered = receipt.get("delivered")
-    delivered = delivered if isinstance(delivered, list) else None
-    if delivered is not None:
-        for fallback_index, segment in enumerate(delivered):
+    delivered = delivered if isinstance(delivered, list) else []
+    if delivered:
+        for segment in delivered:
             if not isinstance(segment, dict):
                 continue
             index = segment.get("original_order")
             if not isinstance(index, int) or isinstance(index, bool) or index < 0:
-                index = fallback_index
+                continue
+            segment_id = segment.get("segment_id")
+            if not isinstance(segment_id, str) or not segment_id:
+                continue
             message = messages[index] if index < len(messages) and isinstance(messages[index], dict) else {}
             content = message.get("content")
             content = content if isinstance(content, str) else None
@@ -374,23 +383,20 @@ def _context_projection(run: dict, *, privacy: str) -> tuple[list[dict], dict]:
             if not isinstance(client_source_id, str) or not client_source_id:
                 supplied = message.get("source_id")
                 client_source_id = supplied if isinstance(supplied, str) and supplied else None
-            segment_id = segment.get("segment_id")
-            native_id = segment_id if isinstance(segment_id, str) and segment_id else f"message-{index}"
             native_ref = {
                 "artifact_schema": schema,
                 "collection": "context_receipt.delivered",
-                "id": native_id,
+                "id": segment_id,
+                "segment_id": segment_id,
             }
-            if isinstance(segment_id, str) and segment_id:
-                native_ref["segment_id"] = segment_id
             if client_source_id:
                 native_ref["client_source_id"] = client_source_id
             if isinstance(segment.get("source_label"), str):
                 native_ref["source_label"] = segment["source_label"]
-            legacy_hash = _valid_short_hash(segment.get("content_hash"))
+            short_hash = _valid_short_hash(segment.get("content_hash"))
             recorded = (
-                ("sha256_truncated_64bit", legacy_hash, "canonical_basis")
-                if legacy_hash else None
+                ("sha256_truncated_64bit", short_hash, "canonical_basis")
+                if short_hash else None
             )
             relation_anchor = (
                 {"client_source_id": client_source_id}
@@ -410,52 +416,11 @@ def _context_projection(run: dict, *, privacy: str) -> tuple[list[dict], dict]:
                 recorded_hash_mismatch_reason="native_content_hash_mismatch",
                 redacted=redacted or content is None,
             ))
-    else:
-        # Pre-schema runs are projected from their immutable run messages.  No
-        # context receipt is fabricated or written back.
-        for index, message in enumerate(messages):
-            if not isinstance(message, dict):
-                continue
-            content = message.get("content")
-            if not isinstance(content, str):
-                continue
-            client_source_id = message.get("source_id")
-            client_source_id = (
-                client_source_id if isinstance(client_source_id, str) and client_source_id else None
-            )
-            native_ref = {
-                "artifact_schema": schema,
-                "collection": "run.messages",
-                "id": f"message-{index}",
-            }
-            if client_source_id:
-                native_ref["client_source_id"] = client_source_id
-            relation_anchor = (
-                {"client_source_id": client_source_id}
-                if client_source_id else {"original_order": index}
-            )
-            addresses.append(make_text_span_address(
-                run_id=run_id,
-                kind="attached_source_span" if client_source_id else "delivered_message",
-                native_ref=native_ref,
-                relation_anchor=relation_anchor,
-                basis="attached_source" if client_source_id else "delivered_message",
-                start=0,
-                end=len(content),
-                privacy=privacy,
-                basis_text=content,
-                redacted=redacted,
-            ))
-
     rendered = receipt.get("rendered")
     rendered = rendered if isinstance(rendered, dict) else {}
     final_prompt = run.get("final_prompt")
     if fully_redacted:
         final_prompt = None
-    elif not isinstance(final_prompt, str):
-        survived = receipt.get("survived")
-        survived = survived if isinstance(survived, dict) else {}
-        final_prompt = survived.get("final_prompt")
     final_prompt = final_prompt if isinstance(final_prompt, str) else None
     rendered_hash = _valid_full_hash(rendered.get("sha256"))
     if final_prompt is not None or rendered:
@@ -486,7 +451,7 @@ def _context_projection(run: dict, *, privacy: str) -> tuple[list[dict], dict]:
 
 
 def project_context_addresses(run: dict, *, privacy: str = "metadata_only") -> list[dict]:
-    """Project current or legacy context evidence without changing the run."""
+    """Project schema-governed Context Receipt evidence without changing the run."""
     return _context_projection(run, privacy=privacy)[0]
 
 

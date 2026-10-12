@@ -193,7 +193,7 @@ def test_runtime_identity_falls_back_to_hashing_without_a_hint(tmp_path, iso_cac
 def test_runtime_identity_includes_template_fingerprint_engine_build_and_version():
     out = identity.runtime_identity(
         apply_template_fn=lambda messages: "rendered-prompt",
-        engine_health={"engine_build": "clozn-server-2026.07"},
+        engine_health={"build_id": "clozn-server-2026.07"},
         clozn_version="9.9.9",
     )
     assert out["template_fingerprint"] == hashlib.sha256(b"rendered-prompt").hexdigest()[:16]
@@ -202,9 +202,7 @@ def test_runtime_identity_includes_template_fingerprint_engine_build_and_version
 
 
 def test_runtime_identity_never_invents_an_engine_build():
-    """/health today carries no build-hash field at all (see identity.py's _ENGINE_BUILD_KEYS
-    comment) -- an engine_health dict that doesn't carry any candidate key must omit engine_build,
-    not guess at one."""
+    """A health document without build_id must not produce an invented engine build."""
     out = identity.runtime_identity(engine_health={"model": "x.gguf", "n_ctx": 4096})
     assert "engine_build" not in out
 

@@ -21,6 +21,7 @@ import pytest  # noqa: E402
 
 from clozn import schemas  # noqa: E402
 from clozn.runs import diagnosis_rules as dr  # noqa: E402
+from clozn.runs.context_receipt import build_context_receipt  # noqa: E402
 
 
 # ==================================================================================== fixture builders
@@ -57,7 +58,10 @@ def _finding_by_id(doc: dict, rule_id: str) -> dict:
     return next(f for f in doc["findings"] if f["rule_id"] == rule_id)
 
 
-_INFLUENCE_METHOD = {"name": "x", "mode": "forced_score_intervention", "claim_limit": "x", "caveat": "x"}
+_INFLUENCE_METHOD = {
+    "name": "x", "version": "1", "mode": "forced_score_intervention",
+    "claim_limit": "x", "caveat": "x",
+}
 
 
 def _influence_map(*, thresholds=None, prompt_spans=(), links=(), status="ok") -> dict:
@@ -264,7 +268,7 @@ def test_evaluate_twice_is_byte_identical():
         response="Paris, the capital city.", finish_reason="length",
         context_receipt={"schema_version": "clozn.context-receipt.v1", "run_id": "run_1",
                          "termination": {"reason": "max_tokens", "generated_tokens": 64},
-                         "limits": {"prompt_tokens": 10, "context_window_tokens": 100}},
+                         "rendered": {"tokens": 10}, "context_window_tokens": 100},
     )
     first = dr.evaluate(run, generated_at="2026-07-29T00:00:00Z")
     second = dr.evaluate(run, generated_at="2026-07-29T00:00:00Z")
@@ -284,18 +288,15 @@ def test_evaluate_twice_with_comparison_run_is_byte_identical():
 # =========================================================================================== R01
 
 def test_r01_finds_omitted_segments_with_span_evidence():
-    run = _run(
-        messages=[_msg("user", "some text", "docA"), _msg("user", "final ask")],
-        context_receipt={
-            "schema_version": "clozn.context-receipt.v1", "run_id": "run_1",
-            "omissions": [{"segment_id": "seg_aaaaaaaaaaaaaaaa", "reason": "context_budget"}],
-            "delivered": [
-                {"segment_id": "seg_aaaaaaaaaaaaaaaa", "source_type": "message", "original_order": 0,
-                 "included": False, "client_source_id": "docA"},
-                {"segment_id": "seg_bbbbbbbbbbbbbbbb", "source_type": "message", "original_order": 1,
-                 "included": True},
-            ],
-        })
+    messages = [_msg("user", "some text", "docA"), _msg("user", "final ask")]
+    context_receipt = build_context_receipt(
+        messages=messages, assembled_messages=[messages[1]], run_id="run_1",
+    )
+    context_receipt["omissions"] = [{
+        "segment_id": context_receipt["delivered"][0]["segment_id"],
+        "reason": "context_budget",
+    }]
+    run = _run(messages=messages, context_receipt=context_receipt)
     doc = dr.evaluate(run, generated_at="2026-07-29T00:00:00Z")
     entry = _finding_by_id(doc, "R01")
     assert entry["status"] == "finding"
@@ -341,7 +342,7 @@ def test_r02_finding_on_context_limit_termination():
 
 def test_r02_finding_on_high_ratio_heuristic():
     run = _run(context_receipt={"schema_version": "clozn.context-receipt.v1", "run_id": "run_1",
-                                "limits": {"prompt_tokens": 3700, "context_window_tokens": 4000}})
+                                "rendered": {"tokens": 3700}, "context_window_tokens": 4000})
     entry = _finding_by_id(dr.evaluate(run, generated_at="2026-07-29T00:00:00Z"), "R02")
     assert entry["status"] == "finding"
     assert entry["confidence"] == "derived"
@@ -349,7 +350,7 @@ def test_r02_finding_on_high_ratio_heuristic():
 
 def test_r02_not_observed_below_ratio():
     run = _run(context_receipt={"schema_version": "clozn.context-receipt.v1", "run_id": "run_1",
-                                "limits": {"prompt_tokens": 100, "context_window_tokens": 4000}})
+                                "rendered": {"tokens": 100}, "context_window_tokens": 4000})
     entry = _finding_by_id(dr.evaluate(run, generated_at="2026-07-29T00:00:00Z"), "R02")
     assert entry["status"] == "not_observed"
 
@@ -362,7 +363,11 @@ def test_r02_unavailable_when_missing_fields():
 # =========================================================================================== R03 / R10
 
 def test_r03_finds_conflicting_directives():
-    run = _run(messages=[_msg("system", "Always answer in English."), _msg("user", "Never answer in English.")])
+    messages = [_msg("system", "Always answer in English."), _msg("user", "Never answer in English.")]
+    run = _run(
+        messages=messages,
+        context_receipt=build_context_receipt(messages=messages, run_id="run_1"),
+    )
     entry = _finding_by_id(dr.evaluate(run, generated_at="2026-07-29T00:00:00Z"), "R03")
     assert entry["status"] == "finding"
     assert entry["severity"] == "medium"

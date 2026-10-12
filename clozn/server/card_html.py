@@ -68,7 +68,7 @@ def _num(v, nd: int = 3, signed: bool = False) -> str:
 
 
 # ------------------------------------------------------------------------------------ inline stylesheet
-# Studio Next values are inlined because receipts cannot depend on the running Studio.
+# Styles are inlined because exported receipts cannot depend on a running Studio.
 _CSS = """
 *{box-sizing:border-box;margin:0;padding:0}
 :root{color-scheme:light dark}

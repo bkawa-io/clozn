@@ -1,5 +1,4 @@
-"""The versioned, public hook/intervention vocabulary (docs/PRODUCT_ROADMAP.md §7 item 2, roadmap
-Phase 4.2): every named native interception point clozn's Python server side can drive, with exact
+"""The versioned public hook/intervention vocabulary: every named native interception point Clozn can drive, with exact
 semantics -- pure, static, model-free.  Nothing here calls the engine; ``GET /contracts/hooks``
 (clozn/server/routes/contracts.py) just serves ``hook_vocabulary()`` verbatim.
 
@@ -106,7 +105,7 @@ _L_OUT = {
             "ablated simultaneously' arm), riding a teacher-forced scoring pass",
             "POST /state -- standalone baseline-then-write-then-observe loop, no continuation scoring. "
             "NOTE: /state's own route body was NOT read for this document (outside the assigned files); "
-            "this entry is sourced only from engine/client/clozn_engine.py's EngineClient.write_state "
+            "this entry is sourced only from engine/client/clozn_engine's EngineClient.write_state "
             "docstring and clozn-client's REPLACE_RESIDUAL OperationSpec, not verified against the C++ "
             "route directly -- treat its exact validation behavior as UNSPECIFIED here.",
         ],
@@ -473,9 +472,7 @@ _CHECKPOINT_BRANCH = {
             "re-prefill from the saved tokens (correct, no KV-blob restore yet). Phase 2 optimization: "
             "load_checkpoint + resume without re-prefill.' It resumes by re-running generation over the "
             "checkpoint's saved token list from a clean context -- correct, but it pays a full re-decode "
-            "rather than the adapter's faster KV-blob restore path. Matches "
-            "docs/PRODUCT_ROADMAP.md's Engine debt tail: 'KV-blob fast restore (restore currently "
-            "re-prefills from saved tokens -- correct, just slower).'"
+            "rather than the adapter's faster KV-blob restore path."
         ),
         "adapter_correctness_bar": (
             "GgmlAdapter's OWN load_checkpoint primitive (not currently exercised by this route) is "

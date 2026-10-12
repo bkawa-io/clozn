@@ -40,30 +40,6 @@ class MinimalContextResultStore:
 
     def _ensure(self) -> None:
         self.runs_store._ensure()
-        # Derived result documents are an additive artifact family, like the
-        # existing standalone replay-result stores.  Keep their table
-        # bootstrap local so the shared run migration ledger remains stable.
-        with closing(self.runs_store._connect()) as db, db:
-            db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS minimal_context_results (
-                    result_id TEXT PRIMARY KEY,
-                    search_id TEXT NOT NULL,
-                    run_id TEXT NOT NULL,
-                    base_execution_fingerprint TEXT NOT NULL,
-                    created_ts REAL NOT NULL,
-                    payload_json TEXT NOT NULL
-                )
-                """
-            )
-            db.execute(
-                "CREATE INDEX IF NOT EXISTS minimal_context_results_run_idx "
-                "ON minimal_context_results(run_id, created_ts DESC, result_id DESC)"
-            )
-            db.execute(
-                "CREATE INDEX IF NOT EXISTS minimal_context_results_search_idx "
-                "ON minimal_context_results(search_id, created_ts DESC, result_id DESC)"
-            )
 
     def _load_row(self, row) -> Any:
         if row is None:

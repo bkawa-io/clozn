@@ -18,7 +18,7 @@ STDLIB ONLY
 -----------
 Per docs/SEAMS.md rule 1, no numpy: the `array` module packs/unpacks float32 exactly (`array('f', ...)`)
 and `array.byteswap()` normalizes to little-endian on a big-endian host, matching the wire convention
-`engine/client/clozn_engine.py`'s `decode_tensor` already documents (SPEC.md's tensor codec is
+`engine/client/clozn_engine`'s `decode_tensor` already documents (SPEC.md's tensor codec is
 little-endian float32) -- a stored blob's bytes are therefore byte-identical to what a caller would get
 by base64-decoding the same values straight off `/score`'s `captured` field.
 

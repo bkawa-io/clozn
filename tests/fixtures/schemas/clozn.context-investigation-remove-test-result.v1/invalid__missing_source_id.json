@@ -1,0 +1,8 @@
+{
+  "schema_version": "clozn.context-investigation-remove-test-result.v1",
+  "run_id": "run_fixture",
+  "experiment_id": "exp_fixture",
+  "arm_id": "arm_fixture",
+  "status": "unavailable",
+  "experiment_state": "completed"
+}

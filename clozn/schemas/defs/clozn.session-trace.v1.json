@@ -67,7 +67,7 @@
     "ContextUsage": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Every key omitted, never zero-padded, when context_receipt.limits did not record it for this turn.",
+      "description": "Every key omitted, never zero-padded, when the Context Receipt did not record it for this turn.",
       "properties": {
         "prompt_tokens": {"type": "integer", "minimum": 0},
         "context_window_tokens": {"type": "integer", "minimum": 0},

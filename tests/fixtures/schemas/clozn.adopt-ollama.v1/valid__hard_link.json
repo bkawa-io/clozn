@@ -28,6 +28,5 @@
   "engine_capability": {
     "level": "discovered",
     "architecture": "qwen2"
-  },
-  "client_transactions": []
+  }
 }

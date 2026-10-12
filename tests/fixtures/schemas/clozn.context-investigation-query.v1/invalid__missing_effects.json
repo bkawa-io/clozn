@@ -1,0 +1,6 @@
+{
+  "schema_version": "clozn.context-investigation-query.v1",
+  "status": "not_measured",
+  "selection": null,
+  "measurement_floor_nats": 0.1
+}

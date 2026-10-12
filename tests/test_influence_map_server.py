@@ -11,11 +11,12 @@ from clozn.server import app as cs
 import clozn.runs.store as runlog
 
 
-# Minimal but schema-valid `method` stub (Method requires name/mode/claim_limit/caveat -- see
+# Minimal but schema-valid `method` stub (Method requires name/version/mode/claim_limit/caveat -- see
 # clozn/schemas/defs/clozn.context_answer_influence.v1.json) for tests that monkeypatch the backend
 # with a hand-built dict rather than a real context_answer_influence() call.
 _METHOD_STUB = {
     "name": "teacher_forced_matched_context_replacement",
+    "version": "1",
     "mode": "forced_score_intervention",
     "claim_limit": "behavioral dependence under a controlled prompt intervention",
     "caveat": "Influence means this context changed the measured output under this intervention.",

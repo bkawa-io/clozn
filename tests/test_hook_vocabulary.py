@@ -143,7 +143,7 @@ def test_stream_semantics_summary_makes_overwrite_vs_contribute_impossible_to_mi
 def test_checkpoint_restore_mechanism_finding_is_honest():
     cb = hook_vocabulary()["checkpoint_branch"]
     assert "does NOT call GgmlAdapter::load_checkpoint" in cb["restore"]["mechanism_finding"]
-    assert "KV-blob fast restore" in cb["restore"]["mechanism_finding"]
+    assert "KV-blob restore path" in cb["restore"]["mechanism_finding"]
     assert "bit-identical GREEDY" in cb["restore"]["adapter_correctness_bar"]
 
 

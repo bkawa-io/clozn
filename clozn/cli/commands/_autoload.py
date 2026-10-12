@@ -1,4 +1,4 @@
-"""Opt-in discovery for NEW subcommands, so adding one is a pure file addition.
+"""Opt-in discovery for command modules.
 
 THE PROBLEM THIS SOLVES
 -----------------------
@@ -17,15 +17,12 @@ A module that opts in here is registered without main.py changing at all:
         p.add_argument("--dry-run", action="store_true")
         p.set_defaults(fn=cmd_setup)
 
-WHY THE EXISTING COMMANDS ARE NOT MIGRATED
-------------------------------------------
-main.py's import block is order-sensitive in ways its docstring spells out (commands.serve/run/explain
-read names directly off commands.models, so models must load first) and several entries exist purely as
-stable re-exports for tests written against the pre-split flat module. Rewriting that by hand-migrating
-25 working commands is a refactor with real regression risk and no user-visible payoff. This runs AFTER
-all of it instead: by the time register_all() is called at the end of build_parser(), every hand-wired
-import has completed, so an autoloaded module reaching back into clozn.cli.main finds it fully defined.
-Existing modules do not set the flag and are therefore never double-registered.
+REGISTRATION ORDER
+------------------
+main.py's explicit import block is order-sensitive: commands that read shared parser helpers must load
+after their providers. Autoload runs after that block, so an opted-in module can safely reach the fully
+initialized command package. Explicitly registered modules do not set the marker and are never
+double-registered.
 
 WHY A TEXT SCAN RATHER THAN IMPORTING EVERYTHING
 ------------------------------------------------

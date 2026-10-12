@@ -19,10 +19,10 @@ def _key(influence: dict) -> str:
 
 
 def _ablation_changes(influence: dict) -> dict | None:
-    """One influence spec -> replay changes for its ablated arm. `section` is the only ablatable influence
-    kind left in the product (memory-card and tone-dial ablation were cut along with cards and dials);
-    anything else -- including a stray legacy `card_id`/`memory_off`/`behavior_off` spec from before that
-    cut -- is not something this codebase can ablate, and returns None rather than claim otherwise."""
+    """One influence spec -> replay changes for its ablated arm.
+
+    ``section`` is the complete supported vocabulary; unknown shapes return None.
+    """
     if not isinstance(influence, dict):
         return None
     section = influence.get("section")
@@ -36,12 +36,8 @@ def _section_influences(manifest: dict) -> tuple[list, list]:
     `sections` field) as receipt influence specs -- (influences, skipped), the same two-list shape
     `_fired_influences` in core.py returns directly to its own caller.
 
-    SOURCE WHITELIST: `clozn.runs.sections` only ever produces `source: "api"` or `"auto"` today (memory
-    cards, and the third `"memory_card"` section source that used to shadow a fired card's own richer
-    `card_id` ablation path, were cut from the product on 2026-07-27 along with the rest of memory). The
-    `in ("api", "auto")` check below is kept as a defensive whitelist rather than dropped outright -- a
-    run recorded before that cut may still carry a stray `"memory_card"`-sourced entry in its manifest,
-    and this must skip it rather than try to ablate a source this codebase no longer knows how to."""
+    Only the canonical ``api`` and ``auto`` source kinds are accepted.
+    """
     sections = ((manifest or {}).get("influences_active") or {}).get("sections") or {}
     if isinstance(sections, dict):                     # explain.py's {"available": .., "sections": [...]}
         sections = sections.get("sections") or []
@@ -51,8 +47,7 @@ def _section_influences(manifest: dict) -> tuple[list, list]:
         if not isinstance(sec, dict):
             continue
         if sec.get("source") not in ("api", "auto"):
-            continue                                    # unknown/legacy source (e.g. old "memory_card"
-                                                          # entries) -- see SOURCE WHITELIST above
+            continue
         name = sec.get("name")
         if not name:
             skipped.append({"influence": {"section_source": sec.get("source")},

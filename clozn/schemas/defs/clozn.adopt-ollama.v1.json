@@ -168,7 +168,7 @@
         "status": {"type": "string", "enum": ["passed", "failed"]},
         "capability": {"type": "string", "enum": ["core", "discovered"]},
         "run_id": {"type": "string"},
-        "receipt_shape": {"type": "string", "enum": ["new", "legacy"]},
+        "receipt_shape": {"type": "string", "const": "recorded"},
         "worker_protocol_version": {"type": ["string", "integer"]},
         "worker_backend": {"type": "string"},
         "error": {"type": "string"},
@@ -176,5 +176,6 @@
         "undo_command": {"type": "string"}
       }
     }
-  }
+  },
+  "additionalProperties": false
 }

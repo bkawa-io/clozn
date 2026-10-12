@@ -655,6 +655,13 @@ _BRANCH_RUNTIME = {
 _BRANCH_WORKER = {
     "worker_id": "worker-a", "worker_generation_id": "worker-generation-test", "protocol_version": "1.1",
 }
+_BRANCH_GENERATION_CONTRACT = {
+    "decode_mode": "greedy",
+    "sampling": None,
+    "max_new": 2,
+    "stop": [],
+    "expected_termination": {"reason": "stop", "reason_raw": "stop"},
+}
 
 
 def _seed_exact_branch_source():
@@ -664,7 +671,9 @@ def _seed_exact_branch_source():
     return runlog.record(
         source="studio_chat", client="studio", model="clozn-qwen", substrate="QwenSubstrate",
         messages=CONV, response="a2", final_prompt="<prompt>",
-        identity=deepcopy(_BRANCH_RUNTIME), meta={"n_ctx": 4096, "device": "cpu"},
+        identity=deepcopy(_BRANCH_RUNTIME),
+        meta={"n_ctx": 4096, "device": "cpu",
+              "generation_contract": deepcopy(_BRANCH_GENERATION_CONTRACT)},
         trace={"steps": [{"token_id": 41, "piece": "a"}, {"token_id": 42, "piece": "2"}]},
     )
 
@@ -796,7 +805,8 @@ def test_time_machine_exact_branch_parents_the_child_on_the_resolved_source_turn
             source="studio_chat", client="studio", model="clozn-qwen", substrate="engine",
             messages=messages, response=response, session_key=session, started=100.0 + index,
             final_prompt=f"<prompt-{index}>", identity=deepcopy(_BRANCH_RUNTIME),
-            meta={"n_ctx": 4096, "device": "cpu"},
+            meta={"n_ctx": 4096, "device": "cpu",
+                  "generation_contract": deepcopy(_BRANCH_GENERATION_CONTRACT)},
             trace={"steps": [{"token_id": tid, "piece": piece} for piece, tid in pieces]},
         ))
     requested_id, turn_zero_id = ids[-1], ids[0]
@@ -832,7 +842,7 @@ def test_time_machine_exact_branch_parents_the_child_on_the_resolved_source_turn
     schemas.validate(out, "clozn.time-machine-branch.v2")
 
 
-def test_time_machine_exact_branch_route_owns_no_legacy_executor_import():
+def test_time_machine_exact_branch_route_uses_the_canonical_adapter():
     """The route may reach the worker RPC, but only underneath the canonical adapter."""
     import clozn.server.routes.timetravel as route
 

@@ -69,8 +69,8 @@ class SectionForcedFakeSub:
         self.calls: list = []
 
     def score_tokens(self, messages, continuation_ids, *, continuation=None, block=None,
-                     steer_strengths=None, steer_vec=None, topk=0):
-        self.calls.append({"messages": messages, "block": block, "steer_strengths": steer_strengths})
+                     steer_vec=None, topk=0):
+        self.calls.append({"messages": messages, "block": block})
         text = " ".join(str((m or {}).get("content", "")) for m in (messages or []) if isinstance(m, dict))
         lps = self.present_lp if self.marker in text else self.absent_lp
         return [{"id": i, "piece": p, "logprob": lp} for i, (p, lp) in enumerate(zip(self.pieces, lps))]
@@ -300,7 +300,7 @@ class RouteFakeSub:
         self.calls = 0
 
     def score_tokens(self, messages, continuation_ids, *, continuation=None, block=None,
-                     steer_strengths=None, steer_vec=None, topk=0):
+                     steer_vec=None, topk=0):
         self.calls += 1
         text = " ".join(str((m or {}).get("content", "")) for m in (messages or []) if isinstance(m, dict))
         has_rag = "whales are mammals" in text
@@ -383,7 +383,7 @@ class NegligibleFakeSub:
     name = "engine"
 
     def score_tokens(self, messages, continuation_ids, *, continuation=None, block=None,
-                     steer_strengths=None, steer_vec=None, topk=0):
+                     steer_vec=None, topk=0):
         text = " ".join(str((m or {}).get("content", "")) for m in (messages or []) if isinstance(m, dict))
         both = "whales are mammals" in text and "2+2" in text
         return [{"id": 1, "piece": "x", "logprob": -0.10 if both else -0.12}]   # |delta| = 0.02 < 0.05 floor
@@ -479,7 +479,7 @@ def test_format_influence_line_never_raises_on_malformed_payload():
 # ==================== 4. EngineSubstrate.score_prompt_tokens -- the raw-prompt scoring seam ==================
 # ============================================================================================================
 # The seam the raw-prompt section path (section 1, above) is built on: unlike score_tokens, this skips
-# prompt assembly (_inject_block/_engine_tmpl) entirely -- the caller's `prompt` string rides to
+# prompt assembly (inject_block/_engine_tmpl) entirely -- the caller's `prompt` string rides to
 # engine.score() UNCHANGED. Mirrors tests/test_engine_score.py's own score_tokens conventions
 # (object.__new__(cs.EngineSubstrate), a fake with just a .score() method) -- no model, no GPU.
 

@@ -128,8 +128,24 @@ def test_raw_worker_finish_reason_is_preserved_before_openai_normalization():
 
 def test_generation_timing_from_worker_terminal_event():
     frames = [{"type": "gen_finished", "new_tokens": 17, "wall_ms": 425.5,
-               "steps_total": 18, "tok_per_s": 40.0, "reason": "eos"}]
+               "steps_total": 18, "tok_per_s": 40.0, "reason": "eos",
+               "timing": {
+                   "schema_version": "clozn.worker-timing.v1", "unit": "nanoseconds",
+                   "clock": "steady_clock", "phases": [{
+                       "name": "decode", "duration_ns": 425_500_000,
+                       "owner": "clozn_worker", "aggregation": "exclusive",
+                   }],
+                   "metrics": {"decode_tokens_per_second": 40.0},
+               }}]
     assert runlog.generation_timing_from_frames(frames) == {
+        "worker_timing": {
+            "schema_version": "clozn.worker-timing.v1", "unit": "nanoseconds",
+            "clock": "steady_clock", "clock_owner": "clozn_worker",
+            "phases": [{
+                "name": "decode", "owner": "clozn_worker", "duration_ns": 425_500_000,
+                "measurement": "measured", "aggregation": "exclusive",
+            }],
+        },
         "generation_duration_ms": 425.5,
         "generation_tokens": 17,
         "generation_steps": 18,

@@ -11,7 +11,7 @@ the same two ways the existing influence receipts answer it, with the same thres
     existing forced-scoring machinery (clozn.receipts.rederive.score_arm) -- per-continuation-token logprob
     deltas, summarized with forced.py's own `_delta_summary` and judged against forced.py's own thresholds
     (_FORCED_MEAN_THRESHOLD / _FORCED_SUM_THRESHOLD -- never re-invented here). The null floor replaces the
-    span with register-matched filler of the SAME character length (forced.py's `_matched_length_filler`,
+    span with register-matched filler of the SAME character length (`matched_length_neutral_filler`,
     the card_filler control's exact recipe) and applies forced.py's `_NULL_FLOOR_RATIO_MIN` ratio test.
 
 OFFSETS ARE CHARACTER OFFSETS, NOT BYTES. `start`/`end` index Unicode code points of the message's
@@ -47,7 +47,7 @@ from .forced import (
     _NULL_FLOOR_RATIO_MIN,
     _delta_summary,
     _forced_deltas,
-    _matched_length_filler,
+    matched_length_neutral_filler,
     _top_dependent,
 )
 from .metrics import receipt_metrics
@@ -164,15 +164,13 @@ def _forced_span_arm(run: dict, influence: dict, sub, ablated_messages: list, co
     degraded = {"influence": influence, "mode": "forced", "causal_verified": False, "caveat": _FORCED_CAVEAT}
 
     with_tokens, with_ok = rederive.score_arm(
-        sub, conditions, messages=conditions["raw_messages"], block=conditions["raw_block"],
-        steer_strengths=conditions["steer_strengths"])
+        sub, conditions, messages=conditions["raw_messages"], block=conditions["raw_block"])
     if not with_ok:
         return {**degraded, "note": "forced scoring needs the engine substrate (score_tokens is not "
                                     "available here)"}
 
     without_tokens, without_ok = rederive.score_arm(
-        sub, conditions, messages=ablated_messages, block=conditions["raw_block"],
-        steer_strengths=conditions["steer_strengths"])
+        sub, conditions, messages=ablated_messages, block=conditions["raw_block"])
     if not without_ok:
         return {**degraded, "note": "the ablated arm could not be scored"}
 
@@ -206,8 +204,7 @@ def _forced_span_arm(run: dict, influence: dict, sub, ablated_messages: list, co
     # failure degrades only the floor (the real with/without deltas above already stand), mirroring
     # forced_receipt's own control handling.
     control_tokens, control_ok = rederive.score_arm(
-        sub, conditions, messages=control_messages, block=conditions["raw_block"],
-        steer_strengths=conditions["steer_strengths"])
+        sub, conditions, messages=control_messages, block=conditions["raw_block"])
     control_deltas = _forced_deltas(with_tokens, control_tokens) if control_ok else None
     if control_deltas is not None:
         c_summary = _delta_summary(control_deltas)
@@ -253,7 +250,8 @@ def span_receipt(run: dict, spec: dict, sub) -> dict | None:
     changes = {"ablated_span": {"message": idx, "start": start, "end": end, "text": text}}
 
     ablated_messages = _with_span_replaced(messages, idx, start, end, "")
-    control_messages = _with_span_replaced(messages, idx, start, end, _matched_length_filler(len(text)))
+    control_messages = _with_span_replaced(
+        messages, idx, start, end, matched_length_neutral_filler(len(text)))
 
     # REGEN arm -- the exact path /receipt's regen mode takes (replay, both arms greedy, the stored
     # sampled reply never a term). The ablated arm replays a message-substituted view of the run; the

@@ -18,6 +18,7 @@ sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, os.path.join(REPO_ROOT, "engine", "client"))
 
 from clozn.server import app as cs          # noqa: E402
+from tests.chat_templates import render_qwen  # noqa: E402
 import clozn.settings as clozn_settings          # noqa: E402
 
 
@@ -83,7 +84,7 @@ class _HealthSteerEngine:
                 "n_ctx": 4096, "device": "cuda", "gpu_layers": 99}
 
     def apply_template(self, messages, add_assistant=True):
-        return cs._qwen_tmpl(messages)
+        return render_qwen(messages)
 
     def complete(self, prompt, **params):
         return {"choices": [{"text": "ok", "finish_reason": "stop"}]}
@@ -100,7 +101,7 @@ def iso(tmp_path, monkeypatch):
 def _make_sub(monkeypatch, model):
     eng = _HealthSteerEngine(model)
     monkeypatch.setattr(cs, "ENGINE", eng)
-    return cs.EngineSubstrate()
+    return cs.EngineSubstrate(engine=eng)
 
 
 

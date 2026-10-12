@@ -1,0 +1,9 @@
+{
+  "schema_version": "clozn.context-investigation-effects-job-result.v1",
+  "source_count": 0,
+  "completed_source_count": 0,
+  "unavailable_source_count": 0,
+  "failed_source_count": 0,
+  "not_measured_source_count": 0,
+  "state": "completed"
+}

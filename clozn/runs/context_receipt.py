@@ -1,30 +1,11 @@
 """Context-delivery receipts: what reached the model, what changed on the way, what was omitted, and
-why generation stopped (feature 06, ``clozn.context-receipt.v1``).
+why generation stopped (``clozn.context-receipt.v1``).
 
-SHAPE HISTORY -- READ THIS BEFORE TOUCHING A KEY NAME
--------------------------------------------------------
-Every run recorded before this module's 2026-07-27 rewrite carries a *different*, pre-schema-seam shape
-under the same ``context_receipt`` field: ``{"schema": "clozn.context_receipt.v1", "delivered": {label,
-meaning, messages}, "survived": {label, meaning, assembled_messages, final_prompt}, "input_truncated",
-"input_policy", "output_cut_off", "limits", "warnings"}``. Note the underscore in the old schema value
-and the ``"schema"`` key name (not ``"schema_version"``) -- that document was never registered under
-``clozn/schemas/`` and carries no version-compatibility promise (its own prior docstring called it
-"Phase 2.4", an internal capture, not a released artifact). It is never rewritten in place: history
-stands as written (see :func:`read_receipt`, which detects and reads both shapes without migrating
-either).
-
-This rewrite is ADDITIVE, not a replacement, for every key that pre-existing code still reads at runtime:
-``survived`` (with ``assembled_messages``/``final_prompt``), ``limits``, ``output_cut_off``,
-``input_truncated``, ``input_policy``, and receipt-level ``warnings`` all keep their old shape and meaning
-unchanged -- ``clozn.runs.diagnosis``'s cutoff/slow-run findings and two existing tests
-(``tests/test_ollama_instrumented.py``, ``tests/test_replay.py``) read them directly and must keep working
-on runs recorded today. The one exception is the top-level ``delivered`` key: nothing outside this
-module's own CLI (``clozn/cli/commands/context.py``) and test file ever read it as the old
-``{label, meaning, messages}`` object, so it is repurposed to the new schema's segment-array meaning. Full
-message/prompt TEXT is deliberately not duplicated into the new segment arrays -- see "segment identity"
-below -- so this repurposing loses nothing: ``run["messages"]``/``run["assembled_messages"]``/
-``run["final_prompt"]`` remain the source of full content, governed by the run-level redact/delete
-lifecycle in ``clozn.runs.mutations``, not by this artifact.
+The receipt is a schema-governed, metadata-only evidence artifact. ``delivered`` and ``assembled`` track
+segments, ``rendered`` records the inference-boundary digest and prompt-token count, and ``termination``
+records why generation stopped. Full message and prompt text remains on the run record under
+``messages``, ``assembled_messages``, and ``final_prompt`` so one redaction lifecycle governs every
+retained copy.
 
 SEGMENT IDENTITY -- the contract features 07/08/10 build on
 -------------------------------------------------------------
@@ -42,8 +23,8 @@ reason/redaction state -- never message content; see the schema file's top-level
 
 ASSEMBLED CURRENTLY EQUALS DELIVERED
 -------------------------------------
-Since the 2026-07-27 "delete memory entirely" refactor, every current code path sets
-``assembled_messages = list(messages)`` verbatim (``clozn/server/substrates.py``) -- there is currently no
+Every current code path sets ``assembled_messages = list(messages)`` verbatim
+(``clozn/server/substrates.py``) -- there is currently no
 transformation between delivered and assembled to observe. :func:`build_context_receipt` still does the
 real (content-hash) matching work rather than assuming identity, so it stays correct if a future assembly
 layer ever does diverge again, and so the existing direct-API test that constructs a genuinely different
@@ -72,7 +53,6 @@ from copy import deepcopy
 OUTPUT_TRUNCATED = "output_truncated"
 
 SCHEMA_VERSION = "clozn.context-receipt.v1"
-LEGACY_SCHEMA = "clozn.context_receipt.v1"          # pre-2026-07-27; never schema-governed, never rewritten
 
 
 # ``clozn_sources`` is deliberately metadata-only.  These values describe why
@@ -162,8 +142,8 @@ def _canonical_message_sources(message: dict, *, segment: str, message_index: in
     """
     raw_sources = message.get("_clozn_sources")
     if raw_sources is None:
-        # Pre-span callers' top-level source_id/source_label remain metadata on
-        # the legacy seg_ root.  Do not manufacture a duplicate src_ source.
+        # A message without exact source spans remains represented by its seg_
+        # root. Do not manufacture a duplicate src_ source.
         raw_sources = []
     if not isinstance(raw_sources, list):
         return []
@@ -173,8 +153,8 @@ def _canonical_message_sources(message: dict, *, segment: str, message_index: in
     for raw in raw_sources:
         if not isinstance(raw, dict):
             return []
-        # A legacy normalized request had no explicit exact range.  Its
-        # identity remains the enclosing seg_ root for compatibility.
+        # A source without an explicit exact range cannot support a src_
+        # identity; its enclosing seg_ root remains the evidence boundary.
         if "unicode_range" not in raw:
             continue
         unicode_range = _range_pair(raw.get("unicode_range"), upper=len(content))
@@ -399,7 +379,7 @@ def _assembled_segments(delivered_segments, delivered_messages, assembled_messag
 # termination normalization
 # ---------------------------------------------------------------------------------------------------
 
-def normalize_termination(finish_reason, error, meta, limits) -> dict | None:
+def normalize_termination(finish_reason, error, meta, token_facts) -> dict | None:
     """Best-effort normalization of why generation stopped into the schema's controlled vocabulary.
 
     Returns None when there is nothing to classify (no finish_reason and no error recorded) -- that is
@@ -419,13 +399,13 @@ def normalize_termination(finish_reason, error, meta, limits) -> dict | None:
         engine's own raw values ("eos"/"length"/"steps_exhausted") are already collapsed to "stop"/
         "length" before this layer (clozn/runs/trace.py), so `reason_raw` reflects clozn's own value,
         not the engine's -- the finer distinction cannot be recovered here.
-      * `limits` -- prompt_tokens/context_window_tokens/requested_max_tokens/generated_tokens, to
+      * `token_facts` -- prompt_tokens/context_window_tokens/requested_max_tokens/generated_tokens, to
         separate "the context window was reached" from "the requested output cap was reached" the same
         way clozn.runs.diagnosis._cutoff_finding already does narratively.
     """
     meta = meta if isinstance(meta, dict) else {}
-    limits = limits if isinstance(limits, dict) else {}
-    generated = limits.get("generated_tokens")
+    token_facts = token_facts if isinstance(token_facts, dict) else {}
+    generated = token_facts.get("generated_tokens")
     base: dict = {}
     if isinstance(generated, int):
         base["generated_tokens"] = generated
@@ -449,9 +429,9 @@ def normalize_termination(finish_reason, error, meta, limits) -> dict | None:
         return {**base, "reason": "tool_call", "reason_raw": raw_finish_reason}
 
     if finish_reason == "length":
-        prompt = limits.get("prompt_tokens")
-        window = limits.get("context_window_tokens")
-        maximum = limits.get("requested_max_tokens")
+        prompt = token_facts.get("prompt_tokens")
+        window = token_facts.get("context_window_tokens")
+        maximum = token_facts.get("requested_max_tokens")
         hit_context = (isinstance(prompt, int) and isinstance(generated, int) and isinstance(window, int)
                        and prompt + generated >= window)
         hit_max = isinstance(generated, int) and isinstance(maximum, int) and generated >= maximum
@@ -471,7 +451,7 @@ def normalize_termination(finish_reason, error, meta, limits) -> dict | None:
 
 
 # ---------------------------------------------------------------------------------------------------
-# legacy (pre-2026-07-27) receipt logic -- unchanged behavior, kept for the additive top-level fields
+# cutoff evidence
 # ---------------------------------------------------------------------------------------------------
 
 def cutoff_warning(finish_reason, meta=None) -> dict | None:
@@ -501,22 +481,15 @@ def warnings_for(finish_reason, meta=None) -> list[dict]:
 # ---------------------------------------------------------------------------------------------------
 
 def _apply_privacy(doc: dict, tier: str) -> dict:
-    """Trim `doc` (already fully built, as if tier=="full") down to `tier`. "off" returns the minimal
-    required-fields-only stub; "metadata_only"/"hashes_only" drop duplicated full TEXT (and, for
-    hashes_only, segment labels/byte counts too) while always keeping hashes -- "store hashes even when
-    privacy settings prevent full content retention" is the spec's own requirement."""
+    """Trim a metadata-only receipt down to ``tier``.
+
+    Run content is never copied into this artifact. ``hashes_only`` removes descriptive segment
+    metadata while retaining stable identities and hashes; ``off`` retains only the receipt marker.
+    """
     if tier == "off":
         return {"schema_version": doc["schema_version"], "run_id": doc["run_id"], "privacy": "off"}
 
     out = dict(doc)
-    if tier in ("metadata_only", "hashes_only"):
-        survived = out.get("survived")
-        if isinstance(survived, dict):
-            survived = dict(survived)
-            survived.pop("final_prompt", None)
-            survived.pop("assembled_messages", None)
-            survived["content_withheld_by_privacy_tier"] = tier
-            out["survived"] = survived
     if tier == "hashes_only":
         for key in ("delivered", "assembled"):
             segments = out.get(key)
@@ -539,14 +512,6 @@ def _apply_privacy(doc: dict, tier: str) -> dict:
                 continue
             out[key] = [{**seg, "redaction_state": redaction_state} if isinstance(seg, dict) else seg
                         for seg in segments]
-    rendered = out.get("rendered")
-    if isinstance(rendered, dict):
-        rendered = dict(rendered)
-        rendered["content_available"] = (
-            tier == "full"
-            and isinstance((out.get("survived") or {}).get("final_prompt"), str)
-        )
-        out["rendered"] = rendered
     out["privacy"] = tier
     return out
 
@@ -579,26 +544,16 @@ def build_context_receipt(*, messages=None, assembled_messages=None, final_promp
     from . import context_units
     receipt_messages = context_units.annotate_auto_sources(messages_list)
 
-    # ---- legacy-shaped fields, unchanged behavior (see module docstring) ----
-    survived = {
-        "label": "survived",
-        "meaning": "post-assembly input retained as evidence of what reached generation",
-        "assembled_messages": (list(assembled_messages) if isinstance(assembled_messages, list) else None),
-        "final_prompt": final_prompt if isinstance(final_prompt, str) else None,
-    }
     prompt_tokens = meta.get("prompt_tokens")
     n_ctx = meta.get("n_ctx")
     maximum = meta.get("max_tokens")
     generated = len(trace.get("tokens") or []) if isinstance(trace.get("tokens"), list) else None
-    limits = {
+    token_facts = {
         "prompt_tokens": prompt_tokens if isinstance(prompt_tokens, int) else None,
         "context_window_tokens": n_ctx if isinstance(n_ctx, int) else None,
         "requested_max_tokens": maximum if isinstance(maximum, int) else None,
         "generated_tokens": generated,
     }
-    warning = cutoff_warning(finish_reason, meta)
-
-    # ---- new schema fields ----
     delivered_segments = _delivered_segments(receipt_messages)
     doc: dict = {"schema_version": SCHEMA_VERSION, "run_id": run_id if isinstance(run_id, str) else ""}
 
@@ -627,7 +582,6 @@ def build_context_receipt(*, messages=None, assembled_messages=None, final_promp
         rendered_bytes = final_prompt.encode("utf-8")
         rendered["sha256"] = hashlib.sha256(rendered_bytes).hexdigest()
         rendered["bytes"] = len(rendered_bytes)
-        rendered["content_available"] = True
         if isinstance(template_fingerprint, str) and template_fingerprint:
             rendered["template_fingerprint"] = template_fingerprint
         all_ids = [seg["segment_id"] for seg in delivered_segments]
@@ -640,7 +594,6 @@ def build_context_receipt(*, messages=None, assembled_messages=None, final_promp
             })
     if isinstance(prompt_tokens, int):
         rendered["tokens"] = prompt_tokens
-        rendered["token_count"] = prompt_tokens
         rendered["estimated"] = False           # the engine's own gen_started frame reports this exactly
     if rendered:
         doc["rendered"] = rendered
@@ -648,17 +601,9 @@ def build_context_receipt(*, messages=None, assembled_messages=None, final_promp
     doc["omissions"] = omissions
     doc["transformations"] = transformations
 
-    termination = normalize_termination(finish_reason, error, meta, limits)
+    termination = normalize_termination(finish_reason, error, meta, token_facts)
     if termination is not None:
         doc["termination"] = termination
-
-    # ---- assemble, validate (never fatally), privacy-trim ----
-    doc["survived"] = survived
-    doc["limits"] = limits
-    doc["input_truncated"] = False
-    doc["input_policy"] = "overlong prompts are rejected, not silently truncated"
-    doc["output_cut_off"] = warning is not None
-    doc["warnings"] = [warning] if warning else []
 
     tier = privacy if privacy in ("full", "metadata_only", "hashes_only", "off") else None
     if tier is None:
@@ -677,21 +622,24 @@ def build_context_receipt(*, messages=None, assembled_messages=None, final_promp
 
 
 # ---------------------------------------------------------------------------------------------------
-# reading -- dual-shape support for legacy (pre-2026-07-27) and new documents
+# reading
 # ---------------------------------------------------------------------------------------------------
 
 def read_receipt(run: dict) -> dict:
-    """A uniform view of `run`'s stored context receipt, regardless of which shape it is in.
+    """Return the canonical stored receipt or an explicit absence/error shape.
 
-    Returns {"shape": "new" | "legacy" | "absent" | "unrecognized", "receipt": <stored dict or {}>}.
-    Legacy documents are read, never migrated in place -- see the module docstring's migration policy.
+    Returns ``{"shape": "recorded" | "absent" | "unrecognized", "receipt": ...}``.
+    Only schema-governed ``clozn.context-receipt.*`` documents are readable receipts.
     """
     stored = run.get("context_receipt") if isinstance(run, dict) else None
     if not isinstance(stored, dict) or not stored:
         return {"shape": "absent", "receipt": {}}
     schema_version = stored.get("schema_version")
-    if isinstance(schema_version, str) and schema_version.startswith("clozn.context-receipt."):
-        return {"shape": "new", "receipt": stored}
-    if stored.get("schema") == LEGACY_SCHEMA:
-        return {"shape": "legacy", "receipt": stored}
+    if schema_version == SCHEMA_VERSION:
+        try:
+            from clozn import schemas
+            schemas.validate(stored, SCHEMA_VERSION)
+        except schemas.ValidationError:
+            return {"shape": "unrecognized", "receipt": stored}
+        return {"shape": "recorded", "receipt": stored}
     return {"shape": "unrecognized", "receipt": stored}

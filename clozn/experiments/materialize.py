@@ -331,6 +331,10 @@ def materialize_arm(
     }
     if isinstance(max_new, int) and not isinstance(max_new, bool) and max_new > 0:
         kwargs["max_new"] = max_new
+    else:
+        recorded_max_new = contract.get("max_new")
+        if isinstance(recorded_max_new, int) and not isinstance(recorded_max_new, bool) and recorded_max_new > 0:
+            kwargs["max_new"] = recorded_max_new
     child = replay_fn(current_parent, changes, substrate, **kwargs)
     if not isinstance(child, Mapping) or not child.get("id"):
         return {

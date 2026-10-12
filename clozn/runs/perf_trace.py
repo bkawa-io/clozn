@@ -40,11 +40,6 @@ def _integer(value: Any, *, minimum: int = 0) -> int | None:
     return int(value) if isinstance(value, int) and not isinstance(value, bool) and value >= minimum else None
 
 
-def _duration_ns(ms) -> int | None:
-    value = _number(ms)
-    return None if value is None else round(value * 1_000_000)
-
-
 def _machine_identity(identity: Mapping[str, Any]) -> dict:
     machine = _object(_object(identity.get("ext")).get("machine"))
     return dict(machine) if machine else {}
@@ -53,16 +48,6 @@ def _machine_identity(identity: Mapping[str, Any]) -> dict:
 def _engine_identity(identity: Mapping[str, Any]) -> dict:
     return {key: identity[key] for key in _ENGINE_IDENTITY_KEYS
             if key in identity and isinstance(identity[key], str) and identity[key]}
-
-
-def _decode_phase(meta: Mapping[str, Any]) -> dict | None:
-    """Legacy-worker fallback for builds that predate the versioned timing wrapper."""
-    duration_ns = _duration_ns(meta.get("generation_duration_ms"))
-    if duration_ns is None:
-        return None
-    # Keep the original v1 shape byte-compatible for old worker frames. The versioned worker wrapper
-    # below carries the richer clock-domain/measurement labels.
-    return {"name": "decode", "owner": "clozn_worker", "duration_ns": duration_ns}
 
 
 def _captured_phases(meta: Mapping[str, Any]) -> list[dict]:
@@ -117,23 +102,19 @@ def _captured_phases(meta: Mapping[str, Any]) -> list[dict]:
             if isinstance(source_schema, str) and source_schema:
                 entry["source_schema"] = source_schema
             phases.append(entry)
-    if not any(phase["name"] == "decode" for phase in phases):
-        legacy = _decode_phase(meta)
-        if legacy is not None:
-            phases.append(legacy)
     return phases
 
 
 def _metrics(run: Mapping[str, Any], meta: Mapping[str, Any]) -> dict:
-    receipt_limits = _object(_object(run.get("context_receipt")).get("limits"))
+    receipt = _object(run.get("context_receipt"))
     timing = _object(run.get("timing"))
     metrics: dict[str, Any] = {}
 
-    prompt_tokens = _integer(receipt_limits.get("prompt_tokens"))
+    prompt_tokens = _integer(_object(receipt.get("rendered")).get("tokens"))
     if prompt_tokens is not None:
         metrics["prompt_tokens"] = prompt_tokens
 
-    generated_tokens = _integer(receipt_limits.get("generated_tokens"))
+    generated_tokens = _integer(_object(receipt.get("termination")).get("generated_tokens"))
     if generated_tokens is None:
         generated_tokens = _integer(meta.get("generation_tokens"))
     if generated_tokens is not None:

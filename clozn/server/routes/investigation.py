@@ -25,8 +25,7 @@ def try_get(h, p):
     # silently under-report scoring_available as False for every run, not just ones whose worker is
     # genuinely unavailable. peek_control_model_for_run never turns that unavailability into a hard
     # refusal here -- this route composes existing evidence and starts no measurement either way, so
-    # an unresolvable worker degrades to scoring_available:false (still 200), exactly like legacy mode
-    # already does when the one engine is down.
+    # an unresolvable worker degrades to scoring_available:false while the read stays available.
     from clozn.server.model_routing import peek_control_model_for_run
     sub = peek_control_model_for_run(h, run.get("model"), route="/runs/<id>/investigation")
     scoring_available = bool(sub and callable(getattr(sub, "score_tokens", None)))

@@ -723,14 +723,12 @@ class DeleteSourceGenerateAdapter:
             return _unavailable(state, evaluator, intervention, "malformed_worker_token_evidence",
                                 "worker token pieces do not reconstruct generated text")
         finish_reason = None
-        finish_accessor = getattr(self.substrate, "_last_finish_reason", None)
+        finish_accessor = getattr(self.substrate, "last_finish_reason", None)
         if callable(finish_accessor):
             try:
                 finish_reason = finish_accessor()
             except Exception:
                 finish_reason = None
-        elif isinstance(finish_accessor, str):
-            finish_reason = finish_accessor
         if finish_reason is None and isinstance(mem_out.get("finish_reason"), str):
             finish_reason = mem_out["finish_reason"]
         input_snapshot = {

@@ -24,18 +24,35 @@ def test_run_missing_an_id_raises_rather_than_producing_an_unattributable_trace(
         perf_trace.build_trace({"id": "   "})
 
 
-def test_decode_phase_is_derived_from_the_worker_measured_generation_timing():
+def test_decode_phase_requires_the_versioned_worker_timing_document():
     run = {
         "id": "run_decode",
-        "meta": {"generation_duration_ms": 1500.0, "generation_tokens_per_second": 18.2,
-                 "generation_tokens": 512},
-        "context_receipt": {"limits": {"prompt_tokens": 7411, "context_window_tokens": 8192,
-                                       "generated_tokens": 512}},
+        "meta": {
+            "generation_duration_ms": 1500.0,
+            "generation_tokens_per_second": 18.2,
+            "generation_tokens": 512,
+            "worker_timing": {
+                "schema_version": "clozn.worker-timing.v1", "unit": "nanoseconds",
+                "clock": "steady_clock", "clock_owner": "clozn_worker",
+                "phases": [{
+                    "name": "decode", "owner": "clozn_worker",
+                    "duration_ns": 1_500_000_000, "measurement": "measured",
+                    "aggregation": "exclusive",
+                }],
+            },
+        },
+        "context_receipt": {
+            "rendered": {"tokens": 7411}, "context_window_tokens": 8192,
+            "termination": {"reason": "eos", "generated_tokens": 512},
+        },
         "timing": {"started_at": 100.0, "ended_at": 124.1, "duration_ms": 24100},
     }
     doc = perf_trace.build_trace(run)
     assert doc["phases"] == [
-        {"name": "decode", "owner": "clozn_worker", "duration_ns": 1_500_000_000}
+        {"name": "decode", "owner": "clozn_worker", "clock_owner": "clozn_worker",
+         "clock_domain": "clozn_worker:steady_clock", "duration_ns": 1_500_000_000,
+         "measurement": "measured", "aggregation": "exclusive",
+         "source_schema": "clozn.worker-timing.v1"}
     ]
     assert doc["metrics"] == {
         "prompt_tokens": 7411,
@@ -48,8 +65,7 @@ def test_decode_phase_is_derived_from_the_worker_measured_generation_timing():
 
 
 def test_no_generation_duration_means_no_phases_key_at_all():
-    """Unmeasured != a zero-duration phase. Confirms load/prefill/queue stay entirely absent, matching
-    the survey finding that no production code path writes load_duration_ms/prefill_duration_ms."""
+    """Unmeasured is distinct from a measured zero-duration phase."""
     doc = perf_trace.build_trace({"id": "run_no_decode", "meta": {"device": "cuda"},
                                   "timing": {"duration_ms": 500}})
     assert "phases" not in doc
@@ -90,13 +106,13 @@ def test_errored_run_still_produces_a_valid_partial_trace():
     assert "phases" not in doc
 
 
-def test_light_capture_tier_run_still_produces_a_valid_trace():
+def test_unversioned_duration_does_not_fabricate_a_decode_phase():
     """capture_mode='light' drops the per-token trace but not meta/timing -- build_trace() never reads
     run['trace'] at all, so a light-tier run degrades the same way a standard-tier one does."""
     run = {"id": "run_light", "meta": {"capture_tier": "light", "generation_duration_ms": 900.0},
           "timing": {"duration_ms": 1200}}
     doc = perf_trace.build_trace(run)
-    assert doc["phases"] == [{"name": "decode", "owner": "clozn_worker", "duration_ns": 900_000_000}]
+    assert "phases" not in doc
 
 
 def test_attach_diagnoses_is_a_separate_optional_layer():

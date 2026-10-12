@@ -121,11 +121,10 @@ def test_complete_sampled_contract_is_preserved_and_incomplete_sample_never_beco
     ("mutation", "expected_state"),
     [
         (lambda run: run.pop("context_receipt", None), "unavailable"),
-        (lambda run: run.update(context_receipt={"schema": "clozn.context_receipt.v1", "delivered": {}}), "partial"),
-        (lambda run: run.update(context_receipt={"schema_version": "unknown.receipt.v1"}), "malformed"),
+        (lambda run: run.update(context_receipt={"unexpected": True}), "malformed"),
     ],
 )
-def test_receipt_shapes_degrade_input_without_failing_the_run_document(
+def test_missing_or_unrecognized_receipt_degrades_input_without_failing_the_run_document(
     tmp_path, monkeypatch, mutation, expected_state,
 ):
     run = _recorded_run(tmp_path, monkeypatch)

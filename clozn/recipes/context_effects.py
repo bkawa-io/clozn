@@ -12,9 +12,23 @@ from clozn.experiments.kernel import Experiment
 from clozn.experiments.projection import AnswerSpanEffect, project_answer_effects
 from clozn.experiments.runner import ExperimentResult, run_experiment
 from clozn.experiments.persistence import ObservationStore
-from clozn.experiments.scoring import DeleteSourceRecordedContinuationScoreAdapter
+from clozn.experiments.scoring import (
+    DeleteSourceRecordedContinuationScoreAdapter,
+    ScoreTokensRefinementPolicy,
+)
 from clozn.experiments.selections import AnswerSelection, ContextSelection
 from clozn.experiments.state import ExecutionState
+
+
+_NO_EXACTLY_REMOVABLE_SOURCE = "no automatically discovered sources are exactly removable"
+_NO_EXACTLY_REMOVABLE_SOURCE_CODE = "context_investigation_no_exactly_removable_source"
+_NO_EXACTLY_REMOVABLE_SOURCE_READER_REASON = (
+    "no canonical Context Receipt source is exactly removable"
+)
+
+
+class _NoExactlyRemovableSource(ValueError):
+    """The receipt is readable, but its default Q2 universe has no legal arm."""
 
 
 def _receipt_source_universe(run: Mapping[str, Any]) -> list[str]:
@@ -109,7 +123,7 @@ def _source_universe(run: Mapping[str, Any], source_ids: Iterable[str] | None) -
             continue
         removable.append(source_id)
     if not removable:
-        raise ValueError("no automatically discovered sources are exactly removable")
+        raise _NoExactlyRemovableSource(_NO_EXACTLY_REMOVABLE_SOURCE)
     return removable, "canonical_context_receipt"
 
 
@@ -136,6 +150,38 @@ class ContextEffectsPlan:
             "measurement_source_ids": list(self.measurement_source_ids),
             "source_universe_basis": self.source_universe_basis,
             "experiment": self.experiment.to_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class ContextEffectsUnavailablePlan:
+    """Read-only projection plan when canonical sources exist but Q2 cannot execute.
+
+    Deliberately carries no Experiment.  It exists only so the linked reader can
+    preserve canonical Context and recorded Answer data without minting a usable
+    measurement identity or weakening the strict effects-job planner.
+    """
+
+    run_id: str
+    execution_state: ExecutionState
+    display_source_ids: tuple[str, ...]
+    measurement_source_ids: tuple[str, ...]
+    source_universe_basis: str
+    reason: str
+    reason_code: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "execution_state": self.execution_state.to_dict(),
+            "display_source_ids": list(self.display_source_ids),
+            "measurement_source_ids": [],
+            "source_universe_basis": self.source_universe_basis,
+            "measurement": {
+                "status": "unavailable",
+                "reason": self.reason,
+                "reason_code": self.reason_code,
+            },
         }
 
 
@@ -168,26 +214,64 @@ def plan_context_effects(run: Mapping[str, Any], source_ids: Iterable[str] | Non
     )
 
 
+def plan_context_effects_reader(
+    run: Mapping[str, Any],
+) -> ContextEffectsPlan | ContextEffectsUnavailablePlan:
+    """Plan the pure linked reader without weakening executable Q2 planning.
+
+    A default plan whose canonical receipt sources are all protected or
+    otherwise not exactly removable still has a faithful read projection.  In
+    that one condition, return a typed unavailable plan with no Experiment.
+    Every other planning error remains an error, and :func:`plan_context_effects`
+    continues to reject an empty executable measurement universe.
+    """
+    try:
+        return plan_context_effects(run)
+    except _NoExactlyRemovableSource:
+        return ContextEffectsUnavailablePlan(
+            run_id=str(run["id"]),
+            execution_state=ExecutionState.from_run(run),
+            display_source_ids=tuple(_receipt_display_source_universe(run)),
+            measurement_source_ids=(),
+            source_universe_basis="canonical_context_receipt",
+            reason=_NO_EXACTLY_REMOVABLE_SOURCE_READER_REASON,
+            reason_code=_NO_EXACTLY_REMOVABLE_SOURCE_CODE,
+        )
+
+
 def measure_context_effects(run: Mapping[str, Any], source_ids: Iterable[str] | None = None, *,
                             execution_adapter: Any = None, substrate: Any = None,
                             run_loader: Any = None, answer_selection: AnswerSelection | None = None,
                             include_control: bool = True, observation_store: ObservationStore | None = None,
-                            store: ObservationStore | None = None, cancel: Any = None) -> ExperimentResult:
+                            store: ObservationStore | None = None, cancel: Any = None,
+                            refinement_policy: ScoreTokensRefinementPolicy | None = None) -> ExperimentResult:
     """Measure baseline plus direct leave-one-out deletion score arms.
 
     ``answer_selection`` is accepted as a convenience validation input but is
     intentionally not stored in or hashed into the experiment.  Use
     :func:`project_context_effects` for the read-side selection.
+
+    ``refinement_policy`` is an explicit, default-off acceleration policy.  On
+    a screening-capable native substrate it screens the missing arms together
+    and scalar-remeasures only the policy's proof-critical/borderline arm IDs.
+    Unselected screens remain unavailable and never enter the observation
+    store.  Scalar substrates retain their existing all-arms behavior.
     """
     if not isinstance(run, Mapping):
         raise TypeError("measure_context_effects requires a run mapping")
     if answer_selection is not None and not isinstance(answer_selection, AnswerSelection):
         raise TypeError("answer_selection must be an AnswerSelection")
+    if refinement_policy is not None and not isinstance(
+            refinement_policy, ScoreTokensRefinementPolicy):
+        raise TypeError("refinement_policy must be a ScoreTokensRefinementPolicy")
+    if execution_adapter is not None and refinement_policy is not None:
+        raise ValueError("refinement_policy cannot be combined with a custom execution_adapter")
     plan = plan_context_effects(run, source_ids)
     adapter = execution_adapter
     if adapter is None:
         adapter = DeleteSourceRecordedContinuationScoreAdapter(
             substrate, run=run, run_loader=run_loader,
+            refinement_policy=refinement_policy,
         )
     return run_experiment(
         plan.experiment, adapter, include_control=include_control,
@@ -221,6 +305,7 @@ def context_effect_message(effect: AnswerSpanEffect) -> str:
 
 
 __all__ = [
-    "ContextEffectsPlan", "context_effect_message", "measure_context_effects",
-    "plan_context_effects", "project_context_effects",
+    "ContextEffectsPlan", "ContextEffectsUnavailablePlan", "context_effect_message",
+    "measure_context_effects", "plan_context_effects", "plan_context_effects_reader",
+    "project_context_effects",
 ]

@@ -1,7 +1,7 @@
-# Clozn Studio — inspect runs, evidence, and changes
+# Clozn Studio
 
-Studio is the browser UI served by the same gateway that records Clozn runs. It does not load a second
-model or maintain a separate evidence store.
+Studio is the browser interface served by the same gateway that records Clozn Runs. It reads the same
+SQLite journal and evidence artifacts as the API; it does not maintain a separate evidence store.
 
 ## Run it
 
@@ -10,88 +10,56 @@ clozn serve MODEL --port 8080
 clozn studio --open
 ```
 
-Point OpenAI-compatible clients at `http://127.0.0.1:8080/v1`. Their completed requests enter the same
-SQLite journal and become available in Studio.
+Point OpenAI-compatible clients at `http://127.0.0.1:8080/v1`. Completed requests are recorded and
+appear in Studio.
 
-## Current surfaces
+## Sessions
 
-- **Runs** lists recorded requests and opens their response, trace, identity, and lineage.
-- **Minimal Context** is the primary run investigation: it reduces the declared Context Units under
-  an explicit exact-output or teacher-forced-likelihood criterion, shows retained versus omitted units,
-  exposes direct proof coverage, and offers explicit source-bound branch actions. `EXACT MINIMUM` is
-  shown only when every smaller cardinality is directly ruled out; `BEST VERIFIED` and unmeasured space
-  remain visibly incomplete.
-- **Lens** shows delivered-context receipts, measured source links, token confidence, model readouts,
-  and performance evidence. Its Performance view separates measured phases from overlapping/context-only
-  spans, shows known versus unaccounted wall time, names the phase clock owner, and labels derived
-  end-to-end throughput separately from worker-measured decode throughput. Missing or unmeasured data
-  stays visibly unavailable.
-- **Compare** aligns two stored runs and separates model/artifact identity, instructions, documents,
-  history, settings, tools, and output changes.
-- **Experiments** renders the case × variant × seed matrix, summaries, filters, and cell detail from
-  versioned experiment results.
-- **Behavior** exposes one-shot corrective retries and runtime sampling defaults. A retry previews a
-  bounded action, confirms it to run a matched baseline/corrected comparison, and optionally keeps the
-  corrected child as that run's own revision (with an explicit undo). Durable, auto-applying corrections
-  ("Teach Once") were retired — nothing kept here shapes a later, unrelated request; see
-  [CAPABILITIES.md](CAPABILITIES.md).
-- **Model** reports the loaded worker and optional artifact state.
-- **Scope** explores recorded token and layer evidence without upgrading post-hoc readouts to causal
-  claims.
-- **Snapshots** previews and pins durable checkpoints, lists manifest metadata, and requires an
-  explicit confirmation before unpinning. Checkpoint bytes remain in the local blob store.
-- **Answer Time Machine** reports per-run replay fidelity and which turns can branch through
-  `GET /runs/<id>/time-machine`. The current branch action is explicitly structural transcript replay;
-  retained KV snapshots do not become an exact-replay claim until a restore-and-verify path is enabled.
-  The latest turn can now request an explicit prompt-boundary proof through
-  `POST /runs/<id>/time-machine/verify`; earlier conversational turns can use an exact matching
-  organic session run, while missing or ambiguous session history remains unavailable.
-  The eligibility receipt preserves requested/source run IDs, and the card shows that provenance when
-  an earlier turn was verified from its historical session run. If a durable checkpoint pin exists
-  for that source, verification hydrates the pin after worker restart before running the same proof.
-  POST /runs/<id>/time-machine/branch is the explicit same-prompt exact-child action; it restores
-  the source checkpoint, runs the unchanged control, and persists a child only after that control
-  matches. It rejects alternate questions because changing the prompt is not exact.
+Sessions lists conversation records and standalone Runs. A session trace preserves turn order, branch
+markers, failures, cumulative facts, and explicit Run selection. Selecting a turn opens its immutable
+Run in Inspect.
 
-The run reader's default hierarchy is Answer → Minimal Context → Context. Compare/Branch is reached
-from an explicit Minimal Context source action and opens the existing parent/child comparison surface.
-Mechanism, claim, correction, time-machine, and other diagnostic instruments remain available under
-the reader as advanced evidence; they are not alternate interpretations of source importance.
+## Inspect
 
-### Minimal Context failure states
+Inspect is the single-Run evidence workspace:
 
-The product keeps these conditions distinct: exact mode unavailable, no preserving set within budget,
-best verified with incomplete coverage, certification budget exhausted, a search universe above its
-declared bound, stale run/runtime identity, unavailable worker, and cancellation. Likelihood is never a
-silent fallback for an exact request. Unmeasured candidates are not rendered as failed candidates.
+- **Read / Context effects** shows the recorded answer, supplied context, measured answer-source
+  relationships, and explicit context-measurement controls.
+- **Received Context** shows what was delivered, assembled, or omitted without treating delivery as
+  influence.
+- **Context Receipt** shows the metadata-only delivery, rendering, capacity, and termination record.
+  Prompt content remains part of the Run and is never duplicated into the receipt.
+- **Minimal Context** searches for a directly verified preserving source set. Exact minimum, inclusion
+  minimum, best verified, incomplete search, no reduction, failure, cancellation, and unavailability
+  remain distinct.
+- **Actions** shows diagnosis evidence and the bounded corrective workflow: preview, confirm or cancel,
+  optional keep for this Run, and undo.
+- **Claims** binds metadata-only claim ranges to the exact recorded answer and preserves supported,
+  weakly supported, contradicted, unsupported by supplied materials, unverifiable, and measurement
+  unavailable states.
 
-The panel registry is additive: a failed optional panel is reported without taking down the other
-surfaces.
+Navigation is read-only. Measurement, search, correction, cancellation, materialization, keep, and undo
+run only from explicit controls.
+
+## Runtime
+
+Runtime reports direct-worker or managed-router health and local GGUF inventory. Missing facts remain
+unavailable rather than being inferred. The surface does not load, switch, download, or remove models.
+
+## Compare
+
+Compare aligns two immutable Runs and reports recorded identity, context, settings, tools, output, and
+classified finding differences. The experiment matrix reads persisted case × variant × seed results and
+loads cell evidence on demand. A difference is an observation, not a causal claim.
 
 ## Evidence rules
 
-- A context segment marked delivered or survived is not automatically influential.
-- The Sources view labels measured, below-threshold, omitted, unavailable, and failed states
-  independently; it never invents links for missing measurements.
+- Delivered context is not automatically influential.
 - Token confidence describes commitment, not correctness.
-- Run comparison reports what changed; only a controlled intervention can support a causal claim.
-- Time Machine distinguishes structural replay from exact replay. Snapshot presence alone is not proof of
-  exactness, and branch execution still requires a ready compatible worker. A successful prompt-boundary
-  verification is an ephemeral worker-generation-scoped proof, not a durable checkpoint guarantee; a
-  session-turn proof records the requested run separately from its historical source run.
-- J-lens and other latent readouts carry method, artifact, and qualification provenance in the view.
-- Provenance labels use “measured context dependence” language; they do not claim an answer literally
-  came from a document. The raw `CONTEXT_CARRIED`/`MIXED`/`PARAMETRIC` enum remains available in the
-  receipt alongside the attention-knockout method and control caveat.
-- Performance diagnoses render only rules supported by recorded phases and metrics. A phase measured on
-  the gateway monotonic clock is never offset-aligned with one measured on the worker steady clock;
-  only non-overlapping measured durations contribute to the known-time total.
+- Screening results identify candidates; exact scoring establishes evidence.
+- Missing or failed measurement is not negative evidence.
+- “Unsupported by supplied materials” does not mean false.
+- Generated previews become evidence only after an explicit materialization records a child Run.
+- The source Run remains immutable; run-scoped keep and undo change only its selected revision.
 
-## Removed surfaces
-
-Prompt-card and learned-prefix memory are not current Studio features. The former standalone PyTorch
-workbench and diffusion UI were retired with that path. Tone dials, dial calibration, user preferences,
-feedback signals, memory cards, and concept steering as a user-facing control were removed along with the
-rest of the personalization layer; raw-vector steering (`steer_vec`, `POST /intervene`) is unaffected.
-Old screenshots, design specs, and handoff notes remain useful historical records, but they are labeled
-as archives and are not instructions for running the current product.
+The canonical routes and backend ownership are listed in [STUDIO_SURFACE_CONTRACT.md](STUDIO_SURFACE_CONTRACT.md).

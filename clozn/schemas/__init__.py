@@ -1,7 +1,7 @@
 """Versioned schemas for clozn's stored artifacts -- the one place a new artifact type gets defined.
 
-Roadmap rule 7 ("Schema-first changes") requires that every new stored artifact ship a versioned schema,
-a validator, a migration policy, and fixtures BEFORE any UI work. This package is that contract, and it
+Every stored artifact ships with a versioned schema, a validator, and fixtures before UI work. This
+package is that contract, and it
 is deliberately shaped so that adding an artifact type is a pure ADDITION -- no shared Python file needs
 editing, so parallel work on different artifacts cannot conflict:
 
@@ -18,14 +18,10 @@ A schema's name IS the `schema_version` string its documents carry -- `clozn.con
 `defs/clozn.context-receipt.v1.json`. That 1:1 mapping is what lets validate() take an untrusted document
 and find the right schema with no registry to keep in sync and no dispatch table to edit.
 
-VERSIONING AND MIGRATION
-------------------------
-Schemas are immutable once released. A backward-compatible change (adding an optional property, widening
-an enum) edits the existing `.v1` file. A breaking change (new required field, removed property, narrowed
-type) adds `.v2` alongside it and leaves `.v1` in place -- readers keep validating old artifacts on disk.
-Never renumber, never delete a version that has been written to a user's disk. A `.vN` file gaining a
-required property that older artifacts lack is the one mistake that silently invalidates existing local
-data; add it as optional, or bump the version.
+CONTRACT DISCIPLINE
+-------------------
+Each schema is a closed, exact contract. Readers validate the declared schema directly and never guess,
+repair, or automatically convert a document that does not satisfy it.
 """
 from __future__ import annotations
 

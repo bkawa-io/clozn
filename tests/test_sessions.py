@@ -1,5 +1,4 @@
-"""Contract tests for F1: first-class session records (clozn/runs/sessions.py, migration 4, the
-`clozn.session.v1` schema, and clozn/server/routes/sessions.py).
+"""Contract tests for first-class session records and the `clozn.session.v1` schema.
 
 NOT tests/test_sections.py -- that file covers prompt-section ablation (clozn.runs.sections), an
 unrelated, pre-existing module this suite does not touch.
@@ -16,7 +15,7 @@ from contextlib import closing
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import clozn.runs.migrations as migrations         # noqa: E402
+import clozn.runs.schema as run_schema              # noqa: E402
 import clozn.runs.store as store                    # noqa: E402
 from clozn.runs import sessions                     # noqa: E402
 from clozn.runs.association import client_key, session_key  # noqa: E402
@@ -53,28 +52,25 @@ def _run_at(recorded_ts: float, *, session=None, client=None):
     return rid
 
 
-# ============================================================================================ migration
+# =============================================================================================== schema
 
-def test_migration_4_creates_the_sessions_table(isolated):
+def test_current_schema_contains_the_sessions_table(isolated):
     db_path = os.path.join(store.RUNS_DIR, "runs.sqlite3")
     store._ensure()
     import sqlite3
     db = sqlite3.connect(db_path)
     try:
-        assert migrations.current_version(db) == migrations.TARGET_VERSION
-        assert migrations.TARGET_VERSION >= 4
+        run_schema.validate(db)
         tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "sessions" in tables
         columns = {r[1] for r in db.execute("PRAGMA table_info(sessions)")}
-        assert {"id", "created_ts", "created_at", "client_key", "title", "privacy_json",
-                "materialized_from"}.issubset(columns)
+        assert {"id", "created_ts", "created_at", "client_key", "title", "privacy_json"} == columns
     finally:
         db.close()
 
 
-def test_migration_4_does_not_touch_existing_run_rows(isolated):
-    """RUN IMMUTABILITY: applying migration 4 to a DB that already has run rows leaves them byte-for-byte
-    unchanged (it only creates a brand-new table -- no ALTER TABLE runs, no data migration)."""
+def test_rechecking_the_schema_does_not_touch_existing_run_rows(isolated):
+    """Repeated initialization leaves existing run documents byte-for-byte unchanged."""
     rid = _run(session="thread-1")
     before = store.get_run(rid)
     store._ensure()
@@ -93,14 +89,14 @@ def test_resolve_session_id_mints_a_fresh_opaque_id_when_none():
     assert re.fullmatch(r"session_[0-9a-f]{24}", a)
 
 
-def test_resolve_session_id_digests_a_raw_token_deterministically():
+def test_resolve_session_id_digests_a_raw_token_deterministically(isolated):
     a = sessions.resolve_session_id("my-conversation-42")
     b = sessions.resolve_session_id("my-conversation-42")
     assert a == b
     assert a == session_key("my-conversation-42")
 
 
-def test_resolve_session_id_different_raw_tokens_yield_different_ids():
+def test_resolve_session_id_different_raw_tokens_yield_different_ids(isolated):
     a = sessions.resolve_session_id("thread-a")
     b = sessions.resolve_session_id("thread-b")
     assert a != b
@@ -122,7 +118,6 @@ def test_resolve_session_id_rejects_empty_string():
 def test_create_session_minimal(isolated):
     doc = sessions.create_session()
     assert doc["schema_version"] == "clozn.session.v1"
-    assert doc["materialized_from"] == "explicit"
     assert doc["privacy"] == {"visibility": "visible"}
     assert "client_key" not in doc
     assert "title" not in doc
@@ -215,72 +210,32 @@ def test_get_session_includes_derived_activity_once_runs_exist(isolated):
     assert doc["first_activity_ts"] <= doc["last_activity_ts"]
 
 
-def test_get_session_legacy_session_key_with_no_row_is_a_pure_read(isolated):
-    """A run recorded with a session_key that predates any explicit `sessions` row still resolves via
-    the derived-aggregate path -- and a plain get_session() call must NOT write a row."""
-    _run(session="legacy-thread", started=5.0)
-    doc = sessions.get_session("legacy-thread")
+def test_recording_first_session_run_creates_session_row(isolated):
+    _run(session="thread-created-by-run", client="only-client", started=5.0)
+    doc = sessions.get_session("thread-created-by-run")
     assert doc is not None
-    assert doc["materialized_from"] == "lazy_backfill"
     assert doc["run_count"] == 1
+    assert doc["client_key"] == client_key("only-client")
 
     with closing(store._connect()) as db:
         count = db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-    assert count == 0, "a plain (materialize=False) get_session() must never write"
+    assert count == 1
 
 
-def test_get_session_materialize_true_persists_the_lazy_row(isolated):
-    _run(session="legacy-thread", started=5.0)
-    doc = sessions.get_session("legacy-thread", materialize=True)
-    assert doc["materialized_from"] == "lazy_backfill"
-    with closing(store._connect()) as db:
-        row = db.execute("SELECT id FROM sessions WHERE id = ?", (doc["id"],)).fetchone()
-    assert row is not None
+def test_recording_more_runs_keeps_first_session_identity(isolated):
+    _run(session="thread-created-by-run", client="first-client", started=5.0)
+    first = sessions.get_session("thread-created-by-run")
+    _run(session="thread-created-by-run", client="second-client", started=6.0)
+    second = sessions.get_session("thread-created-by-run")
+    assert second["created_ts"] == first["created_ts"]
+    assert second["client_key"] == client_key("first-client")
+    assert second["run_count"] == 2
 
 
 def test_get_session_by_raw_and_opaque_token_agree(isolated):
     created = sessions.create_session("thread-1")
     assert sessions.get_session("thread-1")["id"] == created["id"]
     assert sessions.get_session(created["id"])["id"] == created["id"]
-
-
-# ============================================================================================ materialize
-
-def test_materialize_session_returns_none_when_truly_nonexistent(isolated):
-    assert sessions.materialize_session("never-used") is None
-
-
-def test_materialize_session_single_client_key_is_backfilled(isolated):
-    _run(session="legacy-thread", client="only-client", started=1.0)
-    _run(session="legacy-thread", client="only-client", started=2.0)
-    doc = sessions.materialize_session("legacy-thread")
-    assert doc["client_key"] == client_key("only-client")
-
-
-def test_materialize_session_ambiguous_client_key_is_omitted(isolated):
-    """Member runs from TWO DIFFERENT client_key values -- never guess which one 'owns' the session."""
-    _run(session="legacy-thread", client="client-a", started=1.0)
-    _run(session="legacy-thread", client="client-b", started=2.0)
-    doc = sessions.materialize_session("legacy-thread")
-    assert "client_key" not in doc
-
-
-def test_materialize_session_created_ts_is_the_earliest_run(isolated):
-    _run_at(100.0, session="legacy-thread")
-    _run_at(50.0, session="legacy-thread")
-    _run_at(200.0, session="legacy-thread")
-    doc = sessions.materialize_session("legacy-thread")
-    assert doc["created_ts"] == 50.0
-
-
-def test_materialize_session_idempotent_second_call_same_row(isolated):
-    _run(session="legacy-thread", started=1.0)
-    first = sessions.materialize_session("legacy-thread")
-    second = sessions.materialize_session("legacy-thread")
-    assert first["id"] == second["id"]
-    with closing(store._connect()) as db:
-        count = db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-    assert count == 1
 
 
 # =============================================================================================== update
@@ -314,10 +269,8 @@ def test_update_session_rejects_bad_visibility(isolated):
         sessions.update_session("thread-1", visibility="nope")
 
 
-def test_update_session_does_not_materialize_a_legacy_session(isolated):
-    """update_session must never fabricate a row -- only create_session/materialize_session do that."""
-    _run(session="legacy-thread", started=1.0)
-    assert sessions.update_session("legacy-thread", title="x") is None
+def test_update_session_does_not_create_missing_session(isolated):
+    assert sessions.update_session("missing-thread", title="x") is None
     with closing(store._connect()) as db:
         count = db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
     assert count == 0
@@ -340,7 +293,7 @@ def test_delete_session_never_touches_member_runs(isolated):
     run = store.get_run(rid)
     assert run is not None
     assert run["session_key"] == session_key("thread-1")   # untouched -- run keeps its own lifecycle
-    # the runs are still queryable as a (now-implicit, lazy) session even after the entity row is gone
+    # Run evidence remains queryable by its immutable session key.
     page = sessions.list_session_runs("thread-1")
     assert rid in [r["id"] for r in page["runs"]]
 
@@ -353,21 +306,21 @@ def test_delete_session_is_idempotent_when_no_row_exists(isolated):
 
 # ================================================================================================== list
 
-def test_list_sessions_merges_explicit_and_lazy_sorted_by_last_activity(isolated):
+def test_list_sessions_sorted_by_last_activity(isolated):
     sessions.create_session("thread-old", title="Old")
     _run(session="thread-old", started=10.0)
-    _run(session="thread-legacy", started=50.0)          # never explicitly created
+    _run(session="thread-run-created", started=50.0)
     sessions.create_session("thread-new", title="New")
     _run(session="thread-new", started=99.0)
 
     listed = sessions.list_sessions()
     ids = [d["id"] for d in listed]
     assert session_key("thread-new") in ids
-    assert session_key("thread-legacy") in ids
+    assert session_key("thread-run-created") in ids
     assert session_key("thread-old") in ids
     # newest activity first
-    assert ids.index(session_key("thread-new")) < ids.index(session_key("thread-legacy"))
-    assert ids.index(session_key("thread-legacy")) < ids.index(session_key("thread-old"))
+    assert ids.index(session_key("thread-new")) < ids.index(session_key("thread-run-created"))
+    assert ids.index(session_key("thread-run-created")) < ids.index(session_key("thread-old"))
 
 
 def test_list_sessions_excludes_hidden_by_default(isolated):
@@ -565,14 +518,14 @@ def test_created_document_validates_against_its_own_schema(isolated):
     schemas.validate(doc, "clozn.session.v1")
 
 
-def test_lazy_document_validates_against_its_own_schema(isolated):
-    """get_session()'s runtime read view is a documented SUPERSET of the schema (it merges in derived
+def test_run_created_document_validates_against_its_own_schema(isolated):
+    """get_session()'s runtime read view is a documented superset of the schema (it merges in derived
     first_activity_ts/last_activity_ts/run_count, which the schema deliberately excludes -- see
     clozn.session.v1's description and clozn/runs/sessions.py's module docstring). Validate the stored
     CORE document -- the part the schema actually governs -- by stripping the derived keys back off."""
     from clozn import schemas
-    _run(session="legacy-thread", started=1.0)
-    doc = sessions.get_session("legacy-thread")
+    _run(session="run-created-thread", started=1.0)
+    doc = sessions.get_session("run-created-thread")
     core = {k: v for k, v in doc.items()
             if k not in ("first_activity_ts", "last_activity_ts", "run_count")}
     schemas.validate(core, "clozn.session.v1")
@@ -611,12 +564,12 @@ def test_route_get_session_detail_404(routed):
     assert h.status == 404
 
 
-def test_route_get_session_detail_materializes_legacy(routed):
-    _run(session="legacy-thread", started=1.0)
-    h = Handler("/sessions/legacy-thread")
-    assert routed.try_get(h, "/sessions/legacy-thread") is True
+def test_route_get_session_detail_for_run_created_session(routed):
+    _run(session="run-created-thread", started=1.0)
+    h = Handler("/sessions/run-created-thread")
+    assert routed.try_get(h, "/sessions/run-created-thread") is True
     assert h.status == 200
-    assert h.body["materialized_from"] == "lazy_backfill"
+    assert h.body["id"] == session_key("run-created-thread")
     with closing(store._connect()) as db:
         count = db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
     assert count == 1

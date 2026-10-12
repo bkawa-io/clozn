@@ -309,9 +309,7 @@ def test_managed_active_substrate_never_falls_back_to_control_worker():
         app.MODEL_ROUTER, app.SUB, app.ENGINE = previous
 
 
-def test_legacy_engine_substrate_identity_is_exact_fork_eligible(
-    monkeypatch, tmp_path
-):
+def test_single_model_engine_substrate_identity_is_exact_fork_eligible(tmp_path):
     from clozn.experiments.execution_facts import (
         parent_runtime_projection,
         runtime_projection as _runtime_projection,
@@ -319,14 +317,10 @@ def test_legacy_engine_substrate_identity_is_exact_fork_eligible(
     )
     from clozn.server.substrates import EngineSubstrate
 
-    model_sha = hashlib.sha256(b"legacy-model").hexdigest()
-    executable_sha = hashlib.sha256(b"legacy-engine").hexdigest()
+    model_sha = hashlib.sha256(b"single-model").hexdigest()
+    executable_sha = hashlib.sha256(b"single-model-engine").hexdigest()
     rendered = "<system>canonical</system>"
     template = hashlib.sha256(rendered.encode()).hexdigest()[:16]
-    monkeypatch.setenv("CLOZN_ENGINE_ARTIFACT_SHA256", executable_sha)
-    monkeypatch.setenv("CLOZN_ENGINE_DISCOVERY_SOURCE", "repo_dev_build")
-    monkeypatch.setenv("CLOZN_ENGINE_BACKEND", "cpu")
-
     class Engine:
         base = "http://127.0.0.1:43112"
 
@@ -334,8 +328,8 @@ def test_legacy_engine_substrate_identity_is_exact_fork_eligible(
             return {
                 "status": "ok",
                 "protocol_version": "1.1",
-                "worker_generation_id": "legacy-process-generation",
-                "model": str(tmp_path / "legacy.gguf"),
+                "worker_generation_id": "single-model-generation",
+                "model": str(tmp_path / "model.gguf"),
                 "model_sha256": model_sha,
                 "n_ctx": 2048,
                 "device": "cpu",
@@ -354,6 +348,11 @@ def test_legacy_engine_substrate_identity_is_exact_fork_eligible(
             return None
 
     sub = EngineSubstrate(engine=Engine())
+    sub._engine_artifact_context = {
+        "artifact_sha256": executable_sha,
+        "discovery_source": "repo_dev_build",
+        "backend": "cpu",
+    }
     meta = sub.run_meta()
     identity = sub.identity_meta()
     assert identity["template_fingerprint"] == template
@@ -365,8 +364,8 @@ def test_legacy_engine_substrate_identity_is_exact_fork_eligible(
     assert meta["white_box_flags"] == WHITE_BOX
 
     parent = {
-        "id": "run_legacy",
-        "model": "legacy",
+        "id": "run_single_model",
+        "model": "model",
         "identity": identity,
         "meta": meta,
     }
@@ -374,7 +373,7 @@ def test_legacy_engine_substrate_identity_is_exact_fork_eligible(
     selected_runtime, worker, selected_engine = selection_identity_facts(
         SimpleNamespace(sub=sub, engine=sub.engine))
     assert selected_engine is sub.engine
-    assert worker["worker_generation_id"] == "legacy-process-generation"
+    assert worker["worker_generation_id"] == "single-model-generation"
     assert parent_runtime is not None
     assert _runtime_projection(selected_runtime) == parent_runtime
     assert parent_runtime["engine_build"] == f"sha256:{executable_sha}"

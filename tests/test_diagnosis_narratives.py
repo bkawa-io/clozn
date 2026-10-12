@@ -21,6 +21,7 @@ import pytest  # noqa: E402
 from clozn import schemas  # noqa: E402
 from clozn.runs import diagnosis_narratives as dn  # noqa: E402
 from clozn.runs import diagnosis_rules as dr  # noqa: E402
+from clozn.runs.context_receipt import build_context_receipt  # noqa: E402
 
 
 # ==================================================================================== fixture builders
@@ -47,7 +48,10 @@ def _run(*, id="run_1", messages=None, response="ok", finish_reason=None, identi
     return out
 
 
-_INFLUENCE_METHOD = {"name": "x", "mode": "forced_score_intervention", "claim_limit": "x", "caveat": "x"}
+_INFLUENCE_METHOD = {
+    "name": "x", "version": "1", "mode": "forced_score_intervention",
+    "claim_limit": "x", "caveat": "x",
+}
 
 
 def _influence_map(*, thresholds, links, prompt_spans) -> dict:
@@ -64,13 +68,17 @@ def _link(context_span_id, *, clears_floor, abs_delta_nats) -> dict:
 
 
 def _below_floor_run(id="run_influ") -> dict:
-    return _run(
-        id=id,
-        messages=[_msg("user", "Doc A text here.", "docA"), _msg("user", "what does doc A say")],
+    messages = [_msg("user", "Doc A text here.", "docA"), _msg("user", "what does doc A say")]
+    run = _run(
+        id=id, messages=messages,
         influence_map=_influence_map(
             thresholds={"cell_abs_delta_nats": 0.05},
             prompt_spans=[{"id": "ps1", "start": 0, "end": 10, "text": "Doc A text", "client_source_id": "docA"}],
             links=[_link("ps1", clears_floor=False, abs_delta_nats=0.01)]))
+    run["context_receipt"] = build_context_receipt(
+        messages=messages, assembled_messages=messages, run_id=id, privacy="full",
+    )
+    return run
 
 
 # ==================================================================================== schema plumbing
@@ -382,7 +390,7 @@ def test_observed_change_unknown_dimension_falls_back_to_generic_template(monkey
 
 
 def test_observed_change_unavailable_kind_states_it_plainly():
-    text = dn._observed_text({"dimension": "context.limits.prompt_tokens", "kind": "unavailable"})
+    text = dn._observed_text({"dimension": "context.rendered.tokens", "kind": "unavailable"})
     assert "could not be compared" in text
 
 

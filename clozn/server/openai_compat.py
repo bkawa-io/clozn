@@ -1,8 +1,8 @@
 """Honest request validation for Clozn's intentionally small OpenAI-compatible surface.
 
-The gateway used to pick a few fields out of a request and silently discard the rest.  That is especially
-dangerous for tools, stop sequences, structured output, penalties, and ``n``: a client sees HTTP 200 and
-reasonably assumes the requested behavior happened.  This module is the single policy table for the public
+Silently discarding behavior-bearing fields is dangerous for tools, stop sequences, structured output,
+penalties, and ``n``: a client sees HTTP 200 and reasonably assumes the requested behavior happened.
+This module is the single policy table for the public
 OpenAI Chat Completions route. It accepts fields Clozn implements, strips only documented neutral/no-op
 values, and raises an OpenAI-shaped 400 for every behavior-bearing field the runtime cannot honor.
 
@@ -180,10 +180,8 @@ _SOURCE_PROVENANCE_KINDS = frozenset({
 def _normalize_sources(value: Any, *, messages: list[dict[str, str]]) -> list[dict[str, Any]]:
     """Validate exact, metadata-only source spans without changing messages.
 
-    Older callers may continue to send one ``{message_index, source_id,
-    label?}`` record: it becomes an exact whole-message span.  New callers can
-    attach many ranges to one message, with a client identity/label optional
-    and an explicit structural parent when ranges nest.  Canonical ``src_``
+    Callers can attach many ranges to one message, with a client identity/label
+    optional and an explicit structural parent when ranges nest. Canonical ``src_``
     IDs are deliberately minted at receipt capture from the exact post-route
     message bytes, never trusted from the client.
     """
@@ -192,13 +190,11 @@ def _normalize_sources(value: Any, *, messages: list[dict[str, str]]) -> list[di
     if not isinstance(value, list):
         _fail("clozn_sources must be a list", "clozn_sources")
     normalized: list[dict[str, Any]] = []
-    legacy_positions: set[int] = set()
     seen_client_ids: set[str] = set()
     for position, raw in enumerate(value):
         param = f"clozn_sources[{position}]"
         if not isinstance(raw, Mapping):
             _fail("each clozn_sources entry must be an object", param)
-        legacy_shape = set(raw).issubset({"message_index", "source_id", "label"})
         extra = set(raw) - {
             "message_index", "source_id", "client_source_id", "label", "unicode_range",
             "byte_range", "provenance_kind", "parent_source_id",
@@ -224,8 +220,10 @@ def _normalize_sources(value: Any, *, messages: list[dict[str, str]]) -> list[di
                 _fail("source_id values must be unique within a request", f"{param}.source_id")
             seen_client_ids.add(client_source_id)
         content = messages[int(index)]["content"]
+        if "unicode_range" not in raw:
+            _fail("unicode_range is required", f"{param}.unicode_range")
         unicode_range = _source_range(
-            raw.get("unicode_range", [0, len(content)]), upper=len(content),
+            raw["unicode_range"], upper=len(content),
             param=f"{param}.unicode_range", label="unicode_range",
         )
         byte_range = [
@@ -268,8 +266,6 @@ def _normalize_sources(value: Any, *, messages: list[dict[str, str]]) -> list[di
                 _fail("parent_source_id must be a non-empty client source ID", f"{param}.parent_source_id")
             item["parent_source_id"] = parent_source_id.strip()
         normalized.append(item)
-        if legacy_shape:
-            legacy_positions.add(len(normalized) - 1)
 
     by_client_id = {item["source_id"]: item for item in normalized if item.get("source_id")}
     for position, item in enumerate(normalized):
@@ -331,13 +327,6 @@ def _normalize_sources(value: Any, *, messages: list[dict[str, str]]) -> list[di
                 or (right_contains_left and is_ancestor(right, left))
             ):
                 _fail("overlapping source ranges must be structurally nested", "clozn_sources")
-    # The old normalized private shape is used by a few integrations and is
-    # intentionally preserved.  Receipt capture still derives its full exact
-    # range from this legacy whole-message record.
-    for position in legacy_positions:
-        normalized[position].pop("unicode_range", None)
-        normalized[position].pop("byte_range", None)
-        normalized[position].pop("provenance_kind", None)
     return normalized
 
 

@@ -4,30 +4,31 @@ from __future__ import annotations
 import copy
 
 from clozn import schemas
+from clozn.runs.context_receipt import build_context_receipt
 from clozn.runs.turn_receipt import build_turn_receipt, to_markdown
 
 
 def _context(*, privacy="metadata_only", omitted=False, prompt=2481, window=8192, generated=184):
-    delivered = [
-        {"segment_id": "seg_aaaaaaaaaaaaaaaa", "source_label": "system", "included": True},
-        {"segment_id": "seg_bbbbbbbbbbbbbbbb", "source_label": "Policy Handbook",
-         "client_source_id": "policy-2026", "included": not omitted},
+    messages = [
+        {"role": "system", "content": "Be precise."},
+        {"role": "user", "content": "Use the policy.", "source_id": "policy-2026",
+         "source_label": "Policy Handbook"},
     ]
-    assembled = [delivered[0]] if omitted else list(delivered)
-    return {
-        "schema_version": "clozn.context-receipt.v1",
-        "run_id": "run_x",
-        "privacy": privacy,
-        "limits": {"prompt_tokens": prompt, "context_window_tokens": window,
-                   "generated_tokens": generated},
-        "delivered": delivered if privacy != "off" else None,
-        "assembled": assembled if privacy != "off" else None,
-        "omissions": ([{"segment_id": delivered[1]["segment_id"], "reason": "context_budget"}]
-                       if omitted and privacy != "off" else []),
-        "transformations": ([{"reason": "template_transformed", "segment_ids": [s["segment_id"] for s in delivered]}]
-                             if privacy != "off" else []),
-        "termination": {"reason": "eos", "generated_tokens": generated},
-    }
+    receipt = build_context_receipt(
+        messages=messages,
+        assembled_messages=messages[:1] if omitted else messages,
+        finish_reason="stop",
+        meta={"prompt_tokens": prompt, "n_ctx": window, "max_tokens": generated},
+        trace={"tokens": ["x"] * generated},
+        run_id="run_x",
+        privacy=privacy,
+    )
+    if omitted and privacy != "off":
+        receipt["omissions"] = [{
+            "segment_id": receipt["delivered"][1]["segment_id"],
+            "reason": "context_budget",
+        }]
+    return receipt
 
 
 def _run(**over):
@@ -198,12 +199,11 @@ def test_ordinary_run_has_no_comparison_and_rewind_is_compact():
 
 
 def test_privacy_hashes_only_keeps_ids_but_does_not_restore_labels():
-    run = _run(context_receipt={**_context(privacy="hashes_only"), "delivered": [
-        {"segment_id": "seg_aaaaaaaaaaaaaaaa", "content_hash": "a" * 16, "included": True},
-    ], "assembled": [{"segment_id": "seg_aaaaaaaaaaaaaaaa", "included": True}]})
+    run = _run(context_receipt=_context(privacy="hashes_only"))
     context = build_turn_receipt(run)["context"]
     assert context["provenance_state"] == "available"
-    assert context["provenance"] == [{"segment_id": "seg_aaaaaaaaaaaaaaaa", "included": True}]
+    assert len(context["provenance"]) == 2
+    assert all(set(item) == {"segment_id", "included"} for item in context["provenance"])
     assert "Policy Handbook" not in repr(context)
 
 

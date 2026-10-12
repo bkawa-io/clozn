@@ -1,69 +1,13 @@
-"""GET /runs/<id>/context-receipt -- feature 06's dedicated context-receipt endpoint.
+"""Context Receipt reads and metadata-disclosure settings.
 
-Registered via CLOZN_ROUTE_AUTOLOAD (docs/SEAMS.md Seam 4), spliced in before the generic GET /runs/<id>
-fallback, so this /runs/<id>/<suffix> route is reachable at all -- see clozn/server/routes/_autoload.py.
-
-Also serves GET/POST /receipt-privacy for clozn.runs.receipt_privacy's tier setting, kept in THIS module
-rather than added to clozn/server/routes/health.py (which already hosts the analogous /capture/tier
-endpoint) -- health.py is a hand-wired file several other route families also touch; this feature owns
-none of its lines.
-
-`?include_content=false` is a READ-time redaction, independent of the tier the receipt was stored with:
-a caller must not gain access to content that was stored (e.g. under a "full" tier) just because they ask
-without the flag -- and conversely must not be MISTAKEN into thinking `include_content=true` restores
-content genuinely never stored (a "hashes_only"/"off" receipt has nothing to reveal either way).
+The receipt endpoint returns only the schema-governed metadata artifact. Prompt and message content
+belongs to the run resource and is never conditionally embedded in this response.
 """
 from __future__ import annotations
-
-from urllib.parse import parse_qs, urlparse
 
 CLOZN_ROUTE_AUTOLOAD = True
 
 _SUFFIX = "/context-receipt"
-_SEGMENT_METADATA_KEEP = ("segment_id", "source_type", "original_order", "content_hash", "reason",
-                          "included")
-
-
-def _wants_content(h) -> bool:
-    query = parse_qs(urlparse(h.path).query)
-    raw = (query.get("include_content") or ["true"])[0]
-    return raw.strip().lower() not in ("false", "0", "no")
-
-
-def _redact_for_read(receipt: dict, shape: str) -> dict:
-    """Trim `receipt` down to hashes/metadata only, for a caller that passed include_content=false --
-    independent of (and possibly stricter than) whatever privacy tier the document was stored with."""
-    out = dict(receipt)
-    survived = out.get("survived")
-    if isinstance(survived, dict) and ("final_prompt" in survived or "assembled_messages" in survived):
-        survived = dict(survived)
-        survived.pop("final_prompt", None)
-        survived.pop("assembled_messages", None)
-        survived["content_withheld_by_request"] = "include_content=false"
-        out["survived"] = survived
-
-    if shape == "legacy":
-        delivered = out.get("delivered")
-        if isinstance(delivered, dict) and "messages" in delivered:
-            delivered = dict(delivered)
-            delivered.pop("messages", None)
-            delivered["content_withheld_by_request"] = "include_content=false"
-            out["delivered"] = delivered
-        return out
-
-    for key in ("delivered", "assembled"):
-        segments = out.get(key)
-        if not isinstance(segments, list):
-            continue
-        trimmed = []
-        for seg in segments:
-            if not isinstance(seg, dict):
-                continue
-            keep = {k: seg[k] for k in _SEGMENT_METADATA_KEEP if k in seg}
-            keep["redaction_state"] = "hash_only"
-            trimmed.append(keep)
-        out[key] = trimmed
-    return out
 
 
 def try_get(h, p):
@@ -83,10 +27,11 @@ def try_get(h, p):
                           "note": "no context receipt was recorded for this run"})
             return True
 
-        receipt = view["receipt"]
-        if not _wants_content(h):
-            receipt = _redact_for_read(receipt, view["shape"])
-        h._json(200, {"run_id": rid, "shape": view["shape"], "context_receipt": receipt})
+        h._json(200, {
+            "run_id": rid,
+            "shape": view["shape"],
+            "context_receipt": view["receipt"],
+        })
         return True
 
     if p == "/receipt-privacy":
@@ -101,7 +46,7 @@ def try_post(h, p, body):
     if p == "/receipt-privacy":
         from clozn.runs import receipt_privacy
         body = body if isinstance(body, dict) else {}
-        action = str(body.get("action") or "compat_apply").strip().lower()
+        action = str(body.get("action") or "").strip().lower()
         try:
             if action == "undo":
                 mutation = receipt_privacy.undo_tier(body.get("transaction_id"))
@@ -132,16 +77,6 @@ def try_post(h, p, body):
                     expected_exists=expected["exists"],
                     expected_sha256=expected.get("sha256"),
                 )
-            elif action == "compat_apply":
-                # Backward-compatible one-shot POST. It still uses the same
-                # preview/CAS transaction path; new callers should split these
-                # into explicit preview and apply requests.
-                preview = receipt_privacy.preview_tier(name)
-                mutation = receipt_privacy.apply_tier(
-                    name,
-                    expected_exists=preview["expected"]["exists"],
-                    expected_sha256=preview["expected"].get("sha256"),
-                )
             else:
                 raise receipt_privacy.PrivacyMutationError(
                     "action must be preview, apply, or undo"
@@ -159,7 +94,6 @@ def try_post(h, p, body):
             "ok": True,
             "tier": str(name or "").strip().lower(),
             "mutation": mutation,
-            **({"compatibility_mode": "atomic_preview_apply"} if action == "compat_apply" else {}),
         })
         return True
     return False

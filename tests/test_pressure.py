@@ -1,14 +1,13 @@
-"""Hostile / edge-case pressure tests for six recently-shipped subsystems:
+"""Hostile / edge-case pressure tests for five runtime subsystems:
 
-  1. clozn/runs/migrations.py -- transactional schema migrations
-  2. clozn/runs/gc.py         -- content-addressed blob garbage collection
-  3. clozn/server/request_context.py + clozn/server/sse.py + clozn/server/request_gate.py -- cancellation
-  4. clozn/server/routes/engine.py's POST /cancel proxy + EngineClient.cancel() -- the gateway-exempt
+  1. clozn/runs/gc.py         -- content-addressed blob garbage collection
+  2. clozn/server/request_context.py + clozn/server/sse.py + clozn/server/request_gate.py -- cancellation
+  3. clozn/server/routes/engine.py's POST /cancel proxy + EngineClient.cancel() -- the gateway-exempt
      cancel path that lets a client interrupt a running generation without waiting behind POST_GATE
-  5. clozn/server/routes/journal.py's GET /journal/calibration -- the TRUTH-tier reliability_bins and
+  4. clozn/server/routes/journal.py's GET /journal/calibration -- the TRUTH-tier reliability_bins and
      risk_coverage arrays recomputed live, on every request, from clozn/eval/calibration.py against
      whatever `rows` were last persisted to disk by `clozn eval --save`
-  6. clozn/server/routes/engine.py's POST /cancel `req_id` resolution -- correlates the GATEWAY's own
+  5. clozn/server/routes/engine.py's POST /cancel `req_id` resolution -- correlates the GATEWAY's own
      RequestContext.request_id, via the active substrate's live `_request`, to the WORKER's own req
      (`_request.engine_req`, stamped off the first parsed SSE frame -- see EngineSubstrate.chat_stream in
      clozn/server/substrates.py) before proxying the cancel, so a caller that only ever learned the
@@ -42,7 +41,6 @@ sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, os.path.join(REPO_ROOT, "engine", "client"))
 
 import clozn.runs.gc as gc                                   # noqa: E402
-import clozn.runs.migrations as migrations                    # noqa: E402
 import clozn.runs.store as store                               # noqa: E402
 from clozn.eval import store as eval_store                      # noqa: E402
 from clozn.server import app as cs                             # noqa: E402
@@ -55,207 +53,7 @@ from clozn_engine import EngineClient                            # noqa: E402
 
 
 # ======================================================================================================
-# 1. MIGRATIONS
-# ======================================================================================================
-
-def test_rollback_survives_a_baseexception_not_just_a_normal_exception(tmp_path):
-    """"Interrupted migration": migrate()'s except clause is `except BaseException`, which must also catch
-    SystemExit/KeyboardInterrupt-style crashes, not merely ordinary Exception subclasses. Proves the
-    rollback contract holds even for the crash-like exception classes a real process kill/Ctrl-C would
-    raise inside a signal handler."""
-    db = sqlite3.connect(str(tmp_path / "crash.sqlite3"))
-
-    def _step1(conn):
-        conn.execute("CREATE TABLE t1 (id INTEGER PRIMARY KEY)")
-
-    def _step2_crashes(conn):
-        conn.execute("CREATE TABLE t2_partial (id INTEGER PRIMARY KEY)")
-        raise SystemExit(1)   # BaseException, NOT Exception
-
-    fake = (
-        migrations.Migration(1, "ok", _step1),
-        migrations.Migration(2, "crashes like a killed process", _step2_crashes),
-    )
-    try:
-        with pytest.raises(SystemExit):
-            migrations.migrate(db, fake)
-        assert migrations.current_version(db) == 1
-        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert "t2_partial" not in tables
-        # the connection must still be fully usable afterward -- not wedged mid-transaction
-        db.execute("INSERT INTO t1 (id) VALUES (1)")
-        db.commit()
-    finally:
-        db.close()
-
-
-def test_corrupt_schema_meta_wrong_columns_fails_loudly_not_silently(tmp_path):
-    """"Corrupt schema_meta table": a schema_meta that exists but doesn't even have a `key` column (as
-    corrupt as on-disk state gets without the file itself being unreadable). `_ensure_ledger_table`'s
-    CREATE TABLE IF NOT EXISTS is a no-op against the existing (wrong-shaped) table, so the very next SELECT
-    must fail loudly with a clear sqlite3.OperationalError -- not silently return an empty/wrong version."""
-    path = str(tmp_path / "corrupt.sqlite3")
-    db = sqlite3.connect(path)
-    db.execute("CREATE TABLE schema_meta (not_key TEXT, not_value TEXT)")
-    db.commit()
-    try:
-        with pytest.raises(sqlite3.OperationalError):
-            migrations.current_version(db)
-    finally:
-        db.close()
-
-
-def test_ledger_lying_about_an_applied_migration_is_caught_by_verify(tmp_path):
-    """FIX VERIFIED: when the ledger claims migration 1 but the runs table is missing, verify detects
-    the inconsistency -- status reports pending, and migrate() re-applies the migration."""
-    path = str(tmp_path / "lying.sqlite3")
-    db = sqlite3.connect(path)
-    db.execute("CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-    db.execute("INSERT INTO schema_meta(key, value) VALUES ('migration:1', '{\"description\": \"fake\"}')")
-    db.commit()
-    try:
-        report = migrations.status(db)
-        assert report["up_to_date"] is False
-        assert [step["version"] for step in report["pending"]] == [m.version for m in migrations.MIGRATIONS]
-
-        applied = migrations.migrate(db)
-        assert applied == [m.version for m in migrations.MIGRATIONS]
-
-        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert "runs" in tables
-    finally:
-        db.close()
-
-
-def test_schema_meta_ignores_non_matching_or_garbled_migration_rows(tmp_path):
-    """A `migration:` row with a non-integer suffix, and a row whose JSON value is garbage, must not crash
-    current_version()/status() -- only the KEY's shape is examined, never the value's contents."""
-    path = str(tmp_path / "garbled.sqlite3")
-    db = sqlite3.connect(path)
-    db.execute("CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-    db.execute("INSERT INTO schema_meta(key, value) VALUES ('migration:abc', 'not even json{{{')")
-    db.execute("INSERT INTO schema_meta(key, value) VALUES ('migration:', 'also garbage')")
-    db.commit()
-    try:
-        assert migrations.current_version(db) == 0     # neither row matches \d+ -- both ignored, no crash
-        report = migrations.status(db)
-        assert report["current_version"] == 0
-    finally:
-        db.close()
-
-
-def test_duplicate_version_numbers_in_a_migration_list_are_rejected_upfront(tmp_path):
-    """FIX VERIFIED: migrate() validates version uniqueness before running anything. Duplicate versions
-    raise ValueError immediately — no callbacks run, no partial state."""
-    db = sqlite3.connect(str(tmp_path / "dup.sqlite3"))
-    ran = []
-    fake = (
-        migrations.Migration(1, "first with version 1", lambda c: ran.append("first")),
-        migrations.Migration(1, "second, same version", lambda c: ran.append("second")),
-    )
-    try:
-        with pytest.raises(ValueError, match="duplicate migration version"):
-            migrations.migrate(db, fake)
-        assert ran == []
-    finally:
-        db.close()
-
-
-def test_migrations_list_out_of_declaration_order_still_applies_by_version_ascending(tmp_path):
-    """pending() sorts by version, so a migration LIST authored out of order must still apply low-to-high,
-    never in declaration order."""
-    db = sqlite3.connect(str(tmp_path / "unordered.sqlite3"))
-    ran = []
-    fake = (
-        migrations.Migration(3, "third", lambda c: ran.append(3)),
-        migrations.Migration(1, "first", lambda c: ran.append(1)),
-        migrations.Migration(2, "second", lambda c: ran.append(2)),
-    )
-    try:
-        applied = migrations.migrate(db, fake)
-        assert applied == [1, 2, 3]
-        assert ran == [1, 2, 3]
-    finally:
-        db.close()
-
-
-def test_migrate_on_an_in_memory_db_nobody_has_touched(tmp_path):
-    """Brand-new DB, this time genuinely in-memory (":memory:") -- the module docstring explicitly calls
-    this out ("even an in-memory DB nobody has touched")."""
-    db = sqlite3.connect(":memory:")
-    try:
-        assert migrations.current_version(db) == 0
-        applied = migrations.migrate(db)
-        assert applied == [m.version for m in migrations.MIGRATIONS]
-        assert migrations.current_version(db) == migrations.TARGET_VERSION
-        assert migrations.migrate(db) == []       # already-latest: idempotent no-op
-    finally:
-        db.close()
-
-
-def test_concurrent_migrate_calls_from_two_connections_can_raise_integrityerror(tmp_path, monkeypatch):
-    """FINDING (real concurrency bug): migrate()'s `for m in pending(db, migrations):` evaluates `pending()`
-    ONCE, up front, then only afterward takes the BEGIN IMMEDIATE write lock for the first step. Two
-    independent connections to the SAME db file (e.g. a CLI invocation and the server starting up at the
-    same instant, both calling store._ensure()) can each read `current_version() == 0` before either has
-    taken the lock -- a snapshot-then-lock TOCTOU. This test reproduces that deterministically by widening
-    the (normally microsecond) window with a monkeypatched delay inside connection A's `pending()` call --
-    it does not fabricate a new code path, it just makes a real, existing race land reliably instead of
-    requiring a many-run flake hunt.
-
-    Result: connection B (fast) computes its own snapshot, wins the lock, and fully applies+commits
-    migration 1 while A is still "asleep" inside its own (already-returned-a-stale-snapshot) pending() call.
-    When A wakes up and finally takes the lock, it tries to INSERT a `migration:1` ledger row that's already
-    there and gets an uncaught sqlite3.IntegrityError propagated all the way out of migrate() -- not
-    retried, not recognized as "someone else already did this," not swallowed."""
-    path = str(tmp_path / "race.sqlite3")
-    db_a = sqlite3.connect(path, timeout=5.0, check_same_thread=False)
-    db_b = sqlite3.connect(path, timeout=5.0, check_same_thread=False)
-
-    real_pending = migrations.pending
-
-    def _slow_for_a(db, migs=migrations.MIGRATIONS):
-        result = real_pending(db, migs)
-        if db is db_a:
-            time.sleep(0.4)     # widen A's race window deterministically; B is unaffected
-        return result
-
-    monkeypatch.setattr(migrations, "pending", _slow_for_a)
-
-    results: dict = {}
-    errors: dict = {}
-
-    def _run(tag, db):
-        try:
-            results[tag] = migrations.migrate(db)
-        except Exception as exc:
-            errors[tag] = exc
-
-    t_a = threading.Thread(target=_run, args=("a", db_a))
-    t_b = threading.Thread(target=_run, args=("b", db_b))
-    t_a.start()
-    time.sleep(0.1)   # let A enter migrate() -> pending(db_a) -> the 0.4s sleep, mid-call
-    t_b.start()
-    t_a.join(timeout=10)
-    t_b.join(timeout=10)
-    db_a.close()
-    db_b.close()
-
-    assert not errors, (
-        f"expected concurrent migrate() calls to both succeed (the loser skips already-applied "
-        f"migrations inside the write lock); errors={errors}"
-    )
-    check_db = sqlite3.connect(path)
-    try:
-        assert migrations.current_version(check_db) == migrations.TARGET_VERSION
-    finally:
-        check_db.close()
-    all_applied = (results.get("a", []) or []) + (results.get("b", []) or [])
-    assert 1 in all_applied
-
-
-# ======================================================================================================
-# 2. BLOB GC
+# 1. BLOB GC
 # ======================================================================================================
 
 @pytest.fixture
@@ -277,7 +75,7 @@ _FAKE_DIGEST_A = "a" * 64
 
 def test_symlink_escaping_the_blob_root_is_refused_not_deleted(isolated, tmp_path):
     """Symlink attack: a "blob" that's actually a symlink pointing OUTSIDE the blob root (e.g. dropped by a
-    broken install/migration script, or deliberately hostile). `_is_contained` resolves symlinks via
+    broken install script, or deliberately hostile). `_is_contained` resolves symlinks via
     os.path.realpath before checking containment -- must refuse to delete, and the real target file must
     never be touched. Skips gracefully if this environment can't create symlinks (common on Windows without
     Developer Mode / SeCreateSymbolicLinkPrivilege) rather than falsely reporting the protection as broken."""
@@ -350,7 +148,7 @@ def test_real_concurrent_write_lands_between_plan_and_delete_and_is_protected(is
 
 
 def test_corrupt_payload_json_row_does_not_crash_gc_and_orphans_its_blob(isolated):
-    """"Corrupt DB row" analog to the migrations section's corrupt-ledger test: a run row whose
+    """A run row whose
     payload_json is unparseable contributes nothing to the referenced set (per _referenced_digests' own
     `except Exception: continue`). Must not crash plan()/collect(), and the now-unreferenced blob becomes a
     legitimate delete candidate."""
@@ -380,9 +178,9 @@ def test_referenced_digests_ignores_a_hostile_non_hex_sha256_value(isolated):
     hostile_payload = json.dumps({"id": rid, "trace_ref": {"sha256": "../../../../etc/passwd"}})
     with closing(store._connect()) as db, db:
         db.execute(
-            "INSERT INTO runs(id, created_ts, created_at, source, client, model, substrate, parent_run_id,"
+            "INSERT INTO runs(id, created_ts, recorded_ts, created_at, source, client, model, substrate, parent_run_id,"
             " finish_reason, error, prompt_summary, response_summary, duration_ms, payload_json)"
-            " VALUES (?, 0, '', 'cli', 'unknown', '', '', NULL, NULL, NULL, '', '', 0, ?)",
+            " VALUES (?, 0, 0, '', 'cli', 'unknown', '', '', NULL, NULL, NULL, '', '', 0, ?)",
             (rid, hostile_payload),
         )
     with closing(store._connect()) as db:
@@ -602,6 +400,7 @@ class _FailingWfile:
 
 class RecordingHandler:
     def __init__(self, wfile=None):
+        self._route_sub = cs.SUB
         self.code = None
         self.headers = {"Host": "localhost"}
         self.wfile = wfile if wfile is not None else _FailingWfile(fail_after=10 ** 9)
@@ -852,9 +651,8 @@ def _raw_post(path, body_bytes=b"{}", headers=None):
     return head.decode("latin-1"), payload
 
 
-def test_cancel_proxy_503s_when_engine_is_none(monkeypatch):
-    """No model worker connected (offline import, or the worker crashed mid-boot): the proxy must fail
-    closed with a clean 503, never crash trying to call `.cancel()` on None."""
+def test_cancel_proxy_503s_when_selected_worker_is_unavailable(monkeypatch):
+    """An unavailable selected worker fails closed without attempting cancellation."""
     monkeypatch.setattr(cs, "ENGINE", None)
     handler = _JSONCaptureHandler()
 
@@ -862,7 +660,7 @@ def test_cancel_proxy_503s_when_engine_is_none(monkeypatch):
 
     assert claimed is True
     assert handler.code == 503
-    assert handler.body == {"error": "no engine connected"}
+    assert handler.body == {"error": "selected model worker is unavailable"}
 
 
 def test_cancel_proxy_502s_when_engine_cancel_raises(monkeypatch):
@@ -971,7 +769,7 @@ def test_cancel_is_gate_exempt_the_post_gate_is_never_touched(monkeypatch):
 
 def test_concurrent_cancel_fires_while_a_slow_generation_holds_the_post_gate(monkeypatch):
     """Race probe: this is the actual reason /cancel needs to be gate-exempt. While a slow generation holds
-    POST_GATE's one "turn" (a real in-flight, e.g., /engine/chat-shaped call), a concurrent /cancel for
+    a model worker's generation permit, a concurrent /cancel for
     that SAME request must still reach ENGINE.cancel() promptly -- if /cancel were NOT exempt, it would
     queue behind the very call it's trying to interrupt and could never actually cancel anything still
     running. Uses the module's REAL cs.POST_GATE, held busy by a second thread, and the REAL do_POST
@@ -1035,19 +833,18 @@ def test_engine_client_cancel_posts_req_id_under_req_key_verbatim(monkeypatch):
 #
 # clozn/server/routes/journal.py's try_get() recomputes calibration.ece(pairs)["bins"] and
 # calibration.risk_coverage(pairs) live, on every request, from whatever `rows` were persisted by the
-# last `clozn eval --save`. That saved payload is untrusted as far as this route is concerned -- it was
-# written by a prior process, possibly a prior version of the eval harness, and nothing re-validates its
-# shape on the read path. These tests hammer the row-to-pairs extraction (`r["score"], r["correct"]`,
+# newest `clozn eval --save`. The saved payload is untrusted as far as this route is concerned, so these
+# tests hammer the row-to-pairs extraction (`r["score"], r["correct"]`,
 # gated on `r.get(...) is not None`) in journal.py and calibration.py's own `_clean()` against missing,
-# empty, and hostile row shapes -- using the same `_JSONCaptureHandler` + monkeypatch(eval_store.load)
+# empty, and hostile row shapes -- using the same `_JSONCaptureHandler` + isolated profile lookup
 # pattern as section 4.
 
 def test_calibration_no_saved_report_returns_available_false_with_no_bins(monkeypatch):
-    """No `clozn eval --save` has ever run (or the file was deleted/corrupted): eval_store.load() returns
+    """No `clozn eval --save` has ever run (or the registry was deleted/corrupted): lookup returns
     None, and the route must answer available:false with neither reliability_bins nor risk_coverage
     present at all -- not an empty list standing in for "we computed this and there was nothing", which
     would be a different, stronger claim than "nothing was ever saved"."""
-    monkeypatch.setattr(eval_store, "load", lambda *a, **kw: None)
+    monkeypatch.setattr(eval_store, "load_latest_profile", lambda *a, **kw: None)
     h = _JSONCaptureHandler()
 
     claimed = journal_routes.try_get(h, "/journal/calibration")
@@ -1072,7 +869,7 @@ def test_calibration_valid_rows_produce_well_formed_reliability_bins_and_risk_co
         {"score": 0.35, "correct": False},
         {"score": 0.15, "correct": False},
     ]
-    monkeypatch.setattr(eval_store, "load", lambda *a, **kw: {"saved_ts": 100.0, "rows": rows})
+    monkeypatch.setattr(eval_store, "load_latest_profile", lambda *a, **kw: {"saved_ts": 100.0, "rows": rows})
     h = _JSONCaptureHandler()
 
     claimed = journal_routes.try_get(h, "/journal/calibration")
@@ -1103,7 +900,7 @@ def test_calibration_empty_rows_list_is_available_true_with_no_bins_key(monkeypa
     zero-item probe set): `rows` is falsy, so the route's `if rows:` guard skips the whole recompute block
     entirely -- available stays true (a report WAS saved), but reliability_bins/risk_coverage must not
     appear at all, not as empty lists silently standing in for "nothing to show"."""
-    monkeypatch.setattr(eval_store, "load", lambda *a, **kw: {"saved_ts": 100.0, "rows": []})
+    monkeypatch.setattr(eval_store, "load_latest_profile", lambda *a, **kw: {"saved_ts": 100.0, "rows": []})
     h = _JSONCaptureHandler()
 
     claimed = journal_routes.try_get(h, "/journal/calibration")
@@ -1122,7 +919,7 @@ def test_calibration_rows_with_none_or_missing_score_or_correct_are_dropped_not_
     `rows` itself is non-empty, the recompute block still runs; with zero valid pairs surviving the filter
     it must still emit 10 empty bins (not crash, not silently drop the key) and an empty risk_coverage."""
     rows = [{"score": None, "correct": True}, {"score": 0.5}]
-    monkeypatch.setattr(eval_store, "load", lambda *a, **kw: {"saved_ts": 100.0, "rows": rows})
+    monkeypatch.setattr(eval_store, "load_latest_profile", lambda *a, **kw: {"saved_ts": 100.0, "rows": rows})
     h = _JSONCaptureHandler()
 
     claimed = journal_routes.try_get(h, "/journal/calibration")
@@ -1148,7 +945,7 @@ def test_calibration_non_bool_truthy_correct_values_silently_count_as_correct(mo
         {"score": 0.9, "correct": "no"},
         {"score": 0.9, "correct": True},
     ]
-    monkeypatch.setattr(eval_store, "load", lambda *a, **kw: {"saved_ts": 100.0, "rows": rows})
+    monkeypatch.setattr(eval_store, "load_latest_profile", lambda *a, **kw: {"saved_ts": 100.0, "rows": rows})
     h = _JSONCaptureHandler()
 
     claimed = journal_routes.try_get(h, "/journal/calibration")
@@ -1168,7 +965,7 @@ def test_calibration_all_correct_or_all_wrong_rows_do_not_crash_ece_or_risk_cove
     well-behaved (no division-by-zero, no crash) even at that single-class extreme, which any future change
     wiring temperature fitting into this same route would need to preserve."""
     rows = [{"score": s, "correct": all_correct} for s in (0.1, 0.3, 0.5, 0.7, 0.9)]
-    monkeypatch.setattr(eval_store, "load", lambda *a, **kw: {"saved_ts": 100.0, "rows": rows})
+    monkeypatch.setattr(eval_store, "load_latest_profile", lambda *a, **kw: {"saved_ts": 100.0, "rows": rows})
     h = _JSONCaptureHandler()
 
     claimed = journal_routes.try_get(h, "/journal/calibration")
@@ -1186,11 +983,11 @@ def test_calibration_all_correct_or_all_wrong_rows_do_not_crash_ece_or_risk_cove
 
 
 def test_calibration_rows_key_absent_entirely_behaves_like_empty_rows(monkeypatch):
-    """A saved report from before `rows` existed in the schema, or a hand-edited/half-written file missing
-    the key entirely: `out.get("rows") or []` must treat a missing key identically to an empty list, never
+    """A hand-edited or incomplete profile missing `rows`: `out.get("rows") or []` must treat a missing
+    key identically to an empty list, never
     KeyError and never diverge in behavior from the empty-list case. available stays true (a report WAS
     saved) and saved_ago_s is still computed from the given saved_ts alone."""
-    monkeypatch.setattr(eval_store, "load", lambda *a, **kw: {"saved_ts": 123.0})
+    monkeypatch.setattr(eval_store, "load_latest_profile", lambda *a, **kw: {"saved_ts": 123.0})
     h = _JSONCaptureHandler()
 
     claimed = journal_routes.try_get(h, "/journal/calibration")

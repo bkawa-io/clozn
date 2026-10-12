@@ -64,7 +64,7 @@ from clozn.replay import span_bridge
 from clozn.replay.replay import replay as replay_run
 from clozn.runs.investigation_experiment import plan_experiment
 
-from .forced import _matched_length_filler
+from .forced import matched_length_neutral_filler
 
 
 def _now_iso() -> str:
@@ -201,7 +201,7 @@ def _run_content_arms(run: dict, resolved: dict, sub) -> "tuple[dict | None, dic
     if no_op_child is None:
         return None, None, None
 
-    replacement = _matched_length_filler if resolved["kind"] == "replace_span_neutral" else None
+    replacement = matched_length_neutral_filler if resolved["kind"] == "replace_span_neutral" else None
     messages = run.get("messages") or []
     ablated_messages = span_bridge.excise_spans(messages, resolved.get("spans") or [], replacement=replacement)
     treatment_child = replay_run({**run, "messages": ablated_messages}, {"greedy": True}, sub)

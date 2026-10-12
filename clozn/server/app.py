@@ -1,23 +1,15 @@
 """The single public Clozn product gateway.
 
 ``clozn serve`` hosts this Torch-free server in a background thread after its private C++ model worker is
-healthy.  All product HTTP surfaces—OpenAI compatibility, Studio, runs, memory,
-receipts, steering, and readouts—live here.  Training and calibration are offline lab
+healthy. All product HTTP surfaces—OpenAI compatibility, Studio, runs, receipts,
+experiments, and readouts—live here. Training and calibration are offline lab
 jobs and cannot be selected as alternate serving substrates.
 """
 import json
 import os
 import secrets
 import subprocess
-import sys
 import time
-
-# ``python -m clozn.server.app`` executes this file as ``__main__`` while route and substrate modules
-# import ``clozn.server.app`` by its dotted name.  Alias the live module before any of those imports so
-# they share the same SUB/ENGINE/route tables instead of recursively importing a second, half-built app.
-# Normal imports leave the package-owned module untouched.
-if __name__ == "__main__":
-    sys.modules.setdefault("clozn.server.app", sys.modules[__name__])
 
 os.environ.setdefault("CLOZN_RUNTIME_KIND", "product")
 RUNTIME_KIND = os.environ["CLOZN_RUNTIME_KIND"]
@@ -32,15 +24,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer   # noqa: E4
 
 POST_GATE = RequestGate.from_env()
 
-# POST_GATE (request_gate.py) exists because EngineSubstrate keeps generation metadata on a shared
-# object -- concurrent POST dispatch could let two requests corrupt each other's evidence (see
-# request_gate.py's module docstring). Backlog #2 ("request isolation + cancellation") moved the
-# generation-metadata piece onto a per-call RequestContext (see clozn/server/request_context.py +
-# EngineSubstrate.chat/chat_stream in substrates.py). Tone-dial strengths and prompt-mode memory cards --
-# this paragraph's other historical reason for the gate -- were retired with the rest of the
-# personalization layer, along with self.steer/self.memory and the /steer/*, /memory/* routes that used
-# to mutate them. The gate stays broad by default regardless: fork/checkpoint/replay/journal and
-# everything else NOT in _GENERATION_POST_PATHS below still reads or writes worker-shaped state this
+# POST_GATE protects worker-shaped state outside the request-local generation paths. Checkpoint,
+# replay, and journal operations are serialized unless a route has been explicitly audited as
+# worker-independent. Everything outside _GENERATION_POST_PATHS below reads or writes state this
 # process cannot prove is safe to run concurrently with generation (see WorkerGateRegistry.acquire_all's
 # docstring), so this remains a DELIBERATELY SMALL allowlist of POST paths audited to touch NEITHER the
 # substrate's generation state NOR anything else worker-scoped:
@@ -58,12 +44,9 @@ _GATE_EXEMPT_POSTS = frozenset({"/capture/tier", "/cancel"})
 # contract.md's Protocol table). do_POST does NOT acquire POST_GATE for
 # these; select_for_handler acquires a PER-WORKER generation gate itself,
 # AFTER selection (and any RT-04 cold-load coalescing) succeeds -- see that
-# function's docstring for why gating must happen there, not here. In
-# managed mode this is the entire reason two different models can now
-# generate concurrently instead of contending for one global turn; in
-# legacy (no managed router) mode, select_for_handler reuses POST_GATE
-# itself as the one worker's gate, so behavior there is byte-for-byte
-# unchanged. Every other POST path -- including every route this process
+# function's docstring for why gating must happen there, not here. This lets
+# different workers generate concurrently without contending for one global
+# turn. Every other POST path -- including every route this process
 # does not itself understand the worker-scope of (fork, checkpoint, replay,
 # journal, ...) -- still goes through POST_GATE below, and in managed mode
 # ALSO drains every configured worker's generation gate first (see
@@ -80,19 +63,13 @@ _GENERATION_POST_PATHS = frozenset({
 
 try:
     from clozn_engine import EngineClient, EngineError
-    # Product startup has exactly one model worker.  Requiring the supervisor-provided port here avoids
-    # silently constructing clients for two guessed ports and makes a directly-launched gateway fail
-    # closed.  Offline imports/tests still work with ENGINE=None.
-    _ENGINE_PORT = os.environ.get("CLOZN_ENGINE_PORT")
-    ENGINE = EngineClient(port=int(_ENGINE_PORT)) if _ENGINE_PORT else None
+    ENGINE = None
 except Exception:
     ENGINE = None
-    class EngineError(RuntimeError):   # fallback so `except EngineError` resolves even if the SDK import failed
+    class EngineError(RuntimeError):   # keeps imports usable when the worker SDK is unavailable
         pass
 
-# RT-03: absent keeps the historical single-worker process exactly as it was.
-# A configured PreloadedModelRouter applies a request-scoped substrate/engine
-# override before any generation path runs.
+# Product startup always installs the router. ``None`` keeps route modules importable for isolated tests.
 MODEL_ROUTER = None
 PUBLIC_MODEL_ID = None
 STRUCTURED_MODE = "auto"
@@ -101,25 +78,19 @@ STRUCTURED_MODE = "auto"
 class EngineUnavailable(RuntimeError):
     """Raised when the engine is completely UNREACHABLE (connection refused / host down -- a raw
     urllib.error.URLError, never even got an HTTP response), as opposed to EngineError (the engine
-    responded, but with a non-2xx JSON error). Routes that dispatch through a substrate's handle() (the
-    generic per-action fallback in _dispatch_post below) raise/catch this specially so a dead
-    engine answers with the same clean 502 shape every other engine-touching route uses, instead of a
-    bare URLError leaking to the generic 500 fallback (see the engine-down pressure test's finding #1)."""
+    responded, but with a non-2xx JSON error). Routes translate this to a consistent 502 response."""
 
 
 def _engine_unreachable_message() -> str:
     """The one canonical "the engine isn't there" message, shared by every caller that needs to tell a
     dead engine apart from some other failure (the receipt/rederive/swap_receipt routes,
     EngineSubstrate.jlens) -- so the wording is identical everywhere, not re-typed per call site."""
-    if MODEL_ROUTER is not None:
-        return "selected model worker is not reachable"
-    base = getattr(ENGINE, "base", None) or "the engine"
-    return f"engine not reachable at {base} -- is it running?"
+    return "selected model worker is not reachable"
 
 
 def _engine_reachable(sub=None) -> bool:
-    """True iff there's a real engine client to ask (`sub.engine`, falling back to the module-level
-    ENGINE) AND a live GET /health round-trip on it actually connects. Used by routes whose underlying op
+    """True iff the selected substrate has an engine client to ask and a live GET /health round-trip
+    on it actually connects. Used by routes whose underlying op
     (receipts.receipt/rederive/replay -- all documented "never raise into the caller") swallows a
     dead-engine URLError into an ambiguous None/False result: probing here on that ambiguous path (never
     on the happy path) lets the route tell "the engine is down" apart from "bad request/other failure"
@@ -131,8 +102,6 @@ def _engine_reachable(sub=None) -> bool:
     failure that has nothing to do with engine connectivity keeps its ordinary generic message instead of
     being mislabeled "engine not reachable"."""
     eng = getattr(sub, "engine", None) if sub is not None else None
-    if eng is None:
-        eng = ENGINE
     if eng is None or not hasattr(eng, "health"):
         return True
     try:
@@ -379,40 +348,15 @@ def _jlens_envelope(res, run_id, text_source, want_protocol=False):
     return out
 
 
-# (ENGINE_STEER/_engine_steer() -- the tone-dial EngineSteer cache -- and ENGINE_CONCEPT_STEER/
-# _engine_concept_steer() -- the Studio "any-concept dial" cache, clozn/analysis/concept_dir.py's
-# ConceptSteer -- were both retired with the rest of the personalization layer: their one production
-# caller, Substrate._steer()'s /steer/concept/set|check dispatch, went with it. The underlying
-# concept_dir.ConceptSteer mechanism survives as causal-attribution machinery (generation_guard.py's
-# counter-steer loop), but that caller constructs its own fresh, per-request, per-layer instance rather
-# than reading a cached process-global one, so nothing here needs to cache it either.)
-
-
-def _qwen_tmpl(messages):
-    """Render chat messages into Qwen's chat-template STRING (ChatML). LEGACY: kept only as a documented
-    reference / last-ditch fallback -- the engine generation paths now template PER-MODEL via
-    _engine_tmpl (the GGUF's own embedded chat template), so a non-Qwen model gets its correct format.
-    A torch substrate would not use this (HF applies the tokenizer's template internally)."""
-    sysmsg = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
-    for m in messages:
-        if m.get("role") == "system" and m.get("content"):
-            sysmsg = m["content"]
-    s = f"<|im_start|>system\n{sysmsg}<|im_end|>\n"
-    for m in messages:
-        if m.get("role") in ("user", "assistant"):
-            s += f"<|im_start|>{m['role']}\n{m.get('content', '')}<|im_end|>\n"
-    return s + "<|im_start|>assistant\n"
-
-
 def _engine_tmpl(engine, messages, usage_out=None):
     """Render chat `messages` to a prompt string using the ENGINE-LOADED MODEL'S OWN chat template
     (POST /apply_template -> llama_chat_apply_template over the GGUF's tokenizer.chat_template). THIS is
     what makes the engine paths model-agnostic: whatever GGUF the engine has loaded, its messages are
     formatted in that model's native template (Qwen ChatML, Llama-3 headers, Gemma turns, ...), instead
-    of a hardcoded Qwen string. Replaces _qwen_tmpl on every EngineSubstrate generation path.
+    of a hardcoded model-specific string.
 
     Errors propagate deliberately (no silent Qwen fallback): a model with no embedded template, or an
-    engine too old to expose /apply_template, must surface -- silently mis-formatting the prompt is the
+    worker without /apply_template must surface -- silently mis-formatting the prompt is the
     exact bug this removes. Callers that need a soft degrade catch EngineError themselves."""
     if usage_out is not None and hasattr(engine, "apply_template_info"):
         info = engine.apply_template_info(messages)
@@ -423,16 +367,11 @@ def _engine_tmpl(engine, messages, usage_out=None):
     return engine.apply_template(messages)
 
 
-# (_model_scoped_path/_disk_dials/_dial_calibration/_with_calibration/_library_dial_names -- the
-# per-exact-GGUF tone-dial state/calibration/library readers backing /steer/axes -- were retired with the
-# rest of the personalization layer; there is no more studio_personality.json, dial_calibration.json, or
-# studio_library.json to read.)
-
-
-# ------- message assembly: extracted to clozn/server/message_assembly.py; re-exported (the seam) ----
+# ------- message inspection/export and canonical effective-prompt assembly --------------------------
 from clozn.server.message_assembly import (                                              # noqa: E402
-    _last_user, _inject_block, _export_markdown,
+    _last_user, _export_markdown,
 )
+from clozn.experiments.effective_prompt import inject_block                              # noqa: E402
 
 SUB = None         # the active substrate object
 SUBNAME = "engine"  # product server has one substrate; PyTorch model work lives in the lab
@@ -469,12 +408,7 @@ from clozn.server.substrates import (                                           
 
 # ------- route families: registered in dispatch order; each exposes try_get/try_post(handler, path, ...) --
 # returning True once it has written a response, so do_GET/do_POST can stop at the first family that
-# claims a path -- exactly the first-match-wins order the old inline if/elif chain had. POST falls
-# through, after every family, to the generic SUB.handle(path, body) substrate dispatch inlined at the
-# end of do_POST -- a hook for substrate-polymorphic domain dispatch (not per-path HTTP routing) that
-# used to be the /memory/*, /steer/* catch-all; both of those, and the base Substrate class that carried
-# them, were retired with the rest of the personalization layer, but the fallback itself stays for
-# whatever substrate-specific POST surface (if any) still needs it.
+# claims a path. Unknown POST routes return a normal 404 after every family declines them.
 #
 # runs.try_get_fallback (the generic GET /runs/<id>) is registered LAST in _GET_ROUTES, deliberately --
 # every more-specific /runs/<id>/<suffix> family (receipts' /export, runs' own /timeline etc.) must get
@@ -532,74 +466,30 @@ _POST_ROUTES = [_health_routes, _receipts_routes,
 
 
 def active_sub(h):
-    """The substrate for this request: the handler's injected substrate if it has one, else the module
-    global SUB (product default; what tests monkeypatch as cs.SUB). getattr-based so a plain/mock handler
-    with no injection resolves to the global -- routes never touch the raw global directly."""
-    routed = getattr(h, "_route_sub", None)
-    if routed is not None:
-        return routed
-    inj = getattr(h, "_inj_sub", None)
-    if inj is not None:
-        return inj
-    router = MODEL_ROUTER
-    if router is not None:
-        # Managed workers are never an ambient default for engine-touching
-        # operations. Generation routes install an exact request selection;
-        # run-scoped control routes must explicitly select the immutable run's
-        # model. Falling through to SUB/control_pair here would silently
-        # analyze a non-default run on the default worker.
-        return None
-    return SUB
+    """Return the substrate explicitly selected for this request, if any."""
+    return getattr(h, "_route_sub", None)
 
 
 def active_subname(h):
     routed = getattr(h, "_route_subname", None)
-    if routed is not None:
-        return routed
-    inj = getattr(h, "_inj_subname", None)
-    return inj if inj is not None else SUBNAME
+    return routed if routed is not None else "engine"
 
 
 def active_engine(h):
     routed = getattr(h, "_route_engine", None)
     if routed is not None:
         return routed
-    router = MODEL_ROUTER
-    if router is not None:
-        return None
     sub = active_sub(h)
-    engine = getattr(sub, "engine", None) if sub is not None else None
-    return engine if engine is not None else ENGINE
+    return getattr(sub, "engine", None) if sub is not None else None
 
 
 def active_kind(h):
-    inj = getattr(h, "_inj_kind", None)
-    return inj if inj is not None else RUNTIME_KIND
+    return RUNTIME_KIND
 
 
-def make_handler(sub=None, subname=None, runtime_kind=None):
-    """Build the HTTP handler class. sub/subname/runtime_kind are INJECTABLE: when None they fall back to
-    this module's globals (SUB/SUBNAME/RUNTIME_KIND) -- what `clozn serve` sets and what tests monkeypatch
-    as cs.SUB -- so the product path and its tests are unchanged. `clozn lab` passes its own, so it owns
-    its handler + substrate WITHOUT reaching in to mutate this module's globals. Handler code reads
-    _sub()/_subname()/_kind(); route modules read h.sub / h.subname / h.runtime_kind (same source)."""
-    def _sub():
-        return sub if sub is not None else SUB
-
-    def _subname():
-        return subname if subname is not None else SUBNAME
-
-    def _kind():
-        return runtime_kind if runtime_kind is not None else RUNTIME_KIND
-
+def make_handler():
+    """Build the public gateway handler. Model workers are attached per request by the router."""
     class H(BaseHTTPRequestHandler):
-        # The injected substrate/name/kind for this handler (None on the product path, which uses the
-        # module globals). Route modules resolve them via ctx.active_sub(h)/active_subname(h)/active_kind(h),
-        # which getattr-fall-back to the globals when unset -- so a plain/mock handler with no injection
-        # still resolves to cs.SUB (what the product sets and tests monkeypatch). Handler-internal code
-        # uses the _sub()/_subname()/_kind() closures above (same source).
-        _inj_sub, _inj_subname, _inj_kind = sub, subname, runtime_kind
-
         def log_message(self, *a):
             pass
 
@@ -736,10 +626,7 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                      output_contract=None, sections=None):
             """Persist this interaction as an inspectable run (never let logging break the request).
             mem_out: the {final_prompt, assembled_messages, actual_prompt_tokens?} record the generation
-            path filled in -- what the substrate actually did with this turn. (Used to also carry the
-            memory manifest -- applied cards, gate, strength -- until the 2026-07-27 cards cut, and the
-            active tone-dial strengths until the personalization-layer cut that followed; see the body
-            below for what survives.)
+            path filled in -- what the substrate actually did with this turn.
             extra_meta (optional): additional {key: value} pairs folded into the run's `meta` block on top
             of the substrate/build-commit/capture-tier fields this method already assembles -- e.g. sse.py
             tags a failed stream with {"stream_failure": "client_disconnected" | "worker_disconnected"} so
@@ -749,8 +636,7 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
             `sections` (optional): the caller's own explicit-or-auto prompt-section manifest (see
             clozn.runs.sections) -- e.g. openai.py's /v1/chat/completions builds one from the incoming
             messages before this is called. Threaded straight through to runlog.record; this method does
-            not itself derive or augment it (the memory-card-folding this used to do here was removed with
-            the rest of memory on 2026-07-27 -- there is no card manifest left to fold in).
+            not itself derive or augment it.
             Returns the new run's id (str) on success, else None -- any failure along the way is swallowed,
             never raised. The M5 any-client bridge surfaces this id to the caller; None means "nothing to
             surface", not an error the request should see."""
@@ -785,12 +671,6 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                 think = sanitize_reply(response, implicit_open=prompt_opens_think(mo.get("final_prompt")))
                 response = think.public_text
                 reasoning = think.journal()
-                # (The memory manifest -- cards_applied / applied_ids / strength / gate / prompt_block
-                # -- was assembled here until the 2026-07-27 cards cut. Runs carry no `memory` block at
-                # all now, and the readers of the old shape were removed with it. The active-tone-dial
-                # extraction that used to sit here -- `behavior={"active_dials": dials}` on the record
-                # below -- went the same way with the rest of the personalization layer: there is no more
-                # steer object to read, and runlog.record() no longer accepts a `behavior` field at all.)
                 meta = None
                 try:                                          # engine: {model_file, quant, mode, sampling}
                     if request_sub is not None and hasattr(request_sub, "run_meta"):
@@ -1019,8 +899,7 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
             # here. In managed mode it must still never run concurrently with generation on a worker it
             # might touch (checkpoint harvest, ...) -- see
             # WorkerGateRegistry.acquire_all's docstring. Draining every configured worker's turn gives
-            # this the exact same "nothing else is running" guarantee POST_GATE alone used to give
-            # everything, scoped down to just this unclassified bucket.
+            # this bucket the required "nothing else is running" guarantee.
             router = MODEL_ROUTER
             registry = getattr(router, "gate", None) if router is not None else None
             exclusive_release = None
@@ -1095,51 +974,23 @@ def make_handler(sub=None, subname=None, runtime_kind=None):
                     traceback.print_exc()
                     self._json(500, {"error": f"{type(e).__name__}: {e}", "route": p})
                     return
-            # Generic fallback: whatever the active substrate's own per-action dispatch serves --
-            # substrate-polymorphic domain dispatch, not per-path HTTP routing, so it stays here rather
-            # than in a route module. Used to reach Substrate._memory/_steer's /memory/* and /steer/*
-            # catch-all; both that dispatcher and the base Substrate class carrying it were retired with
-            # the rest of the personalization layer, so no substrate defines handle() any more today --
-            # the hasattr guard below keeps this an honest 409 (not an AttributeError-turned-500) for
-            # whatever substrate-specific POST surface a future substrate might still add one for.
-            try:
-                fallback_sub = active_sub(self)
-                fallback_name = active_subname(self)
-                r = (fallback_sub.handle(p, body)
-                    if fallback_sub is not None and hasattr(fallback_sub, "handle") else None)
-                if r is None:
-                    return self._json(409, {
-                        "error": (
-                            f"'{p}' isn't served by the "
-                            f"'{fallback_name}' substrate"
-                        ),
-                        "need": "dream" if p == "/denoise" else "qwen",
-                        "active": fallback_name,
-                    })
-                self._json(200, r)
-            except EngineUnavailable as e:
-                # the engine is down -- the same clean 502 shape every other engine-touching route uses,
-                # not the generic 500 below.
-                self._json(502, {"error": str(e)})
-            except Exception as e:
-                self._json(500, {"error": f"{type(e).__name__}: {e}"})
+            self._json(404, {"error": f"unknown route: {p}"})
 
     return H
 
 
-def build_server(*, host: str, port: int, engine, model_router=None, sub=None,
+def build_server(*, host: str, port: int, engine, model_router,
                  public_model_id=None, structured_mode="auto"):
-    """Build the public HTTP server for either gateway construction path.
+    """Build the public HTTP server around the supervisor-owned model router.
 
-    ``clozn serve`` supplies the already-owned worker/router objects directly,
-    so no projection file or engine-port environment handoff is needed. The
-    globals are intentional: route modules
-    already resolve the active product substrate through this module, while the
-    returned server owns only socket/thread lifetime.
+    The globals are intentional: route modules resolve the active request through
+    this module, while the returned server owns only socket and thread lifetime.
     """
     global SUB, SUBNAME, RUNTIME_KIND, ENGINE, MODEL_ROUTER, PUBLIC_MODEL_ID, STRUCTURED_MODE
     if engine is None:
         raise RuntimeError("the product gateway needs a private model worker")
+    if model_router is None:
+        raise RuntimeError("the product gateway needs a model router")
     os.environ["CLOZN_RUNTIME_KIND"] = "product"
     RUNTIME_KIND = "product"
     SUBNAME = "engine"
@@ -1147,12 +998,9 @@ def build_server(*, host: str, port: int, engine, model_router=None, sub=None,
     MODEL_ROUTER = model_router
     PUBLIC_MODEL_ID = public_model_id or None
     STRUCTURED_MODE = structured_mode
-    if model_router is not None:
-        SUB, managed_engine = model_router.control_pair()
-        if managed_engine is not None:
-            ENGINE = managed_engine
-    else:
-        SUB = sub if sub is not None else EngineSubstrate(engine=engine)
+    SUB, managed_engine = model_router.control_pair()
+    if managed_engine is not None:
+        ENGINE = managed_engine
     if structured_mode == "required":
         from clozn.server import structured_io
         identity = {}

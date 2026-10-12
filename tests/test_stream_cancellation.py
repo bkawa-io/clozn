@@ -103,6 +103,7 @@ class RecordingHandler:
     positional-vs-keyword call style."""
 
     def __init__(self, wfile=None):
+        self._route_sub = cs.SUB
         self.code = None
         self.headers = {"Host": "localhost"}
         self.sent_headers = []

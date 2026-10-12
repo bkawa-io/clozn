@@ -62,15 +62,13 @@ def test_new_worker_timing_keeps_prefill_and_decode_separate_and_decode_excludes
     assert parsed["worker_timing"]["phases"][0]["start_ns"] == 0
 
 
-def test_old_worker_terminal_frame_remains_compatible():
+def test_terminal_frame_without_versioned_timing_does_not_invent_measurements():
     assert generation_timing_from_frames([{
         "type": "gen_finished", "wall_ms": 25.0, "new_tokens": 2,
         "steps_total": 2, "tok_per_s": 80.0,
     }]) == {
-        "generation_duration_ms": 25.0,
         "generation_tokens": 2,
         "generation_steps": 2,
-        "generation_tokens_per_second": 80.0,
     }
 
 
@@ -135,7 +133,7 @@ def test_cold_first_run_evaluates_load_and_warm_run_does_not_invent_one():
 def test_long_prompt_uses_measured_prefill_instead_of_allocating_unknown_time():
     run = {
         "id": "long",
-        "context_receipt": {"limits": {"prompt_tokens": 7500, "context_window_tokens": 8192}},
+        "context_receipt": {"rendered": {"tokens": 7500}, "context_window_tokens": 8192},
         "meta": {
             "generation_duration_ms": 100,
             "worker_timing": _worker_timing(_phase("prefill", 700_000_000)),

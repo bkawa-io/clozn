@@ -11,10 +11,10 @@
    token at a time. Every visual element below either reads a field from the data contract or is
    explicitly a declared decoration (see "HONESTY" below) -- no unearned glow.
 
-   Colors are NEVER hardcoded: every fill/stroke reads studio/app/tokens.css custom properties via
+   Colors are NEVER hardcoded: every fill/stroke reads the host document's custom properties via
    getComputedStyle(document.documentElement), so the scene inherits dawn/night automatically from
    whatever the host page has set (prefers-color-scheme or an explicit [data-theme]). setNight() is
-   kept for API parity with light.mjs's mountLight and to force an immediate cache refresh right after
+   kept to force an immediate cache refresh right after
    a host-driven theme flip; a MutationObserver + matchMedia listener also keep colors live without it.
 
    ============================================================================ DATA CONTRACT
@@ -331,11 +331,10 @@ function sameTexts(a, b) {
 /* ============================================================================ atmosphere (WebGL2 enhancement layer, spec SS9.2)
    A second canvas, painted BENEATH the Canvas2D layer above it (text, precise bolt geometry, and hit-
    testing STAY Canvas2D -- legibility constitution: no texture over text). Raw WebGL2, hand-written
-   GLSL, zero deps, matching studio/app/light.mjs's idiom (fullscreen triangle via gl_VertexID, dual
+   GLSL, zero deps, using a fullscreen triangle via gl_VertexID, dual
    parity via a uNight uniform, activity-gated motion via uAct -- "time flows with activity", decaying
-   so motion must be re-earned). This module does NOT import or modify light.mjs; the fullscreen-
-   triangle trick and the dual-parity/activity pattern are the house convention, reproduced
-   independently here for the casting's own uniform surface.
+   so motion must be re-earned). The atmosphere is implemented independently for the casting's own
+   uniform surface.
 
    GRACEFUL ABSENCE: if WebGL2 context creation (or shader compile/link) fails, createAtmosphere()
    returns null, the extra <canvas class="cst-gl"> is removed from the DOM, and mountCasting's

@@ -1,6 +1,5 @@
 """Tests for clozn.experiments.stats (Phase 4.4: paired bootstrap CIs, seed aggregation, multiple-
-comparison honesty, predeclared primary metric, replay-honesty labels) and the small, backward-compatible
-``primary_metric`` addition this module relies on in clozn.experiments.suite's manifest schema.
+comparison honesty, predeclared primary metric, and replay-honesty labels).
 Model-free: everything here is pure over hand-built / suite.validate_result-shaped dicts, never a live
 gateway."""
 from __future__ import annotations
@@ -160,10 +159,8 @@ def test_primary_metric_rejects_malformed_declarations(bad):
         suite.validate_manifest(_base_manifest(primary_metric=bad))
 
 
-def test_primary_metric_absent_key_never_changes_the_manifest_digest():
-    """Backward compatibility: an old manifest that never mentions primary_metric must digest identically
-    before and after this field existed, so a previously-saved experiment result's manifest_sha256 still
-    validates (suite.validate_result re-validates the embedded manifest and recomputes the digest)."""
+def test_manifest_validation_is_digest_idempotent_without_a_primary_metric():
+    """Repeated validation must not change the canonical manifest digest."""
     manifest = _base_manifest()
     before = suite._manifest_digest(suite.validate_manifest(manifest))
     # Re-validating (as validate_result does on every load) must be idempotent and stable.
@@ -220,6 +217,7 @@ def _result_with_three_variants():
     result = {
         "schema_version": suite.RESULT_SCHEMA, "experiment_id": "exp_three_variant", "name": manifest["name"],
         "created_at": "2026-07-22T00:00:00Z", "manifest_sha256": suite._manifest_digest(manifest),
+        "suite_fingerprint": suite.suite_fingerprint(manifest, seeds=manifest["seeds"]),
         "manifest": manifest, "seeds": manifest["seeds"], "cells": cells,
         "summary": suite._summarize(cells, "base", [v["name"] for v in manifest["variants"]]),
     }

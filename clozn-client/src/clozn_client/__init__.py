@@ -55,6 +55,11 @@ from .models import (
     RunPage,
     ScoreResult,
     ScoreToken,
+    ScoreVariantResult,
+    ScoreVariantsExecution,
+    ScoreVariantsExecutionIdentity,
+    ScoreVariantsResult,
+    ScoreVariantsWave,
     Timeline,
 )
 
@@ -106,6 +111,11 @@ __all__ = [
     "ScoreRequest",
     "ScoreResult",
     "ScoreToken",
+    "ScoreVariantResult",
+    "ScoreVariantsExecution",
+    "ScoreVariantsExecutionIdentity",
+    "ScoreVariantsResult",
+    "ScoreVariantsWave",
     "Timeline",
     "run_manifest_batch",
     "compare_batch_runs",

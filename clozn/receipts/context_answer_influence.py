@@ -236,7 +236,8 @@ def portable_export(artifact: dict, *, privacy: str = "metadata_only") -> dict:
 
     method = artifact.get("method")
     method = deepcopy(method) if isinstance(method, dict) else {}
-    method.setdefault("version", "legacy_unversioned")
+    if method.get("version") != CACHE_METHOD_VERSION:
+        raise ValueError(f"method.version must be {CACHE_METHOD_VERSION!r}")
     source_digest = _digest(artifact)
     exported = {
         "schema_version": EXPORT_SCHEMA,
@@ -391,25 +392,9 @@ def _message_source(message: dict, index: int, *, prompt_view: str,
     }
 
 
-def _sources(messages: list, *, prompt_view: str, block: str | None,
+def _sources(messages: list, *, prompt_view: str,
              receipt_sources: dict[int, dict] | None = None) -> list[dict]:
     sources = []
-    # A fallback prompt block is scored through score_arm's block argument.  Treat
-    # it as a virtual system source so the map does not silently omit injected
-    # memory on legacy runs without assembled_messages.
-    if prompt_view != "assembled_messages" and isinstance(block, str) and block.strip():
-        sources.append({
-            "id": "p.b000",
-            "target": "block",
-            "message_index": None,
-            "role": "system",
-            "name": "prompt_block",
-            "external_source_id": None,
-            "source_kind": "prompt_block",
-            "start": 0,
-            "end": len(block),
-            "text": block,
-        })
     for index, message in enumerate(messages):
         source = _message_source(
             message, index, prompt_view=prompt_view,
@@ -476,7 +461,7 @@ def _partition_units(units: list[dict], count: int) -> list[list[dict]]:
     ]
 
 
-def segment_context(messages: list, *, block: str | None = None,
+def segment_context(messages: list, *,
                     prompt_view: str = "assembled_messages",
                     max_spans: int = DEFAULT_MAX_CONTEXT_SPANS,
                     target_chunk_chars: int = DEFAULT_TARGET_CHUNK_CHARS,
@@ -488,9 +473,7 @@ def segment_context(messages: list, *, block: str | None = None,
     IDs (``p.mNNN.cNNN``) leave room for later fine descendants.
     """
     limit = max(1, int(max_spans))
-    all_sources = _sources(
-        messages, prompt_view=prompt_view, block=block, receipt_sources=receipt_sources,
-    )
+    all_sources = _sources(messages, prompt_view=prompt_view, receipt_sources=receipt_sources)
     selected, omitted_ids = _select_sources(all_sources, limit)
     units = {
         source["id"]: _text_ranges(source["text"], target_chunk_chars=target_chunk_chars)
@@ -570,19 +553,14 @@ def _receipt_sources(run: dict) -> dict[int, dict]:
     return indexed
 
 
-def _replace_span(messages: list, block: str | None, span: dict) -> tuple[list, str | None, dict]:
+def _replace_span(messages: list, span: dict) -> tuple[list, dict]:
     replacement = matched_length_neutral_filler(span["end"] - span["start"])
     copied = [dict(message) if isinstance(message, dict) else message for message in messages]
-    copied_block = block
-    if span["target"] == "block":
-        original = copied_block or ""
-        copied_block = original[:span["start"]] + replacement + original[span["end"]:]
-    else:
-        index = span["message_index"]
-        original = copied[index]["content"]
-        copied[index]["content"] = (
-            original[:span["start"]] + replacement + original[span["end"]:]
-        )
+    index = span["message_index"]
+    original = copied[index]["content"]
+    copied[index]["content"] = (
+        original[:span["start"]] + replacement + original[span["end"]:]
+    )
     control = {
         "context_span_id": span["id"],
         "kind": "matched_length_neutral_filler",
@@ -592,7 +570,7 @@ def _replace_span(messages: list, block: str | None, span: dict) -> tuple[list, 
         "length_preserved": len(replacement) == span["end"] - span["start"],
         "replacement_sha256": hashlib.sha256(replacement.encode("utf-8")).hexdigest(),
     }
-    return copied, copied_block, control
+    return copied, control
 
 
 def _refine_span(span: dict, *, target_chunk_chars: int, max_fine_spans: int) -> list[dict]:
@@ -639,14 +617,13 @@ def _refine_span(span: dict, *, target_chunk_chars: int, max_fine_spans: int) ->
     return fine_spans
 
 
-def _replace_spans(messages: list, block: str | None, spans: list[dict]) -> tuple[list, str | None, list[dict]]:
+def _replace_spans(messages: list, spans: list[dict]) -> tuple[list, list[dict]]:
     """Replace MULTIPLE bounded spans in one arm, each with its own independent matched-length
-    neutral filler. Edits inside the same message/block text apply right-to-left so an earlier
+    neutral filler. Edits inside the same message apply right-to-left so an earlier
     replacement never shifts a later span's recorded offsets. Used only by the bounded redundant-pair
     joint-ablation check -- every other arm still replaces exactly one span via ``_replace_span``.
     """
     copied = [dict(message) if isinstance(message, dict) else message for message in messages]
-    copied_block = block
     controls: list[dict] = []
 
     def _apply(text: str, group: list[dict]) -> str:
@@ -665,20 +642,14 @@ def _replace_spans(messages: list, block: str | None, spans: list[dict]) -> tupl
         return text
 
     by_message: dict[int, list[dict]] = {}
-    block_spans = []
     for span in spans:
-        if span["target"] == "block":
-            block_spans.append(span)
-        else:
-            by_message.setdefault(span["message_index"], []).append(span)
+        by_message.setdefault(span["message_index"], []).append(span)
     for index, group in by_message.items():
         copied[index]["content"] = _apply(copied[index]["content"], group)
-    if block_spans:
-        copied_block = _apply(copied_block or "", block_spans)
 
     order = [span["id"] for span in spans]
     controls.sort(key=lambda control: order.index(control["context_span_id"]))
-    return copied, copied_block, controls
+    return copied, controls
 
 
 def _validated_tokens(tokens: list) -> list[dict] | None:
@@ -766,7 +737,7 @@ def _summary(prompt_spans: list[dict], answer_spans: list[dict], links: list[dic
     }
 
 
-def _redundancy_check(sub, conditions, messages, block, *, prompt_spans: list[dict], matrix: list[list],
+def _redundancy_check(sub, conditions, messages, *, prompt_spans: list[dict], matrix: list[list],
                       answer_spans: list[dict], baseline_tokens, baseline: list[dict], floor: float,
                       clock) -> dict:
     """One bounded joint-ablation control on the two most strongly-clearing DISTINCT context spans.
@@ -794,10 +765,9 @@ def _redundancy_check(sub, conditions, messages, block, *, prompt_spans: list[di
     row_a, row_b = matrix[index_a], matrix[index_b]
 
     arm_started = clock()
-    joint_messages, joint_block, joint_controls = _replace_spans(messages, block, [span_a, span_b])
+    joint_messages, joint_controls = _replace_spans(messages, [span_a, span_b])
     joint_tokens, joint_ok = rederive.score_arm(
-        sub, conditions, messages=joint_messages, block=joint_block,
-        steer_strengths=conditions.get("steer_strengths") or {},
+        sub, conditions, messages=joint_messages, block=None,
     )
     score_ms = _round(max(0.0, (clock() - arm_started) * 1000.0))
     context_span_ids = [id_a, id_b]
@@ -860,11 +830,7 @@ def context_answer_influence(run: dict, sub, *, max_context_spans: int = DEFAULT
     started = clock()
     run = run if isinstance(run, dict) else {}
     conditions = rederive.with_arm_conditions(run)
-    prompt_view = conditions.get("block_source") or "none"
-    if prompt_view == "prompt_block":
-        prompt_view = "messages_plus_prompt_block"
-    elif prompt_view == "none":
-        prompt_view = "messages"
+    prompt_view = conditions.get("block_source") or "messages"
 
     try:
         if not run:
@@ -878,7 +844,7 @@ def context_answer_influence(run: dict, sub, *, max_context_spans: int = DEFAULT
             messages = []
 
         segmented = segment_context(
-            messages, block=block, prompt_view=prompt_view,
+            messages, prompt_view=prompt_view,
             max_spans=max_context_spans, target_chunk_chars=target_chunk_chars,
             receipt_sources=_receipt_sources(run),
         )
@@ -909,7 +875,6 @@ def context_answer_influence(run: dict, sub, *, max_context_spans: int = DEFAULT
         baseline_started = clock()
         baseline_tokens, baseline_ok = rederive.score_arm(
             sub, conditions, messages=messages, block=block,
-            steer_strengths=conditions.get("steer_strengths") or {},
         )
         baseline_ms = max(0.0, (clock() - baseline_started) * 1000.0)
         baseline = _validated_tokens(baseline_tokens) if baseline_ok else None
@@ -931,11 +896,10 @@ def context_answer_influence(run: dict, sub, *, max_context_spans: int = DEFAULT
         answer_spans, answer = _answer_spans(baseline, str(conditions.get("response") or ""))
 
         def _score_one(span: dict) -> tuple[bool, list | None, dict, float]:
-            arm_messages, arm_block, control = _replace_span(messages, block, span)
+            arm_messages, control = _replace_span(messages, span)
             arm_started = clock()
             arm_tokens, arm_ok = rederive.score_arm(
-                sub, conditions, messages=arm_messages, block=arm_block,
-                steer_strengths=conditions.get("steer_strengths") or {},
+                sub, conditions, messages=arm_messages, block=None,
             )
             arm_ms = max(0.0, (clock() - arm_started) * 1000.0)
             raw_deltas = _forced_deltas(baseline_tokens, arm_tokens) if arm_ok else None
@@ -1074,7 +1038,7 @@ def context_answer_influence(run: dict, sub, *, max_context_spans: int = DEFAULT
         _checkpoint(cancel_requested, progress, "finalize", 0, 1)
         redundancy = (
             _redundancy_check(
-                sub, conditions, messages, block, prompt_spans=prompt_spans, matrix=matrix,
+                sub, conditions, messages, prompt_spans=prompt_spans, matrix=matrix,
                 answer_spans=answer_spans, baseline_tokens=baseline_tokens, baseline=baseline,
                 floor=floor, clock=clock,
             )

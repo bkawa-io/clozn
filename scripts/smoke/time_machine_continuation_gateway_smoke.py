@@ -438,7 +438,7 @@ def run_battery(args) -> tuple[list[dict], dict]:
         if not os.path.isfile(engine):
             rows.append(_row("worker build is available", SKIP, f"engine not found: {engine}"))
             return rows, {}
-        environment["CLOZN_ENGINE_BIN"] = engine
+        environment["CLOZN_ENGINE"] = engine
         environment["CLOZN_ENGINE_GPU"] = "1" if args.gpu else "0"
     if args.engine:
         discovery = args.engine

@@ -67,7 +67,7 @@ def test_low_level_probe_is_non_journaling_and_uses_explicit_contract(monkeypatc
     result = sub.probe_reference_match(
         [{"role": "user", "content": "hello"}], [10, 11, 12],
         generation_contract=CONTRACT,
-        explicit_conditions={"steer_strengths": {"warm": 0.9}},
+        explicit_conditions={},
     )
     assert result["status"] == "matched"
     assert result["termination_match"] is True

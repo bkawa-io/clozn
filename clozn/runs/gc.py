@@ -7,8 +7,8 @@ A blob becomes ORPHANED the moment its only
 referencing run row is gone -- pruned by `store._prune()` (KEEP=1000 rows), replaced by `replace_run()`
 with a different trace/map, or deleted by hand. Nothing has ever cleaned these up; they just accumulate.
 
-This module never deletes anything on its own -- `store.py` does not import it, and nothing calls it
-except the `clozn migrate --gc` CLI path. That is intentional: blob deletion is a destructive,
+This module never deletes anything on its own -- `store.py` does not import it, and the user-facing path
+is the explicit `clozn runs gc --apply` command. Blob deletion is a destructive,
 explicitly-requested operation, not something that happens as a side effect of an unrelated read/write.
 
 Safety invariants (read before touching this file):
@@ -96,7 +96,7 @@ def plan(*, blob_root: str | None = None) -> dict:
     """Compute the GC plan without touching disk. `keep`/`delete` are lists of {"path", "digest", "bytes"};
     `malformed` lists anything on disk that doesn't even look like a content-addressed blob (never a
     deletion candidate, reported so `doctor`-style output can flag it as an anomaly)."""
-    store._ensure()                                       # guarantee the `runs` table (and migrations) exist
+    store._ensure()                                       # guarantee the current `runs` table exists
     root = os.path.abspath(blob_root or store._blob_root())
     with closing(store._connect()) as db:
         referenced = _referenced_digests(db)

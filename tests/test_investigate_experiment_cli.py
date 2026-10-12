@@ -13,6 +13,7 @@ import pytest
 
 import clozn.cli.commands.investigate_experiment as cmd_mod
 from clozn.cli.main import CloznError, build_parser
+from clozn.runs.context_receipt import build_context_receipt
 
 
 def _subparser_choices(parser):
@@ -29,6 +30,9 @@ RUN = {
         {"role": "user", "content": "hello there", "source_id": "doc-1"},
     ],
 }
+RUN["context_receipt"] = build_context_receipt(
+    messages=RUN["messages"], run_id=RUN["id"],
+)
 
 
 def test_investigate_experiment_is_registered():

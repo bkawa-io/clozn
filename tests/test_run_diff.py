@@ -14,6 +14,7 @@ import pytest
 
 from clozn import schemas
 from clozn.analysis import run_diff
+from clozn.runs.context_receipt import build_context_receipt
 
 
 # ============================================================================================ fixtures
@@ -37,11 +38,15 @@ def _run(rid, *, model_sha256=None, model_path=None, template_fingerprint=None, 
 
     context_receipt = {}
     if messages is not None or final_prompt is not None or prompt_tokens is not None:
-        context_receipt = {
-            "delivered": {"messages": messages if messages is not None else []},
-            "survived": {"final_prompt": final_prompt},
-            "limits": {"prompt_tokens": prompt_tokens},
-        }
+        receipt_messages = messages if messages is not None else []
+        context_receipt = build_context_receipt(
+            messages=receipt_messages,
+            assembled_messages=receipt_messages,
+            final_prompt=final_prompt,
+            run_id=rid,
+            meta={"prompt_tokens": prompt_tokens} if prompt_tokens is not None else {},
+            privacy="full",
+        )
 
     rec = {
         "id": rid,
@@ -227,7 +232,7 @@ def test_finish_reason_absent_on_both_sides_is_never_reported():
 
 def test_privacy_restricted_comparison_labels_the_limitation_without_inventing_content():
     a = _run("run_a", messages=[{"role": "user", "content": "hi"}] * 4)
-    b = {**_run("run_b"), "context_receipt": {}}     # nothing captured at all -- legacy/light-tier shaped
+    b = {**_run("run_b"), "context_receipt": {}}     # no receipt evidence was retained
     result = run_diff.compare_runs(a, b)
     diff = next(d for d in result["differences"] if d["dimension"] == "context.delivered.messages.count")
     assert diff["kind"] == "unavailable"

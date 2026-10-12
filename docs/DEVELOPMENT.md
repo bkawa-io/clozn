@@ -68,7 +68,7 @@ Published artifacts use a release-unique build ID and are checked against their 
 `clozn setup` promotes them. See [NATIVE_DISTRIBUTION.md](NATIVE_DISTRIBUTION.md) for that contract and
 the current release status.
 
-For a nonstandard or test build, `CLOZN_ENGINE_BIN=/absolute/path/to/clozn-server` selects the worker
+For a nonstandard or test build, `CLOZN_ENGINE=/absolute/path/to/clozn-server` selects the worker
 explicitly; set `CLOZN_ENGINE_GPU=1` when that binary should receive GPU offload flags. A packaged Studio
 outside the repository can be selected with `CLOZN_STUDIO_DIR=/absolute/path/to/studio`.
 

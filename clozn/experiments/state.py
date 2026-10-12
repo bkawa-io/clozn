@@ -89,12 +89,12 @@ def _receipt_identity(run: Mapping[str, Any]) -> dict[str, Any]:
                         source_ids.add(source_id)
     try:
         view = read_receipt(dict(run))
-        state = "current" if view.get("shape") == "new" else "legacy"
+        state = str(view.get("shape") or "unrecognized")
     except Exception:
-        state = "malformed"
+        state = "unrecognized"
     return {
         "state": state,
-        "schema": raw.get("schema_version", raw.get("schema")),
+        "schema": raw.get("schema_version"),
         "run_id": raw.get("run_id"),
         "digest": digest(raw),
         "source_ids": sorted(source_ids),
@@ -163,17 +163,16 @@ class ExecutionState:
         condition_projection = {
             "messages": conditions.get("messages"),
             "block": conditions.get("block"),
-            "steer_strengths": conditions.get("steer_strengths"),
             "continuation_ids": conditions.get("continuation_ids"),
         }
         receipt = _receipt_identity(run)
         answer = _answer_identity(run)
         try:
-            legacy_fingerprint = parent_execution_fingerprint(run)
+            recorded_run_fingerprint = parent_execution_fingerprint(run)
         except Exception as exc:
             raise ValueError(f"run execution fingerprint is unavailable: {exc}") from exc
         execution_fingerprint = digest({
-            "legacy_execution_fingerprint": legacy_fingerprint,
+            "recorded_run_fingerprint": recorded_run_fingerprint,
             "run_id": run["id"],
             "model_runtime_identity": _runtime_identity(run),
             "generation_contract": contract,

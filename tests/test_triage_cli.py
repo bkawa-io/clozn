@@ -87,6 +87,7 @@ def _write_experiment_result(tmp_path, *, seeds=(0,), baseline_status="fail", ca
     result = suite.validate_result({
         "schema_version": suite.RESULT_SCHEMA, "experiment_id": "exp_triage_cli", "name": manifest["name"],
         "created_at": "2026-07-27T00:00:00Z", "manifest_sha256": suite._manifest_digest(manifest),
+        "suite_fingerprint": suite.suite_fingerprint(manifest, seeds=manifest["seeds"]),
         "manifest": manifest, "seeds": manifest["seeds"], "cells": cells,
         "summary": suite._summarize(cells, "base", [v["name"] for v in manifest["variants"]]),
     })

@@ -91,14 +91,12 @@ class FakeEngineDown:
         raise AssertionError("must never be called once health() itself failed")
 
 
-def test_engine_substrate_jlens_distinguishes_engine_down_from_no_jlens_flag(monkeypatch):
+def test_engine_substrate_jlens_distinguishes_engine_down_from_no_jlens_flag():
     down = FakeEngineDown()
-    down.base = "http://127.0.0.1:8080"
-    monkeypatch.setattr(cs, "ENGINE", down)     # ctx._engine_unreachable_message() reads ENGINE.base
     sub = _bare_engine_sub(down)
     out = sub.jlens("hi", layer=None)
     assert out == {"available": False,
-                   "reason": "engine not reachable at http://127.0.0.1:8080 -- is it running?"}
+                   "reason": "selected model worker is not reachable"}
 
 
 def test_engine_substrate_jlens_unknown_layer_surfaces_cleanly():

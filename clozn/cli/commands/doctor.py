@@ -1,8 +1,7 @@
 """``clozn doctor`` -- a diagnostic sweep for "is this install actually usable", for both a source
 checkout and a `pip install`ed release.
 
-Design intent (see docs/BACKLOG.md Sec.2 "CI lanes + release artifact"): a pip user builds the C++ engine
-separately (it isn't packaged -- see engine/core/CMakeLists.txt), so a missing engine binary is completely
+The native engine is installed separately, so a missing engine binary is completely
 normal on a fresh `pip install clozn` and must never fail this command; it prints build instructions and
 moves on. The only things that fail `doctor` outright are installs that are *actually* broken in a way the
 user can't route around by building something later -- today that's just "Python is older than clozn

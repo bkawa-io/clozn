@@ -3,10 +3,8 @@
 Three parts of clozn are designed to be extended by *adding a file* rather than by editing a shared
 registry. This document is the contract for all three.
 
-They exist because the alternative does not scale past one author. A new subcommand used to mean two
-lines in `clozn/cli/main.py`; a new identity field meant editing one function body in
-`clozn/runs/identity.py`. With several features in flight at once, every one of them rewrites the same
-handful of lines and every merge is a conflict in code nobody meant to change.
+They keep independent features from rewriting the same registries and creating avoidable merge
+conflicts.
 
 **If you are working from a feature spec:** this file wins on *mechanics* (where code goes, how it
 registers); your spec wins on *behavior* (what the feature does).

@@ -66,7 +66,7 @@ def try_get(h, p):
     try:
         document = build_suggested_breakpoints(run, limit=limit)
     except Exception:
-        # A malformed legacy run/evidence artifact must not turn private parser details into a public
+        # A malformed run or evidence artifact must not turn private parser details into a public
         # response.  The domain builder is still responsible for its normal explicit missing-evidence
         # states; this branch is reserved for an internal contract/schema failure.
         h._json(500, _CONTRACT_ERROR)

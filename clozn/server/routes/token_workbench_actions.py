@@ -389,16 +389,11 @@ def _mechanistic_diff_action(h, run, index, body):
     from clozn.server import app as ctx
     router = getattr(ctx, "MODEL_ROUTER", None)
     if router is None:
-        # Preserve the legacy single-worker behavior: a compatible pair is still honestly unavailable
-        # when this process has no managed model registry capable of selecting two model identities.
-        h._json(422, {
+        h._json(503, {
             "outcome": "unavailable",
             "reason": {
-                "code": "cross_model_execution_not_wired",
-                "message": (
-                    "pair compatibility permits this comparison, but this gateway is not serving a "
-                    "managed multi-model registry; configure two models or use `clozn diff-model` "
-                    "at the CLI"),
+                "code": "model_router_unavailable",
+                "message": "the gateway model router is unavailable",
             },
             "pair_compatibility": gate["report"],
         })

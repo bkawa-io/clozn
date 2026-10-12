@@ -88,7 +88,12 @@ def test_measured_effect_below_floor_and_unknown_native_state_fail_closed():
         "schema": "clozn.context_answer_influence.v1",
         "status": "ok",
         "available": True,
-        "method": {"name": "forced_score_matched_replacement"},
+        "method": {
+            "name": "forced_score_matched_replacement", "version": "1",
+            "mode": "forced_score_intervention",
+            "claim_limit": "behavioral dependence only",
+            "caveat": "measured effect only",
+        },
         "prompt_sources": [{"id": "p.m000", "text": "PRIVATE SOURCE"}],
         "prompt_spans": [{"id": "p.m000.c000", "text": "PRIVATE SOURCE"}],
         "answer_spans": [{"id": "a.t0000", "text": "PRIVATE ANSWER"}],
@@ -154,6 +159,7 @@ def test_blob_unavailable_and_invalid_influence_remain_typed_without_breaking_sp
 
 def test_route_is_read_only_and_never_calls_scorer(monkeypatch):
     current = _run()
+    from clozn.server import app as server
 
     class Sub:
         steer = None
@@ -163,7 +169,8 @@ def test_route_is_read_only_and_never_calls_scorer(monkeypatch):
 
     monkeypatch.setattr(runlog, "get_run", lambda run_id: current if run_id == current["id"] else None)
     monkeypatch.setattr(runlog, "iter_runs", lambda limit=200: iter([current]))
-    h = Handler(Sub())
+    monkeypatch.setattr(server, "SUB", Sub())
+    h = Handler()
     assert route.try_get(h, f"/runs/{current['id']}/investigation") is True
     assert h.status == 200
     assert h.body["run_id"] == current["id"]

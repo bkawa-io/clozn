@@ -54,6 +54,7 @@ def _close_trace(token="answer", rival="other", emitted_probability=0.43, rival_
 def _method():
     return {
         "name": "teacher_forced_matched_context_replacement",
+        "version": "1",
         "mode": "forced_score_intervention",
         "claim_limit": "no percentage claim",
         "caveat": "measured effect only, not correctness",

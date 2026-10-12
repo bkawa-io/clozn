@@ -20,7 +20,7 @@ or "the forced token's rank moved by N places" -- a measured difference, not an 
 WHERE THE NUMBERS COME FROM
 -----------------------------
 One POST /score call per model, using this slice's EngineClient.score() extension
-(engine/client/clozn_engine.py): `capture_layers`/`capture_positions` request the residual-stream rows
+(engine/client/clozn_engine): `capture_layers`/`capture_positions` request the residual-stream rows
 at the grid, and `topk` (already existed) requests, for every teacher-forced continuation token, the
 model's own top-k alternatives at that position with their log-softmax values. Both pieces of evidence
 come out of the SAME forward pass -- there is no second call, no extra latency budget spent.

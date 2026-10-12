@@ -34,7 +34,7 @@ class Handler:
 
 def _method_stub() -> dict:
     return {
-        "name": "context_answer_influence", "mode": "forced_score_intervention",
+        "name": "context_answer_influence", "version": "1", "mode": "forced_score_intervention",
         "claim_limit": "no percentage claim", "caveat": "measured effect only, not correctness",
     }
 

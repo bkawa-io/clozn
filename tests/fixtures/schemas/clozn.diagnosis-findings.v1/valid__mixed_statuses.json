@@ -71,12 +71,12 @@
       "evidence": [
         {
           "kind": "field",
-          "path": "context_receipt.limits.prompt_tokens",
+          "path": "context_receipt.rendered.tokens",
           "value": 3800
         },
         {
           "kind": "field",
-          "path": "context_receipt.limits.context_window_tokens",
+          "path": "context_receipt.context_window_tokens",
           "value": 4096
         }
       ],

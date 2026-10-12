@@ -1,63 +1,152 @@
+/*
+ * CLOZN Studio theme layers:
+ * reference values -> semantic material/state values -> component aliases.
+ * Feature CSS consumes only the semantic and component layers below.
+ */
 :root {
   color-scheme: light;
-  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-synthesis: none;
-  --font-machine: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace;
-  --page: #e8e9f1;
-  --page-deep: #dddfe9;
-  --panel: rgba(248, 248, 252, 0.68);
-  --panel-solid: #f4f3f8;
-  --panel-raised: rgba(255, 255, 255, 0.8);
-  --glass-edge: rgba(89, 91, 119, 0.25);
-  --glass-bright: rgba(255, 255, 255, 0.9);
-  --line: rgba(82, 84, 110, 0.16);
-  --line-strong: rgba(75, 77, 104, 0.34);
-  --ink: #242738;
-  --ink-soft: #626575;
-  --ink-faint: #898b9a;
-  --signal-cyan: #63d2e2;
-  --signal-mint: #79d8bd;
-  --signal-blue: #79aef1;
-  --signal-violet: #9d88ed;
-  --signal-magenta: #cd81d5;
-  --signal-pink: #e18fc9;
-  --signal-peach: #efaa91;
-  --signal-gold: var(--signal-peach);
-  --danger: #db7c89;
-  --spectrum-full: linear-gradient(90deg, var(--signal-cyan) 0%, var(--signal-mint) 24%, var(--signal-violet) 50%, var(--signal-pink) 75%, var(--signal-peach) 100%);
-  --spectrum-tint: linear-gradient(115deg, color-mix(in srgb, var(--signal-cyan) 10%, transparent), color-mix(in srgb, var(--signal-mint) 7%, transparent) 25%, color-mix(in srgb, var(--signal-violet) 9%, transparent) 51%, color-mix(in srgb, var(--signal-pink) 8%, transparent) 76%, color-mix(in srgb, var(--signal-peach) 8%, transparent));
-  --pearl-sheen: linear-gradient(118deg, rgba(255,255,255,.72), rgba(157,216,214,.12) 25%, rgba(177,156,225,.12) 52%, rgba(231,171,201,.12) 76%, rgba(255,255,255,.5));
-  --shadow: 0 18px 55px rgba(51, 62, 102, 0.12), 0 2px 7px rgba(45, 55, 92, 0.08);
-  --shadow-soft: 0 8px 24px rgba(46, 57, 92, 0.09);
-  --radius: 0;
-  --radius-small: 0;
+
+  /* Reference: Lunar Nacre */
+  --ref-lunar-outer: #fbfcff;
+  --ref-lunar-transition: #f4f6ff;
+  --ref-lunar-edge: #eaedf8;
+  --ref-lunar-workspace: #ffffff;
+  --ref-lunar-bay: #f4fbff;
+  --ref-lunar-well: #eaf7fb;
+  --ref-lunar-ink: #151725;
+  --ref-lunar-muted: #697086;
+
+  /* Reference: Black Pearl */
+  --ref-pearl-outer: #06080d;
+  --ref-pearl-transition: #0a0d14;
+  --ref-pearl-edge: #03050a;
+  --ref-pearl-workspace: #10131a;
+  --ref-pearl-bay: #151a21;
+  --ref-pearl-well: #090d12;
+  --ref-pearl-ink: #f5f4fa;
+  --ref-pearl-muted: #999dab;
+
+  /* Reference: semantic materials and visualization series */
+  --ref-blue-ion-core: #087f92;
+  --ref-blue-ion-bright: #3bc7d8;
+  --ref-blue-ion-deep: #075e6d;
+  --ref-mineral-mint: #2f9e78;
+  --ref-burnished-amber: #b97922;
+  --ref-spectrometer-magenta: #c13f7a;
+  --ref-cold-crimson: #c44354;
+  --ref-silver-blue: #747d96;
+  --ref-cryogenic-cyan: #4bb9c7;
+  --ref-lunar-violet: #7775b5;
+  --ref-series-silver: #7890a8;
+  --ref-spectral-pink: #cb6f9d;
+
+  /* Reference: geometry and type */
+  --ref-space-micro: 4px;
+  --ref-space-tight: 8px;
+  --ref-space-control: 12px;
+  --ref-space-component: 16px;
+  --ref-space-group: 24px;
+  --ref-space-section: 32px;
+  --ref-space-major: 48px;
+  --ref-radius-data: 4px;
+  --ref-radius-control: 7px;
+  --ref-radius-panel: 10px;
+  --ref-radius-shell: 16px;
+  --ref-control-compact: 30px;
+  --ref-control-standard: 36px;
+  --ref-target-min: 32px;
+  --ref-font-sans: "Spline Sans Variable", "Spline Sans", "Avenir Next", Avenir, "Segoe UI", sans-serif;
+  --ref-font-mono: "Spline Sans Mono Variable", "Spline Sans Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
-:root[data-theme="cathedral"] {
+[data-theme="lunar"],
+:root:not([data-theme]) {
+  color-scheme: light;
+  --surface-shell: var(--ref-lunar-outer);
+  --surface-shell-transition: var(--ref-lunar-transition);
+  --surface-edge: var(--ref-lunar-edge);
+  --surface-workspace: var(--ref-lunar-workspace);
+  --surface-bay: var(--ref-lunar-bay);
+  --surface-well: var(--ref-lunar-well);
+  --text-primary: var(--ref-lunar-ink);
+  --text-secondary: var(--ref-lunar-muted);
+  --text-tertiary: var(--ref-silver-blue);
+  --text-inverse: var(--ref-lunar-workspace);
+  --border-etched: rgb(64 74 124 / 29%);
+  --border-subtle: rgb(70 80 132 / 16%);
+  --border-strong: rgb(49 61 111 / 42%);
+  --surface-selection: rgb(8 127 146 / 10%);
+  --shell-highlight: rgb(255 255 255 / 88%);
+  --shell-cast: linear-gradient(115deg, rgb(75 185 199 / 8%), transparent 28%, rgb(119 117 181 / 6%) 64%, transparent 86%);
+  --action-primary: var(--ref-blue-ion-core);
+  --action-hover: var(--ref-blue-ion-deep);
+  --action-bright: var(--ref-blue-ion-bright);
+  --focus-outer: var(--ref-lunar-workspace);
+}
+
+[data-theme="pearl"] {
   color-scheme: dark;
-  --page: #111415;
-  --page-deep: #090b0c;
-  --panel: rgba(24, 27, 29, 0.78);
-  --panel-solid: #191c1e;
-  --panel-raised: rgba(33, 36, 38, 0.84);
-  --glass-edge: rgba(177, 187, 190, 0.22);
-  --glass-bright: rgba(206, 216, 215, 0.13);
-  --line: rgba(185, 194, 195, 0.12);
-  --line-strong: rgba(187, 198, 201, 0.28);
-  --ink: #f0efed;
-  --ink-soft: #b2b4b2;
-  --ink-faint: #7c8181;
-  --signal-cyan: #6bd8e3;
-  --signal-mint: #7cdbbd;
-  --signal-blue: #7faef5;
-  --signal-violet: #ac95f2;
-  --signal-magenta: #d887d7;
-  --signal-pink: #e99dce;
-  --signal-peach: #efad92;
-  --signal-gold: var(--signal-peach);
-  --danger: #ea8994;
-  --spectrum-tint: linear-gradient(115deg, color-mix(in srgb, var(--signal-cyan) 9%, transparent), color-mix(in srgb, var(--signal-mint) 8%, transparent) 25%, color-mix(in srgb, var(--signal-violet) 10%, transparent) 51%, color-mix(in srgb, var(--signal-pink) 8%, transparent) 76%, color-mix(in srgb, var(--signal-peach) 7%, transparent));
-  --pearl-sheen: linear-gradient(118deg, rgba(169,220,211,.06), rgba(110,154,146,.03) 25%, rgba(161,126,190,.08) 52%, rgba(205,124,171,.06) 76%, rgba(228,194,173,.04));
-  --shadow: 0 22px 70px rgba(0, 0, 0, 0.46), 0 2px 8px rgba(0, 0, 0, 0.34);
-  --shadow-soft: 0 10px 30px rgba(0, 0, 0, 0.27);
+  --surface-shell: var(--ref-pearl-outer);
+  --surface-shell-transition: var(--ref-pearl-transition);
+  --surface-edge: var(--ref-pearl-edge);
+  --surface-workspace: var(--ref-pearl-workspace);
+  --surface-bay: var(--ref-pearl-bay);
+  --surface-well: var(--ref-pearl-well);
+  --text-primary: var(--ref-pearl-ink);
+  --text-secondary: var(--ref-pearl-muted);
+  --text-tertiary: var(--ref-silver-blue);
+  --text-inverse: var(--ref-pearl-edge);
+  --border-etched: rgb(177 190 223 / 30%);
+  --border-subtle: rgb(177 190 223 / 15%);
+  --border-strong: rgb(196 208 238 / 44%);
+  --surface-selection: rgb(59 199 216 / 13%);
+  --shell-highlight: rgb(245 244 250 / 7%);
+  --shell-cast: linear-gradient(110deg, rgb(75 185 199 / 8%), transparent 28%, rgb(119 117 181 / 10%) 62%, rgb(193 63 122 / 4%) 100%);
+  --action-primary: var(--ref-blue-ion-bright);
+  --action-hover: var(--ref-blue-ion-core);
+  --action-bright: var(--ref-blue-ion-bright);
+  --focus-outer: var(--ref-pearl-edge);
+}
+
+:root {
+  /* Semantic state layer */
+  --status-info: var(--action-primary);
+  --status-success: var(--ref-mineral-mint);
+  --status-warning: var(--ref-burnished-amber);
+  --status-anomaly: var(--ref-spectrometer-magenta);
+  --status-failure: var(--ref-cold-crimson);
+  --status-unknown: var(--ref-silver-blue);
+  --viz-primary: var(--action-primary);
+  --viz-secondary: var(--ref-cryogenic-cyan);
+  --viz-tertiary: var(--ref-lunar-violet);
+  --evidence-measured: var(--ref-series-silver);
+  --evidence-support: var(--ref-cryogenic-cyan);
+  --evidence-suppression: var(--ref-lunar-violet);
+  --evidence-below-floor: var(--ref-series-silver);
+  --evidence-not-measured: var(--ref-silver-blue);
+  --evidence-unavailable: var(--status-unknown);
+  --evidence-failed: var(--status-failure);
+  --evidence-spectral-pink: var(--ref-spectral-pink);
+  --font-sans: var(--ref-font-sans);
+  --font-mono: var(--ref-font-mono);
+  --space-micro: var(--ref-space-micro);
+  --space-tight: var(--ref-space-tight);
+  --space-control: var(--ref-space-control);
+  --space-component: var(--ref-space-component);
+  --space-group: var(--ref-space-group);
+  --space-section: var(--ref-space-section);
+  --space-major: var(--ref-space-major);
+  --radius-data: var(--ref-radius-data);
+  --radius-control: var(--ref-radius-control);
+  --radius-panel: var(--ref-radius-panel);
+
+  /* Component layer */
+  --component-card-padding: var(--space-component);
+  --component-panel-padding: var(--space-group);
+  --component-seam: 1px solid var(--border-etched);
+  --component-control-height: var(--ref-control-standard);
+  --component-target-min: var(--ref-target-min);
+  --component-scrubber-width: 40px;
+  --component-scrubber-mark: 32px;
+  --component-shadow: 0 12px 30px rgb(31 41 78 / 10%), 0 2px 6px rgb(31 41 78 / 7%);
 }

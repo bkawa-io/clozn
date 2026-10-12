@@ -33,28 +33,6 @@ from clozn.receipts.metrics import receipt_metrics
 from clozn.receipts.span_receipt import SpanSpecError, resolve_span, span_receipt
 
 
-# --- fakes (mirror tests/test_receipts.py's FakeSteer/FakeMem; chat/score are functions of messages) --------
-
-class FakeSteer:
-    def __init__(self, strength=None):
-        self.strength = dict(strength or {})
-
-    def set(self, name, value):
-        self.strength[str(name)] = float(value)
-
-    def clear(self):
-        self.strength = {}
-
-    def active(self):
-        return {k: v for k, v in self.strength.items() if v}
-
-
-class FakeMem:
-    def __init__(self):
-        self.rules = []
-        self.prefix = None
-
-
 def _user_content(messages):
     return next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")
 
@@ -65,8 +43,6 @@ class SpanFakeSub:
     signals, exactly like a real greedy decode / teacher-forced score."""
 
     def __init__(self, chat_fn, lp_fn=None, pieces=("P", "WN", "ED")):
-        self.memory = FakeMem()
-        self.steer = FakeSteer()
         self.chat_fn = chat_fn
         self.lp_fn = lp_fn
         self.pieces = list(pieces)
@@ -81,7 +57,7 @@ class SpanFakeSub:
         return self.chat_fn(messages)
 
     def score_tokens(self, messages, continuation_ids, *, continuation=None, block=None,
-                     steer_strengths=None, steer_vec=None, topk=0):
+                     steer_vec=None, topk=0):
         self.score_seen.append({"messages": [dict(m) for m in messages],
                                 "continuation_ids": continuation_ids, "block": block})
         lps = self.lp_fn(messages)
@@ -93,8 +69,6 @@ class NoScoreSub:
     """chat-only substrate (the torch qwen shape): the regen arm works, the forced arm must degrade."""
 
     def __init__(self, chat_fn):
-        self.memory = FakeMem()
-        self.steer = FakeSteer()
         self.chat_fn = chat_fn
 
     def chat(self, messages, max_new=256, sample=True):
@@ -133,6 +107,7 @@ def _injection_lp(messages):
 
 @pytest.fixture
 def iso(tmp_path, monkeypatch):
+    monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
     return tmp_path
 
 
@@ -374,4 +349,3 @@ def test_span_receipt_bad_run_returns_none_and_bad_spec_raises(iso):
         span_receipt(RUN, {"find": "nowhere to be found"}, sub)
     with pytest.raises(SpanSpecError):
         span_receipt(RUN, {}, sub)
-

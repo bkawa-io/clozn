@@ -1,11 +1,9 @@
 """managed_runtime_smoke.py -- the LIVE acceptance battery for the managed
 multi-model runtime (RT-BOOT-01 / ADR 004, docs/design/004-multi-model-routing-contract.md).
 
-Two large waves landed on origin/main@8ec835f with model-free coverage only. This script is the
-gap-closer docs/HANDOFF_2026-07-29.md section 3 names explicitly: "No live two-GGUF managed smoke
-... was completed." It drives the REAL `clozn serve --models-config` / `clozn ps` / `clozn stop`
-CLI boundary -- the same external process boundary a user gets -- against two real small GGUFs and
-the real GPU engine build, not a fake/mocked worker.
+It drives the real `clozn serve --models-config` / `clozn ps` / `clozn stop` CLI boundary against two
+small GGUFs and the GPU engine build. This is the same process boundary a user gets, not a fake or
+mocked worker.
 
 WHAT THIS PROVES
 -----------------
@@ -496,8 +494,7 @@ def _routing_receipt(run: dict) -> dict:
 def _exercise_cold_load(rows, metrics, client: Client, port: int, default_def, other_def, args) -> None:
     """Exercise a real cold load, resident-cap eviction, and a subsequent reload.
 
-    This mode requires the in-process gateway: the legacy subprocess fallback has no command
-    channel back to the supervisor's registry.
+    This mode requires the in-process gateway and its live supervisor registry.
     """
     status, raw, err = client.get("/readyz")
     ready_doc = _j(raw)

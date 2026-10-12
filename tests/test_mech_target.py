@@ -91,6 +91,7 @@ def _result(cells, *, manifest=None, experiment_id="exp_fixture"):
     return suite.validate_result({
         "schema_version": suite.RESULT_SCHEMA, "experiment_id": experiment_id, "name": manifest["name"],
         "created_at": "2026-07-29T00:00:00Z", "manifest_sha256": suite._manifest_digest(manifest),
+        "suite_fingerprint": suite.suite_fingerprint(manifest, seeds=[0]),
         "manifest": manifest, "seeds": [0], "cells": cells,
         "summary": suite._summarize(cells, manifest["baseline_variant"],
                                     [v["name"] for v in manifest["variants"]]),

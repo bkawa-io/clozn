@@ -1,5 +1,4 @@
-"""Server-side validator + replay executor for clozn-client's ``clozn.intervention_manifest.v1`` JSON
-shape (docs/PRODUCT_ROADMAP.md §7 item 2, roadmap Phase 4.2).
+"""Server-side validator and executor for ``clozn.intervention_manifest.v1`` JSON.
 
 This module deliberately DUPLICATES a minimal subset of clozn-client's own validation
 (``clozn_client.manifests.InterventionManifest`` / ``clozn_client.models.AttentionKnockout``) rather
@@ -13,8 +12,7 @@ the two hashes match byte-for-byte.
 
 Execution is duck-typed against an ``engine`` object exposing ``.score(prompt=, prompt_ids=,
 continuation=, continuation_ids=, topk=, steer=, steer_vec=, attn_knockout=) -> dict`` -- the exact
-shape ``engine.client.clozn_engine.EngineClient.score`` now exposes (extended by this same roadmap item
-to forward ``attn_knockout``; see that module's docstring). This is NEVER generation and NEVER
+shape ``engine.client.clozn_engine.EngineClient.score`` exposes. This is NEVER generation and NEVER
 sampling beyond what the manifest's own ``steer``/``steer_vec`` arms ask for -- every arm is one
 teacher-forced ``/score`` call, matching ``clozn.experiments.stats``'s own definition of a
 forced-rescore. Replay-class labels reuse ``clozn.experiments.stats.REPLAY_CLASSES`` /

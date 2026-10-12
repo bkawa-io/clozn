@@ -81,7 +81,27 @@ def cmd_retention(args) -> int:
             print("  dry run; pass --apply to delete these journal rows")
         orphaned = receipt.get("orphaned_trace_digests") or []
         if orphaned:
-            print(f"  {len(orphaned)} trace blob(s) become unreferenced; `clozn migrate --gc` removes them")
+            print(f"  {len(orphaned)} trace blob(s) become unreferenced; `clozn runs gc --apply` removes them")
+    return 0
+
+
+def cmd_gc(args) -> int:
+    from clozn.runs import gc
+    result = gc.collect(dry_run=not args.apply)
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+    candidates = result.get("delete") or []
+    malformed = result.get("malformed") or []
+    if args.apply:
+        print(f"run blob cleanup - deleted {len(result.get('deleted') or [])} blob(s); "
+              f"{len(result.get('failed') or [])} failed")
+    else:
+        print(f"run blob cleanup - would delete {len(candidates)} unreferenced blob(s)")
+        if candidates:
+            print("  dry run; pass --apply to remove these blobs")
+    if malformed:
+        print(f"  {len(malformed)} unrecognized file(s) left untouched")
     return 0
 
 
@@ -171,6 +191,12 @@ def add_subparser(subparsers):
     retention.add_argument("--json", action="store_true")
     retention.set_defaults(fn=cmd_retention)
 
+    gc_parser = commands.add_parser("gc", help="preview or remove unreferenced run blobs")
+    gc_parser.add_argument("--apply", action="store_true",
+                           help="remove unreferenced blobs (default dry-run)")
+    gc_parser.add_argument("--json", action="store_true")
+    gc_parser.set_defaults(fn=cmd_gc)
+
     exported = commands.add_parser(
         "export-otel", help="export OpenTelemetry/OpenInference-compatible JSONL")
     exported.add_argument("out", help="output .jsonl path or - for stdout")
@@ -207,5 +233,5 @@ def add_subparser(subparsers):
     return parser
 
 
-__all__ = ["add_subparser", "cmd_delete", "cmd_export_bundle", "cmd_export_otel", "cmd_redact",
+__all__ = ["add_subparser", "cmd_delete", "cmd_export_bundle", "cmd_export_otel", "cmd_gc", "cmd_redact",
           "cmd_retention"]

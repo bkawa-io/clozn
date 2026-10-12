@@ -75,8 +75,8 @@ def try_post(h, p, body):
         h._json(422, result)
         return True
 
-    # Execution routing is always parent-scoped.  No request field is accepted as a model, worker,
-    # or runtime override; the shared resolver handles managed multi-model and legacy deployments.
+    # Execution routing is always parent-scoped. No request field is accepted as a model, worker,
+    # or runtime override.
     from clozn.server.model_routing import select_run_model_facts
 
     facts = select_run_model_facts(h, parent, route="/runs/<id>/test-this")

@@ -7,9 +7,8 @@ seam rederive.py duck-types against, mirroring test_engine_score.py's own conven
 no GPU, no real socket.
 
 Covers:
-  * with_arm_conditions(run) -- the assembled/raw message split (assembled_messages preferred when
-    present, block=None there since it's already folded in; raw_messages/raw_block ALWAYS the un-folded
-    pair, for receipts.py's arm-swapping), the trace-token-ids-vs-retokenize-fallback decision, and dials.
+  * with_arm_conditions(run) -- assembled messages are preferred when present; raw messages remain
+    available for section ablations; the current contract has no separate prompt block.
   * score_arm(sub, conditions, ...) -- continuation-ids-primary / continuation-text-fallback dispatch,
     kwargs passthrough, and the "never raise, return ([], False)" failure contract.
   * rederive(run, sub) -- the S3 deliverable: {"text","steps","meta"} assembled from score_tokens's
@@ -39,12 +38,12 @@ class FakeScoreSub:
         self._raises = raises
 
     def score_tokens(self, messages, continuation_ids, *, continuation=None, block=None,
-                     steer_strengths=None, steer_vec=None, topk=0):
+                     steer_vec=None, topk=0):
         if self._raises:
             raise RuntimeError("boom")
         self.calls.append({"messages": messages, "continuation_ids": continuation_ids,
                            "continuation": continuation, "block": block,
-                           "steer_strengths": steer_strengths, "steer_vec": steer_vec, "topk": topk})
+                           "steer_vec": steer_vec, "topk": topk})
         return self._tokens
 
 
@@ -59,33 +58,31 @@ def test_with_arm_conditions_prefers_assembled_messages_and_omits_block():
         "messages": [{"role": "user", "content": "hi"}],
         "assembled_messages": [{"role": "system", "content": "BLOCK"},
                                {"role": "user", "content": "hi"}],
-        "memory": {"prompt_block": "BLOCK"},
         "response": "hey",
     }
     c = rederive.with_arm_conditions(run)
     assert c["messages"] == run["assembled_messages"]
     assert c["block"] is None                          # already folded in -- do not re-inject
     assert c["block_source"] == "assembled_messages"
-    assert c["raw_messages"] == run["messages"]         # ALWAYS the un-folded pair
-    assert c["raw_block"] == "BLOCK"
+    assert c["raw_messages"] == run["messages"]
+    assert c["raw_block"] is None
 
 
-def test_with_arm_conditions_falls_back_to_messages_plus_prompt_block():
-    run = {"messages": [{"role": "user", "content": "hi"}], "memory": {"prompt_block": "BLOCK"},
-          "response": "hey"}
+def test_with_arm_conditions_uses_messages_when_assembled_messages_are_absent():
+    run = {"messages": [{"role": "user", "content": "hi"}], "response": "hey"}
     c = rederive.with_arm_conditions(run)
     assert c["messages"] == run["messages"]
-    assert c["block"] == "BLOCK"
-    assert c["block_source"] == "prompt_block"
+    assert c["block"] is None
+    assert c["block_source"] == "messages"
     assert c["raw_messages"] == run["messages"]
-    assert c["raw_block"] == "BLOCK"
+    assert c["raw_block"] is None
 
 
 def test_with_arm_conditions_no_block_at_all():
     run = {"messages": [{"role": "user", "content": "hi"}], "response": "hey"}
     c = rederive.with_arm_conditions(run)
     assert c["block"] is None
-    assert c["block_source"] == "none"
+    assert c["block_source"] == "messages"
     assert c["raw_block"] is None
 
 
@@ -135,12 +132,11 @@ def test_score_arm_uses_continuation_ids_when_present():
     sub = FakeScoreSub(tokens=TOKENS)
     conditions = {"messages": [{"role": "user", "content": "hi"}], "continuation_ids": [11, 22],
                  "response": "Hello there"}
-    tokens, ok = rederive.score_arm(sub, conditions, block="B", steer_strengths={"warm": 1.0})
+    tokens, ok = rederive.score_arm(sub, conditions, block="B")
     assert ok is True
     assert tokens == TOKENS
     assert sub.calls[-1]["continuation_ids"] == [11, 22]
     assert sub.calls[-1]["block"] == "B"
-    assert sub.calls[-1]["steer_strengths"] == {"warm": 1.0}
     assert "continuation" not in sub.calls[-1] or sub.calls[-1]["continuation"] is None
 
 

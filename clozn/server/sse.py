@@ -46,8 +46,8 @@ def sse_chat(handler, messages, max_new, model, lens=None, receipt=False, sample
 
     AMBIENT DELIVERY (AMBIENT_DELIVERY.md): `receipt` (the request's opt-in `clozn_receipt`, or the
     server-wide default) appends the exception-only in-band footer as ONE final content chunk -- so the
-    run must be logged BEFORE the finish chunk (to have an id + trace for the /r/<id> link), unlike the
-    old order. Off => byte-identical to before.
+    run is logged before the finish chunk so the /r/<id> link has an id and trace. Off leaves content
+    chunks untouched.
 
     F1 LIVE LENS: `lens` (from the request's opt-in `clozn_lens` field -- absent for every standard
     OpenAI client, whose stream stays byte-identical) forwards to the substrate's chat_stream, and each

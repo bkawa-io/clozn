@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "clozn.time-machine-branch.v2",
   "title": "Answer Time Machine exact child replay",
-  "description": "A terminal receipt for an explicit same-prompt child replay from a verified prompt-boundary checkpoint. An alternate question is not an exact child replay and must use the structural branch path. The replay is a canonical unchanged Continue experiment at the prompt boundary: generation stops at a GeneratedObservation, and the child Run is an explicit materialization of that immutable evidence. The receipt therefore identifies its proof by experiment/arm/observation, never by a legacy execution-fork receipt, and this route writes no ExecutionForkResult.",
+  "description": "A terminal receipt for an explicit same-prompt child replay from a verified prompt-boundary checkpoint. An alternate question is not an exact child replay and must use the structural branch path. The replay is a canonical unchanged Continue experiment at the prompt boundary: generation stops at a GeneratedObservation, and the child Run is an explicit materialization of that immutable evidence. The receipt identifies its proof by experiment, arm, and observation, and this route writes no ExecutionForkResult.",
   "type": "object",
   "required": [
     "schema_version",
@@ -47,7 +47,7 @@
     "evidence": {
       "type": "object",
       "additionalProperties": true,
-      "description": "The canonical experiment evidence this replay rests on: the resolved state, the operation that produced it, and the observation's own fidelity claim. Never a legacy execution-fork artifact.",
+      "description": "The canonical experiment evidence this replay rests on: the resolved state, the operation that produced it, and the observation's own fidelity claim.",
       "properties": {
         "operation": {"const": "continue"},
         "state": {"enum": ["completed", "unavailable", "failed", "not_attempted"]},

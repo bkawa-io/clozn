@@ -24,17 +24,20 @@ def _get(path):
 
 
 def test_available_false_when_nothing_saved(tmp_path, monkeypatch):
-    monkeypatch.setattr(eval_store, "_PATH", str(tmp_path / "eval_report.json"))
+    monkeypatch.setattr(eval_store, "_PATH", str(tmp_path / "calibration_profiles.json"))
     h = _get("/journal/calibration")
     assert h.status == 200 and h.obj["available"] is False
     assert "clozn eval --save" in h.obj["note"]                  # tells the user how to populate it
 
 
 def test_serves_the_saved_report_with_age(tmp_path, monkeypatch):
-    path = str(tmp_path / "eval_report.json")
+    path = str(tmp_path / "calibration_profiles.json")
     monkeypatch.setattr(eval_store, "_PATH", path)
-    eval_store.save({"set": "arith", "saved_ts": 100.0,
-                     "report": {"available": True, "ece": 0.15}}, path)
+    eval_store.save_profile(
+        {"model": "model-a", "set": "arith", "saved_ts": 100.0,
+         "report": {"available": True, "ece": 0.15}},
+        task="arith",
+    )
     h = _get("/journal/calibration")
     assert h.status == 200 and h.obj["available"] is True
     assert h.obj["set"] == "arith" and h.obj["report"]["ece"] == 0.15

@@ -261,8 +261,8 @@ def build_parser():
     pv.add_argument("--mode", default="regen", choices=["regen", "forced", "both"],
                     help="receipt mode (default regen -- both-arms-greedy regeneration)")
     pv.add_argument("--coalitions", action="store_true",
-                    help="opt-in (docs/PRODUCT_ROADMAP.md §8 tail): pairwise coalition deltas, a Shapley "
-                         "approximation, and the interaction gap, on top of the default leave-one-out "
+                    help="opt-in pairwise coalition deltas, a Shapley approximation, and the "
+                         "interaction gap, on top of the default leave-one-out "
                          "receipts above. Never changes the default output when omitted.")
     pv.add_argument("--coalitions-batch", dest="coalitions_batch", default="auto",
                     choices=["auto", "off", "approximate"],
@@ -296,7 +296,7 @@ def build_parser():
     _add_causal_trace(sub)  # `clozn causal-trace` — intervention-validated causal tracing
     _add_ci_check(sub)      # `clozn ci baseline`/`clozn ci check` — headless CI gate (§4.4)
     _add_experiment_suite(sub)  # `clozn experiment run/show` — versioned case x variant x seed object (§4.2)
-    _add_context(sub)           # `clozn context last` — delivered vs survived prompt receipt (Phase 2.4)
+    _add_context(sub)           # inspect delivered, assembled, and rendered context evidence
     _add_watch(sub)             # `clozn watch` — insertion-ordered run tail/correlation (Phase 2.6)
     _add_retry(sub)             # `clozn retry` — request-local, prompt-first corrective compare
     _add_diagnose(sub)          # `clozn diagnose last` — evidence-only latency/cutoff diagnosis

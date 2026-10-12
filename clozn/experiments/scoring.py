@@ -20,7 +20,13 @@ from .batch import ArmExecutionOutcome, ArmExecutionRequest, BatchExecutionResul
 from .evaluators import ScoreRecordedContinuation
 from .execution import ExecutionAdapterError, ExecutionStateStaleError, _identity_kwargs, resolve_delete_source
 from .interventions import DeleteSource
-from .multi_arm import BatchCancelled, MultiArmError, score_tokens_many
+from .multi_arm import (
+    BatchCancelled,
+    MultiArmError,
+    ScoreTokensRefinementPolicy,
+    score_tokens_many,
+    score_tokens_many_screen_then_refine,
+)
 from .observations import TokenScoreObservation
 from .selections import _recorded_answer_tokens
 from .state import ExecutionState, digest
@@ -71,7 +77,8 @@ def _runtime_binding(run: Mapping[str, Any], substrate: Any) -> tuple[dict[str, 
 def _score_observation(*, arm_id: str | None, run: Mapping[str, Any], state: ExecutionState,
                        evaluator: ScoreRecordedContinuation, intervention: DeleteSource | None,
                        conditions: Mapping[str, Any], raw_tokens: Any,
-                       provenance: Mapping[str, Any], diagnostics: Mapping[str, Any] | None = None) -> TokenScoreObservation:
+                       provenance: Mapping[str, Any], diagnostics: Mapping[str, Any] | None = None,
+                       proof_grade: str = "trusted", trusted: bool = True) -> TokenScoreObservation:
     identity = _identity_kwargs(state, evaluator, intervention)
     try:
         expected_ids, expected_pieces, response = _recorded_answer_tokens(run)
@@ -131,7 +138,6 @@ def _score_observation(*, arm_id: str | None, run: Mapping[str, Any], state: Exe
         "recorded_answer_text_sha256": digest(response),
         "prompt_conditions_digest": digest({
             "messages": conditions.get("messages"), "block": conditions.get("block"),
-            "steer_strengths": conditions.get("steer_strengths"),
         }),
         "continuation_basis": "recorded_token_ids",
     })
@@ -140,7 +146,7 @@ def _score_observation(*, arm_id: str | None, run: Mapping[str, Any], state: Exe
         token_pieces=expected_pieces, token_spans=spans, token_logprobs=logprobs,
         total_continuation_logprob=sum(logprobs), evaluator_provenance=provenance,
         score_basis=basis, execution_provenance=provenance,
-        proof_grade="trusted", trusted=True, diagnostics=diagnostics,
+        proof_grade=proof_grade, trusted=trusted, diagnostics=diagnostics,
     )
 
 
@@ -152,20 +158,63 @@ def _thaw(value: Any) -> Any:
     return value
 
 
+def _score_execution_proof(execution: Mapping[str, Any]) -> tuple[str, bool]:
+    trusted = bool(
+        execution.get("qualified")
+        and execution.get("evidence_use") == "trusted"
+        and execution.get("numerical_regime") == "scalar_reference"
+        and execution.get("execution_strategy") in {"scalar_serial", "scalar_http_concurrent"}
+    )
+    if trusted:
+        return "trusted", True
+    if execution.get("evidence_use") == "screening":
+        return "screening", False
+    return "unqualified", False
+
+
+def _score_execution_before_dispatch(substrate: Any) -> dict[str, Any]:
+    """Describe a detailed dispatch when it fails before returning metadata."""
+    declared = getattr(substrate, "score_tokens_many_execution_strategy", None)
+    many_enabled = bool(
+        getattr(substrate, "score_tokens_many_proof_grade", False)
+        and callable(getattr(substrate, "score_tokens_many", None))
+    )
+    if isinstance(declared, str) and (declared == "native" or declared.startswith("native_")) and many_enabled:
+        return {
+            "execution_strategy": declared, "numerical_regime": "unqualified_native",
+            "evidence_use": "unqualified", "qualified": False,
+            "execution_identity": {}, "execution_metadata": {},
+        }
+    strategy = "scalar_http_concurrent" if declared == "scalar_http_concurrent" and many_enabled else "scalar_serial"
+    return {
+        "execution_strategy": strategy, "numerical_regime": "scalar_reference",
+        "evidence_use": "trusted", "qualified": True,
+        "execution_identity": {
+            "kind": "clozn.score-tokens-scalar-reference.v1",
+        },
+        "execution_metadata": {},
+    }
+
+
 class DeleteSourceRecordedContinuationScoreAdapter:
     """Execute control and direct ``DeleteSource`` score arms."""
 
     def __init__(self, substrate: Any, *, run: Mapping[str, Any] | None = None,
-                 run_loader: Callable[[str], Mapping[str, Any] | None] | None = None):
+                 run_loader: Callable[[str], Mapping[str, Any] | None] | None = None,
+                 refinement_policy: ScoreTokensRefinementPolicy | None = None):
         if substrate is None:
             raise ValueError("DeleteSourceRecordedContinuationScoreAdapter requires a substrate")
         if run is not None and not isinstance(run, Mapping):
             raise TypeError("run must be a run mapping when supplied")
         if run_loader is not None and not callable(run_loader):
             raise TypeError("run_loader must be callable")
+        if refinement_policy is not None and not isinstance(
+                refinement_policy, ScoreTokensRefinementPolicy):
+            raise TypeError("refinement_policy must be a ScoreTokensRefinementPolicy")
         self.substrate = substrate
         self._run = deepcopy(dict(run)) if isinstance(run, Mapping) else None
         self._run_loader = run_loader
+        self.refinement_policy = refinement_policy
 
     def load_run(self, state: ExecutionState) -> Mapping[str, Any] | None:
         if self._run_loader is not None:
@@ -279,8 +328,7 @@ class DeleteSourceRecordedContinuationScoreAdapter:
                 diagnostics={"reason": "scoring_substrate_unavailable"},
             )
         tokens, ok = score_arm(
-            self.substrate, score_conditions, messages=messages, block=block,
-            steer_strengths=conditions.get("steer_strengths"), topk=0,
+            self.substrate, score_conditions, messages=messages, block=block, topk=0,
         )
         if not ok:
             return TokenScoreObservation(
@@ -304,8 +352,10 @@ class DeleteSourceRecordedContinuationScoreAdapter:
         run: Mapping[str, Any],
         exc: BaseException,
         *,
-        strategy: str,
+        execution: Mapping[str, Any],
     ) -> tuple[ArmExecutionOutcome, ...]:
+        strategy = str(execution.get("execution_strategy") or "scalar_serial")
+        proof_grade, trusted = _score_execution_proof(execution)
         completed_rows = list(getattr(exc, "completed", ()) or ())
         completed_indices = tuple(getattr(exc, "completed_indices", ()) or ())
         if not completed_indices:
@@ -322,12 +372,24 @@ class DeleteSourceRecordedContinuationScoreAdapter:
         outcomes: list[ArmExecutionOutcome] = []
         for index, (request, payload) in enumerate(prepared):
             if index in completed_by_index:
-                observation = _score_observation(
-                    arm_id=request.arm_id, run=run, state=request.state, evaluator=request.evaluator,
-                    intervention=request.intervention, conditions=payload,
-                    raw_tokens=completed_by_index[index], provenance=payload["provenance"],
-                    diagnostics={"partial_batch": True},
-                )
+                if trusted:
+                    observation = _score_observation(
+                        arm_id=request.arm_id, run=run, state=request.state, evaluator=request.evaluator,
+                        intervention=request.intervention, conditions=payload,
+                        raw_tokens=completed_by_index[index], provenance=payload["provenance"],
+                        diagnostics={"partial_batch": True},
+                        proof_grade=proof_grade, trusted=True,
+                    )
+                else:
+                    observation = TokenScoreObservation(
+                        **_identity_kwargs(request.state, request.evaluator, request.intervention),
+                        status="unavailable", evaluator_provenance=payload["provenance"],
+                        score_basis={"runtime_binding": payload["provenance"].get("runtime_binding")},
+                        execution_provenance=payload["provenance"], proof_grade=proof_grade,
+                        trusted=False,
+                        diagnostics={**deepcopy(dict(execution)), "partial_batch": True,
+                                     "reason": "unqualified_scoring_execution"},
+                    )
                 outcomes.append(ArmExecutionOutcome(
                     arm_id=request.arm_id, observation=observation,
                     execution_disposition="executed",
@@ -455,42 +517,191 @@ class DeleteSourceRecordedContinuationScoreAdapter:
                 "messages": messages,
                 "continuation_ids": list(expected_ids),
                 "block": block,
-                "steer_strengths": deepcopy(conditions.get("steer_strengths") or {}),
                 "provenance": provenance,
             }))
         if not prepared:
             return BatchExecutionResult(tuple(outcomes), {"execution_strategy": "preflight", "batch_count": 0})
         if not callable(getattr(self.substrate, "score_tokens", None)):
             raise ScoreExecutionError("scoring_substrate_unavailable")
-        strategy = "native_many" if bool(getattr(self.substrate, "score_tokens_many_proof_grade", False)) else "scalar"
         arms = [{key: deepcopy(value) for key, value in payload.items() if key != "provenance"}
                 for _request, payload in prepared]
+        execution = _score_execution_before_dispatch(self.substrate)
+        native_screen_requested = bool(
+            self.refinement_policy is not None
+            and (
+                (
+                    isinstance(execution.get("execution_strategy"), str)
+                    and str(execution["execution_strategy"]).startswith("native_")
+                )
+                or getattr(
+                    self.substrate, "native_score_variants_available", False,
+                ) is True
+            )
+        )
         try:
-            raw_rows = list(score_tokens_many(self.substrate, arms, cancel=cancel, proof_grade=True))
+            if native_screen_requested:
+                refined = score_tokens_many_screen_then_refine(
+                    self.substrate,
+                    arms,
+                    arm_ids=(request.arm_id for request, _payload in prepared),
+                    policy=self.refinement_policy,
+                    cancel=cancel,
+                )
+                execution = refined.provenance()
+                exact_by_arm_id = refined.refined_by_arm_id
+                screening_by_arm_id = {
+                    request.arm_id: row
+                    for (request, _payload), row in zip(prepared, refined.screening.results)
+                }
+                scalar_execution = (
+                    refined.scalar_refinement.provenance()
+                    if refined.scalar_refinement is not None else None
+                )
+                screen_execution = refined.screening.provenance()
+                selected = set(refined.selected_arm_ids)
+                proof_critical = set(refined.proof_critical_arm_ids)
+                borderline = set(refined.borderline_arm_ids)
+                for request, payload in prepared:
+                    selection_reason = (
+                        "proof_critical" if request.arm_id in proof_critical
+                        else "borderline" if request.arm_id in borderline
+                        else "not_selected"
+                    )
+                    if request.arm_id in selected:
+                        if scalar_execution is None or request.arm_id not in exact_by_arm_id:
+                            raise ScoreExecutionError(
+                                "selected refinement arm has no scalar-reference result"
+                            )
+                        scalar_provenance = deepcopy(scalar_execution)
+                        payload["provenance"].update(scalar_provenance)
+                        payload["provenance"]["proof_grade"] = "trusted"
+                        observation = _score_observation(
+                            arm_id=request.arm_id,
+                            run=run,
+                            state=request.state,
+                            evaluator=request.evaluator,
+                            intervention=request.intervention,
+                            conditions=payload,
+                            raw_tokens=exact_by_arm_id[request.arm_id],
+                            provenance=payload["provenance"],
+                            diagnostics={
+                                **deepcopy(scalar_provenance),
+                                "refinement_selection": selection_reason,
+                            },
+                            proof_grade="trusted",
+                            trusted=True,
+                        )
+                        outcome_diagnostics = {
+                            **deepcopy(scalar_provenance),
+                            "refinement_selection": selection_reason,
+                        }
+                    else:
+                        screen_provenance = deepcopy(screen_execution)
+                        payload["provenance"].update(screen_provenance)
+                        payload["provenance"]["proof_grade"] = "screening"
+                        raw_screen = screening_by_arm_id.get(request.arm_id)
+                        logprobs = [
+                            float(token["logprob"])
+                            for token in raw_screen
+                            if isinstance(token, Mapping)
+                            and isinstance(token.get("logprob"), (int, float))
+                            and not isinstance(token.get("logprob"), bool)
+                        ] if isinstance(raw_screen, (list, tuple)) else []
+                        observation = TokenScoreObservation(
+                            **_identity_kwargs(
+                                request.state, request.evaluator, request.intervention,
+                            ),
+                            status="unavailable",
+                            evaluator_provenance=payload["provenance"],
+                            score_basis={
+                                "runtime_binding": payload["provenance"].get("runtime_binding"),
+                            },
+                            execution_provenance=payload["provenance"],
+                            proof_grade="screening",
+                            trusted=False,
+                            diagnostics={
+                                **deepcopy(screen_provenance),
+                                "reason": "screening_not_selected_for_scalar_refinement",
+                                "refinement_selection": selection_reason,
+                                "screening_token_count": len(logprobs),
+                                "screening_total_logprob": sum(logprobs),
+                            },
+                        )
+                        outcome_diagnostics = {
+                            **deepcopy(screen_provenance),
+                            "reason": "screening_not_selected_for_scalar_refinement",
+                            "refinement_selection": selection_reason,
+                            # Durable experiment rows intentionally do not
+                            # associate the untrusted screening Observation.
+                            # Retain only its bounded selection summary so an
+                            # opt-in scheduler can refine it without promoting
+                            # the screen into the trusted observation store.
+                            "screening_token_count": len(logprobs),
+                            "screening_total_logprob": sum(logprobs),
+                        }
+                    outcomes.append(ArmExecutionOutcome(
+                        arm_id=request.arm_id,
+                        observation=observation,
+                        execution_disposition="executed",
+                        state="completed" if observation.completed else "failed",
+                        diagnostics=outcome_diagnostics,
+                    ))
+                return BatchExecutionResult(tuple(outcomes), {
+                    **deepcopy(execution),
+                    "batch_count": 1,
+                    "batch_size": len(prepared),
+                    "phase_count": 2 if refined.scalar_refinement is not None else 1,
+                    "scalar_refined_arm_count": len(refined.refined_rows),
+                    "screening_only_arm_count": len(prepared) - len(refined.refined_rows),
+                })
+
+            detailed = score_tokens_many(
+                self.substrate, arms, cancel=cancel, proof_grade=True,
+            )
+            execution = detailed.provenance()
+            raw_rows = list(detailed.results)
         except (BatchCancelled, MultiArmError) as exc:
+            proof_grade, _trusted = _score_execution_proof(execution)
+            for _request, payload in prepared:
+                payload["provenance"].update(deepcopy(execution))
+                payload["provenance"]["proof_grade"] = proof_grade
             return BatchExecutionResult(
                 tuple(outcomes) + self._partial_score_outcomes(
-                    prepared, run, exc, strategy=strategy,
+                    prepared, run, exc, execution=execution,
                 ),
-                {"execution_strategy": strategy, "batch_count": 1,
+                {**deepcopy(execution), "batch_count": 1,
                  "batch_size": len(prepared), "partial_failure": True},
             )
         if len(raw_rows) != len(prepared):
             raise ScoreExecutionError("score batch returned the wrong arm count")
+        proof_grade, trusted = _score_execution_proof(execution)
         for (request, payload), raw_tokens in zip(prepared, raw_rows):
-            observation = _score_observation(
-                arm_id=request.arm_id, run=run, state=request.state, evaluator=request.evaluator,
-                intervention=request.intervention, conditions=payload, raw_tokens=raw_tokens,
-                provenance=payload["provenance"],
-            )
+            payload["provenance"].update(deepcopy(execution))
+            payload["provenance"]["proof_grade"] = proof_grade
+            if trusted:
+                observation = _score_observation(
+                    arm_id=request.arm_id, run=run, state=request.state, evaluator=request.evaluator,
+                    intervention=request.intervention, conditions=payload, raw_tokens=raw_tokens,
+                    provenance=payload["provenance"],
+                    diagnostics=execution, proof_grade=proof_grade, trusted=True,
+                )
+            else:
+                observation = TokenScoreObservation(
+                    **_identity_kwargs(request.state, request.evaluator, request.intervention),
+                    status="unavailable", evaluator_provenance=payload["provenance"],
+                    score_basis={"runtime_binding": payload["provenance"].get("runtime_binding")},
+                    execution_provenance=payload["provenance"], proof_grade=proof_grade,
+                    trusted=False,
+                    diagnostics={**deepcopy(execution), "reason": "unqualified_scoring_execution"},
+                )
             outcomes.append(ArmExecutionOutcome(
                 arm_id=request.arm_id, observation=observation,
                 execution_disposition="executed",
                 state="completed" if observation.completed else "failed",
-                diagnostics={"execution_strategy": strategy},
+                diagnostics=execution,
             ))
         return BatchExecutionResult(tuple(outcomes), {
-            "execution_strategy": strategy, "batch_count": 1, "batch_size": len(prepared),
+            **deepcopy(execution), "batch_count": 1, "batch_size": len(prepared),
         })
 
 
@@ -502,4 +713,5 @@ RecordedContinuationScoreAdapter = DeleteSourceRecordedContinuationScoreAdapter
 __all__ = [
     "DeleteSourceRecordedContinuationScoreAdapter", "DeleteSourceScoreAdapter",
     "RecordedContinuationScoreAdapter", "ScoreRecordedContinuationAdapter", "ScoreExecutionError",
+    "ScoreTokensRefinementPolicy",
 ]

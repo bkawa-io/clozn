@@ -27,28 +27,16 @@ product-facing call never raises -- it returns a labeled dict"), and folds three
 reasons (missing engine capability, a degenerate/empty focus region, any other runtime exception) under
 one status without having to guess which of several non-200 codes best fits all three.
 
-Which worker: the run's OWN `model` field resolves the worker, through
-clozn.server.model_routing.select_control_model_for_run -- never a client-supplied model, and never the
-bare module-level ctx.ENGINE fallback this route used before (a real bug under a managed multi-model
-gateway: ctx.ENGINE there is the ROUTER'S CONTROL-PAIR engine, i.e. some OTHER model's worker, not this
-run's -- silently tracing provenance against the wrong model's weights while returning a normal-looking
-200. See clozn.server.routes.causal_trace's identical fix and ctx.active_engine's own docstring for why
-it, too, refuses rather than falls back to ctx.ENGINE under a managed router). An unknown/not-ready
-parent model now refuses with a typed `clozn.model-routing.v1` error instead -- this is the ONE non-200
-outcome this route can produce, and only when a worker cannot be resolved at all, never when the
-resolved engine merely lacks a capability (that stays 200/ok:false, per the reasoning above). Legacy
-one-worker serving is unaffected: `engine_url` stays None (trace_provenance's own DEFAULT_ENGINE
-applies), exactly as before.
+The run's own `model` field selects the worker through
+clozn.server.model_routing.select_control_model_for_run; the request cannot choose a different model.
+An unknown or unavailable recorded model returns a typed `clozn.model-routing.v1` refusal. A selected
+worker that lacks the analysis capability still returns the completed 200/ok:false result described
+above.
 """
 
 
 def _engine_base(engine):
-    """The live engine client's base URL ('http://host:port') off the resolved run-scoped
-    ModelSelection's own `.engine` -- in legacy (no-router) mode this is
-    `ctx.active_engine(h)`, which already falls back to the module-level `ctx.ENGINE` when the
-    substrate itself has none (there is only one engine either way, so that fallback is safe);
-    under a managed router it is the run's OWN resolved worker engine, never any other model's.
-    None (trace_provenance's own DEFAULT_ENGINE applies) when there truly is none."""
+    """Return the selected run worker's private engine URL, when available."""
     return getattr(engine, "base", None)
 
 

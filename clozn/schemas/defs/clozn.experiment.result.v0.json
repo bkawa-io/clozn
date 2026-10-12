@@ -5,7 +5,7 @@
   "description": "Produced by clozn.experiments.suite.run_manifest() and validated in depth by validate_result() (cell-matrix completeness against the embedded manifest, manifest_sha256 agreement, and summary-recomputed-from-cells -- none of which this shape schema attempts, since the validator here has no keyword for cross-referencing sibling fields). This schema is the STRUCTURAL contract three features share (Studio Experiments workspace, the GitHub Action model gate's verify mode, and automatic regression triage): what a well-shaped result document looks like, so any of them can validate a document they did not produce with clozn.schemas.validate() alone. validate_result() remains the authority on whether a result is a genuinely complete, internally consistent experiment.",
 
   "type": "object",
-  "required": ["schema_version", "experiment_id", "name", "created_at", "manifest_sha256", "manifest", "seeds", "cells", "summary"],
+  "required": ["schema_version", "experiment_id", "name", "created_at", "manifest_sha256", "suite_fingerprint", "manifest", "seeds", "cells", "summary"],
   "properties": {
     "schema_version": { "const": "clozn.experiment.result.v0" },
     "experiment_id": { "type": "string", "minLength": 1 },
@@ -17,7 +17,7 @@
     },
     "manifest_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "suite_fingerprint": {
-      "description": "Versioned canonical hash of behavior-bearing suite content. Optional only for backward compatibility with result artifacts created before canonical-json-v1.",
+      "description": "Versioned canonical hash of behavior-bearing suite content.",
       "$ref": "#/$defs/SuiteFingerprint"
     },
     "vcs": { "$ref": "#/$defs/VcsMetadata" },
@@ -121,7 +121,7 @@
 
     "PrimaryMetric": {
       "type": "object",
-      "description": "The one comparison a manifest author predeclared as primary, before seeing results (docs/PRODUCT_ROADMAP.md Phase 4.4) -- optional, and absent on every manifest saved before this field existed.",
+      "description": "The optional comparison a manifest author predeclares as primary before seeing results.",
       "required": ["suite", "metric"],
       "properties": {
         "suite": { "type": "string", "enum": ["target", "guard"] },

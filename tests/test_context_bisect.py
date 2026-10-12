@@ -31,7 +31,7 @@ def _run():
         "schema": "clozn.context_answer_influence.v1",
         "status": "ok",
         "available": True,
-        "method": {"name": "teacher_forced_matched_context_replacement", "mode": "forced_score_intervention", "claim_limit": "no percentage claim", "caveat": "measured effect only"},
+        "method": {"name": "teacher_forced_matched_context_replacement", "version": "1", "mode": "forced_score_intervention", "claim_limit": "no percentage claim", "caveat": "measured effect only"},
         "identity": {"model_sha256": "a" * 64},
         "prompt_sources": [{"id": "source-0", "text": source, "client_source_id": "doc-1", "selected": True}],
         "prompt_spans": [{"id": "source-fine", "parent_id": "source-0", "level": "fine", "start": 0, "end": len(source), "text": source, "client_source_id": "doc-1"}],

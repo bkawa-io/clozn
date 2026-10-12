@@ -3,7 +3,7 @@
 A capture TIER trades latency + storage for detail. The ladder (agreed with the studio design):
 
   light     text + finish_reason + metadata           -- no per-token trace: fastest, smallest
-  standard  + per-token trace (tokens/conf/alts)       -- the default; what every run captured before tiers
+  standard  + per-token trace (tokens/conf/alts)       -- the default
   deep      + raw activations (state="full")           -- needs the engine activation tap (staged)
   lab       + SAE concept features + probes            -- needs --sae at launch (staged)
 
@@ -13,8 +13,7 @@ What v1 ENFORCES is the one dimension that is pure record policy: whether the pe
 (so they light up the day that lands) but until then store exactly what standard does. Either way the
 active tier is written onto every run's meta, so a reader always knows how much was captured.
 
-Mirrors memory_mode's own settings-gate pattern: stdlib only (torch-free, model-free-testable); the
-setting lives in the SAME studio_settings.json via memory_mode's never-raise get/set.
+The setting uses the shared stdlib-only settings store, so model-free consumers can read it.
 """
 from __future__ import annotations
 

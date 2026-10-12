@@ -57,8 +57,7 @@ def try_post(h, p, body):
         h._json(422, result)
         return True
 
-    # The resolver uses parent.model and the same managed/legacy run-scoped routing path as
-    # other controlled operations.
+    # The resolver uses parent.model and the same run-scoped routing path as other controlled operations.
     # It never accepts a model supplied in this body.  Keep the selected substrate itself so
     # reconstructed replay can reapply the parent's recorded dials/template seam.
     from clozn.server.model_routing import select_run_model_facts

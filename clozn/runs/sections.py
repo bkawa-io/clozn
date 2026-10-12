@@ -1,7 +1,7 @@
 """sections.py -- the ablatable prompt-section manifest (foundation for per-section influence).
 
 WHY THIS EXISTS. A run's prompt is rarely one undifferentiated blob: it's a system prompt, maybe a RAG
-context dump with several retrieved documents, maybe an applied memory card, then the user's actual
+context dump with several retrieved documents, then the user's actual
 question. "Which PART of the prompt actually shaped the reply" is a question the (separately-owned)
 receipts system wants to answer by ablation -- but ablation needs something concrete to ablate: a set of
 named, char-addressable spans over the run's own recorded text. That's what a "section" is here. This
@@ -14,7 +14,7 @@ THE SCHEMA (a fixed contract with the receipts system -- do not change the shape
 `parts` are char spans: `message_index` indexes the run's `messages` list (int) or is `null` for a
 raw-prompt run, whose offsets are into the run's `final_prompt` string instead. A part spanning a whole
 message's content means "the entire message". Multiple parts under one section name means "this one
-logical section rode in more than one message" (the same RAG block quoted twice, a card that repeats).
+logical section rode in more than one message" (for example, the same RAG block quoted twice).
 THE FINAL user message is never a section -- it's the question being answered, not context to ablate.
 
 TWO WAYS A SECTION IS BORN, in priority order when more than one could apply to the same run:
@@ -51,10 +51,6 @@ TWO WAYS A SECTION IS BORN, in priority order when more than one could apply to 
      is an honest single "nothing to split on" chunk; a message with none, over LONG_MESSAGE_CHARS, is the
      old paragraph-split-and-merge behavior. Cap-16 (`_cap`) still applies globally, last, across whatever
      chunks either tier produced.
-
-A run recorded before memory cards were cut from the product (2026-07-27) may still carry a legacy
-`"memory_card"`-sourced entry in its stored `sections` field; nothing in this codebase emits that value
-anymore, and nothing re-derives it.
 
 ID UNIQUENESS. Each of the functions below guarantees unique `id`s WITHIN its own returned list (the
 "sec_" + slug(name), suffixed _2/_3/... on collision rule the schema specifies). `dedupe_ids` exists for a
@@ -329,7 +325,7 @@ def structural_spans(text: str) -> list[tuple[int, int]]:
     """Return the uncapped text-only structural decomposition used by the chunker.
 
     This is intentionally a thin public seam over ``_chunk_text``.  It exposes
-    the deterministic semantic boundaries without exposing the legacy section
+    the deterministic semantic boundaries without exposing the section
     manifest's message filtering, global cap, IDs, or output shape.  In
     particular, callers that need a complete partition must assign the
     whitespace between these trimmed semantic spans themselves.

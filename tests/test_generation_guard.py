@@ -20,7 +20,6 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import clozn.settings as clozn_settings          # noqa: E402
 from clozn.server import generation_guard as gg                  # noqa: E402
 
 
@@ -89,18 +88,6 @@ def test_parse_guard_spec_honors_explicit_overrides():
 def test_parse_guard_spec_rejects_malformed_values(bad, why):
     with pytest.raises(ValueError, match=why):
         gg.parse_guard_spec(bad)
-
-
-def test_parse_guard_spec_ignores_a_stale_persisted_setting(monkeypatch, tmp_path):
-    """Regression: Clozn no longer persists a server-wide guard default (retired -- see
-    docs/CAPABILITIES.md). A settings file left over from an old Clozn version that still carries the
-    retired `generation_guard` key must be completely inert -- a request that omits `clozn_guard` always
-    takes the ordinary, unguarded path, regardless of anything ever written to the settings store."""
-    monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    clozn_settings.set_setting("generation_guard", {"concepts": ["violence"]})
-    assert gg.parse_guard_spec({}) is None
-    spec = gg.parse_guard_spec({"clozn_guard": {"concepts": ["self-harm"]}})
-    assert spec["concepts"] == ["self-harm"]
 
 
 # ================================================================================ per-model calibration load/schema

@@ -46,10 +46,10 @@ See [missing](docs/MISSING.md).
     assert check_drift.main([str(tmp_path)]) == 1
 
 
-def test_archival_allowlist_preserves_historical_claims(tmp_path):
+def test_explicit_archival_directories_are_outside_current_user_docs(tmp_path):
     _write(tmp_path / "README.md", "# Current\n")
     _write(
-        tmp_path / "docs" / "DESIGN.md",
+        tmp_path / "docs" / "design" / "old.md",
         """# Historical design
 
 `clozn memory`, https://github.com/old-owner/clozn, [deleted](old/path.md)

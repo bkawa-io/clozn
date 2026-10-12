@@ -1,13 +1,8 @@
 """Re-running a past run under changed state: POST /runs/<id>/replay (F1: apply changes_applied and
 regenerate a child run). Needs a chat-capable substrate since it regenerates, resolved through the run's
 OWN `model` field (never a client-supplied one) via clozn.server.model_routing.select_control_model_for_run
--- a managed gateway that cannot resolve a ready worker for that model refuses with a typed
-`clozn.model-routing.v1` error rather than the old unconditional 503; legacy one-worker serving is
-unaffected. -> clozn.replay.
-
-(M3's POST /runs/<id>/counterfactual -- one named-dial re-gen against a `behavior_overrides:
-{dial_name: value}` body -- was retired with the rest of named-dial personalization; clozn.replay.
-counterfactual, the module it called into, is gone.)
+-- a gateway that cannot resolve a ready worker for that model refuses with a typed
+`clozn.model-routing.v1` error. -> clozn.replay.
 """
 
 

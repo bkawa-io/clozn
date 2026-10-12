@@ -1,4 +1,4 @@
-"""tests/test_ollama_streaming.py -- roadmap PRODUCT_ROADMAP.md Phase 2 item 1 ("Ollama NDJSON
+"""Ollama NDJSON
 streaming") and item 2 ("explicit-or-rejected shim fields"), both landed together in
 clozn/server/routes/ollama.py + the new clozn/server/ndjson.py.
 
@@ -431,39 +431,3 @@ def test_num_predict_maps_to_max_tokens_on_the_generate_route_too(isolated_runlo
         "prompt": "hi", "stream": False, "options": {"num_predict": 42},
     })
     assert sub.calls[0]["max_new"] == 42
-
-
-# ==================================================================================== /api/tags digest honesty
-
-
-class _FakeEngine:
-    def __init__(self, health):
-        self._health = health
-
-    def health(self):
-        return self._health
-
-
-def test_tags_uses_real_model_sha256_when_the_engine_reports_one(monkeypatch):
-    monkeypatch.setattr(cs, "ENGINE", _FakeEngine(
-        {"model": "some/model.Q4_K_M.gguf", "model_sha256": "abc123"}))
-    monkeypatch.setattr(cs, "SUB", object())            # no .model_sha256 attr -- falls back to health()
-    out = _payload(_dispatch("GET", "/api/tags"))
-    assert out["models"][0]["digest"] == "sha256:abc123"
-
-
-def test_tags_prefers_the_substrates_own_resolved_model_sha256(monkeypatch):
-    class _Sub:
-        model_sha256 = "cached-digest"
-
-    monkeypatch.setattr(cs, "ENGINE", _FakeEngine({"model": "some/model.gguf"}))   # no model_sha256 here
-    monkeypatch.setattr(cs, "SUB", _Sub())
-    out = _payload(_dispatch("GET", "/api/tags"))
-    assert out["models"][0]["digest"] == "sha256:cached-digest"
-
-
-def test_tags_omits_digest_entirely_when_unavailable(monkeypatch):
-    monkeypatch.setattr(cs, "ENGINE", _FakeEngine({"model": "some/model.gguf"}))
-    monkeypatch.setattr(cs, "SUB", object())
-    out = _payload(_dispatch("GET", "/api/tags"))
-    assert "digest" not in out["models"][0]

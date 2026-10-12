@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "clozn.answer-claims.v1",
   "title": "Deterministic claim segmentation over one run's recorded answer",
-  "description": "A derived, read-only projection over run.response. Never a run migration. Each claim's text_span is the exact clozn.text-span-addresses.v1 address shape (kind 'claim', native_ref.collection 'derived.claims'), duplicated locally in this schema's $defs because this validator only resolves local '#/$defs/NAME' refs -- the shape and the values it validates are identical to clozn.text-span-addresses.v1's own 'address' definition, not a second addressing scheme. Category assignment is deterministic and rule-based (see clozn/runs/claims.py's RULES table); category_reason names the exact rule that fired.",
+  "description": "A derived, read-only projection over run.response that never mutates the run. Each claim's text_span is the exact clozn.text-span-addresses.v1 address shape (kind 'claim', native_ref.collection 'derived.claims'), duplicated locally in this schema's $defs because this validator only resolves local '#/$defs/NAME' refs -- the shape and the values it validates are identical to clozn.text-span-addresses.v1's own 'address' definition, not a second addressing scheme. Category assignment is deterministic and rule-based (see clozn/runs/claims.py's RULES table); category_reason names the exact rule that fired.",
   "type": "object",
   "required": [
     "schema_version",

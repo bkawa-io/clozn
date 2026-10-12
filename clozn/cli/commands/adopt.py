@@ -284,6 +284,7 @@ def _run_qualification(plan: dict) -> dict:
         stack = spawn_runtime(RuntimeConfig(
             model=plan["clozn_path"],
             public_port=port,
+            public_model_id="clozn-local",
             flags={"ctx": 1024},
             prefer_gpu=False,
             gateway_boot_timeout=45,
@@ -309,7 +310,7 @@ def _run_qualification(plan: dict) -> dict:
             f"http://127.0.0.1:{port}/runs/{run_id}/context-receipt", timeout=10
         ) as response:
             receipt = json.loads(response.read().decode("utf-8"))
-        if receipt.get("shape") not in {"new", "legacy"}:
+        if receipt.get("shape") != "recorded":
             raise ValueError("qualification run did not produce a readable Context Receipt")
         report = {
             "status": "passed",

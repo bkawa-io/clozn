@@ -51,9 +51,6 @@ def _generated_tokens(run: dict):
     value = _dict(receipt.get("termination")).get("generated_tokens")
     if isinstance(value, int) and not isinstance(value, bool):
         return value
-    value = _dict(receipt.get("limits")).get("generated_tokens")
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value
     tokens = _dict(run.get("trace")).get("tokens")
     return len(tokens) if isinstance(tokens, list) else None
 
@@ -138,13 +135,8 @@ def recorded_sampling_config(run: dict):
     return values
 
 
-# Backward-compatible private spelling for existing callers.  New code should use the public helper
-# above so there is one definition of recorded sampler provenance.
-_sampling_config = recorded_sampling_config
-
-
 def _fixed_sampling(run: dict) -> bool:
-    config = _sampling_config(run)
+    config = recorded_sampling_config(run)
     return config is False or (isinstance(config, dict) and isinstance(config.get("seed"), int))
 
 
@@ -182,7 +174,7 @@ def _available(test: str, baseline: dict, candidate: dict, diff: dict) -> tuple[
             return False, "exact delivered messages are not retained on both runs"
         if baseline.get("messages") == candidate.get("messages"):
             return False, "delivered context is identical; there is nothing to swap"
-        if _sampling_config(candidate) is None:
+        if recorded_sampling_config(candidate) is None:
             return False, "candidate sampling configuration is not exactly recoverable"
         return True, None
     if test == "template":
@@ -197,8 +189,8 @@ def _available(test: str, baseline: dict, candidate: dict, diff: dict) -> tuple[
             )
         return True, None
     if test == "sampling":
-        sampling_a = _sampling_config(baseline)
-        sampling_b = _sampling_config(candidate)
+        sampling_a = recorded_sampling_config(baseline)
+        sampling_b = recorded_sampling_config(candidate)
         if sampling_a is None or sampling_b is None:
             return False, (
                 "one or both sampling configurations are not exactly recoverable "
@@ -607,7 +599,7 @@ class SubstrateReplayRunner:
         return {"ok": True, "checked": checked}
 
     def _sampling_for(self, run: dict):
-        value = _sampling_config(run)
+        value = recorded_sampling_config(run)
         if value is None:
             raise ControlledTestError("sampling configuration is not exactly recoverable")
         return value

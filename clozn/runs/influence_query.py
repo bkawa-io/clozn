@@ -73,11 +73,6 @@ DEFAULT_LIMIT = 12
 MIN_LIMIT = 1
 MAX_LIMIT = 50
 
-# Re-exported for backward compatibility with callers that imported these names from this module before
-# the shared clozn.runs.influence_geometry extraction -- the values themselves live there now.
-STATES = geometry.STATES
-
-
 def _sort_key(entry: dict) -> tuple:
     native = entry["native"]
     causally_first = 0 if entry["evidence_state"] == "causally_supported" else 1
@@ -249,6 +244,5 @@ __all__ = [
     "MAX_LIMIT",
     "MIN_LIMIT",
     "SCHEMA_VERSION",
-    "STATES",
     "build_influence_query",
 ]

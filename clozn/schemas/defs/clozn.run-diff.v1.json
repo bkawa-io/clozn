@@ -58,7 +58,7 @@
     },
     "privacy_limited": {
       "type": "boolean",
-      "description": "True when at least one dimension could only be compared by hash/token-count because full content was unavailable on one or both runs (a legacy/light-capture-tier run, or -- once feature 06 ships graduated privacy modes -- a restrictive retention policy). Never a reason to omit the dimension; see each such difference's own note."
+      "description": "True when at least one dimension could only be compared by hash or token count because full content was unavailable on one or both runs. Never a reason to omit the dimension; see each such difference's own note."
     }
   },
 

@@ -4,9 +4,8 @@ Wraps the VALIDATED research primitive (../clozn-jlens-work/scripts/dirc.py; liv
 scale 0.25-0.5: raises logprob(c) +6..9 nat over baseline, content-specific vs a random equal-norm
 write; scale>=1 over-injects and loses coherence -- see
 ../clozn-jlens-work/artifacts/dirc_selfconsistency_result.txt and j5a_swap_result.txt) into a
-product module: type ANY concept word, get a steer direction, with ZERO contrastive pos/neg
-calibration prompts (the retired tone-dial mechanism needed a harvested diff-of-means over a
-whole pole pair; dir(c) needs neither a pole nor any harvesting). This module builds and caches
+product module: type ANY concept word, get a steer direction, with no contrastive positive/negative
+calibration prompts. dir(c) needs neither a pole pair nor harvesting. This module builds and caches
 the vector, which rides the same steer_vec/coef/layer wire contract every steering write uses:
 clozn_engine.EngineClient.intervene / .score, and EngineSubstrate.chat's kw["steer_vec"].
 
@@ -39,7 +38,7 @@ the DEFAULT path: ConceptDirSource.unembed_row() / fetch_unembed_row_from_engine
 ConceptSteer.compute() uses it automatically via the engine_client it already holds (for
 resolve_token_id's /score round trip) -- no extra configuration needed to make dir(c) work
 end-to-end against a running clozn-server with a J-lens sidecar loaded.
-The OLDER lab-export path (a directory holding norm_weight.npy [d_model] fp32, lm_head_weight.npy
+The explicit lab-export path (a directory holding norm_weight.npy [d_model] fp32, lm_head_weight.npy
 [vocab, d_model] fp32, unembed_meta.json {"rms_norm_eps": eps} -- the same shape
 ../clozn-jlens-work/artifacts already has) still works and still WINS if explicitly configured
 (`unembed_dir=` / CLOZN_DIRC_UNEMBED_DIR) -- useful for offline dev/tests with no engine running,
@@ -79,11 +78,9 @@ VALIDATED_SCALE_RANGE = (0.25, 0.5)
 #
 # THE HOLE THIS MODULE'S PER-MODEL CALIBRATION CLOSES: the table above (and VALIDATED_SCALE_RANGE) is
 # PINNED to one exact model -- a different GGUF has its own residual-activation scale entirely (the same
-# lesson research/dial_autocalibrate_engine.py's own docstring documents for the diff-of-means tone
-# dials: "a raw number does not transfer even to a different quantization/layer"). `load_concept_dial_
-# calibration` / `save_concept_dial_calibration` below are the per-exact-model equivalent of
-# clozn.server.app._dial_calibration()'s ~/.clozn/dial_calibration.json for THIS dial (dir(c)), written
-# to the SAME _model_scoped_path-style per-digest location
+# same calibration principle applies across quantizations and layers: a raw number does not transfer.
+# `load_concept_dial_calibration` / `save_concept_dial_calibration` write this dial's measurements
+# to a per-digest location
 # (~/.clozn/models/<model_sha256>/concept_dial_calibration.json) by
 # scripts/calibration/concept_dial_autocalibrate.py's live sweep. `ConceptSteer` reads the per-model file
 # when one is configured and present, and falls back to the constants below when it is absent -- NEVER
@@ -224,32 +221,32 @@ def load_unembed(unembed_dir: Optional[str] = None) -> UnembedWeights:
 CONCEPT_CALIBRATION_SCHEMA = "clozn.concept_dial_calibration.v1"
 
 
-def concept_calibration_path(model_sha256: Optional[str] = None) -> str:
-    """~/.clozn/models/<model_sha256>/concept_dial_calibration.json when a digest is given -- the SAME
-    per-exact-GGUF scoping convention clozn.server.app._model_scoped_path uses for the tone-dial
-    calibration file -- else the legacy ~/.clozn/concept_dial_calibration.json root (mirrors
-    _model_scoped_path's own "no digest known yet" fallback). This module stays import-light (no
-    clozn.server.app dependency: it must keep working standalone via --selftest/--demo, with no server
-    process at all), so the digest is a plain string argument here, never read off a live substrate --
-    callers that DO have a live substrate (the server) pass its `model_sha256` through explicitly."""
+def concept_calibration_path(model_sha256: str) -> str:
+    """Return the calibration path for one exact GGUF digest.
+
+    Calibration is never global: applying measurements without an exact model identity would make the
+    resulting intervention ambiguous.
+    """
+    if not isinstance(model_sha256, str) or not model_sha256.strip():
+        raise ValueError("concept calibration requires model_sha256")
     base = os.path.join(os.path.expanduser("~"), ".clozn")
-    if model_sha256:
-        return os.path.join(base, "models", str(model_sha256), "concept_dial_calibration.json")
-    return os.path.join(base, "concept_dial_calibration.json")
+    return os.path.join(
+        base, "models", model_sha256.strip(), "concept_dial_calibration.json",
+    )
 
 
 def load_concept_dial_calibration(model_sha256: Optional[str] = None, *,
                                   path: Optional[str] = None) -> Optional[dict]:
     """This exact model's per-layer concept-dial calibration, or None when there is nothing usable to
-    read (missing file, unreadable JSON, wrong/missing schema tag, or no valid layer entries) -- NEVER
-    raises, mirroring clozn.server.app._dial_calibration()'s missing-file=no-op discipline exactly: every
-    caller (ConceptSteer) must fall back to the global VALIDATED_* constants exactly as it did before this
-    existed, so an uncalibrated model's dir(c) behaves EXACTLY as it always has.
+    read (missing identity/file, unreadable JSON, wrong/missing schema tag, or no valid layer entries).
+    ConceptSteer uses the explicitly labelled validated constants when no exact-model calibration exists.
 
     Returns {layer:int -> {"median_resid_norm": float, "usable_scale_range": (lo, hi) or None,
     "derail_point": float or None, "works": bool}}, or None. A malformed individual layer entry is
     skipped (not fatal to the rest of the file), matching clozn.server.app._dial_calibration()'s own
     per-entry tolerance."""
+    if path is None and not model_sha256:
+        return None
     p = path or concept_calibration_path(model_sha256)
     if not os.path.isfile(p):
         return None
@@ -545,14 +542,9 @@ class ConceptSteer:
         self.source = source or ConceptDirSource()
         self.layer = int(layer)
         self.model_sha256 = model_sha256
-        # Per-model concept-dial calibration (see the module docstring's THE HOLE ... section, and
-        # load_concept_dial_calibration's own docstring for the missing-file=no-op discipline). `calibration`
-        # lets a caller hand over an already-loaded dict directly (tests, or a caller that has it in memory
-        # already); otherwise this loads ~/.clozn/models/<model_sha256>/concept_dial_calibration.json when
-        # `model_sha256` is given, and stays None (falls straight through to the global VALIDATED_*
-        # constants below) when it isn't -- so every EXISTING caller that never passes model_sha256 behaves
-        # EXACTLY as it did before this existed (never silently wrong the other way either: `median_norm_
-        # source`/`scale_range_source` always say which table actually fired).
+        # A caller may supply already-loaded calibration directly. Otherwise an exact model digest selects
+        # ~/.clozn/models/<model_sha256>/concept_dial_calibration.json. Without either, the labelled
+        # VALIDATED_* constants below remain the only available calibration source.
         if calibration is not None:
             self._calibration = calibration
         elif model_sha256:
@@ -777,7 +769,7 @@ class ConceptSteer:
 
 # ============================================================================== CLI: --selftest / --demo
 #
-# Mirrors engine/client/clozn_engine.py's own --selftest/--demo split: --selftest is offline (no
+# Mirrors engine/client/clozn_engine's own --selftest/--demo split: --selftest is offline (no
 # engine, no GPU, safe as this module's default with no flags -- exercised in spirit by
 # tests/test_concept_dir.py's fixture-based self-consistency checks, just runnable standalone
 # here too). --demo is the LIVE smoke -- it needs only a running clozn-server with a J-lens

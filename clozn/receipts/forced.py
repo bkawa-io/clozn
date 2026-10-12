@@ -13,7 +13,7 @@ A section whose parts are ALL anchored to `final_prompt` (`message_index: null` 
 native-journaled run with no message breakdown) takes a DIFFERENT path (`_forced_raw_prompt_receipt` +
 `_splice_final_prompt`, dispatched from `forced_receipt` via the `raw_prompt_ablation` sentinel
 `_forced_ablation` returns for this case): there is no messages list to splice OR to feed
-`EngineSubstrate.score_tokens` (its only prompt surface is `messages` -> `ctx._inject_block` ->
+`EngineSubstrate.score_tokens` (its only prompt surface is `messages` -> `ctx.inject_block` ->
 `ctx._engine_tmpl`), but `run["final_prompt"]` -- the exact string the model already saw -- IS the prompt,
 so ablation means splicing the section's char spans directly out of THAT string (reusing replay.py's
 `_strip_message_parts` verbatim by wrapping the string as a synthetic one-message list -- see
@@ -86,11 +86,6 @@ def matched_length_neutral_filler(n_chars: int) -> str:
     n = max(1, int(n_chars))
     reps = n // len(_FILLER_TEXT) + 1
     return (_FILLER_TEXT * reps)[:n]
-
-
-# Backward-compatible private name retained for existing receipt callers.  The public helper above
-# is the single recipe seam used by Influence Map and free-generation counterfactual confirmation.
-_matched_length_filler = matched_length_neutral_filler
 
 
 def _vector_norm(vec) -> float:
@@ -249,11 +244,9 @@ def _forced_raw_prompt_receipt(run: dict, influence: dict, sub, conditions: dict
 def _forced_ablation(run: dict, influence: dict, sub, conditions: dict):
     """One influence spec -> its forced with/without construction, or None for a kind this module doesn't
     know how to ablate. `section` is the only real kind (see module docstring); memory-card and
-    behavior-off ablation used to have their own branches here (filler text / a random steering
-    direction respectively) but both were cut from the product along with cards and dials."""
+    know how to ablate."""
     influence = influence or {}
     with_block = conditions.get("raw_block")
-    with_strengths = dict(conditions.get("steer_strengths") or {})
 
     section = influence.get("section")
     if section:
@@ -271,8 +264,8 @@ def _forced_ablation(run: dict, influence: dict, sub, conditions: dict):
         # CLI or native-journaled run with no message breakdown at all). A MIXED section (some parts
         # null, some message-anchored) is not expected from the producer (clozn.runs.sections's schema);
         # when it happens anyway, fall through to the message path below, which already reports any
-        # raw-anchored leftovers honestly via _apply_section_exclusions's own partial-application note --
-        # only an ALL-null section takes this branch. Returns a `raw_prompt_ablation` sentinel that
+        # raw-anchored leftovers honestly via _apply_section_exclusions's own partial-application note.
+        # Only an all-null section takes this branch. Returns a `raw_prompt_ablation` sentinel that
         # forced_receipt dispatches on BEFORE its generic messages-based with/without construction (see
         # _forced_raw_prompt_receipt) -- "without"/"control" stay None/None here since this ablation
         # doesn't reconstruct block/steer arms at all.
@@ -295,9 +288,8 @@ def _forced_ablation(run: dict, influence: dict, sub, conditions: dict):
         if not applied:
             return {"without": None, "control": None,
                     "note": note or f"section '{section}' has no usable parts on this run -- nothing to ablate"}
-        # steer_strengths/block are UNCHANGED from the with-arm -- only the message content differs.
-        return {"without": {"messages": without_messages, "block": with_block,
-                            "steer_strengths": with_strengths},
+        # The block is unchanged from the with-arm; only the message content differs.
+        return {"without": {"messages": without_messages, "block": with_block},
                 "control": None, "note": note}
 
     return None
@@ -330,8 +322,7 @@ def forced_receipt(run: dict, influence: dict, sub) -> dict | None:
                     "note": ablation.get("note"), "caveat": _FORCED_CAVEAT}
 
         with_tokens, with_ok = rederive.score_arm(
-            sub, conditions, messages=conditions["raw_messages"], block=conditions["raw_block"],
-            steer_strengths=conditions["steer_strengths"])
+            sub, conditions, messages=conditions["raw_messages"], block=conditions["raw_block"])
         if not with_ok:
             return {"influence": influence, "mode": "forced", "causal_verified": False,
                     "note": "forced scoring needs the engine substrate (score_tokens is not available "

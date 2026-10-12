@@ -1,4 +1,4 @@
-"""clozn/runs/identity.py -- immutable reproduction identity for run records (roadmap S4.3).
+"""Immutable reproduction identity for run records.
 
 The external audit (notes/POSITIONING_AUDIT_B_2026-07.md S1.3/S3.2) and Hugging Face's own analysis
 (96.5% of 50k+ eval records missing minimal reproduction fields) both name the same gap: a run record
@@ -21,16 +21,13 @@ across the engine boots gguf_identity() itself pays for -- costs one os.stat() i
 
 WHY THE HOT PATH NEVER PAYS FOR THIS
 -------------------------------------
-The product's own engine already reports a `model_sha256` field on GET /health (server_main.cpp),
+The engine reports a `model_sha256` field on GET /health (server_main.cpp),
 computed at process boot via the exact gguf_identity()->sha256_file() path above and handed to the
 worker with `--model-sha256`. clozn.server.substrates.EngineSubstrate.run_meta() -- which already
 fetches /health once per process and caches the result -- is where this module gets wired in
 (EngineSubstrate.identity_meta()): it prefers that already-computed, zero-marginal-cost health field
-over calling model_sha256() itself. Only when an engine build/launch path doesn't report model_sha256
-(e.g. an older worker binary, or CLOZN_ENGINE_BIN pointed at a file clozn never hashed at boot) does
-run_meta() fall back to this module's own model_sha256(), and even then only once per process (the
-existing run_meta() cache), matching this task's documented acceptable option: "compute at
-engine boot/first-run and cache in the process." No request after the first ever re-hashes anything.
+over calling model_sha256() itself. Direct tooling may use model_sha256() when it starts from a model
+file rather than a running engine. No request after the first ever re-hashes anything.
 
 template_fingerprint() takes the same zero-request-cost approach: it renders one FIXED short
 conversation through the caller's chat-template function (the engine's own /apply_template, when
@@ -165,21 +162,11 @@ def template_fingerprint(apply_template_fn) -> str | None:
     return hashlib.sha256(rendered.encode("utf-8")).hexdigest()[:16]
 
 
-# Forward-compatible health-field lookup.  Current workers expose the build identity from
-# engine_build_info() on /health; older workers may omit it, in which case this function still omits the
-# field rather than inventing a value.  The tuple also accepts historical/managed aliases so a worker
-# upgrade remains additive.
-_ENGINE_BUILD_KEYS = ("engine_build", "build", "build_id", "build_commit")
-
-
 def _engine_build(engine_health) -> str | None:
     if not isinstance(engine_health, dict):
         return None
-    for key in _ENGINE_BUILD_KEYS:
-        value = engine_health.get(key)
-        if value:
-            return str(value)
-    return None
+    value = engine_health.get("build_id")
+    return str(value) if value else None
 
 
 def _clozn_version() -> str | None:

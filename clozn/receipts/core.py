@@ -104,7 +104,7 @@ def _prove_all_regen(run: dict, sub, *, manifest: dict | None = None, coalitions
 
     `coalitions=True` (opt-in, default False -- NEVER changes the output above) additionally attaches a
     `"coalitions"` key: pairwise coalition deltas, a Shapley approximation, and the interaction gap, per
-    `clozn.receipts.coalition` (docs/PRODUCT_ROADMAP.md §8 tail). Reuses the leave-one-out receipts already
+    `clozn.receipts.coalition`. Reuses the leave-one-out receipts already
     computed here (never regenerates the solo arms a second time)."""
     out = {
         "run_id": run.get("id") if isinstance(run, dict) else None,

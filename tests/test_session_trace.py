@@ -47,19 +47,19 @@ def _run(*, session=None, client="tester", started=1.0, duration=0.05, prompt="h
 def _set_context_receipt(rid, **fields):
     """Overwrite a run's context_receipt for a deterministic, controllable fixture -- store.record()'s
     real build_context_receipt() output is fine for defaults but does not let a test dictate delivered
-    segments/limits directly."""
+    segments/token facts directly."""
     run = store.get_run(rid)
     run["context_receipt"] = dict(fields)
     assert store.replace_run(run)
 
 
 def _receipt(delivered, *, prompt_tokens=None, generated_tokens=None, context_window_tokens=4096):
-    limits = {"context_window_tokens": context_window_tokens}
+    receipt = {"delivered": delivered, "context_window_tokens": context_window_tokens}
     if prompt_tokens is not None:
-        limits["prompt_tokens"] = prompt_tokens
+        receipt["rendered"] = {"tokens": prompt_tokens}
     if generated_tokens is not None:
-        limits["generated_tokens"] = generated_tokens
-    return {"delivered": delivered, "limits": limits}
+        receipt["termination"] = {"reason": "eos", "generated_tokens": generated_tokens}
+    return receipt
 
 
 def _segment(sid, content_hash="a" * 16):
@@ -150,7 +150,7 @@ def test_cumulative_timing_and_tokens_accumulate_per_turn(isolated):
 def test_context_usage_omits_absent_keys_never_zero_pads(isolated):
     sessions.create_session("thread-1")
     r1 = _run(session="thread-1")
-    _set_context_receipt(r1, delivered=[], limits={})   # nothing recorded at all
+    _set_context_receipt(r1, delivered=[])   # nothing recorded at all
     doc = session_trace.build_trace("thread-1", generated_at=GENERATED_AT)
     assert "context_usage" not in doc["turns"][0]
 
@@ -246,7 +246,7 @@ def test_cancelled_run_via_termination_reason_counts_as_failed(isolated):
     sessions.create_session("thread-1")
     r1 = _run(session="thread-1", started=1.0)
     r2 = _run(session="thread-1", started=2.0)
-    _set_context_receipt(r2, delivered=[], limits={}, termination={"reason": "client_cancelled"})
+    _set_context_receipt(r2, delivered=[], termination={"reason": "client_cancelled"})
     doc = session_trace.build_trace("thread-1", generated_at=GENERATED_AT)
     kinds = {c["kind"]: c for c in doc["first_went_wrong_candidates"]}
     assert kinds["first_failed_run"]["run_id"] == r2

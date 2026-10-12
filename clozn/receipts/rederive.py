@@ -2,25 +2,18 @@
 a stored run's exact answer + per-token internals, built entirely from the run record and
 EngineSubstrate.score_tokens (S0/S1) -- NO generation anywhere, ever.
 
-Two consumers share the reconstruction logic here: this module's own `rederive()` (S3 deliverable 1 --
-re-derive a run's own answer under its own conditions), and receipts.py's forced-mode receipts (S3
-deliverable 2 -- score the SAME answer under a DELIBERATELY-CHANGED block/steer, to measure how much the
-answer depended on one influence). Both need "what were this run's with-arm conditions" from the record
-alone; only receipts.py additionally needs to SWAP the block/steer between two calls, which is why
-`with_arm_conditions` carries both an assembled-preferring pair (`messages`/`block`) and a raw pair
-(`raw_messages`/`raw_block`) -- see its docstring.
+Two consumers share the reconstruction logic here: this module's own `rederive()` and forced-mode
+receipts, which score the same answer under a deliberately changed prompt condition. Both use the
+recorded assembled messages when present and otherwise the recorded messages.
 
 Public surface:
 
   * with_arm_conditions(run) -- everything needed to reconstruct a run's WITH-arm forced-scoring
-    conditions from the record ALONE: the prompt messages, `steer_strengths` (always {} -- a regular
-    run carries no recorded steering state; named-dial personalization is retired and nothing else
-    logs a raw steer vector onto an ordinary run record), and the continuation as TOKEN IDS from the
+    conditions from the record alone: the prompt messages and the continuation as token IDs from the
     stored trace (falling back to the raw `response` TEXT, flagged `retokenized: True` --
     boundary-approximate, per REPRODUCE_AND_PROVE_PLAN.md's tokenization-boundary caveat).
-  * score_arm(sub, conditions, ...) -- one forced-scoring call reusing `conditions`'s messages/
-    continuation under a possibly-different block/steer_strengths/steer_vec -- what makes a with/
-    without receipt arm just two calls that share everything except the one knob under test.
+  * score_arm(sub, conditions, ...) -- one forced-scoring call reusing `conditions`'s messages and
+    continuation under a possibly different block or raw steering vector.
   * rederive(run, sub) -- the S3 deliverable: re-derive `run`'s own stored answer under its own
     conditions and return {"text", "steps": [{"piece","token_id","logprob","conf"}, ...], "meta"}.
     Deterministic; never raises (mirrors replay.py/receipts.py's "never raise into the caller"
@@ -56,49 +49,37 @@ def _continuation_ids(run: dict):
 def with_arm_conditions(run: dict) -> dict:
     """Everything needed to reconstruct `run`'s WITH-arm forced-scoring conditions from the record
     ALONE:
-      "messages"/"block"        -- the ASSEMBLED-preferring pair: `run.assembled_messages` when it was
-                                    recorded (what was actually fed to the model; `block` is None here
-                                    since it's already folded in), else the raw `messages` PLUS the
-                                    stored `memory.prompt_block` as an explicit block. This is what
-                                    rederive()'s single-arm re-derivation uses.
-      "raw_messages"/"raw_block" -- the UN-folded `messages` plus the bare block string, always. A
-                                    with/without receipt pair MUST reconstruct both arms from these,
-                                    never from "messages" above: clozn_server._inject_block APPENDS a
-                                    block to an existing system message rather than replacing it, so
-                                    re-injecting a DIFFERENT block onto already-ASSEMBLED messages would
-                                    double up old+new block text instead of swapping it.
-      "steer_strengths"          -- always {}: a regular run carries no recorded steering state to
-                                    reconstruct (named-dial personalization is retired).
+      "messages"/"block"        -- `run.assembled_messages` when recorded, otherwise `run.messages`.
+                                    The current prompt contract has no separate injected block.
+      "raw_messages"/"raw_block" -- the recorded message list and ``None``; retained as named inputs
+                                    for the shared scoring helpers.
       "continuation_ids"/"retokenized" -- see _continuation_ids.
       "response"                 -- the stored reply text (the continuation-TEXT fallback's input).
     """
     run = run or {}
     assembled = run.get("assembled_messages")
     raw_messages = list(run.get("messages") or [])
-    raw_block = (run.get("memory") or {}).get("prompt_block")
     if isinstance(assembled, list) and assembled:
         messages, block, block_source = list(assembled), None, "assembled_messages"
     else:
-        messages, block = raw_messages, raw_block
-        block_source = "prompt_block" if block else "none"
+        messages, block, block_source = raw_messages, None, "messages"
     ids, retokenized = _continuation_ids(run)
     return {
         "messages": messages,
         "block": block,
         "block_source": block_source,
         "raw_messages": raw_messages,
-        "raw_block": raw_block,
-        "steer_strengths": {},
+        "raw_block": None,
         "continuation_ids": ids,
         "retokenized": retokenized,
         "response": run.get("response") or "",
     }
 
 
-def score_arm(sub, conditions: dict, *, messages=None, block=None, steer_strengths=None, steer_vec=None,
+def score_arm(sub, conditions: dict, *, messages=None, block=None, steer_vec=None,
              topk: int = 0):
     """One forced-scoring call on `sub.score_tokens`, reusing `conditions`'s messages/continuation
-    (from with_arm_conditions) under the given block/steer_strengths/steer_vec -- so a with/without
+    (from with_arm_conditions) under the given block/steer_vec -- so a with/without
     receipt arm is just two calls that share everything except the one knob under test. Continuation
     ids are primary; when `conditions["continuation_ids"]` is None (an old/light-tier run), falls back
     to scoring `conditions["response"]` as continuation TEXT (boundary-approximate; the caller should
@@ -113,8 +94,6 @@ def score_arm(sub, conditions: dict, *, messages=None, block=None, steer_strengt
         kwargs = {"block": block, "topk": int(topk)}
         if steer_vec is not None:
             kwargs["steer_vec"] = steer_vec
-        if steer_strengths is not None:
-            kwargs["steer_strengths"] = steer_strengths
         if ids is not None:
             tokens = score_tokens(msgs, ids, **kwargs)
         else:
@@ -136,8 +115,7 @@ def rederive(run: dict, sub) -> dict | None:
         if not run or not isinstance(run, dict):
             return None
         conditions = with_arm_conditions(run)
-        tokens, ok = score_arm(sub, conditions, block=conditions["block"],
-                               steer_strengths=conditions["steer_strengths"])
+        tokens, ok = score_arm(sub, conditions, block=conditions["block"])
         if not ok or not tokens:
             return None
         steps = []

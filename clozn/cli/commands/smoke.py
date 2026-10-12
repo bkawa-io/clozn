@@ -376,9 +376,13 @@ def _exercise(base: str, timeout: float, report: Report, *, deep: bool = False) 
 
     ready = client.get("/readyz")
     ready_doc = ready.json()
+    managed_models = ready_doc.get("models")
     report.add("gateway readiness includes one worker",
-               ready.status == 200 and ready_doc.get("active") == "engine" and bool(ready_doc.get("worker")),
-               f"HTTP {ready.status} mode={ready_doc.get('mode')} model={ready_doc.get('model')}")
+               ready.status == 200 and ready_doc.get("active") == "engine"
+               and isinstance(managed_models, dict)
+               and int(managed_models.get("resident_count") or 0) >= 1,
+               f"HTTP {ready.status} residents={managed_models.get('resident_count') if isinstance(managed_models, dict) else '?'} "
+               f"model={ready_doc.get('model')}")
     queue = ready_doc.get("queue")
     report.add("gateway exposes its bounded request queue",
                isinstance(queue, dict) and int(queue.get("capacity") or 0) > 0

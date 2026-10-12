@@ -1,5 +1,4 @@
-"""GET /contracts/hooks (the versioned hook vocabulary) and POST /contracts/replay (the intervention-
-manifest executor) -- docs/PRODUCT_ROADMAP.md §7 item 2, roadmap Phase 4.2.
+"""GET /contracts/hooks and POST /contracts/replay for versioned interventions.
 
 GET /contracts/hooks is a pure static read: it serves clozn.receipts.hook_vocabulary.hook_vocabulary()
 verbatim, no substrate/engine required.
@@ -10,14 +9,10 @@ executes it against the active substrate's engine. A structurally invalid manife
 well-formed manifest the CURRENT engine cannot satisfy (missing capability, e.g. attn_knockout with
 flash-attn on) is a typed 409 listing exactly what's missing, never a silent no-op and never a 500.
 
-NOT converted to per-run model selection: this route takes no run_id at all -- the manifest carries
-no reference to any stored run, so there is no immutable run record to read a `model` from. It
-operates against "the active substrate" generically, the same shape as a generation/ambient route,
-not a run-scoped control route (see clozn.server.model_routing.select_control_model_for_run's
-docstring on what that requires). Left as ctx.active_sub(h), unchanged.
+The route has no run identity, so it resolves the gateway's default model through the mandatory
+router. That keeps intervention execution on the same explicit request-selection path as generation
+without allowing a manifest to choose an unrelated worker.
 """
-from clozn.server import app as ctx
-
 
 def try_get(h, p):
     if p != "/contracts/hooks":
@@ -36,7 +31,16 @@ def try_post(h, p, body):
         h._json(400, {"error": "'manifest' must be an object (a clozn.intervention_manifest.v1 document)"})
         return True
 
-    sub = ctx.active_sub(h)
+    from clozn.server.model_routing import select_for_handler
+    selection = select_for_handler(
+        h,
+        {},
+        surface="native",
+        route="/contracts/replay",
+    )
+    if selection is None:
+        return True
+    sub = selection.sub
     engine = getattr(sub, "engine", None)
     if engine is None or not callable(getattr(engine, "score", None)):
         h._json(503, {"error": "intervention replay requires an engine-backed substrate"})

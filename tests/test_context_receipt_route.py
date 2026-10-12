@@ -5,21 +5,10 @@ from __future__ import annotations
 
 import io
 import json
-import os
 
 import clozn.runs.store as runlog
 from clozn.server.routes import context_receipt as route
 from clozn.runs.context_receipt import build_context_receipt
-
-FIXTURE_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "schemas",
-                            "clozn.context-receipt.v1")
-
-
-def _legacy_fixture() -> dict:
-    with open(os.path.join(FIXTURE_ROOT, "invalid__legacy_pre_2026_07_27_shape.json"), encoding="utf-8") \
-            as handle:
-        return json.load(handle)
-
 
 class Handler:
     def __init__(self, path="/"):
@@ -60,42 +49,15 @@ def test_absent_receipt_is_a_clean_200_not_a_fabricated_document(monkeypatch):
     assert h.body["context_receipt"] == {}
 
 
-def test_new_shape_serves_full_content_by_default(monkeypatch):
+def test_recorded_shape_serves_metadata_without_run_content(monkeypatch):
     monkeypatch.setattr(runlog, "get_run", lambda rid: _new_run(rid))
     h = Handler("/runs/run_x/context-receipt")
     assert route.try_get(h, "/runs/run_x/context-receipt") is True
-    assert h.body["shape"] == "new"
-    assert h.body["context_receipt"]["survived"]["final_prompt"] == "EXACT PROMPT"
-    assert h.body["context_receipt"]["delivered"][0]["source_label"] == "system"
-
-
-def test_include_content_false_redacts_regardless_of_stored_tier(monkeypatch):
-    monkeypatch.setattr(runlog, "get_run", lambda rid: _new_run(rid))
-    h = Handler("/runs/run_x/context-receipt?include_content=false")
-    assert route.try_get(h, "/runs/run_x/context-receipt") is True
+    assert h.body["shape"] == "recorded"
     receipt = h.body["context_receipt"]
-    assert "final_prompt" not in receipt["survived"]
-    assert "assembled_messages" not in receipt["survived"]
-    seg = receipt["delivered"][0]
-    assert "source_label" not in seg
-    assert seg["content_hash"]                  # hashes survive redaction, per spec
-
-
-def test_legacy_shape_served_as_is_by_default(monkeypatch):
-    monkeypatch.setattr(runlog, "get_run", lambda rid: {"id": rid, "context_receipt": _legacy_fixture()})
-    h = Handler("/runs/run_old/context-receipt")
-    assert route.try_get(h, "/runs/run_old/context-receipt") is True
-    assert h.body["shape"] == "legacy"
-    assert h.body["context_receipt"]["delivered"]["messages"]
-
-
-def test_legacy_shape_redacted_on_include_content_false(monkeypatch):
-    monkeypatch.setattr(runlog, "get_run", lambda rid: {"id": rid, "context_receipt": _legacy_fixture()})
-    h = Handler("/runs/run_old/context-receipt?include_content=false")
-    assert route.try_get(h, "/runs/run_old/context-receipt") is True
-    receipt = h.body["context_receipt"]
-    assert "messages" not in receipt["delivered"]
-    assert "final_prompt" not in receipt["survived"]
+    assert "survived" not in receipt
+    assert "EXACT PROMPT" not in json.dumps(receipt)
+    assert receipt["delivered"][0]["source_label"] == "system"
 
 
 def test_unrelated_path_is_not_claimed():
@@ -108,7 +70,7 @@ def test_unrelated_path_is_not_claimed():
 # GET/POST /receipt-privacy
 # ---------------------------------------------------------------------------------------------------
 
-def test_receipt_privacy_get_default_and_post_sets_it(tmp_path, monkeypatch):
+def test_receipt_privacy_get_default_and_explicit_apply_sets_it(tmp_path, monkeypatch):
     import clozn.settings as settings
     monkeypatch.setattr(settings, "SETTINGS_PATH", str(tmp_path / "studio_settings.json"))
 
@@ -116,13 +78,18 @@ def test_receipt_privacy_get_default_and_post_sets_it(tmp_path, monkeypatch):
     assert route.try_get(h, "/receipt-privacy") is True
     assert h.body == {"tier": "full", "tiers": ["full", "metadata_only", "hashes_only", "off"]}
 
+    previewed = Handler("/receipt-privacy")
+    assert route.try_post(previewed, "/receipt-privacy", {
+        "action": "preview", "tier": "hashes_only",
+    }) is True
     posted = Handler("/receipt-privacy")
-    assert route.try_post(posted, "/receipt-privacy", {"tier": "hashes_only"}) is True
+    assert route.try_post(posted, "/receipt-privacy", {
+        "action": "apply", "tier": "hashes_only",
+        "expected": previewed.body["preview"]["expected"],
+    }) is True
     assert posted.body["ok"] is True
     assert posted.body["tier"] == "hashes_only"
     assert posted.body["mutation"]["status"] == "applied"
-    assert posted.body["compatibility_mode"] == "atomic_preview_apply"
-
     after = Handler("/receipt-privacy")
     route.try_get(after, "/receipt-privacy")
     assert after.body["tier"] == "hashes_only"
@@ -132,7 +99,9 @@ def test_receipt_privacy_post_rejects_unknown_tier(tmp_path, monkeypatch):
     import clozn.settings as settings
     monkeypatch.setattr(settings, "SETTINGS_PATH", str(tmp_path / "studio_settings.json"))
     h = Handler("/receipt-privacy")
-    assert route.try_post(h, "/receipt-privacy", {"tier": "telepathy"}) is True
+    assert route.try_post(h, "/receipt-privacy", {
+        "action": "preview", "tier": "telepathy",
+    }) is True
     assert h.status == 400
 
 
@@ -235,5 +204,5 @@ def test_end_to_end_http_get_reaches_this_route_not_the_fallback(tmp_path, monke
                         response="ok", started=1.0)
     out = _dispatch("GET", f"/runs/{rid}/context-receipt")
     assert out["run_id"] == rid
-    assert out["shape"] == "new"
+    assert out["shape"] == "recorded"
     assert isinstance(out["context_receipt"]["delivered"], list)

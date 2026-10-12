@@ -1,10 +1,10 @@
 """Model-free contract tests for stable text-span address projection."""
 from __future__ import annotations
 
-import copy
 import hashlib
 
 from clozn import schemas
+from clozn.runs.context_receipt import build_context_receipt
 from clozn.runs import text_span_addresses as spans
 
 
@@ -26,6 +26,7 @@ def _context_run(run_id: str = "run_context", *, parent: str | None = None) -> d
         "final_prompt": rendered,
         "context_receipt": {
             "schema_version": "clozn.context-receipt.v1",
+            "run_id": "run_parent",
             "run_id": run_id,
             "privacy": "full",
             "delivered": [
@@ -49,6 +50,22 @@ def _context_run(run_id: str = "run_context", *, parent: str | None = None) -> d
         },
     }
     return run
+
+
+def _single_message_run(run_id: str, content: str, *, parent: str | None = None) -> dict:
+    messages = [{"role": "user", "content": content}]
+    return {
+        "id": run_id,
+        "parent_run_id": parent,
+        "messages": messages,
+        "final_prompt": content,
+        "context_receipt": build_context_receipt(
+            messages=messages,
+            assembled_messages=messages,
+            final_prompt=content,
+            run_id=run_id,
+        ),
+    }
 
 
 def _metadata_influence() -> dict:
@@ -194,21 +211,18 @@ def test_redacted_context_keeps_native_reference_but_invents_no_offsets():
     assert addresses[0]["native_ref"]["segment_id"] == "seg_1111111111111111"
 
 
-def test_legacy_run_messages_are_projected_without_mutating_the_run():
+def test_unversioned_receipt_is_not_projected_as_schema_governed_evidence():
     run = {
-        "id": "run_legacy",
-        "messages": [{"role": "user", "content": "legacy prompt"}],
+        "id": "run_unversioned",
+        "messages": [{"role": "user", "content": "unversioned prompt"}],
         "context_receipt": {
-            "schema": "clozn.context_receipt.v1",
-            "delivered": {"messages": [{"role": "user", "content": "legacy prompt"}]},
+            "delivered": {"messages": [{"role": "user", "content": "unversioned prompt"}]},
         },
     }
-    before = copy.deepcopy(run)
     document = spans.build_text_span_addresses(run)
 
-    assert run == before
-    assert document["addresses"][0]["native_ref"]["collection"] == "run.messages"
-    assert _canonical(document["addresses"][0])["span_sha256"] == _sha("legacy prompt")
+    assert document["addresses"] == []
+    assert document["source_artifacts"][0]["native_status"] == "failed"
 
 
 def test_metadata_only_influence_projection_preserves_native_method_and_all_span_kinds():
@@ -266,37 +280,28 @@ def test_generic_claim_address_only_addresses_a_caller_supplied_span():
 
 
 def test_lineage_maps_only_exact_hash_and_offset_inheritance():
-    parent_run = {
-        "id": "run_parent",
-        "messages": [{"role": "user", "content": "same"}],
-    }
+    parent_run = _single_message_run("run_parent", "same")
     parent = spans.build_text_span_addresses(parent_run)
     unchanged = spans.build_text_span_addresses(
-        {
-            "id": "run_child_same",
-            "parent_run_id": "run_parent",
-            "messages": [{"role": "user", "content": "same"}],
-        },
+        _single_message_run("run_child_same", "same", parent="run_parent"),
         parent_document=parent,
     )
     changed = spans.build_text_span_addresses(
-        {
-            "id": "run_child_changed",
-            "parent_run_id": "run_parent",
-            "messages": [{"role": "user", "content": "diff"}],
-        },
+        _single_message_run("run_child_changed", "diff", parent="run_parent"),
         parent_document=parent,
     )
 
-    assert unchanged["lineage"]["mappings"] == [{
-        "relation_key": parent["addresses"][0]["relation_key"],
-        "parent_address_id": parent["addresses"][0]["address_id"],
-        "child_address_id": unchanged["addresses"][0]["address_id"],
-        "state": "inherited",
-        "reason": "exact_text_and_hashes_unchanged",
-    }]
-    assert changed["lineage"]["mappings"][0]["state"] == "drifted"
-    assert changed["lineage"]["mappings"][0]["reason"] == "canonical_basis_hash_changed"
+    assert len(unchanged["lineage"]["mappings"]) == 2
+    assert all(mapping["state"] == "inherited" for mapping in unchanged["lineage"]["mappings"])
+    assert all(
+        mapping["reason"] == "exact_text_and_hashes_unchanged"
+        for mapping in unchanged["lineage"]["mappings"]
+    )
+    assert all(mapping["state"] == "drifted" for mapping in changed["lineage"]["mappings"])
+    assert all(
+        mapping["reason"] == "canonical_basis_hash_changed"
+        for mapping in changed["lineage"]["mappings"]
+    )
 
 
 def test_lineage_reports_missing_and_unresolved_children_without_guessing():
@@ -305,6 +310,7 @@ def test_lineage_reports_missing_and_unresolved_children_without_guessing():
         "messages": [{"role": "user", "content": "same"}],
         "context_receipt": {
             "schema_version": "clozn.context-receipt.v1",
+            "run_id": "run_parent",
             "delivered": [{
                 "segment_id": "seg_bbbbbbbbbbbbbbbb",
                 "source_type": "message",
@@ -324,6 +330,7 @@ def test_lineage_reports_missing_and_unresolved_children_without_guessing():
         "messages": [],
         "context_receipt": {
             "schema_version": "clozn.context-receipt.v1",
+            "run_id": "run_redacted",
             "delivered": [{
                 "segment_id": "seg_aaaaaaaaaaaaaaaa",
                 "source_type": "message",

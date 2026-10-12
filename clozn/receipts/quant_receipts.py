@@ -6,7 +6,7 @@ broke exactly these refusal/formatting behaviors, at these tokens."
 
 Model-free and GPU-free by construction: this module never talks to a model. Its whole surface is a pure
 function of two already-computed /score outputs (EngineClient.score / EngineSubstrate.score_tokens
-responses -- see engine/client/clozn_engine.py's `score()` docstring and
+responses -- see engine/client/clozn_engine's `score()` docstring and
 engine/core/serve/routes_whitebox.cpp's /score handler for the exact wire shape reproduced in fixtures
 here: `[{"id","piece","logprob","topk"?: [{"id","piece","logprob"}, ...]}, ...]`, topk sorted DESCENDING
 by logprob so `topk[0]` IS that arm's argmax at that forced step). Mirrors receipts/rederive.py's own
@@ -267,15 +267,13 @@ def quant_receipt_for_run(run: dict, sub_a, sub_b, *, label_a: str, label_b: str
                              "at the BPE boundary and make the per-position diff meaningless"),
                     "caveat": _QUANT_CAVEAT}
 
-        tokens_a, ok_a = rederive.score_arm(sub_a, conditions, block=conditions["block"],
-                                            steer_strengths=conditions["steer_strengths"], topk=topk)
+        tokens_a, ok_a = rederive.score_arm(sub_a, conditions, block=conditions["block"], topk=topk)
         if not ok_a:
             return {"mode": "quant_diff", "causal_verified": False, "label_a": label_a, "label_b": label_b,
                     "note": f"quant '{label_a}' could not be scored (no score_tokens, or scoring raised)",
                     "caveat": _QUANT_CAVEAT}
 
-        tokens_b, ok_b = rederive.score_arm(sub_b, conditions, block=conditions["block"],
-                                            steer_strengths=conditions["steer_strengths"], topk=topk)
+        tokens_b, ok_b = rederive.score_arm(sub_b, conditions, block=conditions["block"], topk=topk)
         if not ok_b:
             return {"mode": "quant_diff", "causal_verified": False, "label_a": label_a, "label_b": label_b,
                     "note": f"quant '{label_b}' could not be scored (no score_tokens, or scoring raised)",

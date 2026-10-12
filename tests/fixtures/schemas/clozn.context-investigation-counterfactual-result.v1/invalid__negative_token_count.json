@@ -1,0 +1,11 @@
+{
+  "schema_version": "clozn.context-investigation-counterfactual-result.v1",
+  "run_id": "run_fixture",
+  "source_id": "src_fixture",
+  "experiment_id": "exp_fixture",
+  "arm_id": "arm_fixture",
+  "status": "completed",
+  "generated_text": "",
+  "generated_token_count": -1,
+  "experiment_state": "completed"
+}

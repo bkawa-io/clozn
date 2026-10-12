@@ -1,18 +1,29 @@
 from __future__ import annotations
 
+import pytest
+
 from clozn.replay import corrective
+from clozn.server import app as server
 from clozn.server.routes import corrective_retries as route
 import clozn.runs.store as runlog
 
 
 class Handler:
     def __init__(self):
-        self._inj_sub = type("Sub", (), {"chat": lambda *_args, **_kwargs: "ok"})()
         self.status = None
         self.body = None
 
     def _json(self, status, body, **_kwargs):
         self.status, self.body = status, body
+
+
+@pytest.fixture(autouse=True)
+def _product_sub(monkeypatch):
+    monkeypatch.setattr(
+        server,
+        "SUB",
+        type("Sub", (), {"chat": lambda *_args, **_kwargs: "ok"})(),
+    )
 
 
 def comparison():

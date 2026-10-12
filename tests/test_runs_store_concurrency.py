@@ -2,7 +2,7 @@
 
 Background: `_ensure()` is called cheaply on EVERY store entry point and, before this fix, had NO
 process- or thread-level protection around its one-time WAL-mode switch (`_connect()`'s
-`PRAGMA journal_mode=WAL`) plus schema migration. RT-05's global `POST_GATE` in clozn/server/app.py used
+`PRAGMA journal_mode=WAL`) plus schema initialization. RT-05's global `POST_GATE` in clozn/server/app.py used
 to accidentally mask this by serializing every POST; RT-05 replaces that gate with per-worker gating,
 which makes the race reachable in production, and RT-05's own fix (warming the store once before the
 server accepts connections) only covers the server's own boot path -- a second entry point (the CLI, a
@@ -21,7 +21,7 @@ not threads) also reproduced it, at a lower rate given a busy-wait synchronizati
 than an in-process Barrier (120 calls -> 2 failures, 1.7%), confirming the race is not merely a
 same-process/GIL artifact.
 
-The fix (`_ensure_schema_locked` in store.py) serializes the WAL switch + `migrations.migrate()` behind a
+The fix (`_ensure_schema_locked` in store.py) serializes the WAL switch + current-schema bootstrap behind a
 SEPARATE lock-only SQLite file that is deliberately never itself switched to WAL, plus a per-process
 short-circuit cache once a given db path is confirmed current. See store.py's own docstrings for the
 full design rationale and the additional isolated measurements (0/300 ordinary BEGIN IMMEDIATE
@@ -29,7 +29,7 @@ contention failures, 0/150 WAL-pragma-reissue-on-an-already-WAL-file failures un
 load, 0/500 dedicated-lock-primitive failures) that ruled out a bare `threading.Lock` and pinned down
 exactly what needed protecting.
 
-These tests exercise the REAL store.py/migrations.py code end-to-end (no mocking) and are expected to
+These tests exercise the real store/schema code end-to-end (no mocking) and are expected to
 run at 0 failures against the fixed code; reverting the fix in `_ensure_schema_locked`/`_ensure` (e.g.
 `git stash` this file's sibling changes to store.py) reproduces failures in the thread-based tests below
 reliably.
@@ -46,7 +46,7 @@ import time
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import clozn.runs.migrations as migrations  # noqa: E402
+import clozn.runs.schema as run_schema       # noqa: E402
 import clozn.runs.store as store            # noqa: E402
 
 
@@ -63,11 +63,10 @@ def isolated(tmp_path, monkeypatch):
 
 
 def _assert_schema_current(db_path: str) -> None:
-    """Not merely 'no exception' -- the schema must actually be fully, correctly migrated."""
+    """Not merely 'no exception' -- the complete current schema must exist."""
     db = sqlite3.connect(db_path)
     try:
-        assert migrations.current_version(db) == migrations.TARGET_VERSION
-        assert migrations.pending(db) == []
+        run_schema.validate(db)
         tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert {"schema_meta", "runs", "pinned_checkpoints"}.issubset(tables)
     finally:
@@ -98,25 +97,21 @@ def _run_thread_race(n_threads: int) -> list[str]:
 
 def test_ensure_survives_concurrent_threads_on_fresh_store(isolated):
     """25 threads, released simultaneously via a Barrier, all call _ensure() against a store that has
-    NEVER been touched. Every call must succeed, and the resulting schema must be fully migrated."""
+    NEVER been touched. Every call must succeed, and the resulting schema must be complete."""
     results = _run_thread_race(25)
     failures = [r for r in results if r != "OK"]
     assert failures == [], f"{len(failures)}/{len(results)} _ensure() calls failed: {failures[:5]}"
     _assert_schema_current(store._db_path())
 
 
-def test_ensure_concurrent_threads_do_not_corrupt_the_migration_ledger(isolated):
-    """Beyond 'no exception': the migration ledger must show each migration applied EXACTLY once, never
-    partially and never twice -- a lost race that silently reapplied or skipped a step would pass a bare
-    no-exception check but corrupt the ledger."""
+def test_ensure_concurrent_threads_leave_one_complete_schema(isolated):
+    """Beyond 'no exception': racing initializers leave one exact, complete schema."""
     results = _run_thread_race(20)
     assert [r for r in results if r != "OK"] == []
 
     db = sqlite3.connect(store._db_path())
     try:
-        rows = db.execute("SELECT key FROM schema_meta WHERE key LIKE 'migration:%'").fetchall()
-        versions = sorted(int(k[0].split(":")[1]) for k in rows)
-        assert versions == [migration.version for migration in migrations.MIGRATIONS], versions
+        run_schema.validate(db)
     finally:
         db.close()
 
@@ -227,7 +222,7 @@ def test_schema_lock_timeout_is_typed_not_silent(isolated, monkeypatch):
 
 def test_ensure_is_idempotent_after_concurrent_init(isolated):
     """Once the race has settled, repeated sequential _ensure() calls (the normal per-request path) must
-    remain cheap no-ops that never re-touch migrations."""
+    remain cheap no-ops that never rebuild the schema."""
     _run_thread_race(10)
     _assert_schema_current(store._db_path())
     for _ in range(5):

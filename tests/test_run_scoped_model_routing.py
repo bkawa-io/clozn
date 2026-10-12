@@ -1,26 +1,13 @@
-"""Run-scoped control routes resolve their worker from the RUN'S OWN model under a managed
-multi-model gateway, instead of `ctx.active_sub(h)` failing closed for every run (the bug this
-change fixes -- see clozn.server.app.active_sub's docstring and
-clozn.server.model_routing.select_control_model_for_run's docstring for the full story).
+"""Run-scoped control routes resolve their worker from the run's recorded model.
 
-Every route exercised here used to do one of two wrong things under `app.MODEL_ROUTER` being set:
-  * call `ctx.active_sub(h)` directly -> always None -> an unconditional 503 for EVERY run, not
-    just ones whose worker was genuinely unavailable (see the old, now-corrected
-    `test_unselected_run_engine_routes_never_use_default_worker` in test_managed_model_bootstrap.py);
-  * (causal_trace.py, provenance.py) fall back to the bare `ctx.ENGINE` global, which under a
-    managed router is the CONTROL-PAIR engine -- i.e. some OTHER model's worker -- silently
-    analyzing the wrong model's weights while returning a normal-looking 200.
-
-This file proves, for a representative, broad sample of the converted routes:
+This file proves, for a representative sample of routes:
   1. under a real two-model `PreloadedModelRouter`, a run whose `model` is "beta" resolves to
-     BETA's own substrate/engine, never alpha's and never the legacy global SUB;
+     beta's own substrate and engine, never alpha's;
   2. a run whose `model` is not configured on the router refuses with a typed
      `clozn.model-routing.v1` error (never a bare 503, never a fallback);
   3. the two "compose, don't block" read routes (investigation, corrective-actions registry)
      degrade to an honest "capability unavailable" instead of refusing outright, since they never
-     execute anything;
-  4. the legacy (`MODEL_ROUTER is None`) path is untouched -- still resolves through
-     `ctx.active_sub`/`ctx.active_engine` exactly as before.
+     execute anything.
 
 No model, no GPU, no engine launch: every engine here is a small deterministic fake whose
 `.health()` satisfies `PreloadedModelBinding`/`qualify_live_identity`'s own bookkeeping, and every
@@ -473,8 +460,7 @@ def test_section_influence_uses_the_runs_own_model_worker(iso, managed, monkeypa
 
     def fake_with_arm_conditions(run_arg):
         captured.setdefault("subs", [])
-        return {"raw_messages": run_arg.get("messages", []), "raw_block": None,
-                "steer_strengths": None}
+        return {"raw_messages": run_arg.get("messages", []), "raw_block": None}
 
     def fake_score_arm(sub, conditions, **kwargs):
         captured["sub"] = sub
@@ -565,29 +551,6 @@ def test_corrective_actions_confirm_hard_refuses_on_unresolvable_worker(iso, man
     assert artifact.get("schema_version") == "clozn.model-routing.v1"
 
 
-# ==================================================================================== legacy path
-
-def test_legacy_no_router_still_uses_active_sub_directly_unchanged(iso, monkeypatch):
-    """MODEL_ROUTER is None (the pre-existing single-worker product path): every converted route
-    must keep resolving through ctx.active_sub/ctx.active_engine exactly as before -- proved here
-    for a representative working substrate reaching the deep call."""
-    previous = server.MODEL_ROUTER, server.SUB, server.ENGINE
-    server.MODEL_ROUTER = None
-    server.SUB = None
-    server.ENGINE = None
-    try:
-        run = _run(model="whatever-legacy-runs-had")
-        engine = FakeEngine(digest="z" * 64, template="9" * 16, build="b", generation="g",
-                            base="http://127.0.0.1:1")
-        sub = FakeSub(engine)
-        server.SUB = sub
-        server.ENGINE = engine
-
-        assert server.SUB is sub
-    finally:
-        server.MODEL_ROUTER, server.SUB, server.ENGINE = previous
-
-
 # ============================================================== neutral run-scoped identity facts
 
 def test_run_model_facts_reuses_router_binding_facts_without_reprobing(iso, managed):
@@ -604,15 +567,15 @@ def test_run_model_facts_reuses_router_binding_facts_without_reprobing(iso, mana
     assert sub is beta.sub
 
 
-def test_selection_identity_facts_derives_on_legacy_path(iso):
-    """Legacy (no router) path still derives identity through one engine health probe."""
+def test_selection_identity_facts_derives_when_binding_facts_are_absent(iso):
+    """A bare selection derives identity through one engine health probe."""
     from clozn.server.model_routing import ModelSelection
     from clozn.experiments.execution_facts import selection_identity_facts
 
     engine = FakeEngine(digest="z" * 64, template="9" * 16, build="b", generation="g",
                         base="http://127.0.0.1:1")
     sub = FakeSub(engine)
-    selection = ModelSelection(model_id="legacy", sub=sub, engine=engine, artifact=None)
+    selection = ModelSelection(model_id="fixture", sub=sub, engine=engine, artifact=None)
     runtime, worker, resolved_engine = selection_identity_facts(selection)
     assert resolved_engine is engine
     assert worker["worker_generation_id"] == "g"

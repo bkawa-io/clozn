@@ -95,7 +95,7 @@ def test_wizard_guides_choices_saves_task_profile_and_prints_claim_limits(monkey
 
     def save_profile(payload, *, task):
         called.update(payload=payload, task=task)
-        return {"profile_path": "/profiles/model/coding.json", "active_path": "/eval_report.json"}
+        return {"model": payload["model"], "task": task}
 
     monkeypatch.setattr(eval_store, "save_profile", save_profile, raising=False)
     ns = build_parser().parse_args(["eval", "--wizard"])
@@ -113,7 +113,7 @@ def test_wizard_guides_choices_saves_task_profile_and_prints_claim_limits(monkey
     assert "Distribution limit" in text
     assert "recorded token probabilities" in text
     assert "not a live fact-check" in text
-    assert "active report -> /eval_report.json" in text
+    assert "saved TRUTH-tier profile -> model-sha-123 / coding" in text
 
 
 def test_wizard_eof_uses_cli_defaults_and_does_not_save_unasked(monkeypatch, capsys):

@@ -180,7 +180,7 @@ def test_ollama_nonstream_cutoff_has_warning_body_and_header(iso):
     assert out["clozn_warnings"][0]["code"] == "output_truncated"
     assert b"X-Clozn-Warning: output-truncated" in raw.partition(b"\r\n\r\n")[0]
     logged = runlog.get_run(out["clozn_run_id"])
-    assert logged["context_receipt"]["output_cut_off"] is True
+    assert logged["context_receipt"]["termination"]["reason"] == "max_tokens"
 
 
 def test_ollama_generation_failure_is_still_an_inspectable_run(iso):
@@ -199,7 +199,7 @@ def test_ollama_generation_failure_is_still_an_inspectable_run(iso):
 
 
 def test_ollama_chat_streams_by_default_when_stream_is_omitted(iso):
-    """DEFAULT-STREAM SEMANTICS (roadmap PRODUCT_ROADMAP.md Phase 2 item 1): upstream Ollama streams
+    """Default stream semantics: upstream Ollama streams
     unless the caller explicitly opts out with `stream: false` -- https://docs.ollama.com/api/streaming.
     Before this shipped, an omitted `stream` took clozn's own non-stream path (and an explicit `stream:
     true` was a clean 501); omitting it now must match upstream and stream instead. Wire-shape depth

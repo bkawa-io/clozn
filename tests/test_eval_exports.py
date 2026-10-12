@@ -43,6 +43,7 @@ def _result(statuses=None):
     result = {"schema_version": suite.RESULT_SCHEMA, "experiment_id": "exp_portable",
               "name": manifest["name"], "created_at": "2026-07-21T12:00:00Z",
               "manifest_sha256": suite._manifest_digest(manifest), "manifest": manifest,
+              "suite_fingerprint": suite.suite_fingerprint(manifest, seeds=[0]),
               "seeds": [0], "cells": cells,
               "summary": suite._summarize(cells, "base", ["base", "candidate"])}
     return suite.validate_result(result)

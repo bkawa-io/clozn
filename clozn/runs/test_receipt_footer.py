@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from clozn.runs import receipt_footer
+from clozn.runs.context_receipt import build_context_receipt
 
 
 def _run(**kw):
@@ -18,17 +19,22 @@ def _run(**kw):
 
 def _context(*, pressure=False, omitted=False):
     prompt, window = (910, 1000) if pressure else (100, 1000)
-    delivered = [{"segment_id": "seg_aaaaaaaaaaaaaaaa", "source_label": "system",
-                  "included": not omitted}]
-    return {
-        "schema_version": "clozn.context-receipt.v1", "run_id": "run_x",
-        "privacy": "metadata_only",
-        "limits": {"prompt_tokens": prompt, "context_window_tokens": window, "generated_tokens": 3},
-        "delivered": delivered, "assembled": [] if omitted else delivered,
-        "omissions": ([{"segment_id": delivered[0]["segment_id"], "reason": "context_budget"}]
-                       if omitted else []),
-        "transformations": [], "termination": {"reason": "eos", "generated_tokens": 3},
-    }
+    messages = [{"role": "system", "content": "Be precise."}]
+    receipt = build_context_receipt(
+        messages=messages,
+        assembled_messages=[] if omitted else messages,
+        finish_reason="stop",
+        meta={"prompt_tokens": prompt, "n_ctx": window, "max_tokens": 3},
+        trace={"tokens": ["A", " normal", " answer."]},
+        run_id="run_x",
+        privacy="metadata_only",
+    )
+    if omitted:
+        receipt["omissions"] = [{
+            "segment_id": receipt["delivered"][0]["segment_id"],
+            "reason": "context_budget",
+        }]
+    return receipt
 
 
 def test_off_never_appends_a_footer():
@@ -126,7 +132,7 @@ def test_multipart_assistant_footer_is_stripped_without_mutating_input():
     assert messages[0]["content"][0]["text"].endswith(footer)
 
 
-def test_summary_legacy_helper_remains_defensive():
+def test_summary_helper_remains_defensive():
     for value in (None, {}, {"trace": "bad"}, {"trace": {"tokens": None}}):
         summary = receipt_footer.summary(value)
         assert summary["n_tokens"] == 0 and summary["mean_conf"] is None

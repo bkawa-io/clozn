@@ -1,0 +1,13 @@
+{
+  "schema_version": "clozn.experiment-materialization.v1",
+  "state": "completed",
+  "parent_run_id": "run_parent",
+  "child_run_id": "run_child",
+  "experiment_id": "exp_fixture",
+  "arm_id": "arm_fixture",
+  "observation_id": "obs_fixture",
+  "realized_fidelity": "direct_context_generation",
+  "trace_state": "available",
+  "comparison": {},
+  "compare_path": "#/compare/run_parent/run_child"
+}

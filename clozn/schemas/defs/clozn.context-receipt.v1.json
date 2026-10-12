@@ -2,10 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "clozn.context-receipt.v1",
   "title": "Context receipt: what reached the model, what changed on the way, what was omitted, and why generation stopped",
-  "description": "Built by clozn.runs.context_receipt.build_context_receipt() and stored on every run's `context_receipt` field (feature 06). This is the FIRST schema-governed version of that field -- runs recorded before 2026-07-27 carry an informal, pre-seam shape (top-level 'schema': 'clozn.context_receipt.v1', note the underscore and the different key name) that predates clozn/schemas/ and was never validated against any schema; those documents are read by clozn.runs.context_receipt.describe() via shape detection, never migrated in place, and never validated against this file. 'delivered' and 'assembled' are metadata-only segment arrays (source type/label/order/byte count/hash/reason) -- they deliberately do NOT carry message content; full content lives on the run's own 'messages'/'assembled_messages'/'final_prompt' fields, governed by the run-level redact/delete lifecycle (clozn.runs.mutations), not by this artifact. 'template_fingerprint' is inherited from clozn.run-identity.v1's own field, which fingerprints template AND tokenizer rendering behavior TOGETHER -- it cannot isolate one from the other, which is why 'tokenizer_conflated_with_template' rides alongside it instead of a separate (and equally unable to isolate) tokenizer_fingerprint field.",
+  "description": "Built by clozn.runs.context_receipt.build_context_receipt() and stored on every run's `context_receipt` field. 'delivered' and 'assembled' are metadata-only segment arrays (source type/label/order/byte count/hash/reason); full content lives on the run's own 'messages'/'assembled_messages'/'final_prompt' fields under the run-level redact/delete lifecycle. 'template_fingerprint' fingerprints template and tokenizer rendering behavior together, so 'tokenizer_conflated_with_template' states that limitation explicitly.",
 
   "type": "object",
   "required": ["schema_version", "run_id"],
+  "additionalProperties": false,
 
   "$defs": {
     "segment_reason": {
@@ -20,7 +21,7 @@
     "segment": {
       "type": "object",
       "description": "One user-visible unit (v1: one chat message) tracked from delivery through rendering. Metadata only -- no content field by design; see the top-level description.",
-      "required": ["segment_id", "source_type", "original_order"],
+      "required": ["segment_id", "source_type", "original_order", "content_hash"],
       "properties": {
         "segment_id": {
           "type": "string",
@@ -131,25 +132,21 @@
           "minimum": 0,
           "description": "Exact worker-reported rendered prompt token count."
         },
-        "token_count": {"type": "integer", "minimum": 0},
         "template_fingerprint": {
           "type": "string",
           "pattern": "^[0-9a-f]{16}$"
         },
-        "content_available": {
-          "type": "boolean",
-          "description": "Whether this receipt's survived block still contains the exact rendered text under its privacy tier."
-        },
         "estimated": {
           "type": "boolean",
-          "description": "true if token_count came from a non-exact source. Native-engine runs report exact counts (omit this key -> exact); Torch lab adapters that cannot report an exact count must mark true rather than silently claiming exactness."
+          "description": "true if tokens came from a non-exact source. Native-engine runs report exact counts; adapters that cannot report an exact count must mark true rather than silently claiming exactness."
         },
         "special_tokens": {
           "type": "array",
           "items": {"type": "string"},
           "description": "Not populated in v1 -- no capture point exists for which special tokens the template inserted. Omitted (never an empty-list guess) until one does."
         }
-      }
+      },
+      "additionalProperties": false
     },
 
     "omissions": {"type": "array", "items": {"$ref": "#/$defs/omission"}},
@@ -175,13 +172,14 @@
           "description": "Capture layer that supplied the raw reason, for example substrate, worker_event, or fallback."
         },
         "generated_tokens": {"type": "integer", "minimum": 0}
-      }
+      },
+      "additionalProperties": false
     },
 
     "privacy": {
       "type": "string",
       "enum": ["full", "metadata_only", "hashes_only", "off"],
-      "description": "The receipt-privacy tier active when this document was built (clozn.runs.receipt_privacy). Governs how much of THIS artifact's own duplicated content was retained -- independent of the run-level redact/delete lifecycle that governs run['messages'] etc."
+      "description": "The metadata-disclosure tier active when this receipt was built. Full message and prompt content is never stored in this artifact."
     }
   }
 }

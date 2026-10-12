@@ -1,0 +1,10 @@
+{
+  "schema_version": "clozn.context-investigation-effects-job-result.v1",
+  "experiment_id": "exp_fixture",
+  "source_count": 3,
+  "completed_source_count": 1,
+  "unavailable_source_count": 1,
+  "failed_source_count": 0,
+  "not_measured_source_count": 1,
+  "state": "completed"
+}

@@ -200,7 +200,7 @@ def _tombstone(row: sqlite3.Row, payload: dict | None) -> dict:
 
 def _cleanup_blob(digest: str | None) -> dict[str, Any]:
     """Synchronously remove one content-addressed blob (trace or influence-map) IF nothing else still
-    references it -- the immediate counterpart to the deferred, explicitly-requested `clozn migrate --gc`
+    references it -- the immediate counterpart to the deferred, explicitly-requested `clozn runs gc --apply`
     sweep. Generic over which ref key produced the digest; `gc._referenced_digests` already scans both."""
     if digest is None:
         return {"status": "not_applicable", "sha256": None}
@@ -488,7 +488,7 @@ def prune_to(keep: int, *, dry_run: bool = True) -> dict[str, Any]:
 
 def prune_older_than(days: int, *, dry_run: bool = True) -> dict[str, Any]:
     """Plan or apply the age-based ``clozn privacy retention --days N`` policy: delete every run recorded
-    more than ``days`` days ago. Backs the delete-on-GC path (`clozn migrate --gc`); blob removal stays
+    more than ``days`` days ago. Blob removal stays
     with the existing blob GC, exactly like :func:`prune_to`."""
     if not isinstance(days, int) or isinstance(days, bool) or days <= 0:
         raise MutationError("days must be a positive integer")

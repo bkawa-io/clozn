@@ -118,7 +118,7 @@ def rejection_response(outcome: str) -> tuple:
 
     Shared by every gate in the gateway -- the catch-all POST_GATE (app.py's
     do_POST) and any per-worker WorkerGateRegistry gate (model_routing.py's
-    select_for_handler, legacy no-router branch) -- so a caller sees an
+    select_for_handler) -- so a caller sees an
     identical envelope no matter which gate actually said no.
     """
     return (

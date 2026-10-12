@@ -3,6 +3,7 @@
   "$id": "clozn.context-investigation-remove-test-result.v1",
   "title": "Compact Context Investigation remove-test result",
   "type": "object",
+  "additionalProperties": false,
   "required": ["schema_version", "run_id", "source_id", "experiment_id", "arm_id", "status", "experiment_state"],
   "properties": {
     "schema_version": {"const": "clozn.context-investigation-remove-test-result.v1"},
@@ -11,12 +12,12 @@
     "experiment_id": {"type": "string", "minLength": 1},
     "arm_id": {"type": "string", "minLength": 1},
     "observation_id": {"type": ["string", "null"]},
-    "status": {"type": "string"},
+    "status": {"enum": ["exact_preserved", "diverged", "unavailable", "failed"]},
     "matched_token_count": {"type": ["integer", "null"], "minimum": 0},
     "first_divergence_index": {"type": ["integer", "null"], "minimum": 0},
     "divergence_kind": {"type": ["string", "null"]},
     "reason": {"type": ["string", "null"]},
     "reason_code": {"type": ["string", "null"]},
-    "experiment_state": {"type": "string"}
+    "experiment_state": {"enum": ["pending", "running", "completed", "cancelled", "failed", "blocked"]}
   }
 }

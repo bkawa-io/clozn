@@ -90,7 +90,7 @@ def _clean_alts(alts) -> list[dict]:
 
 
 def _clean_step(s, fallback_index: int) -> dict | None:
-    """Normalize one raw token step into the v2 schema while keeping v1 aliases readable."""
+    """Normalize one worker token step into the stored step schema."""
     if not isinstance(s, dict):
         return None
     piece = str(s.get("piece", s.get("token", s.get("text", ""))))
@@ -120,7 +120,7 @@ def _clean_step(s, fallback_index: int) -> dict | None:
 
 
 def _steps_from_parallel(trace: dict) -> list[dict]:
-    """Reconstruct v2 `steps` from a ready trace dict's parallel arrays."""
+    """Normalize a caller-supplied parallel-array trace into canonical steps."""
     tokens = trace.get("tokens") if isinstance(trace, dict) else None
     if not isinstance(tokens, list):
         return []
@@ -144,7 +144,7 @@ def _steps_from_parallel(trace: dict) -> list[dict]:
 
 
 def steps_to_trace(steps) -> dict:
-    """Map per-token steps -> the run's trace dict with v1 arrays plus rich v2 `steps`."""
+    """Map per-token worker steps into the canonical run trace."""
     steps = [s for s in (steps or []) if isinstance(s, dict)]
     if not steps:
         return {}
@@ -273,11 +273,9 @@ def raw_finish_reason_from_frames(frames) -> str | None:
 
 
 def generation_timing_from_frames(frames) -> dict:
-    """Return versioned worker phases plus legacy aggregate aliases from the last terminal frame.
+    """Return measured worker phases and their aggregate aliases from the terminal frame.
 
-    New workers send ``timing`` with nanosecond durations from their own steady clock. Old workers only
-    send ``wall_ms``/``tok_per_s``; that legacy path remains accepted. Invalid or absent fields are
-    omitted, never converted into a zero-duration phase.
+    Invalid or absent fields are omitted, never converted into estimated phases.
     """
     timing = {}
     for obj in frames or []:
@@ -359,22 +357,12 @@ def generation_timing_from_frames(frames) -> dict:
                     and math.isfinite(float(decode_rate)) and decode_rate >= 0
                 ):
                     timing["generation_tokens_per_second"] = decode_rate
-        wall_ms = obj.get("wall_ms")
         new_tokens = obj.get("new_tokens")
         steps_total = obj.get("steps_total")
-        tok_per_s = obj.get("tok_per_s")
-        if ("generation_duration_ms" not in timing
-                and isinstance(wall_ms, (int, float)) and not isinstance(wall_ms, bool)
-                and math.isfinite(float(wall_ms)) and wall_ms >= 0):
-            timing["generation_duration_ms"] = wall_ms
         if isinstance(new_tokens, int) and not isinstance(new_tokens, bool) and new_tokens >= 0:
             timing["generation_tokens"] = new_tokens
         if isinstance(steps_total, int) and not isinstance(steps_total, bool) and steps_total >= 0:
             timing["generation_steps"] = steps_total
-        if ("generation_tokens_per_second" not in timing
-                and isinstance(tok_per_s, (int, float)) and not isinstance(tok_per_s, bool)
-                and math.isfinite(float(tok_per_s)) and tok_per_s >= 0):
-            timing["generation_tokens_per_second"] = tok_per_s
     return timing
 
 

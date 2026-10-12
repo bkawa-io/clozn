@@ -23,12 +23,7 @@ across every scored section (0.0 for every section, never NaN, when every delta 
 token count, so a long vs. short answer's deltas are comparable.  `summary` is a bucketed, honest phrase
 ("negligible"/"small"/"substantial" x "better"/"worse") -- never a causal claim.
 
-DEDUP (why a legacy "memory_card" section is silently absent from `sections`, never surfaced as an error):
-that source was cut from the product on 2026-07-27 along with the rest of memory, so `clozn.runs.sections`
-never produces it today; a run recorded before the cut may still carry a stray `"memory_card"`-sourced
-entry in its manifest, and `clozn.receipts.deltas._section_influences`'s whitelist (restated here for the
-identical reason) skips it rather than try to ablate a source this codebase no longer knows how to. Only
-"api"/"auto" sourced sections are scored.
+Only canonical ``api`` and ``auto`` sections are scored. Malformed manifest entries are ignored.
 
 COST, stated honestly: this calls `forced_receipt()` once per ablatable section, and forced_receipt itself
 always re-scores its own WITH arm internally -- so this route redoes that one (cheap: one forward pass over
@@ -76,7 +71,7 @@ _SUBSTANTIAL = 0.5
 
 def _ablatable_sections(run: dict) -> list:
     """The run's own `sections` manifest, filtered to what this fast path can actually score -- "api"/
-    "auto" sources only (see module docstring's dedup note); an entry with no `name` can't be ablated by
+    "auto" sources only; an entry with no `name` can't be ablated by
     name either (mirrors deltas._section_influences's own skip rule) so it's dropped here too. Never
     raises: a malformed manifest degrades to []."""
     manifest = run.get("sections")
@@ -147,9 +142,7 @@ def try_post(h, p, body):
 
     sections = _ablatable_sections(run)
     if not sections:
-        # No manifest at all (predates section capture), or a manifest with nothing this fast path can
-        # ablate (memory_card-only) -- either way, an honest empty answer, not an engine-availability check
-        # nobody needed: there is nothing to score regardless of substrate state.
+        # No canonical ablatable section means there is nothing to score regardless of substrate state.
         h._json(200, {"run_id": rid, "sections": [], "any_meaningful": False, "note": _NO_MANIFEST_NOTE})
         return True
 
@@ -168,8 +161,7 @@ def try_post(h, p, body):
     # here, a single time, instead of once per section.
     conditions = rederive.with_arm_conditions(run)
     with_tokens, with_ok = rederive.score_arm(
-        sub, conditions, messages=conditions["raw_messages"], block=conditions["raw_block"],
-        steer_strengths=conditions["steer_strengths"])
+        sub, conditions, messages=conditions["raw_messages"], block=conditions["raw_block"])
     if not with_ok:
         h._json(503, {"error": "section-influence requires worker token scoring"})
         return True

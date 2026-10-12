@@ -76,7 +76,7 @@ def try_get(h, p):
         # ValueError from build_context_utilization always means the persisted evidence itself is
         # malformed or internally inconsistent (bad run id, bad selection bookkeeping, a selected source
         # missing coarse spans/links, ...), never a caller mistake. An exception raised while reading a
-        # malformed legacy run or influence artifact may itself contain private source literals, so the
+        # malformed run or influence artifact may itself contain private source literals, so the
         # public failure stays generic and text-free.
         h._json(500, _CONTRACT_ERROR)
         return True

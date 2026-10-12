@@ -118,10 +118,7 @@ def _post(path, body_obj):
 def iso(tmp_path, monkeypatch):
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    monkeypatch.setattr(eval_store, "_PATH", str(tmp_path / "eval_report.json"))
-    # Existing cases pin legacy single-active-report compatibility. Tests for
-    # task-index selection install load_profile explicitly.
-    monkeypatch.delattr(eval_store, "load_profile", raising=False)
+    monkeypatch.setattr(eval_store, "_PATH", str(tmp_path / "calibration_profiles.json"))
     monkeypatch.setattr(cs, "SUB", TraceSub())
     return tmp_path
 
@@ -130,10 +127,14 @@ def _body(**extra):
     return {"model": MODEL, "messages": [{"role": "user", "content": "what's the answer?"}], **extra}
 
 
+def _save_profile(payload):
+    eval_store.save_profile(payload, task=payload.get("task") or payload.get("set") or "general")
+
+
 # ================================================================= the ask band attaches clozn_policy
 
 def test_ask_band_attaches_clozn_policy(iso):
-    eval_store.save(dict(SAVED))
+    _save_profile(dict(SAVED))
     out = _post("/v1/chat/completions", _body())
     assert out["clozn_policy"] == {
         "band": "ask", "score": 0.6, "score_aggregate": "min", "answer_at": 0.8, "ask_at": 0.4,
@@ -148,7 +149,7 @@ def test_ask_band_attaches_clozn_policy(iso):
 # ================================================================= the abstain band attaches clozn_policy
 
 def test_abstain_band_attaches_clozn_policy(iso, monkeypatch):
-    eval_store.save(dict(SAVED))
+    _save_profile(dict(SAVED))
     monkeypatch.setattr(cs, "SUB", TraceSub(steps=ABSTAIN_STEPS))
     out = _post("/v1/chat/completions", _body())
     assert out["clozn_policy"] == {
@@ -171,20 +172,20 @@ def test_no_metadata_when_no_calibration_saved(iso):
 
 
 def test_no_metadata_when_confidence_is_in_the_answer_band(iso, monkeypatch):
-    eval_store.save(dict(SAVED))
+    _save_profile(dict(SAVED))
     monkeypatch.setattr(cs, "SUB", TraceSub(steps=ANSWER_STEPS))
     out = _post("/v1/chat/completions", _body())
     assert "clozn_policy" not in out
 
 
 def test_no_metadata_on_model_mismatch(iso):
-    eval_store.save({**SAVED, "model": "a-totally-different-model"})
+    _save_profile({**SAVED, "model": "a-totally-different-model"})
     out = _post("/v1/chat/completions", _body())
     assert "clozn_policy" not in out
 
 
 def test_no_metadata_when_saved_report_carries_no_policy(iso):
-    eval_store.save({"model": MODEL, "score": "min"})
+    _save_profile({"model": MODEL, "set": "arith", "score": "min"})
     out = _post("/v1/chat/completions", _body())
     assert "clozn_policy" not in out
 
@@ -222,7 +223,7 @@ def test_clozn_task_is_a_strict_short_identifier(iso, bad):
 
 def test_sse_uses_same_task_profile_and_records_task(iso, monkeypatch):
     monkeypatch.setattr(cs, "SUB", StreamTraceSub())
-    eval_store.save(dict(SAVED))
+    _save_profile(dict(SAVED))
     raw = _dispatch("/v1/chat/completions", _body(stream=True, clozn_task="arith"))
     _, _, payload = raw.partition(b"\r\n\r\n")
     frames = [json.loads(line[6:]) for line in payload.decode("utf-8").splitlines()

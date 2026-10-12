@@ -37,7 +37,10 @@ def _run(**updates):
             "generation_duration_ms": 900.5, "generation_tokens_per_second": 5.5,
         },
         "trace": {"tokens": ["one", "two", "three"]},
-        "context_receipt": {"limits": {"prompt_tokens": 12, "generated_tokens": 3}},
+        "context_receipt": {
+            "rendered": {"tokens": 12},
+            "termination": {"reason": "eos", "generated_tokens": 3},
+        },
         "identity": {"model_sha256": "a" * 64, "template_fingerprint": "0123456789abcdef"},
     }
     run.update(updates)
@@ -185,7 +188,7 @@ def test_jsonl_is_one_otlp_record_per_line_and_write_is_atomic(tmp_path):
     assert target.read_text(encoding="utf-8") == "prior-good-data"
 
 
-def test_legacy_timestamp_and_token_fallbacks_remain_deterministic():
+def test_timestamp_and_meta_token_fallbacks_are_deterministic():
     span = telemetry.run_to_span(_run(
         created_ts=None, created_at="2024-01-01T00:00:00Z",
         timing={"duration_ms": 250}, context_receipt={},

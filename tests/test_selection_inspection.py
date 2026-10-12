@@ -50,6 +50,7 @@ def _influence(run):
         "status": "ok",
         "available": True,
         "method": {"name": "teacher_forced_matched_context_replacement",
+                    "version": "1",
                     "mode": "forced_score_intervention", "claim_limit": "no percentage claim",
                     "caveat": "measured effect only, not correctness"},
         "identity": {"model_sha256": "a" * 64},

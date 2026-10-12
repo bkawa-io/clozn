@@ -1,4 +1,4 @@
-"""test_prove_cli -- model-free tests for `clozn prove` (docs/PRODUCT_ROADMAP.md §8 tail: batched
+"""Model-free tests for `clozn prove`, including batched
 coalition/Shapley causal credit). Mirrors test_narrate_cli.py's layout exactly:
 
   * canned-dict tests drive format_prove() directly against hand-built /receipts-shaped fixtures -- no

@@ -13,6 +13,24 @@ def _by_rule(entries):
     return {item["rule"]: item for item in entries}
 
 
+def _worker_timing(*phases):
+    return {
+        "schema_version": "clozn.worker-timing.v1",
+        "unit": "nanoseconds",
+        "clock": "steady_clock",
+        "clock_owner": "clozn_worker",
+        "phases": list(phases),
+    }
+
+
+def _prefill(milliseconds):
+    return {
+        "name": "prefill", "owner": "clozn_worker",
+        "duration_ns": round(milliseconds * 1_000_000),
+        "measurement": "measured", "aggregation": "exclusive",
+    }
+
+
 _ALL_RULE_NAMES = {
     "large_context", "slow_decode", "cold_model_load", "client_backpressure",
     "queue_contention", "adapter_reload", "memory_pressure",
@@ -40,7 +58,7 @@ def test_structurally_uninstrumented_rules_are_always_unavailable_regardless_of_
         "timing": {"duration_ms": 5000},
         "meta": {"generation_duration_ms": 1000.0, "generation_tokens_per_second": 40.0,
                 "cpu_spill_bytes": 0},
-        "context_receipt": {"limits": {"prompt_tokens": 100, "context_window_tokens": 8192}},
+        "context_receipt": {"rendered": {"tokens": 100}, "context_window_tokens": 8192},
         "identity": {"model_sha256": "a" * 64},
     }
     by_rule = _by_rule(diagnose_performance(rich_run))
@@ -52,15 +70,17 @@ def test_structurally_uninstrumented_rules_are_always_unavailable_regardless_of_
 
 # ------------------------------------------------------------------------------------- large_context
 
-def test_large_context_unavailable_without_context_receipt_limits():
+def test_large_context_unavailable_without_context_receipt_token_facts():
     entry = _by_rule(diagnose_performance({"id": "r", "timing": {"duration_ms": 1000},
                                            "meta": {"generation_duration_ms": 100}}))["large_context"]
     assert entry["status"] == "unavailable"
-    assert "prompt_tokens" in entry["reason"]
+    assert "rendered.tokens" in entry["reason"]
 
 
-def test_large_context_unavailable_without_timing_or_decode_duration():
-    run = {"id": "r", "context_receipt": {"limits": {"prompt_tokens": 7000, "context_window_tokens": 8192}}}
+def test_large_context_unavailable_without_wall_or_measured_prefill():
+    run = {"id": "r", "context_receipt": {
+        "rendered": {"tokens": 7000}, "context_window_tokens": 8192,
+    }}
     entry = _by_rule(diagnose_performance(run))["large_context"]
     assert entry["status"] == "unavailable"
     assert "duration_ms" in entry["reason"]
@@ -69,8 +89,8 @@ def test_large_context_unavailable_without_timing_or_decode_duration():
 def test_large_context_not_fired_on_a_small_prompt_with_fast_decode():
     run = {
         "id": "r", "timing": {"duration_ms": 1000},
-        "meta": {"generation_duration_ms": 950},
-        "context_receipt": {"limits": {"prompt_tokens": 100, "context_window_tokens": 8192}},
+        "meta": {"worker_timing": _worker_timing(_prefill(50))},
+        "context_receipt": {"rendered": {"tokens": 100}, "context_window_tokens": 8192},
     }
     entry = _by_rule(diagnose_performance(run))["large_context"]
     assert entry["status"] == "not_fired"
@@ -78,11 +98,11 @@ def test_large_context_not_fired_on_a_small_prompt_with_fast_decode():
     assert "reason" in entry
 
 
-def test_large_context_fires_when_prompt_is_large_and_decode_is_a_small_share_of_total():
+def test_large_context_fires_when_prompt_is_large_and_prefill_is_a_large_share_of_total():
     run = {
         "id": "r", "timing": {"duration_ms": 20000},
-        "meta": {"generation_duration_ms": 2000},   # decode is 10% of the 20s total
-        "context_receipt": {"limits": {"prompt_tokens": 7500, "context_window_tokens": 8192}},
+        "meta": {"worker_timing": _worker_timing(_prefill(18000))},
+        "context_receipt": {"rendered": {"tokens": 7500}, "context_window_tokens": 8192},
     }
     entry = _by_rule(diagnose_performance(run))["large_context"]
     assert entry["status"] == "fired"
@@ -90,8 +110,7 @@ def test_large_context_fires_when_prompt_is_large_and_decode_is_a_small_share_of
     assert entry["likely_cause"]
     assert entry["possible_fix"]
     assert entry["evidence"]
-    # never overclaims a specific phase it hasn't measured
-    assert "prefill" not in entry["likely_cause"].lower() or "does not yet time prefill" in entry["likely_cause"]
+    assert "measured prompt prefill" in entry["likely_cause"].lower()
 
 
 # --------------------------------------------------------------------------------------- slow_decode
@@ -195,7 +214,7 @@ def test_build_performance_report_composes_trace_and_diagnoses_and_validates():
         "id": "run_full", "model": "qwen",
         "timing": {"duration_ms": 5000},
         "meta": {"generation_duration_ms": 1000.0, "generation_tokens_per_second": 40.0},
-        "context_receipt": {"limits": {"prompt_tokens": 100, "context_window_tokens": 8192}},
+        "context_receipt": {"rendered": {"tokens": 100}, "context_window_tokens": 8192},
     }
     report = perf_diagnosis.build_performance_report(run)
     assert report["schema_version"] == "clozn.performance-trace.v1"

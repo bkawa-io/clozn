@@ -118,7 +118,7 @@ def test_markdown_internalized_mode_stays_honest_about_soft_prefix():
 def test_markdown_survives_non_numeric_memory_strength_and_gate():
     """Bug #6 repro: `mem['strength']`/`mem['gate']` were guarded only by `is not None`, unlike
     `relevance` right above (which checks `isinstance(rel, (int, float))` first) -- a non-numeric value
-    (e.g. a stray string from a malformed/legacy record) hit `float(mem['strength'])` and raised
+    (e.g. a stray string from a malformed record) hit `float(mem['strength'])` and raised
     ValueError, taking down the whole GET /runs/<id>/export?format=md response with it."""
     md = cs._export_markdown({
         "id": "r5",
@@ -209,7 +209,7 @@ def test_receipt_bundle_drops_malformed_output_contract_without_mutating_source(
 
 
 # ---------------------------------------------------------------------------------------------------
-# feature 06: the exported markdown states termination and omission/redaction status explicitly
+# The exported markdown states termination and metadata disclosure explicitly.
 # ---------------------------------------------------------------------------------------------------
 
 def test_markdown_states_termination_and_privacy_for_a_new_shaped_receipt():
@@ -223,33 +223,22 @@ def test_markdown_states_termination_and_privacy_for_a_new_shaped_receipt():
     md = receipt_bundle.to_markdown(bundle)
     assert "## Context receipt" in md
     assert "termination: **max_tokens**" in md
-    assert "privacy tier: **full**" in md
+    assert "metadata disclosure: **full**" in md
 
 
-def test_markdown_states_content_withheld_by_privacy_tier_not_omitted_by_oversight():
+def test_markdown_states_receipt_does_not_duplicate_run_content():
     from clozn.runs.context_receipt import build_context_receipt
     receipt = build_context_receipt(
         messages=[{"role": "user", "content": "hi"}], final_prompt="secret prompt",
         run_id="r_priv", privacy="metadata_only",
     )
-    bundle = receipt_bundle.build({"id": "r_priv", "context_receipt": receipt, "messages": []})
+    bundle = receipt_bundle.build({
+        "id": "r_priv", "context_receipt": receipt, "messages": [],
+        "final_prompt": "secret prompt",
+    })
     md = receipt_bundle.to_markdown(bundle)
-    assert "withheld by receipt privacy tier 'metadata_only'" in md
+    assert "retained on the run, not duplicated in this receipt" in md
     assert "secret prompt" not in md
-
-
-def test_markdown_labels_a_legacy_shaped_receipt_plainly():
-    legacy = {
-        "schema": "clozn.context_receipt.v1",
-        "delivered": {"label": "delivered", "meaning": "m", "messages": []},
-        "survived": {"label": "survived", "meaning": "m", "assembled_messages": None,
-                    "final_prompt": None},
-        "limits": {}, "warnings": [], "input_truncated": False, "input_policy": "p",
-        "output_cut_off": False,
-    }
-    bundle = receipt_bundle.build({"id": "r_legacy", "context_receipt": legacy, "messages": []})
-    md = receipt_bundle.to_markdown(bundle)
-    assert "pre-2026-07-27 receipt shape" in md
 
 
 def test_markdown_has_no_context_receipt_section_when_absent():

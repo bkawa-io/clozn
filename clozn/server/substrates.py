@@ -1,25 +1,19 @@
-"""Product model adapter.
+"""Torch-free product adapter for the supervised C++ GGUF worker.
 
-``EngineSubstrate`` is the only product-serving adapter (it talks to the C++ worker over HTTP -- no
-Torch), and the only substrate class left in this module. It used to be joined by ``Substrate``, a
-shared base carrying the studio surface (prompt-card memory + tone dials) that both this adapter and
-the PyTorch lab adapters inherited from -- the Torch lab adapters were deleted with the memory program
-on 2026-07-27 (a product process has no Torch adapter to import, and the gateway has no loader or route
-that could activate one), and ``Substrate`` itself was retired with the rest of named-dial
-personalization: it existed only to carry the /memory/* + /steer/* dispatch, and nothing else.
-The app module remains the seam:
-mutable server state (SUB/SUBNAME/ENGINE*/SLOTS/...) and the helpers routes and tests patch live there,
-and this module reads them through `ctx` (late-bound, so a monkeypatch on the app module is always
-seen). app re-exports every public name here, so `from clozn.server import app as cs; cs.EngineSubstrate`
-keeps working unchanged.
+The app module owns live server state and route injection. This module reads that state through
+``ctx`` so request-scoped worker selection and test doubles remain late-bound.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
+from copy import deepcopy
 import json
+import math
 import os
 import sys
 import threading
 import time
+from typing import Any
 
 from clozn.server.config import REPO_ROOT, DEMO                        # noqa: F401
 from clozn.server import app as ctx   # the seam: live server state + patchable helpers (see docstring)
@@ -47,6 +41,81 @@ def _experimental_native_reference_match_arms_enabled() -> bool:
     }
 
 
+def _experimental_native_score_variants_enabled() -> bool:
+    """Opt into the screening-only related-prompt scorer.
+
+    Capability advertisement alone must not move product scoring off the
+    scalar reference path.  The native endpoint has a distinct floating-point
+    regime and is deliberately quarantined as screening evidence.
+    """
+    return os.environ.get("CLOZN_ENABLE_NATIVE_SCORE_VARIANTS", "").lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _native_score_variants_min_arms() -> int:
+    """Conservative native-screen crossover, configurable for qualification work.
+
+    Both qualified Metal fixtures were slower at one and two variants and
+    faster for four late-sharing variants.  Keep the production opt-in on the
+    measured side of that crossover.  Benchmark owners can lower the value
+    explicitly without changing the default product policy.
+    """
+    raw = os.environ.get("CLOZN_NATIVE_SCORE_VARIANTS_MIN_ARMS", "4")
+    try:
+        return max(1, min(64, int(raw)))
+    except (TypeError, ValueError):
+        return 4
+
+
+def _native_score_variants_min_prefix_reuse_ratio() -> float:
+    """Minimum exact trie-row reuse required by the adaptive native path."""
+    raw = os.environ.get("CLOZN_NATIVE_SCORE_VARIANTS_MIN_PREFIX_REUSE_RATIO", "0.25")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 0.25
+    if not math.isfinite(value):
+        return 0.25
+    return max(0.0, min(1.0, value))
+
+
+def _score_variant_prefix_stats(variants: list[Mapping[str, Any]]) -> dict[str, Any]:
+    """Return a model-free exact-token reuse estimate for rollout admission.
+
+    This counts edges in the same kind of token trie the native planner uses.
+    It is deliberately an admission estimate rather than execution telemetry:
+    the worker remains authoritative for actual waves and decoded rows.
+    """
+    trie: dict[int, dict] = {}
+    logical_rows = 0
+    physical_rows = 0
+    unique_prompts: set[tuple[int, ...]] = set()
+    for variant in variants:
+        prompt_ids = tuple(variant["prompt_ids"])
+        unique_prompts.add(prompt_ids)
+        logical_rows += len(prompt_ids)
+        node = trie
+        for token in prompt_ids:
+            child = node.get(token)
+            if child is None:
+                child = {}
+                node[token] = child
+                physical_rows += 1
+            node = child
+    reused_rows = max(0, logical_rows - physical_rows)
+    return {
+        "variant_count": len(variants),
+        "unique_prompt_count": len(unique_prompts),
+        "logical_prompt_rows": logical_rows,
+        "estimated_physical_prompt_rows": physical_rows,
+        "estimated_reused_prompt_rows": reused_rows,
+        "estimated_prefix_reuse_ratio": (
+            float(reused_rows) / float(logical_rows) if logical_rows else 0.0
+        ),
+    }
+
+
 def _experimental_parent_anchor_enabled() -> bool:
     """Opt into the Phase-B parent-anchor path; never enable it for proof arms."""
     return os.environ.get("CLOZN_ENABLE_NATIVE_PARENT_ANCHOR", "").lower() in {
@@ -55,33 +124,166 @@ def _experimental_parent_anchor_enabled() -> bool:
 
 
 
-# roadmap feature 01: CLOZN_ENGINE_DISCOVERY_SOURCE/BACKEND/ARTIFACT_SHA256/VERSION/BUILD_ID and
-# LLAMA_CPP_COMMIT are set by
-# clozn.cli.runtime_process.spawn_runtime() on the gateway subprocess's own environment -- this process
-# (clozn.server.app, launched as `python -m clozn.server.app`) is a SEPARATE process from the `clozn
-# serve` CLI that called clozn.cli.engine_process.find_engine_ex(), so these facts have no other way to
-# cross that boundary (the same reason CLOZN_ENGINE_PORT is an env var and not a constructor argument).
-_ENGINE_DISCOVERY_ENV_KEYS = {
-    "discovery_source": "CLOZN_ENGINE_DISCOVERY_SOURCE",
-    "backend": "CLOZN_ENGINE_BACKEND",
-    "artifact_sha256": "CLOZN_ENGINE_ARTIFACT_SHA256",
-    "engine_version": "CLOZN_ENGINE_VERSION",
-    "build_id": "CLOZN_ENGINE_BUILD_ID",
-    "llama_cpp_commit": "CLOZN_ENGINE_LLAMA_CPP_COMMIT",
-}
+def _engine_discovery_context(engine_health=None, configured=None) -> dict:
+    """Combine worker-reported build facts with supervisor-owned executable identity."""
+    out = {}
+    if isinstance(engine_health, Mapping):
+        for field in ("backend", "engine_version", "build_id", "llama_cpp_commit"):
+            value = engine_health.get(field)
+            if value not in (None, ""):
+                out[field] = value
+    if isinstance(configured, Mapping):
+        out.update({key: value for key, value in configured.items() if value not in (None, "")})
+    return out
 
 
-def _engine_discovery_context() -> dict:
-    """Managed-engine discovery/build fields restricted to whichever CLOZN_ENGINE_* environment values
-    are actually set -- an unset one is omitted, never null-padded (the
-    same rule clozn.runs.identity follows everywhere else), so e.g. a repo-local dev build honestly
-    reports no artifact_sha256 rather than an empty string. Fed to
-    clozn.runs.identity.runtime_identity(extra_context=...), which clozn.runs.identity_providers.
-    engine_artifact then reads. Never raises: os.environ.get is the only thing this does."""
+def _score_many_cancelled(cancel) -> bool:
+    if cancel is None:
+        return False
+    if callable(cancel):
+        return bool(cancel())
+    is_set = getattr(cancel, "is_set", None)
+    if callable(is_set):
+        return bool(is_set())
+    return bool(cancel)
+
+
+def _normalise_native_score_variants(response, *, variants, continuation_ids,
+                                     dispatched_indices):
+    """Translate a validated worker screen into the batch result contract.
+
+    The engine client validates the complete wire contract.  These checks are
+    retained here as a fail-closed boundary for alternate/fake engine objects
+    and to turn typed partial work into the product's existing batch errors.
+    """
+    from clozn.experiments.multi_arm import BatchCancelled, MultiArmError
+
+    def malformed(message, *, arm_index=0, completed=(), completed_indices=()):
+        return MultiArmError(
+            message, arm_index=arm_index, completed=completed,
+            completed_indices=completed_indices,
+            dispatched_indices=dispatched_indices,
+        )
+
+    if not isinstance(response, Mapping):
+        raise malformed("native score variants returned a non-object response")
+    if response.get("schema_version") != "clozn.score-variants-worker.v1":
+        raise malformed("native score variants returned an unsupported schema")
+    top_status = response.get("status")
+    if top_status not in {"completed", "partial", "failed", "cancelled"}:
+        raise malformed("native score variants returned an invalid status")
+    if response.get("continuation_ids") != continuation_ids:
+        raise malformed("native score variants returned mismatched continuation IDs")
+
+    execution = response.get("execution")
+    if not isinstance(execution, Mapping):
+        raise malformed("native score variants omitted execution metadata")
+    strategy = execution.get("strategy")
+    identity = execution.get("execution_identity")
+    if (
+        not isinstance(strategy, str)
+        or not strategy.startswith("native_")
+        or execution.get("numerical_regime") != "screening_unqualified"
+        or execution.get("evidence_use") != "screening"
+        or execution.get("qualified") is not False
+        or not isinstance(identity, Mapping)
+        or not identity
+    ):
+        raise malformed("native score variants returned unsafe execution metadata")
+
+    rows = response.get("results")
+    if not isinstance(rows, list) or len(rows) != len(variants):
+        raise malformed("native score variants returned the wrong number of rows")
+
+    completed_rows = []
+    completed_indices = []
+    incomplete = []
+    for index, (row, variant) in enumerate(zip(rows, variants)):
+        if not isinstance(row, Mapping) or row.get("id") != variant["id"]:
+            raise malformed(
+                "native score variants returned out-of-order rows", arm_index=index,
+                completed=completed_rows, completed_indices=completed_indices,
+            )
+        status = row.get("status")
+        if status not in {"completed", "failed", "cancelled", "not_started", "unsupported"}:
+            raise malformed(
+                "native score variants returned an invalid row status", arm_index=index,
+                completed=completed_rows, completed_indices=completed_indices,
+            )
+        if status == "completed":
+            scores = row.get("target_logprobs")
+            if (
+                not isinstance(scores, list)
+                or len(scores) != len(continuation_ids)
+                or any(
+                    isinstance(score, bool)
+                    or not isinstance(score, (int, float))
+                    or not math.isfinite(float(score))
+                    for score in scores
+                )
+            ):
+                raise malformed(
+                    "native score variants returned invalid target logprobs", arm_index=index,
+                    completed=completed_rows, completed_indices=completed_indices,
+                )
+            completed_rows.append([
+                {"id": token_id, "logprob": float(logprob)}
+                for token_id, logprob in zip(continuation_ids, scores)
+            ])
+            completed_indices.append(index)
+        else:
+            if "target_logprobs" in row:
+                raise malformed(
+                    "native score variants returned scores for an incomplete row", arm_index=index,
+                    completed=completed_rows, completed_indices=completed_indices,
+                )
+            incomplete.append((index, status, row.get("error")))
+
+    completed_count = len(completed_indices)
+    coherent = (
+        (top_status == "completed" and completed_count == len(rows))
+        or (top_status == "partial" and 0 < completed_count < len(rows))
+        or (top_status in {"failed", "cancelled"} and completed_count == 0)
+    )
+    if not coherent:
+        raise malformed(
+            "native score variants returned incoherent completion status",
+            completed=completed_rows, completed_indices=completed_indices,
+        )
+
+    if incomplete:
+        executed_indices = tuple(
+            index for index, status, _error in incomplete
+            if status != "not_started"
+        )
+        executed_indices = tuple(sorted({*completed_indices, *executed_indices}))
+        first_failed = next(
+            (item for item in incomplete if item[1] in {"failed", "unsupported"}), None,
+        )
+        if top_status == "failed" or first_failed is not None:
+            index, status, error = first_failed or incomplete[0]
+            detail = error if isinstance(error, str) and error else status
+            raise MultiArmError(
+                f"native score variants row {index} {detail}", arm_index=index,
+                completed=completed_rows, completed_indices=completed_indices,
+                dispatched_indices=executed_indices,
+            )
+        first_index = incomplete[0][0]
+        raise BatchCancelled(
+            "native score variants did not complete every row",
+            completed=completed_rows, next_index=first_index,
+            completed_indices=completed_indices, dispatched_indices=executed_indices,
+        )
+
     return {
-        field: os.environ[env_key]
-        for field, env_key in _ENGINE_DISCOVERY_ENV_KEYS.items()
-        if os.environ.get(env_key)
+        "results": completed_rows,
+        "execution_strategy": strategy,
+        "numerical_regime": execution["numerical_regime"],
+        "evidence_use": execution["evidence_use"],
+        "qualified": False,
+        "execution_identity": deepcopy(dict(identity)),
+        "metrics": deepcopy(response.get("metrics")),
+        "worker_response": deepcopy(dict(response)),
     }
 
 
@@ -89,16 +291,39 @@ class EngineSubstrate:
     """PURE-ENGINE substrate: chat on the C++ GGUF runtime, NO PyTorch model resident. THIS is the class
     that brings the whole torch-free Server tier -- /v1/chat/completions, replay, receipts, explain,
     narrate -- onto the fast engine, because every one of those routes through SUB.chat(). No memory, no
-    named-dial personalization: both were cut from the product (memory on 2026-07-27, dials in the
-    personalization cut that followed). Raw-vector steering (steer_vec/steer_strengths on score_tokens,
-    /intervene) survives as interpretability/causal-attribution machinery -- see score_tokens' own
-    docstring. See RUNTIME_SPLIT.md (the keystone)."""
+    product memory or personalization state. Raw-vector steering remains available to explicit
+    interpretability and causal-attribution calls. See RUNTIME_SPLIT.md."""
 
     name = "engine"
     # The score-many seam is a scheduling wrapper around the same scalar
-    # ``/score`` contract (including bounded concurrency), so its evidence is
-    # proof-grade even though the worker has no native score endpoint.
+    # ``/score`` contract (including bounded concurrency), not a native model
+    # batch. The explicit strategy declaration keeps that distinction visible.
     score_tokens_many_proof_grade = True
+
+    @property
+    def native_score_variants_available(self):
+        """Whether the selected worker can execute an explicit native screen.
+
+        This is capability, not rollout policy.  The environment gate still
+        controls automatic admission through ``score_tokens_many_execution_strategy``;
+        an explicitly requested screen-then-refine job may use the capability
+        while preserving scalar refinement for evidence.
+        """
+        engine = getattr(self, "engine", None)
+        if hasattr(self, "_identity_last_attempt"):
+            self._maybe_reresolve_identity()
+        return bool(
+            getattr(self, "_native_score_variants", False)
+            and callable(getattr(engine, "score_variants", None))
+            and callable(getattr(engine, "apply_template_info", None))
+        )
+
+    @property
+    def score_tokens_many_execution_strategy(self):
+        native_enabled = _experimental_native_score_variants_enabled()
+        if native_enabled and self.native_score_variants_available:
+            return "native_prefix_reuse_step_batch"
+        return "scalar_http_concurrent" if _minimal_context_batch_workers() > 1 else "scalar_serial"
 
     # IDENTITY LAZY RE-RESOLUTION (engine-down pressure test finding #2): a down-at-startup engine pays
     # this ~2s connect-refused tax (this host's control fact) at most once per cooldown window on lazy
@@ -107,11 +332,11 @@ class EngineSubstrate:
     _IDENTITY_RETRY_COOLDOWN_S = 30.0
 
     def __init__(self, engine=None):
-        engine = engine if engine is not None else ctx.ENGINE
         if engine is None:
-            raise RuntimeError("engine substrate needs the supervised GGUF worker (set CLOZN_ENGINE_PORT)")
+            raise RuntimeError("engine substrate needs a supervised GGUF worker")
         self.engine = engine
         self.brain = None                       # no SAE/brain on the pure-engine substrate (concepts 409 cleanly)
+        self.steer = None                       # optional lab steering resolver; raw vectors still work directly
         # T0.2: reflect the ACTUALLY-LOADED GGUF, not a hardcoded Qwen assumption. Derive the family from
         # the engine's /health model file (best-effort -- never blocks boot if the engine isn't up yet).
         # run_meta() re-derives this lazily too, so the run record is correct even when the engine comes
@@ -127,14 +352,15 @@ class EngineSubstrate:
         self._identity_lock = threading.Lock()
         self._identity_last_attempt = 0.0
         self._native_reference_match_arms = False
+        self._native_score_variants = False
         self.last_native_reference_match_metrics = None
+        self._request: RequestContext | None = None
         self._resolve_identity()
 
     def _resolve_identity(self):
         """One best-effort attempt to derive model_family/model_id/model_sha256 from the engine's /health.
-        Never blocks boot, never raises (a down/old engine just leaves everything at its unresolved
-        default). Called once at construction and retried lazily by _maybe_reresolve_identity whenever the
-        engine was down at the previous attempt."""
+        Never blocks boot or raises: an unreachable worker leaves identity unresolved. Called once at
+        construction and retried lazily while the identity remains unresolved."""
         self._identity_last_attempt = time.time()
         h = {}
         try:
@@ -142,6 +368,9 @@ class EngineSubstrate:
             capabilities = (h or {}).get("capabilities") if isinstance(h, dict) else {}
             self._native_reference_match_arms = bool(
                 isinstance(capabilities, dict) and capabilities.get("reference_match_arms") is True
+            )
+            self._native_score_variants = bool(
+                isinstance(capabilities, dict) and capabilities.get("score_variants") is True
             )
             fam, _info = _engine_model_info((h or {}).get("model", ""))
             self._model_family_val = fam
@@ -155,8 +384,7 @@ class EngineSubstrate:
 
     def _maybe_reresolve_identity(self):
         """Retry _resolve_identity() iff identity is still unresolved (no model_sha256 yet) AND the
-        cooldown has elapsed since the last attempt. A no-op once resolved -- never re-fetches, matching
-        the pre-existing "resolve once" behavior for a healthy startup -- and a no-op within the cooldown
+        cooldown has elapsed since the last attempt. A no-op once resolved and within the cooldown
         window so a persistently-down engine doesn't add a health() round-trip to every request."""
         if self._model_sha256_val:
             return
@@ -184,55 +412,17 @@ class EngineSubstrate:
         self._maybe_reresolve_identity()
         return self._model_sha256_val
 
-    # ---- per-request context: request isolation (backlog #2) ------------------------------------------
+    # ---- per-request context -------------------------------------------------------------------------
     # chat()/chat_stream() each start with self._new_request(), then write everything the call learns
-    # about ITSELF onto that one object (see request_context.RequestContext's docstring for why). The
-    # properties below are the back-compat SEAM: every existing reader of sub._last_generation_meta /
-    # _last_finish_reason / _last_diverged / _last_diverged_at / _last_stream_trace keeps working
-    # unchanged, unaware that the piecemeal attributes became views onto self._request. Read-only on
-    # purpose: the only legitimate writers are chat()/chat_stream() below, and they now write through
-    # `self._request` instead.
+    # about itself onto that one object. Public accessors below expose the completed request state.
     def _new_request(self) -> RequestContext:
-        """Start this call's own RequestContext and publish it as 'the current one' in a single attribute
-        assignment. Must be the FIRST thing chat()/chat_stream() do, mirroring exactly where the old code
-        used to reset self._last_generation_meta/_last_diverged/_last_diverged_at at call start."""
+        """Start this call's RequestContext and atomically publish it as the current request."""
         self._request = RequestContext()
         return self._request
 
-    @property
-    def _last_generation_meta(self):
-        req = getattr(self, "_request", None)
-        return req.generation_meta if req is not None else None
-
-    @property
-    def _last_finish_reason(self):
-        req = getattr(self, "_request", None)
-        return req.finish_reason if req is not None else None
-
-    @property
-    def _last_diverged(self):
-        req = getattr(self, "_request", None)
-        return req.diverged if req is not None else None
-
-    @property
-    def _last_diverged_at(self):
-        req = getattr(self, "_request", None)
-        return req.diverged_at if req is not None else None
-
-    @property
-    def _last_stream_trace(self):
-        req = getattr(self, "_request", None)
-        return req.trace if req is not None else []
-
-    @property
-    def _last_prompt_tokens(self):
-        req = getattr(self, "_request", None)
-        return req.prompt_tokens if req is not None else None
-
     def chat(self, messages, max_new=256, sample=True, trace_out=None, mem_out=None,
              reference_tokens=None, stop=None):
-        """One stateless chat completion on the engine. Keeps the historical chat contract EXACTLY (same
-        signature, same trace_out/mem_out fill) so the receipts/replay stack is backend-agnostic.
+        """One stateless chat completion on the engine.
 
         `sample`: the caller's request to sample (True), force greedy (False), or override this request's
         sampling fields with a dict. REPRODUCE_AND_PROVE_PLAN S5: `sample=True` (the default) resolves via
@@ -250,11 +440,8 @@ class EngineSubstrate:
         verdict stashed for last_divergence(). This is a pure termination check -- decode/sampling (greedy
         or not) are otherwise untouched, so a diverged reply is still a bit-exact prefix either way.
 
-        REQUEST ISOLATION (backlog #2): this call's own RequestContext (self._new_request()) replaces the
-        old piecemeal self._last_generation_meta/_last_diverged/_last_diverged_at instance writes -- see
-        request_context.RequestContext's docstring. _last_generation_meta/_last_diverged/_last_diverged_at
-        stay readable exactly as before (now read-only views onto self._request); nothing about this
-        call's CONTROL FLOW or the reply it returns changed."""
+        REQUEST ISOLATION: this call publishes one RequestContext through self._new_request(); all
+        generation metadata, divergence state, trace data, and termination facts belong to that object."""
         req = self._new_request()
         samp = ctx._resolve_sampling(sample)
         req.sampling = samp
@@ -349,19 +536,12 @@ class EngineSubstrate:
         req.sampling = samp
         req.generation_meta = ctx._engine_generation_meta(max_new, stream=False, sample=samp)
 
-        # (The memory-card block was composed and injected here until the 2026-07-27 cards cut. The
-        # manifest survives as the record of what was ASSEMBLED for this request -- published below even
-        # when the worker fails, because it describes the assembly, not a claim that generation worked.)
-        # `assembled` was `_inject_block(messages, block)` -- the card block folded in as system context.
-        # With cards gone the worker renders the caller's messages exactly as given.
+        # Record the exact request assembly even when the worker fails; it describes the input, not a
+        # claim that generation completed.
         assembled = list(messages)
         prompt_manifest = {"assembled_messages": list(assembled)}
 
         options = {}
-
-        # (Anchored memory was applied here, opt-in. Removed 2026-07-27 -- it could not recall, see
-        # notes/ANCHORED_MEMORY_FINDINGS.md. Tone-dial steering options were built here too, until named-
-        # dial personalization was retired -- there is no more steer object to build them from.)
         if mem_out is not None:
             mem_out.update(prompt_manifest)
 
@@ -455,35 +635,29 @@ class EngineSubstrate:
         """The early-stop verdict from the most recent chat(): (diverged, diverged_at). (None, None) when
         the last chat carried no reference_tokens. Read by replay to record whether an ablated arm's reply
         was truncated at the point it provably changed."""
-        return (getattr(self, "_last_diverged", None), getattr(self, "_last_diverged_at", None))
+        request = getattr(self, "_request", None)
+        if request is None:
+            return None, None
+        return request.diverged, request.diverged_at
 
     def score_tokens(self, messages, continuation_ids=None, *, continuation=None, block=None,
-                     steer_strengths=None, steer_vec=None, topk=0):
+                     steer_vec=None, topk=0):
         """Teacher-forced per-token logprob of a continuation under an EXPLICIT (block, steer_vec)
         condition -- the seam the forced-scoring stack (rederive.py, forced receipts) builds on.
-        Assembles the prompt EXACTLY like chat() (ctx._inject_block + ctx._engine_tmpl -- the loaded
+        Assembles the prompt EXACTLY like chat() (ctx.inject_block + ctx._engine_tmpl -- the loaded
         model's own chat template), but from the CALLER's `block`/`steer_vec` -- NEVER from live state --
         so a with/without arm is reconstructed purely from a run record rather than from whatever the
         live substrate happens to be doing right now. That's what makes receipt arms reconstructable: two
         calls with different explicit `block`/`steer_vec`, same messages and continuation_ids, are
         directly comparable. No sampling anywhere; deterministic.
 
-        `block`: a prompt-mode memory block string (or None to omit it), e.g. run.memory.prompt_block --
-        memory cards were retired from the product on 2026-07-27; this stays for a pre-cut run's own
-        reconstruction, and for callers (fork.py, quant_check.py) that fold an arbitrary system block in
-        this same shape.
+        `block`: an explicit system-context block string, or None to omit it.
         `continuation_ids`: the PRIMARY continuation form (token ids, e.g. from a stored trace) --
         takes precedence over `continuation` when both are given (mirrors EngineClient.score).
         `continuation`: a TEXT fallback (S3's rederive.py, for a run whose trace lacks per-token ids) --
         the engine retokenizes it independently of the prompt, which can drift at the prompt/
         continuation BPE boundary (flagged `boundary_approximate` by /score itself; see
         REPRODUCE_AND_PROVE_PLAN.md's tokenization-boundary caveat).
-        `steer_strengths`: kept only for call-site compatibility with the forced-scoring stack's
-        with/without arm vocabulary (a {name: strength} dict). Named-dial personalization was retired, so
-        there is no more engine to turn a strength dict into a direction -- this parameter is accepted
-        but has no effect. Every current caller passes {} (rederive.with_arm_conditions's own
-        `steer_strengths` is always {}: a regular run carries no recorded steering state to reconstruct).
-        Pass `steer_vec` directly for any raw-direction need.
         `steer_vec`: an explicit RAW steer direction -- what the S3 null-floor control and the receipt/
         rederive/swap_receipt causal-attribution paths build directly (dir(c), or a random vector of
         equal norm at the same layer) and pass straight through here.
@@ -492,7 +666,7 @@ class EngineSubstrate:
         continuation token, in the SAME order as continuation_ids (or the engine's own retokenization
         of `continuation` text).
         """
-        assembled = ctx._inject_block(messages, block)
+        assembled = ctx.inject_block(messages, block)
         prompt = ctx._engine_tmpl(self.engine, assembled)
         kw = {}
         if steer_vec is not None:
@@ -507,16 +681,205 @@ class EngineSubstrate:
         r = self.engine.score(prompt=prompt, topk=int(topk), **kw)
         return r.get("tokens", [])
 
-    def score_tokens_many(self, arms, *, cancel=None):
+    def score_tokens_many(self, arms, *, cancel=None, require_native_screening=False):
         """Batch seam for teacher-forced scoring.
 
-        The managed engine currently exposes only scalar ``/score``.  Keep the
-        public seam here so a future native implementation can replace this
-        method without changing Minimal Context scheduling or proof logic;
-        today this is an explicit, cancellation-aware serial fallback.
+        Scalar HTTP scheduling remains the default.  An explicit environment
+        opt-in plus a worker capability can instead use the native related-
+        prompt endpoint when the exact-token workload clears conservative
+        arm-count and prefix-reuse thresholds.  An admitted native row is
+        screening-only and retains the worker's full execution envelope; a
+        workload fallback is reported as an ordinary trusted scalar regime.
+
+        ``require_native_screening`` is an internal orchestration signal used
+        by screen-then-refine.  It bypasses only the performance admission
+        thresholds, never capability, token-exactness, or safety validation.
         """
-        from clozn.experiments.multi_arm import concurrent_many, serial_many
-        from clozn.runs.answer_preservation import classify_reference_match
+        from clozn.experiments.multi_arm import (
+            BatchCancelled,
+            MultiArmError,
+            concurrent_many,
+            serial_many,
+        )
+
+        if not isinstance(require_native_screening, bool):
+            raise TypeError("require_native_screening must be a boolean")
+
+        strategy = self.score_tokens_many_execution_strategy
+        if require_native_screening and self.native_score_variants_available:
+            strategy = "native_prefix_reuse_step_batch"
+        if strategy == "native_prefix_reuse_step_batch":
+            prepared_arms = list(arms)
+            arm_count = len(prepared_arms)
+            if not 1 <= arm_count <= 64:
+                raise MultiArmError("native score variants requires between 1 and 64 arms")
+
+            continuation_ids = None
+            for index, arm in enumerate(prepared_arms):
+                if not isinstance(arm, Mapping):
+                    raise MultiArmError(
+                        f"score_tokens arm {index} must be a mapping", arm_index=index)
+                current_ids = arm.get("continuation_ids")
+                if (
+                    not isinstance(current_ids, (list, tuple))
+                    or not current_ids
+                    or any(
+                        isinstance(token, bool) or not isinstance(token, int) or token < 0
+                        for token in current_ids
+                    )
+                ):
+                    raise MultiArmError(
+                        f"score_tokens arm {index} needs non-empty exact continuation_ids",
+                        arm_index=index,
+                    )
+                current_ids = list(current_ids)
+                if continuation_ids is None:
+                    continuation_ids = current_ids
+                elif current_ids != continuation_ids:
+                    raise MultiArmError(
+                        "native score variants requires one shared continuation_ids array",
+                        arm_index=index,
+                    )
+                topk = arm.get("topk", 0)
+                if isinstance(topk, bool) or not isinstance(topk, int) or topk != 0:
+                    raise MultiArmError(
+                        f"score_tokens arm {index} must use topk=0 for native screening",
+                        arm_index=index,
+                    )
+                if arm.get("continuation") is not None:
+                    raise MultiArmError(
+                        f"score_tokens arm {index} cannot use text continuation in native screening",
+                        arm_index=index,
+                    )
+                if arm.get("steer_vec") is not None:
+                    raise MultiArmError(
+                        f"score_tokens arm {index} cannot use steer_vec in native screening",
+                        arm_index=index,
+                    )
+                messages = arm.get("messages")
+                if not isinstance(messages, (list, tuple)):
+                    raise MultiArmError(
+                        f"score_tokens arm {index} must carry a messages list", arm_index=index)
+                if _score_many_cancelled(cancel):
+                    raise BatchCancelled(
+                        completed=[], next_index=index,
+                        completed_indices=(), dispatched_indices=(),
+                    )
+
+            def scalar_fallback(reason_code, rollout_metrics):
+                workers = _minimal_context_batch_workers()
+                if workers <= 1:
+                    rows = serial_many(self.score_tokens, prepared_arms, cancel=cancel)
+                    strategy = "scalar_serial"
+                else:
+                    rows = concurrent_many(
+                        self.score_tokens, prepared_arms, cancel=cancel, max_workers=workers)
+                    strategy = "scalar_http_concurrent"
+                return {
+                    "results": rows,
+                    "execution_strategy": strategy,
+                    "numerical_regime": "scalar_reference",
+                    "evidence_use": "trusted",
+                    "qualified": True,
+                    "execution_identity": {
+                        "kind": "clozn.score-tokens-scalar-reference.v1",
+                    },
+                    "rollout": {
+                        "decision": "scalar_fallback",
+                        "reason_code": reason_code,
+                        **deepcopy(rollout_metrics),
+                    },
+                }
+
+            min_arms = _native_score_variants_min_arms()
+            if not require_native_screening and arm_count < min_arms:
+                return scalar_fallback("variant_count_below_native_threshold", {
+                    "variant_count": arm_count,
+                    "minimum_variant_count": min_arms,
+                    "minimum_prefix_reuse_ratio": (
+                        _native_score_variants_min_prefix_reuse_ratio()
+                    ),
+                    "template_preflight_performed": False,
+                    "template_preflight_seconds": 0.0,
+                })
+
+            variants = []
+            template_preflight_started = time.monotonic()
+            for index, arm in enumerate(prepared_arms):
+                messages = arm["messages"]
+                try:
+                    assembled = ctx.inject_block(messages, arm.get("block"))
+                    template = self.engine.apply_template_info(
+                        assembled, include_token_ids=True,
+                    )
+                except Exception as exc:
+                    raise MultiArmError(
+                        f"native score variants template preflight failed: {exc}",
+                        arm_index=index,
+                    ) from exc
+                prompt_ids = template.get("prompt_token_ids") if isinstance(template, Mapping) else None
+                if (
+                    not isinstance(prompt_ids, list)
+                    or not prompt_ids
+                    or any(
+                        isinstance(token, bool) or not isinstance(token, int) or token < 0
+                        for token in prompt_ids
+                    )
+                ):
+                    raise MultiArmError(
+                        "native score variants template preflight did not return exact prompt token IDs",
+                        arm_index=index,
+                    )
+                variants.append({"id": f"arm-{index}", "prompt_ids": list(prompt_ids)})
+
+            rollout_stats = _score_variant_prefix_stats(variants)
+            rollout_stats.update({
+                "template_preflight_performed": True,
+                "template_preflight_seconds": max(
+                    0.0, time.monotonic() - template_preflight_started,
+                ),
+            })
+            min_reuse = _native_score_variants_min_prefix_reuse_ratio()
+            if (
+                not require_native_screening
+                and rollout_stats["estimated_prefix_reuse_ratio"] < min_reuse
+            ):
+                return scalar_fallback("prefix_reuse_below_native_threshold", {
+                    **rollout_stats,
+                    "minimum_variant_count": min_arms,
+                    "minimum_prefix_reuse_ratio": min_reuse,
+                })
+
+            if _score_many_cancelled(cancel):
+                raise BatchCancelled(
+                    completed=[], next_index=0,
+                    completed_indices=(), dispatched_indices=(),
+                )
+            dispatched = tuple(range(arm_count))
+            try:
+                response = self.engine.score_variants(variants, continuation_ids)
+            except (BatchCancelled, MultiArmError):
+                raise
+            except Exception as exc:
+                raise MultiArmError(
+                    f"native score variants dispatch failed: {exc}", arm_index=0,
+                    completed=[], completed_indices=(), dispatched_indices=dispatched,
+                ) from exc
+            result = _normalise_native_score_variants(
+                response, variants=variants, continuation_ids=continuation_ids,
+                dispatched_indices=dispatched,
+            )
+            result["rollout"] = {
+                "decision": "native_admitted",
+                "reason_code": (
+                    "required_by_screen_then_refine"
+                    if require_native_screening else "workload_thresholds_met"
+                ),
+                **rollout_stats,
+                "minimum_variant_count": min_arms,
+                "minimum_prefix_reuse_ratio": min_reuse,
+            }
+            return result
 
         workers = _minimal_context_batch_workers()
         if workers <= 1:
@@ -583,7 +946,7 @@ class EngineSubstrate:
 
         conditions = dict(explicit_conditions or {})
         block = conditions.get("block")
-        assembled = ctx._inject_block(messages, block) if block is not None else list(messages)
+        assembled = ctx.inject_block(messages, block) if block is not None else list(messages)
         template_usage = {}
         try:
             prompt = ctx._engine_tmpl(self.engine, assembled, usage_out=template_usage)
@@ -591,9 +954,6 @@ class EngineSubstrate:
             prompt = ctx._engine_tmpl(self.engine, assembled)
         kw = {"reference_tokens": [int(value) for value in reference_token_ids]}
         steer_vec = conditions.get("steer_vec")
-        strengths = conditions.get("steer_strengths")
-        if self.steer is not None and isinstance(strengths, dict) and strengths and any(strengths.values()):
-            steer_vec = self.steer.steer_vector(strengths)
         if steer_vec is not None:
             kw["steer_vec"] = list(steer_vec)
             kw["steer"] = {"coef": 1.0, "layer": self.steer.layer if self.steer is not None else 0}
@@ -671,13 +1031,12 @@ class EngineSubstrate:
                 if (not isinstance(contract, dict) or contract.get("decode_mode") != "greedy"
                         or arm.get("reference_token_ids") != common_reference
                         or contract != common_contract
-                        or conditions.get("steer_vec") is not None
-                        or any((conditions.get("steer_strengths") or {}).values())):
+                        or conditions.get("steer_vec") is not None):
                     native_supported = False
                     break
                 messages = list(arm.get("messages") or [])
                 block = conditions.get("block")
-                assembled = ctx._inject_block(messages, block) if block is not None else messages
+                assembled = ctx.inject_block(messages, block) if block is not None else messages
                 prompt = ctx._engine_tmpl(self.engine, assembled)
                 prepared.append({"arm_id": len(prepared), "prompt": prompt})
             if native_supported:
@@ -741,17 +1100,17 @@ class EngineSubstrate:
         PRE-BUILT prompt STRING, skipping the messages -> block -> template assembly entirely.
 
         WHY THIS EXISTS: score_tokens' only prompt surface is a `messages` list (it always runs
-        `ctx._inject_block` then `ctx._engine_tmpl`, the model's own chat-template render), because every
+        `ctx.inject_block` then `ctx._engine_tmpl`, the model's own chat-template render), because every
         run it was built for HAD a messages list to reconstruct with/without arms from. A raw-prompt run
         (CLI / native-journaled, `clozn.runs.sections`'s `message_index: null` convention) has no such
         list -- what got recorded is `run["final_prompt"]`, the exact string the model already saw, with
         no messages to re-template. For THAT case the run's own `final_prompt` (whole, or with a prompt-
         section's char spans spliced out -- see `clozn.receipts.forced`'s raw-prompt section path) already
-        IS the prompt; re-deriving it through `_inject_block`/`_engine_tmpl` would be not just redundant
+        IS the prompt; re-deriving it through `inject_block`/`_engine_tmpl` would be not just redundant
         but WRONG (there's no message structure left to template against). So this method is score_tokens
         minus the assembly step: it hands `prompt` straight to `self.engine.score`.
 
-        Consequences of skipping assembly: no `block`/`steer_strengths`/`steer_vec` params here at all --
+        Consequences of skipping assembly: no `block`/`steer_vec` params here at all --
         a raw-prompt receipt's with/without arms differ ONLY in the prompt string (whatever section text
         was spliced out), never in a memory block or tone dial, so there is nothing to reconstruct or hold
         constant on that axis (any memory/dial effect a raw run had is already baked into its recorded
@@ -781,9 +1140,7 @@ class EngineSubstrate:
 
         The health() probe itself is wrapped SEPARATELY from parsing its body (pressure test finding #5):
         a connection failure (the engine isn't running at all) is factually different from a reachable
-        engine whose /health simply carries no jlens block (it's up, just started without --jlens), and
-        the two used to collapse into the same wrong "started without --jlens" reason whenever the engine
-        was fully down."""
+        engine whose /health simply carries no jlens block (it's up, just started without --jlens)."""
         try:
             h = self.engine.health() if (self.engine and hasattr(self.engine, "health")) else {}
         except Exception:
@@ -807,21 +1164,21 @@ class EngineSubstrate:
                 "tokens": r.get("tokens", []), "readouts": r.get("readouts", [])}
 
     def last_stream_trace(self):
-        """The per-token trace captured during the most recent chat_stream (raw step list, or []) --
-        same contract as the historical last_stream_trace: the SSE handler reads this AFTER the generator
-        is exhausted, to log the run's Run Inspector timeline."""
-        return list(getattr(self, "_last_stream_trace", []) or [])
+        """Per-token trace from the most recent completed or closed chat stream."""
+        request = getattr(self, "_request", None)
+        return list(request.trace) if request is not None else []
 
     def last_finish_reason(self):
         """The stop cause ("stop"|"length"|...) from the most recent chat()/chat_stream, or None. Same
         stash-and-read contract as last_stream_trace: the handler reads it AFTER generation, so the run
         logs WHY the engine stopped instead of a hard-coded 'stop'."""
-        return getattr(self, "_last_finish_reason", None)
+        request = getattr(self, "_request", None)
+        return request.finish_reason if request is not None else None
 
     def last_finish_reason_raw(self):
         """The worker event's raw stop cause before protocol normalization, when available."""
         request = getattr(self, "_request", None)
-        return getattr(request, "finish_reason_raw", None)
+        return request.finish_reason_raw if request is not None else None
 
     def last_prompt_tokens(self):
         """The prompt token count the engine's own `gen_started` frame reported for the most recent
@@ -829,14 +1186,15 @@ class EngineSubstrate:
         nothing streamed yet). Same stash-and-read contract as last_stream_trace/last_finish_reason --
         read by clozn.server.ndjson to fill an honest `prompt_eval_count` on the Ollama NDJSON shim's
         final chunk (roadmap Phase 2 #1); never guessed when absent."""
-        return getattr(self, "_last_prompt_tokens", None)
+        request = getattr(self, "_request", None)
+        return request.prompt_tokens if request is not None else None
 
     def run_meta(self):
         """Reproducibility metadata -- WHAT produced a run -- for the run record. Fetched once from
         /health (model file -> quant, engine mode) and cached; the STATIC baseline here is the honest
         greedy default (temperature 0) -- the ACTUAL regime a specific reply used (greedy, or S5 sampled
-        with its params + seed) rides in _last_generation_meta, filled by chat()/chat_stream() and merged
-        in below, so a call made before any generation still reports the honest baseline rather than a
+        with its params + seed) rides in the current RequestContext, filled by chat()/chat_stream() and
+        merged below, so a call made before any generation still reports the honest baseline rather than a
         guess. Health-derived fields are omitted when unavailable rather than guessed. Never raises:
         metadata never breaks a run."""
         health_meta = getattr(self, "_run_meta", None)
@@ -890,15 +1248,17 @@ class EngineSubstrate:
                     model_sha256_hint=(h or {}).get("model_sha256"),
                     apply_template_fn=getattr(self.engine, "apply_template", None),
                     engine_health=h if isinstance(h, dict) else None,
-                    extra_context=_engine_discovery_context(),
+                    extra_context=_engine_discovery_context(
+                        h, getattr(self, "_engine_artifact_context", None)
+                    ),
                 )
             except Exception:
                 self._identity_meta_val = {}
             self._run_meta = dict(health_meta)
         meta = ctx._engine_generation_meta()
         meta.update(dict(health_meta))
-        meta.update(getattr(self, "_last_generation_meta", None) or {})
         request = getattr(self, "_request", None)
+        meta.update(dict(request.generation_meta) if request is not None else {})
         meta.update(dict(getattr(request, "generation_timing", None) or {}))
         gateway_timing = getattr(request, "gateway_timing", None)
         if isinstance(gateway_timing, dict) and gateway_timing.get("phases"):
@@ -907,7 +1267,7 @@ class EngineSubstrate:
         if isinstance(raw_reason, str) and raw_reason:
             meta["finish_reason_raw"] = raw_reason
             meta["finish_reason_source"] = "worker_event"
-        prompt_tokens = getattr(self, "_last_prompt_tokens", None)
+        prompt_tokens = request.prompt_tokens if request is not None else None
         if isinstance(prompt_tokens, int):
             meta["prompt_tokens"] = prompt_tokens
         completion_tokens = getattr(request, "completion_tokens", None)
@@ -953,7 +1313,7 @@ class EngineSubstrate:
         failing on_frame is dropped (never kills generation).
 
         Per-token trace (the B3 contract): every parsed SSE frame is
-        collected, then folded into self._last_stream_trace via runlog.accumulate_ar_events once the
+        collected, then folded into the request context via runlog.accumulate_ar_events once the
         stream ends -- normal completion OR an early GeneratorExit (the consumer stopped early) -- so a
         partial stream still logs whatever trace it managed. Wrapped so any parse hiccup just leaves it
         [], same as the non-streaming path's fallback.
@@ -963,10 +1323,8 @@ class EngineSubstrate:
         ordinary callers use True and inherit the persisted defaults. The master setting off degrades to
         greedy, byte-identical to pre-S5 behavior.
 
-        REQUEST ISOLATION + CANCELLATION (backlog #2): this call's own RequestContext (self._new_request())
-        replaces the old piecemeal self._last_generation_meta/_last_stream_trace/_last_finish_reason
-        instance writes (see request_context.RequestContext's docstring); the piecemeal names stay readable
-        exactly as before. The context also carries a cancellation Event: sse.py's caller sets it (via
+        REQUEST ISOLATION + CANCELLATION: this call's own RequestContext (self._new_request()) owns all
+        generated state. The context also carries a cancellation Event: sse.py's caller sets it (via
         self._request.cancel()) the instant it detects the CLIENT is gone (a failed write to the far end),
         and the read loop below checks it between worker frames as a second, belt-and-suspenders stop
         alongside the GeneratorExit an explicit `gen.close()` throws at the `yield` below -- either one
@@ -978,8 +1336,6 @@ class EngineSubstrate:
         samp = ctx._resolve_sampling(sample)
         req.sampling = samp
         req.generation_meta = ctx._engine_generation_meta(max_new, stream=True, sample=samp, stop=stop)
-        # (The memory-card block chat() used to compose here went with the 2026-07-27 cards cut; the two
-        # paths stay in lockstep, both now block-free.)
         template_usage = {}
         gateway_phases = []
         template_started_ns = time.monotonic_ns()
@@ -994,9 +1350,6 @@ class EngineSubstrate:
         if mem_out is not None:
             # final_prompt = the EXACT rendered string the model saw (backlog #5); kept in lockstep with chat().
             mem_out.update(assembled_messages=list(messages), final_prompt=prompt)
-        # (F6 anchored memory composed a gated steer_vec here; removed 2026-07-27. Tone-dial steering
-        # built a kw["steer_vec"] here too, until named-dial personalization was retired -- there is no
-        # more steer object to build one from.)
         kw = {}
         body = dict(kw); body["prompt"] = prompt; body["max_tokens"] = int(max_new)
         if stop:
@@ -1132,11 +1485,7 @@ def _quant_from_name(name):
 # The engine substrate reflects the ACTUALLY-LOADED GGUF, not a hardcoded "Qwen2.5-7B" id/assumption.
 # This tiny registry keys a friendly model_id for run_meta off the loaded model's family (derived from
 # its /health filename), with a sensible default (None) for any unrecognized GGUF. This is NOT a
-# framework -- it is the minimal table that removes the last hardcoded-Qwen coupling from the engine path.
-# (It used to also carry the tone-dial steer TAP LAYER per family -- e.g. mid-depth 14 for Qwen-7B's 28
-# layers -- pinned onto EngineSteer at identity-resolve time. That steer object and the pin both went with
-# named-dial personalization; the engine now always picks its own per-model calibrated mid-depth steer
-# band, which is what an unrecognized GGUF already fell back to here.)
+# framework -- it is the minimal table that avoids a hardcoded-Qwen coupling in the engine path.
 _ENGINE_MODELS = {
     "qwen2.5-7b":   {"model_id": "Qwen/Qwen2.5-7B-Instruct"},
     "qwen2.5-0.5b": {"model_id": "Qwen/Qwen2.5-0.5B-Instruct"},
@@ -1287,13 +1636,8 @@ def _engine_complete_traced(engine, prompt, max_tokens, kw, sample=None, usage_o
     finish = ch[0].get("finish_reason") if (ch and isinstance(ch[0], dict)) else None
     divinfo = (r.get("diverged"), r.get("diverged_at")) if isinstance(r, dict) else (None, None)
     if not (isinstance(ch, list) and ch and isinstance(ch[0], dict)):
-        # A reply with no usable `choices` is a worker protocol violation, not a generation. This
-        # used to `return str(r)` -- which handed the caller a stringified dict AS THE MODEL'S TEXT,
-        # so a malformed engine reply became a plausible-looking answer (and, via fork(), a stored
-        # child run built on it). Fabricating output is the one thing this codebase must not do:
-        # fail loudly instead. Callers that can degrade gracefully already catch (fork() falls back
-        # to _complete_greedy, which independently rejects this shape); the rest surface a clean
-        # error rather than a confident lie.
+        # A reply with no usable `choices` is a worker protocol violation, not a generation. Never turn
+        # a malformed response into plausible-looking model text.
         raise ValueError(
             "engine reply has no usable 'choices' -- refusing to synthesize text from "
             f"{type(r).__name__}"

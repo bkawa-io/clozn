@@ -2,13 +2,12 @@
 
 SQLite is authoritative.  A run's queryable metadata and JSON document live in the
 ``runs`` table; the potentially large normalized trace lives in an immutable SHA-256
-blob.  Old ``run_*.json`` journals are accepted only through :func:`import_json_dir`.
+blob.
 """
 from __future__ import annotations
 
 from contextlib import closing
 import base64
-import glob
 import hashlib
 import json
 import logging
@@ -23,7 +22,7 @@ from copy import deepcopy
 
 from clozn._io import atomic_write_json
 
-from . import migrations
+from . import schema
 from .summaries import SUMMARY_FIELDS, _flags, _summ, _summary, confidence_facts
 from .trace import (
     TRACE_KEYS,
@@ -49,9 +48,8 @@ from .trace import (
 
 RUNS_DIR = os.path.join(os.path.expanduser("~/.clozn"), "runs")
 KEEP = 1000
-SCHEMA_VERSION = migrations.TARGET_VERSION      # kept as a re-export -- pre-migrations code read this bare
-                                                 # int; it now always mirrors the migration engine's target.
 _SAFE_RID = re.compile(r"^[A-Za-z0-9_-]+$")
+_OPAQUE_CLIENT_KEY = re.compile(r"^client_[0-9a-f]{24}$")
 _log = logging.getLogger(__name__)
 
 
@@ -66,10 +64,10 @@ class SchemaLockTimeout(RuntimeError):
 
 _SCHEMA_LOCK_TIMEOUT_S = 30.0     # mirrors _connect()'s own busy_timeout convention below
 
-# Per-process cache of db paths already confirmed at migrations.TARGET_VERSION -- see `_ensure()`. Keyed
+# Per-process cache of db paths already confirmed to have the current schema. Keyed
 # by path, not a bare bool: tests legitimately repoint the module-global RUNS_DIR at a fresh tmp_path per
 # test within the SAME process, and a bare "already initialized" flag would silently skip real schema
-# creation for every subsequent test's brand-new, unmigrated store.
+# creation for every subsequent test's brand-new store.
 _schema_verified: set[str] = set()
 _schema_verify_lock = threading.Lock()
 
@@ -87,11 +85,7 @@ def _schema_lock_path() -> str:
 
 
 def _ensure() -> None:
-    """Bring RUNS_DIR + the DB schema up to date. Auto-migrate-on-open (BACKLOG §2): every store entry
-    point still calls this cheaply on every operation exactly as before, but the schema work itself now
-    goes entirely through clozn.runs.migrations -- real transactional, ordered, versioned steps -- instead
-    of the old ad-hoc `executescript` + upsert-a-stamp. `clozn migrate` (clozn/cli/commands/migrate.py)
-    drives the SAME engine explicitly, with reporting and a --dry-run preview.
+    """Create the run directory and ensure its current database schema exists.
 
     Concurrency: `_connect()`'s `PRAGMA journal_mode=WAL` is a genuine, one-time on-disk file-format
     conversion the first time it runs against a non-WAL file, and SQLite requires exclusive access to
@@ -102,7 +96,7 @@ def _ensure() -> None:
     locked`, always at that exact PRAGMA (tests/test_runs_store_concurrency.py reproduces this). The fix
     below is two-layered: a per-process cache (`_schema_verified`) short-circuits everything after this
     process has itself confirmed the schema is current, and the one-time work -- the WAL switch plus
-    `migrations.migrate()` -- is serialized (both cross-thread AND cross-process) by
+    current-schema bootstrap -- is serialized (both cross-thread AND cross-process) by
     `_ensure_schema_locked()`."""
     os.makedirs(RUNS_DIR, exist_ok=True)
     os.makedirs(_blob_root(), exist_ok=True)
@@ -117,29 +111,27 @@ def _ensure() -> None:
 
 
 def _ensure_schema_locked(db_path: str) -> None:
-    """Cross-PROCESS mutual exclusion around the one-time WAL-mode switch + schema migration.
+    """Cross-process mutual exclusion around WAL setup and schema initialization.
 
     The lock is a SEPARATE, tiny SQLite file (`_schema_lock_path()`) that -- deliberately -- is NEVER
     itself switched to WAL, so acquiring it never triggers the very race it exists to prevent: ordinary
     rollback-journal `BEGIN IMMEDIATE` contention IS reliably retried by `busy_timeout` (measured: 0
     failures across 500+ concurrent acquisitions of exactly this primitive, vs. the WAL-conversion race
     above). Holding it, only ONE thread/process at a time performs `_connect()` (the WAL switch) and
-    `migrations.migrate()`; every other caller blocks -- bounded by `_SCHEMA_LOCK_TIMEOUT_S` -- and then
+    `schema.bootstrap()`; every other caller blocks -- bounded by `_SCHEMA_LOCK_TIMEOUT_S` -- and then
     finds the work already done, at which point its OWN `PRAGMA journal_mode=WAL` reissue is a safe no-op
     (measured: 0 failures reissuing the pragma against an already-WAL file under concurrent write load --
     the exclusive-access requirement only applies to an actual mode CHANGE). A crashed lock holder needs
     no separate staleness heuristic: SQLite's own hot-journal recovery rolls back an abandoned transaction
     the moment the next connection touches the file.
 
-    Migration idempotency/atomicity is unaffected -- `migrations.migrate()` still applies each step in
-    its own `BEGIN IMMEDIATE` ... `COMMIT`/`ROLLBACK`, exactly as before; this lock only prevents the
-    WAL-conversion race from ever landing two callers inside that machinery at the same moment.
+    The bootstrap is idempotent and transactional; this outer lock prevents the WAL-conversion race from
+    landing two callers inside initialization at the same moment.
     """
     lock_conn = sqlite3.connect(_schema_lock_path(), timeout=_SCHEMA_LOCK_TIMEOUT_S)
     try:
         lock_conn.execute(f"PRAGMA busy_timeout={int(_SCHEMA_LOCK_TIMEOUT_S * 1000)}")
-        lock_conn.isolation_level = None      # manual transaction control, same reasoning as
-                                               # migrations.migrate(): DDL/PRAGMA needs an explicit BEGIN
+        lock_conn.isolation_level = None      # manual transaction control: DDL/PRAGMA needs an explicit BEGIN
                                                # to be governed by it at all under Python's sqlite3 module.
         try:
             lock_conn.execute("BEGIN IMMEDIATE")
@@ -151,10 +143,10 @@ def _ensure_schema_locked(db_path: str) -> None:
             ) from exc
         try:
             with closing(_connect()) as db:
-                migrations.migrate(db)
+                schema.bootstrap(db)
         finally:
-            lock_conn.execute("COMMIT")       # release the lock even if migrate() raised -- a real
-                                               # migration failure must not also wedge every OTHER
+            lock_conn.execute("COMMIT")       # release the lock even if bootstrap raised -- a real
+                                               # schema failure must not also wedge every OTHER
                                                # caller behind a lock nobody will ever release.
     finally:
         lock_conn.close()
@@ -356,9 +348,21 @@ def _put(rec: dict, *, replace: bool = False, ignore: bool = False) -> bool:
     elif ignore:
         statement = _INSERT.replace("INSERT INTO", "INSERT OR IGNORE INTO", 1)
     with closing(_connect()) as db, db:
-        before = db.total_changes
-        db.execute(statement, _row_values(rec, payload_json))
-        return db.total_changes > before
+        session_id = rec.get("session_key")
+        if session_id:
+            created_ts = float(rec.get("recorded_ts") or rec.get("created_ts") or time.time())
+            created_at = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(created_ts))
+            session_client = rec.get("client_key")
+            if not isinstance(session_client, str) or not _OPAQUE_CLIENT_KEY.fullmatch(session_client):
+                session_client = None
+            db.execute(
+                "INSERT OR IGNORE INTO sessions"
+                "(id, created_ts, created_at, client_key, title, privacy_json) "
+                "VALUES (?, ?, ?, ?, NULL, ?)",
+                (session_id, created_ts, created_at, session_client, '{"visibility":"visible"}'),
+            )
+        cursor = db.execute(statement, _row_values(rec, payload_json))
+        return cursor.rowcount > 0
 
 
 def record(*, source: str, client: str = "unknown", model: str = "", substrate: str = "",
@@ -395,6 +399,8 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
     """
     try:
         _ensure()
+        from .association import session_key as normalize_session_key
+        session_key = normalize_session_key(session_key)
         started = started if started is not None else time.time()
         ended = ended if ended is not None else time.time()
         rid = _reserved_run_id or f"run_{int(started * 1000):013x}_{uuid.uuid4().hex[:6]}"
@@ -481,9 +487,9 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
             "finish_reason": finish_reason,
             "meta": meta or {},
             "identity": identity or {},
-            # Structured-I/O evidence is an additive, JSON-payload field: it does not need a SQLite
-            # migration because none of its members are indexed columns.  Copy only a real object so a
-            # malformed direct/legacy caller cannot make _flags() raise and silently lose the whole run.
+            # Structured-I/O evidence lives in the JSON payload because none of its members are indexed
+            # columns. Copy only a real object so a malformed direct caller cannot make _flags() raise and
+            # silently lose the whole run.
             "output_contract": dict(output_contract) if isinstance(output_contract, dict) else {},
             "context_receipt": context_receipt,
             "warnings": warnings_for(finish_reason, meta),
@@ -744,42 +750,6 @@ def iter_runs(*, limit: int | None = None) -> list[dict]:
         except Exception:
             continue
     return out
-
-
-def import_json_dir(path: str) -> dict:
-    """Explicit one-shot import of a legacy ``run_*.json`` directory."""
-    _ensure()
-    result = {"found": 0, "imported": 0, "skipped": 0, "invalid": 0}
-    for filename in sorted(glob.glob(os.path.join(os.path.abspath(path), "run_*.json"))):
-        result["found"] += 1
-        try:
-            with open(filename, encoding="utf-8") as handle:
-                rec = json.load(handle)
-            if not isinstance(rec, dict) or not _valid_rid(rec.get("id")):
-                result["invalid"] += 1
-                continue
-            rec.setdefault("trace", {})
-            rec.setdefault("created_ts", os.path.getmtime(filename))
-            rec.setdefault("recorded_ts", rec["created_ts"])
-            rec.setdefault("created_at", time.strftime("%Y-%m-%dT%H:%M:%S",
-                                                        time.localtime(rec["created_ts"])))
-            rec.setdefault("source", "legacy")
-            rec.setdefault("client", "unknown")
-            rec.setdefault("model", "")
-            rec.setdefault("substrate", "")
-            rec.setdefault("prompt_summary", "")
-            rec.setdefault("response_summary", "")
-            rec.setdefault("timing", {"started_at": rec["created_ts"], "ended_at": rec["created_ts"],
-                                      "duration_ms": 0})
-            rec.setdefault("flags", _flags(rec))
-            if _put(rec, ignore=True):
-                result["imported"] += 1
-            else:
-                result["skipped"] += 1
-        except Exception:
-            result["invalid"] += 1
-    _prune()
-    return result
 
 
 def update_tiny_tests(rid: str, tiny_tests: list) -> bool:

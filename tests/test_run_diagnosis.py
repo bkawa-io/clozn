@@ -13,9 +13,11 @@ def test_diagnosis_reports_only_recorded_phase_context_cutoff_and_related_calls(
                    "kv_allocation_ms": 20},
         "meta": {"device": "cuda", "cpu_spill_bytes": 0, "generation_duration_ms": 1500},
         "trace": {"steps": [{"dt_ms": 10}, {"dt_ms": 20}]},
-        "context_receipt": {"output_cut_off": True, "limits": {
-            "prompt_tokens": 90, "context_window_tokens": 128,
-            "requested_max_tokens": 38, "generated_tokens": 38}},
+        "context_receipt": {
+            "rendered": {"tokens": 90}, "context_window_tokens": 128,
+            "reserved_output_tokens": 38,
+            "termination": {"reason": "context_limit", "generated_tokens": 38},
+        },
     }
     related = [
         {"id": "run_aux", "session_key": "session_exact", "source": "openai_api",

@@ -1,0 +1,13 @@
+{
+  "source_ids": ["seg_a", "seg_b"],
+  "coarse_group_size": 2,
+  "refine_threshold_nats": 0.25,
+  "drilldown_source_ids": ["seg_a"],
+  "joint_source_sets": [["seg_a", "seg_b"]],
+  "budget": {
+    "max_coarse_arms": 1,
+    "max_fine_arms": 1,
+    "max_joint_arms": 1
+  },
+  "execution_policy": "trusted_scalar_only"
+}

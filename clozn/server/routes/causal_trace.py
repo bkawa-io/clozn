@@ -21,15 +21,9 @@ span_receipts.py). CAPABILITY-UNAVAILABLE: tracer.trace() returns a typed {"ok":
 same reasoning provenance.py documents (a completed analysis that reports "couldn't" is a
 successful outcome, not a failed request).
 
-Which worker: the run's OWN `model` field resolves the worker, through
-clozn.server.model_routing.select_control_model_for_run -- never a client-supplied model, and never
-the bare module-level ctx.ENGINE fallback this route used before (a real bug under a managed
-multi-model gateway: ctx.ENGINE there is the ROUTER'S CONTROL-PAIR engine, i.e. some OTHER model's
-worker, not this run's -- silently tracing the wrong model's weights while returning a normal-looking
-200. See ctx.active_engine's own docstring for why it, too, refuses rather than falls back to
-ctx.ENGINE under a managed router). An unknown/not-ready parent model now refuses with a typed
-`clozn.model-routing.v1` error instead. Legacy one-worker serving is unaffected: `engine_url` stays
-None (tracer.trace's own DEFAULT_ENGINE applies), exactly as before.
+The run's own `model` field selects the worker through
+clozn.server.model_routing.select_control_model_for_run; the request cannot choose a different model.
+An unknown or unavailable recorded model returns a typed `clozn.model-routing.v1` refusal.
 """
 
 

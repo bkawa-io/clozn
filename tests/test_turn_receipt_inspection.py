@@ -4,6 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 from clozn import schemas
+from clozn.runs.context_receipt import build_context_receipt
 from clozn.runs.receipt_inspection import attach_inspection_targets, build_inspect_target
 from clozn.runs.turn_receipt import build_turn_receipt, to_markdown
 from tests.test_selection_inspection import _influence, _influence_ids, _run as selection_run
@@ -39,10 +40,13 @@ def test_visible_relationship_gets_canonical_inspect_target_without_mutating_inp
     assert receipt == before_receipt
 
 
-def test_source_only_legacy_item_gets_source_selection_when_span_resolves():
+def test_source_only_item_gets_source_selection_when_span_resolves():
     run = selection_run()
-    # The shared selection reference contract can resolve ordinary legacy message spans without any
-    # influence artifact.  This is the compatibility path for old source-level Receipt items.
+    run["context_receipt"] = build_context_receipt(
+        messages=run["messages"], run_id=run["id"],
+    )
+    # The shared selection reference contract resolves a receipt-backed source without an influence
+    # artifact, which is the source-level Receipt path.
     from clozn.runs.text_span_addresses import build_persisted_text_span_addresses
     source_id = next(item["address_id"] for item in build_persisted_text_span_addresses(run)["addresses"]
                      if item.get("native_ref", {}).get("client_source_id") == "doc-1")

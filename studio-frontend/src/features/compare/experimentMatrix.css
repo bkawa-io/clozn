@@ -1,0 +1,206 @@
+.matrix-surface {
+  max-width: 92rem;
+}
+
+.matrix-intro,
+.matrix-page-count {
+  color: var(--ink-muted);
+}
+
+.matrix-result-list,
+.matrix-broken ul {
+  display: grid;
+  gap: 0.75rem;
+  margin: 1rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.matrix-result-list > li,
+.matrix-summary,
+.matrix-panel,
+.matrix-broken,
+.matrix-cell-evidence {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.matrix-result-list > li,
+.matrix-summary,
+.matrix-broken,
+.matrix-cell-evidence {
+  padding: 1rem;
+}
+
+.matrix-result-title,
+.matrix-result-title > div,
+.matrix-panel > header,
+.matrix-cell-evidence > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.matrix-result-title > div {
+  align-items: baseline;
+  justify-content: flex-start;
+}
+
+.matrix-result-title a,
+.compare-heading nav a,
+.matrix-grid a,
+.matrix-cell-evidence a {
+  color: var(--accent);
+}
+
+.matrix-result-list dl,
+.matrix-summary dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+
+.matrix-result-list dl div,
+.matrix-summary dl div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.matrix-result-list dt,
+.matrix-summary dt,
+.matrix-grid small {
+  color: var(--ink-muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.matrix-result-rates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.matrix-result-rates span {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line);
+  color: var(--ink-muted);
+  font-size: 0.78rem;
+}
+
+.matrix-broken {
+  border-color: var(--danger);
+}
+
+.matrix-broken li {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.matrix-panel {
+  margin-top: 1rem;
+}
+
+.matrix-panel > header {
+  padding: 0.8rem 1rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.matrix-panel h2,
+.matrix-summary h2,
+.matrix-broken h2 {
+  margin: 0;
+}
+
+.matrix-table-wrap {
+  overflow: auto;
+}
+
+.matrix-grid {
+  width: 100%;
+  min-width: 48rem;
+  border-collapse: collapse;
+}
+
+.matrix-grid th,
+.matrix-grid td {
+  padding: 0.75rem;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.matrix-grid th:last-child,
+.matrix-grid td:last-child {
+  border-right: 0;
+}
+
+.matrix-grid thead th small,
+.matrix-grid tbody th span,
+.matrix-grid tbody th b,
+.matrix-grid tbody th small {
+  display: block;
+}
+
+.matrix-grid td button {
+  display: grid;
+  width: 100%;
+  gap: 0.2rem;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.matrix-grid td button span,
+.matrix-grid td em,
+.matrix-grid td small {
+  display: block;
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+}
+
+.matrix-grid td[data-cell-status="pass"] b {
+  color: var(--success);
+}
+
+.matrix-grid td[data-cell-status="fail"] b,
+.matrix-grid td[data-cell-status="error"] b {
+  color: var(--danger);
+}
+
+.matrix-grid td[data-cell-status="unscored"] b {
+  color: var(--warning);
+}
+
+.matrix-cell-evidence {
+  margin-top: 1rem;
+}
+
+.matrix-cell-evidence > small {
+  display: block;
+  margin-top: 0.75rem;
+  color: var(--ink-muted);
+}
+
+@media (max-width: 760px) {
+  .matrix-result-list dl,
+  .matrix-summary dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .matrix-result-title,
+  .matrix-cell-evidence > header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

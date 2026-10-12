@@ -13,7 +13,7 @@ This module owns ONLY the CLI shell around that machinery:
   * the two-engine boot (clozn.cli.engine_process.spawn_engine -- the SAME boot path `clozn run`/`clozn
     serve` already use -- on two separate ports, one process per quant file),
   * a lightweight duct-typed substrate (`_EngineScoreSub`) that exposes the `.score_tokens(...)` contract
-    `quant_receipt_for_run` needs, backed by ONE `EngineClient` (engine/client/clozn_engine.py) per port,
+    `quant_receipt_for_run` needs, backed by ONE `EngineClient` (engine/client/clozn_engine) per port,
   * gathering runs (fresh generation under A's engine, or `clozn.runs.store`'s run journal),
   * aggregating N per-run receipts into one ladder, and rendering it.
 All the HONESTY machinery -- argmax-flip vs dependence-shift, the "unknown" bucket, the caveat text --
@@ -77,9 +77,9 @@ _TOP_FLIPS_ACROSS_RUNS = 20
 # ------------------------------------------------------------------------------------- the engine substrate
 
 class _EngineScoreSub:
-    """Duct-typed substrate over ONE `EngineClient` (engine/client/clozn_engine.py -- one quant file's own
+    """Duct-typed substrate over ONE `EngineClient` (engine/client/clozn_engine -- one quant file's own
     engine process/port), exposing exactly the `.score_tokens(messages, continuation_ids=None, *,
-    continuation=None, block=None, steer_strengths=None, steer_vec=None, topk=0)` contract
+    continuation=None, block=None, steer_vec=None, topk=0)` contract
     `clozn.receipts.rederive.score_arm` / `quant_receipts.quant_receipt_for_run` call -- mirrors
     `clozn.server.app.EngineSubstrate.score_tokens`'s signature closely enough that the SAME
     quant_receipts.py plumbing works against either, without importing clozn.server.app itself (that
@@ -87,14 +87,8 @@ class _EngineScoreSub:
     import time -- unsuitable for holding two quants' engines side by side in one process, which is
     exactly what quant-check needs).
 
-    Deliberately narrower than the full EngineSubstrate: quant-check's question is "does the quant
-    change what the model says", not "does memory/steer" -- so `block` is folded in as a plain
-    system-message append (mirrors `clozn.server.app._inject_block`'s shape exactly) and
-    `steer_strengths`/`steer_vec` are accepted for interface parity but NOT reconstructed here (no
-    per-model steer calibration is loaded by this lightweight wrapper); a run recorded with active raw
-    steering still teacher-forces correctly on its messages + continuation, just without replaying that
-    steering's push. A documented scope choice, not an oversight -- fresh prompts and typical --from-log
-    runs (no steering) are unaffected either way.
+    `block` is folded in as a plain system-message append, matching the product substrate. Explicit raw
+    steering vectors pass through to the worker without loading any named calibration state.
 
     `template_engine` (optional, default None meaning "use `engine` itself"): the engine whose
     `apply_template` renders the prompt for `score_tokens`' `/score` call, while `engine` still does the
@@ -108,24 +102,10 @@ class _EngineScoreSub:
         self.engine = engine   # an EngineClient; one port = one quant file's own process
         self.template_engine = template_engine if template_engine is not None else engine
 
-    @staticmethod
-    def _inject_block(messages, block):
-        """`messages` with `block` folded in as system context -- a copy, never mutates the caller's
-        list. Appends to an existing system message, else prepends a new one; a falsy block is a no-op.
-        Mirrors clozn.server.app._inject_block's exact shape (reproduced, not imported, so this module
-        never has to import clozn.server.app -- see the class docstring)."""
-        if not block:
-            return list(messages)
-        msgs = [dict(m) for m in messages]
-        for m in msgs:
-            if m.get("role") == "system":
-                m["content"] = (str(m.get("content") or "") + "\n\n" + block).strip()
-                return msgs
-        return [{"role": "system", "content": block}] + msgs
-
     def score_tokens(self, messages, continuation_ids=None, *, continuation=None, block=None,
-                     steer_strengths=None, steer_vec=None, topk=0):
-        assembled = self._inject_block(messages, block)
+                     steer_vec=None, topk=0):
+        from clozn.experiments.effective_prompt import inject_block
+        assembled = inject_block(messages, block)
         prompt = self.template_engine.apply_template(assembled)
         kw = {"topk": int(topk)}
         if steer_vec is not None:

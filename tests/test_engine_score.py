@@ -5,10 +5,8 @@ built here). Two layers under test:
   * clozn_engine.EngineClient.score -- the thin SDK wrapper: request-body construction (prompt vs
     prompt_ids precedence, continuation_ids vs continuation precedence, steer/steer_vec passthrough).
   * clozn_server.EngineSubstrate.score_tokens -- assembles the prompt EXACTLY like chat() does
-    (_inject_block + _qwen_tmpl) and the steer_vec EXACTLY like chat() does (self.steer.steer_vector),
-    but from EXPLICIT `block`/`steer_strengths` caller inputs -- never from live self.memory/
-    self.steer.strength -- which is what makes a stored run's with/without receipt arms reconstructable
-    from the run record alone.
+    (inject_block + the worker template) from explicit inputs, which makes a stored run's
+    with/without receipt arms reconstructable from the run record alone.
 
 Model-free throughout: EngineClient._post and EngineSubstrate.engine/.steer are faked (no C++ server, no
 GPU), mirroring test_engine_layers.py / test_engine_substrate.py's own conventions. The C++ /score route
@@ -25,6 +23,7 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "engine", "client"))
 
 from clozn_engine import EngineClient          # noqa: E402
 from clozn.server import app as cs           # noqa: E402
+from tests.chat_templates import render_qwen  # noqa: E402
 
 
 # ==================================================================================== EngineClient.score
@@ -111,27 +110,16 @@ class _FakeScoreEngine:
 
     def apply_template(self, messages, add_assistant=True):
         self.template_calls.append([dict(m) for m in messages])
-        return cs._qwen_tmpl(messages)
+        return render_qwen(messages)
 
     def score(self, **kw):
         self.calls.append(kw)
         return self._reply
 
 
-class _FakeScoreSteer:
-    def __init__(self, vec=None, layer=14):
-        self._vec = vec
-        self.layer = layer
-        self.vector_calls = []
-
-    def steer_vector(self, strength):
-        self.vector_calls.append(dict(strength))
-        return self._vec
-
-
 def _bare_engine_substrate(engine, steer):
     """EngineSubstrate via object.__new__ (mirrors test_engine_substrate.py's own helper) -- exercises
-    score_tokens's prompt-assembly + dial-forwarding logic without a real EngineSteer/engine."""
+    score_tokens's prompt assembly without a real worker."""
     sub = object.__new__(cs.EngineSubstrate)
     sub.engine = engine
     sub.steer = steer
@@ -172,21 +160,10 @@ def test_score_tokens_forwards_continuation_ids_as_ints_and_topk():
 
 
 
-def test_score_tokens_skips_steer_vec_when_strengths_all_zero():
+def test_score_tokens_omits_steering_when_no_raw_vector_is_given():
     fe = _FakeScoreEngine()
-    steer = _FakeScoreSteer(vec=[0.1, 0.2])
-    sub = _bare_engine_substrate(fe, steer)
-    sub.score_tokens([{"role": "user", "content": "hi"}], [1], block=None, steer_strengths={"warm": 0.0})
-    assert steer.vector_calls == []
-    assert "steer_vec" not in fe.calls[-1]
-
-
-def test_score_tokens_skips_steer_vec_when_strengths_none():
-    fe = _FakeScoreEngine()
-    steer = _FakeScoreSteer(vec=[0.1, 0.2])
-    sub = _bare_engine_substrate(fe, steer)
-    sub.score_tokens([{"role": "user", "content": "hi"}], [1], block=None, steer_strengths=None)
-    assert steer.vector_calls == []
+    sub = _bare_engine_substrate(fe, None)
+    sub.score_tokens([{"role": "user", "content": "hi"}], [1], block=None)
     assert "steer_vec" not in fe.calls[-1]
 
 
@@ -227,12 +204,10 @@ def test_score_tokens_continuation_ids_take_precedence_over_continuation_text():
     assert "continuation" not in fe.calls[-1]
 
 
-def test_score_tokens_steer_vec_used_alone_without_steer_strengths():
+def test_score_tokens_forwards_explicit_raw_steer_vec():
     fe = _FakeScoreEngine()
     sub = _bare_engine_substrate(fe, steer=None)
     sub.score_tokens([{"role": "user", "content": "hi"}], [1], block=None, steer_vec=[0.3, 0.4])
     assert fe.calls[-1]["steer_vec"] == [0.3, 0.4]
     # no self.steer -> layer 0 (the engine picks its OWN calibrated mid-depth band), NOT a hardcoded Qwen 14
     assert fe.calls[-1]["steer"] == {"coef": 1.0, "layer": 0}
-
-

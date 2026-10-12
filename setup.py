@@ -49,20 +49,35 @@ def _asset_subpackages(dist_root: str, disk_dir: str) -> dict:
 
 _studio_map = _asset_subpackages("clozn.studio", "studio")
 _protocol_map = _asset_subpackages("clozn.protocol_fixtures", "protocol")
+_schema_data_package = "clozn.schemas.defs"
+_engine_client_package = "clozn_engine"
 
 setup(
-    packages=find_packages(include=["clozn", "clozn.*"]) + list(_studio_map) + list(_protocol_map),
-    package_dir={**_studio_map, **_protocol_map},
+    packages=(
+        find_packages(include=["clozn", "clozn.*"])
+        + [_schema_data_package, _engine_client_package]
+        + list(_studio_map)
+        + list(_protocol_map)
+    ),
+    package_dir={
+        _engine_client_package: "engine/client/clozn_engine",
+        **_studio_map,
+        **_protocol_map,
+    },
     package_data={
         # Artifact schemas ship with the wheel: clozn.schemas.validate() is on the path that reads and
         # writes stored artifacts, so a pip-installed clozn with no defs/ would fail every validation
-        # (SchemaError "no schema named ...") rather than degrade. defs/ has no __init__.py -- it is
-        # data, not code -- so it rides in as package_data on clozn.schemas rather than as a package.
-        "clozn.schemas": ["defs/*.json"],
+        # (SchemaError "no schema named ...") rather than degrade. Setuptools treats every data
+        # directory as importable for package-discovery checks, so defs/ is explicitly declared as a
+        # data package even though it contains no Python modules.
+        _schema_data_package: ["*.json"],
         "clozn.studio": ["*"],
         "clozn.protocol_fixtures": ["*"],
         **{name: ["*"] for name in _studio_map if name != "clozn.studio"},
         **{name: ["*"] for name in _protocol_map if name != "clozn.protocol_fixtures"},
     },
     include_package_data=True,
+    # Release verification supplies a disposable build base so an earlier wheel's generated files
+    # cannot leak into a later wheel after packages are renamed or removed.
+    options={"build": {"build_base": os.environ.get("CLOZN_BUILD_BASE", "build")}},
 )

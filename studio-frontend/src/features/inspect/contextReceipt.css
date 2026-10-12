@@ -1,0 +1,64 @@
+.receipt-surface { max-width: 1240px; }
+.receipt-shape { display: inline-flex; align-items: center; min-height: var(--component-target-min); border: 1px solid var(--border-subtle); border-radius: 999px; color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; letter-spacing: .08em; padding: 0 var(--space-control); text-transform: uppercase; }
+.receipt-shape.state-recorded { border-color: var(--status-success); color: var(--status-success); }
+.receipt-shape.state-unrecognized { border-color: var(--status-failure); color: var(--status-failure); }
+.receipt-instrument > header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-component); min-height: 68px; border-bottom: var(--component-seam); background: var(--surface-shell-transition); padding: var(--space-control) var(--component-panel-padding); }
+.receipt-instrument > header span, .receipt-subsection-heading span { color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
+.receipt-instrument > header h2 { margin-top: 3px; font-size: 17px; font-weight: 600; }
+.receipt-instrument > header > code { color: var(--text-tertiary); font-size: 9px; }
+.receipt-primary-state { min-height: 220px; color: var(--text-secondary); padding: var(--component-panel-padding); }
+.receipt-primary-state.is-error, .receipt-contract-note.is-error, .receipt-disclosure-state.is-error { color: var(--status-failure); }
+.receipt-primary-state span, .receipt-contract-note span, .receipt-disclosure-state span { display: block; margin-top: var(--space-tight); color: var(--text-tertiary); font-family: var(--font-mono); font-size: 9px; overflow-wrap: anywhere; }
+.receipt-contract-note { border-bottom: var(--component-seam); background: var(--surface-shell-transition); color: var(--status-warning); font-family: var(--font-mono); font-size: 10px; line-height: 1.5; padding: var(--space-control) var(--component-panel-padding); }
+.receipt-summary-grid, .receipt-limits { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--border-subtle); }
+.receipt-limits { grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: var(--component-seam); }
+.receipt-summary-grid > div, .receipt-limits > div { min-width: 0; background: var(--surface-workspace); padding: var(--space-component) var(--component-panel-padding); }
+.receipt-summary-grid dt, .receipt-limits dt, .receipt-segments dt { color: var(--text-tertiary); font-family: var(--font-mono); font-size: 8px; letter-spacing: .07em; text-transform: uppercase; }
+.receipt-summary-grid dd, .receipt-limits dd { margin-top: var(--space-micro); overflow: hidden; font-family: var(--font-mono); font-size: 11px; text-overflow: ellipsis; text-transform: capitalize; white-space: nowrap; }
+.receipt-summary-grid dd code { font-size: inherit; text-transform: none; }
+.receipt-subsection { border-top: var(--component-seam); padding: var(--component-panel-padding); }
+.receipt-subsection-heading { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-control); margin-bottom: var(--space-component); }
+.receipt-subsection h3, .receipt-disclosure h3 { font-size: 13px; font-weight: 600; }
+.receipt-subsection > p { color: var(--text-secondary); font-size: 12px; }
+.receipt-subsection ul { display: grid; gap: var(--space-tight); margin: 0; padding: 0; list-style: none; }
+.receipt-subsection li { display: grid; gap: var(--space-micro); border: 1px solid var(--border-subtle); border-radius: var(--radius-data); color: var(--text-secondary); padding: var(--space-control); }
+.receipt-subsection li code { font-size: 9px; }
+.receipt-subsection li span { font-size: 11px; line-height: 1.45; }
+.receipt-segments { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-control); margin: 0; padding: 0; list-style: none; counter-reset: none; }
+.receipt-segments > li { min-width: 0; border: 1px solid var(--border-subtle); border-radius: var(--radius-data); background: var(--surface-well); padding: var(--space-control); }
+.receipt-segments > li > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: var(--space-control); }
+.receipt-segments strong { min-width: 0; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.receipt-segments > li > div:first-child span { font-family: var(--font-mono); font-size: 8px; text-transform: uppercase; }
+.receipt-segments .state-included { color: var(--status-success); }
+.receipt-segments .state-omitted { color: var(--status-failure); }
+.receipt-segments .state-unknown { color: var(--text-tertiary); }
+.receipt-segments > li > code { display: block; margin-top: var(--space-tight); overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.receipt-segments dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-tight); margin-top: var(--space-control); }
+.receipt-segments dd { margin-top: 2px; overflow: hidden; font-family: var(--font-mono); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.receipt-evidence-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.receipt-evidence-grid .receipt-subsection + .receipt-subsection { border-left: var(--component-seam); }
+.receipt-disclosure { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-control) var(--space-component); align-items: center; border-top: var(--component-seam); background: var(--surface-shell-transition); padding: var(--component-panel-padding); }
+.receipt-disclosure > div:first-child { display: grid; gap: var(--space-micro); }
+.receipt-disclosure > div:first-child p { max-width: 70ch; color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
+.receipt-disclosure > button { border: 1px solid var(--action-primary); border-radius: var(--radius-control); background: var(--surface-selection); color: var(--action-primary); font-family: var(--font-mono); font-size: 9px; padding: 0 var(--space-control); }
+.receipt-disclosure > button:disabled { cursor: default; opacity: .45; }
+.receipt-disclosure-state, .receipt-prompt-disclosure { grid-column: 1 / -1; }
+.receipt-disclosure-state { color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; }
+.receipt-prompt-disclosure { display: grid; gap: var(--space-tight); border-top: 1px solid var(--border-subtle); padding-top: var(--space-control); }
+.receipt-prompt-disclosure strong { font-size: 12px; }
+.receipt-prompt-disclosure p { color: var(--status-warning); font-family: var(--font-mono); font-size: 9px; }
+.receipt-prompt-disclosure pre { max-height: 420px; overflow: auto; border: 1px solid var(--border-subtle); border-radius: var(--radius-data); background: var(--surface-well); font: 10px/1.55 var(--font-mono); padding: var(--space-component); white-space: pre-wrap; }
+.receipt-boundary { display: flex; align-items: baseline; gap: var(--space-component); margin-top: var(--space-section); border-left: 2px solid var(--action-primary); background: var(--surface-selection); padding: var(--space-control) var(--space-component); }
+.receipt-boundary strong { font-size: 12px; white-space: nowrap; }
+.receipt-boundary p { color: var(--text-secondary); font-size: 12px; }
+
+@media (max-width: 760px) {
+  .receipt-summary-grid, .receipt-limits, .receipt-evidence-grid, .receipt-segments { grid-template-columns: 1fr; }
+  .receipt-evidence-grid .receipt-subsection + .receipt-subsection { border-left: 0; }
+  .receipt-disclosure { grid-template-columns: 1fr; }
+  .receipt-disclosure > button { justify-self: start; }
+}
+
+@media (max-width: 560px) {
+  .receipt-boundary { display: grid; align-items: start; }
+}

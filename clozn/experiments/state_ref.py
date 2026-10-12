@@ -499,10 +499,6 @@ def operation_readiness(
 
     contract = resolved_state.execution.generation_contract
     if not isinstance(contract, Mapping):
-        # A recorded sampled run can have enough metadata to identify its regime while still
-        # lacking the complete immutable sampler contract. Do not let the historical greedy
-        # default turn that into an apparently deterministic operation. Runs with no decode
-        # regime at all retain the legacy greedy planning default.
         if resolved_state.execution.generation_contract_reason == "sampled_replay_not_proven":
             base.update({
                 "state": "unavailable", "plannable": False,
@@ -511,8 +507,14 @@ def operation_readiness(
                 "sampler": {"required": True, "mode": "sample", "status": "unbound"},
             })
             return base
+        base.update({
+            "state": "unavailable", "plannable": False,
+            "reason_code": "generation_contract_incomplete",
+            "reason": "the recorded run has no complete generation contract",
+        })
+        return base
     recorded_mode = contract.get("decode_mode") if isinstance(contract, Mapping) else None
-    mode = decode_mode or recorded_mode or "greedy"
+    mode = decode_mode or recorded_mode
     if mode not in {"greedy", "sample"}:
         base.update({
             "state": "unavailable", "plannable": False,
@@ -604,9 +606,8 @@ def resolve_state(state_ref: StateRef, *, run: Mapping[str, Any] | None = None,
         if not prerequisites["final_prompt_available"]:
             return _unavailable(state_ref, "reconstruction_prompt_unavailable",
                                 "the parent has no exact rendered prompt for reconstruction")
-        # Reconstructed replay is a model-free state realization.  Runtime identity is useful
-        # provenance when supplied, but it is not an exact-execution prerequisite and must not
-        # route this path through the legacy fork planner.
+        # Reconstructed replay is a model-free state realization. Runtime identity is useful
+        # provenance when supplied, but it is not an exact-execution prerequisite.
         plan = _model_free_reconstruction_plan(state_ref, source)
         if runtime_identity is not None:
             plan["runtime_identity"] = deepcopy(dict(runtime_identity))

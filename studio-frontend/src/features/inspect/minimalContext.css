@@ -1,0 +1,142 @@
+.minimal-context-surface { display: grid; gap: var(--space-component); }
+.minimal-context-surface > .inspect-heading { margin-bottom: 0; }
+.minimal-overall { display: inline-flex; min-height: var(--component-target-min); align-items: center; border: 1px solid var(--border-subtle); border-radius: 999px; color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; letter-spacing: .06em; padding: 0 var(--space-control); text-transform: uppercase; }
+.minimal-overall.state-completed { border-color: var(--status-success); color: var(--status-success); }
+.minimal-overall.state-cancelled { border-style: dashed; color: var(--status-warning); }
+
+.minimal-context-instrument > header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-component); min-height: 72px; border-bottom: var(--component-seam); background: var(--surface-shell-transition); padding: var(--space-control) var(--component-panel-padding); }
+.minimal-context-instrument > header > div { display: grid; gap: 3px; }
+.minimal-context-instrument > header span, .minimal-context-instrument > header code, .minimal-boundary span, .minimal-controls label > span, .minimal-controls > div > span, .minimal-empty > span, .minimal-proof > header span, .minimal-sources > header span, .minimal-materialization > div > span { color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+.minimal-context-instrument > header h2 { font-size: 18px; font-weight: 600; letter-spacing: -.02em; }
+.minimal-context-instrument > header code { letter-spacing: 0; text-transform: none; }
+.minimal-boundary { display: flex; align-items: center; justify-content: space-between; gap: var(--space-group); border-bottom: var(--component-seam); padding: var(--space-control) var(--component-panel-padding); }
+.minimal-boundary p { max-width: 72ch; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.minimal-boundary span { flex: 0 0 auto; }
+
+.minimal-primary-state { min-height: 150px; color: var(--text-secondary); padding: var(--component-panel-padding); }
+.minimal-primary-state span { display: block; margin-top: var(--space-tight); color: var(--text-tertiary); font-family: var(--font-mono); font-size: 10px; }
+.minimal-primary-state.is-error, .minimal-action-error { color: var(--status-failure); }
+
+.minimal-controls { display: grid; grid-template-columns: minmax(240px, 1.2fr) minmax(240px, 1fr) auto; gap: var(--space-component); align-items: end; border-bottom: var(--component-seam); background: var(--surface-shell-transition); padding: var(--space-control) var(--component-panel-padding); }
+.minimal-controls label, .minimal-controls > div { display: grid; gap: 4px; min-width: 0; }
+.minimal-controls select { width: 100%; min-width: 0; min-height: var(--component-target-min); border: 1px solid var(--border-subtle); border-radius: var(--radius-control); background: var(--surface-workspace); color: var(--text-primary); font-family: var(--font-mono); font-size: 10px; padding: 0 var(--space-control); }
+.minimal-controls small { overflow: hidden; color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.minimal-controls button, .minimal-job > button, .minimal-materialization > button, .minimal-materialization-confirm button { min-height: var(--component-target-min); border: 1px solid var(--action-primary); border-radius: var(--radius-control); background: var(--surface-selection); color: var(--action-primary); font-family: var(--font-mono); font-size: 9px; padding: 0 var(--space-control); }
+.minimal-controls button:disabled, .minimal-job button:disabled, .minimal-materialization button:disabled, .minimal-controls select:disabled { cursor: default; opacity: .48; }
+
+.minimal-job { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(180px, .8fr) auto; gap: var(--space-control) var(--space-group); align-items: center; border-bottom: var(--component-seam); background: var(--surface-well); padding: var(--space-control) var(--component-panel-padding); }
+.minimal-job > div:first-child { display: grid; gap: 3px; }
+.minimal-job > div:first-child strong { font-size: 12px; font-weight: 600; }
+.minimal-job > div:first-child small { color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; }
+.minimal-job-meter { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px var(--space-control); color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; }
+.minimal-job-meter strong { color: var(--text-primary); }
+.minimal-job-meter progress { grid-column: 1 / -1; width: 100%; height: 3px; border: 0; background: var(--surface-workspace); color: var(--action-primary); }
+.minimal-job-meter progress::-webkit-progress-bar { background: var(--surface-workspace); }
+.minimal-job-meter progress::-webkit-progress-value { background: var(--action-primary); }
+.minimal-job-meter progress::-moz-progress-bar { background: var(--action-primary); }
+.minimal-candidate-certificate { grid-column: 1 / -1; color: var(--status-success); font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; }
+.minimal-job-error { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: var(--space-control); color: var(--status-failure); font-family: var(--font-mono); font-size: 10px; }
+.minimal-job-error button { min-height: var(--component-target-min); border: 1px solid var(--status-failure); border-radius: var(--radius-control); background: transparent; color: var(--status-failure); font-size: 9px; padding: 0 var(--space-control); }
+.minimal-job.state-failed, .minimal-job.state-cancelled { background: var(--surface-shell-transition); }
+.minimal-top-error { border-bottom: var(--component-seam); font-family: var(--font-mono); font-size: 10px; padding: var(--space-control) var(--component-panel-padding); }
+
+.minimal-empty { display: grid; gap: var(--space-tight); min-height: 210px; align-content: center; justify-items: center; padding: var(--component-panel-padding); text-align: center; }
+.minimal-empty h3 { font-size: 17px; font-weight: 600; }
+.minimal-empty p { max-width: 58ch; color: var(--text-secondary); font-size: 12px; }
+.minimal-binding-warning, .minimal-result-state { display: grid; gap: 4px; border-bottom: var(--component-seam); color: var(--status-warning); padding: var(--space-control) var(--component-panel-padding); }
+.minimal-binding-warning span, .minimal-result-state span { color: var(--text-secondary); font-size: 11px; }
+.minimal-binding-warning code, .minimal-result-state code { color: var(--text-tertiary); font-size: 9px; }
+.minimal-result-state.state-unavailable { color: var(--status-failure); }
+
+.minimal-verdict { display: grid; grid-template-columns: minmax(260px, .8fr) minmax(300px, 1.2fr); border-bottom: var(--component-seam); }
+.minimal-collapse-count { display: grid; grid-template-columns: auto auto 30px auto auto; gap: var(--space-tight); align-items: baseline; border-right: var(--component-seam); background: var(--surface-well); padding: var(--component-panel-padding); }
+.minimal-collapse-count strong { font-family: var(--font-mono); font-size: clamp(25px, 3vw, 38px); font-weight: 500; }
+.minimal-collapse-count span { color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; }
+.minimal-collapse-count b { align-self: center; color: var(--action-primary); font-weight: 400; text-align: center; }
+.minimal-verdict > div:last-child { display: grid; gap: 5px; align-content: center; padding: var(--component-panel-padding); }
+.minimal-verdict > div:last-child > span { color: var(--status-success); font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; }
+.minimal-verdict h3, .minimal-proof h3, .minimal-sources h3, .minimal-materialization h3 { font-size: 15px; font-weight: 600; }
+.minimal-verdict p { max-width: 70ch; color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
+.minimal-verdict.state-cancelled > div:last-child > span { color: var(--status-warning); }
+.minimal-verdict.state-unavailable > div:last-child > span { color: var(--status-failure); }
+
+.minimal-proof { display: grid; grid-template-columns: minmax(180px, .7fr) minmax(0, 1.3fr); gap: var(--space-component) var(--space-group); border-bottom: var(--component-seam); padding: var(--component-panel-padding); }
+.minimal-proof > header { display: grid; gap: 3px; align-content: start; }
+.minimal-proof dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--border-subtle); }
+.minimal-proof dl > div { min-width: 0; background: var(--surface-workspace); padding: var(--space-control); }
+.minimal-proof dt { color: var(--text-tertiary); font-family: var(--font-mono); font-size: 8px; letter-spacing: .06em; text-transform: uppercase; }
+.minimal-proof dd { margin-top: 4px; overflow-wrap: anywhere; color: var(--text-primary); font-family: var(--font-mono); font-size: 10px; }
+.minimal-proof > p, .minimal-proof > small { grid-column: 2; color: var(--text-secondary); font-size: 11px; }
+.minimal-proof > small { color: var(--text-tertiary); font-family: var(--font-mono); font-size: 9px; }
+
+.minimal-sources { display: grid; gap: var(--space-component); border-bottom: var(--component-seam); padding: var(--component-panel-padding); }
+.minimal-sources > header { display: flex; align-items: end; justify-content: space-between; gap: var(--space-group); }
+.minimal-sources > header > div { display: grid; gap: 3px; }
+.minimal-sources > header p { color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; }
+.minimal-source-browser { display: grid; grid-template-columns: minmax(230px, .8fr) minmax(300px, 1.2fr); min-height: 260px; overflow: hidden; border: 1px solid var(--border-subtle); border-radius: var(--radius-data); }
+.minimal-source-browser > ol { max-height: 390px; overflow: auto; border-right: var(--component-seam); background: var(--surface-shell-transition); }
+.minimal-source-browser li + li { border-top: 1px solid var(--border-subtle); }
+.minimal-source-browser li button { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: var(--space-tight); width: 100%; min-height: 46px; align-items: center; border: 0; background: transparent; color: var(--text-primary); padding: var(--space-tight) var(--space-control); text-align: left; }
+.minimal-source-browser li button[aria-pressed="true"] { background: var(--surface-selection); box-shadow: inset 2px 0 var(--action-primary); }
+.minimal-source-browser li button > span, .minimal-source-browser li button > small { color: var(--text-tertiary); font-family: var(--font-mono); font-size: 8px; text-transform: uppercase; }
+.minimal-source-browser li button > strong { overflow: hidden; font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.minimal-source-browser li button.state-retained > small { color: var(--status-success); }
+.minimal-source-browser li button.state-removed > small { color: var(--status-warning); }
+.minimal-source-browser > article { display: grid; gap: var(--space-component); align-content: start; min-width: 0; padding: var(--space-component); }
+.minimal-source-browser article > header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-control); }
+.minimal-source-browser article > header > span { border: 1px solid currentColor; border-radius: 999px; color: var(--status-success); font-family: var(--font-mono); font-size: 8px; padding: 2px 6px; text-transform: uppercase; }
+.minimal-source-browser article > header > span.state-removed { color: var(--status-warning); }
+.minimal-source-browser article > header code { color: var(--text-tertiary); font-size: 9px; }
+.minimal-source-browser blockquote { max-height: 170px; overflow: auto; border-left: 2px solid var(--border-strong); color: var(--text-primary); font-size: 12px; line-height: 1.55; padding-left: var(--space-control); white-space: pre-wrap; }
+.minimal-source-text-unavailable { color: var(--text-secondary); font-size: 11px; }
+.minimal-source-browser article dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-control); }
+.minimal-source-browser article dt { color: var(--text-tertiary); font-family: var(--font-mono); font-size: 8px; text-transform: uppercase; }
+.minimal-source-browser article dd { margin-top: 3px; overflow-wrap: anywhere; color: var(--text-secondary); font-size: 10px; }
+
+.minimal-materialization { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(300px, 1fr); gap: var(--space-component) var(--space-group); align-items: center; background: var(--surface-shell-transition); padding: var(--component-panel-padding); }
+.minimal-materialization > div:first-child { display: grid; gap: 4px; }
+.minimal-materialization > div:first-child p { color: var(--text-secondary); font-size: 11px; }
+.minimal-materialization > button { justify-self: end; }
+.minimal-materialization-blocked { color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; }
+.minimal-materialization-confirm { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px var(--space-control); align-items: center; border: 1px solid var(--status-warning); border-radius: var(--radius-control); background: var(--surface-workspace); padding: var(--space-control); }
+.minimal-materialization-confirm strong, .minimal-materialization-confirm span { grid-column: 1; }
+.minimal-materialization-confirm strong { font-size: 11px; }
+.minimal-materialization-confirm span { color: var(--text-secondary); font-size: 10px; }
+.minimal-materialization-confirm button { grid-row: 1 / span 2; }
+.minimal-materialization-confirm button:first-of-type { grid-column: 2; }
+.minimal-materialization-confirm button:last-of-type { grid-column: 3; border-color: var(--border-strong); background: var(--surface-workspace); color: var(--text-primary); }
+.minimal-materialization-result { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-control); color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; }
+.minimal-materialization-result strong { color: var(--status-success); }
+.minimal-materialization-result a { color: var(--action-primary); }
+.minimal-action-error { grid-column: 1 / -1; font-family: var(--font-mono); font-size: 10px; }
+
+.minimal-read-boundary { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-control); align-items: baseline; border: var(--component-seam); border-radius: var(--radius-data); background: var(--surface-shell-transition); padding: var(--space-control) var(--component-panel-padding); }
+.minimal-read-boundary strong { color: var(--action-primary); font-family: var(--font-mono); font-size: 9px; letter-spacing: .06em; text-transform: uppercase; }
+.minimal-read-boundary p { color: var(--text-secondary); font-size: 11px; }
+
+@media (max-width: 900px) {
+  .minimal-controls { grid-template-columns: minmax(0, 1fr) auto; }
+  .minimal-controls > div { grid-column: 1; }
+  .minimal-controls > button { grid-column: 2; grid-row: 1 / span 2; }
+  .minimal-job { grid-template-columns: minmax(0, 1fr) auto; }
+  .minimal-job-meter { grid-column: 1 / -1; }
+  .minimal-verdict, .minimal-proof { grid-template-columns: minmax(0, 1fr); }
+  .minimal-collapse-count { border-right: 0; border-bottom: var(--component-seam); }
+  .minimal-proof > p, .minimal-proof > small { grid-column: 1; }
+  .minimal-source-browser { grid-template-columns: minmax(190px, .7fr) minmax(240px, 1.3fr); }
+  .minimal-materialization { grid-template-columns: minmax(0, 1fr); }
+  .minimal-materialization > button { justify-self: start; }
+}
+
+@media (max-width: 640px) {
+  .minimal-boundary, .minimal-sources > header { align-items: flex-start; flex-direction: column; }
+  .minimal-controls { grid-template-columns: minmax(0, 1fr); }
+  .minimal-controls > button, .minimal-controls > div { grid-column: 1; grid-row: auto; }
+  .minimal-job { grid-template-columns: minmax(0, 1fr); }
+  .minimal-proof dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .minimal-source-browser { grid-template-columns: minmax(0, 1fr); }
+  .minimal-source-browser > ol { max-height: 230px; border-right: 0; border-bottom: var(--component-seam); }
+  .minimal-materialization-confirm { grid-template-columns: minmax(0, 1fr); }
+  .minimal-materialization-confirm button, .minimal-materialization-confirm button:first-of-type, .minimal-materialization-confirm button:last-of-type { grid-column: 1; grid-row: auto; }
+  .minimal-read-boundary { grid-template-columns: minmax(0, 1fr); }
+}

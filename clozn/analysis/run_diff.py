@@ -17,9 +17,8 @@ WHAT THIS COMPARES
                identity["ext"] via _ext_diff (see below) -- the part of the design the roadmap task
                called central.
 - generation.* clozn.receipts.bundle.REPRO_META_KEYS' sampling-relevant subset, read off run["meta"].
-- context.*    clozn.context-receipt.v1's stable delivered/assembled segment metadata and stored rendered
-               hash, with read compatibility for legacy delivered.messages/survived.final_prompt runs,
-               plus prompt/context/output limit fields.
+- context.*    clozn.context-receipt.v1's stable delivered/assembled segment metadata, stored rendered
+               hash, and prompt/context/output limit fields.
 - output.*     finish_reason, response length in words, output_contract.outcome.status (tool-call parse
                status -- see _tool_call_status for the shape this reads, verified against
                tests/test_openai_structured_client_compat.py rather than guessed), and an EMBEDDED
@@ -130,8 +129,8 @@ def _scalar_diff(dimension: str, a: dict, b: dict, key) -> dict | None:
 
 
 def _content_availability_diff(dimension: str, value_a, value_b, *, note: str) -> list[dict]:
-    """Like _scalar_diff, but for a value that may be genuinely UNCAPTURABLE (a legacy/light-tier run, or
-    -- once feature 06 ships graduated privacy modes -- a restrictive retention policy) rather than merely
+    """Like _scalar_diff, but for a value that may be unavailable under the active
+    retention policy rather than merely
     absent-because-irrelevant. `None` on exactly one side is 'unavailable', never silently read as 0/equal
     -- the spec's own privacy rule: compare what evidence exists and label the limitation, never invent."""
     if value_a is None and value_b is None:
@@ -210,28 +209,15 @@ def _generation_diff(run_a: dict, run_b: dict) -> list[dict]:
 # ------------------------------------------------------------------------------------------------ context
 
 def _msg_count(context_receipt: dict):
-    """Message/segment count across both context-receipt generations.
-
-    The released v1 receipt stores ``delivered`` as a metadata-only segment
-    array.  Older runs used ``delivered.messages``.  Reading both shapes here
-    keeps historical comparisons useful without rewriting either artifact.
-    """
+    """Message count from the canonical metadata-only delivered segment array."""
     delivered = context_receipt.get("delivered")
-    if isinstance(delivered, list):
-        return len(delivered)
-    messages = _dict(delivered).get("messages")
-    return len(messages) if isinstance(messages, list) else None
+    return len(delivered) if isinstance(delivered, list) else None
 
 
 def _rendered_prompt_hash(context_receipt: dict):
-    """Prefer v1's stored rendered hash, falling back to the legacy prompt text."""
+    """Return the canonical rendered-prompt digest when it was retained."""
     stored = _dict(context_receipt.get("rendered")).get("sha256")
-    if isinstance(stored, str) and len(stored) == 64:
-        return stored
-    final_prompt = _dict(context_receipt.get("survived")).get("final_prompt")
-    if not isinstance(final_prompt, str) or not final_prompt:
-        return None
-    return hashlib.sha256(final_prompt.encode("utf-8")).hexdigest()
+    return stored if isinstance(stored, str) and len(stored) == 64 else None
 
 
 def _segments(receipt: dict, stage: str) -> list[dict] | None:
@@ -321,7 +307,7 @@ def _segment_stage_diff(stage: str, a: list[dict] | None, b: list[dict] | None) 
             "kind": "unavailable",
             "note": (
                 f"{stage} segment metadata is unavailable on "
-                f"{'run_a' if a is None else 'run_b'}; legacy/privacy-limited evidence "
+                f"{'run_a' if a is None else 'run_b'}; unavailable evidence "
                 "is not treated as an empty segment list"
             ),
         }]
@@ -384,21 +370,23 @@ def _context_diff(run_a: dict, run_b: dict) -> list[dict]:
         "context.rendered_prompt_sha256", _rendered_prompt_hash(cr_a), _rendered_prompt_hash(cr_b),
         note="the rendered prompt text was not captured for this run -- comparing hashes/counts only")
 
-    # Feature-06 v1 segment metadata.  Legacy runs simply take the compatibility
-    # path above; when only one side is v1 the unavailable entry is important
-    # evidence rather than pretending the older side delivered zero segments.
     out += _segment_stage_diff("delivered", _segments(cr_a, "delivered"), _segments(cr_b, "delivered"))
     out += _segment_stage_diff("assembled", _segments(cr_a, "assembled"), _segments(cr_b, "assembled"))
 
-    limits_a, limits_b = _dict(cr_a.get("limits")), _dict(cr_b.get("limits"))
-    for key in ("prompt_tokens", "context_window_tokens", "requested_max_tokens", "generated_tokens"):
-        entry = _scalar_diff(f"context.limits.{key}", limits_a, limits_b, key)
+    rendered_a, rendered_b = _dict(cr_a.get("rendered")), _dict(cr_b.get("rendered"))
+    entry = _scalar_diff("context.rendered.tokens", rendered_a, rendered_b, "tokens")
+    if entry:
+        out.append(entry)
+    for key in ("context_window_tokens", "reserved_output_tokens"):
+        entry = _scalar_diff(f"context.{key}", cr_a, cr_b, key)
         if entry:
             out.append(entry)
 
-    entry = _scalar_diff("context.output_cut_off", cr_a, cr_b, "output_cut_off")
-    if entry:
-        out.append(entry)
+    termination_a, termination_b = _dict(cr_a.get("termination")), _dict(cr_b.get("termination"))
+    for key in ("reason", "generated_tokens"):
+        entry = _scalar_diff(f"context.termination.{key}", termination_a, termination_b, key)
+        if entry:
+            out.append(entry)
 
     return out
 

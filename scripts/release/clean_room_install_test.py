@@ -1,9 +1,8 @@
 """Clean-room install proof: build clozn's wheel, install it into a brand-new venv, then prove the
 console entry point, `python -m clozn`, and `import clozn` all work OUTSIDE this repo checkout -- no
 CLOZN_* env vars pointing back at it, no repo-relative sys.path hacks, cwd is a scratch temp dir. This is
-the actual bar docs/BACKLOG.md Sec.2 sets ("pip install into a clean env yields a working clozn with no
-repo-path hacks"); a passing run here is what "packaging works" means for this project, not just "the
-wheel built".
+the release bar: pip install into a clean environment must yield a working Clozn with no repo-path
+hacks. A passing run here is what "packaging works" means, not just "the wheel built".
 
     python scripts/release/clean_room_install_test.py
     python scripts/release/clean_room_install_test.py --keep      # leave the venv+dist dirs for inspection
@@ -62,7 +61,13 @@ def main(argv=None) -> int:
 
     try:
         # 1) Build the wheel with THIS interpreter's build tooling -- the target venv only ever needs pip.
-        build = _run([sys.executable, "-m", "build", "--wheel", "--outdir", dist_dir], cwd=REPO)
+        build_env = dict(os.environ)
+        build_env["CLOZN_BUILD_BASE"] = os.path.join(scratch, "build")
+        build = _run(
+            [sys.executable, "-m", "build", "--wheel", "--outdir", dist_dir],
+            cwd=REPO,
+            env=build_env,
+        )
         if build.returncode != 0:
             print("FAIL: wheel build failed", file=sys.stderr)
             return 1
@@ -95,6 +100,41 @@ def main(argv=None) -> int:
 
         # `import clozn` must work with NO repo on sys.path and NOT running from inside the repo.
         check('python -c "import clozn"', [vpy, "-c", "import clozn; print('clozn at', clozn.__file__)"])
+
+        # The installed product gateway must carry its private native-worker client. A source checkout
+        # finds this client through engine/client, so importing only `clozn` cannot catch a wheel that
+        # accidentally omitted it.
+        engine_client_probe = """
+import clozn.server.app as app
+assert app.EngineClient is not None
+assert "torch" not in __import__("sys").modules
+print("private engine client", app.EngineClient.__module__)
+"""
+        check("packaged private engine client", [vpy, "-c", engine_client_probe])
+
+        # The installed wheel must contain the application the server redirects to. Checking only
+        # `clozn doctor` is insufficient because missing optional assets are reported as a warning.
+        studio_probe = """
+from importlib.resources import files
+import re
+
+package = files("clozn.studio")
+directories = {item.name for item in package.iterdir() if item.is_dir()}
+assert directories <= {"app", "casting", "ext", "__pycache__"}, directories
+root = package.joinpath("app")
+index = root.joinpath("index.html")
+assert index.is_file(), index
+html = index.read_text(encoding="utf-8")
+refs = re.findall(r'(?:src|href)="([^"]+)"', html)
+local = [ref for ref in refs if not ref.startswith(("http://", "https://", "//", "data:"))]
+assert local, refs
+for ref in local:
+    assert not ref.startswith("/"), ref
+    target = root.joinpath(*ref.removeprefix("./").split("/"))
+    assert target.is_file(), target
+print("Studio at", root)
+"""
+        check("packaged Studio application", [vpy, "-c", studio_probe])
 
         # `clozn version` / `clozn doctor` via `python -m clozn` (the documented entry point clozn.cmd /
         # clozn.sh both use) -- doctor must not crash even though nothing is installed/running yet.

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import pytest
 
+from clozn.runs.context_receipt import build_context_receipt
 from clozn.receipts.investigation_experiment import (
     _derive_analysis,
     _derive_causal_claim,
@@ -166,13 +167,17 @@ RUN = {
         {"role": "user", "content": "IGNORE ME"},
     ],
 }
+RUN["context_receipt"] = build_context_receipt(
+    messages=RUN["messages"], run_id=RUN["id"],
+)
 
 
 def _address_id_for(run, message_index):
     from clozn.runs.text_span_addresses import build_persisted_text_span_addresses
     document = build_persisted_text_span_addresses(run)
+    target = run["context_receipt"]["delivered"][message_index]["segment_id"]
     return next(a["address_id"] for a in document["addresses"]
-                if a["native_ref"].get("id") == f"message-{message_index}")
+                if a["native_ref"].get("segment_id") == target)
 
 
 def test_run_experiment_refused_passthrough_never_calls_chat():
@@ -278,6 +283,9 @@ def test_run_experiment_omit_source_ablates_every_resolvable_span():
             {"role": "user", "content": "IGNORE ME", "source_id": "doc-9"},
         ],
     }
+    run["context_receipt"] = build_context_receipt(
+        messages=run["messages"], run_id=run["id"],
+    )
 
     def chat_fn(messages, sample):
         return "PWNED" if "IGNORE ME" in _user_content(messages) else "SAFE"

@@ -47,16 +47,16 @@ class FakeScoreSub:
         self._raises = raises
 
     def score_tokens(self, messages, continuation_ids, *, continuation=None, block=None,
-                     steer_strengths=None, steer_vec=None, topk=0):
+                     steer_vec=None, topk=0):
         if self._raises:
             raise RuntimeError("boom")
         self.calls.append({"messages": messages, "continuation_ids": continuation_ids, "topk": topk,
-                           "block": block, "steer_strengths": steer_strengths})
+                           "block": block})
         return self._tokens
 
 
 class FakeEngine:
-    """Stands in for engine/client/clozn_engine.py's EngineClient: exposes apply_template/score/complete
+    """Stands in for engine/client/clozn_engine's EngineClient: exposes apply_template/score/complete
     with the SAME call shapes _EngineScoreSub and the fresh-generation helpers use. Records every call so
     tests can assert on what was actually sent (prompt string, topk, continuation vs continuation_ids)."""
 
@@ -121,7 +121,8 @@ def test_engine_score_sub_passes_steer_vec_through():
 
 def test_inject_block_appends_to_existing_system_message():
     messages = [{"role": "system", "content": "be nice"}, {"role": "user", "content": "hi"}]
-    out = qc._EngineScoreSub._inject_block(messages, "remember: X")
+    from clozn.experiments.effective_prompt import inject_block
+    out = inject_block(messages, "remember: X")
     assert out[0]["role"] == "system"
     assert out[0]["content"] == "be nice\n\nremember: X"
     assert out[1] == {"role": "user", "content": "hi"}
@@ -131,14 +132,16 @@ def test_inject_block_appends_to_existing_system_message():
 
 def test_inject_block_prepends_new_system_message_when_none_exists():
     messages = [{"role": "user", "content": "hi"}]
-    out = qc._EngineScoreSub._inject_block(messages, "remember: X")
+    from clozn.experiments.effective_prompt import inject_block
+    out = inject_block(messages, "remember: X")
     assert out[0] == {"role": "system", "content": "remember: X"}
     assert out[1] == {"role": "user", "content": "hi"}
 
 
 def test_inject_block_noop_on_falsy_block():
     messages = [{"role": "user", "content": "hi"}]
-    out = qc._EngineScoreSub._inject_block(messages, None)
+    from clozn.experiments.effective_prompt import inject_block
+    out = inject_block(messages, None)
     assert out == messages
     assert out is not messages   # still a copy
 

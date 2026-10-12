@@ -36,7 +36,8 @@ _ANSWER = "The launch date is June 12."
 
 def _method() -> dict:
     return {
-        "name": "teacher_forced_matched_context_replacement", "mode": "forced_score_intervention",
+        "name": "teacher_forced_matched_context_replacement", "version": "1",
+        "mode": "forced_score_intervention",
         "claim_limit": "no percentage claim", "caveat": "measured effect only, not correctness",
     }
 

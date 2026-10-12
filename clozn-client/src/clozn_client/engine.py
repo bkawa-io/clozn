@@ -21,10 +21,13 @@ from .models import (
     PatchArmResult,
     PatchSweepResult,
     ScoreResult,
+    ScoreVariantsResult,
     require_object,
 )
 
 _USER_AGENT = "clozn-client-engine/0.11.0"
+_SCORE_VARIANTS_MAX = 64
+_SCORE_VARIANT_ID_MAX = 128
 
 
 class EngineClient:
@@ -201,6 +204,116 @@ class EngineClient:
             body["attn_knockout"] = [spec.to_wire() for spec in specs]
         response = self._transport.request_json("POST", "/score", body=body)
         return ScoreResult.from_json(response)
+
+    def score_variants(
+        self,
+        variants: Sequence[Mapping[str, Any]],
+        continuation_ids: Sequence[int],
+        *,
+        generation_state: Mapping[str, Any] | None = None,
+    ) -> ScoreVariantsResult:
+        """Score one exact continuation under related exact-token prompts.
+
+        This native endpoint is strictly an unqualified screening primitive. Prefix reuse and
+        multi-sequence execution may produce small numerical differences from scalar :meth:`score`.
+        The returned type therefore rejects any response that claims qualification or trusted-evidence
+        use. Remeasure claim-critical and borderline effects through scalar ``/score``. An optional
+        ``generation_state`` can reference the original generation's worker-local checkpoint; the
+        worker validates its identity and reports whether reuse was applied or safely skipped.
+        """
+        if isinstance(variants, (str, bytes, bytearray)) or not isinstance(variants, Sequence):
+            raise ValueError("variants must be a non-empty array")
+        items = list(variants)
+        if not items or len(items) > _SCORE_VARIANTS_MAX:
+            raise ValueError(
+                f"variants must contain between 1 and {_SCORE_VARIANTS_MAX} entries")
+
+        normalized: list[dict[str, Any]] = []
+        variant_ids: list[str] = []
+        prompt_lengths: list[int] = []
+        seen: set[str] = set()
+        for index, item in enumerate(items):
+            if not isinstance(item, Mapping):
+                raise ValueError(f"variants[{index}] must be an object")
+            if set(item) != {"id", "prompt_ids"}:
+                raise ValueError(
+                    f"variants[{index}] must contain exactly 'id' and 'prompt_ids'")
+            variant_id = item.get("id")
+            id_is_safe = (
+                isinstance(variant_id, str)
+                and 0 < len(variant_id) <= _SCORE_VARIANT_ID_MAX
+                and all(
+                    character.isascii()
+                    and (character.isalnum() or character in "_-.:")
+                    for character in variant_id
+                )
+            )
+            if not id_is_safe:
+                raise ValueError(
+                    f"variants[{index}].id must be 1..{_SCORE_VARIANT_ID_MAX} "
+                    "ASCII-safe characters")
+            if variant_id in seen:
+                raise ValueError(f"duplicate variant id {variant_id!r}")
+            seen.add(variant_id)
+            prompt_value = item.get("prompt_ids")
+            if (
+                isinstance(prompt_value, (str, bytes, bytearray))
+                or not isinstance(prompt_value, Sequence)
+            ):
+                raise ValueError(f"variants[{index}].prompt_ids must be an integer sequence")
+            prompt_ids = self._ids(prompt_value, f"variants[{index}].prompt_ids")
+            normalized.append({"id": variant_id, "prompt_ids": prompt_ids})
+            variant_ids.append(variant_id)
+            prompt_lengths.append(len(prompt_ids))
+
+        if (
+            isinstance(continuation_ids, (str, bytes, bytearray))
+            or not isinstance(continuation_ids, Sequence)
+        ):
+            raise ValueError("continuation_ids must be an integer sequence")
+        continuation = self._ids(continuation_ids, "continuation_ids")
+        body: dict[str, Any] = {
+            "variants": normalized,
+            "continuation_ids": continuation,
+        }
+        if generation_state is not None:
+            if not isinstance(generation_state, Mapping):
+                raise ValueError("generation_state must be an object")
+            required = {"checkpoint_id", "worker_generation_id", "baseline_variant_id"}
+            if set(generation_state) != required:
+                raise ValueError(
+                    "generation_state must contain exactly checkpoint_id, "
+                    "worker_generation_id, and baseline_variant_id")
+            checkpoint_id = generation_state.get("checkpoint_id")
+            worker_generation_id = generation_state.get("worker_generation_id")
+            baseline_variant_id = generation_state.get("baseline_variant_id")
+            if (not isinstance(checkpoint_id, str) or not checkpoint_id
+                    or len(checkpoint_id) > 512):
+                raise ValueError(
+                    "generation_state.checkpoint_id must be a bounded non-empty string")
+            if (not isinstance(worker_generation_id, str) or not worker_generation_id
+                    or len(worker_generation_id) > 128):
+                raise ValueError(
+                    "generation_state.worker_generation_id must be a bounded non-empty string")
+            if baseline_variant_id not in seen:
+                raise ValueError(
+                    "generation_state.baseline_variant_id must name a request variant")
+            body["generation_state"] = {
+                "checkpoint_id": checkpoint_id,
+                "worker_generation_id": worker_generation_id,
+                "baseline_variant_id": baseline_variant_id,
+            }
+        response = self._transport.request_json(
+            "POST",
+            "/v1/score-variants",
+            body=body,
+        )
+        return ScoreVariantsResult.from_json(
+            response,
+            variant_ids=variant_ids,
+            prompt_lengths=prompt_lengths,
+            continuation_ids=continuation,
+        )
 
     def knockout_score(self, *, knockouts: Sequence[AttentionKnockout],
                         prompt: str | None = None, prompt_ids: Sequence[int] | None = None,

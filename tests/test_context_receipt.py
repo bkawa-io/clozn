@@ -1,10 +1,7 @@
-"""Feature 06: context receipts (clozn.context-receipt.v1), segment identity, termination
-normalization, receipt privacy tiers, dual-shape reading (legacy pre-2026-07-27 + new), and the
-`clozn context` CLI. See clozn/runs/context_receipt.py's module docstring for the shape history."""
+"""Context receipts: segment identity, termination normalization, privacy, and the context CLI."""
 from __future__ import annotations
 
 import json
-import os
 
 import pytest
 
@@ -13,42 +10,29 @@ from clozn.cli import main as cli
 from clozn.runs.context_receipt import build_context_receipt, normalize_termination, read_receipt, \
     segment_id
 
-FIXTURE_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "schemas",
-                            "clozn.context-receipt.v1")
-
-
-def _legacy_fixture() -> dict:
-    """The real pre-2026-07-27 shape, loaded from the same fixture the schema-contract suite uses to
-    prove the NEW schema correctly rejects it -- one source of truth for "what legacy looks like"."""
-    with open(os.path.join(FIXTURE_ROOT, "invalid__legacy_pre_2026_07_27_shape.json"), encoding="utf-8") \
-            as handle:
-        return json.load(handle)
-
-
 # ---------------------------------------------------------------------------------------------------
-# build_context_receipt: legacy-shaped fields stay byte-identical (diagnosis.py / other tests depend on this)
+# build_context_receipt: one canonical evidence shape
 # ---------------------------------------------------------------------------------------------------
 
-def test_legacy_shaped_fields_are_additive_and_unchanged():
+def test_canonical_token_and_termination_facts_are_recorded_once():
     delivered = [{"role": "system", "content": "caller rule"},
                  {"role": "user", "content": "question"}]
     assembled = [{"role": "system", "content": "caller rule\n\nmemory card"},
                  {"role": "user", "content": "question"}]
     receipt = build_context_receipt(
         messages=delivered, assembled_messages=assembled, final_prompt="<rendered exact>",
-        finish_reason="length", meta={"max_tokens": 8, "n_ctx": 128, "prompt_tokens": 31},
+        finish_reason="length", meta={"max_tokens": 2, "n_ctx": 128, "prompt_tokens": 31},
         trace={"tokens": ["a", "b"]}, run_id="run_test1",
     )
 
-    assert receipt["survived"]["assembled_messages"] == assembled
-    assert receipt["survived"]["final_prompt"] == "<rendered exact>"
-    assert receipt["input_truncated"] is False
-    assert receipt["output_cut_off"] is True
-    assert receipt["warnings"][0]["code"] == "output_truncated"
-    assert receipt["limits"] == {
-        "prompt_tokens": 31, "context_window_tokens": 128,
-        "requested_max_tokens": 8, "generated_tokens": 2,
-    }
+    assert receipt["rendered"]["tokens"] == 31
+    assert receipt["context_window_tokens"] == 128
+    assert receipt["reserved_output_tokens"] == 2
+    assert receipt["termination"]["generated_tokens"] == 2
+    assert receipt["termination"]["reason"] == "max_tokens"
+    for removed in ("survived", "limits", "input_truncated", "input_policy",
+                    "output_cut_off", "warnings"):
+        assert removed not in receipt
     # no schema_validation_error -- a well-formed call must validate cleanly
     assert "schema_validation_error" not in receipt
 
@@ -64,10 +48,10 @@ def test_run_store_persists_context_receipt_and_summary_warning(tmp_path, monkey
         trace=[{"piece": "par"}, {"piece": "tial"}],
     )
     run = runlog.get_run(rid)
-    assert run["context_receipt"]["survived"]["final_prompt"] == "EXACT PROMPT"
+    assert run["final_prompt"] == "EXACT PROMPT"
+    assert "survived" not in run["context_receipt"]
     assert run["warnings"][0]["code"] == "output_truncated"
     assert runlog.list_runs(1)[0]["warnings"] == run["warnings"]
-    # the new schema fields ride alongside, unbroken
     assert run["context_receipt"]["schema_version"] == "clozn.context-receipt.v1"
     assert run["context_receipt"]["run_id"] == rid
 
@@ -146,13 +130,13 @@ def test_exact_source_spans_are_canonical_metadata_only_with_utf8_offsets_and_st
     assert "content" not in parent
 
 
-def test_legacy_message_source_identity_stays_a_single_segment_root_without_duplicate_span():
+def test_whole_message_source_identity_stays_a_single_segment_root_without_duplicate_span():
     receipt = build_context_receipt(
-        messages=[{"role": "user", "content": "whole source", "source_id": "legacy-doc"}],
-        run_id="run_legacy_source",
+        messages=[{"role": "user", "content": "whole source", "source_id": "whole-doc"}],
+        run_id="run_whole_source",
     )
     segment = receipt["delivered"][0]
-    assert segment["client_source_id"] == "legacy-doc"
+    assert segment["client_source_id"] == "whole-doc"
     assert "sources" not in segment
 
 
@@ -323,10 +307,8 @@ def test_rendered_sha256_and_exact_token_count():
     )
     import hashlib
     assert receipt["rendered"]["sha256"] == hashlib.sha256(b"THE EXACT PROMPT").hexdigest()
-    assert receipt["rendered"]["token_count"] == 42
     assert receipt["rendered"]["tokens"] == 42
     assert receipt["rendered"]["bytes"] == len(b"THE EXACT PROMPT")
-    assert receipt["rendered"]["content_available"] is True
     assert receipt["rendered"]["estimated"] is False
 
 
@@ -372,18 +354,17 @@ _ARGS = dict(
 
 def test_privacy_full_keeps_everything():
     receipt = build_context_receipt(**_ARGS, privacy="full")
-    assert receipt["survived"]["final_prompt"] == "EXACT RENDERED PROMPT"
-    assert receipt["survived"]["assembled_messages"] is not None
+    assert "survived" not in receipt
+    assert "EXACT RENDERED PROMPT" not in json.dumps(receipt)
     assert receipt["delivered"][0]["source_label"] == "system"
     assert receipt["rendered"]["sha256"]
     assert receipt["privacy"] == "full"
 
 
-def test_privacy_metadata_only_drops_full_text_keeps_segment_metadata():
+def test_privacy_metadata_only_keeps_segment_metadata_without_content():
     receipt = build_context_receipt(**_ARGS, privacy="metadata_only")
-    assert "final_prompt" not in receipt["survived"]
-    assert "assembled_messages" not in receipt["survived"]
-    assert receipt["survived"]["content_withheld_by_privacy_tier"] == "metadata_only"
+    assert "survived" not in receipt
+    assert "EXACT RENDERED PROMPT" not in json.dumps(receipt)
     assert receipt["delivered"][0]["source_label"] == "system"      # segment metadata still present
     assert receipt["rendered"]["sha256"]                            # hashes always retained
     assert receipt["delivered"][0]["redaction_state"] == "redacted"
@@ -391,7 +372,7 @@ def test_privacy_metadata_only_drops_full_text_keeps_segment_metadata():
 
 def test_privacy_hashes_only_drops_segment_metadata_too():
     receipt = build_context_receipt(**_ARGS, privacy="hashes_only")
-    assert "final_prompt" not in receipt["survived"]
+    assert "survived" not in receipt
     seg = receipt["delivered"][0]
     assert "source_label" not in seg
     assert "delivered_bytes" not in seg
@@ -433,38 +414,22 @@ def test_missing_run_id_degrades_visibly_instead_of_raising(capsys):
 
 
 # ---------------------------------------------------------------------------------------------------
-# dual-shape reading: legacy (pre-2026-07-27) vs. new, proven against the REAL legacy shape
+# receipt reading
 # ---------------------------------------------------------------------------------------------------
 
-def test_read_receipt_detects_legacy_shape():
-    run = {"id": "run_old", "context_receipt": _legacy_fixture()}
-    view = read_receipt(run)
-    assert view["shape"] == "legacy"
-    assert view["receipt"]["schema"] == "clozn.context_receipt.v1"
-
-
-def test_read_receipt_detects_new_shape():
+def test_read_receipt_detects_recorded_shape():
     receipt = build_context_receipt(messages=[{"role": "user", "content": "hi"}], run_id="run_new")
     run = {"id": "run_new", "context_receipt": receipt}
     view = read_receipt(run)
-    assert view["shape"] == "new"
+    assert view["shape"] == "recorded"
 
 
 def test_read_receipt_absent_when_no_context_receipt_field():
     assert read_receipt({"id": "run_x"})["shape"] == "absent"
 
 
-def test_legacy_fixture_is_rejected_by_the_new_schema():
-    """The flip side of test_read_receipt_detects_legacy_shape: the same real legacy document must NOT
-    validate against clozn.context-receipt.v1 -- it is read via shape detection, never migrated in
-    place, and never claimed to satisfy a schema it predates."""
-    from clozn import schemas
-    with pytest.raises(schemas.ValidationError):
-        schemas.validate(_legacy_fixture(), "clozn.context-receipt.v1")
-
-
 # ---------------------------------------------------------------------------------------------------
-# CLI: clozn context last / show, dual-shape rendering, --detailed
+# CLI: clozn context last / show and --detailed
 # ---------------------------------------------------------------------------------------------------
 
 def test_context_last_uses_latest_organic_run_and_prints_both_sections(tmp_path, monkeypatch, capsys):
@@ -485,7 +450,7 @@ def test_context_last_uses_latest_organic_run_and_prints_both_sections(tmp_path,
     assert organic in output
     assert "internal replay" not in output
     assert "DELIVERED" in output and "raw question" in output
-    assert "SURVIVED" in output and "RENDERED QUESTION" in output
+    assert "ASSEMBLED" in output and "RENDERED PROMPT" in output and "RENDERED QUESTION" in output
     assert "WARNING" in output and "reply may be incomplete" in output
 
     assert cli.main(["context", "last", "--json"]) == 0
@@ -547,25 +512,8 @@ def test_context_export_is_metadata_only_and_refuses_overwrite(tmp_path, monkeyp
     ]) != 0
 
 
-def test_cli_renders_a_legacy_shaped_run_without_crashing(tmp_path, monkeypatch, capsys):
-    """The dual-shape requirement end to end: a run recorded before this feature's rewrite must still
-    render sensibly through the CLI, not just through read_receipt() in isolation."""
-    monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    rid = runlog.record(source="cli", client="cli", messages=[{"role": "user", "content": "hi"}],
-                        response="ok", started=1.0)
-    run = runlog.get_run(rid)
-    run["context_receipt"] = _legacy_fixture()
-    monkeypatch.setattr(runlog, "get_run", lambda _rid: run)
-    assert cli.main(["context", "show", rid]) == 0
-    output = capsys.readouterr().out
-    assert "DELIVERED" in output
-    assert "caller rule" in output          # from the legacy fixture's delivered.messages
-    assert "SURVIVED" in output
-
-
-def test_reconstructs_a_best_effort_receipt_for_a_run_with_no_context_receipt_at_all(tmp_path, monkeypatch,
-                                                                                     capsys):
-    """Older-than-Phase-2.4 runs (or privacy="off") have no context_receipt field at all."""
+def test_reports_no_receipt_when_privacy_is_off(tmp_path, monkeypatch, capsys):
+    """Privacy-off runs have no context_receipt field at all."""
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
     rid = runlog.record(source="cli", client="cli", messages=[{"role": "user", "content": "hi"}],
                         response="ok", started=1.0)
@@ -573,4 +521,4 @@ def test_reconstructs_a_best_effort_receipt_for_a_run_with_no_context_receipt_at
     del run["context_receipt"]
     monkeypatch.setattr(runlog, "get_run", lambda _rid: run)
     assert cli.main(["context", "show", rid]) == 0
-    assert "DELIVERED" in capsys.readouterr().out
+    assert "no readable Context Receipt recorded" in capsys.readouterr().out

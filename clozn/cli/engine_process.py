@@ -89,7 +89,7 @@ class EngineDiscovery:
     exe: str
     dll_dirs: list
     gpu: bool
-    discovery_source: str                    # "env_override" | "managed" | "repo_dev_build" | "legacy"
+    discovery_source: str                    # "env_override" | "managed" | "repo_dev_build"
     backend: "str | None" = None
     artifact_sha256: "str | None" = None
     engine_version: "str | None" = None
@@ -98,19 +98,19 @@ class EngineDiscovery:
 
 
 def _env_override_candidate() -> "EngineDiscovery | None":
-    """Tier 1. CLOZN_ENGINE is the spec's own name for this override; CLOZN_ENGINE_BIN is kept working
-    indefinitely as the pre-existing name (renaming it would break any script/CI already setting it) --
-    CLOZN_ENGINE wins when both are set. CLOZN_ENGINE_GPU marks a CLOZN_ENGINE(_BIN)-pointed build as a
-    GPU worker; there is no way to detect that from the file itself."""
+    """Tier 1. ``CLOZN_ENGINE`` selects an explicit worker executable.
+
+    ``CLOZN_ENGINE_GPU`` marks that executable as a GPU worker; there is no
+    reliable way to infer the backend from the file itself.
+    """
     from clozn.cli import main as ctx
 
-    override = os.environ.get("CLOZN_ENGINE") or os.environ.get("CLOZN_ENGINE_BIN")
+    override = os.environ.get("CLOZN_ENGINE")
     if not override:
         return None
     exe = os.path.abspath(os.path.expanduser(override))
     if not os.path.isfile(exe):
-        raise ctx.CloznError(
-            f"CLOZN_ENGINE{'' if os.environ.get('CLOZN_ENGINE') else '_BIN'} does not point to a file: {exe}")
+        raise ctx.CloznError(f"CLOZN_ENGINE does not point to a file: {exe}")
     gpu = os.environ.get("CLOZN_ENGINE_GPU", "").strip().lower() in ("1", "true", "yes", "on")
     return EngineDiscovery(exe=exe, dll_dirs=_dll_dirs_for(exe), gpu=gpu,
                            discovery_source="env_override", backend="gpu" if gpu else "cpu")
@@ -161,18 +161,10 @@ def _repo_dev_build_candidates() -> list:
     return found
 
 
-def _legacy_candidates() -> list:
-    """Tier 4, named and kept last so a future migration path (e.g. a pre-feature-01 install layout, or
-    a deprecated managed-engine directory shape) has somewhere to land without another precedence-order
-    edit. No such layout has ever shipped -- this always returns [] today, honestly, rather than
-    inventing a filesystem location no version of clozn has ever written to."""
-    return []
-
-
 def find_engine_ex(prefer_gpu=True) -> EngineDiscovery:
-    """The full discovery result -- see EngineDiscovery. Precedence: CLOZN_ENGINE(_BIN) override ->
-    active managed engine (clozn setup) -> repository-local dev build -> legacy search paths (currently
-    always empty). ``prefer_gpu=False`` is the CLI's documented ``--cpu`` contract: it skips any
+    """The full discovery result -- see EngineDiscovery. Precedence: ``CLOZN_ENGINE`` override ->
+    active managed engine (``clozn setup``) -> repository-local development build.
+    ``prefer_gpu=False`` is the CLI's documented ``--cpu`` contract: it skips any
     candidate this function otherwise cannot prove is a CPU build, at every tier -- including refusing a
     GPU env override and falling through past a GPU managed install to whatever CPU candidate a later
     tier offers, exactly as it already did for tier 3 before this refactor."""
@@ -182,7 +174,7 @@ def find_engine_ex(prefer_gpu=True) -> EngineDiscovery:
     if override is not None:
         if not prefer_gpu and override.gpu:
             raise ctx.CloznError(
-                "--cpu was requested, but CLOZN_ENGINE(_BIN) is marked as a GPU worker; "
+                "--cpu was requested, but CLOZN_ENGINE is marked as a GPU worker; "
                 "point it at a CPU build or unset CLOZN_ENGINE_GPU"
             )
         return override
@@ -191,7 +183,7 @@ def find_engine_ex(prefer_gpu=True) -> EngineDiscovery:
     if managed is not None and (prefer_gpu or not managed.gpu):
         return managed
 
-    candidates = _repo_dev_build_candidates() + _legacy_candidates()
+    candidates = _repo_dev_build_candidates()
     if not prefer_gpu:
         candidates = [c for c in candidates if not c.gpu]
         if not candidates:

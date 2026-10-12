@@ -227,7 +227,6 @@ class DeleteSourceExactReferenceAdapter:
             "generation_contract": state.to_dict().get("generation_contract"),
             "explicit_conditions": {
                 "block": prompt.block,
-                "steer_strengths": deepcopy(conditions.get("steer_strengths") or {}),
             },
             "provenance": provenance,
         }, None
@@ -522,11 +521,10 @@ class DeleteSourceExactReferenceAdapter:
         if not self._shared_parent_supported():
             return None
         # Shared sessions currently support the unchanged exact generation
-        # contract only.  A varying block/steering condition must use the
+        # contract only. A varying block condition must use the
         # ordinary exact adapter rather than being silently grouped.
         condition_values = [payload["explicit_conditions"] for _request, payload in prepared]
-        if any((value.get("steer_strengths") or {}) or value.get("block") not in (None, "")
-               for value in condition_values):
+        if any(value.get("block") not in (None, "") for value in condition_values):
             return None
         probe_started = False
         try:

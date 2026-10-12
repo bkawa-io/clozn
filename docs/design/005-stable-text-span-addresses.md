@@ -41,8 +41,8 @@ metadata canonical shape so adding `text` to a metadata-only resolution is inval
 helper has model-free no-secret tests.
 
 A metadata-only influence export already contains full SHA-256 hashes and code-point offsets, so it
-can produce a resolved metadata address. A redacted context receipt may retain only a 16-hex legacy
-hash and a UTF-8 byte count. Those fields cannot prove a full SHA-256 or a code-point range, so the
+can produce a resolved metadata address. A redacted context receipt may retain only a truncated
+16-hex hash and a UTF-8 byte count. Those fields cannot prove a full SHA-256 or a code-point range, so the
 projection keeps a typed redacted reference and does not invent a canonical span.
 
 Literal redaction or artifact drift can leave stored text inconsistent with an older receipt hash.

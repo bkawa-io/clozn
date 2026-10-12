@@ -2,7 +2,7 @@
 
 The pilot (notes/CIRCUIT_TRACER_DESIGN.md section 5h) validated trace_provenance on 4 prompts, 1
 model family. Before any product surface ships a CONTEXT_CARRIED / MIXED / PARAMETRIC chip
-(docs/PRODUCT_ROADMAP.md Phase 3.7, lane R1), the verdict system needs to face a real battery:
+the verdict system needs to face a real battery:
 does it discriminate across ~30 varied cases, on more than one model family, and does the
 INCONCLUSIVE guard ever actually fire on a real prompt (it never has)?
 

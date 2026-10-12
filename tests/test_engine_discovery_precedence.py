@@ -1,5 +1,5 @@
-"""find_engine_ex()'s 4-tier precedence (roadmap feature 01): CLOZN_ENGINE(_BIN) override -> active
-managed engine (clozn setup) -> repository-local dev build -> legacy search paths. Every tier is
+"""find_engine_ex() precedence: CLOZN_ENGINE override -> active managed engine
+(``clozn setup``) -> repository-local development build. Every source is
 exercised in isolation via tmp_path + monkeypatch -- no real engine build or GPU is ever required.
 """
 from __future__ import annotations
@@ -18,7 +18,7 @@ from clozn.setup import registry as setup_registry
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(engine_process, "ENGINE_CORE", str(tmp_path / "engine_core"))
     monkeypatch.setattr(cli, "HOME", str(tmp_path / ".clozn"))
-    for var in ("CLOZN_ENGINE", "CLOZN_ENGINE_BIN", "CLOZN_ENGINE_GPU"):
+    for var in ("CLOZN_ENGINE", "CLOZN_ENGINE_GPU"):
         monkeypatch.delenv(var, raising=False)
     return tmp_path
 
@@ -152,23 +152,6 @@ def test_clozn_engine_env_wins_over_everything(isolated, monkeypatch):
     assert result.backend == "cpu"
 
 
-def test_legacy_clozn_engine_bin_still_works(isolated, monkeypatch):
-    override_exe = _touch(str(isolated / "custom" / "clozn-server.exe"))
-    monkeypatch.setenv("CLOZN_ENGINE_BIN", override_exe)
-    result = engine_process.find_engine_ex()
-    assert result.exe == override_exe
-    assert result.discovery_source == "env_override"
-
-
-def test_clozn_engine_wins_over_clozn_engine_bin_when_both_set(isolated, monkeypatch):
-    new_exe = _touch(str(isolated / "new" / "clozn-server.exe"))
-    old_exe = _touch(str(isolated / "old" / "clozn-server.exe"))
-    monkeypatch.setenv("CLOZN_ENGINE", new_exe)
-    monkeypatch.setenv("CLOZN_ENGINE_BIN", old_exe)
-    result = engine_process.find_engine_ex()
-    assert result.exe == new_exe
-
-
 def test_clozn_engine_gpu_marks_the_override_as_a_gpu_worker(isolated, monkeypatch):
     override_exe = _touch(str(isolated / "custom" / "clozn-server.exe"))
     monkeypatch.setenv("CLOZN_ENGINE", override_exe)
@@ -192,9 +175,9 @@ def test_clozn_engine_pointing_at_a_missing_file_raises(isolated, monkeypatch):
         engine_process.find_engine_ex()
 
 
-# --------------------------------------------------------------------------------------- back-compat shape
+# ---------------------------------------------------------------------------------------- tuple helper
 
-def test_find_engine_still_returns_the_historical_3_tuple(isolated):
+def test_find_engine_returns_the_launch_tuple(isolated):
     exe = _dev_build(isolated, "build-cpu", "cpu")
     result = engine_process.find_engine()
     assert result == (exe, engine_process._dll_dirs_for(exe), False)

@@ -9,7 +9,7 @@ still spliced the same way the autoloader always splices GET modules, for one un
 Wire shape
 ----------
   GET  /sessions                       -> list_sessions() (?include_hidden=1, ?limit=N)
-  GET  /sessions/<id>                  -> get_session(id, materialize=True); 404 if it does not exist
+  GET  /sessions/<id>                  -> get_session(id); 404 if it does not exist
   GET  /sessions/<id>/runs             -> list_session_runs(id) (?cursor=..., ?limit=N, ?include_derived=1)
   POST /sessions                       -> create_session(body) -- idempotent; see sessions.py's
                                            concurrency contract for what "the same id twice" does
@@ -105,11 +105,9 @@ def try_get(h, p):
         h._json(200, page)
         return True
 
-    # GET /sessions/<id> -- the session detail view. Lazily materializes a legacy session on first
-    # look-up (see sessions.get_session's `materialize` docstring) so the SAME id resolves to a real row
-    # on the next request instead of re-deriving it every time.
+    # GET /sessions/<id> -- the session detail view.
     session_id = rest
-    doc = sessions.get_session(session_id, materialize=True)
+    doc = sessions.get_session(session_id)
     if doc is None:
         h._json(404, {"error": "session not found"})
         return True

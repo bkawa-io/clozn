@@ -1,14 +1,8 @@
-"""Persist outcome-grounded calibration reports and per-model/task profiles.
+"""Persist outcome-grounded calibration profiles in one authoritative registry.
 
-The legacy ``save`` / ``load`` pair remains the single active report consumed by
-the journal UI.  The profile registry lives beside that report and lets the
-calibration workflow retain more than one exact model/task pair without changing
-any current reader: ``save_profile`` updates the registry *and* activates the
-saved profile through the legacy current-report file.
-
-Deliberately dependency-light: mirrors clozn.runs.store's `~/.clozn` convention with a plain atomic write,
-importing no server code (eval stays a pure analysis package). `save`/`load` take an optional path so tests
-point at a tmp dir.
+The store is dependency-light and imports no server code. Every reader selects a
+profile from the same model/task-indexed document; there is no separate active
+report or fallback representation.
 """
 from __future__ import annotations
 
@@ -19,39 +13,13 @@ import os
 import time
 import unicodedata
 
-_PATH = os.path.join(os.path.expanduser("~/.clozn"), "eval_report.json")
-_REGISTRY_NAME = "calibration_profiles.json"
+_PATH = os.path.join(os.path.expanduser("~/.clozn"), "calibration_profiles.json")
 _PROFILE_SCHEMA = "clozn.calibration_profile.v1"
 _REGISTRY_SCHEMA = "clozn.calibration_profile_registry.v1"
 
 
-def save(payload: dict, path: str | None = None) -> str:
-    """Atomically write the report payload (report + policy + provenance), stamping `saved_ts` if absent.
-    Returns the path written."""
-    path = path or _PATH
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    out = dict(payload)
-    out.setdefault("saved_ts", time.time())
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(out, f)
-    os.replace(tmp, path)
-    return path
-
-
-def load(path: str | None = None) -> dict | None:
-    """The last saved report, or None if none exists / the file is unreadable. Never raises."""
-    try:
-        with open(path or _PATH, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return None
-
-
 def _registry_path(path: str | None = None) -> str:
-    """Registry beside ``path`` (or monkeypatchable ``_PATH``), never in a second global root."""
-    current_path = os.fspath(path or _PATH)
-    return os.path.join(os.path.dirname(current_path) or ".", _REGISTRY_NAME)
+    return os.fspath(path or _PATH)
 
 
 def _normal_task(task) -> str:
@@ -164,8 +132,7 @@ def save_profile(payload: dict, task: str, path: str | None = None) -> dict:
     """Validate and persist one exact model/normalized-task calibration profile.
 
     Only the prior entry for the same exact ``(model, task)`` pair is replaced.
-    The enriched profile is also written through legacy ``save`` so current
-    journal/UI readers immediately see it. Returns the stored profile.
+    Returns the stored profile.
     """
     profile = _profile(payload, task)
     profiles = _read_registry(path)
@@ -177,7 +144,6 @@ def save_profile(payload: dict, task: str, path: str | None = None) -> dict:
     # Stable registry order makes diffs and recovery inspection predictable.
     profiles.sort(key=lambda item: (item["model"], item["task"], item["saved_ts"]))
     _write_registry(profiles, path)
-    save(profile, path)
     return deepcopy(profile)
 
 
@@ -186,6 +152,12 @@ def list_profiles(path: str | None = None) -> list[dict]:
     profiles = _read_registry(path)
     profiles.sort(key=lambda item: (-float(item["saved_ts"]), item["model"], item["task"]))
     return profiles
+
+
+def load_latest_profile(path: str | None = None) -> dict | None:
+    """Newest valid profile across all models and tasks, or None."""
+    profiles = list_profiles(path)
+    return deepcopy(profiles[0]) if profiles else None
 
 
 def load_profile(model: str, task: str | None = None, path: str | None = None) -> dict | None:
@@ -205,22 +177,7 @@ def load_profile(model: str, task: str | None = None, path: str | None = None) -
     if exact_task is not None:
         matches = [profile for profile in matches if profile["task"] == exact_task]
     if not matches:
-        # Backward compatibility for deployments that only have the pre-registry
-        # active report.  An explicit task still has to match that report's task
-        # (or historical probe-set field) after the same normalization; there is
-        # never a cross-task fallback.
-        legacy = load(path)
-        legacy_model = legacy.get("model") if isinstance(legacy, dict) else None
-        if not isinstance(legacy_model, str) or legacy_model.strip() != exact_model:
-            return None
-        if exact_task is not None:
-            legacy_task = legacy.get("task") or legacy.get("set")
-            try:
-                if _normal_task(legacy_task) != exact_task:
-                    return None
-            except ValueError:
-                return None
-        return deepcopy(legacy)
+        return None
     newest = max(
         enumerate(matches),
         key=lambda indexed: (float(indexed[1]["saved_ts"]), indexed[0]),

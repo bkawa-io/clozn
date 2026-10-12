@@ -78,8 +78,12 @@ def inject_correction(messages: Sequence[Mapping[str, Any]], preset: str) -> lis
 
 
 def _original_budget(run: Mapping[str, Any]) -> int:
-    limits = ((run.get("context_receipt") or {}).get("limits") or {})
-    value = limits.get("requested_max_tokens")
+    receipt = run.get("context_receipt")
+    receipt = receipt if isinstance(receipt, Mapping) else {}
+    value = receipt.get("reserved_output_tokens")
+    if not isinstance(value, int):
+        meta = run.get("meta")
+        value = meta.get("max_tokens") if isinstance(meta, Mapping) else None
     return int(value) if isinstance(value, int) and 0 < value <= 16384 else 256
 
 

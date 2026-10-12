@@ -40,7 +40,7 @@ def test_build_run_can_accept_an_injected_live_probe_and_lab_steps():
     report = pipeline.build_run(
         "fixture.gguf", identity=_identity(), live=True,
         live_smoke=lambda _model: {"status": "passed", "run_id": "run_fixture",
-                                   "receipt_shape": "new", "elapsed_ms": 4.0},
+                                   "receipt_shape": "recorded", "elapsed_ms": 4.0},
         jlens={"status": "passed", "evidence": {"artifact": "jlens"}},
         batteries=[{"id": "basic", "status": "passed"}],
     )
@@ -127,7 +127,7 @@ def test_acceptance_fixture_requires_all_supplied_stages_to_pass():
     identity = _identity()
     core = pipeline.build_run(
         "fixture.gguf", identity=identity, live=True,
-        live_smoke=lambda _model: {"status": "passed", "run_id": "r", "receipt_shape": "new"},
+        live_smoke=lambda _model: {"status": "passed", "run_id": "r", "receipt_shape": "recorded"},
     )
     accepted = lab.acceptance_fixture(
         model="fixture.gguf", core=core,
@@ -149,7 +149,7 @@ def test_acceptance_fixture_rejects_cross_model_stage_receipts():
     identity = _identity()
     core = pipeline.build_run(
         "fixture.gguf", identity=identity, live=True,
-        live_smoke=lambda _model: {"status": "passed", "run_id": "r", "receipt_shape": "new"},
+        live_smoke=lambda _model: {"status": "passed", "run_id": "r", "receipt_shape": "recorded"},
     )
     result = lab.acceptance_fixture(
         model="fixture.gguf", core=core,
@@ -159,7 +159,6 @@ def test_acceptance_fixture_rejects_cross_model_stage_receipts():
     )
     assert result["claims"]["qualification_status"] == "failed"
     assert result["steps"][1]["evidence"]["identity_mismatch"] == ["d" * 64]
-
 
 
 

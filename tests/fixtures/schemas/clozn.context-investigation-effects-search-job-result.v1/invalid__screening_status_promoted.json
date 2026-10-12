@@ -1,0 +1,57 @@
+{
+  "schema_version": "clozn.context-investigation-effects-search-job-result.v1",
+  "run_id": "run_fixture",
+  "source_ids": ["seg_a"],
+  "refine_threshold_nats": 0.25,
+  "budget": {"max_coarse_arms": 1, "max_fine_arms": 0, "max_joint_arms": 0},
+  "budget_usage": {
+    "limits": {"max_coarse_arms": 1, "max_fine_arms": 0, "max_joint_arms": 0},
+    "new_slots_reserved_before_cancellation": {},
+    "cache_or_prior_hits": {},
+    "exhausted": {},
+    "control_outside_intervention_budget": true,
+    "actual_work": {
+      "control": {},
+      "interventions": {},
+      "model_measurements_executed_total": 1,
+      "model_measurements_reused_total": 0,
+      "model_measurements_skipped_total": 0,
+      "saved_model_measurements_total": 0,
+      "saved_work_breakdown": {}
+    }
+  },
+  "native_screening_requested": true,
+  "coverage": {},
+  "arms": [{
+    "phase": "fine",
+    "source_ids": ["seg_a"],
+    "selection_reason": "selected",
+    "execution_state": "completed",
+    "execution_disposition": "executed",
+    "evidence_status": "proof",
+    "delta_nats": 1.0,
+    "observation_id": "obs_a",
+    "proof_grade": "trusted",
+    "reused_from_phase": null,
+    "numerical_regime": "screening_unqualified",
+    "execution_identity": {"kind": "fixture-native-screen"},
+    "diagnostics": {}
+  }],
+  "experiments": {"coarse_experiment_id": "exp_a", "refinement_experiment_id": null},
+  "search_spec": {
+    "source_ids": ["seg_a"],
+    "coarse_groups": [["seg_a"]],
+    "coarse_group_size": 1,
+    "refine_threshold_nats": 0.25,
+    "drilldown_source_ids": [],
+    "joint_source_sets": [],
+    "budget": {"max_coarse_arms": 1, "max_fine_arms": 0, "max_joint_arms": 0},
+    "execution_policy": "native_screen_then_scalar_refine"
+  },
+  "reader_projection": {
+    "experiment_id": "exp_reader",
+    "status": "not_measured",
+    "control_observation_id": null,
+    "trusted_singleton_source_ids": []
+  }
+}

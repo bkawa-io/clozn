@@ -1,0 +1,83 @@
+{
+  "schema_version": "clozn.context-investigation-effects-search-job-result.v1",
+  "run_id": "run_fixture",
+  "source_ids": ["seg_a", "seg_b"],
+  "refine_threshold_nats": 0.25,
+  "budget": {
+    "max_coarse_arms": 1,
+    "max_fine_arms": 1,
+    "max_joint_arms": 0
+  },
+  "budget_usage": {
+    "limits": {
+      "max_coarse_arms": 1,
+      "max_fine_arms": 1,
+      "max_joint_arms": 0
+    },
+    "new_slots_reserved_before_cancellation": {"coarse": 1, "fine": 1, "joint": 0},
+    "cache_or_prior_hits": {"coarse": 0, "fine": 0, "joint": 0},
+    "exhausted": {"coarse": false, "fine": true, "joint": false},
+    "control_outside_intervention_budget": true,
+    "actual_work": {
+      "control": {"executed": 1, "reused": 0, "not_executed": 0},
+      "interventions": {
+        "executed_by_phase": {"coarse": 1, "fine": 1, "joint": 0},
+        "reused_by_phase": {"coarse": 0, "fine": 0, "joint": 0},
+        "skipped_by_phase": {"coarse": 0, "fine": 1, "joint": 0}
+      },
+      "model_measurements_executed_total": 3,
+      "model_measurements_reused_total": 0,
+      "model_measurements_skipped_total": 1,
+      "saved_model_measurements_total": 1,
+      "saved_work_breakdown": {
+        "trusted_cache_or_prior_reuse": 0,
+        "scheduler_or_cancellation_skip": 1
+      }
+    }
+  },
+  "native_screening_requested": false,
+  "coverage": {"source_count": 2},
+  "arms": [
+    {
+      "phase": "coarse",
+      "source_ids": ["seg_a", "seg_b"],
+      "selection_reason": "coarse_candidate",
+      "execution_state": "completed",
+      "execution_disposition": "executed",
+      "evidence_status": "trusted",
+      "delta_nats": 1.5,
+      "observation_id": "obs_fixture",
+      "proof_grade": "trusted",
+      "reused_from_phase": null,
+      "numerical_regime": "scalar_reference",
+      "execution_identity": {
+        "kind": "clozn.score-tokens-scalar-reference.v1"
+      },
+      "diagnostics": {}
+    }
+  ],
+  "experiments": {
+    "coarse_experiment_id": "exp_coarse",
+    "refinement_experiment_id": "exp_refine"
+  },
+  "search_spec": {
+    "source_ids": ["seg_a", "seg_b"],
+    "coarse_groups": [["seg_a", "seg_b"]],
+    "coarse_group_size": 2,
+    "refine_threshold_nats": 0.25,
+    "drilldown_source_ids": ["seg_a"],
+    "joint_source_sets": [],
+    "budget": {
+      "max_coarse_arms": 1,
+      "max_fine_arms": 1,
+      "max_joint_arms": 0
+    },
+    "execution_policy": "trusted_scalar_only"
+  },
+  "reader_projection": {
+    "experiment_id": "exp_reader",
+    "status": "partial",
+    "control_observation_id": "obs_control",
+    "trusted_singleton_source_ids": ["seg_a"]
+  }
+}

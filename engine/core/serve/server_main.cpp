@@ -340,6 +340,9 @@ int main(int argc, char** argv) {
     ctx.model_sha256 = model_sha256;
     ctx.tokenizer_sha256 = tokenizer_sha256;
     CheckpointStore<EngineCheckpoint> checkpoints(worker_generation_id, kMaxCheckpoints);
+    ctx.find_checkpoint = [&checkpoints](const std::string& checkpoint_id) {
+        return checkpoints.find_copy(checkpoint_id);
+    };
 
     // Existing in-process clients may continue sending only checkpoint_id because new ids already
     // carry the worker generation. A caller that persisted the compound reference can additionally
@@ -441,6 +444,8 @@ int main(int argc, char** argv) {
                                           // false would have meant "knows, and declines".
             {"score_arms", true},         // /score arms: batched multi-arm scoring -- APPROXIMATE
                                           // regime (screening only; response carries the label)
+            {"score_variants", ar_mode},  // exact-token related prompts: trie prefix reuse +
+                                           // multi-sequence continuation scoring; screening only
             {"reference_match_arms", ar_mode}, // private greedy native-many exact-reference probe;
                                                 // experimental until real-GGUF parity is qualified
             {"persistent_parent_session", ar_mode}, // private persistent exact-reference session;
@@ -469,11 +474,12 @@ int main(int argc, char** argv) {
         // capability flags, so older supervisors can ignore them while newer exact-replay paths fail
         // closed when an older worker does not provide them.
         json build = engine_build_info();
+        const std::string backend = build.value("backend", std::string("cpu"));
         const auto memory = pool.memory_breakdown();
         json h{{"status", "ok"},
                {"engine_version", build.value("engine_version", std::string())},
                {"build_id", build.value("build_id", std::string())},
-               {"backend", build.value("backend", std::string())},
+               {"backend", backend},
                {"llama_cpp_commit", build.value("llama_cpp_commit", std::string())},
                {"protocol_version", PROTOCOL_VERSION},        // worker <-> supervisor wire contract
                {"worker_generation_id", worker_generation_id},  // opaque identity for this process
@@ -491,7 +497,7 @@ int main(int argc, char** argv) {
                {"n_ubatch", pool.n_ubatch()},                  // accelerator execution microbatch
                {"memory", memory},                              // measured llama.cpp allocation breakdown
                {"gpu_layers", gpu_layers},                    // layers offloaded to the GPU (0 => CPU-resident)
-               {"device", gpu_layers > 0 ? "cuda" : "cpu"}};  // CUDA build; device follows the offload setting
+               {"device", gpu_layers > 0 ? backend : "cpu"}}; // report the compiled accelerator, not CUDA generically
         // The ATTACHED adapter, present only when one actually is -- omitted, never null-padded, so a
         // reader cannot mistake "no adapter" for "adapter whose fields we failed to read". The meta map
         // is whatever the adapter GGUF itself declares (rank, alpha, target modules), read back off the
@@ -1336,6 +1342,8 @@ int main(int argc, char** argv) {
     };
 
     register_whitebox_routes(svr, ctx);
+
+    register_score_variants_routes(svr, ctx);
 
     register_jlens_routes(svr, ctx);
 

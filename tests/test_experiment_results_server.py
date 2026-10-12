@@ -1,12 +1,10 @@
 """Focused HTTP wiring tests for GET /experiment-results[...] (clozn/server/routes/experiment_results.py).
 
-Model-free: drives the REAL clozn_server do_GET handler (the object.__new__(H) no-socket trick used by
-test_run_diagnosis_server.py / test_experiment_server.py / test_receipts_server.py) against a directory
+Model-free: drives the real server GET handler against a directory
 of hand-built clozn.experiment.result.v0 fixtures on disk. clozn.experiments.suite's own validation is
 exhaustively covered elsewhere (test_experiment_suite_cmd.py, clozn/experiments/test_stats.py); this file
-only proves the route wiring: list/detail/cells shapes, pagination, thin-vs-full cell payloads,
-a broken file staying visible rather than vanishing, and that the existing GET /experiments/types drawer
-catalog (clozn/server/routes/receipts.py) is untouched by the new /experiment-results namespace.
+only proves the route wiring: list/detail/cells shapes, pagination, thin-vs-full cell payloads, and
+a broken file staying visible rather than vanishing.
 """
 from __future__ import annotations
 
@@ -69,6 +67,7 @@ def _write_result(directory, *, experiment_id, name, created_at, extra_error_cel
     result = suite.validate_result({
         "schema_version": suite.RESULT_SCHEMA, "experiment_id": experiment_id, "name": name,
         "created_at": created_at, "manifest_sha256": suite._manifest_digest(manifest),
+        "suite_fingerprint": suite.suite_fingerprint(manifest, seeds=manifest["seeds"]),
         "manifest": manifest, "seeds": manifest["seeds"], "cells": cells,
         "summary": suite._summarize(cells, "base", ["base", "cand"]),
     })
@@ -215,4 +214,3 @@ def test_artifact_like_path_is_an_ordinary_route_miss(iso):
 
 
 # --------------------------------------------------------------------------- the existing drawer catalog is untouched
-

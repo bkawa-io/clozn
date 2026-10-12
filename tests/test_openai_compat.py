@@ -87,14 +87,15 @@ def test_chat_rejects_unknown_field_instead_of_silently_dropping_it():
     assert caught.value.param == "magic"
 
 
-def test_chat_accepts_explicit_unique_source_metadata_without_putting_it_in_messages():
+def test_chat_accepts_exact_source_metadata_without_putting_it_in_messages():
     out = normalize_chat_request({
         "messages": [
             {"role": "system", "content": "Policy"},
             {"role": "user", "content": "Document text"},
         ],
         "clozn_sources": [
-            {"message_index": 1, "source_id": "customer-handbook", "label": "Customer handbook"},
+            {"message_index": 1, "source_id": "customer-handbook", "label": "Customer handbook",
+             "unicode_range": [0, 13]},
         ],
     })
     assert out["messages"][1] == {"role": "user", "content": "Document text"}
@@ -102,7 +103,19 @@ def test_chat_accepts_explicit_unique_source_metadata_without_putting_it_in_mess
         "message_index": 1,
         "source_id": "customer-handbook",
         "label": "Customer handbook",
+        "unicode_range": [0, 13],
+        "byte_range": [0, 13],
+        "provenance_kind": "message",
     }]
+
+
+def test_chat_rejects_source_without_exact_range():
+    with pytest.raises(CompatibilityError) as caught:
+        normalize_chat_request({
+            "messages": [{"role": "user", "content": "Document text"}],
+            "clozn_sources": [{"message_index": 0, "source_id": "document"}],
+        })
+    assert caught.value.param == "clozn_sources[0].unicode_range"
 
 
 def test_chat_accepts_multiple_exact_unicode_sources_on_one_message_and_derives_utf8_ranges():
@@ -178,12 +191,13 @@ def test_chat_rejects_cyclic_source_hierarchies(sources):
 @pytest.mark.parametrize("sources,param", [
     (
         [
-            {"message_index": 0, "source_id": "duplicate"},
-            {"message_index": 1, "source_id": "duplicate"},
+            {"message_index": 0, "source_id": "duplicate", "unicode_range": [0, 6]},
+            {"message_index": 1, "source_id": "duplicate", "unicode_range": [0, 8]},
         ],
         "clozn_sources[1].source_id",
     ),
-    ([{"message_index": 4, "source_id": "missing"}], "clozn_sources[0].message_index"),
+    ([{"message_index": 4, "source_id": "missing", "unicode_range": [0, 1]}],
+     "clozn_sources[0].message_index"),
 ])
 def test_chat_rejects_ambiguous_source_metadata(sources, param):
     with pytest.raises(CompatibilityError) as caught:

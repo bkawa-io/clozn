@@ -103,6 +103,7 @@ def _run_live_smoke(model: str, *, timeout: float = 180.0) -> dict[str, Any]:
         port = _free_port()
         stack = spawn_runtime(RuntimeConfig(
             model=model, public_port=port, flags={"ctx": 1024}, prefer_gpu=False,
+            public_model_id="clozn-qualification",
             gateway_boot_timeout=min(timeout, 60.0), worker_boot_timeout=timeout,
         ))
         body = json.dumps({
@@ -125,7 +126,7 @@ def _run_live_smoke(model: str, *, timeout: float = 180.0) -> dict[str, Any]:
         ) as response:
             receipt = json.loads(response.read().decode("utf-8"))
         shape = receipt.get("shape")
-        if shape not in {"new", "legacy"}:
+        if shape != "recorded":
             raise ValueError("core smoke did not produce a readable Context Receipt")
         return {
             "status": "passed",

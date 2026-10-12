@@ -25,6 +25,7 @@ from clozn.experiments.state import ExecutionState
 import clozn.runs.store as runlog
 from clozn.recipes.removability import can_remove, removability_message
 from clozn.runs.context_receipt import build_context_receipt
+from clozn import schemas
 
 
 CONTRACT = {
@@ -311,6 +312,33 @@ def test_materialize_arm_persists_one_generic_child_and_returns_canonical_diff(t
     }
     assert "minimal_context" not in str(child["changes_applied"])
     assert outcome["comparison"]["first_divergence_view"]["state"] == "available"
+    schemas.validate(outcome, "clozn.experiment-materialization.v1")
+
+
+def test_materialize_arm_replays_with_the_recorded_generation_budget():
+    run, source_ids = _run()
+    state = ExecutionState.from_run(run)
+    experiment = Experiment(
+        base=state, evaluator=ExactReferenceMatch(),
+        arms=[DeleteSource(ContextSelection([source_ids[1]]))],
+    )
+    substrate = GenerationSubstrate()
+    result = run_experiment(experiment, DeleteSourceExactReferenceAdapter(substrate, run=run))
+    calls = []
+
+    def replay(parent, changes, active_substrate, **kwargs):
+        calls.append((parent, changes, active_substrate, kwargs))
+        return {"id": "run_child", "response": "changed answer"}
+
+    outcome = materialize_arm(
+        run, result, result.arms[0].arm_id,
+        substrate=substrate, replay_fn=replay,
+    )
+
+    assert outcome["state"] == "completed"
+    assert len(calls) == 1
+    assert calls[0][3]["max_new"] == CONTRACT["max_new"]
+    assert calls[0][3]["sampling_override"] is False
 
 
 def test_failed_materialization_does_not_create_a_child(tmp_path, monkeypatch):
@@ -331,6 +359,7 @@ def test_failed_materialization_does_not_create_a_child(tmp_path, monkeypatch):
     assert outcome["state"] == "failed"
     assert "child_run_id" not in outcome
     assert runlog.list_runs(20) == []
+    schemas.validate(outcome, "clozn.experiment-materialization.v1")
 
 def test_removability_recipe_is_thin_and_uses_preservation_language():
     run, source_ids = _run()

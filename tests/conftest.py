@@ -58,6 +58,84 @@ def _never_write_the_real_user_data():
         )
 
 
+@pytest.fixture(autouse=True)
+def _required_test_model_router():
+    """Route tests use the same mandatory-router shape as the product gateway.
+
+    Individual routing tests replace this double with a real router. The double resolves the substrate
+    and engine lazily because many route fixtures install their fakes after pytest fixtures have started.
+    """
+    from clozn.server import app
+    from clozn.server.model_routing import ModelSelection
+
+    if app.MODEL_ROUTER is not None:
+        yield
+        return
+
+    class TestModelRouter:
+        gate = None
+        worker_call_tracker = None
+        default_model_id = "test-model"
+
+        @staticmethod
+        def _pair():
+            sub = app.SUB
+            engine = getattr(sub, "engine", None) if sub is not None else None
+            return sub, engine if engine is not None else app.ENGINE
+
+        @staticmethod
+        def _model_id(requested=None):
+            return str(requested or app.PUBLIC_MODEL_ID or app.SUBNAME or "test-model")
+
+        def select(self, requested, **_kwargs):
+            sub, engine = self._pair()
+            return ModelSelection(self._model_id(requested), sub, engine, None)
+
+        def select_control_model(self, requested, **_kwargs):
+            sub, engine = self._pair()
+            return ModelSelection(self._model_id(requested), sub, engine, None)
+
+        def control_pair(self):
+            return self._pair()
+
+        def model_ids(self):
+            return [self._model_id()]
+
+        def catalog(self):
+            sub, _engine = self._pair()
+            digest = getattr(sub, "model_sha256", None) if sub is not None else None
+            return [{
+                "model_id": self._model_id(),
+                "artifact_sha256": str(digest or ("0" * 64)),
+                "state": "ready" if sub is not None else "unloaded",
+            }]
+
+        def runtime_status(self):
+            sub, engine = self._pair()
+            ready = sub is not None and engine is not None
+            model_id = self._model_id()
+            return {
+                "default_model_id": model_id,
+                "preload_model_ids": [model_id],
+                "max_loaded_models": 1,
+                "configured_count": 1,
+                "resident_count": 1 if ready else 0,
+                "models": [{
+                    "model_id": model_id,
+                    "state": "ready" if ready else "unloaded",
+                    "default": True,
+                }],
+            }
+
+    router = TestModelRouter()
+    app.MODEL_ROUTER = router
+    try:
+        yield
+    finally:
+        if app.MODEL_ROUTER is router:
+            app.MODEL_ROUTER = None
+
+
 def pytest_collection_modifyitems(config, items):
     markexpr = config.getoption("markexpr", "") or ""
     if "model" in markexpr:            # explicit opt-in (`-m model`) or exclusion (`-m "not model"`):

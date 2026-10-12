@@ -48,6 +48,13 @@ def _run():
         "response": "zero one two",
         "identity": deepcopy(RUNTIME),
         "meta": {"n_ctx": 4096, "device": "cpu"},
+        "generation_contract": {
+            "decode_mode": "greedy",
+            "sampling": None,
+            "max_new": 3,
+            "stop": [],
+            "expected_termination": {"reason": "stop", "reason_raw": "stop"},
+        },
         "trace": {
             "tokens": ["zero", " one", " two"],
             "token_ids": [10, 11, 12],
@@ -289,6 +296,7 @@ def test_sampled_capabilities_and_recipe_reject_both_operations_without_model_ca
 
 def test_incomplete_sampled_metadata_does_not_fall_back_to_greedy():
     run = _run()
+    run.pop("generation_contract")
     run["meta"]["decode"] = {"mode": "sample"}
     resolved = resolve_state(
         StateRef.before_answer_token(run, 1), run=run, policy="reconstructed_only",
@@ -488,6 +496,10 @@ def test_time_travel_v1_routes_continue_and_materialize_without_regeneration(tmp
         messages=[{"role": "user", "content": "question"}],
         assembled_messages=[{"role": "user", "content": "question"}],
         final_prompt="<prompt>", response="zero one two", identity=deepcopy(RUNTIME),
+        meta={"generation_contract": {
+            "decode_mode": "greedy", "sampling": None, "max_new": 3, "stop": [],
+            "expected_termination": {"reason": "stop", "reason_raw": "stop"},
+        }},
         trace={
             "tokens": ["zero", " one", " two"], "token_ids": [10, 11, 12],
             "steps": [

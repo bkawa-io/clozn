@@ -1,13 +1,13 @@
-# llama-server migration compatibility
+# llama-server-style launch flags
 
-Clozn targets common single-model GGUF text-chat migrations. It is not a full
+Clozn accepts a small, explicit set of familiar single-model GGUF serving flags. It is not a full
 `llama-server` replacement and does not accept unknown upstream flags.
 
 | llama-server argument | Clozn status | Clozn semantics |
 |---|---|---|
-| `-m`, `--model` | supported | Alias for the existing single-model positional argument. |
+| `-m`, `--model` | supported | Alias for the single-model positional argument. |
 | `-c`, `--ctx-size` | supported | Same worker context setting as `--ctx`. |
-| `-ngl`, `--gpu-layers`, `--n-gpu-layers` | supported subset | Non-negative integer layer count; omitted preserves Clozn's existing default. |
+| `-ngl`, `--gpu-layers`, `--n-gpu-layers` | supported subset | Non-negative integer layer count; omitted uses Clozn's default. |
 | `--host` | supported | Binds the public Clozn gateway only. The private worker remains loopback-only. |
 | `--port` | supported | Public gateway port. |
 | `-a`, `--alias` | supported subset | One public model presentation name in single-model mode. It never replaces loaded model identity. |

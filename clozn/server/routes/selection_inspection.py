@@ -45,7 +45,7 @@ def try_post(h, p, body):
     except (TypeError, ValueError, UnicodeError, schemas.ValidationError):
         return _error(h, 500, _CONTRACT_ERROR["code"], _CONTRACT_ERROR["error"])
     except Exception:
-        # Do not expose arbitrary legacy-artifact exception text; source and prompt data may be present
+        # Do not expose arbitrary artifact exception text; source and prompt data may be present
         # in malformed records even though the normal document is metadata-only.
         return _error(h, 500, _CONTRACT_ERROR["code"], _CONTRACT_ERROR["error"])
 

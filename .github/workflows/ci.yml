@@ -9,9 +9,8 @@ name: CI
 #             this checkout (no repo-path hacks). See scripts/release/clean_room_install_test.py.
 # The seam (engine/ never links a model backend) is what makes the cpp lane fast and dependency-free.
 #
-# NOTE: `inspector/` is post-reorg vestigial -- it has zero tracked files at HEAD (its live code
-# moved to `studio/`; its legacy Python package moved out to the separate clozn-research repo), so
-# there is nothing left here to install or test. Its old CI steps were dropped, not fixed.
+# Studio has one source package under `studio-frontend/`; research-only packages are outside this
+# repository and are not part of the product CI matrix.
 
 on:
   push:
@@ -19,6 +18,35 @@ on:
   pull_request:
 
 jobs:
+  studio:
+    name: Studio — checks and committed bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: studio-frontend/pnpm-lock.yaml
+      - name: Install frozen Studio dependencies
+        working-directory: studio-frontend
+        run: pnpm install --frozen-lockfile
+      - name: Check Studio source
+        working-directory: studio-frontend
+        run: pnpm check
+      - name: Rebuild the packaged Studio
+        working-directory: studio-frontend
+        run: pnpm build
+      - name: Require the committed bundle to match source
+        run: |
+          if [ -n "$(git status --porcelain -- studio/app)" ]; then
+            git status --short -- studio/app
+            exit 1
+          fi
+
   cpp:
     name: engine — backend-free ctest
     runs-on: ubuntu-latest

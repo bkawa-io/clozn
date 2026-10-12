@@ -1,4 +1,4 @@
-"""tests/test_calibration_wizard_e2e.py -- Phase 3.6 (docs/PRODUCT_ROADMAP.md §6 item 6): proves the
+"""End-to-end calibration wizard tests: proves the
 guided calibration wizard's output actually drives the live ask/abstain metadata, not just that each piece
 works in isolation. Every other test in this repo either (a) exercises `clozn eval --wizard` with
 `eval_store.save_profile` MOCKED (tests/test_eval_cmd.py), or (b) exercises the live route with a
@@ -130,7 +130,7 @@ def test_wizard_fit_and_save_then_a_live_reply_carries_the_same_thresholds(tmp_p
     # --- isolate every store this touches -- never the real ~/.clozn ---
     monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(clozn_settings, "SETTINGS_PATH", str(tmp_path / "settings.json"))
-    monkeypatch.setattr(eval_store, "_PATH", str(tmp_path / "eval_report.json"))
+    monkeypatch.setattr(eval_store, "_PATH", str(tmp_path / "calibration_profiles.json"))
 
     # --- the ONE necessarily-faked piece: the live probe run itself needs a real gateway. Everything
     # downstream of `pairs` (the fit, the save, the live read) is real production code. ---
@@ -149,7 +149,7 @@ def test_wizard_fit_and_save_then_a_live_reply_carries_the_same_thresholds(tmp_p
     assert called["which"] == "arith" and called["score"] == "min"          # kept the CLI defaults
 
     # The wizard's own fit, read back from the real profile it just wrote to disk.
-    saved_profile = eval_store.load_profile(MODEL, NORMALIZED_TASK, str(tmp_path / "eval_report.json"))
+    saved_profile = eval_store.load_profile(MODEL, NORMALIZED_TASK, str(tmp_path / "calibration_profiles.json"))
     assert saved_profile is not None and saved_profile["model"] == MODEL and saved_profile["task"] == NORMALIZED_TASK
 
     # An independent oracle call to the exact same policy fit, so the live assertions below are never
@@ -187,10 +187,10 @@ def test_wizard_fit_and_save_then_a_live_reply_carries_the_same_thresholds(tmp_p
 
 
 def test_wizard_prints_the_token_probability_and_hard_tail_labels(tmp_path, monkeypatch, capsys):
-    """The CRITICAL honesty requirement (docs/RESEARCH_ROADMAP.md Killed: the deployed signal is
+    """The critical honesty requirement: the deployed signal is
     bit-identical to black-box logprobs): the wizard's own printed scope must label the signal as
     token-probability based and print the hard-tail band limitation -- never imply a white-box advantage."""
-    monkeypatch.setattr(eval_store, "_PATH", str(tmp_path / "eval_report.json"))
+    monkeypatch.setattr(eval_store, "_PATH", str(tmp_path / "calibration_profiles.json"))
     monkeypatch.setattr(bench, "bench", lambda url, which, score: _fake_out())
     monkeypatch.setattr(bench, "_print", lambda *_args: None)
     answers = iter([TASK_ANSWER, "", "", "0.1", "no"])

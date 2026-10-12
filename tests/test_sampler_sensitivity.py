@@ -7,7 +7,7 @@ import pytest
 
 from clozn import schemas
 from clozn.experiments.persistence import ObservationStore
-from clozn.replay.controlled import _sampling_config, recorded_sampling_config
+from clozn.replay.controlled import recorded_sampling_config
 from clozn.replay.sampler_sensitivity import (
     SamplerSensitivityInputError,
     execute_sampler_sensitivity,
@@ -36,7 +36,6 @@ def parent(*, sampled=True):
 
 def test_public_sampler_reader_is_the_private_reader_and_handles_alias():
     run = parent()
-    assert recorded_sampling_config(run) == _sampling_config(run)
     assert recorded_sampling_config(run)["repeat_penalty"] == 1.0
     run["meta"]["decode"].pop("repeat_penalty")
     run["meta"]["repetition_penalty"] = 1.1

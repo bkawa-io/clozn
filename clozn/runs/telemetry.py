@@ -221,13 +221,15 @@ def _model_name(run: Mapping) -> str | None:
 
 def _token_counts(run: Mapping) -> tuple[int | None, int | None]:
     meta = _mapping(run.get("meta"))
-    limits = _mapping(_mapping(run.get("context_receipt")).get("limits"))
+    receipt = _mapping(run.get("context_receipt"))
+    rendered = _mapping(receipt.get("rendered"))
+    termination = _mapping(receipt.get("termination"))
     trace = _mapping(run.get("trace"))
     tokens = trace.get("tokens")
     traced = len(tokens) if isinstance(tokens, list) else None
-    prompt = _first_integer(limits.get("prompt_tokens"), meta.get("prompt_tokens"))
+    prompt = _first_integer(rendered.get("tokens"), meta.get("prompt_tokens"))
     completion = _first_integer(
-        limits.get("generated_tokens"), meta.get("completion_tokens"),
+        termination.get("generated_tokens"), meta.get("completion_tokens"),
         meta.get("generation_tokens"), traced,
     )
     return prompt, completion

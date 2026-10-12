@@ -5,20 +5,9 @@ separate from result storage: preview is pure; apply writes only an explicitly n
 artifact under ~/.clozn/regression-suites after expected-hash and redaction-review checks. CI preview
 returns copyable text and never writes a repository workflow.
 
-This is the backend half of notes/agent_roadmap/04-studio-experiments-workspace.md ("Studio reads and
-composes existing experiment/run artifacts" -- no new experiment engine or scorer lives here). Three
-roadmap features read this family: Studio's Experiments workspace, the GitHub Action model gate's verify
-mode, and automatic regression triage. All three should validate what they read with
+Studio's Experiments workspace, the model gate, and regression triage read this family. All three
+validate what they read with
 clozn.schemas.validate(doc, "clozn.experiment.result.v0") rather than trusting shape by convention.
-
-WHY /experiment-results, NOT /experiments/<id>
-------------------------------------------------
-GET /experiments/types already exists (clozn/server/routes/receipts.py) as the capability catalog for
-the UNRELATED single-run "change one thing" drawer primitive (clozn.experiments.experiment -- swap a
-concept, edit a turn, re-roll, ...). Nesting case x variant x seed suite results under /experiments/<id>
-would share a path prefix with that catalog for no reason beyond both modules containing the English
-word "experiment". A distinct top-level segment avoids the collision outright instead of relying on a
-real experiment_id never happening to equal "types".
 
 TWO SIZES OF RESPONSE, ON PURPOSE
 ------------------------------------------------
@@ -33,7 +22,7 @@ without downloading complete receipts... fetch a receipt only when the cell is o
     GET /experiment-results/<id>/cells          FULL matching cells (response/receipts/run included),
                                                  filtered by ?suite=&case=&variant=&seed= so a client
                                                  fetches exactly the cell it opened
-NO CACHING (v1, DELIBERATE)
+NO CACHING
 ------------------------------------------------
 Every request under this family re-reads and re-validates every *.json file in the results directory
 (clozn.experiments.suite.load_result, which runs the full case x variant x seed completeness check, not

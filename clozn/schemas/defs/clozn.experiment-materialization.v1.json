@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.experiment-materialization.v1",
+  "title": "Explicit experiment observation materialization",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "state",
+        "parent_run_id",
+        "child_run_id",
+        "experiment_id",
+        "arm_id",
+        "observation_id",
+        "realized_fidelity",
+        "trace_state",
+        "comparison",
+        "compare_path"
+      ],
+      "properties": {
+        "schema_version": {"const": "clozn.experiment-materialization.v1"},
+        "state": {"const": "completed"},
+        "parent_run_id": {"type": "string", "minLength": 1},
+        "child_run_id": {"type": "string", "minLength": 1},
+        "experiment_id": {"type": "string", "minLength": 1},
+        "arm_id": {"type": "string", "minLength": 1},
+        "observation_id": {"type": "string", "minLength": 1},
+        "realized_fidelity": {"const": "direct_context_generation"},
+        "trace_state": {"enum": ["available", "unavailable"]},
+        "comparison": {"type": ["object", "null"]},
+        "compare_path": {"type": "string", "pattern": "^#/compare/[^/]+/[^/]+$"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "state",
+        "parent_run_id",
+        "experiment_id",
+        "arm_id",
+        "observation_id",
+        "reason"
+      ],
+      "properties": {
+        "schema_version": {"const": "clozn.experiment-materialization.v1"},
+        "state": {"const": "failed"},
+        "parent_run_id": {"type": "string", "minLength": 1},
+        "experiment_id": {"type": "string", "minLength": 1},
+        "arm_id": {"type": "string", "minLength": 1},
+        "observation_id": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "state",
+        "parent_run_id",
+        "child_run_id",
+        "experiment_id",
+        "arm_id",
+        "intervention",
+        "comparison",
+        "compare_path"
+      ],
+      "properties": {
+        "schema_version": {"const": "clozn.experiment-materialization.v1"},
+        "state": {"const": "completed"},
+        "parent_run_id": {"type": "string", "minLength": 1},
+        "child_run_id": {"type": "string", "minLength": 1},
+        "experiment_id": {"type": "string", "minLength": 1},
+        "arm_id": {"type": "string", "minLength": 1},
+        "intervention": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "source_ids"],
+          "properties": {
+            "kind": {"const": "delete_source"},
+            "source_ids": {
+              "type": "array",
+              "minItems": 1,
+              "items": {"type": "string", "minLength": 1}
+            }
+          }
+        },
+        "comparison": {"type": ["object", "null"]},
+        "compare_path": {"type": "string", "pattern": "^#/compare/[^/]+/[^/]+$"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "state",
+        "parent_run_id",
+        "experiment_id",
+        "arm_id",
+        "intervention",
+        "reason"
+      ],
+      "properties": {
+        "schema_version": {"const": "clozn.experiment-materialization.v1"},
+        "state": {"const": "failed"},
+        "parent_run_id": {"type": "string", "minLength": 1},
+        "experiment_id": {"type": "string", "minLength": 1},
+        "arm_id": {"type": "string", "minLength": 1},
+        "intervention": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "source_ids"],
+          "properties": {
+            "kind": {"const": "delete_source"},
+            "source_ids": {
+              "type": "array",
+              "minItems": 1,
+              "items": {"type": "string", "minLength": 1}
+            }
+          }
+        },
+        "reason": {"type": "string", "minLength": 1}
+      }
+    }
+  ]
+}

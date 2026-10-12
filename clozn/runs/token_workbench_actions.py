@@ -42,10 +42,9 @@ fingerprints, the capture grid, top-k request, and tensor-retention policy.
 
 EXECUTION AND FAILURE BOUNDARY
 ------------------------------
-The managed-router path now executes a compatible comparison through one model loader at a time. The
-pair gate remains pure and authoritative, while the job worker owns exact run evidence, model selection,
-progress, persistence, and typed engine failures. A gateway without a managed registry still returns the
-legacy `cross_model_execution_not_wired` refusal; it does not fabricate a successful artifact.
+The model router executes a compatible comparison through one model loader at a time. The pair gate
+remains pure and authoritative, while the job worker owns exact run evidence, model selection, progress,
+persistence, and typed engine failures.
 """
 from __future__ import annotations
 
@@ -91,9 +90,9 @@ def _run_fingerprint(run: Mapping[str, Any]) -> str:
 def _mechanistic_run_fingerprint(run: Mapping[str, Any]) -> str:
     """Include the full recorded runtime identity for mechanistic evidence caching.
 
-    The general workbench fingerprint intentionally stays small for legacy action caches. A
-    cross-model capture also depends on template, context, backend, adapter, and engine identity, so
-    this action gets a stricter fingerprint without changing cache identities for the other actions.
+    The general workbench fingerprint contains the facts shared by every action. A cross-model capture
+    also depends on template, context, backend, adapter, and engine identity, so this action adds those
+    facts to its cache identity.
     """
     identity = run.get("identity") if isinstance(run.get("identity"), Mapping) else {}
     return _sha({

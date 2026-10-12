@@ -127,21 +127,12 @@ def _context_receipt(run) -> dict:
 
 def _delivered_messages(run):
     delivered = _context_receipt(run).get("delivered")
-    if isinstance(delivered, list):
-        # v1 metadata-only segments.  Full content remains on run.messages,
-        # but the stable IDs/hashes/order are the stronger comparison input.
-        return delivered
-    messages = delivered.get("messages") if isinstance(delivered, dict) else None
-    return messages if isinstance(messages, list) else None
+    return delivered if isinstance(delivered, list) else None
 
 
 def _assembled_messages(run):
     assembled = _context_receipt(run).get("assembled")
-    if isinstance(assembled, list):
-        return assembled
-    survived = _context_receipt(run).get("survived")
-    messages = survived.get("assembled_messages") if isinstance(survived, dict) else None
-    return messages if isinstance(messages, list) else None
+    return assembled if isinstance(assembled, list) else None
 
 
 def _final_prompt(run):
@@ -149,8 +140,7 @@ def _final_prompt(run):
     sha256 = rendered.get("sha256") if isinstance(rendered, dict) else None
     if isinstance(sha256, str) and len(sha256) == 64:
         return {"stored_sha256": sha256}
-    survived = _context_receipt(run).get("survived")
-    prompt = survived.get("final_prompt") if isinstance(survived, dict) else None
+    prompt = run.get("final_prompt") if isinstance(run, dict) else None
     return prompt if isinstance(prompt, str) else None
 
 

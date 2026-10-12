@@ -250,16 +250,32 @@ def _final_user_index(messages: Sequence[Mapping[str, Any]]) -> "int | None":
     return None
 
 
-def _address_for_message_index(document: "dict | None", index: int, message: Mapping[str, Any]) -> "str | None":
+def _address_for_message_index(
+    document: "dict | None",
+    index: int,
+    message: Mapping[str, Any],
+    receipt: Mapping[str, Any],
+) -> "str | None":
     """The `delivered_message`/`attached_source_span` address_id for `messages[index]`, matched against
     the shared span document's own PUBLIC `native_ref` fields only -- never a second computation of the
     address_id itself. Matches by `client_source_id` first (an explicit, stable client identity), else by
-    the same `f"message-{index}"` native id `text_span_addresses` assigns positionally."""
+    the segment id the Context Receipt binds to this message position."""
     if not isinstance(document, dict):
         return None
     client_source_id = message.get("source_id")
     client_source_id = client_source_id if isinstance(client_source_id, str) and client_source_id else None
-    fallback_id = f"message-{index}"
+    segment_id = None
+    delivered = receipt.get("delivered")
+    if isinstance(delivered, list):
+        for fallback_index, segment in enumerate(delivered):
+            if not isinstance(segment, Mapping):
+                continue
+            original_order = segment.get("original_order")
+            position = original_order if isinstance(original_order, int) and not isinstance(
+                original_order, bool) and original_order >= 0 else fallback_index
+            if position == index and isinstance(segment.get("segment_id"), str):
+                segment_id = segment["segment_id"]
+                break
     for address in document.get("addresses") or []:
         if not isinstance(address, dict) or address.get("kind") not in (
                 "delivered_message", "attached_source_span"):
@@ -267,7 +283,7 @@ def _address_for_message_index(document: "dict | None", index: int, message: Map
         native_ref = _object(address.get("native_ref"))
         if client_source_id and native_ref.get("client_source_id") == client_source_id:
             return address.get("address_id")
-        if not client_source_id and native_ref.get("id") == fallback_id and not native_ref.get(
+        if not client_source_id and segment_id and native_ref.get("segment_id") == segment_id and not native_ref.get(
                 "client_source_id"):
             return address.get("address_id")
     return None
@@ -403,7 +419,12 @@ class _Context:
     def address_for_message(self, index: int) -> "str | None":
         if not (0 <= index < len(self.messages)):
             return None
-        return _address_for_message_index(self.span_document, index, self.messages[index])
+        return _address_for_message_index(
+            self.span_document,
+            index,
+            self.messages[index],
+            self.context_receipt,
+        )
 
 
 # =========================================================================================== R01 - R12
@@ -477,8 +498,8 @@ def _rule_context_budget_pressure(ctx: "_Context") -> dict:
                                        "reduce prompt size or use a model/config with a larger context window")],
             limitations=["termination.reason reflects the engine's own report of why generation stopped; "
                         "it does not measure how much headroom would have been enough"])
-    limits = _object(receipt.get("limits"))
-    prompt_tokens, context_window = _int(limits.get("prompt_tokens")), _int(limits.get("context_window_tokens"))
+    prompt_tokens = _int(_object(receipt.get("rendered")).get("tokens"))
+    context_window = _int(receipt.get("context_window_tokens"))
     if prompt_tokens is None or not context_window:
         return _unavailable(rule_id, rule_name,
                             "prompt_tokens and context_window_tokens were not both recorded, so context-budget pressure is unavailable")
@@ -488,8 +509,8 @@ def _rule_context_budget_pressure(ctx: "_Context") -> dict:
             rule_id, rule_name, status="finding", severity="medium", confidence="derived",
             summary=f"the prompt used {prompt_tokens} of {context_window} context tokens ({ratio * 100:.1f}%), "
                    f"at or above the {BUDGET_PRESSURE_RATIO * 100:.0f}% pressure heuristic.",
-            evidence=[_field_evidence("context_receipt.limits.prompt_tokens", prompt_tokens),
-                     _field_evidence("context_receipt.limits.context_window_tokens", context_window)],
+            evidence=[_field_evidence("context_receipt.rendered.tokens", prompt_tokens),
+                     _field_evidence("context_receipt.context_window_tokens", context_window)],
             suggested_actions=[_action("increase_context_budget",
                                        "reduce prompt size or use a model/config with a larger context window")],
             limitations=[f"a fixed {BUDGET_PRESSURE_RATIO * 100:.0f}% ratio heuristic, not a measured "
@@ -498,8 +519,8 @@ def _rule_context_budget_pressure(ctx: "_Context") -> dict:
         rule_id, rule_name,
         f"the prompt used {prompt_tokens} of {context_window} context tokens ({ratio * 100:.1f}%), "
         f"below the {BUDGET_PRESSURE_RATIO * 100:.0f}% pressure heuristic.",
-        evidence=[_field_evidence("context_receipt.limits.prompt_tokens", prompt_tokens),
-                 _field_evidence("context_receipt.limits.context_window_tokens", context_window)])
+        evidence=[_field_evidence("context_receipt.rendered.tokens", prompt_tokens),
+                 _field_evidence("context_receipt.context_window_tokens", context_window)])
 
 
 def _directive_evidence(ctx: "_Context", directive: "_Directive") -> dict:

@@ -34,6 +34,7 @@ import clozn.runs.store as runlog            # noqa: E402
 
 @pytest.fixture
 def store(tmp_path, monkeypatch):
+    monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
     return runlog
 
 
@@ -68,7 +69,10 @@ def test_confidence_with_trace_finds_uncertain_moments_and_their_alternatives(st
     rid = store.record(source="engine_chat", model="clozn-qwen",
                        messages=[{"role": "user", "content": "what color is the sky?"}],
                        response="The sky is blue.",
-                       trace={"tokens": tokens, "confidence": confidence, "alternatives": alternatives})
+                       trace=[
+                           {"piece": token, "conf": confidence[index], "alts": alternatives[index]}
+                           for index, token in enumerate(tokens)
+                       ])
     run = store.get_run(rid)
 
     out = explain.explain(run)
@@ -80,18 +84,20 @@ def test_confidence_with_trace_finds_uncertain_moments_and_their_alternatives(st
     assert [u["index"] for u in conf["uncertain_moments"]] == [1, 3]
     assert conf["uncertain_moments"][0]["token"] == " sky"
     assert conf["uncertain_moments"][0]["confidence"] == 0.30
-    assert conf["uncertain_moments"][0]["alternatives"] == [{"piece": " sea", "prob": 0.22}]
+    first_alt = conf["uncertain_moments"][0]["alternatives"][0]
+    assert first_alt["piece"] == " sea" and first_alt["prob"] == 0.22
     assert conf["uncertain_moments"][1]["alternatives"][1]["piece"] == " green"
     assert conf["summary"] == "2 hesitations"   # the one-line "N hesitations" count
 
 
 def test_confidence_summary_pluralizes_correctly_at_zero_and_one(store):
     rid0 = store.record(source="cli", messages=[{"role": "user", "content": "hi"}], response="hey",
-                        trace={"tokens": ["hey"], "confidence": [0.99]})
+                        trace=[{"piece": "hey", "conf": 0.99, "alts": []}])
     assert explain.explain(store.get_run(rid0))["confidence"]["summary"] == "0 hesitations"
 
     rid1 = store.record(source="cli", messages=[{"role": "user", "content": "hi"}], response="uh, hey",
-                        trace={"tokens": ["uh", ", hey"], "confidence": [0.2, 0.9]})
+                        trace=[{"piece": "uh", "conf": 0.2, "alts": []},
+                               {"piece": ", hey", "conf": 0.9, "alts": []}])
     assert explain.explain(store.get_run(rid1))["confidence"]["summary"] == "1 hesitation"
 
 
@@ -99,7 +105,7 @@ def test_confidence_tolerates_a_token_with_no_alternatives_recorded(store):
     """Only SOME tokens get alternatives in practice (runlog.steps_to_trace only stores the `alternatives`
     key at all when at least one step had some); a token with none must default to [], not KeyError."""
     rid = store.record(source="cli", messages=[{"role": "user", "content": "q"}], response="a",
-                       trace={"tokens": ["a", "b"], "confidence": [0.1, 0.9]})   # no alternatives key at all
+                       trace=[{"piece": "a", "conf": 0.1}, {"piece": "b", "conf": 0.9}])
     conf = explain.explain(store.get_run(rid))["confidence"]
     assert conf["available"] is True
     assert conf["uncertain_moments"][0]["alternatives"] == []
@@ -160,7 +166,7 @@ def test_sections_active_lists_the_manifest_with_causal_verified_null(store):
 
 
 def test_sections_active_absent_manifest_degrades_explicitly(store):
-    """A run predating section capture carries no `sections` key at all -- an explicit
+    """A run without section capture carries no `sections` key at all -- an explicit
     {"available": false, "note": ...}, never a silently-missing key or a misleadingly empty list."""
     rid = store.record(source="cli", messages=[{"role": "user", "content": "q"}], response="a")
     run = store.get_run(rid)
@@ -214,7 +220,7 @@ def test_concepts_available_when_the_run_carries_sae_readouts(store):
     here, mutating a fetched run, to prove the assembler's side of the forward-compatible contract."""
     rid = store.record(source="engine_chat", messages=[{"role": "user", "content": "tell me about dragons"}],
                        response="Dragons are mythical.",
-                       trace={"tokens": ["Dragons"], "confidence": [0.9]})
+                       trace=[{"piece": "Dragons", "conf": 0.9, "alts": []}])
     run = store.get_run(rid)
     run["trace"]["concepts"] = [
         {"position": 0, "piece": "Dragons", "features": [

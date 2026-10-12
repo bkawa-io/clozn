@@ -13,7 +13,7 @@ engine/core/serve/checkpoint_codec.hpp) and persists it:
     ``.bin`` blob + ``.json`` sidecar convention exactly -- that module's own docstring explains why
     JSON-only storage is wrong for large binary payloads: ~5-10x the bytes as decimal-literal text).
   - everything else (identity, state, both hashes) is the sidecar, plus a SQLite row
-    (``pinned_checkpoints``, clozn/runs/migrations.py migration 3) that makes "is run X pinned"
+    (``pinned_checkpoints``, clozn/runs/schema.py) that makes "is run X pinned"
     answerable without ever touching the blob file.
   - the full manifest (identity + state + blob refs) is schema-governed
     (clozn.schemas.defs.clozn.pinned-checkpoint.v1.json) and stored verbatim in the row's

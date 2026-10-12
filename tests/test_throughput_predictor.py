@@ -218,16 +218,16 @@ def test_cli_plan_bandwidth_and_calibrate_default_off():
     assert args.calibrate is False
 
 
-def test_calibrate_stub_prints_deferred_and_never_touches_the_engine(capsys):
-    """The seam the task asks us to leave: --calibrate must be a clearly-marked stub, not a real engine
+def test_calibrate_stub_prints_unavailable_and_never_touches_the_engine(capsys):
+    """--calibrate must be clearly unavailable, not a real engine
     boot. Proof-by-source as well as by-behavior: _cmd_plan_calibrate_stub's own module (commands/models.py)
     imports engine_process only for ENGINE_CORE/REPO/find_engine at module load -- this call must not
     reach any of those or spawn a subprocess."""
     from clozn.cli.commands import models as models_mod
     models_mod._cmd_plan_calibrate_stub("some-model")
     out = capsys.readouterr().out
-    assert "DEFERRED" in out
-    assert "not implemented" in out.lower()
+    assert "unavailable" in out.lower()
+    assert "not part of the current plan command" in out.lower()
 
 
 def test_cmd_plan_end_to_end_prints_throughput_block(tmp_path, capsys):

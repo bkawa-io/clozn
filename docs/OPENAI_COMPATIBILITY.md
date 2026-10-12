@@ -37,7 +37,7 @@ Clozn state events never leak into a standard OpenAI stream.
 | `n` | one only | `1`/null accepted and stripped; any other value is a 400 |
 | `top_k`, `repeat_penalty` | Clozn extensions | forwarded to the engine sampler |
 | `clozn_trust`, `clozn_receipt`, `clozn_receipt_mode`, `clozn_lens` | Clozn extensions | opt-in confidence spans, receipt delivery (`off`, `exceptions`, or `always`), and live J-lens readout |
-| `clozn_sources` | Clozn extension | optional source metadata; legacy `{message_index, source_id, label?}` records still address a whole message, while exact records may add `unicode_range`, verified `byte_range`, `provenance_kind`, and `parent_source_id` for multiple/nested sources in one message |
+| `clozn_sources` | Clozn extension | optional exact source metadata with required `message_index` and `unicode_range`; verified `byte_range`, client source identity/label, `provenance_kind`, and `parent_source_id` support multiple or nested sources in one message |
 | `tools` | qualified subset | up to 32 strict function definitions; Clozn returns at most one call and never executes it |
 | `tool_choice` | qualified subset | `"auto"` activates the one-tool contract; `"none"` is an explicit text bypass |
 | `parallel_tool_calls` | false for active tools | omitted/`false` accepted; `true` is rejected when the tool contract is active |
@@ -200,8 +200,6 @@ Unqualified structured request example:
 - CI pins `openai==2.46.0` in the CPU Python lane, so the SDK integration test cannot silently skip there.
 - `tests/test_runtime_architecture.py` and `tests/test_product_smoke.py` guard the standard-vs-native stream
   envelope boundary.
-- `tests/test_model_routing_gateway.py` verifies the retired legacy route returns the typed 410 migration
-  response without selecting a model, loading a worker, or creating a run.
 - `tests/test_think_tags.py` plus the OpenAI/Ollama streaming integration tests prove chunk-split think tags
   never enter public answer/history content while their journal evidence remains inspectable.
 

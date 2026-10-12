@@ -1,30 +1,8 @@
-"""RequestContext -- the per-generation-call bundle (backlog #2, "request isolation + cancellation").
+"""Request-local generation state and cancellation.
 
-WHY this exists: EngineSubstrate.chat()/chat_stream() used to stash everything a call produces across FIVE
-separate instance attributes written one at a time over the course of the call: self._last_generation_meta,
-self._last_stream_trace, self._last_finish_reason, self._last_diverged, self._last_diverged_at. A reader
-(run_meta(), last_finish_reason(), the loop guard's own mid-call read of self._last_stream_trace) calling in
-between two of those writes -- which today's POST_GATE (a single `threading.Lock`, see request_gate.py)
-makes impossible by fully serializing generation, but which is exactly the thing any future loosening of
-that gate would reintroduce -- would see a TORN mix: e.g. THIS turn's trace sitting next to the PREVIOUS
-turn's finish reason. Bundling everything one call produces into ONE object, constructed fresh at the top
-of chat()/chat_stream() and published as `self._request` in a single attribute assignment, means a
-concurrent reader sees either the complete previous request's context or the complete current one -- never
-a hand-mixed one -- once that assignment itself becomes the only cross-call mutation point.
-
-SCOPE, deliberately conservative: this does NOT (yet) thread a context object through the call graph as an
-explicit parameter -- that would touch every caller of chat()/score_tokens()/chat_stream() (replay.py,
-rederive.py, the whole receipts stack) for no behavior change today and real risk to the byte-identical-
-receipts invariant. It gets the "one coherent, atomically-swapped object instead of five scattered
-attributes" win now, plus a real request id and a real cancellation primitive neither piecemeal attribute
-scheme had room for. A future pass can thread RequestContext explicitly once the substrate itself is made
-request-scoped instead of process-global.
-
-Backward compat: EngineSubstrate exposes sub._last_generation_meta / _last_finish_reason / _last_diverged /
-_last_diverged_at / _last_stream_trace as READ-ONLY @property views onto sub._request's fields (see
-substrates.py) -- every existing test/consumer of those names keeps working unchanged, they just can no
-longer be written directly (chat()/chat_stream() write the context's fields instead; nothing else ever
-legitimately wrote them -- see the audit note in the backlog #2 commit that introduced this).
+Each EngineSubstrate chat call creates and publishes one RequestContext. Generation metadata, trace,
+termination, timing, prompt facts, and cancellation therefore move together as one coherent request
+record; readers cannot observe fields combined from different calls.
 """
 from __future__ import annotations
 
@@ -41,8 +19,8 @@ def new_request_id() -> str:
     frames (engine/core/serve/server_shared.hpp's StreamEnvelope) -- EngineSubstrate.chat_stream (see
     substrates.py) reads that `req` off the first parsed frame and stashes it on this call's
     RequestContext.engine_req, so routes/engine.py's POST /cancel can resolve a gateway `req_` id to the
-    worker's own id before proxying the cancel (body key `req_id`, kept distinct from the pre-existing
-    `req` key that already carries a raw worker id straight through unchanged)."""
+    worker's own id before proxying the cancel (body key `req_id`, distinct from the `req` key that
+    carries a raw worker id)."""
     return "req_" + secrets.token_hex(8)
 
 
@@ -58,21 +36,20 @@ class RequestContext:
     list exactly):
       request_id          -- new_request_id(), for log correlation.
       sampling             -- ctx._resolve_sampling()'s dict, or None for the greedy/forced-deterministic path.
-      generation_meta      -- ctx._engine_generation_meta(...)'s reproducibility block (what _last_generation_meta aliases).
+      generation_meta      -- ctx._engine_generation_meta(...)'s reproducibility block.
       generation_timing    -- worker-measured aggregate decode timing from its terminal gen_finished
                               event; empty when that event was unavailable or the final reply was retried.
       gateway_timing       -- request-local gateway spans (template rendering/worker dispatch). These
                               use the gateway monotonic clock and are never aligned to worker offsets.
       prompt_manifest       -- a snapshot of mem_out once the call has finished mutating it
-                              (assembled_messages/final_prompt -- what memory_manifest carried before the
-                              2026-07-27 cards cut and the personalization cut that followed, now just what
-                              was actually sent); the LIVE mem_out dict remains the primary,
+                              (assembled_messages/final_prompt, representing what was actually sent); the
+                              live mem_out dict remains the primary,
                               already-per-call-isolated channel (callers own and read it directly) -- this is
                               an additional, consolidated copy on the context object for symmetry.
-      trace                -- the per-token step list (what last_stream_trace() aliases).
+      trace                -- the per-token step list returned by last_stream_trace().
       finish_reason         -- the engine's stop cause, or None (missing reads as missing, never as "stop").
       finish_reason_raw     -- the worker event's pre-normalization stop cause, when available.
-      diverged/diverged_at  -- the prove-all early-stop verdict (what last_divergence() aliases).
+      diverged/diverged_at  -- the prove-all early-stop verdict returned by last_divergence().
       engine_req            -- the worker's OWN per-request id (StreamEnvelope's `req`, stamped on every
                               native SSE frame), captured off the FIRST frame chat_stream() parses -- or
                               None until that first frame arrives (nothing streamed yet, or a non-streaming

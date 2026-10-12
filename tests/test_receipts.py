@@ -4,11 +4,8 @@ No model, no GPU, no torch: drives receipts.receipt() / receipts.prove_all() aga
 whose .chat() is a DETERMINISTIC function of the messages it actually saw, so a receipt's
 baseline-vs-ablated delta is driven ONLY by whatever replay.py actually changed, never by randomness.
 
-Memory-card ablation and tone-dial ablation were both cut from the product (memory cards on 2026-07-27,
-dials in the personalization cut that followed) -- `section` is the only influence kind
-receipts.core._ablation_changes/deltas.py still recognize; a legacy `dial`/`memory_off`/`behavior_off`/
-`card_id` influence spec is simply not something this codebase can ablate any more and degrades to None,
-exactly like any other unrecognized spec. See test_section_influence.py for the full section-ablation
+`section` is the only influence kind receipts.core._ablation_changes/deltas.py recognizes; every other
+shape is rejected as an unknown spec. See test_section_influence.py for the full section-ablation
 surface (regen AND forced mode); this file covers the metric math, the mode-dispatch plumbing, and the
 degrade-on-bad-input paths.
 
@@ -63,6 +60,8 @@ RUN = {"id": "run_parent0", "model": "clozn-qwen", "substrate": "QwenSubstrate",
 
 @pytest.fixture
 def iso(tmp_path, monkeypatch):
+    monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
+    runlog._schema_verified.clear()
     return tmp_path
 
 
@@ -118,9 +117,7 @@ def test_receipt_returns_none_on_bad_influence_spec(iso):
     assert receipts.receipt(RUN, None, sub) is None
 
 
-def test_receipt_returns_none_on_a_legacy_influence_spec(iso):
-    """card/dial ablation was cut from the product -- a stray `card_id`/`memory_off`/`behavior_off` spec
-    (from before that cut) degrades to None exactly like any other unrecognized influence, never raises."""
+def test_receipt_returns_none_on_unknown_influence_specs(iso):
     sub = FakeSub()
     assert receipts.receipt(RUN, {"card_id": "mem_card_a"}, sub) is None
     assert receipts.receipt(RUN, {"memory_off": True}, sub) is None
@@ -175,8 +172,7 @@ def test_prove_all_states_the_pairwise_approximation_and_the_perf_follow_up(iso)
 #
 # The section generalization: a run's `sections` manifest (id/name/source/parts/char_count/preview -- the
 # fixed schema clozn.runs.sections/store produce) yields its own leave-one-out ablation arm, exactly like a
-# card or a dial used to, EXCEPT for sections whose source is "memory_card" -- those duplicate a card
-# influence that no longer exists (see deltas._section_influences' docstring for the full reasoning).
+# any other section source is rejected by the canonical source allowlist.
 
 SECTION_PREFIX = "Question. "
 SECTION_TEXT = "RAG-MARKER extra info here."
@@ -302,8 +298,8 @@ def test_section_influences_helper_degrades_when_no_sections_manifest_at_all(iso
 # test_section_influence.py for forced-mode section-ablation coverage, which has no null floor of its own.)
 
 def test_matched_length_filler_is_deterministic_and_matches_length():
-    a = receipts._matched_length_filler(37)
-    b = receipts._matched_length_filler(37)
+    a = receipts.matched_length_neutral_filler(37)
+    b = receipts.matched_length_neutral_filler(37)
     assert a == b
     assert len(a) == 37
 

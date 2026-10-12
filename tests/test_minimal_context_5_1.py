@@ -5,7 +5,6 @@ from copy import deepcopy
 from itertools import combinations
 
 import clozn.runs.store as run_store
-from clozn.experiments.effective_prompt import inject_block
 from clozn.experiments.search import BEST_VERIFIED, run_adaptive_search
 from clozn.experiments.persistence import ObservationStore
 from clozn.recipes.minimal_context import run_minimal_context
@@ -192,7 +191,7 @@ def test_search_identity_binds_inclusion_policy(tmp_path, monkeypatch):
     assert second.policy["attempt_inclusion_check"] is False
 
 
-def test_prompt_block_cost_is_the_same_effective_prompt_used_by_execution(tmp_path, monkeypatch):
+def test_prompt_cost_and_execution_use_the_same_canonical_messages(tmp_path, monkeypatch):
     from tests.test_experiment_kernel import ProbeSubstrate, _run
 
     class BlockSubstrate(ProbeSubstrate):
@@ -202,7 +201,7 @@ def test_prompt_block_cost_is_the_same_effective_prompt_used_by_execution(tmp_pa
 
         def probe_reference_match(self, messages, reference_token_ids, *, generation_contract,
                                   explicit_conditions):
-            effective = inject_block(messages, explicit_conditions.get("block"))
+            effective = deepcopy(messages)
             self.effective_inputs.append(deepcopy(effective))
             return super().probe_reference_match(
                 effective, reference_token_ids, generation_contract=generation_contract,
@@ -213,7 +212,6 @@ def test_prompt_block_cost_is_the_same_effective_prompt_used_by_execution(tmp_pa
     run_store._schema_verified.clear()
     run, _source_ids = _run()
     run.pop("assembled_messages")
-    run["memory"] = {"prompt_block": "recorded prompt block"}
     run["context_receipt"] = build_context_receipt(
         messages=run["messages"], assembled_messages=None, final_prompt=None,
         run_id=run["id"], privacy="full",
@@ -228,7 +226,7 @@ def test_prompt_block_cost_is_the_same_effective_prompt_used_by_execution(tmp_pa
 
     assert result.status == "completed"
     expected = [
-        {"role": "system", "content": "stable context\n\nrecorded prompt block"},
+        {"role": "system", "content": "stable context"},
         {"role": "user", "content": "removable source"},
         {"role": "user", "content": "current question"},
     ]
@@ -238,7 +236,7 @@ def test_prompt_block_cost_is_the_same_effective_prompt_used_by_execution(tmp_pa
     assert expected_cost == sum(len(str(item["content"])) for item in substrate.effective_inputs[0])
 
 
-def test_product_job_worker_calls_new_recipe_not_legacy_executor(monkeypatch):
+def test_product_job_worker_calls_the_minimal_context_recipe(monkeypatch):
     from clozn.server.routes import minimal_context as route
     import clozn.runs.store as runlog
 

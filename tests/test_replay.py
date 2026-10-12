@@ -220,11 +220,12 @@ class _ContextSub(FakeSub):
         return reply
 
 
-def test_replay_child_retains_its_own_survived_prompt(store):
+def test_replay_child_retains_its_own_prompt_without_receipt_duplication(store):
     child = replay.replay(RUN, {}, _ContextSub())
     assert child["assembled_messages"][0] == {"role": "system", "content": "replay memory"}
     assert child["final_prompt"] == "REPLAY EXACT PROMPT"
-    assert child["context_receipt"]["survived"]["final_prompt"] == "REPLAY EXACT PROMPT"
+    assert child["final_prompt"] == "REPLAY EXACT PROMPT"
+    assert "survived" not in child["context_receipt"]
 
 
 def test_replay_at_light_tier_drops_the_trace(store, monkeypatch):
