@@ -16,8 +16,7 @@
         "observation_id",
         "realized_fidelity",
         "trace_state",
-        "comparison",
-        "compare_path"
+        "comparison"
       ],
       "properties": {
         "schema_version": {"const": "clozn.experiment-materialization.v1"},
@@ -29,8 +28,7 @@
         "observation_id": {"type": "string", "minLength": 1},
         "realized_fidelity": {"const": "direct_context_generation"},
         "trace_state": {"enum": ["available", "unavailable"]},
-        "comparison": {"type": ["object", "null"]},
-        "compare_path": {"type": "string", "pattern": "^#/compare/[^/]+/[^/]+$"}
+        "comparison": {"type": ["object", "null"]}
       }
     },
     {
@@ -66,8 +64,7 @@
         "experiment_id",
         "arm_id",
         "intervention",
-        "comparison",
-        "compare_path"
+        "comparison"
       ],
       "properties": {
         "schema_version": {"const": "clozn.experiment-materialization.v1"},
@@ -89,8 +86,7 @@
             }
           }
         },
-        "comparison": {"type": ["object", "null"]},
-        "compare_path": {"type": "string", "pattern": "^#/compare/[^/]+/[^/]+$"}
+        "comparison": {"type": ["object", "null"]}
       }
     },
     {

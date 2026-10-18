@@ -4,6 +4,8 @@ from __future__ import annotations
 from copy import deepcopy
 from itertools import combinations
 
+import pytest
+
 import clozn.runs.store as run_store
 from clozn.experiments.search import BEST_VERIFIED, run_adaptive_search
 from clozn.experiments.persistence import ObservationStore
@@ -226,7 +228,7 @@ def test_prompt_cost_and_execution_use_the_same_canonical_messages(tmp_path, mon
 
     assert result.status == "completed"
     expected = [
-        {"role": "system", "content": "stable context"},
+            {"role": "user", "content": "stable context"},
         {"role": "user", "content": "removable source"},
         {"role": "user", "content": "current question"},
     ]
@@ -275,3 +277,16 @@ def test_product_job_worker_calls_the_minimal_context_recipe(monkeypatch):
     assert outcome == {"state": "completed"}
     assert calls and calls[0][0][0] == run
     assert calls[0][1]["max_new_counterfactual_observations"] == 2
+
+
+def test_product_route_uses_one_fixed_bounded_search_policy():
+    from clozn.server.routes import minimal_context as route
+
+    assert route.normalize_request({}) == {
+        "max_units": 16,
+        "max_new_counterfactual_observations": 32,
+        "attempt_inclusion_check": True,
+    }
+    with pytest.raises(route.MinimalContextRouteError, match="fixed v1 search policy") as exc:
+        route.normalize_request({"max_new_counterfactual_observations": 1})
+    assert exc.value.code == "unsupported_search_policy"

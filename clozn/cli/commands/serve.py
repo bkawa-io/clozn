@@ -36,123 +36,23 @@ def cmd_serve(args):
     if getattr(args, "cpu", False) and gpu_layers is not None and gpu_layers > 0:
         raise ctx.CloznError("--cpu cannot be combined with a positive GPU-layer count")
 
-    models_config_path = getattr(args, "models_config", None)
-    managed = None
-    if models_config_path:
-        if requested_model:
-            raise ctx.CloznError(
-                "MODEL and --models-config are mutually exclusive"
-            )
-        if getattr(args, "alias", None):
-            raise ctx.CloznError("--alias is supported only for single-model serving")
-        if gpu_layers is not None:
-            raise ctx.CloznError("GPU-layer flags are per-model in --models-config")
-        incompatible = [
-            name for name, active in (
-                ("--ctx", getattr(args, "ctx", None) is not None),
-                ("--batch", getattr(args, "batch", None) is not None),
-                ("--ubatch", getattr(args, "ubatch", None) is not None),
-                ("--cpu", bool(getattr(args, "cpu", False))),
-                ("--mask", getattr(args, "mask", None) is not None),
-                ("--eos", getattr(args, "eos", None) is not None),
-                ("--sae", getattr(args, "sae", None) is not None),
-                ("--sae-k", getattr(args, "sae_k", None) is not None),
-                (
-                    "--no-flash-attn",
-                    bool(getattr(args, "no_flash_attn", False)),
-                ),
-                ("--adapter", getattr(args, "adapter", None) is not None),
-                (
-                    "--adapter-scale",
-                    getattr(args, "adapter_scale", None) is not None,
-                ),
-            )
-            if active
-        ]
-        if incompatible:
-            raise ctx.CloznError(
-                f"{incompatible[0]} is per-model in --models-config"
-            )
-        from clozn.cli.managed_models import (
-            ManagedModelsConfigError,
-            load_managed_models,
-        )
-        try:
-            managed = load_managed_models(
-                models_config_path,
-                default_model_id=getattr(args, "default_model", None),
-                preload_model_ids=getattr(args, "preload", None),
-                max_loaded_models=getattr(args, "max_loaded_models", None),
-            )
-        except ManagedModelsConfigError as error:
-            raise ctx.CloznError(str(error)) from None
-        default_definition = managed.definition(managed.default_model_id)
-        model = default_definition.model
-        flags = {}
-        print(
-            f"{fmt.DIM}- models: "
-            f"{', '.join(item.model_id for item in managed.definitions)} "
-            f"(default {managed.default_model_id}){fmt.RST}",
-            file=sys.stderr,
-            flush=True,
-        )
-    else:
-        if not requested_model:
-            raise ctx.CloznError(
-                "give MODEL, or use --models-config with a qualified manifest"
-            )
-        if any(
-            getattr(args, name, None) is not None
-            for name in ("default_model", "preload", "max_loaded_models")
-        ):
-            raise ctx.CloznError(
-                "--default-model/--preload/--max-loaded-models require "
-                "--models-config"
-            )
-        model = resolve_model(requested_model)
-        print(
-            f"{fmt.DIM}- model: {model}{fmt.RST}",
-            file=sys.stderr,
-            flush=True,
-        )
-        flags = _flags_for(model)
-        if args.mask is not None:
-            flags["mask"] = args.mask
-        if args.eos is not None:
-            flags["eos"] = args.eos
-        if args.ctx is not None:
-            flags["ctx"] = args.ctx
-        if getattr(args, "batch", None) is not None:
-            flags["batch"] = args.batch
-        if getattr(args, "ubatch", None) is not None:
-            flags["ubatch"] = args.ubatch
-        if gpu_layers is not None:
-            flags["gpu_layers"] = gpu_layers
-        if args.sae is not None:
-            flags["sae"] = args.sae
-            if args.sae_k is not None:
-                flags["sae_k"] = args.sae_k
-        if args.no_flash_attn:
-            # extra_args is the generic engine-argv passthrough _launch_args already documents (see
-            # engine_process.py) -- attention-edge provenance (`clozn provenance`) needs the engine started
-            # this way so kq_soft_max materializes for /score's attn_knockout. NOT the Studio Sources lens,
-            # which runs on /runs/<id>/influence-map's forced-scoring path and never touches attn_knockout.
-            flags.setdefault("extra_args", []).append("--no-flash-attn")
-        if getattr(args, "adapter", None):
-            # Fail here rather than letting the engine abort mid-boot: a missing adapter file is a typo, and
-            # the actionable message is the path the user typed, not a worker exit code.
-            adapter = os.path.abspath(os.path.expanduser(args.adapter))
-            if not os.path.isfile(adapter):
-                raise ctx.CloznError(f"adapter not found: {adapter}")
-            flags["adapter"] = adapter
-            if getattr(args, "adapter_scale", None) is not None:
-                flags["adapter_scale"] = args.adapter_scale
-            scale = flags.get("adapter_scale", 1.0)
-            print(
-                f"{fmt.DIM}- adapter: {adapter} (scale {scale}){fmt.RST}",
-                file=sys.stderr,
-                flush=True,
-            )
+    if not requested_model:
+        raise ctx.CloznError("give one GGUF MODEL")
+    model = resolve_model(requested_model)
+    print(f"{fmt.DIM}- model: {model}{fmt.RST}", file=sys.stderr, flush=True)
+    flags = _flags_for(model)
+    if getattr(args, "mask", None) is not None:
+        flags["mask"] = args.mask
+    if getattr(args, "eos", None) is not None:
+        flags["eos"] = args.eos
+    if getattr(args, "ctx", None) is not None:
+        flags["ctx"] = args.ctx
+    if getattr(args, "batch", None) is not None:
+        flags["batch"] = args.batch
+    if getattr(args, "ubatch", None) is not None:
+        flags["ubatch"] = args.ubatch
+    if gpu_layers is not None:
+        flags["gpu_layers"] = gpu_layers
 
     port = args.port or 8080
     host = getattr(args, "host", "127.0.0.1") or "127.0.0.1"
@@ -185,24 +85,19 @@ def cmd_serve(args):
         except (AttributeError, ValueError):
             previous_sigterm = None  # unavailable, or cmd_serve was invoked outside the main thread
         print(f"{fmt.DIM}- starting {_friendly(model)} …{fmt.RST}", file=sys.stderr, flush=True)
+        from clozn.paths import data_root
+        print(f"{fmt.DIM}- data root: {data_root()}{fmt.RST}", file=sys.stderr, flush=True)
         try:
             runtime_config = RuntimeConfig(
                 model=model,
                 public_port=port,
                 host=host,
                 public_model_id=alias,
-                structured_mode=getattr(args, "structured", "auto"),
                 flags=flags,
                 prefer_gpu=not args.cpu,
-                worker_definitions=managed.definitions if managed else (),
-                default_model_id=managed.default_model_id if managed else None,
-                preload_model_ids=managed.preload_model_ids if managed else (),
-                max_loaded_models=(
-                    managed.max_loaded_models if managed else None
-                ),
             )
         except Exception as error:
-            from clozn.cli.worker_registry import WorkerRegistryConfigError
+            from clozn.cli.runtime_identity import WorkerRegistryConfigError
             if isinstance(error, WorkerRegistryConfigError):
                 raise ctx.CloznError(str(error)) from None
             raise
@@ -223,35 +118,16 @@ def cmd_serve(args):
         print(f"  Listening:                 {listening}")
         if alias:
             print(f"  Public model:              {alias}")
-        if stack.worker_registry is not None:
-            runtime_status = stack.worker_registry.status()
-            resident = sum(
-                worker["state"] == "ready"
-                for worker in runtime_status["workers"]
-            )
-            print(
-                f"\n  {fmt.BOLD}{resident}/{len(runtime_status['workers'])} "
-                f"models resident{fmt.RST} "
-                f"(default {runtime_status['default_model_id']}) "
-                f"in {time.time()-started:.1f}s"
-            )
-        else:
-            print(
-                f"\n  {fmt.BOLD}{alias or _friendly(model)}{fmt.RST} ready on "
-                f"{'GPU' if stack.gpu else 'CPU'} ({health.get('mode')}) "
-                f"in {time.time()-started:.1f}s"
+        print(
+            f"\n  {fmt.BOLD}{alias or _friendly(model)}{fmt.RST} ready on "
+            f"{'GPU' if stack.gpu else 'CPU'} ({health.get('mode')}) "
+            f"in {time.time()-started:.1f}s"
         )
         print(f"  Studio:                    {fmt.BOLD}{base}/{fmt.RST}")
         print(f"  OpenAI chat:               POST {base}/v1/chat/completions")
-        print(f"  Clozn event stream:        POST {base}/api/clozn/generate")
         print(f"  Readiness:                 GET  {base}/readyz")
-        worker_phrase = (
-            "model workers are private"
-            if stack.worker_registry is not None
-            else "the model worker is private"
-        )
         print(
-            f"\n  {fmt.DIM}one public gateway; {worker_phrase}"
+            f"\n  {fmt.DIM}one public gateway; the model worker is private"
             f"   -   Ctrl-C to stop{fmt.RST}\n"
         )
 
@@ -312,9 +188,11 @@ def cmd_ps(_args):
 
 
 def _worker_url(port: int) -> str:
-    """The gateway's raw C++ worker base URL (serves /score etc. -- what export-bundle's live check
-    needs), read from /engine/health's worker_url. '-' when unavailable: the field is honest-absent on
-    older gateways and while the worker is down, and this must never make `clozn ps` slow or crash."""
+    """The gateway's raw C++ worker base URL, read from /engine/health's worker_url.
+
+    ``-`` means the field is unavailable while the worker is down; this probe must never make
+    ``clozn ps`` slow or crash.
+    """
     try:
         import json as _json
         import urllib.request as _rq

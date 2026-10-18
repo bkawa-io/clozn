@@ -1,68 +1,8 @@
-"""span_bridge.py -- the arbitrary-span bridge (C3 core slice, item 3).
+"""Resolve canonical Context Receipt sources into safe message edits.
 
-B3 span addressing (`clozn.runs.text_span_addresses`) already gives every passage in a run a stable,
-content-addressed identity: an `address_id`, a receipt-segment native reference, and a
-`resolution.canonical` block carrying Unicode-code-point offsets plus SHA-256 hashes of both the
-canonical basis text and the selected span. What it does NOT do is turn that address back into
-something `clozn.replay.replay.replay()` can execute -- `replay()`'s only content-level ablation lever is
-`changes["exclude_sections"]`, a list of NAMED sections against the run's persisted `sections` manifest.
-An arbitrary address is neither named nor guaranteed to align with a section boundary.
-
-This module is the bridge. `resolve_span_address()` re-derives a FRESH `clozn.text-span-addresses.v1`
-document from the run's CURRENT stored content (never a cached/stale one) and looks the requested
-`address_id` up in it. Because `address_id` is itself a hash over `{relation_key, native_ref,
-canonical.basis_sha256, canonical.span_sha256, canonical.start, canonical.end}` (see
-`text_span_addresses._address_id`), a content change since the id was minted changes the id too -- so a
-stale id simply is not found in the fresh rebuild, and this function refuses
-(`span_address_not_found_or_drifted`) rather than resolving to the WRONG text at the same coordinates.
-This is deliberately one merged reason, not two: telling "this id never existed" apart from "the content
-at this same logical spot moved" would need the relation_key reversed, which is a hash and not
-reversible from the id alone. Both cases are equally disqualifying, so a caller a re-run
-`clozn text-span-addresses RUN_ID` (or the investigation surface) gets a fresh id either way.
-
-Spans anchored to an ordinary chat message (`native_ref.collection == "context_receipt.delivered"`)
-resolve to a `message_index` this module can hand to `excise_spans()` through the receipt's opaque
-`segment_id`, looked up against a `segment_id -> (message_index, content_hash)` index this
-module builds by READING the run's OWN context receipt (`_segment_id_index()`, via
-`clozn.runs.context_receipt.read_receipt`; the index reuses the receipt's own `original_order` field,
-which is a message-list position recorded once at delivery time -- see that module's "segment identity"
-section). A `segment_id` lookup is a lookup, not a proof: before trusting it, `_resolved_span_from_address()`
-re-hashes the message CURRENTLY sitting at the resolved index (`clozn.runs.context_receipt._content_hash`,
-reused rather than reimplemented -- two content-hash implementations that could drift apart would defeat
-the purpose) and compares it against that segment's own recorded `content_hash`, refusing rather than
-silently mis-mapping when the two disagree, or when the receipt records no usable hash to check against in
-the first place. This makes the segment_id path self-verifying: a stale or corrupted `original_order`
-almost always points at content with a different hash, and gets caught here rather than producing a
-confident, wrong ablation. Two kinds are refused by construction, honestly, never guessed, regardless of
-native-id shape:
-  * `rendered_prompt_segment` (basis `rendered_prompt`, i.e. `final_prompt`) -- `replay()`'s only surface
-    is a MESSAGE list (`chat(messages, ...)`), never a raw-prompt override; raw-prompt reconstruction
-    belongs to the Branch Fan execution seam. Splicing here would require inventing a capability replay does
-    not have.
-  * `answer_span` (basis `scored_answer`) -- a piece of the model's OWN reply, not prompt content. There
-    is nothing to ablate out of a PROMPT here; that is a different kind of question this slice does not
-    answer.
-
-`excise_spans()` is the OTHER half: given one or more resolved spans, build a NEW messages list with each
-span's [start, end) removed or replaced, right-to-left within a message so an earlier span's offsets in
-the SAME message are never invalidated by a later span's removal -- exactly `replay.py`'s own
-`_strip_message_parts` algorithm, generalized from a NAMED section's `parts` to an arbitrary offset list
-(this module does not import that private helper; the two are independent, intentionally small,
-implementations of the identical splice rule, kept apart because one is keyed by section name against a
-persisted manifest and the other by raw offsets against a resolved address -- forcing them through one
-shared function would need a manifest-shaped wrapper for every arbitrary-span caller for no shared
-benefit). The result is an ordinary message list `clozn.replay.replay.replay()` already knows how to
-consume via its `messages_override` parameter -- no change to replay.py itself was needed.
-
-`pick_random_control_span()` builds the ONE piece of new machinery C3's five-arm-style discipline needs
-that the plain-text neutral filler does not cover: a same-LENGTH,
-NON-OVERLAPPING window elsewhere in the SAME basis text, chosen deterministically (SHA-256 over canonical
-JSON, never Python's process-randomized `hash()` -- mirrors `clozn.analysis.causal_bisect.
-_derive_single_site_seed`'s own reasoning) so the "did ANY similarly-sized change do this" control is
-reproducible from the run id and the target span alone. `None` when the basis text is too short to fit a
-disjoint window of the same length -- never a guessed overlapping or truncated one.
-
-Stdlib-only, model-free, fully unit-testable against fixture run dicts -- no substrate, no generation.
+Source and span identities are re-derived from the current run before use.  The bridge verifies message
+content hashes, refuses prompt-only and answer spans, applies edits right-to-left so offsets remain stable,
+and provides deterministic same-length controls.  It is stdlib-only and performs no generation.
 """
 from __future__ import annotations
 
@@ -71,10 +11,20 @@ import json
 from copy import deepcopy
 from typing import Any, Iterable
 
-from clozn.receipts.forced import (
-    MATCHED_LENGTH_NEUTRAL_FILLER_RECIPE,
-    matched_length_neutral_filler,
+MATCHED_LENGTH_NEUTRAL_FILLER_RECIPE = "clozn.matched_length_neutral_filler.v1"
+_FILLER_TEXT = (
+    "The user prefers to schedule meetings in the early morning rather than the afternoon. The user "
+    "always tips exactly twenty percent at restaurants without needing to calculate it by hand. The "
+    "user set their phone's default browser to a different app than the one it shipped with. The user "
+    "keeps their email inbox at zero and archives messages the same day they arrive. "
 )
+
+
+def matched_length_neutral_filler(n_chars: int) -> str:
+    """Return deterministic neutral filler with exactly ``n_chars`` code points."""
+    length = max(1, int(n_chars))
+    repetitions = length // len(_FILLER_TEXT) + 1
+    return (_FILLER_TEXT * repetitions)[:length]
 
 
 def _reason(code: str, message: str) -> dict:
@@ -837,7 +787,7 @@ def resolve_source_spans(run: dict, source_id: str) -> dict:
 
 def excise_spans(messages: list, spans: list, *, replacement=None) -> list:
     """`messages` with every `ResolvedSpan`'s `[start, end)` removed (`replacement=None`) or replaced
-    (`replacement(n_chars) -> str`, e.g. `clozn.receipts.forced.matched_length_neutral_filler`). Multiple spans in
+    (`replacement(n_chars) -> str`, e.g. :func:`matched_length_neutral_filler`). Multiple spans in
     the SAME message are spliced right-to-left (highest start first) so an earlier span's offsets stay
     valid; spans in different messages are independent. Never raises: an out-of-range message index, or a
     non-dict message, is left untouched -- same "never take the rest of the list down with one bad entry"

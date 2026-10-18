@@ -32,23 +32,18 @@ jobs:
       # run with zero jobs" signature this step exists to fix. Route MODEL_PATH through $GITHUB_ENV
       # instead so every later step in this job still sees it as a plain env var.
       - name: Resolve the model cache path
-        run: echo "MODEL_PATH=${{ runner.temp }}/clozn-models/${{ env.MODEL_FILE }}" >> "$GITHUB_ENV"
+        run: |
+          echo "MODEL_PATH=${{ runner.temp }}/clozn-models/${{ env.MODEL_FILE }}" >> "$GITHUB_ENV"
+          echo "CLOZN_DATA_ROOT=${{ runner.temp }}/clozn-v1-data" >> "$GITHUB_ENV"
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # This job sets up Python but never installed anything into it, so every run died at the P0
-      # contracts step with `ModuleNotFoundError: No module named 'numpy'`: importing
-      # `clozn.server.app` pulls in `clozn/server/routes/readouts.py`, which imports numpy at module
-      # scope. That is not a dependency leak to fix in the product -- numpy IS the sanctioned
-      # product-minimal dependency (see ci.yml's product-minimal lane, which installs exactly this and
-      # deliberately no torch/transformers/lab). Pinned to the same version as ci.yml so the two lanes
-      # can never disagree about what "product-minimal" means.
-      - name: Install product-minimal Python deps (numpy only; NO torch/transformers/lab)
+      - name: Install the test runner only
         run: |
           python -m pip install --upgrade pip
-          pip install "numpy==2.4.6"
+          pip install pytest
 
       - name: Install CPU build prerequisites
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++ curl
@@ -82,25 +77,88 @@ jobs:
           cmake --build engine/core/build-serve --target clozn-server -j 2
 
       - name: Run the P0 model-free contracts
-        run: python -m unittest -v tests.test_runtime_architecture tests.test_product_smoke
+        run: >-
+          python -m pytest -q
+          tests/test_runtime_architecture.py
+          tests/test_v1_acceptance_smoke.py
+          tests/test_v1_product_boundary.py
 
-      - name: Run real CPU smoke
+      - name: Start the v1 gateway and wait for readiness
         run: |
           mkdir -p smoke-logs
-          set -o pipefail
-          python -m clozn smoke "$MODEL_PATH" --cpu --json \
-            --timeout 300 --startup-timeout 240 | tee smoke-logs/smoke.json
+          python -m clozn serve "$MODEL_PATH" --cpu --port 8080 \
+            > smoke-logs/gateway.log 2>&1 &
+          supervisor_pid=$!
+          echo "CLOZN_SUPERVISOR_PID=$supervisor_pid" >> "$GITHUB_ENV"
+          for attempt in $(seq 1 240); do
+            if curl --fail --silent http://127.0.0.1:8080/readyz >/dev/null; then
+              exit 0
+            fi
+            if ! kill -0 "$supervisor_pid" 2>/dev/null; then
+              cat smoke-logs/gateway.log
+              exit 1
+            fi
+            sleep 1
+          done
+          cat smoke-logs/gateway.log
+          exit 1
 
-      - name: Run real CPU deep smoke
+      - name: Run the live two-feature acceptance journey
         run: |
           set -o pipefail
-          python -m clozn smoke "$MODEL_PATH" --cpu --deep --json \
-            --timeout 300 --startup-timeout 240 | tee smoke-logs/smoke-deep.json
+          python scripts/smoke/v1_acceptance.py \
+            --base-url http://127.0.0.1:8080 \
+            --timeout 300 \
+            --job-timeout 300 | tee smoke-logs/acceptance.json
+
+      - name: Restart and reopen durable results
+        run: |
+          kill -TERM "$CLOZN_SUPERVISOR_PID"
+          for attempt in $(seq 1 30); do
+            kill -0 "$CLOZN_SUPERVISOR_PID" 2>/dev/null || break
+            sleep 1
+          done
+          python -m clozn serve "$MODEL_PATH" --cpu --port 8080 \
+            > smoke-logs/gateway-restart.log 2>&1 &
+          supervisor_pid=$!
+          echo "CLOZN_SUPERVISOR_PID=$supervisor_pid" >> "$GITHUB_ENV"
+          for attempt in $(seq 1 240); do
+            if curl --fail --silent http://127.0.0.1:8080/readyz >/dev/null; then
+              break
+            fi
+            if ! kill -0 "$supervisor_pid" 2>/dev/null; then
+              cat smoke-logs/gateway-restart.log
+              exit 1
+            fi
+            sleep 1
+          done
+          python - <<'PY'
+          import json
+          from urllib.request import urlopen
+
+          with open("smoke-logs/acceptance.json", encoding="utf-8") as handle:
+              report = json.load(handle)
+          parent = report["parent_run_id"]
+          minimal = report["minimal_context"]
+          result_id = minimal["result_id"]
+          child = minimal["child_run_id"]
+          paths = (
+              f"/runs/{parent}",
+              f"/runs/{parent}/minimal-context/results/{result_id}",
+              f"/runs/{child}",
+          )
+          for path in paths:
+              with urlopen("http://127.0.0.1:8080" + path, timeout=30) as response:
+                  assert response.status == 200, (path, response.status)
+                  json.load(response)
+          print("restart persistence: parent, result, and child reopened")
+          PY
 
       - name: Verify process cleanup
         if: always()
         run: |
           mkdir -p smoke-logs
+          python -m clozn stop all || true
           python -m clozn ps | tee smoke-logs/clozn-ps.txt
           if pgrep -af 'clozn-server|clozn\.server\.app|python.*-m clozn serve' \
               > smoke-logs/residual-processes.txt; then

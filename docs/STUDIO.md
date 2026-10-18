@@ -1,65 +1,40 @@
 # Clozn Studio
 
-Studio is the browser interface served by the same gateway that records Clozn Runs. It reads the same
-SQLite journal and evidence artifacts as the API; it does not maintain a separate evidence store.
+Studio is the browser interface served by the same gateway that records runs.
 
-## Run it
-
-```bash
+```sh
 clozn serve MODEL --port 8080
-clozn studio --open
+clozn studio --port 8080 --open
 ```
 
-Point OpenAI-compatible clients at `http://127.0.0.1:8080/v1`. Completed requests are recorded and
-appear in Studio.
+## Run list and composer
 
-## Sessions
+The landing view lists durable runs and offers New run. The composer accepts a question, optional
+instructions, and plain-text context blocks. The working example populates those fields and executes a
+real run; it is not a static mock.
 
-Sessions lists conversation records and standalone Runs. A session trace preserves turn order, branch
-markers, failures, cumulative facts, and explicit Run selection. Selecting a turn opens its immutable
-Run in Inspect.
+## Run workspace
 
-## Inspect
+One run workspace has two modes:
 
-Inspect is the single-Run evidence workspace:
+- **Context Effects** shows recorded input and output side by side. Selecting answer text or a context
+  source reveals measured relationships in the corresponding direction. Whole-source evidence remains
+  whole-source evidence; the UI does not invent finer attribution.
+- **Minimal Context** runs the bounded exact-preservation search, shows progress and cancellation, and
+  saves the best verified result. Its comparison is limited to the original and that saved child.
 
-- **Read / Context effects** shows the recorded answer, supplied context, measured answer-source
-  relationships, and explicit context-measurement controls.
-- **Received Context** shows what was delivered, assembled, or omitted without treating delivery as
-  influence.
-- **Context Receipt** shows the metadata-only delivery, rendering, capacity, and termination record.
-  Prompt content remains part of the Run and is never duplicated into the receipt.
-- **Minimal Context** searches for a directly verified preserving source set. Exact minimum, inclusion
-  minimum, best verified, incomplete search, no reduction, failure, cancellation, and unavailability
-  remain distinct.
-- **Actions** shows diagnosis evidence and the bounded corrective workflow: preview, confirm or cancel,
-  optional keep for this Run, and undo.
-- **Claims** binds metadata-only claim ranges to the exact recorded answer and preserves supported,
-  weakly supported, contradicted, unsupported by supplied materials, unverifiable, and measurement
-  unavailable states.
-
-Navigation is read-only. Measurement, search, correction, cancellation, materialization, keep, and undo
-run only from explicit controls.
-
-## Runtime
-
-Runtime reports direct-worker or managed-router health and local GGUF inventory. Missing facts remain
-unavailable rather than being inferred. The surface does not load, switch, download, or remove models.
-
-## Compare
-
-Compare aligns two immutable Runs and reports recorded identity, context, settings, tools, output, and
-classified finding differences. The experiment matrix reads persisted case × variant × seed results and
-loads cell evidence on demand. A difference is an observation, not a causal claim.
+Received context, provenance, model/runtime identity, and termination details live in disclosure panels
+inside this workspace. There is no separate session navigator, runtime dashboard, experiment matrix, or
+general comparison workbench in v1.
 
 ## Evidence rules
 
 - Delivered context is not automatically influential.
-- Token confidence describes commitment, not correctness.
-- Screening results identify candidates; exact scoring establishes evidence.
-- Missing or failed measurement is not negative evidence.
-- “Unsupported by supplied materials” does not mean false.
-- Generated previews become evidence only after an explicit materialization records a child Run.
-- The source Run remains immutable; run-scoped keep and undo change only its selected revision.
+- Context Effects scoring is not the success criterion for Minimal Context.
+- Low effect, unmeasured, unavailable, failed, and cancelled are distinct.
+- “Best verified within budget” is the normal bounded-search result.
+- Saving creates a child and leaves the original immutable.
+- Deletion is explicit and refuses unsafe parent removal while children remain.
 
-The canonical routes and backend ownership are listed in [STUDIO_SURFACE_CONTRACT.md](STUDIO_SURFACE_CONTRACT.md).
+The backend routes used by these views are listed in
+[STUDIO_SURFACE_CONTRACT.md](STUDIO_SURFACE_CONTRACT.md).

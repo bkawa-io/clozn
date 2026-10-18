@@ -115,7 +115,7 @@ class WorkerHandle:
 
         ``False`` means zero tracked calls. It is safe as an eviction signal only
         when the router wraps every private-worker call in :meth:`track_call`;
-        ``WorkerRegistry`` enforces that integration with ``busy_tracking_wired``.
+        The single-model runtime owns this handle directly.
         """
         with self._call_cond:
             return self.active_calls > 0

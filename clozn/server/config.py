@@ -10,6 +10,8 @@ product `clozn serve` process needs neither.
 import os
 import sys
 
+from clozn.paths import data_root
+
 sys.stdout.reconfigure(encoding="utf-8")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -44,4 +46,8 @@ def _resolve_studio_dir() -> str:
 
 DEMO = _resolve_studio_dir()
 
-CLOZN_DIR = os.path.join(os.path.expanduser("~"), ".clozn")     # studio memory + personality persist here
+# Current product state is isolated from the historical ~/.clozn/runs journal.
+# Keep CLOZN_DIR as the existing server-facing name so route modules do not
+# each grow their own path-resolution logic.
+CLOZN_DATA_ROOT = data_root()
+CLOZN_DIR = CLOZN_DATA_ROOT

@@ -44,48 +44,4 @@ def try_get(h, p):
             "queue": queue,
         })
         return True
-    if p == "/runtime/models":
-        try:
-            managed = _managed_status()
-        except Exception as error:
-            h._json(503, {"error": f"managed routing unavailable: {error}"})
-            return True
-        h._json(200, managed)
-        return True
-    if p == "/substrate":
-        h._json(200, {"active": "engine", "available": ["engine"]})
-        return True
-    if p == "/engine/health":
-        try:
-            managed = _managed_status()
-        except Exception as error:
-            h._json(502, {"error": f"managed routing unavailable: {error}"})
-            return True
-        # This endpoint is the public router projection. Private worker ports and raw worker health stay
-        # private; the explicit discriminator keeps the Studio contract unambiguous even when the router
-        # currently contains a single model.
-        h._json(200, {"engine": {"managed": True, **managed}})
-        return True
-    if p == "/state":
-        h._json(200, {"substrate": ctx.active_subname(h)})
-        return True
-    if p == "/capture/tier":
-        from clozn.runs import capture_mode
-        h._json(200, {"tier": capture_mode.tier(), "tiers": list(capture_mode.TIERS)})
-        return True
-    return False
-
-
-def try_post(h, p, body):
-    if p == "/capture/tier":
-        from clozn.runs import capture_mode
-        name = str(body.get("tier", "")).strip().lower()
-        if name not in capture_mode.TIERS:
-            h._json(400, {"error": f"unknown tier (want one of {list(capture_mode.TIERS)})"})
-            return True
-        if not capture_mode.set_tier(name):
-            h._json(200, {"ok": False, "reason": "could not persist the tier setting"})
-            return True
-        h._json(200, {"ok": True, "tier": name})
-        return True
     return False

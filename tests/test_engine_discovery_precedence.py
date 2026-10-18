@@ -1,5 +1,5 @@
-"""find_engine_ex() precedence: CLOZN_ENGINE override -> active managed engine
-(``clozn setup``) -> repository-local development build. Every source is
+"""find_engine_ex() precedence: CLOZN_ENGINE override -> legacy managed engine
+-> repository-local development build. Every source is
 exercised in isolation via tmp_path + monkeypatch -- no real engine build or GPU is ever required.
 """
 from __future__ import annotations
@@ -54,8 +54,8 @@ def _install_managed(home, *, backend="cuda", cuda_major=12, sha256="a" * 64, ve
 
 # ------------------------------------------------------------------------------------------------- none
 
-def test_no_candidates_raises_and_mentions_setup(isolated):
-    with pytest.raises(CloznError, match="clozn setup"):
+def test_no_candidates_raises_with_supported_build_guidance(isolated):
+    with pytest.raises(CloznError, match="docs/DEVELOPMENT.md"):
         engine_process.find_engine_ex()
 
 

@@ -1,56 +1,17 @@
-export const INSPECT_VIEWS = [
-  "read",
-  "context-effects",
-  "context",
-  "receipt",
-  "minimal-context",
-  "actions",
-  "claims",
-] as const;
+export const INSPECT_VIEWS = ["context-effects", "minimal-context"] as const;
 
 export type InspectView = (typeof INSPECT_VIEWS)[number];
 
-type InspectRouteBase = {
+export type InspectRoute = {
   surface: "inspect";
   runId: string;
-  sessionId?: string;
+  view?: InspectView;
+  answerStart?: number;
+  answerEnd?: number;
+  sourceId?: string;
 };
 
-type InspectReaderRoute = InspectRouteBase & (
-  | {
-      view?: "read" | "context-effects";
-      answerStart: number;
-      answerEnd: number;
-      sourceId?: string;
-    }
-  | {
-      view?: "read" | "context-effects";
-      answerStart?: never;
-      answerEnd?: never;
-      sourceId?: never;
-    }
-);
-
-type InspectSimpleRoute = InspectRouteBase & {
-  view: Exclude<InspectView, "read" | "context-effects">;
-  answerStart?: never;
-  answerEnd?: never;
-  sourceId?: never;
-};
-
-export type InspectRoute = InspectReaderRoute | InspectSimpleRoute;
-
-export type CompareRoute =
-  | { surface: "compare"; runA?: never; runB?: never }
-  | { surface: "compare"; runA: string; runB: string }
-  | { surface: "compare"; mode: "matrix"; experimentId?: string; runA?: never; runB?: never };
-
-export type StudioRoute =
-  | { surface: "sessions" }
-  | { surface: "session"; sessionId: string; runId?: string }
-  | InspectRoute
-  | CompareRoute
-  | { surface: "runtime" };
+export type StudioRoute = { surface: "runs" } | InspectRoute;
 
 function decodePathPart(value: string | undefined): string | undefined {
   if (!value) return undefined;
@@ -62,29 +23,10 @@ function decodePathPart(value: string | undefined): string | undefined {
   }
 }
 
-function nonEmpty(value: string | null): string | undefined {
-  return value?.trim() ? value : undefined;
-}
-
 function coordinate(value: string | null): number | undefined {
   if (value === null || !/^(0|[1-9]\d*)$/.test(value)) return undefined;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) ? parsed : undefined;
-}
-
-function answerRange(
-  startValue: string | null,
-  endValue: string | null,
-): { answerStart: number; answerEnd: number } | undefined {
-  const answerStart = coordinate(startValue);
-  const answerEnd = coordinate(endValue);
-  return answerStart !== undefined && answerEnd !== undefined && answerEnd > answerStart
-    ? { answerStart, answerEnd }
-    : undefined;
-}
-
-function inspectView(value: string | null): InspectView | undefined {
-  return INSPECT_VIEWS.find((candidate) => candidate === value);
 }
 
 function hasOnlyQueryKeys(query: URLSearchParams, allowed: readonly string[]): boolean {
@@ -103,83 +45,48 @@ export function readRoute(hash = window.location.hash): StudioRoute {
 
   if (parts[0] === "inspect" && parts.length === 2) {
     const runId = decodePathPart(parts[1]);
-    if (!runId) return { surface: "sessions" };
-    const sessionId = nonEmpty(query.get("sessionId"));
-    if (query.has("sessionId") && !sessionId) return { surface: "sessions" };
+    if (!runId || !hasOnlyQueryKeys(query, ["view", "answerStart", "answerEnd", "sourceId"])) {
+      return { surface: "runs" };
+    }
     const viewValue = query.get("view");
-    const view = viewValue === null ? undefined : inspectView(viewValue);
-    if (viewValue !== null && !view) return { surface: "sessions" };
-
-    if (view && view !== "read" && view !== "context-effects") {
-      if (!hasOnlyQueryKeys(query, ["view", "sessionId"])) {
-        return { surface: "sessions" };
-      }
-      return { surface: "inspect", runId, view, ...(sessionId ? { sessionId } : {}) };
-    }
-
-    if (!hasOnlyQueryKeys(query, ["view", "sessionId", "answerStart", "answerEnd", "sourceId"])) {
-      return { surface: "sessions" };
-    }
+    const view = viewValue === null
+      ? undefined
+      : INSPECT_VIEWS.find((candidate) => candidate === viewValue);
+    if (viewValue !== null && !view) return { surface: "runs" };
 
     const startValue = query.get("answerStart");
     const endValue = query.get("answerEnd");
     const sourceValue = query.get("sourceId");
-    const range = answerRange(startValue, endValue);
-    if (!range && (startValue !== null || endValue !== null || sourceValue !== null)) {
-      return { surface: "sessions" };
+    if (view === "minimal-context" && (startValue !== null || endValue !== null || sourceValue !== null)) {
+      return { surface: "runs" };
     }
-    if (!range) {
-      return {
-        surface: "inspect",
-        runId,
-        ...(view ? { view } : {}),
-        ...(sessionId ? { sessionId } : {}),
-      };
+    if (startValue === null && endValue === null && sourceValue === null) {
+      return { surface: "inspect", runId, ...(view ? { view } : {}) };
     }
-    const sourceId = nonEmpty(sourceValue);
-    if (sourceValue !== null && !sourceId) return { surface: "sessions" };
+    const answerStart = coordinate(startValue);
+    const answerEnd = coordinate(endValue);
+    if (answerStart === undefined || answerEnd === undefined || answerEnd <= answerStart) {
+      return { surface: "runs" };
+    }
+    let sourceId: string | undefined;
+    if (sourceValue !== null) {
+      sourceId = sourceValue.trim() ? sourceValue : undefined;
+      if (!sourceId) return { surface: "runs" };
+    }
     return {
       surface: "inspect",
       runId,
       ...(view ? { view } : {}),
-      ...(sessionId ? { sessionId } : {}),
-      ...range,
+      answerStart,
+      answerEnd,
       ...(sourceId ? { sourceId } : {}),
     };
   }
 
-
-  if (!queryString && parts.length === 1 && parts[0] === "compare") return { surface: "compare" };
-  if (!queryString && parts[0] === "compare" && parts[1] === "matrix" && parts.length <= 3) {
-    if (parts.length === 2) return { surface: "compare", mode: "matrix" };
-    const experimentId = decodePathPart(parts[2]);
-    return experimentId
-      ? { surface: "compare", mode: "matrix", experimentId }
-      : { surface: "sessions" };
+  if (parts.length === 0 || (parts.length === 1 && parts[0] === "runs" && !queryString)) {
+    return { surface: "runs" };
   }
-  if (!queryString && parts[0] === "compare" && parts.length === 3) {
-    const runA = decodePathPart(parts[1]);
-    const runB = decodePathPart(parts[2]);
-    return runA && runB && runA !== runB
-      ? { surface: "compare", runA, runB }
-      : { surface: "sessions" };
-  }
-
-  if (parts.length === 1 && parts[0] === "runtime" && !queryString) {
-    return { surface: "runtime" };
-  }
-  if (parts[0] === "sessions" && parts.length === 2) {
-    const sessionId = decodePathPart(parts[1]);
-    if (!sessionId) return { surface: "sessions" };
-    if (!hasOnlyQueryKeys(query, ["run"])) return { surface: "sessions" };
-    const runId = nonEmpty(query.get("run"));
-    if (query.has("run") && !runId) return { surface: "sessions" };
-    return { surface: "session", sessionId, ...(runId ? { runId } : {}) };
-  }
-  if (parts.length === 0 || (parts.length === 1 && parts[0] === "sessions" && !queryString)) {
-    return { surface: "sessions" };
-  }
-  return { surface: "sessions" };
+  return { surface: "runs" };
 }
 
 function queryEntry(name: string, value: string | number): string {
@@ -187,32 +94,13 @@ function queryEntry(name: string, value: string | number): string {
 }
 
 export function routeHref(route: StudioRoute): string {
-  if (route.surface === "sessions") return "#/sessions";
-  if (route.surface === "runtime") return "#/runtime";
-  if (route.surface === "session") {
-    const query = route.runId ? `?${queryEntry("run", route.runId)}` : "";
-    return `#/sessions/${encodeURIComponent(route.sessionId)}${query}`;
-  }
-
-  if (route.surface === "compare") {
-    if ("mode" in route && route.mode === "matrix") {
-      return route.experimentId?.trim()
-        ? `#/compare/matrix/${encodeURIComponent(route.experimentId)}`
-        : "#/compare/matrix";
-    }
-    return route.runA?.trim() && route.runB?.trim() && route.runA !== route.runB
-      ? `#/compare/${encodeURIComponent(route.runA)}/${encodeURIComponent(route.runB)}`
-      : "#/compare";
-  }
-
-  if (!route.runId.trim()) return "#/sessions";
+  if (route.surface === "runs") return "#/runs";
+  if (!route.runId.trim()) return "#/runs";
   const query: string[] = [];
   if (route.view) query.push(queryEntry("view", route.view));
-  if (route.sessionId?.trim()) query.push(queryEntry("sessionId", route.sessionId));
   if (
-    (!route.view || route.view === "read" || route.view === "context-effects")
-    &&
-    Number.isSafeInteger(route.answerStart)
+    route.view !== "minimal-context"
+    && Number.isSafeInteger(route.answerStart)
     && Number.isSafeInteger(route.answerEnd)
     && route.answerStart !== undefined
     && route.answerEnd !== undefined

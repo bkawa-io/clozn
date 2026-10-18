@@ -13,7 +13,7 @@ Public surface:
     stored trace (falling back to the raw `response` TEXT, flagged `retokenized: True` --
     boundary-approximate, per REPRODUCE_AND_PROVE_PLAN.md's tokenization-boundary caveat).
   * score_arm(sub, conditions, ...) -- one forced-scoring call reusing `conditions`'s messages and
-    continuation under a possibly different block or raw steering vector.
+    continuation under a possibly different context block.
   * rederive(run, sub) -- the S3 deliverable: re-derive `run`'s own stored answer under its own
     conditions and return {"text", "steps": [{"piece","token_id","logprob","conf"}, ...], "meta"}.
     Deterministic; never raises (mirrors replay.py/receipts.py's "never raise into the caller"
@@ -76,10 +76,9 @@ def with_arm_conditions(run: dict) -> dict:
     }
 
 
-def score_arm(sub, conditions: dict, *, messages=None, block=None, steer_vec=None,
-             topk: int = 0):
+def score_arm(sub, conditions: dict, *, messages=None, block=None, topk: int = 0):
     """One forced-scoring call on `sub.score_tokens`, reusing `conditions`'s messages/continuation
-    (from with_arm_conditions) under the given block/steer_vec -- so a with/without
+    (from with_arm_conditions) under the given block -- so a with/without
     receipt arm is just two calls that share everything except the one knob under test. Continuation
     ids are primary; when `conditions["continuation_ids"]` is None (an old/light-tier run), falls back
     to scoring `conditions["response"]` as continuation TEXT (boundary-approximate; the caller should
@@ -92,8 +91,6 @@ def score_arm(sub, conditions: dict, *, messages=None, block=None, steer_vec=Non
     ids = conditions.get("continuation_ids")
     try:
         kwargs = {"block": block, "topk": int(topk)}
-        if steer_vec is not None:
-            kwargs["steer_vec"] = steer_vec
         if ids is not None:
             tokens = score_tokens(msgs, ids, **kwargs)
         else:

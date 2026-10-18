@@ -17,6 +17,7 @@ const runId = "run_fixture";
 const resultId = "mcres_0123456789abcdef01234567";
 const sourceA = "src_aaaaaaaaaaaaaaaaaaaaaaaa";
 const sourceB = "src_bbbbbbbbbbbbbbbbbbbbbbbb";
+const sourceC = "src_cccccccccccccccccccccccc";
 const jobId = "infjob_fixture";
 
 function candidate(retained: string[], removed: string[], cost: number, suffix: string): WireDocument {
@@ -198,7 +199,7 @@ function summaryDocument(document = resultDocument()): WireDocument {
 
 function jobDocument(state = "completed", includeResult = true): WireDocument {
   return {
-    schema_version: "clozn.influence-map-job.v1",
+    schema_version: "clozn.analysis-job.v1",
     job_id: jobId,
     run_id: runId,
     kind: "minimal_context",
@@ -232,7 +233,6 @@ function materializationDocument(state: "completed" | "failed" = "completed"): W
     ...shared,
     child_run_id: "run_child",
     comparison: {},
-    compare_path: `#/compare/${runId}/run_child`,
   };
 }
 
@@ -350,27 +350,18 @@ describe("Minimal Context canonical client", () => {
     expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({ method: "GET" }));
   });
 
-  it("starts only the exact mode with explicit bounded-search policy", async () => {
+  it("starts the fixed exact bounded-search policy with an empty body", async () => {
     const queued = jobDocument("queued", false);
     const fetchMock = vi.fn().mockResolvedValue(json(queued, 202));
     vi.stubGlobal("fetch", fetchMock);
 
-    await minimalContextApi.start(runId, {
-      maxUnits: 50,
-      maxNewCounterfactualObservations: 32,
-      attemptInclusionCheck: true,
-    });
+    await minimalContextApi.start(runId);
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/runs/run_fixture/minimal-context/jobs",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({
-          preservation: { kind: "exact_recorded_output" },
-          universe: { max_units: 50 },
-          max_new_counterfactual_observations: 32,
-          attempt_inclusion_check: true,
-        }),
+        body: "{}",
       }),
     );
   });
@@ -446,13 +437,11 @@ describe("Minimal Context canonical client", () => {
     expect(error).toMatchObject({ code: "minimal_context_result_stale", status: 409 });
   });
 
-  it("rejects malformed request values and blank identities before dispatch", async () => {
+  it("rejects blank identities before dispatch", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(minimalContextApi.start(runId, {
-      maxUnits: 0, maxNewCounterfactualObservations: 1, attemptInclusionCheck: true,
-    })).rejects.toBeInstanceOf(ContractError);
+    await expect(minimalContextApi.start(" ")).rejects.toBeInstanceOf(ContractError);
     await expect(minimalContextApi.job(runId, " ")).rejects.toBeInstanceOf(ContractError);
     await expect(minimalContextApi.results(" ")).rejects.toBeInstanceOf(ContractError);
     expect(fetchMock).not.toHaveBeenCalled();
@@ -460,6 +449,22 @@ describe("Minimal Context canonical client", () => {
 });
 
 describe("Minimal Context exact-replay materialization contract", () => {
+  it("treats deletion membership, not display order, as materialization identity", () => {
+    const decoded = decodeMinimalContextResult(resultDocument(), "/result", runId, true);
+    const result = {
+      ...decoded,
+      best: { ...decoded.best!, removedSourceIds: [sourceB, sourceC] },
+    };
+    const materialization = {
+      ...materializationDocument(),
+      intervention: { kind: "delete_source", source_ids: [sourceC, sourceB] },
+    };
+
+    expect(decodeMinimalContextMaterializationResult(
+      materialization, "/materialize", runId, result,
+    ).removedSourceIds).toEqual([sourceC, sourceB]);
+  });
+
   it("rejects a response that changes winner evidence, deletion set, or child lineage", () => {
     const result = decodeMinimalContextResult(resultDocument(), "/result", runId, true);
     expect(() => decodeMinimalContextMaterializationResult(
@@ -470,7 +475,7 @@ describe("Minimal Context exact-replay materialization contract", () => {
       "/materialize", runId, result,
     )).toThrow(/persisted result winner/);
     expect(() => decodeMinimalContextMaterializationResult(
-      { ...materializationDocument(), child_run_id: runId, compare_path: `#/compare/${runId}/${runId}` },
+      { ...materializationDocument(), child_run_id: runId },
       "/materialize", runId, result,
     )).toThrow(/child, not the source Run/);
   });

@@ -12,10 +12,7 @@ from clozn.experiments.kernel import Experiment
 from clozn.experiments.projection import AnswerSpanEffect, project_answer_effects
 from clozn.experiments.runner import ExperimentResult, run_experiment
 from clozn.experiments.persistence import ObservationStore
-from clozn.experiments.scoring import (
-    DeleteSourceRecordedContinuationScoreAdapter,
-    ScoreTokensRefinementPolicy,
-)
+from clozn.experiments.scoring import DeleteSourceRecordedContinuationScoreAdapter
 from clozn.experiments.selections import AnswerSelection, ContextSelection
 from clozn.experiments.state import ExecutionState
 
@@ -243,35 +240,25 @@ def measure_context_effects(run: Mapping[str, Any], source_ids: Iterable[str] | 
                             execution_adapter: Any = None, substrate: Any = None,
                             run_loader: Any = None, answer_selection: AnswerSelection | None = None,
                             include_control: bool = True, observation_store: ObservationStore | None = None,
-                            store: ObservationStore | None = None, cancel: Any = None,
-                            refinement_policy: ScoreTokensRefinementPolicy | None = None) -> ExperimentResult:
+                            store: ObservationStore | None = None,
+                            cancel: Any = None) -> ExperimentResult:
     """Measure baseline plus direct leave-one-out deletion score arms.
 
     ``answer_selection`` is accepted as a convenience validation input but is
     intentionally not stored in or hashed into the experiment.  Use
     :func:`project_context_effects` for the read-side selection.
 
-    ``refinement_policy`` is an explicit, default-off acceleration policy.  On
-    a screening-capable native substrate it screens the missing arms together
-    and scalar-remeasures only the policy's proof-critical/borderline arm IDs.
-    Unselected screens remain unavailable and never enter the observation
-    store.  Scalar substrates retain their existing all-arms behavior.
+    Every arm uses the same trusted scalar scoring contract.
     """
     if not isinstance(run, Mapping):
         raise TypeError("measure_context_effects requires a run mapping")
     if answer_selection is not None and not isinstance(answer_selection, AnswerSelection):
         raise TypeError("answer_selection must be an AnswerSelection")
-    if refinement_policy is not None and not isinstance(
-            refinement_policy, ScoreTokensRefinementPolicy):
-        raise TypeError("refinement_policy must be a ScoreTokensRefinementPolicy")
-    if execution_adapter is not None and refinement_policy is not None:
-        raise ValueError("refinement_policy cannot be combined with a custom execution_adapter")
     plan = plan_context_effects(run, source_ids)
     adapter = execution_adapter
     if adapter is None:
         adapter = DeleteSourceRecordedContinuationScoreAdapter(
             substrate, run=run, run_loader=run_loader,
-            refinement_policy=refinement_policy,
         )
     return run_experiment(
         plan.experiment, adapter, include_control=include_control,

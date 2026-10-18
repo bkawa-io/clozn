@@ -1,30 +1,13 @@
-"""fit_planner -- answer "which model should I run / will it fit?" before a multi-GB download.
+"""Minimal local GGUF-header parser used to derive stable model identity.
 
-FRONTIER_BETS Sec.2: the metadata that decides fit -- architecture, quantization, layer/embedding
-shapes, trained context length -- lives in a small, self-describing binary header at the very
-START of a GGUF file (see the spec: https://github.com/ggml-org/ggml/blob/master/docs/gguf.md).
-The multi-GB tensor payload comes AFTER that header, so reading it needs only the first few MB:
-a local file read is instant, and a remote HuggingFace URL only needs one HTTP Range request --
-never the full download.
-
-Stdlib + urllib only. CPU-only. Never loads the model, never touches a GPU -- this module only
-ever reads and unpacks bytes.
-
-    header = gguf_header_from_path("model.gguf")            # or gguf_header_from_url(url)
-    report = fit_report(header, header["file_size_bytes"], vram_gb=16)
-
-The four functions below are the whole surface: parse_gguf_header (pure, offline, takes bytes
-already in hand), gguf_header_from_path / gguf_header_from_url (fetch just enough bytes and grow
-on demand), and fit_report (the honest, approximate "will it fit" math).
+The metadata needed for identity lives at the front of a GGUF, so this module reads only enough
+of a local file to parse that header. It never loads model weights or touches an accelerator.
 """
 from __future__ import annotations
 
 import os
 import struct
-import urllib.request
 from collections import Counter
-
-USER_AGENT = "clozn-fit-planner/0.1"
 
 GGUF_MAGIC = b"GGUF"
 
@@ -63,8 +46,7 @@ LLAMA_FTYPE_LABELS = {
 
 
 class NeedMoreBytes(ValueError):
-    """Raised by parse_gguf_header when the buffer it was given is truncated mid-header. Callers
-    (gguf_header_from_path/url) catch this, grow the range/read, and retry from scratch."""
+    """Raised when the supplied bytes end before the GGUF header does."""
 
     def __init__(self, need_at_least: int, have: int):
         self.need_at_least = need_at_least
@@ -154,7 +136,7 @@ def _quant_label(metadata: dict, tensors: list[dict]) -> tuple[str, str]:
 def parse_gguf_header(data: bytes) -> dict:
     """Parse a GGUF binary header out of `data` (the first N bytes of a .gguf file/URL). Raises
     NeedMoreBytes if `data` is truncated before the header ends -- the caller should fetch more and
-    retry. Returns a dict with the fields the fit planner needs (arch, context_length, n_layers,
+    retry. Returns a dict with useful identity fields (arch, context_length, n_layers,
     embedding_length, head_count, head_count_kv, quant, ...) plus the raw `metadata` dict and the
     parsed `tensors` list for anyone who wants more."""
     if len(data) < 4:
@@ -231,114 +213,3 @@ def gguf_header_from_path(path: str, initial_bytes: int = 1 << 20, max_bytes: in
     header["path"] = os.path.abspath(path)
     header["bytes_read"] = len(data)
     return header
-
-
-def _http_range_get(url: str, n: int, timeout: float):
-    """GET bytes [0, n) via a Range request. Reads at most `n` bytes even if the server ignores
-    the Range header and sends the whole file with a 200 -- this is what guarantees a fit-check
-    never turns into an accidental multi-GB download."""
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Range": f"bytes=0-{n - 1}"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        data = resp.read(n)
-        headers = dict(resp.headers.items())
-    return data, headers
-
-
-def _remote_size(url: str, timeout: float) -> int | None:
-    """Total file size via HEAD; falls back to a 1-byte Range GET and its Content-Range total
-    (some hosts, HuggingFace's CDN included, don't answer HEAD the same way as GET)."""
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT}, method="HEAD")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            cl = resp.headers.get("Content-Length")
-            if cl:
-                return int(cl)
-    except Exception:
-        pass
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Range": "bytes=0-0"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            cr = resp.headers.get("Content-Range")   # "bytes 0-0/<total>"
-            if cr and "/" in cr:
-                return int(cr.rsplit("/", 1)[-1])
-    except Exception:
-        pass
-    return None
-
-
-def gguf_header_from_url(url: str, initial_bytes: int = 1 << 20, max_bytes: int = 64 << 20,
-                          timeout: float = 30.0) -> dict:
-    """HTTP Range the first chunk of a remote .gguf (start ~1 MiB, grow on NeedMoreBytes) and parse
-    it, plus a separate size lookup for the full file. Works against HuggingFace
-    `.../resolve/main/*.gguf` URLs, which honor Range without needing auth for public repos."""
-    n = initial_bytes
-    data, headers = b"", {}
-    while True:
-        data, headers = _http_range_get(url, n, timeout)
-        try:
-            header = parse_gguf_header(data)
-            break
-        except NeedMoreBytes as e:
-            if n >= max_bytes:
-                raise
-            n = min(max(e.need_at_least + 4096, n * 2), max_bytes)
-
-    size = _remote_size(url, timeout)
-    if size is None:
-        cr = headers.get("Content-Range")
-        if cr and "/" in cr:
-            try:
-                size = int(cr.rsplit("/", 1)[-1])
-            except ValueError:
-                size = None
-        elif headers.get("Content-Length") and headers.get("Content-Length").isdigit():
-            # only trustworthy as a total if the server ignored our Range and sent everything
-            if int(headers["Content-Length"]) > n:
-                size = int(headers["Content-Length"])
-
-    header["file_size_bytes"] = size
-    header["url"] = url
-    header["bytes_fetched"] = len(data)
-    return header
-
-
-def fit_report(header: dict, file_size_bytes: int, vram_gb: float, ctx_for_estimate: int = 8192) -> dict:
-    """Rough "will it fit on this GPU" estimate: model file size (weights) + an approximate KV-cache
-    term for an 8k-token context at KV-q8 + a rule-of-thumb runtime/compute-buffer overhead. This is
-    a before-you-download sanity check, not a promise -- actual usage depends on the runtime,
-    context actually used, and batch size."""
-    file_size_bytes = file_size_bytes or 0
-    n_layers = header.get("n_layers") or 0
-    embedding_length = header.get("embedding_length") or 0
-    head_count = header.get("head_count") or 0
-    head_count_kv = header.get("head_count_kv") or head_count or 1
-    head_dim = (embedding_length / head_count) if head_count else 0.0
-
-    file_gb = file_size_bytes / 1e9
-    # KV cache: 2 (K and V) * layers * kv-heads * head_dim * context, 1 byte/element at KV-q8.
-    kv_bytes = 2 * n_layers * head_count_kv * head_dim * ctx_for_estimate
-    kv_gb = kv_bytes / 1e9
-    overhead_gb = max(0.3, file_gb * 0.08)   # compute buffers / dequant workspace, rule-of-thumb
-    est_vram_gb = file_gb + kv_gb + overhead_gb
-
-    fits = est_vram_gb <= vram_gb
-
-    note = (f"APPROXIMATE: file size + KV-cache for a {ctx_for_estimate}-token context (KV-q8; "
-            f"{n_layers} layers x {head_count_kv} kv-heads x {head_dim:.0f}-dim) + a rule-of-thumb "
-            f"compute/workspace overhead. Real VRAM use depends on the runtime, batch size, and the "
-            f"context actually used -- this is a before-you-download sanity check, not a promise.")
-
-    offload_hint = None
-    if not fits and n_layers:
-        bytes_per_layer = file_size_bytes / n_layers   # rough: spreads embed/lm_head across layers too
-        budget_bytes = max(0.0, vram_gb * 1e9 - kv_bytes - overhead_gb * 1e9)
-        layers_fit = max(0, min(n_layers, int(budget_bytes // bytes_per_layer))) if bytes_per_layer else 0
-        offload_hint = (f"~{layers_fit}/{n_layers} layers would fit on {vram_gb:g} GB VRAM; "
-                         f"the rest would spill to CPU/RAM (slower).")
-
-    return {
-        "est_vram_gb": round(est_vram_gb, 2),
-        "fits": fits,
-        "note": note,
-        "offload_hint": offload_hint,
-    }

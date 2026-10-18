@@ -39,7 +39,7 @@
     },
     "ext": {
       "type": "object",
-      "description": "Namespaced identity facets contributed by clozn.runs.identity_ext providers. Each key is a provider name (e.g. 'engine_artifact', 'adapter', 'machine'); each value is that provider's own object. A reader that does not recognise a namespace must preserve it, not drop it.",
+      "description": "Namespaced identity facets contributed by clozn.runs.identity_ext providers. Each key is a provider name (for example 'engine_artifact' or 'machine'); each value is that provider's own object. A reader that does not recognise a namespace must preserve it, not drop it.",
       "additionalProperties": {
         "type": "object"
       }

@@ -1,104 +1,58 @@
-# Architecture — Clozn's current product runtime
+# Clozn v1 architecture
 
-Clozn is one local product: an autoregressive GGUF worker behind a Torch-free gateway, with every
-generation recorded as an inspectable run. The product is built to compare behavior, expose delivered
-context and runtime evidence, apply bounded interventions, and fail closed when evidence or a qualified
-artifact is missing.
-
-The [capability matrix](CAPABILITIES.md) is authoritative for user-visible status.
-
-## Layers and dependency direction
+Clozn is one public Python gateway supervising one private native GGUF worker.
 
 ```text
-clozn/ + studio-frontend/  →  protocol/  →  engine/
-product/API/UI                shared seam    C++ runtime
+CLI / OpenAI client / Studio
+              |
+        public gateway
+  validation · recording · jobs
+              |
+       private worker HTTP
+ generation · template · score
+ exact match · cancellation
 ```
 
-- `clozn/` owns the CLI, OpenAI-compatible gateway, run journal, context receipts, comparisons,
-  experiments, corrective actions, steering, readouts, and setup logic. The installed product remains
-  stdlib-only.
-- `studio-frontend/` is the Studio source and `studio/app/` is its compiled application. Studio reads
-  the same run and evidence APIs as the CLI.
-- `protocol/` defines the worker/gateway state-event and handshake contract.
-- `engine/core/` owns GGUF loading, chat-template rendering, generation, sampling, scoring, activation
-  taps, steering writes, and optional qualified readout application.
+The gateway is stdlib-only. It owns the public API, Studio assets, run journal, source mapping,
+Context Effects, Minimal Context orchestration, background job state, saved-child creation, and reduced
+comparison. The worker owns model loading, tokenization, model-specific chat-template rendering,
+autoregressive generation, scalar teacher-forced scoring, exact-reference probes, and cancellation.
 
-Product code never imports Torch or Transformers. Offline fitting, calibration, and research scripts
-may use heavier dependencies, but they communicate with the product only through validated artifacts.
+## Public boundary
 
-## Process model
+The only public model API is the text subset documented in
+[OPENAI_COMPATIBILITY.md](OPENAI_COMPATIBILITY.md). Studio additionally uses explicit run, context,
+effects, reduction, comparison, and cancellation routes. The worker port is loopback-private and is not
+a second product API.
 
-`clozn serve MODEL --port 8080` runs the public gateway in the supervisor process and owns one or more
-private model workers:
+Both CLI commands and HTTP route modules use checked-in allowlists. Restoring a removed file cannot
+restore a public surface.
 
-1. one public loopback Python gateway on the requested port; and
-2. private C++ GGUF workers on random loopback ports, selected through the model router.
+## Recording boundary
 
-The gateway is the only public URL. It owns API compatibility, Studio, journaling, receipts, run
-comparison, and action orchestration. The worker is replaceable: the gateway negotiates protocol
-compatibility, reports the exact worker identity, and restarts it after an unexpected exit.
+A successful generation response represents a durably recorded run. The gateway records the delivered
+messages, rendered prompt when available, answer, finish reason, token trace, source catalogue, model and
+engine identity, and generation settings. If persistence fails after generation, the public request fails
+with `journal_persistence_failed`.
 
-Generation requests acquire the selected worker's bounded gate, so different workers may execute
-concurrently while one worker remains isolated. Operations whose worker scope cannot be proven acquire
-the gateway mutation gate and drain worker generation gates. Health, Studio assets, and read-only run
-inspection remain concurrent.
+v1 data is isolated under `CLOZN_DATA_ROOT` or `~/.clozn/v1/`. SQLite is authoritative for run metadata;
+large traces are immutable SHA-256 blobs. Saved reduction children are new immutable runs linked to an
+unchanged parent.
 
-## Public and native APIs
+## Evidence boundary
 
-- `/v1/models` and `/v1/chat/completions` form the strict client-facing OpenAI subset documented in
-  [OPENAI_COMPATIBILITY.md](OPENAI_COMPATIBILITY.md).
-- `/api/clozn/generate` carries Clozn's typed native state stream. Native event frames never leak into
-  an OpenAI completion stream.
-- `/runs/*`, `/experiment-results/*`, and other namespaced routes expose recorded evidence and derived
-  views. A derived view does not upgrade the evidence in its source run.
-- Raw vector steering (`steer_vec`) is an engine-level primitive reached through `/intervene`,
-  execution-fork steer arms, and the receipts/analysis machinery, not a dedicated product route. Raw
-  engine inspection remains separate under `/engine/*`.
+Context Effects removes a recorded source and scores fixed output tokens. Its links mean measured change
+under that intervention, not general attribution. Minimal Context separately asks the worker to reproduce
+the recorded output and stop behavior under a reduced prompt. It reports the best verified result within
+its bounded budget unless stronger proof conditions are actually met.
 
-## Runs, identity, and persistence
+Missing, unmeasured, unavailable, failed, low-effect, and exact-preserved states remain distinct. Source
+and answer selections always resolve through recorded ranges; the UI must not imply finer evidence than
+was measured.
 
-SQLite is authoritative for queryable run metadata, lineage, status, and the complete run document.
-Large normalized traces are immutable SHA-256-addressed blobs. The complete current SQLite schema is
-created transactionally when the store first opens and verified on subsequent process starts.
+## Lifecycle
 
-A run records the messages delivered to the renderer, exact rendered prompt when available, response,
-trace, finish or failure state, behavior settings, model/engine identity, and additive identity facets.
-Every persisted artifact gets a versioned schema before it is written. Unknown values are omitted, not
-null-padded, and optional identity providers may lose only their own namespace when unavailable.
-
-## Evidence paths
-
-The engine provides measurements; the Python layer composes them into bounded claims:
-
-| Evidence | Source | Claim boundary |
-|---|---|---|
-| Token confidence and alternatives | native generation trace | commitment, not correctness |
-| Context Receipt | delivered/assembled segment metadata, rendered prompt facts, and termination evidence | what reached the model, not what caused output |
-| Teacher-forced score differences | `/score` interventions | local effect under the stated counterfactual |
-| Source influence map | bounded source ablations and thresholds | measured spans only; omissions remain visible |
-| Run comparison | stored run identity/context/settings/output | structural difference, not causal attribution |
-| Performance diagnosis | versioned gateway/worker monotonic spans, explicit clock owners, known/unaccounted aggregation, and explicit rules | a cause only when the rule's evidence is present; never subtract unrelated process clocks or double-count overlapping spans |
-| J-lens | qualified fitted artifact applied to engine activations | disposition readout, not literal thought or causal proof |
-
-## Product acceptance gate
-
-`clozn smoke MODEL` launches the real supervised stack, checks Studio and the public/native protocol surfaces,
-verifies journaling and trace integrity, replaces the private worker behind the stable gateway, proves
-generation still works, and cleans up the complete process tree. `--deep` adds forced scoring/receipt
-paths; `--preflight` reports prerequisites without starting anything.
-
-Unit tests may replace the worker, but they do not substitute for a successful real-GGUF smoke gate.
-Likewise, merged installer code is not a released install path until public archives and their manifest
-pass the clean-machine release lanes.
-
-## Hard invariants
-
-1. **Evidence before narration.** Observed, eliminated, reproduced, correlated, and causally supported
-   are distinct states.
-2. **No silent fallback.** Unsupported capabilities fail or return an explicit unavailable state.
-3. **Exact identity travels with comparisons.** Model, template, engine, adapter, and artifact
-   differences must not disappear behind a friendly label.
-4. **Model-free by default.** Contracts, schemas, planners, renderers, and failure paths are testable
-   without a model or network.
-5. **Qualification is scoped.** Core support never implies that a model-specific lens, SAE, or
-   structured-I/O artifact is qualified.
+`clozn serve MODEL` starts the gateway and one worker. Generation and analysis use the same selected
+worker identity. Context Effects and Minimal Context run as cancellable jobs with explicit queued,
+running, completed, cancelled, and failed states. Finished analysis results are durable; interrupted work
+is not presented as complete.

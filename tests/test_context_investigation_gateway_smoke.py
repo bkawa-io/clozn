@@ -20,54 +20,22 @@ smoke = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(smoke)
 
 
-def _reader(*, observation_id=None):
-    measured = observation_id is not None
+def _reader(*, measured=1, failed=0, unavailable=0, not_measured=3):
     return {
-        "status": "partial" if measured else "not_measured",
         "measurement": {
-            "status": "partial" if measured else "not_measured",
-            "experiment_id": "exp_reader",
-            "baseline_observation_id": observation_id,
-            "completed_source_count": int(measured),
-            "unavailable_source_count": 0,
-            "failed_source_count": 0,
-            "not_measured_source_count": 0 if measured else 1,
+            "completed_source_count": measured,
+            "failed_source_count": failed,
+            "unavailable_source_count": unavailable,
+            "not_measured_source_count": not_measured,
         },
-        "sources": [{
-            "source_id": "src_a",
-            "measurement": {
-                "status": "measured" if measured else "not_measured",
-                "experiment_id": "exp_reader" if measured else None,
-                "arm_id": "arm_a" if measured else None,
-                "observation_id": observation_id,
-            },
-        }],
     }
 
 
-def _cancelled_job(*, executed=1, skipped=2):
+def _cancelled_job(**overrides):
     return {
         "state": "cancelled",
         "cancel_requested": True,
-        "result": {
-            "schema_version": (
-                "clozn.context-investigation-effects-search-job-result.v1"
-            ),
-            "reader_projection": {
-                "status": "not_published_cancelled",
-                "control_observation_id": None,
-                "trusted_singleton_source_ids": [],
-            },
-            "budget_usage": {
-                "actual_work": {
-                    "model_measurements_executed_total": executed,
-                    "model_measurements_skipped_total": skipped,
-                    "saved_work_breakdown": {
-                        "scheduler_or_cancellation_skip": skipped,
-                    },
-                },
-            },
-        },
+        **overrides,
     }
 
 
@@ -82,38 +50,56 @@ def test_cancellation_fixture_has_non_overlapping_exact_source_ranges():
             assert sources[index - 2]["unicode_range"][1] < start
 
 
-def test_cancelled_search_gate_requires_partial_work_and_unchanged_reader():
-    reader = _reader()
+def test_live_fixture_protects_instructions_and_question_but_marks_context_removable():
+    class Client:
+        body = None
 
-    summary = smoke._validate_cancelled_search(
-        _cancelled_job(),
-        reader_before=reader,
-        reader_after=reader,
-        planned_measurements=4,
+        def post(self, path, body):
+            assert path == "/v1/chat/completions"
+            self.body = body
+            return 200, {"clozn_run_id": "run_one"}
+
+    client = Client()
+    run_id, _generated = smoke._create_run(
+        client,
+        model="fixture-model",
+        context="Northstar launches May 22.",
+        sources=[{
+            "message_index": 0,
+            "source_id": "launch-date",
+            "unicode_range": [0, 26],
+        }],
+        prompt="When does Northstar launch?",
+        max_tokens=32,
+    )
+
+    assert run_id == "run_one"
+    assert [message["role"] for message in client.body["messages"]] == ["system", "user", "user"]
+    assert client.body["clozn_sources"][0]["message_index"] == 1
+    assert "clozn_receipt" not in client.body
+
+
+def test_cancelled_direct_measurement_gate_accepts_partial_honest_evidence():
+    summary = smoke._validate_cancelled_effects(
+        _cancelled_job(), reader_after=_reader(), source_count=4,
     )
 
     assert summary == {
-        "model_measurements_executed": 1,
-        "model_measurements_skipped": 2,
-        "planned_measurements": 4,
-        "reader_projection_status": "not_published_cancelled",
+        "measured_source_count": 1,
+        "not_measured_source_count": 3,
+        "source_count": 4,
     }
 
 
 @pytest.mark.parametrize(
-    ("job", "after", "message"),
+    ("job", "reader", "message"),
     [
-        (_cancelled_job(executed=0), _reader(), "before any real model measurement"),
-        (_cancelled_job(skipped=0), _reader(), "skipped-work accounting"),
-        (_cancelled_job(executed=4), _reader(), "after all 4 planned measurements"),
-        (_cancelled_job(), _reader(observation_id="obs_published"), "reader changed"),
+        ({"state": "completed", "cancel_requested": True}, _reader(), "was not cancelled"),
+        (_cancelled_job(result={}), _reader(), "completed result"),
+        (_cancelled_job(), _reader(measured=4, not_measured=0), "measured every source"),
+        (_cancelled_job(), _reader(measured=1, not_measured=1), "inconsistent"),
     ],
 )
-def test_cancelled_search_gate_rejects_false_positive_qualification(job, after, message):
+def test_cancelled_direct_measurement_gate_rejects_false_positives(job, reader, message):
     with pytest.raises(smoke.SmokeFailure, match=message):
-        smoke._validate_cancelled_search(
-            job,
-            reader_before=_reader(),
-            reader_after=after,
-            planned_measurements=4,
-        )
+        smoke._validate_cancelled_effects(job, reader_after=reader, source_count=4)

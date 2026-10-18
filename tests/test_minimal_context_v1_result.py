@@ -141,6 +141,43 @@ def test_full_context_winner_is_a_typed_noop_for_materialization(tmp_path, monke
     assert run_store.list_runs(20) == []
 
 
+def test_materialization_source_binding_is_order_independent():
+    from clozn.server.routes.minimal_context import _same_source_set
+
+    assert _same_source_set(("src_a", "src_b", "src_c"), ("src_b", "src_c", "src_a"))
+    assert not _same_source_set(("src_a", "src_b"), ("src_a", "src_c"))
+    assert not _same_source_set(("src_a", "src_a"), ("src_a",))
+
+
+def test_existing_result_materialization_is_reused(monkeypatch):
+    from types import SimpleNamespace
+    from clozn.server.routes import minimal_context as route
+
+    winner = SimpleNamespace(
+        experiment_id="exp_one", arm_id="arm_one", observation_id="obs_one",
+        removed_source_ids=("src_b", "src_a"),
+    )
+    result = SimpleNamespace(result_id="mcres_one", best=winner)
+    parent = {"id": "run_parent", "response": "same"}
+    child = {
+        "id": "run_child", "parent_run_id": "run_parent", "response": "same",
+        "changes_applied": {"experiment": {
+            "experiment_id": "exp_one", "arm_id": "arm_one", "observation_id": "obs_one",
+            "intervention": {"kind": "delete_source", "source_ids": ["src_a", "src_b"]},
+            "derived_provenance": {"minimal_context": {"result_id": "mcres_one"}},
+        }},
+    }
+    monkeypatch.setattr(run_store, "iter_runs", lambda: [child])
+    monkeypatch.setattr("clozn.analysis.reduction_compare.compare_reduction", lambda left, right: {
+        "left": left["id"], "right": right["id"],
+    })
+
+    outcome = route._existing_materialization(parent, result)
+
+    assert outcome["child_run_id"] == "run_child"
+    assert outcome["comparison"] == {"left": "run_parent", "right": "run_child"}
+
+
 def test_job_routes_refuse_another_instruments_job_without_cancelling_it(monkeypatch):
     from clozn.server import influence_jobs
     from clozn.server.routes import minimal_context as route

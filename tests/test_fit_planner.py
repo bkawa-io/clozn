@@ -1,30 +1,13 @@
-"""test_fit_planner -- model-free tests for clozn/fit_planner.py (FRONTIER_BETS Sec.2: "will it fit?"
-answered from a GGUF's header alone -- no download of the multi-GB tensor payload, no model load, no GPU).
+"""Model-free tests for the local GGUF header parser used by model identity.
 
-Layout:
-  * a tiny hand-built GGUF byte-string (magic + version + counts + a handful of metadata KVs, including
-    a string array, + two tensor infos) drives parse_gguf_header() in complete isolation -- deterministic,
-    no real model file needed -- and exercises the NeedMoreBytes growth contract directly (truncated
-    buffers at several cut points) plus the bad-magic error path.
-  * gguf_header_from_path() is driven against that same synthetic bytes written to a real temp file, with
-    a deliberately tiny initial read size, so the "start small, grow on NeedMoreBytes" path actually runs
-    through more than one iteration.
-  * the two REAL local GGUFs named in FRONTIER_BETS (Qwen2.5-7B-Instruct-Q4_K_M.gguf, arch qwen2, 28 layers,
-    32k ctx; Llama-3.2-1B-Instruct-Q4_K_M.gguf, arch llama) are parsed and checked against their known
-    facts -- skipped (not failed) if this machine doesn't have them under ~/.clozn/models.
-  * fit_report()'s fit/no-fit math and its offload hint, plus the mandatory "APPROXIMATE" honesty flag.
-  * gguf_header_from_url() against one live HuggingFace GGUF -- best-effort: any network failure skips
-    rather than fails, so the offline suite never depends on connectivity.
-  * clozn/cli.py wiring: `plan` is registered in build_parser() with the expected flags, and format_plan()
-    (the pure header+report -> terminal text renderer cli.py factors out) is driven with a canned dict.
+Synthetic bytes cover parsing, truncation, and local incremental reads. Optional checks against real
+local models are skipped when those GGUFs are not installed.
 """
 from __future__ import annotations
 
 import os
 import struct
 import sys
-import tempfile
-from types import SimpleNamespace
 
 import pytest
 
@@ -33,7 +16,6 @@ REPO = os.path.dirname(HERE)                                # repo root
 sys.path.insert(0, REPO)
 
 from clozn.cli import fit_planner                            # noqa: E402
-import clozn.cli.main as clozn_cli                           # noqa: E402
 
 
 # ---------------------------------------------------------------------------------- synthetic GGUF bytes
@@ -203,147 +185,3 @@ def test_local_llama_header_matches_ground_truth():
     assert h["quant"] == "Q4_K_M"
     assert h["n_layers"] == 16
     assert h["file_size_bytes"] == os.path.getsize(LLAMA_PATH)
-
-
-# --------------------------------------------------------------------------------------------- fit_report
-
-QWEN_LIKE_HEADER = {"n_layers": 28, "embedding_length": 3584, "head_count": 28, "head_count_kv": 4}
-QWEN_LIKE_SIZE = 4_683_074_240   # the real file size of the Q4_K_M GGUF on disk
-
-
-def test_fit_report_fits_on_ample_vram_and_flags_approximate():
-    r = fit_planner.fit_report(QWEN_LIKE_HEADER, QWEN_LIKE_SIZE, vram_gb=16)
-    assert r["fits"] is True
-    assert r["offload_hint"] is None
-    assert "APPROXIMATE" in r["note"]
-    assert r["est_vram_gb"] > QWEN_LIKE_SIZE / 1e9            # file size alone is a lower bound
-
-
-def test_fit_report_does_not_fit_on_tight_vram_and_gives_offload_hint():
-    r = fit_planner.fit_report(QWEN_LIKE_HEADER, QWEN_LIKE_SIZE, vram_gb=2)
-    assert r["fits"] is False
-    assert r["offload_hint"] is not None
-    assert "/28" in r["offload_hint"]
-
-
-def test_fit_report_never_promises_the_estimate():
-    r = fit_planner.fit_report(QWEN_LIKE_HEADER, QWEN_LIKE_SIZE, vram_gb=16)
-    assert "promise" in r["note"].lower()
-
-
-# ------------------------------------------------------------------------------- gguf_header_from_url (live)
-# Best-effort only: the offline suite must stay green (and fast) with no network, so any failure OR slowness
-# here is a skip, never a failure. Validates that a real HuggingFace resolve/main/*.gguf URL answers Range
-# and that our growth loop (starting ~1 MiB) lands on a correctly parsed header without downloading the
-# whole (few-hundred-MB) file.
-#
-# Run off a daemon thread with a hard join timeout rather than relying on gguf_header_from_url's own
-# `timeout=` alone: some networks (this development sandbox included -- verified directly with raw
-# sockets) hand back IPv6 addresses first for huggingface.co but silently blackhole IPv6 egress, and
-# stdlib's http.client tries every resolved address in order before falling back to IPv4 -- so a single
-# request can serially re-time-out across several v6 candidates and take minutes even though it would
-# eventually succeed. A daemon thread means an abandoned slow attempt can't block pytest's own exit either.
-
-LIVE_URL = "https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q8_0.gguf"
-
-
-def test_gguf_header_from_url_live_optional():
-    import threading
-
-    box: dict = {}
-
-    def _run():
-        try:
-            box["header"] = fit_planner.gguf_header_from_url(LIVE_URL, timeout=3.0)
-        except Exception as e:
-            box["error"] = e
-
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    t.join(timeout=10.0)
-    if t.is_alive():
-        pytest.skip("network too slow (or blocked) within the 10s test budget -- skipping live HF Range check")
-    if "error" in box:
-        pytest.skip(f"network unavailable/blocked, skipping live HF Range check: {box['error']}")
-
-    h = box["header"]
-    assert h["arch"] == "qwen2"
-    assert h["quant"]
-    assert h["file_size_bytes"] and h["file_size_bytes"] > 0
-    assert h["bytes_fetched"] < h["file_size_bytes"]          # proof we did NOT download the whole file
-
-
-# ------------------------------------------------------------------------------------------ cli.py wiring
-
-def test_cli_plan_subcommand_registered():
-    p = clozn_cli.build_parser()
-    args = p.parse_args(["plan", "qwen", "--vram", "8"])
-    assert args.fn is clozn_cli.cmd_plan
-    assert args.model == "qwen"
-    assert args.vram == 8.0
-
-
-def test_cli_plan_default_vram_is_none_until_detected():
-    p = clozn_cli.build_parser()
-    args = p.parse_args(["plan", "qwen"])
-    assert args.vram is None
-
-
-def test_format_plan_pure_render_from_canned_dicts():
-    header = dict(QWEN_LIKE_HEADER, quant="Q4_K_M", quant_source="general.file_type",
-                  context_length=32768)
-    report = fit_planner.fit_report(header, QWEN_LIKE_SIZE, vram_gb=16)
-    text = clozn_cli.format_plan("Qwen2.5-7B-Instruct", header, QWEN_LIKE_SIZE, report, 16.0)
-    assert "Q4_K_M" in text
-    assert "28 layers" in text
-    assert "32k ctx" in text
-    assert "FITS" in text
-    assert "APPROXIMATE" in text
-
-
-def test_format_plan_shows_wont_fit_and_offload_hint():
-    header = dict(QWEN_LIKE_HEADER, quant="Q4_K_M", quant_source="general.file_type",
-                  context_length=32768)
-    report = fit_planner.fit_report(header, QWEN_LIKE_SIZE, vram_gb=2)
-    text = clozn_cli.format_plan("Qwen2.5-7B-Instruct", header, QWEN_LIKE_SIZE, report, 2.0)
-    assert "WON'T FIT" in text
-    assert "/28" in text
-
-
-def test_cmd_plan_on_a_malformed_gguf_is_a_clean_cloznerror_not_a_traceback(tmp_path):
-    """Bug #2 repro: a bad-magic file used to blow past cmd_plan (only fit_report/format_plan were
-    exercised directly above) as an uncaught ValueError -- main() only catches CloznError, so this was a
-    raw traceback for the user. cmd_plan must now catch it and re-raise a clean, one-line CloznError."""
-    bad = tmp_path / "not-a-model.gguf"
-    bad.write_bytes(b"OOPS" + SYNTH[4:])
-    args = SimpleNamespace(model=str(bad), vram=None)
-    with pytest.raises(clozn_cli.CloznError) as ei:
-        clozn_cli.cmd_plan(args)
-    assert "not a GGUF file" in str(ei.value)
-
-
-def test_cmd_plan_on_a_truncated_gguf_is_a_clean_cloznerror():
-    """Same bug, the other raise path: a file that's truncated mid-header so badly that even reading it
-    in full (gguf_header_from_path grows the read until n >= the file's own size) still can't parse a
-    complete header -- NeedMoreBytes (a ValueError subclass) escapes all the way to `raise` inside
-    gguf_header_from_path. Must not escape cmd_plan as a raw traceback either."""
-    truncated = SYNTH[:10]                      # genuinely short: not even one full KV entry
-    with tempfile.TemporaryDirectory() as d:
-        p = os.path.join(d, "truncated.gguf")
-        with open(p, "wb") as f:
-            f.write(truncated)
-        # sanity: the underlying planner really does raise NeedMoreBytes on this input
-        with pytest.raises(fit_planner.NeedMoreBytes):
-            fit_planner.gguf_header_from_path(p)
-
-        args = SimpleNamespace(model=p, vram=None)
-        with pytest.raises(clozn_cli.CloznError):
-            clozn_cli.cmd_plan(args)
-
-
-def test_format_plan_flags_dominant_tensor_type_guess():
-    header = dict(QWEN_LIKE_HEADER, quant="Q4_K", quant_source="dominant tensor type (approximate -- "
-                  "general.file_type metadata absent)", context_length=32768)
-    report = fit_planner.fit_report(header, QWEN_LIKE_SIZE, vram_gb=16)
-    text = clozn_cli.format_plan("mystery-model", header, QWEN_LIKE_SIZE, report, 16.0)
-    assert "guess from the dominant tensor type" in text

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { InspectRoute } from "../../app/router";
+import { studioApi } from "../../data/client";
 import {
   minimalContextApi,
   type MinimalContextDurableResult,
@@ -171,7 +172,7 @@ function resultList(...results: MinimalContextResultSummary[]): MinimalContextRe
 
 function job(overrides: Partial<MinimalContextJob> = {}): MinimalContextJob {
   return {
-    schemaVersion: "clozn.influence-map-job.v1",
+    schemaVersion: "clozn.analysis-job.v1",
     jobId: "infjob_minimal",
     runId,
     kind: "minimal_context",
@@ -223,7 +224,19 @@ describe("Minimal Context Inspect instrument", () => {
       experimentId: "exp_minimal",
       armId: "arm_minimal",
       removedSourceIds: ["source-drop"],
-      comparePath: `#/compare/${runId}/run_child`,
+    });
+    const compare = vi.spyOn(studioApi, "runComparison").mockResolvedValue({
+      schemaVersion: "clozn.reduction-comparison.v1",
+      parentRunId: runId,
+      childRunId: "run_child",
+      context: {
+        parentSourceIds: ["source-keep", "source-drop"],
+        retainedSourceIds: ["source-keep"],
+        removedSourceIds: ["source-drop"],
+      },
+      renderedPromptTokens: { parent: 31, child: 12, saved: 19, improved: true },
+      preservation: { answerExactMatch: true, finishReasonMatch: true, exact: true },
+      generationIdentity: { parent: {}, child: {}, match: true },
     });
 
     render(<InspectSurface route={route()} />);
@@ -260,7 +273,9 @@ describe("Minimal Context Inspect instrument", () => {
     expect(materialize.mock.calls[0]?.[2]).toBeInstanceOf(AbortSignal);
     expect(await screen.findByText("Child Run created")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Inspect child" })).toHaveAttribute("href", "#/inspect/run_child");
-    expect(screen.getByRole("link", { name: "Compare parent and child" })).toHaveAttribute("href", `#/compare/${runId}/run_child`);
+    expect(await screen.findByRole("heading", { name: "Original vs reduced child" })).toBeInTheDocument();
+    expect(screen.getByText("19")).toBeInTheDocument();
+    expect(compare).toHaveBeenCalledWith(runId, "run_child", expect.any(AbortSignal));
   });
 
   it("shows history honestly and blocks materialization for stale and incomplete results", async () => {
@@ -330,7 +345,6 @@ describe("Minimal Context Inspect instrument", () => {
 
     await waitFor(() => expect(minimalContextApi.start).toHaveBeenCalledWith(
       runId,
-      { maxUnits: 50, maxNewCounterfactualObservations: 32, attemptInclusionCheck: true },
       expect.any(AbortSignal),
     ));
     await waitFor(() => expect(minimalContextApi.job).toHaveBeenCalledTimes(1));

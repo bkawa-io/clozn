@@ -45,7 +45,7 @@ def test_stream_envelope_declared(fixture):
     assert fixture["stream_frame_envelope"] == ["req", "seq"]
     src = CPP_HEALTH.read_text(encoding="utf-8")
     # the envelope is wired into the streaming blocks (guards against the frames silently going raw again)
-    assert "StreamEnvelope env{id, write}" in src
+    assert re.search(r"StreamEnvelope\s+\w+\{id,\s*write\}", src)
 
 
 def test_cpp_health_capability_keys_match_fixture(fixture):
@@ -59,10 +59,9 @@ def test_cpp_health_capability_keys_match_fixture(fixture):
 
 
 def test_cpp_health_required_fields_match_fixture(fixture):
-    """Every required handshake field is present in the C++ /health document, including the opaque
-    process generation needed to reject checkpoint references after a worker restart."""
+    """Every required handshake field is present in the C++ /health document."""
     src = CPP_HEALTH.read_text(encoding="utf-8")
-    block = re.search(r'json h\{\{"status", "ok"\},(.*?)\};', src, re.DOTALL)
+    block = re.search(r'json \w+\{\{"status", "ok"\},(.*?)\};', src, re.DOTALL)
     assert block, "/health response literal not found in server_main.cpp"
     keys = {"status", *re.findall(r'\{"(\w+)",', block.group(1))}
     assert set(fixture["health_required_fields"]).issubset(keys)
@@ -70,41 +69,27 @@ def test_cpp_health_required_fields_match_fixture(fixture):
 
 
 def test_cpp_health_exposes_additive_engine_build_identity():
-    """Direct one-worker serving must expose the same truthful build identity used by checkpoints.
+    """Direct one-worker serving exposes the build identity used by recorded execution facts.
 
     The fields are intentionally not part of ``health_required_fields``: an older worker may omit
     them and the Python gateway must then fail closed for exact replay rather than fabricate a build.
     """
     src = CPP_HEALTH.read_text(encoding="utf-8")
-    block = re.search(r'json h\{\{"status", "ok"\},(.*?)\};', src, re.DOTALL)
+    block = re.search(r'json \w+\{\{"status", "ok"\},(.*?)\};', src, re.DOTALL)
     assert block, "/health response literal not found in server_main.cpp"
     keys = set(re.findall(r'\{"(\w+)",', block.group(1)))
     assert {"engine_version", "build_id", "backend", "llama_cpp_commit"}.issubset(keys)
-    assert "json build = engine_build_info();" in src
+    assert re.search(r"(?:const\s+)?json build = engine_build_info\(\);", src)
 
 
 def test_cpp_health_exposes_context_batch_and_memory_regime():
     src = CPP_HEALTH.read_text(encoding="utf-8")
-    block = re.search(r'json h\{\{"status", "ok"\},(.*?)\};', src, re.DOTALL)
+    block = re.search(r'json \w+\{\{"status", "ok"\},(.*?)\};', src, re.DOTALL)
     assert block, "/health response literal not found in server_main.cpp"
     keys = set(re.findall(r'\{"(\w+)",', block.group(1)))
     assert {"n_ctx", "n_batch", "n_ubatch", "memory"}.issubset(keys)
     assert "cp.n_batch = n_batch_;" in (ROOT / "engine/core/src/model_ggml.cpp").read_text(encoding="utf-8")
     assert "cp.n_ubatch = n_ubatch_;" in (ROOT / "engine/core/src/model_ggml.cpp").read_text(encoding="utf-8")
-
-
-def test_checkpoint_reference_contract_is_generation_scoped(fixture):
-    checkpoint_ref = fixture["checkpoint_reference"]
-    assert checkpoint_ref["fields"] == ["checkpoint_id", "worker_generation_id"]
-    assert checkpoint_ref["checkpoint_id_semantics"] == "opaque_generation_scoped"
-    assert checkpoint_ref["worker_generation_precondition"] == \
-        "optional_for_in_process_compatibility"
-
-    source = (ROOT / "engine" / "core" / "serve" / "checkpoint_store.hpp").read_text(
-        encoding="utf-8")
-    assert '"ckpt-" + worker_generation_id_' in source
-    assert "std::deque<std::string> insertion_order_" in source
-    assert "records_.erase(insertion_order_.front())" in source
 
 
 def test_cpp_model_free_build_info_contract_is_embedded():

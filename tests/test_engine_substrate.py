@@ -20,8 +20,7 @@ Covers:
   * run_meta() reproducibility metadata and S5 interactive-sampling resolution.
   * RequestContext: the per-call bundle chat()/chat_stream() publish as self._request (backlog #2).
 
-Explicit raw-vector steering remains available for interpretability and causal-attribution calls; see
-test_engine_score.py and test_engine_stream.py.
+Research steering/readout objects are intentionally absent from the v1 adapter.
 """
 from __future__ import annotations
 
@@ -96,7 +95,8 @@ def test_engine_substrate_builds_a_real_product_adapter(iso, fake_engine):
     assert isinstance(sub, cs.EngineSubstrate)
     assert sub.name == "engine"
     assert sub.engine is fake_engine
-    assert sub.brain is None                       # no SAE on the pure-engine substrate
+    assert not hasattr(sub, "brain")               # no SAE/readout surface on the v1 substrate
+    assert not hasattr(sub, "steer")               # no steering surface on the v1 substrate
 
 
 # ==================================================================================== fix #2: lazy identity re-resolution
@@ -300,7 +300,7 @@ def test_explicit_request_sampling_fields_win_over_the_studio_default(iso):
 
 def test_engine_complete_traced_sends_the_resolved_sampler_params(iso, fake_engine, monkeypatch):
     """_engine_complete_traced forwards the FULL resolved regime -- temperature/rep_penalty/seed AND the
-    Ollama nucleus top_k/top_p -- from a _resolve_sampling() dict to the engine's .complete() fallback
+    llama.cpp nucleus top_k/top_p -- from a _resolve_sampling() dict to the engine's .complete() fallback
     (FakeEngine's .base is unroutable, so every call here exercises that fallback). The fallback must
     decode under the SAME regime the HTTP path recorded in the run's meta, so the nucleus rides along."""
     samp = {"on": True, "temperature": 0.8, "top_p": 0.9, "top_k": 40, "repeat_penalty": 1.1, "seed": 12345}

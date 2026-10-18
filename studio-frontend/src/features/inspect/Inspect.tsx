@@ -11,7 +11,7 @@ import {
   type RefObject,
 } from "react";
 import { routeHref, type InspectRoute } from "../../app/router";
-import { describeError, isContractError, studioApi } from "../../data/client";
+import { describeError, isContractError } from "../../data/client";
 import {
   type ContextInvestigationEffect,
   type ContextInvestigationLocus,
@@ -23,18 +23,10 @@ import {
   type UnicodeRange,
 } from "../../data/contextInvestigation";
 import { contextInvestigationApi } from "../../data/contextInvestigationClient";
-import type {
-  ContextCounterfactualJob,
-  CounterfactualMaterializationResult,
-  RemoveSourceTestJob,
-} from "../../data/contextInvestigationActions";
 import {
-  isTerminalEffectsSearchJob,
-  type EffectsSearchExecutionPolicy,
-  type EffectsSearchJob,
+  isTerminalContextEffectsJob,
+  type ContextEffectsJob,
 } from "../../data/contextInvestigationJobs";
-import type { SessionTrace } from "../../data/contracts";
-import { ConversationScrubber } from "../sessions/Sessions";
 import {
   codePointLength,
   isValidCodePointRange,
@@ -43,11 +35,8 @@ import {
   type AnnotatedTextSegment,
   type CodePointRange,
 } from "./unicodeRanges";
-import { ContextReceiptSurface } from "./ContextReceipt";
-import { ClaimSupportSurface } from "./ClaimSupport";
-import { DiagnosisRepairSurface } from "./DiagnosisRepair";
 import { MinimalContextSurface } from "./MinimalContext";
-import { ReceivedContextSurface } from "./ReceivedContext";
+import { RunDetailsDisclosure } from "./ContextReceipt";
 import "./inspect.css";
 
 type Resource<T> =
@@ -1137,16 +1126,14 @@ function InspectReader({
     window.location.hash = routeHref(range ? {
       surface: "inspect",
       runId: route.runId,
-      ...(route.sessionId ? { sessionId: route.sessionId } : {}),
       answerStart: range.start,
       answerEnd: range.end,
       ...(sourceId ? { sourceId } : {}),
     } : {
       surface: "inspect",
       runId: route.runId,
-      ...(route.sessionId ? { sessionId: route.sessionId } : {}),
     });
-  }, [route.runId, route.sessionId]);
+  }, [route.runId]);
 
   useEffect(() => {
     if (!lockedRange) return undefined;
@@ -1297,9 +1284,6 @@ function InspectReader({
             onNext={() => navigateSource(1)}
             onClear={() => setCoordinate()}
           />
-          {focusedSourceId && (
-            <ContextSourceActions runId={route.runId} sourceId={focusedSourceId} />
-          )}
         </>
       )}
     </>
@@ -1310,257 +1294,7 @@ function phaseLabel(value: string): string {
   return value.replaceAll("_", " ");
 }
 
-function actionJobTerminal(job: RemoveSourceTestJob | ContextCounterfactualJob): boolean {
-  return job.state === "completed" || job.state === "failed" || job.state === "cancelled";
-}
-
-function ContextSourceActions({ runId, sourceId }: { runId: string; sourceId: string }) {
-  const [removeJob, setRemoveJob] = useState<RemoveSourceTestJob>();
-  const [counterfactualJob, setCounterfactualJob] = useState<ContextCounterfactualJob>();
-  const [materialization, setMaterialization] = useState<CounterfactualMaterializationResult>();
-  const [confirmMaterialization, setConfirmMaterialization] = useState(false);
-  const [busy, setBusy] = useState<"idle" | "remove" | "counterfactual" | "materialize" | "cancel">("idle");
-  const [error, setError] = useState<string>();
-  const actionController = useRef<AbortController | undefined>(undefined);
-
-  useEffect(() => {
-    actionController.current?.abort();
-    actionController.current = undefined;
-    setRemoveJob(undefined);
-    setCounterfactualJob(undefined);
-    setMaterialization(undefined);
-    setConfirmMaterialization(false);
-    setBusy("idle");
-    setError(undefined);
-  }, [runId, sourceId]);
-
-  useEffect(() => {
-    if (!removeJob || actionJobTerminal(removeJob)) return undefined;
-    const controller = new AbortController();
-    let timer: number | undefined;
-    const poll = async () => {
-      try {
-        const next = await contextInvestigationApi.removeSourceTestJob(
-          runId, removeJob.jobId, sourceId, controller.signal,
-        );
-        if (controller.signal.aborted) return;
-        setRemoveJob(next);
-        if (!actionJobTerminal(next)) timer = window.setTimeout(() => { void poll(); }, 750);
-      } catch (pollError: unknown) {
-        if (!controller.signal.aborted) setError(describeError(pollError));
-      }
-    };
-    void poll();
-    return () => {
-      controller.abort();
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [removeJob?.jobId, removeJob?.state, runId, sourceId]);
-
-  useEffect(() => {
-    if (!counterfactualJob || actionJobTerminal(counterfactualJob)) return undefined;
-    const controller = new AbortController();
-    let timer: number | undefined;
-    const poll = async () => {
-      try {
-        const next = await contextInvestigationApi.contextCounterfactualJob(
-          runId, counterfactualJob.jobId, sourceId, controller.signal,
-        );
-        if (controller.signal.aborted) return;
-        setCounterfactualJob(next);
-        if (!actionJobTerminal(next)) timer = window.setTimeout(() => { void poll(); }, 750);
-      } catch (pollError: unknown) {
-        if (!controller.signal.aborted) setError(describeError(pollError));
-      }
-    };
-    void poll();
-    return () => {
-      controller.abort();
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [counterfactualJob?.jobId, counterfactualJob?.state, runId, sourceId]);
-
-  const begin = (kind: "remove" | "counterfactual" | "materialize" | "cancel") => {
-    actionController.current?.abort();
-    const controller = new AbortController();
-    actionController.current = controller;
-    setBusy(kind);
-    setError(undefined);
-    return controller;
-  };
-
-  const startRemove = async () => {
-    const controller = begin("remove");
-    try {
-      const next = await contextInvestigationApi.startRemoveSourceTest(runId, sourceId, controller.signal);
-      if (!controller.signal.aborted) setRemoveJob(next);
-    } catch (actionError: unknown) {
-      if (!controller.signal.aborted) setError(describeError(actionError));
-    } finally {
-      if (!controller.signal.aborted) setBusy("idle");
-    }
-  };
-
-  const startCounterfactual = async () => {
-    const controller = begin("counterfactual");
-    setCounterfactualJob(undefined);
-    setMaterialization(undefined);
-    setConfirmMaterialization(false);
-    try {
-      const next = await contextInvestigationApi.startContextCounterfactual(runId, sourceId, controller.signal);
-      if (!controller.signal.aborted) setCounterfactualJob(next);
-    } catch (actionError: unknown) {
-      if (!controller.signal.aborted) setError(describeError(actionError));
-    } finally {
-      if (!controller.signal.aborted) setBusy("idle");
-    }
-  };
-
-  const cancel = async (job: RemoveSourceTestJob | ContextCounterfactualJob) => {
-    if (!job.cancellable) return;
-    const controller = begin("cancel");
-    try {
-      if (job.kind === "context_investigation_remove_test") {
-        const next = await contextInvestigationApi.cancelRemoveSourceTest(
-          runId, job.jobId, sourceId, controller.signal,
-        );
-        if (!controller.signal.aborted) setRemoveJob(next);
-      } else {
-        const next = await contextInvestigationApi.cancelContextCounterfactual(
-          runId, job.jobId, sourceId, controller.signal,
-        );
-        if (!controller.signal.aborted) setCounterfactualJob(next);
-      }
-    } catch (actionError: unknown) {
-      if (!controller.signal.aborted) setError(describeError(actionError));
-    } finally {
-      if (!controller.signal.aborted) setBusy("idle");
-    }
-  };
-
-  const materialize = async () => {
-    const result = counterfactualJob?.result;
-    if (!result?.observationId) return;
-    const controller = begin("materialize");
-    try {
-      const next = await contextInvestigationApi.materializeContextCounterfactual(runId, {
-        experimentId: result.experimentId,
-        armId: result.armId,
-        observationId: result.observationId,
-      }, controller.signal);
-      if (!controller.signal.aborted) {
-        setMaterialization(next);
-        setConfirmMaterialization(false);
-      }
-    } catch (actionError: unknown) {
-      if (!controller.signal.aborted) setError(describeError(actionError));
-    } finally {
-      if (!controller.signal.aborted) setBusy("idle");
-    }
-  };
-
-  const removeActive = Boolean(removeJob && !actionJobTerminal(removeJob));
-  const counterfactualActive = Boolean(counterfactualJob && !actionJobTerminal(counterfactualJob));
-  const active = removeActive || counterfactualActive;
-  const generated = counterfactualJob?.state === "completed"
-    && counterfactualJob.result?.status === "completed"
-    ? counterfactualJob.result
-    : undefined;
-  return (
-    <section className="context-source-actions" aria-label="Selected context source actions">
-      <div className="context-source-actions-heading">
-        <div>
-          <span className="eyebrow">Selected source</span>
-          <code>{shortId(sourceId)}</code>
-        </div>
-        <span>Tests create evidence. Only materialization creates a child Run.</span>
-      </div>
-      <div className="context-source-action-grid">
-        <article>
-          <h3>Preservation test</h3>
-          <p>Remove this source and check whether the recorded continuation remains exact.</p>
-          {removeActive ? (
-            <button type="button" disabled={!removeJob?.cancellable || busy !== "idle"} onClick={() => { if (removeJob) void cancel(removeJob); }}>
-              {busy === "cancel" ? "Cancelling…" : "Cancel test"}
-            </button>
-          ) : (
-            <button type="button" disabled={active || busy !== "idle"} onClick={() => { void startRemove(); }}>
-              {busy === "remove" ? "Starting…" : removeJob ? "Run again" : "Test removal"}
-            </button>
-          )}
-          {removeJob && (
-            <div className={`context-action-result state-${removeJob.state}`} role="status">
-              <strong>{removeJob.result?.status.replaceAll("_", " ") ?? phaseLabel(removeJob.progress.phase)}</strong>
-              <span>{removeJob.progress.percent.toFixed(0)}%</span>
-              {removeJob.result?.matchedTokenCount !== null && removeJob.result?.matchedTokenCount !== undefined && (
-                <small>{plural(removeJob.result.matchedTokenCount, "recorded token")} matched</small>
-              )}
-              {(removeJob.result?.reason || removeJob.error?.message) && <small>{removeJob.result?.reason ?? removeJob.error?.message}</small>}
-            </div>
-          )}
-        </article>
-        <article>
-          <h3>Counterfactual</h3>
-          <p>Generate a preview without this source, then explicitly materialize it if useful.</p>
-          {counterfactualActive ? (
-            <button type="button" disabled={!counterfactualJob?.cancellable || busy !== "idle"} onClick={() => { if (counterfactualJob) void cancel(counterfactualJob); }}>
-              {busy === "cancel" ? "Cancelling…" : "Cancel generation"}
-            </button>
-          ) : (
-            <button type="button" disabled={active || busy !== "idle"} onClick={() => { void startCounterfactual(); }}>
-              {busy === "counterfactual" ? "Starting…" : counterfactualJob ? "Generate again" : "Generate preview"}
-            </button>
-          )}
-          {counterfactualJob && (
-            <div className={`context-action-result state-${counterfactualJob.state}`} role="status">
-              <strong>{counterfactualJob.result?.status ?? phaseLabel(counterfactualJob.progress.phase)}</strong>
-              <span>{counterfactualJob.progress.percent.toFixed(0)}%</span>
-              {(counterfactualJob.result?.reason || counterfactualJob.error?.message) && <small>{counterfactualJob.result?.reason ?? counterfactualJob.error?.message}</small>}
-            </div>
-          )}
-          {generated && (
-            <div className="counterfactual-preview">
-              <span className="eyebrow">Generated observation</span>
-              <p>{generated.generatedText || "Empty continuation"}</p>
-              <small>{plural(generated.generatedTokenCount, "generated token")}</small>
-              {!materialization && !confirmMaterialization && (
-                <button type="button" disabled={busy !== "idle"} onClick={() => setConfirmMaterialization(true)}>
-                  Materialize…
-                </button>
-              )}
-              {!materialization && confirmMaterialization && (
-                <div className="materialization-confirm" role="group" aria-label="Confirm child Run creation">
-                  <strong>Create an immutable child Run?</strong>
-                  <span>The recorded source Run will not be changed.</span>
-                  <button type="button" disabled={busy !== "idle"} onClick={() => { void materialize(); }}>
-                    {busy === "materialize" ? "Creating…" : "Create child Run"}
-                  </button>
-                  <button type="button" disabled={busy !== "idle"} onClick={() => setConfirmMaterialization(false)}>Keep preview only</button>
-                </div>
-              )}
-            </div>
-          )}
-          {materialization?.state === "completed" && (
-            <div className="materialization-result" role="status">
-              <strong>Child Run created</strong>
-              <code>{shortId(materialization.childRunId)}</code>
-              <a href={routeHref({ surface: "inspect", runId: materialization.childRunId })}>Inspect child</a>
-              <a href={routeHref({
-                surface: "compare",
-                runA: materialization.parentRunId,
-                runB: materialization.childRunId,
-              })}>Compare parent and child</a>
-            </div>
-          )}
-          {materialization?.state === "failed" && <p className="context-action-error" role="alert">{materialization.reason}</p>}
-        </article>
-      </div>
-      {error && <p className="context-action-error" role="alert">{error}</p>}
-    </section>
-  );
-}
-
-function EffectsSearchPanel({
+function EffectsPanel({
   reader,
   route,
   onCompleted,
@@ -1569,23 +1303,13 @@ function EffectsSearchPanel({
   route: InspectRoute;
   onCompleted: () => void;
 }) {
-  const [policy, setPolicy] = useState<EffectsSearchExecutionPolicy>("trusted_scalar_only");
-  const [job, setJob] = useState<EffectsSearchJob | undefined>();
+  const [job, setJob] = useState<ContextEffectsJob | undefined>();
   const [action, setAction] = useState<"idle" | "starting" | "cancelling">("idle");
   const [error, setError] = useState<string | undefined>();
   const [pollRevision, setPollRevision] = useState(0);
   const actionController = useRef<AbortController | undefined>(undefined);
   const completedJobId = useRef<string | undefined>(undefined);
   const sourceIds = reader.measurement.sourceUniverse;
-  const coarseGroupSize = Math.min(4, Math.max(1, sourceIds.length));
-  const budget = useMemo(() => ({
-    maxCoarseArms: Math.ceil(sourceIds.length / coarseGroupSize),
-    maxFineArms: Math.min(6, sourceIds.length),
-    maxJointArms: 0,
-  }), [coarseGroupSize, sourceIds.length]);
-  const requestedDrilldowns = route.sourceId && sourceIds.includes(route.sourceId)
-    ? [route.sourceId]
-    : [];
 
   useEffect(() => {
     actionController.current?.abort();
@@ -1598,12 +1322,12 @@ function EffectsSearchPanel({
   }, [route.runId]);
 
   useEffect(() => {
-    if (!job || isTerminalEffectsSearchJob(job)) return undefined;
+    if (!job || isTerminalContextEffectsJob(job)) return undefined;
     const controller = new AbortController();
     let timer: number | undefined;
     const poll = async () => {
       try {
-        const next = await contextInvestigationApi.effectsSearchJob(
+        const next = await contextInvestigationApi.effectsJob(
           route.runId, job.jobId, controller.signal,
         );
         if (controller.signal.aborted) return;
@@ -1612,7 +1336,7 @@ function EffectsSearchPanel({
           completedJobId.current = next.jobId;
           onCompleted();
         }
-        if (!isTerminalEffectsSearchJob(next)) {
+        if (!isTerminalContextEffectsJob(next)) {
           timer = window.setTimeout(() => { void poll(); }, 750);
         }
       } catch (pollError: unknown) {
@@ -1633,14 +1357,9 @@ function EffectsSearchPanel({
     setAction("starting");
     setError(undefined);
     try {
-      const next = await contextInvestigationApi.startEffectsSearch(route.runId, {
-        sourceIds,
-        coarseGroupSize,
-        refineThresholdNats: .25,
-        drilldownSourceIds: requestedDrilldowns,
-        budget,
-        executionPolicy: policy,
-      }, controller.signal);
+      const next = await contextInvestigationApi.startEffects(
+        route.runId, { sourceIds }, controller.signal,
+      );
       if (!controller.signal.aborted) {
         setJob(next);
         if (next.state === "completed" && completedJobId.current !== next.jobId) {
@@ -1663,7 +1382,7 @@ function EffectsSearchPanel({
     setAction("cancelling");
     setError(undefined);
     try {
-      const next = await contextInvestigationApi.cancelEffectsSearch(
+      const next = await contextInvestigationApi.cancelEffects(
         route.runId, job.jobId, controller.signal,
       );
       if (!controller.signal.aborted) setJob(next);
@@ -1674,33 +1393,14 @@ function EffectsSearchPanel({
     }
   };
 
-  const evidenceCounts = job?.result?.arms.reduce((counts, arm) => {
-    counts[arm.evidenceStatus] += 1;
-    return counts;
-  }, { trusted: 0, screening_only: 0, unavailable: 0, skipped: 0 });
-  const active = Boolean(job && !isTerminalEffectsSearchJob(job));
+  const active = Boolean(job && !isTerminalContextEffectsJob(job));
   return (
     <section className="effects-search-panel" aria-label="Context measurement">
       <div className="effects-search-copy">
         <span className="eyebrow">Measurement</span>
         <strong>{sourceIds.length ? plural(sourceIds.length, "source") : "No measurable sources"}</strong>
-        <span>
-          Budget {budget.maxCoarseArms} coarse · {budget.maxFineArms} fine · control outside budget
-          {requestedDrilldowns.length ? " · selected source prioritized" : ""}
-        </span>
+        <span>Each source is removed once and scored against the recorded answer.</span>
       </div>
-      <label>
-        <span>Execution</span>
-        <select
-          aria-label="Context measurement execution"
-          value={policy}
-          disabled={active || action !== "idle"}
-          onChange={(event) => setPolicy(event.target.value as EffectsSearchExecutionPolicy)}
-        >
-          <option value="trusted_scalar_only">Exact only</option>
-          <option value="native_screen_then_scalar_refine">Fast screen + exact refine</option>
-        </select>
-      </label>
       <div className="effects-search-action">
         {active ? (
           <button type="button" disabled={!job?.cancellable || action !== "idle"} onClick={() => { void cancel(); }}>
@@ -1716,15 +1416,10 @@ function EffectsSearchPanel({
         <div className={`effects-search-progress state-${job.state}`} role="status" aria-live="polite">
           <span>{job.state === "completed" ? "Completed" : job.state === "failed" ? "Failed" : job.state === "cancelled" ? "Cancelled" : phaseLabel(job.progress.phase)}</span>
           <strong>{job.progress.percent.toFixed(0)}%</strong>
-          {!isTerminalEffectsSearchJob(job) && <progress max="100" value={job.progress.percent} />}
-          {evidenceCounts && (
-            <small>
-              {evidenceCounts.trusted} trusted · {evidenceCounts.screening_only} screening · {evidenceCounts.unavailable} unavailable · {evidenceCounts.skipped} skipped
-            </small>
-          )}
+          {!isTerminalContextEffectsJob(job) && <progress max="100" value={job.progress.percent} />}
           {job.result && (
             <small>
-              {job.result.actualWork.modelMeasurementsExecutedTotal} executed · {job.result.actualWork.modelMeasurementsReusedTotal} reused · {job.result.actualWork.modelMeasurementsSkippedTotal} skipped
+              {job.result.completedSourceCount} measured · {job.result.unavailableSourceCount} unavailable · {job.result.failedSourceCount} failed · {job.result.notMeasuredSourceCount} not measured
             </small>
           )}
           {job.error && <small className="is-failed">{job.error.message}</small>}
@@ -1753,28 +1448,12 @@ function ContextInspectSurface({ route }: { route: InspectRoute }) {
   );
   const readerResource = useResource(`${route.runId}:${readerRevision}`, readerLoader);
   const refreshReader = useCallback(() => setReaderRevision((value) => value + 1), []);
-  const traceLoader = useMemo(() => route.sessionId
-    ? (signal: AbortSignal) => studioApi.sessionTrace(route.sessionId!, signal)
-    : undefined, [route.sessionId]);
-  const traceResource = useOptionalResource<SessionTrace>(route.sessionId, traceLoader);
-  const traceContainsRun = traceResource.phase === "ready"
-    && traceResource.value.turns.some((turn) => turn.runId === route.runId);
-  const sessionCoordinateMismatch = Boolean(route.sessionId)
-    && traceResource.phase === "ready"
-    && !traceContainsRun;
-  const sessionHref = route.sessionId
-    ? routeHref({
-      surface: "session",
-      sessionId: route.sessionId,
-      ...(traceContainsRun ? { runId: route.runId } : {}),
-    })
-    : routeHref({ surface: "sessions" });
   return (
     <div className="inspect-surface">
       <header className="inspect-heading">
         <div>
-          <a className="back-link" href={sessionHref}>← {route.sessionId ? "Session" : "Sessions"}</a>
-          <h1>Inspect</h1>
+          <a className="back-link" href={routeHref({ surface: "runs" })}>← Runs</a>
+          <h1>Context Effects</h1>
           <code>{shortId(route.runId)}</code>
         </div>
         {readerResource.phase === "ready" && (
@@ -1783,29 +1462,13 @@ function ContextInspectSurface({ route }: { route: InspectRoute }) {
           </span>
         )}
       </header>
-      {sessionCoordinateMismatch && <p className="session-coordinate-state" role="status">Run not present in Session.</p>}
-      <div className={`inspect-layout${traceContainsRun ? " has-session" : ""}`}>
-        {traceResource.phase === "ready" && traceContainsRun && (
-          <div className="inspect-session-orientation">
-            <ConversationScrubber
-              trace={traceResource.value}
-              selectedRunId={route.runId}
-              onSelect={(runId) => {
-                window.location.hash = routeHref({
-                  surface: "inspect",
-                  runId,
-                  ...(route.sessionId ? { sessionId: route.sessionId } : {}),
-                });
-              }}
-            />
-          </div>
-        )}
+      <div className="inspect-layout">
         <section className="inspect-instrument" aria-label="Influence">
           <ReaderState resource={readerResource} />
           {readerResource.phase === "ready" && (
             <>
               {readerResource.value.capabilities.contextEffects === "measurable" && (
-                <EffectsSearchPanel
+                <EffectsPanel
                   reader={readerResource.value}
                   route={route}
                   onCompleted={refreshReader}
@@ -1828,10 +1491,12 @@ function ContextInspectSurface({ route }: { route: InspectRoute }) {
 }
 
 export function InspectSurface({ route }: { route: InspectRoute }) {
-  if (route.view === "receipt") return <ContextReceiptSurface route={route} />;
-  if (route.view === "context") return <ReceivedContextSurface route={route} />;
-  if (route.view === "minimal-context") return <MinimalContextSurface route={route} />;
-  if (route.view === "actions") return <DiagnosisRepairSurface route={route} />;
-  if (route.view === "claims") return <ClaimSupportSurface route={route} />;
-  return <ContextInspectSurface route={route} />;
+  return (
+    <>
+      {route.view === "minimal-context"
+        ? <MinimalContextSurface route={route} />
+        : <ContextInspectSurface route={route} />}
+      <RunDetailsDisclosure runId={route.runId} />
+    </>
+  );
 }

@@ -105,6 +105,19 @@ def test_real_openai_client_parses_stream(openai_gateway):
     assert terminal_run_id and runlog.get_run(terminal_run_id)["response"] == "SDK stream."
 
 
+def test_plain_chat_rejects_a_reply_when_run_persistence_fails(openai_gateway, monkeypatch):
+    monkeypatch.setattr(runlog, "record", lambda **_kwargs: None)
+    with pytest.raises(openai.APIStatusError) as caught:
+        _client(openai_gateway).chat.completions.create(
+            model="clozn-local",
+            messages=[{"role": "user", "content": "Hello"}],
+            temperature=0,
+        )
+    error = caught.value.body.get("error", caught.value.body)
+    assert caught.value.status_code == 502
+    assert error["code"] == "journal_persistence_failed"
+
+
 def test_real_openai_client_receives_typed_400_for_unqualified_tools(openai_gateway):
     client = _client(openai_gateway)
     with pytest.raises(openai.BadRequestError) as caught:
@@ -122,4 +135,4 @@ def test_real_openai_client_receives_typed_400_for_unqualified_tools(openai_gate
     error = caught.value.body.get("error", caught.value.body)
     assert error["param"] == "tools"
     assert error["type"] == "invalid_request_error"
-    assert error["code"] == "model_not_qualified"
+    assert error["code"] == "unsupported_parameter"

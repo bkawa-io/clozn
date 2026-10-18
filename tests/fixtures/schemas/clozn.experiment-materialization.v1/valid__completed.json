@@ -8,6 +8,5 @@
   "observation_id": "obs_fixture",
   "realized_fidelity": "direct_context_generation",
   "trace_state": "available",
-  "comparison": {},
-  "compare_path": "#/compare/run_parent/run_child"
+  "comparison": {}
 }

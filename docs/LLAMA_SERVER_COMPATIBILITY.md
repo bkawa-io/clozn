@@ -1,24 +1,16 @@
 # llama-server-style launch flags
 
-Clozn accepts a small, explicit set of familiar single-model GGUF serving flags. It is not a full
-`llama-server` replacement and does not accept unknown upstream flags.
+Clozn accepts a small set of familiar single-model launch flags. It is not a drop-in `llama-server`.
 
-| llama-server argument | Clozn status | Clozn semantics |
-|---|---|---|
-| `-m`, `--model` | supported | Alias for the single-model positional argument. |
-| `-c`, `--ctx-size` | supported | Same worker context setting as `--ctx`. |
-| `-ngl`, `--gpu-layers`, `--n-gpu-layers` | supported subset | Non-negative integer layer count; omitted uses Clozn's default. |
-| `--host` | supported | Binds the public Clozn gateway only. The private worker remains loopback-only. |
-| `--port` | supported | Public gateway port. |
-| `-a`, `--alias` | supported subset | One public model presentation name in single-model mode. It never replaces loaded model identity. |
-| `-np`, `--parallel` | supported subset | `1` only. Larger values are rejected because generation is serialized for evidence fidelity. |
+| Flag | v1 behavior |
+|---|---|
+| `-m`, `--model` | alias for the positional GGUF path/name |
+| `-c`, `--ctx-size`, `--ctx` | worker context size |
+| `-ngl`, `--gpu-layers`, `--n-gpu-layers` | non-negative GPU offload layer count |
+| `--host` | public gateway bind host; worker stays loopback-only |
+| `--port` | public gateway port |
+| `-a`, `--alias` | public presentation name for the one loaded model |
+| `-np`, `--parallel` | only `1` is supported |
 
-The managed multi-model runtime remains configured by its qualified manifest;
-single-model aliases and per-model GPU-layer flags are not accepted there.
-
-Not covered by this compatibility surface include arbitrary argument
-passthrough, parallel slots greater than one, multimodal serving, embeddings,
-router/preset parity, native llama.cpp endpoints, TLS, and authentication.
-
-Compatibility claims should be dated with the upstream llama.cpp revision,
-Clozn revision, model identity, and client versions used for the test.
+Unknown upstream flags, multiple slots, multiple loaded models, embeddings, multimodal serving, TLS,
+authentication, and native llama.cpp endpoints are outside this compatibility surface.

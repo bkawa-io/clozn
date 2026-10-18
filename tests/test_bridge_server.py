@@ -1,6 +1,6 @@
 """test_bridge_server -- the M5 any-client run_id bridge (EXPLAIN_THIS_ANSWER_SPEC.md): a user chatting
 through ANY OpenAI-compatible client gets the clozn run_id back with their reply, so a companion
-`clozn inspect <run_id>` can inspect that exact reply -- without that client needing to know clozn exists.
+Studio or another API client can reopen that exact reply without client-side journal knowledge.
 
 Unlike M2-M4 (receipts.py / counterfactual.py / narrate.py, each unit-tested standalone with the server test
 only proving thin wiring on top), M5 has no separate module: the whole feature IS the wiring -- `_log_run`
@@ -197,20 +197,6 @@ def test_chat_completions_uses_real_length_finish_reason_end_to_end(iso, monkeyp
     assert logged["meta"]["max_tokens"] == 3
 
 
-def test_responses_text_subset_uses_one_instrumented_chat_run(iso):
-    out = _post("/v1/responses", {
-        "model": "clozn-qwen",
-        "instructions": "Be concise.",
-        "input": "Explain mutexes.",
-    })
-    assert out["object"] == "response"
-    assert out["status"] == "completed"
-    assert out["output_text"] == "A plain reply."
-    assert out["output"][0]["role"] == "assistant"
-    assert len(runlog.list_runs()) == 1
-    assert runlog.get_run(out["clozn_run_id"])["source"] == "openai_responses"
-
-
 def test_non_stream_usage_comes_from_worker_request_evidence(iso, monkeypatch):
     monkeypatch.setattr(cs, "SUB", UsageSub())
     out = _post("/v1/chat/completions", {"messages": [{"role": "user", "content": "hi"}]})
@@ -260,54 +246,6 @@ def test_chat_completions_raw_http_response_carries_the_x_clozn_run_id_header(is
     assert f"X-Clozn-Run-Id: {rid}".encode("utf-8") in header_block
 
 
-def test_opt_in_association_headers_resolve_exact_latest_without_storing_raw_ids(iso):
-    raw_client = "studio-install-123"
-    raw_session = "studio-tab-456"
-    raw_project = "workspace-clozn"
-    raw = _dispatch("POST", "/v1/chat/completions",
-                    {"messages": [{"role": "user", "content": "associated"}]},
-                    headers={"X-Clozn-Client-Id": raw_client,
-                             "X-Clozn-Session-Id": raw_session,
-                             "X-Clozn-Project-Id": raw_project})
-    _, _, payload = raw.partition(b"\r\n\r\n")
-    rid = json.loads(payload)["clozn_run_id"]
-    rec = runlog.get_run(rid)
-    assert rec["client_key"].startswith("client_")
-    assert rec["client_key_source"] == "header"
-    assert rec["session_key"].startswith("session_")
-    assert rec["project_key"].startswith("project_")
-    assert raw_client not in json.dumps(rec)
-    assert raw_session not in json.dumps(rec)
-    assert raw_project not in json.dumps(rec)
-
-    latest = _get("/runs/latest", headers={"X-Clozn-Client-Id": raw_client,
-                                            "X-Clozn-Session-Id": raw_session})
-    assert latest["available"] is True
-    assert latest["association"] == {"exact": True, "ambiguous": False, "selector": "session"}
-    assert latest["run"]["id"] == rid
-
-
-def test_latest_requires_an_explicit_association_selector(iso):
-    out = _get("/runs/latest")
-    assert out["error"]["code"] == "association_selector_required"
-
-
-def test_runs_watch_endpoint_pages_new_matches_from_an_opaque_cursor(iso):
-    headers = {"X-Clozn-Client-Id": "watch-client", "X-Clozn-Session-Id": "watch-session"}
-    first = json.loads(_dispatch(
-        "POST", "/v1/chat/completions", {"messages": [{"role": "user", "content": "one"}]},
-        headers=headers,
-    ).partition(b"\r\n\r\n")[2])["clozn_run_id"]
-    cursor = runlog.cursor_for_run(first)
-    second = json.loads(_dispatch(
-        "POST", "/v1/chat/completions", {"messages": [{"role": "user", "content": "two"}]},
-        headers=headers,
-    ).partition(b"\r\n\r\n")[2])["clozn_run_id"]
-    page = _get("/runs/watch?after=" + cursor, headers=headers)
-    assert [run["id"] for run in page["runs"]] == [second]
-    assert page["next_cursor"] != cursor
-
-
 def test_invalid_association_header_is_typed_400_and_records_nothing(iso):
     raw = _dispatch("POST", "/v1/chat/completions",
                     {"messages": [{"role": "user", "content": "no"}]},
@@ -318,17 +256,16 @@ def test_invalid_association_header_is_typed_400_and_records_nothing(iso):
     assert runlog.list_runs() == []
 
 
-def test_chat_completions_omits_the_bridge_cleanly_when_logging_fails(iso, monkeypatch):
-    """runlog.record failing (returning None, its own documented contract) must not surface a literal
-    "null"/"None" anywhere, and must not break the reply itself -- logging must never break the request."""
+def test_chat_completions_surfaces_recording_failure(iso, monkeypatch):
+    """A generated reply is not successful unless its run evidence is durable."""
     monkeypatch.setattr(runlog, "record", lambda **kw: None)
     raw = _post_raw("/v1/chat/completions", {"messages": [{"role": "user", "content": "hi"}]})
     header_block, _, payload = raw.partition(b"\r\n\r\n")
     body = json.loads(payload.decode("utf-8"))
+    assert b" 502 " in header_block
+    assert body["error"]["code"] == "journal_persistence_failed"
     assert "clozn_run_id" not in body
     assert b"X-Clozn-Run-Id" not in header_block
-    assert "null" not in payload.decode("utf-8").lower()
-    assert body["choices"][0]["message"]["content"] == "A plain reply."   # the reply itself is unaffected
 
 
 def test_streaming_terminal_chunk_carries_exact_resolvable_run_id(iso):

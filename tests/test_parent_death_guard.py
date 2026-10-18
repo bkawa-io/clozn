@@ -1,6 +1,6 @@
-"""Stage 0 of ADR 008 (docs/design/008-single-process-runtime.md): the parent-death guard.
+"""Parent-death guard for the private worker.
 
-The graceful shutdown path -- ``RuntimeStack.stop()`` calling ``worker_registry.stop_all()`` /
+The graceful shutdown path -- ``RuntimeStack.stop()`` stopping its worker /
 terminating the gateway from ``cmd_serve``'s ``finally`` -- already works today and is proven by
 ``tests/test_runtime_architecture.py``. A test that only exercises THAT path proves nothing about this
 guard, because the guard exists exclusively for the UNGRACEFUL case: SIGKILL, a crash, ``taskkill /F``,

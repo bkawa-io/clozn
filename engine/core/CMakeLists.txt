@@ -39,11 +39,8 @@ if(NOT CLOZN_ENGINE_BUILD_ID MATCHES "^[A-Za-z0-9._+-]+$")
         "CLOZN_ENGINE_BUILD_ID must contain only letters, digits, dot, underscore, plus, or hyphen")
 endif()
 
-# clozn_runtime: the sampler + the event spine + the attention-mask builder. Backend-free —
-# clozn/sample.hpp speaks only to the abstract ForwardResult/Candidate/Mask types, so no model
-# backend lives here either. blocks.cpp survives only for attention_mask() (still called, always
-# bidirectional, by the concept-probe calibration's one-shot sentence read -- see clozn/blocks.hpp).
-# The ggml adapter (below) depends on this; never the reverse.
+# clozn_runtime: the sampler, event spine, and shared attention-mask type/builder. Backend-free;
+# the ggml adapter below depends on this library, never the reverse.
 add_library(clozn_runtime STATIC
     src/sample.cpp
     src/events.cpp
@@ -51,44 +48,13 @@ add_library(clozn_runtime STATIC
 )
 target_include_directories(clozn_runtime PUBLIC include)
 
-# clozn_sha256: vendored, public-domain, dependency-free SHA-256 (third_party/sha256 -- copied
-# straight out of llama.cpp's examples/gguf-hash/deps/sha256 so it does not depend on that
-# examples/ tree surviving future bootstrap_llama.py re-vendors; examples/ isn't built by
-# CLOZN_BUILD_GGML at all). FORK-PIN-01's checkpoint export/import envelope hash (see
-# serve/checkpoint_codec.hpp) is the only consumer today. Plain, C++-clean C89; this project
-# (`project(clozn_core LANGUAGES CXX)` above) never enables a C toolchain, so the source is compiled
-# as C++ (set_source_files_properties below) rather than pulling in a whole second language's worth
-# of CMake compiler detection for one small file.
+# Vendored, public-domain, dependency-free SHA-256. Exact-reference sessions use it to bind
+# prompts, recorded references, and generation contracts to stable digests.
 add_library(clozn_sha256 STATIC third_party/sha256/sha256.c)
 set_source_files_properties(third_party/sha256/sha256.c PROPERTIES LANGUAGE CXX)
 target_include_directories(clozn_sha256 PUBLIC third_party/sha256)
 
 enable_testing()
-
-# GAP #1 (task #43): the white-box state WRITE seam (ModelAdapter::write_state) — the
-# read -> edit -> write -> observe loop, proven against a writable test double (backend-free, CPU).
-# Links clozn_runtime for the include dir (Mask/ModelAdapter/ForwardResult all live there now).
-# The ggml adapter implements write_state against the live llama context in a later slice below.
-add_executable(test_state_write tests/test_state_write.cpp)
-target_link_libraries(test_state_write PRIVATE clozn_runtime)
-add_test(NAME state_write COMMAND test_state_write)
-
-# Worker checkpoint references are process-generation-scoped and the bounded store evicts by
-# insertion-order FIFO. This test is header-only/model-free: no GGUF, ggml, or network is required.
-add_executable(test_checkpoint_store tests/test_checkpoint_store.cpp)
-target_include_directories(test_checkpoint_store PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/serve)
-add_test(NAME checkpoint_store COMMAND test_checkpoint_store)
-
-# ADR 010's private continuation route has a model-free preflight: stale worker generations,
-# missing checkpoints, position/history/payload proof mismatch, malformed or empty append tokens,
-# and cancellation all fail before a lease is acquired.  Keep that contract runnable in CPU-only CI.
-add_executable(test_time_machine_continuation_protocol
-    tests/test_time_machine_continuation_protocol.cpp)
-target_include_directories(test_time_machine_continuation_protocol PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/serve
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sha256)
-target_link_libraries(test_time_machine_continuation_protocol PRIVATE clozn_sha256)
-add_test(NAME time_machine_continuation_protocol COMMAND test_time_machine_continuation_protocol)
 
 # Request-wide reference-match radix planning is model-free.  The fake traversal callbacks in this
 # test assert seq-0 depth restoration, duplicate-terminal collapse, and the no-remerge invariant
@@ -97,95 +63,11 @@ add_executable(test_reference_match_plan tests/test_reference_match_plan.cpp)
 target_include_directories(test_reference_match_plan PRIVATE include)
 add_test(NAME reference_match_plan COMMAND test_reference_match_plan)
 
-# Related-prompt scoring needs a separate model-free plan: collapse exact duplicate requests,
-# account for physically shared prompt-prefix KV, and split distinct histories into bounded resident
-# waves.  Keep this runnable without llama.cpp or a GGUF so capacity and ordering invariants fail fast.
-add_executable(test_variant_score_plan tests/test_variant_score_plan.cpp)
-target_include_directories(test_variant_score_plan PRIVATE include)
-add_test(NAME variant_score_plan COMMAND test_variant_score_plan)
-
-# Generation-state reuse has stricter identity and capacity rules than request-local trie reuse:
-# the checkpoint must prove the baseline token history/regime, and a prompt ending at the retained
-# boundary forces a one-token rewind to recover its logits. Keep those lifecycle decisions model-free.
-add_executable(test_variant_score_checkpoint_reuse
-    tests/test_variant_score_checkpoint_reuse.cpp)
-target_include_directories(test_variant_score_checkpoint_reuse PRIVATE include)
-add_test(NAME variant_score_checkpoint_reuse COMMAND test_variant_score_checkpoint_reuse)
-
-# Strict score-variants wire preflight and result validation are model-free.  The parsed structs
-# retain JSON integer-vs-other type information so malformed ids fail before a route touches a model.
-add_executable(test_score_variants_protocol tests/test_score_variants_protocol.cpp)
-target_include_directories(test_score_variants_protocol PRIVATE
-    include
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp/vendor)
-target_compile_definitions(test_score_variants_protocol PRIVATE
-    CLOZN_SCORE_VARIANTS_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/../../protocol/fixtures/score_variants.json")
-add_test(NAME score_variants_protocol COMMAND test_score_variants_protocol)
-
 # Backend target-logprob reduction has a llama.cpp-specific decode constraint: no sequence may
 # request two output rows in one decode. Keep the prefix-terminal chunk partition model-free.
 add_executable(test_target_logprob_reduction tests/test_target_logprob_reduction.cpp)
 target_include_directories(test_target_logprob_reduction PRIVATE include)
 add_test(NAME target_logprob_reduction COMMAND test_target_logprob_reduction)
-
-# --- On-device SAE readout (ROADMAP 3.3 wired into the engine) ---
-# clozn_sae (src/sae_encoder.cu + clozn/sae.hpp): the JumpReLU SAE encoder GEMV + the vendored
-# sae_topk kernel, behind a CUDA-free pimpl header so clozn-server links it untouched by nvcc.
-# Weights come from tools/export_sae_weights.py; parity vs the torch oracle is gated by
-# test_sae_encoder against tools/dump_sae_vectors.py artifacts (SKIPs where the export is absent).
-#   cmake -S core -B build-cuda -G Ninja -DCMAKE_BUILD_TYPE=Release -DCLOZN_BUILD_SAE=ON
-option(CLOZN_BUILD_SAE "Build the on-device SAE readout (JumpReLU encoder + sae_topk, CUDA)" OFF)
-# Kept only to gate test_sae_topk below (the CUDA confidence-select kernel + its CommitSelector
-# wrapper this option used to also build were diffusion-only and were removed with the scheduler).
-#   cmake -S core -B build-cuda -G Ninja -DCMAKE_BUILD_TYPE=Release -DCLOZN_BUILD_CUDA=ON
-option(CLOZN_BUILD_CUDA "Build the sae_topk CUDA parity test" OFF)
-
-if(CLOZN_BUILD_CUDA OR CLOZN_BUILD_SAE)
-    # Ampere/Ada/Blackwell for all CUDA targets — set BEFORE enable_language (CMake otherwise
-    # pre-seeds a default at enable time), matching kernels/confidence_select/CMakeLists.txt.
-    if(NOT CMAKE_CUDA_ARCHITECTURES)
-        set(CMAKE_CUDA_ARCHITECTURES "80;89;120")
-    endif()
-    enable_language(CUDA)
-    set(CMAKE_CUDA_STANDARD 17)
-    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-
-    # SAE-sparsify top-k kernel (ROADMAP 3.3: the confidence-select top-k repointed at the FEATURE
-    # dim), vendored from kernels/ — shared by the CUDA parity test AND the SAE readout library.
-    # Validated on sm_120: selected indices exact, values within f32-vs-f64 eps (also proven
-    # standalone by kernels/sae_topk/validate.py vs the numpy reference).
-    set(SAE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../kernels/sae_topk)  # monorepo: engine/core -> kernels/
-    add_library(clozn_sae_topk STATIC ${SAE_DIR}/sae_topk.cu)
-    set_target_properties(clozn_sae_topk PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
-    target_include_directories(clozn_sae_topk PUBLIC ${SAE_DIR})
-endif()
-
-if(CLOZN_BUILD_CUDA)
-    # Self-contained C++ parity test gating the sae_topk kernel (built above, shared with
-    # CLOZN_BUILD_SAE) against an in-process CPU reference.
-    add_executable(test_sae_topk tests/test_sae_topk.cu)
-    set_target_properties(test_sae_topk PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
-    target_link_libraries(test_sae_topk PRIVATE clozn_sae_topk)
-    add_test(NAME sae_topk COMMAND test_sae_topk)
-endif()
-
-if(CLOZN_BUILD_SAE)
-    find_package(CUDAToolkit REQUIRED)
-    # The SAE readout library: JumpReLU encoder GEMV + epilogue in front of the sae_topk kernel.
-    # CUDA_RESOLVE_DEVICE_SYMBOLS so plain-CXX consumers (clozn-server, test_sae_encoder) link it
-    # without a device-link step of their own; cudart_static rides the public interface for the same
-    # reason. See clozn/sae.hpp for the pipeline + numerics contract.
-    add_library(clozn_sae STATIC src/sae_encoder.cu)
-    set_target_properties(clozn_sae PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-    target_include_directories(clozn_sae PUBLIC include)
-    target_link_libraries(clozn_sae PUBLIC clozn_sae_topk CUDA::cudart_static)
-
-    # Engine-vs-torch parity gate (SKIPs cleanly when the exported weights are absent, so CI boxes
-    # without the 0.94 GB export stay green — same convention as test_ggml_state_write).
-    add_executable(test_sae_encoder tests/test_sae_encoder.cpp)
-    target_link_libraries(test_sae_encoder PRIVATE clozn_sae)
-    add_test(NAME sae_encoder COMMAND test_sae_encoder)
-endif()
 
 # --- L0 ggml adapter (Phase 3, slice 3) ---
 # Optional + heavy: this builds the vendored llama.cpp. Default OFF so the runtime-only
@@ -212,86 +94,12 @@ if(CLOZN_BUILD_GGML)
     # it's backend-coupled by nature.
     add_library(clozn_ggml STATIC src/model_ggml.cpp src/generate_ar.cpp)
     target_link_libraries(clozn_ggml PUBLIC clozn_runtime llama)
-
-    # GAP #1 (task #43): the white-box state-WRITE on a REAL model — read -> edit -> write -> observe ->
-    # clear through llama, via the patch-free eval-callback activation patch. SKIPS without a GGUF arg.
-    add_executable(test_ggml_state_write tests/test_ggml_state_write.cpp)
-    target_link_libraries(test_ggml_state_write PRIVATE clozn_ggml)
-    if(WIN32)
-        # llama/ggml DLLs are emitted under build/bin.  The product launcher prepends that directory,
-        # but a bare CTest invocation otherwise stalls behind Windows' missing-DLL error dialog before
-        # this test can reach its intentional no-model skip.
-        add_test(
-            NAME ggml_state_write
-            COMMAND ${CMAKE_COMMAND} -E env
-                "PATH=$<TARGET_FILE_DIR:llama>;$ENV{PATH}"
-                $<TARGET_FILE:test_ggml_state_write>
-        )
-    else()
-        add_test(NAME ggml_state_write COMMAND test_ggml_state_write)
-    endif()
-
-    # ffn_out-<il> hook (feed-forward/MLP contribution, additive analogue of kqv_out) + the
-    # 2026-07-28 head_write/ffn_write honesty fix -- on a REAL model. SKIPS without a GGUF arg,
-    # same convention as test_ggml_state_write above.
-    add_executable(test_ffn_hook tests/test_ffn_hook.cpp)
-    target_link_libraries(test_ffn_hook PRIVATE clozn_ggml)
-    if(WIN32)
-        add_test(
-            NAME ffn_hook
-            COMMAND ${CMAKE_COMMAND} -E env
-                "PATH=$<TARGET_FILE_DIR:llama>;$ENV{PATH}"
-                $<TARGET_FILE:test_ffn_hook>
-        )
-    else()
-        add_test(NAME ffn_hook COMMAND test_ffn_hook)
-    endif()
-
-    # FORK-PIN-01: the checkpoint export/import envelope codec (serve/checkpoint_codec.hpp) --
-    # structural round-trip, payload-hash determinism/sensitivity, and fail-closed decode of every
-    # declared-vs-actual mismatch (n_tokens, kv_bytes, steer_dims). Model-free in the sense that no
-    # GGUF/context is needed (every EngineCheckpoint here is hand-built), but the header itself
-    # needs EngineCheckpoint's definition (model_ggml.hpp -> llama.h), so this links clozn_ggml the
-    # same way test_ggml_state_write/test_ffn_hook do, and needs nlohmann/json.hpp's vendor include
-    # dir (normally only added for CLOZN_BUILD_SERVE) since checkpoint_codec.hpp uses json directly.
-    add_executable(test_checkpoint_codec tests/test_checkpoint_codec.cpp)
-    target_include_directories(test_checkpoint_codec PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/serve
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp/vendor)
-    target_link_libraries(test_checkpoint_codec PRIVATE clozn_ggml clozn_sha256)
-    if(WIN32)
-        add_test(
-            NAME checkpoint_codec
-            COMMAND ${CMAKE_COMMAND} -E env
-                "PATH=$<TARGET_FILE_DIR:llama>;$ENV{PATH}"
-                $<TARGET_FILE:test_checkpoint_codec>
-        )
-    else()
-        add_test(NAME checkpoint_codec COMMAND test_checkpoint_codec)
-    endif()
-
-    # clozn-bench — the §9 quant-calibration sweep: quantize f16 -> Q8/Q5/Q4 in-process and
-    # report size + token-agreement-vs-f16 + tok/s (the honest quality column for the quant axis).
-    add_executable(clozn-bench tools/clozn_bench.cpp)
-    target_link_libraries(clozn-bench PRIVATE clozn_ggml)
-
-    # clozn-probe-sweep — sweep all layers to find the best tap for concept probes.
-    add_executable(clozn-probe-sweep tools/clozn_probe_sweep.cpp)
-    target_link_libraries(clozn-probe-sweep PRIVATE clozn_ggml)
-
-    # clozn-ar — autoregressive white-box CLI: read tap + logit-lens per token on any AR GGUF.
-    # The daily-driver shape behind the tests (clozn_cli.cpp / the "clozn" tool and clozn-arbench's
-    # AR-vs-diffusion throughput comparison were diffusion-era tools and were removed with it).
-    add_executable(clozn-ar tools/clozn_ar.cpp)
-    target_link_libraries(clozn-ar PRIVATE clozn_ggml)
-
 endif()
 
 # --- L2 serving layer (HTTP, needs CLOZN_BUILD_GGML) ---
 # An HTTP server over the runtime: /v1/completions (+ SSE streaming of the §5.1 events), using the
-# cpp-httplib + nlohmann/json that llama.cpp already vendors (no new deps). /v1/infill and the
-# diffusion-only /v1/revise + /v1/board routes are gone with the diffusion generator; /v1/completions
-# always answers via the autoregressive generate_ar loop now.
+# cpp-httplib + nlohmann/json that llama.cpp already vendors (no new deps). The worker is private to
+# the v1 gateway; research and diffusion product routes are deliberately not linked into it.
 #   cmake -S core -B build -G Ninja -DCLOZN_BUILD_GGML=ON -DCLOZN_BUILD_SERVE=ON
 if(CLOZN_BUILD_SERVE AND CLOZN_BUILD_GGML)
     set(_vendor ${CMAKE_CURRENT_SOURCE_DIR}/third_party/llama.cpp/vendor)
@@ -302,10 +110,7 @@ if(CLOZN_BUILD_SERVE AND CLOZN_BUILD_GGML)
     add_executable(clozn-server
         serve/server_main.cpp
         serve/chat_template_renderer.cpp
-        serve/routes_jlens.cpp
         serve/routes_whitebox.cpp
-        serve/routes_score_variants.cpp
-        serve/routes_state.cpp
         serve/routes_reference_match.cpp
         ${_vendor}/cpp-httplib/httplib.cpp)
     if(GGML_CUDA)
@@ -321,14 +126,8 @@ if(CLOZN_BUILD_SERVE AND CLOZN_BUILD_GGML)
         CLOZN_ENGINE_BACKEND="${_clozn_engine_backend}"
         CLOZN_LLAMA_CPP_COMMIT="${CLOZN_LLAMA_CPP_COMMIT}")
     target_include_directories(clozn-server PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/serve ${_vendor}/cpp-httplib ${_vendor})
-    # clozn_sha256: FORK-PIN-01's checkpoint export/import envelope hash (serve/checkpoint_codec.hpp).
+    # Stable digests for exact-reference prompts, references, and generation contracts.
     target_link_libraries(clozn-server PRIVATE clozn_ggml llama-common clozn_sha256)
-    if(CLOZN_BUILD_SAE)
-        # --sae <dir>: the on-device SAE feature readout rides the server (clozn/sae.hpp is a
-        # CUDA-free pimpl header, so this stays a plain-CXX target; clozn_sae brings cudart).
-        target_link_libraries(clozn-server PRIVATE clozn_sae)
-        target_compile_definitions(clozn-server PRIVATE CLOZN_SAE)
-    endif()
     find_package(Threads REQUIRED)
     target_link_libraries(clozn-server PRIVATE Threads::Threads)
     if(WIN32)

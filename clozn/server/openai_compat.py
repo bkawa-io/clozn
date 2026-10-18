@@ -54,8 +54,7 @@ def _empty_sequence(value: Any) -> bool:
 
 CHAT_SUPPORTED_FIELDS = frozenset({
     "model", "messages", "max_tokens", "max_completion_tokens", "temperature", "top_p", "seed",
-    "stream", "stop", "stream_options", "top_k", "repeat_penalty", "clozn_trust", "clozn_receipt", "clozn_receipt_mode", "clozn_lens",
-    "clozn_guard", "clozn_sources", "tools", "tool_choice", "parallel_tool_calls", "response_format",
+    "stream", "stop", "stream_options", "top_k", "repeat_penalty", "clozn_sources",
 })
 
 # Accepted only at the listed neutral value, then removed.  These are compatibility affordances, not
@@ -68,8 +67,6 @@ CHAT_NEUTRAL_FIELDS: dict[str, Callable[[Any], bool]] = {
     "logprobs": lambda v: v is False,
     "top_logprobs": lambda v: _is_int(v) and v == 0,
     "logit_bias": _empty_mapping,
-    "functions": _empty_sequence,
-    "function_call": lambda v: v == "none",
     "modalities": lambda v: v == ["text"],
     "audio": lambda _v: False,
     "prediction": lambda _v: False,
@@ -123,7 +120,7 @@ def _number_in(body: Mapping[str, Any], field: str, low: float, high: float,
     return number
 
 
-_MESSAGE_KNOWN_FIELDS = {"role", "content", "clozn_section"}
+_MESSAGE_KNOWN_FIELDS = {"role", "content"}
 
 
 def _normalize_messages(value: Any) -> list[dict[str, str]]:
@@ -147,17 +144,8 @@ def _normalize_messages(value: Any) -> list[dict[str, str]]:
         # Local GGUF templates generally predate the developer role.  Its instruction semantics map to
         # system for this text-only surface; the public matrix documents this normalization explicitly.
         normalized = {"role": "system" if role == "developer" else str(role), "content": content}
-        # clozn_section (prompt-section influence, clozn.runs.sections): an opt-in per-message tag naming
-        # which ablatable section this message belongs to. Carried through UNVALIDATED here beyond "is it
-        # present" -- clozn.runs.sections.sections_from_messages already tolerates a malformed value (not a
-        # non-empty string) by treating the message as untagged, per its own module docstring, so this
-        # layer doesn't need a second copy of that rule. Absent for a standard OpenAI client, so its
-        # request/response stays byte-identical to before this field existed.
-        if "clozn_section" in message:
-            normalized["clozn_section"] = message["clozn_section"]
         out.append(normalized)
     return out
-
 
 def _source_range(value: Any, *, upper: int, param: str, label: str) -> list[int]:
     if not (
@@ -368,51 +356,17 @@ def normalize_chat_request(body: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(body, Mapping):
         _fail("request body must be a JSON object", "body")
     _check_known_fields(body, CHAT_SUPPORTED_FIELDS, CHAT_NEUTRAL_FIELDS)
-    from clozn.server.structured_io import StructuredIOError, normalize_and_lower_messages, normalize_contract
-    try:
-        structured = normalize_contract(body)
-    except StructuredIOError as exc:
-        raise CompatibilityError(str(exc), param=exc.param, code=exc.code) from exc
-
     out = {key: value for key, value in body.items() if key in CHAT_SUPPORTED_FIELDS}
     for field in ("max_tokens", "max_completion_tokens", "temperature", "top_p", "seed", "stream",
-                  "top_k", "repeat_penalty", "clozn_trust", "clozn_receipt", "clozn_receipt_mode", "clozn_lens",
-                  "clozn_guard"):
+                  "top_k", "repeat_penalty"):
         if out.get(field) is None:
             out.pop(field, None)
-
-    has_tool_history = any(
-        isinstance(message, Mapping)
-        and (message.get("role") == "tool" or "tool_calls" in message)
-        for message in (body.get("messages") if isinstance(body.get("messages"), list) else [])
-    )
-    if structured.get("mode") or has_tool_history:
-        try:
-            plan = normalize_and_lower_messages(body.get("messages"), structured)
-        except StructuredIOError as exc:
-            raise CompatibilityError(str(exc), param=exc.param, code=exc.code) from exc
-        out["messages"] = plan["messages"]
-        out["_structured_contract"] = structured
-    else:
-        out["messages"] = _normalize_messages(body.get("messages"))
+    out["messages"] = _normalize_messages(body.get("messages"))
     sources = _normalize_sources(body.get("clozn_sources"), messages=out["messages"])
     out.pop("clozn_sources", None)
     if sources:
         out["_clozn_sources"] = sources
 
-    if structured.get("mode"):
-        if sources:
-            _fail("clozn_sources cannot be combined with structured I/O in v1", "clozn_sources",
-                  code="unsupported_parameter")
-        for extension in ("clozn_trust", "clozn_receipt", "clozn_receipt_mode", "clozn_lens", "clozn_guard"):
-            if body.get(extension):
-                _fail(f"{extension} cannot be combined with structured I/O in v1", extension,
-                      code="unsupported_parameter")
-
-    # Neutral structured fields remain compatibility no-ops, just as before.  Active
-    # fields are represented by the private normalized contract consumed by the route.
-    for field in ("tools", "tool_choice", "parallel_tool_calls", "response_format"):
-        out.pop(field, None)
     if "model" in out and (not isinstance(out["model"], str) or not out["model"].strip()):
         _fail("model must be a non-empty string", "model")
     if "stream" in out and not isinstance(out["stream"], bool):
@@ -454,78 +408,4 @@ def normalize_chat_request(body: Mapping[str, Any]) -> dict[str, Any]:
                 or float(out["repeat_penalty"]) <= 0):
             _fail("repeat_penalty must be a positive number", "repeat_penalty")
         out["repeat_penalty"] = float(out["repeat_penalty"])
-    for field in ("clozn_trust", "clozn_receipt"):
-        if field in out and not isinstance(out[field], bool):
-            _fail(f"{field} must be a boolean", field)
-    if "clozn_receipt_mode" in out and out["clozn_receipt_mode"] not in {"off", "exceptions", "always"}:
-        _fail("clozn_receipt_mode must be off, exceptions, or always", "clozn_receipt_mode")
-    if "clozn_lens" in out and not isinstance(out["clozn_lens"], (bool, dict)):
-        _fail("clozn_lens must be a boolean or object", "clozn_lens")
-    # clozn_guard's own semantics (concepts/threshold/counter_strength/max_fires validation) are the
-    # generation_guard module's job (it needs to report which sub-field is wrong) -- this is only a
-    # wire-shape gate, matching clozn_lens's own boolean-or-object split.
-    if "clozn_guard" in out and not isinstance(out["clozn_guard"], (bool, dict)):
-        _fail("clozn_guard must be an object", "clozn_guard")
-    if structured.get("mode") and out.get("stop"):
-        _fail("stop cannot be combined with structured output in v1", "stop",
-              code="unsupported_parameter")
-    return out
-
-
-def normalize_responses_request(body: Mapping[str, Any]) -> dict[str, Any]:
-    """Normalize the deliberately small text-only Responses API subset into chat messages."""
-    if not isinstance(body, Mapping):
-        _fail("request body must be a JSON object", "body")
-    supported = {"model", "instructions", "input", "temperature", "top_p",
-                 "max_output_tokens", "stream", "tools", "stop"}
-    unknown = set(body) - supported
-    if unknown:
-        field = sorted(unknown)[0]
-        _fail(f"unsupported parameter '{field}' in the narrow Responses subset", field)
-    if "input" not in body:
-        _fail("input is required", "input")
-    if body.get("stream", False) is not False:
-        raise CompatibilityError(
-            "Responses streaming is not supported in v1; set stream:false",
-            param="stream", code="responses_streaming_not_supported",
-        )
-    if body.get("tools"):
-        _fail("Responses tools are not supported in v1; use Chat Completions", "tools",
-              code="responses_tools_not_supported")
-    instructions = body.get("instructions")
-    if instructions is not None and not isinstance(instructions, str):
-        _fail("instructions must be a string", "instructions")
-    raw_input = body.get("input")
-    if isinstance(raw_input, str):
-        messages = [{"role": "user", "content": raw_input}]
-        input_kind = "string"
-    elif isinstance(raw_input, list):
-        messages = _normalize_messages(raw_input)
-        input_kind = "text_message_array"
-    else:
-        _fail("input must be a string or text message array", "input")
-    if instructions is not None:
-        messages.insert(0, {"role": "system", "content": instructions})
-    out: dict[str, Any] = {"messages": messages, "stream": False,
-                           "_responses_input_kind": input_kind,
-                           "_responses_instructions": instructions is not None}
-    if "model" in body:
-        if not isinstance(body["model"], str) or not body["model"].strip():
-            _fail("model must be a non-empty string", "model")
-        out["model"] = body["model"]
-    maximum = body.get("max_output_tokens")
-    if maximum is not None:
-        if not _is_int(maximum) or maximum < 1:
-            _fail("max_output_tokens must be an integer of at least 1", "max_output_tokens")
-        out["max_tokens"] = int(maximum)
-    temperature = _number_in(body, "temperature", 0.0, 2.0)
-    top_p = _number_in(body, "top_p", 0.0, 1.0, low_inclusive=False)
-    if temperature is not None:
-        out["temperature"] = temperature
-    if top_p is not None:
-        out["top_p"] = top_p
-    if "stop" in body:
-        stop = _normalize_stop(body.get("stop"))
-        if stop:
-            out["stop"] = stop
     return out

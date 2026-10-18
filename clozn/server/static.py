@@ -11,20 +11,10 @@ from clozn.server.config import DEMO
 # keeps every generated asset reference relative to this directory.
 APP_INDEX = "/app/index.html"
 
-# The casting: the project's art half -- a live-fed, forkable, WebGL-shaded rendering, kept because
-# clozn is an art project as much as a science one.
-#
-# It lives at its own URL under ``studio/casting/`` so its lifecycle is independent of the product UI.
-CASTING_INDEX = "/casting/casting-demo.html"
-
-
 def try_get(handler, path):
     """Serve Studio entry points and contained HTML, CSS, JavaScript, and font assets."""
     if path in ("/", "/index.html", "/app", "/app/"):
         handler._send(302, "", "text/plain; charset=utf-8", {"Location": APP_INDEX})
-        return True
-    if path in ("/casting", "/casting/"):
-        handler._send(302, "", "text/plain; charset=utf-8", {"Location": CASTING_INDEX})
         return True
     text_types = {
         ".html": "text/html",

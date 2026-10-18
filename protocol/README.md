@@ -21,8 +21,3 @@ instead of two inspectors.
 Full contract: **[SPEC.md](SPEC.md)** — the canonical types, the engine-event → `StateStep`
 mapping, and the SSE/JSON wire (light frame by default, heavy state on demand). View = read the
 stream; steer = push an `Intervention`; memory = persist and recall the state.
-
-Related-prompt continuation scoring has its own complete worker wire contract in
-**[SCORE_VARIANTS.md](SCORE_VARIANTS.md)**. It is an explicitly unqualified screening protocol;
-trusted evidence continues through scalar refinement. Its constants and cross-language conformance
-case have one source in **[fixtures/score_variants.json](fixtures/score_variants.json)**.

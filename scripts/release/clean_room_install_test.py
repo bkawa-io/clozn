@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import venv
+import zipfile
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -45,6 +46,54 @@ def _run(cmd, **kw) -> subprocess.CompletedProcess:
     if result.stderr.strip():
         print(result.stderr.rstrip(), file=sys.stderr)
     return result
+
+
+def _verify_wheel_manifest(wheel_path: str) -> None:
+    """Reject missing v1 assets and any known removed product surface before installation."""
+    required = {
+        "clozn/__init__.py",
+        "clozn/server/app.py",
+        "clozn_engine/__init__.py",
+        "clozn/studio/app/index.html",
+        "clozn/schemas/defs/clozn.context-investigation-effects-job-result.v1.json",
+        "clozn/schemas/defs/clozn.minimal-context-search-result.v2.json",
+    }
+    forbidden = (
+        "clozn_client/",
+        "clozn/runs/telemetry.py",
+        "clozn/runs/sections.py",
+        "clozn/runs/lineage.py",
+        "clozn/receipts/forced.py",
+        "clozn/experiments/state_ref.py",
+        "clozn/models/lockfile.py",
+        "clozn/cli/throughput_predictor.py",
+        "clozn/studio/casting/",
+        "clozn/studio/ext/",
+        "clozn/studio/atlas_emergent.json",
+        "clozn/studio/workspace_lens_trace.jsonl",
+        "clozn/schemas/defs/clozn.context-answer-influence-export.v1.json",
+        "clozn/schemas/defs/clozn.receipt-privacy-transaction.v1.json",
+        "clozn/schemas/defs/clozn.model-lock.v1.json",
+    )
+    with zipfile.ZipFile(wheel_path) as archive:
+        names = set(archive.namelist())
+        missing = sorted(required - names)
+        leaked = sorted(
+            name for name in names
+            if any(fragment in name for fragment in forbidden)
+            or (name.endswith(".py") and name.rsplit("/", 1)[-1].startswith("test_"))
+        )
+        javascript = b"\n".join(
+            archive.read(name)
+            for name in names
+            if name.startswith("clozn/studio/app/assets/") and name.endswith(".js")
+        )
+    if missing:
+        raise RuntimeError(f"wheel is missing required v1 entries: {missing}")
+    if leaked:
+        raise RuntimeError(f"wheel contains removed product entries: {leaked}")
+    if b"clozn.influence-map-job.v1" in javascript:
+        raise RuntimeError("packaged Studio contains the removed influence-map job contract")
 
 
 def main(argv=None) -> int:
@@ -77,6 +126,12 @@ def main(argv=None) -> int:
             return 1
         wheel_path = os.path.join(dist_dir, wheels[0])
         print(f"built {wheel_path}")
+        try:
+            _verify_wheel_manifest(wheel_path)
+        except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
+            print(f"FAIL: wheel manifest is invalid: {exc}", file=sys.stderr)
+            return 1
+        print("PASS: exact v1 wheel manifest")
 
         # 2) A brand-new venv -- not the interpreter running this script, so nothing it already has
         #    installed (or an editable-install path hack) can paper over a packaging bug.
@@ -120,7 +175,7 @@ import re
 
 package = files("clozn.studio")
 directories = {item.name for item in package.iterdir() if item.is_dir()}
-assert directories <= {"app", "casting", "ext", "__pycache__"}, directories
+assert directories <= {"app", "__pycache__"}, directories
 root = package.joinpath("app")
 index = root.joinpath("index.html")
 assert index.is_file(), index

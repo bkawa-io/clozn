@@ -1,196 +1,137 @@
 # Clozn
 
-**Reduce an LLM's context to the smallest set that preserves its answer.** Clozn records an ordinary
-local-model run, derives canonical Context Units with zero prompt instrumentation, and lets you test a
-bounded reduction directly against the recorded continuation.
+Clozn shows how context affects a local model's answer, then searches for a smaller context that
+preserves that answer.
 
-“Smallest” means the fewest retained canonical source units in the declared search universe. “Preserves”
-means either the recorded answer is reproduced token-for-token under the recorded generation contract,
-or the whole recorded continuation stays within an explicitly chosen teacher-forced likelihood tolerance.
-`EXACT MINIMUM` is reserved for the stronger case: every smaller cardinality was directly checked and
-ruled out under that same criterion. A partial search is shown as `BEST VERIFIED`, never as a hidden
-estimate.
+The v1 proof of concept is deliberately narrow:
 
-Clozn is zero-config for local OpenAI-compatible inference: run or serve the model, open the recorded
-Run, and choose **Reduce context**. The primary Studio path is Runs → Answer → Minimal Context →
-Context → Compare/Branch; detailed mechanism and diagnostic tools remain available as advanced evidence
-surfaces. See the [capability matrix](docs/CAPABILITIES.md) and [model support](docs/MODEL_SUPPORT.md)
-for boundaries.
+- one local GGUF and one private native worker;
+- a run list and composer in Studio;
+- Context Effects over recorded source ranges;
+- Minimal Context with exact answer/termination verification;
+- original-versus-reduced comparison and basic run deletion; and
+- a text-only OpenAI Chat Completions API.
 
-`clozn` = `cloze` (the engine inside) + *cozen* (to deceive — the illusion it reveals).
+Research workbenches, J-lens/SAE views, steering, snapshots, model comparison suites, tools/structured
+output, Responses, and Ollama-compatible APIs are not part of v1. See the
+[implementation plan](docs/V1_POC_PLAN.md) and [current capability boundary](docs/CAPABILITIES.md).
 
-→ **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — the design, the layers, the state-stream protocol.
-→ **[docs/CAPABILITIES.md](docs/CAPABILITIES.md)** — what is merged, released, qualified, and limited.
-→ **[docs/STUDIO_RELEASE_CHECKLIST.md](docs/STUDIO_RELEASE_CHECKLIST.md)** — current release gates.
+## Quickstart from a source checkout
 
-## Quickstart
+Build the private worker first; this source snapshot does not include a published native binary:
 
-> **Distribution status:** the managed setup contract is implemented, but no public engine release
-> matrix is published yet. This source snapshot still requires a developer build; see
-> [native distribution status](docs/NATIVE_DISTRIBUTION.md) and
-> [development bring-up](docs/DEVELOPMENT.md).
-
-Run a local model in one command. `clozn` starts one public, Torch-free product gateway and one private
-C++ model worker. It finds your build (GPU if present), streams tokens, reports honestly what it is
-running on, and fails with one clear line instead of a stack trace.
-
-```bash
-clozn pull llama-1b                       # download a model (qwen / mistral / gemma-2b / owner/repo/file.gguf)
-clozn models                              # discover local GGUFs + the backend that would run them
-clozn run llama-1b "Explain entropy."     # one-shot, streams tokens to the terminal
-clozn serve qwen --port 8080              # gateway + private worker; API and Studio on :8080
-clozn studio --open                       # attach a browser to that already-running gateway
-clozn ps                                  # what's running    ·    clozn stop qwen   to stop it
+```sh
+python engine/core/third_party/bootstrap_llama.py
+cmake -S engine/core -B engine/core/build -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCLOZN_BUILD_GGML=ON \
+  -DCLOZN_BUILD_SERVE=ON \
+  -DGGML_METAL=ON
+cmake --build engine/core/build --target clozn-server
 ```
 
-If the GGUF already exists in Ollama, inspect the adoption plan before copying or hard-linking anything:
+Use `-DGGML_CUDA=ON` on a CUDA host, or disable both Metal and CUDA for CPU. Then start one model:
 
-```bash
-clozn adopt ollama                        # list discoverable Ollama models
-clozn adopt ollama --model MODEL --dry-run
-clozn adopt ollama --model MODEL --try --yes --qualify
+```sh
+python -m clozn serve /absolute/path/to/model.gguf --port 8080
+python -m clozn studio --port 8080 --open
 ```
 
-Managed Ollama manifests resolve the exact model layer by digest and size; Clozn never guesses by
-choosing the largest blob. `--try` previews disk, fidelity, and capability changes until `--yes` is
-supplied. Adoption and qualification remain independently undoable. Clozn does not edit any other
-application's configuration — point an existing client at Clozn's OpenAI-compatible endpoint yourself
-(`http://127.0.0.1:8080/v1`; see [docs/CLIENT_CONFORMANCE.md](docs/CLIENT_CONFORMANCE.md) for
-Aider/Open WebUI/SDK setup).
+The same runtime can serve a command-line request:
 
-Before changing the runtime, run its managed acceptance gate:
-
-```bash
-clozn smoke qwen --preflight              # report every missing build/model/asset prerequisite
-clozn smoke qwen                          # test APIs + SQLite, restart the worker, then clean up
-clozn smoke qwen --deep                   # also exercise forced receipts and replay
+```sh
+python -m clozn run /absolute/path/to/model.gguf "Explain entropy."
 ```
 
-`clozn smoke --url http://127.0.0.1:8080` attaches non-destructively to an existing gateway. Managed
-smoke owns the stack it starts, verifies that the private worker can be replaced without changing the
-public gateway, and stops the complete process tree when finished.
+The public CLI is exactly:
 
-## Model CI
-
-Start with the question fine-tune authors actually have: did the candidate change, what improved, and
-what regressed?
-
-```bash
-clozn diff-model base.gguf tuned.gguf --runs 8 --both
-clozn diff-adapter base.gguf tune.gguf
-clozn validate-export base.gguf --adapter tune.gguf --merged merged.gguf \
-  --suite examples/adapter-export-suite.v1.json --out export-receipt.json
-clozn experiment run examples/experiment.v0.json --out result.json
-clozn ci check --experiment result.json --min-target-gains 1 --max-guard-regressions 0
+```text
+run  serve  models  pull  studio  ps  stop  version  doctor
 ```
 
-`diff-model` refuses mismatched tokenizers and labels its verdict as a sample-based screen, not proof of
-quality. `validate-export` uses base, base-plus-adapter, and merged arms; it gates the adapted-versus-
-merged teacher-forced deltas while keeping base as the control and never calls a differently quantized
-merge byte-equivalent. Experiment artifacts retain each instrumented run; the CI gate validates their
-matrix and identity evidence, recomputes comparisons from raw cells, and returns a deterministic exit
-code. See the
-[worked Qwen reasoning-SFT case study](docs/MODEL_DIFF_CASE_STUDY_QWEN_REASONING.md) for a real two-GGUF
-run on a 16 GB Mac.
+`clozn serve` also accepts the documented single-model aliases `-m`, `-c`, `-ngl`, `--host`, `-a`,
+and `-np 1`; see [llama-server-style flags](docs/LLAMA_SERVER_COMPATIBILITY.md).
 
-Chat templates come from each model's own GGUF (Qwen / Llama-3 / Mistral / Gemma / …), applied
-engine-side, so pulled models chat coherently — not just Qwen. Drop the prompt — `clozn run llama-1b` —
-for an interactive chat (multi-turn; `/reset` clears, `/bye` quits).
+## Text API
 
-`clozn run` reuses a running `serve` for that model (warm, no reload); otherwise it spawns a temporary
-gateway/worker pair and tears it down after. Product commands never bypass the gateway to call a warm
-worker directly. `clozn serve` supervises the private worker and restarts it after an unexpected exit.
+Point an OpenAI-compatible client at `http://127.0.0.1:8080/v1`, or call the endpoint directly:
 
-OpenAI clients use the documented subset of `/v1/chat/completions` and `/v1/models`. Unsupported
-behavior-bearing fields return a typed 400 instead of being silently ignored. See the exact
-[endpoint/field matrix](docs/OPENAI_COMPATIBILITY.md). Clozn's CLI and Studio instrumentation use
-`/api/clozn/generate`, which preserves the native state-event stream. Native event frames never leak into
-an OpenAI completion stream.
-
-Every run is debuggable after the fact. The engine streams per-token confidence and the alternatives it
-weighed; open a run in Studio for the delivered-context receipt, measured source links when available,
-the **"Disposed to say · J-lens"** panel (per-token, per-layer, with an unskippable provenance caption),
-the branch lineage tree, and the exact rendered prompt the model saw:
-
-```bash
-clozn trace                               # last runlog entry: confidence timeline + almost-said tokens
-clozn inspect <clozn_run_id>              # explain any API reply from the local journal; no model needed
-clozn branch                              # re-run from the most uncertain token on the alternative
-clozn test cases.json                     # run-level assertions over the receipt/replay seams
-clozn context export <run_id> --out receipt.json --privacy metadata_only
+```sh
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "clozn-local",
+    "messages": [{"role": "user", "content": "Explain entropy."}],
+    "stream": false
+  }'
 ```
 
-`clozn trace`, `clozn inspect`, and Studio read the same SQLite journal. Non-streaming OpenAI chat
-exposes the exact id as `clozn_run_id` and `X-Clozn-Run-Id`. Streaming requests are journaled but cannot
-expose a post-generation run id in already-committed headers; the terminal chat chunk carries the id.
-`inspect` assembles confidence, active influences, and captured
-concepts locally, falling back to a running gateway only when the id is not in this journal.
-Queryable run
-metadata lives in `~/.clozn/runs/runs.sqlite3`; large traces are immutable, content-addressed blobs under
-`~/.clozn/runs/blobs/sha256`. The current database schema is created and verified automatically.
-`clozn test` runs user-authored checks against a stored run; model-free assertions such as `contains`,
-`finish_reason`, and `min_confidence` read the run alone, while live checks honestly skip when their
-measurement prerequisite is unavailable. Point any OpenAI client at `clozn serve`; pass
-`"clozn_trust": true` in a chat request to get per-claim confidence spans back on the wire (labeled
-uncalibrated).
+The supported public model endpoints are `GET /v1/models` and `POST /v1/chat/completions`.
+Unsupported behavior-bearing fields receive a typed HTTP 400 instead of being ignored. Exact request
+fields and response extensions are documented in [OpenAI compatibility](docs/OPENAI_COMPATIBILITY.md).
 
-`clozn run …` works once the repo root is on PATH; otherwise `python -m clozn run …`. Put GGUFs in
-`~/.clozn/models`, set `CLOZN_MODELS=<dir>`, or list dirs in `~/.clozn/config.json`. For this unreleased
-source snapshot, build the engine first. On Windows: `cd engine/core && build_gpu.bat` (GPU, CUDA) or
-`build_serve.bat` (CPU). On Linux/macOS: `./engine/core/build_gpu.sh` (GPU: CUDA on Linux, Metal on
-macOS) or `./engine/core/build_serve.sh` (CPU). See [Platform support](#platform-support) below for what
-is and is not independently verified on each.
+Completed generation must be durably recorded before Clozn returns success. Non-streaming responses
+include `clozn_run_id` and `X-Clozn-Run-Id`; the terminal streaming chunk includes `clozn_run_id`.
 
-## Platform support
+## Studio journey
 
-The Python side (`clozn/`, stdlib-only) was never Windows-only: `clozn/setup/platform_detect.py`
-already detects Windows/Linux/macOS and x86_64/arm64 and treats every Apple Silicon Mac as Metal-capable
-by design, and both `clozn.sh` (POSIX) and `clozn.cmd` (Windows) are documented launchers.
+Studio has a run list/composer and one run workspace:
 
-What genuinely had no POSIX path until this change: `engine/core/`'s build convenience scripts
-(`build_serve.bat`, `build_gpu.bat`, …) had no `.sh` equivalent, and `_env_with_dlls()` — the code that
-puts the engine's own build directory on a spawned worker's library search path — only ever wrote
-`PATH`, the Windows DLL mechanism. That made it inert rather than broken on Linux/macOS: a CMake-built
-binary normally also carries an rpath into its own build tree, which is almost certainly why a
-locally-built engine has run on a Mac before despite this. `engine/core/build_serve.sh` / `build_gpu.sh`
-now mirror the `.bat` scripts (`build_core.sh`, `build_cuda.sh`, `build_sae.sh` too — see
-[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)), and `_env_with_dlls()` now also sets `LD_LIBRARY_PATH`
-(Linux) / `DYLD_LIBRARY_PATH` (macOS) as an additional robustness path, not a fix for a prior failure.
+1. create a run from a question, optional instructions, and text context blocks;
+2. inspect input and output in Context Effects;
+3. measure how removing a recorded source changes the likelihood of selected answer text;
+4. run Minimal Context and cancel it if needed;
+5. save the best exact-preserving result; and
+6. compare the reduced child with its original or reopen both after restart.
 
-What is actually verified, per platform, as of this snapshot:
+Context Effects and Minimal Context use the same canonical source identities. Context Effects is a
+teacher-forced intervention measurement; Minimal Context separately verifies the recorded answer and
+stop behavior. Low measured effect, unmeasured, unavailable, failed, and exact-preserved are distinct
+states.
 
-| Platform | Python CLI/product | Engine build (CMake) | How that is known |
-|---|---|---|---|
-| Windows x64 | yes | CPU + CUDA GPU | The primary dev machine for this repo (RTX 5080); built and run directly, repeatedly. |
-| Linux x64, CPU | yes (stdlib-only) | yes | `.github/workflows/real-runtime-smoke.yml` builds `clozn-server`, downloads a real GGUF, and runs `clozn smoke --deep` against it on `ubuntu-24.04` every night — the strongest non-Windows evidence in this repo. |
-| Linux x64, CUDA GPU | yes | scripted (`build_gpu.sh` detects `nvcc` on `PATH`) | Not built or run anywhere; no GPU CI runner exists for this repo. |
-| macOS, Metal | yes | scripted (`build_gpu.sh` detects Darwin) | The repo owner reports having run clozn on a Mac. No CI run or build artifact for it exists in this repository: `.github/workflows/native-engine-release.yml` has a `macos-14`/Metal release-matrix cell, but that workflow has never been dispatched (0 recorded runs). Treat this row as owner-reported, not reproducible from this repo alone. |
+## Data and privacy
 
-"Scripted" means the CMake invocation and platform-detection logic exist and are exercised by unit tests
-that simulate the target platform (`tests/test_env_with_dlls_platform.py`) — not that a build has
-actually run there. None of this is a claim that Linux CUDA or macOS are unsupported in principle; the
-codebase (standard CMake, `if(WIN32)`/`if(MSVC)`-gated C++, POSIX-aware Python process management) was
-already structurally cross-platform. It is a claim about which cells have and have not actually been
-exercised, so nobody trusts a row this document doesn't back up.
+v1 stores its SQLite journal, immutable trace blobs, evidence, and results under
+`~/.clozn/v1/` by default. Set `CLOZN_DATA_ROOT` to choose an isolated location. Historical data under
+`~/.clozn/runs/` is not imported or modified.
 
-## Layout
+Run deletion is transactional and refuses to remove a parent while saved children still depend on it.
+Unreferenced content-addressed blobs are cleaned through the run mutation path.
 
-| Dir | What |
+## Qualification
+
+With a gateway already running, exercise the retained live journey with:
+
+```sh
+python scripts/smoke/v1_acceptance.py \
+  --base-url http://127.0.0.1:8080
+```
+
+The reference backend run and its exact identities are recorded in
+[v1 live qualification](docs/V1_LIVE_QUALIFICATION.md). The fresh browser journey remains a separate
+release check.
+
+Model-free validation:
+
+```sh
+.venv/bin/pytest -q tests
+cd studio-frontend && npm test -- --run
+cd studio-frontend && npm run build
+ctest --test-dir engine/core/build --output-on-failure
+```
+
+## Repository layout
+
+| Path | Responsibility |
 |---|---|
-| `clozn/`    | the product Python package — server/API, run journal, context receipts, replay, readouts, the J-lens proxy, and Model CI (`python -m clozn`) |
-| `engine/`   | the C++/ggml runtime plus optional CUDA kernels — runs GGUF models, emits the state stream, harvests activations, applies steers, and serves `/jlens` |
-| `studio/`   | the white-box UI — runs, comparisons, experiments, context/source evidence, performance, and J-lens readouts, served by the backend |
-| `protocol/` | the one state-stream contract the engine emits and the studio consumes |
-| `docs/`     | architecture, the consolidated roadmap, and the honest technical account |
-| `tests/`    | the model-free product suite · `scripts/` dev tooling |
+| `clozn/` | stdlib-only CLI, public gateway, run/evidence storage, and the two v1 analyses |
+| `engine/client/` | private gateway-to-worker client |
+| `engine/core/` | private GGUF worker: generation, template rendering, scoring, exact matching, cancellation |
+| `studio-frontend/` | Studio source |
+| `studio/` | built Studio assets served by the gateway |
+| `protocol/` | private worker/gateway handshake and fixtures |
+| `scripts/smoke/` | development and live acceptance harnesses |
+| `docs/` | current architecture, contracts, and implementation plan |
 
-The legibility-science spikes and findings (the interpretability-tax thread) live in a separate
-local-only sibling repo: `../clozn-research`.
-
-The product runtime is the **autoregressive GGUF** path. The earlier diffusion runtime and PyTorch
-workbench are research history, not alternate current-user commands; the old design and measurements are
-kept in clearly labeled archival documents. The AR core contract includes trace, harvest, steer, and
-teacher-forced `/score`; the checked-in qualification ledger records how far each exact model/quant has
-passed. **J-lens runs a published Jacobian-lens method** (not a Clozn invention), fit per model offline
-(nf4 + autograd) and applied forward on the engine's own GGUF head; today's qualified fit covers
-Qwen2.5-7B. A second-family fit and targeted cross-family write checks remain open.
+The Python package has no runtime dependencies. The native worker owns model loading and inference; the
+public gateway owns compatibility, recording, orchestration, and Studio.

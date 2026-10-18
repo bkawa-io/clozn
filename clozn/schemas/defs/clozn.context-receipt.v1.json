@@ -11,7 +11,7 @@
   "$defs": {
     "segment_reason": {
       "type": "string",
-      "description": "Controlled omission/transformation reason codes. Several are defined for forward compatibility but have no live detection path in clozn today: clozn is a raw OpenAI/Ollama-compatible relay with no attachment/RAG/document-chunk concept and no server-side history trimming (overlong prompts are rejected outright, never silently trimmed -- see clozn.runs.context_receipt's OVERLONG_POLICY), so context_budget/history_policy/attachment_limit/deduplicated/tool_result_pruned/system_message_merged never fire from clozn's own code today. Only template_transformed (every request is rendered through the chat template) is currently emitted unconditionally.",
+      "description": "Controlled omission/transformation reason codes. Clozn v1 has no attachment, RAG, document-chunk, tool-result, or server-side history-trimming path; overlong prompts are rejected rather than silently trimmed. Only template_transformed is currently emitted unconditionally because each request is rendered through the chat template.",
       "enum": [
         "context_budget", "client_not_delivered", "history_policy", "attachment_limit",
         "deduplicated", "empty_content", "unsupported_role", "tool_result_pruned",

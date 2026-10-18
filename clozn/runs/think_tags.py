@@ -184,7 +184,7 @@ class ThinkTagStream:
         return "".join(emitted)
 
     def drain_reasoning(self) -> list[str]:
-        """Return newly completed reasoning blocks once (used by Ollama's separate thinking field)."""
+        """Return newly completed reasoning blocks once for streaming evidence capture."""
         fresh = [str(block.get("text") or "") for block in self._blocks[self._drained_blocks:]]
         self._drained_blocks = len(self._blocks)
         return fresh
@@ -240,8 +240,8 @@ def sanitize_messages(messages) -> list:
             continue
         item = dict(message)
         if item.get("role") == "assistant":
-            # Ollama clients may echo its separate `thinking` field with the transcript.  It is evidence,
-            # not assistant content, and no chat template should receive it on the next turn.
+            # A caller may echo a separate `thinking` field with the transcript. It is evidence, not
+            # assistant content, and no chat template should receive it on the next turn.
             item.pop("thinking", None)
             if isinstance(item.get("content"), str):
                 item["content"] = sanitize_reply(item["content"]).public_text

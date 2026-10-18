@@ -1,19 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ContractError } from "../../data/contracts";
-import { studioApi } from "../../data/client";
-import type { SessionTrace } from "../../data/contracts";
 import type {
   ContextInvestigationQuery,
   ContextInvestigationReader,
 } from "../../data/contextInvestigation";
 import { contextInvestigationApi } from "../../data/contextInvestigationClient";
-import type {
-  ContextCounterfactualJob,
-  CounterfactualMaterializationResult,
-  RemoveSourceTestJob,
-} from "../../data/contextInvestigationActions";
-import type { EffectsSearchJob } from "../../data/contextInvestigationJobs";
+import type { ContextEffectsJob } from "../../data/contextInvestigationJobs";
 import { InspectSurface } from "./Inspect";
 
 const runId = "run_alpha";
@@ -321,18 +314,18 @@ function nonMeasurementQueryFixture(
   };
 }
 
-function effectsSearchJobFixture(
-  state: EffectsSearchJob["state"],
-): EffectsSearchJob {
+function effectsJobFixture(
+  state: ContextEffectsJob["state"],
+): ContextEffectsJob {
   const terminal = state === "completed" || state === "failed" || state === "cancelled";
   return {
-    schemaVersion: "clozn.influence-map-job.v1",
+    schemaVersion: "clozn.analysis-job.v1",
     jobId: "infjob_ui",
     runId,
-    kind: "context_investigation_effects_search",
+    kind: "context_investigation_effects",
     state,
     progress: {
-      phase: terminal ? (state === "completed" ? "done" : state) : "coarse_scalar_scoring",
+      phase: terminal ? (state === "completed" ? "done" : state) : "scoring_recorded_continuation",
       completedUnits: terminal ? 1 : 0,
       totalUnits: 1,
       percent: terminal ? 100 : 0,
@@ -342,113 +335,16 @@ function effectsSearchJobFixture(
     cached: false,
     ...(state === "completed" ? {
       result: {
-        schemaVersion: "clozn.context-investigation-effects-search-job-result.v1",
-        runId,
-        nativeScreeningRequested: false,
-        arms: [{
-          phase: "fine",
-          sourceIds: ["source-a"],
-          selectionReason: "user_requested_drilldown",
-          executionState: "completed",
-          executionDisposition: "executed",
-          evidenceStatus: "trusted",
-          deltaNats: .4,
-          observationId: "observation_a",
-          proofGrade: "trusted",
-          numericalRegime: "scalar_reference",
-          executionIdentity: { kind: "clozn.score-tokens-scalar-reference.v1" },
-        }],
-        actualWork: {
-          modelMeasurementsExecutedTotal: 3,
-          modelMeasurementsReusedTotal: 0,
-          modelMeasurementsSkippedTotal: 1,
-          savedModelMeasurementsTotal: 1,
-        },
-        readerProjection: {
-          experimentId: "experiment_reader",
-          status: "partial",
-          controlObservationId: "observation_baseline",
-          trustedSingletonSourceIds: ["source-a"],
-        },
+        schemaVersion: "clozn.context-investigation-effects-job-result.v1",
+        experimentId: "experiment_reader",
+        sourceCount: 2,
+        completedSourceCount: 1,
+        unavailableSourceCount: 1,
+        failedSourceCount: 0,
+        notMeasuredSourceCount: 0,
+        state: "completed",
       },
     } : {}),
-  };
-}
-
-function removeSourceJobFixture(): RemoveSourceTestJob {
-  return {
-    schemaVersion: "clozn.influence-map-job.v1",
-    jobId: "infjob_remove",
-    runId,
-    kind: "context_investigation_remove_test",
-    state: "completed",
-    progress: { phase: "done", completedUnits: 1, totalUnits: 1, percent: 100 },
-    cancelRequested: false,
-    cancellable: false,
-    cached: false,
-    createdAt: "2026-10-08T00:00:00+00:00",
-    updatedAt: "2026-10-08T00:00:01+00:00",
-    result: {
-      schemaVersion: "clozn.context-investigation-remove-test-result.v1",
-      runId,
-      sourceId: "source-a",
-      experimentId: "experiment_remove",
-      armId: "arm_remove",
-      observationId: "observation_remove",
-      status: "exact_preserved",
-      matchedTokenCount: 3,
-      firstDivergenceIndex: null,
-      divergenceKind: null,
-      reason: null,
-      reasonCode: null,
-      experimentState: "completed",
-    },
-  };
-}
-
-function counterfactualJobFixture(): ContextCounterfactualJob {
-  return {
-    schemaVersion: "clozn.influence-map-job.v1",
-    jobId: "infjob_counterfactual",
-    runId,
-    kind: "context_investigation_counterfactual",
-    state: "completed",
-    progress: { phase: "done", completedUnits: 1, totalUnits: 1, percent: 100 },
-    cancelRequested: false,
-    cancellable: false,
-    cached: false,
-    createdAt: "2026-10-08T00:00:00+00:00",
-    updatedAt: "2026-10-08T00:00:01+00:00",
-    result: {
-      schemaVersion: "clozn.context-investigation-counterfactual-result.v1",
-      runId,
-      sourceId: "source-a",
-      experimentId: "experiment_counterfactual",
-      armId: "arm_counterfactual",
-      observationId: "observation_counterfactual",
-      status: "completed",
-      generatedText: "A child-facing counterfactual preview.",
-      generatedTokenCount: 5,
-      finishReason: "stop",
-      reason: null,
-      reasonCode: null,
-      experimentState: "completed",
-    },
-  };
-}
-
-function materializationFixture(): CounterfactualMaterializationResult {
-  return {
-    schemaVersion: "clozn.experiment-materialization.v1",
-    state: "completed",
-    parentRunId: runId,
-    childRunId: "run_child",
-    experimentId: "experiment_counterfactual",
-    armId: "arm_counterfactual",
-    observationId: "observation_counterfactual",
-    realizedFidelity: "direct_context_generation",
-    traceState: "available",
-    comparePath: `#/compare/${runId}/run_child`,
   };
 }
 
@@ -594,10 +490,10 @@ describe("Inspect surface", () => {
     const reader = vi.spyOn(contextInvestigationApi, "reader")
       .mockResolvedValueOnce(notMeasuredReaderFixture())
       .mockResolvedValueOnce(partialReaderFixture());
-    const start = vi.spyOn(contextInvestigationApi, "startEffectsSearch")
-      .mockResolvedValue(effectsSearchJobFixture("queued"));
-    const poll = vi.spyOn(contextInvestigationApi, "effectsSearchJob")
-      .mockResolvedValue(effectsSearchJobFixture("completed"));
+    const start = vi.spyOn(contextInvestigationApi, "startEffects")
+      .mockResolvedValue(effectsJobFixture("queued"));
+    const poll = vi.spyOn(contextInvestigationApi, "effectsJob")
+      .mockResolvedValue(effectsJobFixture("completed"));
     const initialHash = "#/inspect/run_alpha";
     window.location.hash = initialHash;
     render(<InspectSurface route={{ surface: "inspect", runId }} />);
@@ -605,16 +501,11 @@ describe("Inspect surface", () => {
     const button = await screen.findByRole("button", { name: "Measure context" });
     expect(start).not.toHaveBeenCalled();
     expect(poll).not.toHaveBeenCalled();
-    expect(screen.getByText("Budget 1 coarse · 2 fine · control outside budget")).toBeInTheDocument();
+    expect(screen.getByText("Each source is removed once and scored against the recorded answer.")).toBeInTheDocument();
 
     fireEvent.click(button);
     await waitFor(() => expect(start).toHaveBeenCalledWith(runId, {
       sourceIds: ["source-a", "source b"],
-      coarseGroupSize: 2,
-      refineThresholdNats: .25,
-      drilldownSourceIds: [],
-      budget: { maxCoarseArms: 1, maxFineArms: 2, maxJointArms: 0 },
-      executionPolicy: "trusted_scalar_only",
     }, expect.any(AbortSignal)));
     await waitFor(() => expect(poll).toHaveBeenCalledWith(runId, "infjob_ui", expect.any(AbortSignal)));
     await waitFor(() => expect(reader).toHaveBeenCalledTimes(2));
@@ -625,12 +516,12 @@ describe("Inspect surface", () => {
     vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(notMeasuredReaderFixture());
     vi.spyOn(contextInvestigationApi, "query")
       .mockResolvedValue(nonMeasurementQueryFixture("not_measured"));
-    vi.spyOn(contextInvestigationApi, "startEffectsSearch")
-      .mockResolvedValue(effectsSearchJobFixture("running"));
-    vi.spyOn(contextInvestigationApi, "effectsSearchJob")
-      .mockResolvedValue(effectsSearchJobFixture("running"));
-    const cancel = vi.spyOn(contextInvestigationApi, "cancelEffectsSearch")
-      .mockResolvedValue(effectsSearchJobFixture("cancelled"));
+    vi.spyOn(contextInvestigationApi, "startEffects")
+      .mockResolvedValue(effectsJobFixture("running"));
+    vi.spyOn(contextInvestigationApi, "effectsJob")
+      .mockResolvedValue(effectsJobFixture("running"));
+    const cancel = vi.spyOn(contextInvestigationApi, "cancelEffects")
+      .mockResolvedValue(effectsJobFixture("cancelled"));
     window.location.hash = "#/inspect/run_alpha?answerStart=3&answerEnd=4";
     render(<InspectSurface route={{ surface: "inspect", runId, ...answerRange }} />);
 
@@ -647,11 +538,11 @@ describe("Inspect surface", () => {
     const reader = vi.spyOn(contextInvestigationApi, "reader")
       .mockResolvedValueOnce(notMeasuredReaderFixture())
       .mockResolvedValueOnce(partialReaderFixture());
-    const start = vi.spyOn(contextInvestigationApi, "startEffectsSearch")
-      .mockResolvedValue(effectsSearchJobFixture("running"));
-    const poll = vi.spyOn(contextInvestigationApi, "effectsSearchJob")
+    const start = vi.spyOn(contextInvestigationApi, "startEffects")
+      .mockResolvedValue(effectsJobFixture("running"));
+    const poll = vi.spyOn(contextInvestigationApi, "effectsJob")
       .mockRejectedValueOnce(new Error("temporary poll failure"))
-      .mockResolvedValueOnce(effectsSearchJobFixture("completed"));
+      .mockResolvedValueOnce(effectsJobFixture("completed"));
     render(<InspectSurface route={{ surface: "inspect", runId }} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Measure context" }));
@@ -779,64 +670,6 @@ describe("Inspect surface", () => {
     expect(await screen.findByText("Inspect unavailable.")).toBeInTheDocument();
   });
 
-  it("keeps source actions behind an exact focused coordinate and starts preservation only on click", async () => {
-    vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(readerFixture());
-    vi.spyOn(contextInvestigationApi, "query").mockResolvedValue(queryFixture());
-    const start = vi.spyOn(contextInvestigationApi, "startRemoveSourceTest")
-      .mockResolvedValue(removeSourceJobFixture());
-    const view = render(<InspectSurface route={{ surface: "inspect", runId, ...answerRange }} />);
-
-    expect(await screen.findByText("2 above-floor relationships")).toBeInTheDocument();
-    expect(screen.queryByRole("region", { name: "Selected context source actions" })).not.toBeInTheDocument();
-    expect(start).not.toHaveBeenCalled();
-
-    view.rerender(<InspectSurface route={{
-      surface: "inspect", runId, ...answerRange, sourceId: "source-a",
-    }} />);
-    const button = await screen.findByRole("button", { name: "Test removal" });
-    expect(start).not.toHaveBeenCalled();
-    fireEvent.click(button);
-
-    await waitFor(() => expect(start).toHaveBeenCalledWith(
-      runId, "source-a", expect.any(AbortSignal),
-    ));
-    expect(await screen.findByText("exact preserved")).toBeInTheDocument();
-    expect(screen.getByText("3 recorded tokens matched")).toBeInTheDocument();
-  });
-
-  it("keeps generated output as a preview until a second explicit materialization confirmation", async () => {
-    vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(readerFixture());
-    vi.spyOn(contextInvestigationApi, "query").mockResolvedValue(queryFixture());
-    const start = vi.spyOn(contextInvestigationApi, "startContextCounterfactual")
-      .mockResolvedValue(counterfactualJobFixture());
-    const materialize = vi.spyOn(contextInvestigationApi, "materializeContextCounterfactual")
-      .mockResolvedValue(materializationFixture());
-    render(<InspectSurface route={{
-      surface: "inspect", runId, ...answerRange, sourceId: "source-a",
-    }} />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "Generate preview" }));
-    expect(await screen.findByText("A child-facing counterfactual preview.")).toBeInTheDocument();
-    expect(start).toHaveBeenCalledWith(runId, "source-a", expect.any(AbortSignal));
-    expect(materialize).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: "Materialize…" }));
-    expect(screen.getByText("The recorded source Run will not be changed.")).toBeInTheDocument();
-    expect(materialize).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Create child Run" }));
-
-    await waitFor(() => expect(materialize).toHaveBeenCalledWith(runId, {
-      experimentId: "experiment_counterfactual",
-      armId: "arm_counterfactual",
-      observationId: "observation_counterfactual",
-    }, expect.any(AbortSignal)));
-    expect(await screen.findByText("Child Run created")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Inspect child" })).toHaveAttribute("href", "#/inspect/run_child");
-    expect(screen.getByRole("link", { name: "Compare parent and child" })).toHaveAttribute(
-      "href", `#/compare/${runId}/run_child`,
-    );
-  });
-
   it("never paints a previous Run or query result under a new URL coordinate", async () => {
     let keepReaderPending: ((value: ContextInvestigationReader) => void) | undefined;
     const reader = vi.spyOn(contextInvestigationApi, "reader")
@@ -891,13 +724,4 @@ describe("Inspect surface", () => {
     expect(block).toHaveAttribute("data-source-ids", '["source-a"]');
   });
 
-  it("does not visually attach a Run to a Session trace that does not contain it", async () => {
-    vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(readerFixture());
-    vi.spyOn(studioApi, "sessionTrace").mockResolvedValue({ turns: [] } as unknown as SessionTrace);
-    render(<InspectSurface route={{ surface: "inspect", runId, sessionId: "session_other" }} />);
-
-    expect(await screen.findByText("Run not present in Session.")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Conversation turns")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "← Session" })).toHaveAttribute("href", "#/sessions/session_other");
-  });
 });

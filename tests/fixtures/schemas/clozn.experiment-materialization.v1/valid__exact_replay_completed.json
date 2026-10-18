@@ -9,6 +9,5 @@
     "kind": "delete_source",
     "source_ids": ["src_context"]
   },
-  "comparison": {},
-  "compare_path": "#/compare/run_parent/run_child"
+  "comparison": {}
 }

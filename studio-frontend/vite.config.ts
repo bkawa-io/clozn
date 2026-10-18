@@ -10,11 +10,8 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      "/sessions": "http://127.0.0.1:8080",
       "/runs": "http://127.0.0.1:8080",
-      "/engine": "http://127.0.0.1:8080",
-      "/models": "http://127.0.0.1:8080",
-      "/experiment-results": "http://127.0.0.1:8080",
+      "/v1": "http://127.0.0.1:8080",
     },
   },
 });

@@ -9,6 +9,5 @@
   "realized_fidelity": "direct_context_generation",
   "trace_state": "available",
   "comparison": {},
-  "compare_path": "#/compare/run_same/run_same",
   "unexpected": true
 }

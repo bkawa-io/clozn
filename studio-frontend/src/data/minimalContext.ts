@@ -219,7 +219,7 @@ export interface MinimalContextResultList {
 }
 
 export interface MinimalContextJob {
-  schemaVersion: "clozn.influence-map-job.v1";
+  schemaVersion: "clozn.analysis-job.v1";
   jobId: string;
   runId: string;
   kind: "minimal_context";
@@ -242,12 +242,6 @@ export interface MinimalContextJob {
   result?: MinimalContextResult;
 }
 
-export interface MinimalContextStartRequest {
-  maxUnits: number;
-  maxNewCounterfactualObservations: number;
-  attemptInclusionCheck: boolean;
-}
-
 export type MinimalContextMaterializationResult =
   | {
       schemaVersion: "clozn.experiment-materialization.v1";
@@ -257,7 +251,6 @@ export type MinimalContextMaterializationResult =
       experimentId: string;
       armId: string;
       removedSourceIds: readonly string[];
-      comparePath: string;
     }
   | {
       schemaVersion: "clozn.experiment-materialization.v1";
@@ -397,6 +390,10 @@ function halfOpenRange(value: unknown, endpoint: string, path: string): readonly
 
 function sameStrings(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value) => right.includes(value));
 }
 
 function decodeBinding(value: unknown, endpoint: string, path: string): MinimalContextCurrentBinding {
@@ -890,7 +887,7 @@ export function decodeMinimalContextJob(
   const rawBestCount = rawProgress.best_retained_source_count;
   const rawCandidate = rawProgress.certificate_candidate_kind;
   return {
-    schemaVersion: oneOf(required(row, "schema_version", endpoint, "$"), ["clozn.influence-map-job.v1"] as const, endpoint, "$.schema_version"),
+    schemaVersion: oneOf(required(row, "schema_version", endpoint, "$"), ["clozn.analysis-job.v1"] as const, endpoint, "$.schema_version"),
     jobId,
     runId,
     kind: oneOf(required(row, "kind", endpoint, "$"), ["minimal_context"] as const, endpoint, "$.kind"),
@@ -948,7 +945,7 @@ export function decodeMinimalContextMaterializationResult(
   const state = oneOf(required(row, "state", endpoint, "$"), ["completed", "failed"] as const, endpoint, "$.state");
   closed(row, state === "completed" ? [
     "schema_version", "state", "parent_run_id", "child_run_id", "experiment_id", "arm_id",
-    "intervention", "comparison", "compare_path",
+    "intervention", "comparison",
   ] : [
     "schema_version", "state", "parent_run_id", "experiment_id", "arm_id", "intervention", "reason",
   ], endpoint, "$");
@@ -965,7 +962,7 @@ export function decodeMinimalContextMaterializationResult(
   closed(intervention, ["kind", "source_ids"], endpoint, "$.intervention");
   oneOf(required(intervention, "kind", endpoint, "$.intervention"), ["delete_source"] as const, endpoint, "$.intervention.kind");
   const removedSourceIds = strings(required(intervention, "source_ids", endpoint, "$.intervention"), endpoint, "$.intervention.source_ids");
-  if (!sameStrings(removedSourceIds, best.removedSourceIds)) {
+  if (!sameStringSet(removedSourceIds, best.removedSourceIds)) {
     fail(endpoint, "$.intervention.source_ids", "does not match the persisted result winner");
   }
   const schemaVersion = oneOf(required(row, "schema_version", endpoint, "$"), ["clozn.experiment-materialization.v1"] as const, endpoint, "$.schema_version");
@@ -984,8 +981,6 @@ export function decodeMinimalContextMaterializationResult(
   if (childRunId === parentRunId) fail(endpoint, "$.child_run_id", "must identify a child, not the source Run");
   const rawComparison = required(row, "comparison", endpoint, "$"), comparisonPath = "$.comparison";
   if (rawComparison !== null) record(rawComparison, endpoint, comparisonPath);
-  const comparePath = text(required(row, "compare_path", endpoint, "$"), endpoint, "$.compare_path");
-  if (comparePath !== `#/compare/${parentRunId}/${childRunId}`) fail(endpoint, "$.compare_path", "does not match the returned lineage");
   return {
     schemaVersion,
     state,
@@ -994,7 +989,6 @@ export function decodeMinimalContextMaterializationResult(
     experimentId,
     armId,
     removedSourceIds,
-    comparePath,
   };
 }
 
@@ -1040,25 +1034,6 @@ function throwResponseError(response: Response, endpoint: string, body: unknown)
   throw new HttpError(endpoint, response.status, response.statusText);
 }
 
-function startBody(request: MinimalContextStartRequest): string {
-  if (!Number.isSafeInteger(request.maxUnits) || request.maxUnits < 1) {
-    throw new ContractError("client", "maxUnits must be a positive integer");
-  }
-  if (!Number.isSafeInteger(request.maxNewCounterfactualObservations)
-      || request.maxNewCounterfactualObservations < 0) {
-    throw new ContractError("client", "maxNewCounterfactualObservations must be a non-negative integer");
-  }
-  if (typeof request.attemptInclusionCheck !== "boolean") {
-    throw new ContractError("client", "attemptInclusionCheck must be a boolean");
-  }
-  return JSON.stringify({
-    preservation: { kind: "exact_recorded_output" },
-    universe: { max_units: request.maxUnits },
-    max_new_counterfactual_observations: request.maxNewCounterfactualObservations,
-    attempt_inclusion_check: request.attemptInclusionCheck,
-  });
-}
-
 export const minimalContextApi = {
   async results(runId: string, signal?: AbortSignal): Promise<MinimalContextResultList> {
     const endpoint = runPath(runId, "results");
@@ -1077,7 +1052,6 @@ export const minimalContextApi = {
 
   async start(
     runId: string,
-    request: MinimalContextStartRequest,
     signal?: AbortSignal,
   ): Promise<MinimalContextJob> {
     const endpoint = runPath(runId, "jobs");
@@ -1085,7 +1059,7 @@ export const minimalContextApi = {
       method: "POST",
       signal,
       headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: startBody(request),
+      body: "{}",
     });
     return decodeMinimalContextJob(await responseJson(response, endpoint, [202]), endpoint, runId);
   },

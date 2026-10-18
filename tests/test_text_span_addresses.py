@@ -68,78 +68,6 @@ def _single_message_run(run_id: str, content: str, *, parent: str | None = None)
     }
 
 
-def _metadata_influence() -> dict:
-    prompt = "Alpha beta"
-    answer = "yes"
-    return {
-        "schema_version": "clozn.context-answer-influence-export.v1",
-        "source_schema": "clozn.context_answer_influence.v1",
-        "source_artifact_sha256": "f" * 64,
-        "privacy": "metadata_only",
-        "status": "ok",
-        "available": True,
-        "method": {
-            "name": "context_answer_influence",
-            "version": "1",
-            "mode": "forced_score_intervention",
-            "claim_limit": "this exact intervention only",
-            "caveat": "does not prove correctness or reveal hidden reasoning",
-        },
-        "identity": {},
-        "cache_identity": {},
-        "thresholds": {"cell_abs_delta_nats": 0.05},
-        "prompt_sources": [{
-            "id": "p.m000",
-            "source_kind": "assembled_message",
-            "segment_id": "seg_3333333333333333",
-            "client_source_id": "doc-alpha",
-            "source_label": "alpha notes",
-            "selected": True,
-            "start": 0,
-            "end": len(prompt),
-            "text_sha256": _sha(prompt),
-            "text_bytes": len(prompt.encode("utf-8")),
-        }],
-        "selection": {
-            "selected_source_ids": ["p.m000"],
-            "omitted_source_ids": [],
-        },
-        "prompt_spans": [{
-            "id": "p.m000.c000",
-            "parent_id": "p.m000",
-            "level": "coarse",
-            "segment_id": "seg_3333333333333333",
-            "client_source_id": "doc-alpha",
-            "start": 0,
-            "end": 5,
-            "text_sha256": _sha("Alpha"),
-            "text_bytes": 5,
-        }],
-        "answer_spans": [{
-            "id": "a.t0000",
-            "level": "token",
-            "token_index": 0,
-            "start": 0,
-            "end": 3,
-            "text_sha256": _sha(answer),
-            "text_bytes": 3,
-        }],
-        "answer_hashes": {
-            "scored_text": {
-                "text_sha256": _sha(answer),
-                "text_bytes": 3,
-            },
-        },
-        "links": [{
-            "context_span_id": "p.m000.c000",
-            "answer_span_id": "a.t0000",
-            "delta_nats": 0.2,
-            "evidence_state": "causally_supported",
-        }],
-        "summary": {},
-    }
-
-
 def _canonical(address: dict) -> dict:
     return address["resolution"]["canonical"]
 
@@ -223,37 +151,6 @@ def test_unversioned_receipt_is_not_projected_as_schema_governed_evidence():
 
     assert document["addresses"] == []
     assert document["source_artifacts"][0]["native_status"] == "failed"
-
-
-def test_metadata_only_influence_projection_preserves_native_method_and_all_span_kinds():
-    influence = _metadata_influence()
-    document = spans.build_text_span_addresses(
-        {"id": "run_influence", "messages": []},
-        influence=influence,
-        privacy="metadata_only",
-    )
-    influence_source = document["source_artifacts"][1]
-    projected = [
-        item for item in document["addresses"]
-        if item["native_ref"]["artifact_schema"] == influence["schema_version"]
-    ]
-
-    assert influence_source["native_status"] == "ok"
-    assert influence_source["available"] is True
-    assert influence_source["method"] == influence["method"]
-    assert [item["native_ref"]["collection"] for item in projected] == [
-        "influence.prompt_sources",
-        "influence.prompt_spans",
-        "influence.answer_spans",
-    ]
-    assert [item["kind"] for item in projected] == [
-        "attached_source_span", "attached_source_span", "answer_span",
-    ]
-    assert all(item["resolution"]["state"] == "metadata_only" for item in projected)
-    assert all("text" not in _canonical(item) for item in projected)
-    # Numeric links and thresholds remain in the native artifact. This address
-    # projection neither copies them nor invents a cross-method score.
-    assert "links" not in document and "thresholds" not in document
 
 
 def test_generic_claim_address_only_addresses_a_caller_supplied_span():

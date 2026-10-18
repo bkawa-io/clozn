@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Benchmark the native exact-reference arm wire against scalar probes.
 
-The fixture mirrors ``ollama_minimal_context_baseline_v3.py`` without tags in
-the source text: natural Markdown sections are unitized automatically, a
+The fixture mirrors the original Minimal Context baseline without tags in the
+source text: natural Markdown sections are unitized automatically, a
 50-unit universe is declared, and the 0/1/2-retained certification workload
 contains exactly 1 + 50 + 1,225 = 1,276 arms.
 

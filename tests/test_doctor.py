@@ -47,7 +47,6 @@ def test_check_offline_always_lists_known_outbound_capable_commands(isolated):
     assert "known_outbound_capable_commands" in result
     commands = result["known_outbound_capable_commands"]
     assert any("clozn pull" in c for c in commands)
-    assert any("clozn plan" in c for c in commands)
     assert "clozn pull" in result["detail"]
 
 
@@ -55,7 +54,7 @@ def test_check_offline_lists_known_commands_even_when_verified(isolated):
     network_policy.set_local_only(True)
     result = doctor._check_offline()
     assert result["status"] == "OK"
-    assert "clozn pull" in result["detail"] and "clozn plan" in result["detail"]
+    assert "clozn pull" in result["detail"]
 
 
 def test_run_all_verify_offline_includes_bind_and_offline_checks(isolated):

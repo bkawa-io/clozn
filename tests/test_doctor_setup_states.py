@@ -1,8 +1,4 @@
-"""roadmap feature 01's 4-state contract inside `clozn doctor`: python package installed / compatible
-engine installed / core inference qualification / white-box qualification, always reported as four
-SEPARATE rows, never compressed into one "installed" boolean. See tests/test_doctor.py for the
-pre-existing --verify-offline checks this file does not duplicate.
-"""
+"""The retained package, worker, and core-inference checks in ``clozn doctor``."""
 from __future__ import annotations
 
 import argparse
@@ -40,10 +36,12 @@ def test_check_package_installed_reports_ok_with_version():
     assert clozn.__version__ in result["detail"]
 
 
-def test_check_engine_warns_with_no_binary_and_mentions_setup(isolated):
+def test_check_engine_warns_with_no_binary_and_points_to_supported_install_paths(isolated):
     result = doctor._check_engine()
     assert result["status"] == "WARN"
-    assert "clozn setup" in result["detail"]
+    assert "docs/DEVELOPMENT.md" in result["detail"]
+    assert "CLOZN_ENGINE" in result["detail"]
+    assert "clozn setup" not in result["detail"]
 
 
 def test_check_engine_reports_discovery_source_when_found(isolated, tmp_path):
@@ -68,7 +66,6 @@ def test_check_engine_deep_false_never_launches_anything(isolated, tmp_path, mon
 
 def test_check_engine_deep_true_runs_build_identity_check_and_warns_on_failure(isolated, tmp_path):
     """The fake exe above is not a real Win32/ELF binary, so a genuine subprocess launch attempt fails --
-    this is exactly the "found_but_not_launchable" case qualify_entrypoint()/four_state_report() define,
     proving --deep actually exercises build identity rather than trusting the file's existence."""
     _touch_exe(tmp_path, "engine_core/build-cpu/clozn-server.exe")
     result = doctor._check_engine(deep=True)
@@ -106,23 +103,14 @@ def test_check_core_inference_qualification_is_always_warn_not_ok():
     assert "clozn run" in result["detail"]
 
 
-def test_check_white_box_qualification_is_always_warn_not_ok():
-    result = doctor._check_white_box_qualification()
-    assert result["status"] == "WARN"
-    assert "not verified" in result["detail"]
-
-
 # ----------------------------------------------------------------------------------------------- _run_all
 
-def test_run_all_always_includes_all_four_states(isolated):
+def test_run_all_includes_only_retained_runtime_qualification_states(isolated):
     labels = [c["label"] for c in doctor._run_all()]
     assert "python package installed" in labels
     assert "engine binary" in labels
     assert "core inference qualification" in labels
-    assert "white-box qualification" in labels
-    # never compressed: 4 distinct rows, not one combined "installed" row
-    assert len({"python package installed", "engine binary", "core inference qualification",
-               "white-box qualification"} & set(labels)) == 4
+    assert "white-box qualification" not in labels
 
 
 def test_run_all_deep_false_by_default(isolated, tmp_path, monkeypatch):
@@ -144,13 +132,13 @@ def test_run_all_deep_true_threads_through_to_check_engine(isolated, tmp_path):
 
 # ---------------------------------------------------------------------------------------------- cmd_doctor
 
-def test_cmd_doctor_json_includes_four_state_rows(isolated, capsys):
+def test_cmd_doctor_json_includes_retained_runtime_rows(isolated, capsys):
     args = argparse.Namespace(json=True, verify_offline=False, deep=False)
     doctor.cmd_doctor(args)
     out = json.loads(capsys.readouterr().out)
     labels = [c["label"] for c in out["checks"]]
-    assert {"python package installed", "engine binary", "core inference qualification",
-           "white-box qualification"}.issubset(set(labels))
+    assert {"python package installed", "engine binary", "core inference qualification"}.issubset(set(labels))
+    assert "white-box qualification" not in labels
 
 
 def test_cmd_doctor_without_deep_flag_attribute_defaults_to_false(isolated, capsys):
@@ -173,9 +161,11 @@ def test_cmd_doctor_deep_flag_reaches_the_engine_check(isolated, tmp_path, capsy
 
 # --------------------------------------------------------------------------------------- outbound disclosure
 
-def test_setup_is_listed_as_an_outbound_capable_command():
+def test_only_the_supported_pull_command_is_disclosed_as_outbound_capable():
     result = doctor._check_offline()
-    assert any("clozn setup" in c for c in result["known_outbound_capable_commands"])
+    assert result["known_outbound_capable_commands"] == [
+        "clozn pull <model> -- downloads a GGUF from HuggingFace",
+    ]
 
 
 # --------------------------------------------------------------------------------------- argparse wiring

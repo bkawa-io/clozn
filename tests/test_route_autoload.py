@@ -1,4 +1,4 @@
-"""Contract tests for the opt-in route autoloader (clozn/server/routes/_autoload.py)."""
+"""Contract tests for the explicit server route registration manifest."""
 from __future__ import annotations
 
 import itertools
@@ -23,7 +23,6 @@ def _shim(tmp_path, monkeypatch):
     module = types.ModuleType(name)
     module.__path__ = [str(tmp_path)]
     sys.modules[name] = module
-    monkeypatch.setattr(_autoload, "_DIR", str(tmp_path))
     monkeypatch.setattr(_autoload, "_PACKAGE", name)
 
     def _cleanup():
@@ -55,8 +54,19 @@ def test_existing_route_families_survived_the_splice():
     assert app._GET_ROUTES[0] is static_routes, "static must stay first"
     for mod in (health, runs, openai):
         assert mod in app._GET_ROUTES, f"{mod.__name__} disappeared from _GET_ROUTES"
-    for mod in (health, openai):
-        assert mod in app._POST_ROUTES, f"{mod.__name__} disappeared from _POST_ROUTES"
+    assert openai in app._POST_ROUTES
+    assert health not in app._POST_ROUTES
+
+
+def test_production_route_manifest_is_explicit_and_stable():
+    assert _autoload.ROUTE_MODULES == (
+        "context_investigation_v1",
+        "context_receipt",
+        "engine",
+        "minimal_context",
+        "run_compare",
+    )
+    assert _autoload._candidates() == sorted(_autoload.ROUTE_MODULES)
 
 
 def test_a_get_only_module_is_not_added_to_post_routes(tmp_path, monkeypatch):
@@ -66,7 +76,7 @@ def test_a_get_only_module_is_not_added_to_post_routes(tmp_path, monkeypatch):
         "    return False\n", encoding="utf-8")
     cleanup = _shim(tmp_path, monkeypatch)
     try:
-        found = _autoload.discover()
+        found = _autoload.discover(["getonly"])
         assert len(_autoload.with_try_get(found)) == 1
         assert _autoload.with_try_post(found) == []
     finally:
@@ -80,7 +90,7 @@ def test_a_post_only_module_is_not_added_to_get_routes(tmp_path, monkeypatch):
         "    return False\n", encoding="utf-8")
     cleanup = _shim(tmp_path, monkeypatch)
     try:
-        found = _autoload.discover()
+        found = _autoload.discover(["postonly"])
         assert _autoload.with_try_get(found) == []
         assert len(_autoload.with_try_post(found)) == 1
     finally:
@@ -95,19 +105,22 @@ def test_discovery_order_is_deterministic(tmp_path, monkeypatch):
             "CLOZN_ROUTE_AUTOLOAD = True\ndef try_get(h, p):\n    return False\n", encoding="utf-8")
     cleanup = _shim(tmp_path, monkeypatch)
     try:
-        names = [m.__name__.rsplit(".", 1)[-1] for m in _autoload.discover()]
+        names = [
+            module.__name__.rsplit(".", 1)[-1]
+            for module in _autoload.discover(["zeta", "alpha", "mu"])
+        ]
         assert names == ["alpha", "mu", "zeta"]
     finally:
         cleanup()
 
 
-def test_a_module_without_the_marker_is_not_imported(tmp_path, monkeypatch):
+def test_an_unlisted_module_is_not_imported(tmp_path, monkeypatch):
     (tmp_path / "inert.py").write_text("raise AssertionError('must not be imported')\n",
                                        encoding="utf-8")
     cleanup = _shim(tmp_path, monkeypatch)
     before = len(_autoload.LOAD_FAILURES)
     try:
-        assert _autoload.discover() == []
+        assert _autoload.discover([]) == []
         assert len(_autoload.LOAD_FAILURES) == before
     finally:
         cleanup()
@@ -120,7 +133,7 @@ def test_a_module_opting_in_with_no_handler_is_recorded(tmp_path, monkeypatch, c
     cleanup = _shim(tmp_path, monkeypatch)
     before = len(_autoload.LOAD_FAILURES)
     try:
-        assert _autoload.discover() == []
+        assert _autoload.discover(["handlerless"]) == []
         assert len(_autoload.LOAD_FAILURES) == before + 1
         assert "handlerless" in capsys.readouterr().err
     finally:
@@ -134,7 +147,7 @@ def test_a_broken_module_is_recorded_not_raised(tmp_path, monkeypatch, capsys):
     cleanup = _shim(tmp_path, monkeypatch)
     before = len(_autoload.LOAD_FAILURES)
     try:
-        assert _autoload.discover() == []           # did not raise
+        assert _autoload.discover(["broken"]) == []  # did not raise
         assert len(_autoload.LOAD_FAILURES) == before + 1
         assert "broken" in capsys.readouterr().err
     finally:
@@ -144,3 +157,10 @@ def test_a_broken_module_is_recorded_not_raised(tmp_path, monkeypatch, capsys):
 
 def test_marker_constant_is_the_documented_name():
     assert _autoload.MARKER == "CLOZN_ROUTE_AUTOLOAD"
+
+
+def test_manifest_rejects_invalid_or_duplicate_module_names():
+    with pytest.raises(ValueError, match="invalid route"):
+        _autoload._candidates(["not-a-module"])
+    with pytest.raises(ValueError, match="duplicate route"):
+        _autoload._candidates(["sessions", "sessions"])

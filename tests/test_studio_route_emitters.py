@@ -18,14 +18,8 @@ class RouteEvidence:
 
 
 CANONICAL_EMITTERS = (
-    RouteEvidence("python", "materialized comparison", "clozn/experiments/materialize.py", '"compare_path": f"#/compare/'),
-    RouteEvidence("python", "context-action comparison", "clozn/server/routes/context_investigation_v1.py", '"compare_path": f"#/compare/'),
-    RouteEvidence("python", "receipt permalink", "clozn/server/routes/receipt_link.py", 'APP_INDEX + "#/inspect/"'),
-    RouteEvidence("studio", "sessions", "studio-frontend/src/app/router.ts", 'return "#/sessions"'),
+    RouteEvidence("studio", "runs", "studio-frontend/src/app/router.ts", 'return "#/runs"'),
     RouteEvidence("studio", "inspect", "studio-frontend/src/app/router.ts", "return `#/inspect/"),
-    RouteEvidence("studio", "runtime", "studio-frontend/src/app/router.ts", 'return "#/runtime"'),
-    RouteEvidence("studio", "comparison", "studio-frontend/src/app/router.ts", "? `#/compare/"),
-    RouteEvidence("studio", "experiment matrix", "studio-frontend/src/app/router.ts", '"#/compare/matrix"'),
 )
 
 
@@ -67,11 +61,15 @@ def test_studio_source_contains_only_canonical_route_families():
         for path in sorted((ROOT / "studio-frontend/src").rglob("*"))
         if path.suffix in {".ts", ".tsx"} and ".test." not in path.name
     )
-    for route in ("#/sessions", "#/inspect/", "#/runtime", "#/compare", "#/compare/matrix"):
+    for route in ("#/runs", "#/inspect/"):
         assert route in source
+    for removed_route in ("#/sessions", "#/runtime", "#/compare"):
+        assert removed_route not in source
 
 
 def test_committed_bundle_contains_the_canonical_routes():
     bundle = _bundled_javascript()
-    for route in ("#/sessions", "#/inspect/", "#/runtime", "#/compare", "#/compare/matrix"):
+    for route in ("#/runs", "#/inspect/"):
         assert route in bundle
+    for removed_route in ("#/sessions", "#/runtime", "#/compare"):
+        assert removed_route not in bundle

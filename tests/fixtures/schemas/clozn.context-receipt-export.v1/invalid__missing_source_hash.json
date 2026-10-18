@@ -1,7 +1,0 @@
-{
-  "schema_version": "clozn.context-receipt-export.v1",
-  "run_id": "run_export",
-  "privacy": "metadata_only",
-  "omitted_fields": [],
-  "context_receipt": {}
-}

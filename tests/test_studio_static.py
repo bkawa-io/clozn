@@ -50,7 +50,7 @@ class StudioStaticTests(unittest.TestCase):
             name for name in os.listdir(DEMO)
             if os.path.isdir(os.path.join(DEMO, name))
         }
-        self.assertLessEqual(directories, {"app", "casting", "ext", "__pycache__"})
+        self.assertLessEqual(directories, {"app", "__pycache__"})
 
     def test_root_redirects_to_the_app_index(self):
         for path in ("/", "/index.html"):
@@ -141,24 +141,6 @@ class StudioStaticTests(unittest.TestCase):
                 handled, sent = _serve(resolved)
                 self.assertTrue(handled, f"{resolved} (from {ref}) is not served by static.try_get")
                 self.assertEqual(sent[0], 200, f"{resolved} did not return 200")
-
-    def test_the_casting_is_served_and_self_contained(self):
-        """The casting is an independent project surface with its own entry point and module graph."""
-        handled, sent = _serve("/casting")
-        self.assertTrue(handled, "/casting is not routed")
-        self.assertEqual(sent[0], 302)
-        self.assertEqual(sent[3].get("Location"), static_routes.CASTING_INDEX)
-
-        handled, sent = _serve(static_routes.CASTING_INDEX)
-        self.assertTrue(handled, f"{static_routes.CASTING_INDEX} is not served")
-        self.assertEqual(sent[0], 200)
-
-        # the module graph the entry point actually loads
-        for module in ("/casting/casting.mjs", "/casting/casting-optics.mjs", "/casting/tokens.css"):
-            with self.subTest(module=module):
-                handled, sent = _serve(module)
-                self.assertTrue(handled, f"{module} is not served")
-                self.assertEqual(sent[0], 200, f"{module} did not return 200")
 
 if __name__ == "__main__":
     unittest.main()

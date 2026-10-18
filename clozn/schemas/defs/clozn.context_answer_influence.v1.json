@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "clozn.context_answer_influence.v1",
-  "title": "Context <-> answer influence evidence (Sources evidence lens, feature 07)",
-  "description": "The versioned artifact clozn.receipts.context_answer_influence.context_answer_influence() returns and clozn/server/routes/influence_map.py persists at run['influence_map']. Measures forced_score_intervention only -- never attention_proxy, never a percentage, never a claim about document correctness or hidden reasoning (see method.caveat, present on every shape below). schema/status/available/method/identity are guaranteed on every call; everything else is present only when it was produced.",
+  "title": "Context Effects evidence",
+  "description": "Versioned evidence for measured changes to the recorded continuation when context sources are removed. It never represents attention, a percentage, document correctness, hidden reasoning, or an internal mediation claim.",
 
   "type": "object",
   "required": ["schema", "status", "available", "method", "identity"],
@@ -23,7 +23,7 @@
     "method": { "$ref": "#/$defs/Method" },
     "identity": {
       "type": "object",
-      "description": "Which run, model, substrate, and exact rendered-prompt view this evidence is anchored to (clozn.receipts.context_answer_influence._identity()). Not itself a measurement claim."
+      "description": "The run, model, runtime, and rendered-prompt view to which this evidence is anchored. Not itself a measurement claim."
     },
     "error": { "$ref": "#/$defs/Error" },
     "prompt_sources": {
@@ -86,7 +86,7 @@
     "artifact_sha256": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$",
-      "description": "Digest of the artifact with wall-clock timing stripped -- stable across re-runs of the identical evidence, per context_answer_influence.py's own test coverage."
+      "description": "Digest of the artifact with wall-clock timing stripped, stable across identical measurements."
     }
   },
 
@@ -99,14 +99,8 @@
         "version": { "const": "1" },
         "mode": {
           "type": "string",
-          "enum": [
-            "presence_only",
-            "attention_proxy",
-            "forced_score_intervention",
-            "regeneration_intervention",
-            "unsupported"
-          ],
-          "description": "notes/agent_roadmap/07-sources-evidence-lens.md's exact mode enum. This module always emits forced_score_intervention -- it never reads or reports raw attention weight as evidence."
+          "const": "forced_score_intervention",
+          "description": "Context Effects v1 measures the recorded continuation under source-deletion interventions."
         },
         "generation_used": { "type": "boolean" },
         "baseline_reused": { "type": "boolean" },
@@ -140,7 +134,7 @@
             "intervention_score_failed",
             "influence_map_error"
           ],
-          "description": "The closed set clozn.receipts.context_answer_influence.ERROR_CODES defines. A code outside this enum means the module and this schema have drifted -- fix the schema, do not widen it silently."
+          "description": "Closed v1 Context Effects error vocabulary."
         },
         "message": { "type": "string" }
       }

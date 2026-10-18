@@ -17,7 +17,6 @@ from urllib.parse import unquote
 
 ARCHIVAL_PREFIXES = (
     "docs/design/",
-    "docs/research/",
 )
 
 ARCHIVAL_FILES = frozenset(

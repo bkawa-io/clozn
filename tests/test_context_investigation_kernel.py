@@ -199,6 +199,39 @@ def test_locus_grouping_respects_floor_sign_and_gaps():
     assert [item["answer_token_range"] for item in gap_loci] == [[1, 2], [3, 4]]
 
 
+def test_locus_projection_does_not_turn_eos_effects_into_empty_text_ranges():
+    run, source_ids = _run()
+    template = _view(run, source_ids[:1]).control
+
+    def score(logprobs):
+        return TokenScoreObservation(
+            status="completed",
+            recorded_token_ids=[1, 2],
+            token_pieces=["answer", ""],
+            token_spans=[[0, 6], [6, 6]],
+            token_logprobs=logprobs,
+            total_continuation_logprob=sum(logprobs),
+            run_id=template.run_id,
+            base_execution_fingerprint=template.base_execution_fingerprint,
+            evaluator=template.evaluator,
+            condition=template.condition,
+            contract=template.contract,
+            score_basis=template.score_basis,
+        )
+
+    baseline = score([0.0, 0.0])
+    intervention = score([-0.4, -0.8])
+
+    loci = project_source_loci(
+        baseline, intervention, source_id="src_eos", floor_nats=0.1,
+        experiment_id="exp_eos", arm_id="arm_eos",
+    )
+
+    assert [item["answer_token_range"] for item in loci] == [[0, 1]]
+    assert [item["answer_unicode_range"] for item in loci] == [[0, 6]]
+    assert loci[0]["answer_text"] == "answer"
+
+
 def test_reader_stale_baseline_does_not_retokenize_response():
     run, source_ids = _run()
     plan = plan_context_effects(run, source_ids=source_ids[:1])
@@ -243,17 +276,23 @@ def test_answer_query_reuses_vectors_and_ranks_signed_effects():
 
 
 def test_exact_span_display_address_is_not_shortened():
-    messages = [{
-        "role": "user",
-        "content": "before REMOVE after",
-        "_clozn_sources": [{
-            "source_id": "remove",
-            "label": "Removal source",
-            "unicode_range": [7, 13],
-            "provenance_kind": "retrieved_document",
-        }],
-    }]
-    clean = [{"role": "user", "content": messages[0]["content"]}]
+    messages = [
+        {
+            "role": "user",
+            "content": "before REMOVE after",
+            "_clozn_sources": [{
+                "source_id": "remove",
+                "label": "Removal source",
+                "unicode_range": [7, 13],
+                "provenance_kind": "retrieved_document",
+            }],
+        },
+        {"role": "user", "content": "current question"},
+    ]
+    clean = [
+        {key: value for key, value in message.items() if key != "_clozn_sources"}
+        for message in messages
+    ]
     run = {
         "id": "run_context_investigation_span",
         "messages": clean,

@@ -32,7 +32,7 @@ def _run(messages: list[dict], *, run_id: str = "run_units", explicit: bool = Fa
 
 def test_structured_message_is_partitioned_without_a_duplicate_root():
     content = "# Rules\nalpha\n\n# Documents\nDocument 1\none\n\n# Examples\ntwo"
-    run = _run([{"role": "system", "content": content}, {"role": "user", "content": "q"}])
+    run = _run([{"role": "user", "content": content}, {"role": "user", "content": "q"}])
     manifest = run["context_units"]
 
     assert len(manifest["default_source_ids"]) >= 3
@@ -45,7 +45,7 @@ def test_structured_message_is_partitioned_without_a_duplicate_root():
 
 
 def test_short_unstructured_message_keeps_the_existing_root():
-    run = _run([{"role": "system", "content": "You are helpful."}, {"role": "user", "content": "q"}])
+    run = _run([{"role": "user", "content": "A short context note."}, {"role": "user", "content": "q"}])
     manifest = run["context_units"]
 
     assert len(manifest["default_source_ids"]) == 1
@@ -64,8 +64,20 @@ def test_previous_user_and_assistant_are_context_but_current_turn_is_protected()
     run = _run(messages)
     manifest = run["context_units"]
 
-    assert manifest["protected_message_indices"] == [3]
-    assert {unit["message_index"] for unit in manifest["units"]} == {0, 1, 2}
+    assert manifest["protected_message_indices"] == [0, 3]
+    assert {unit["message_index"] for unit in manifest["units"]} == {1, 2}
+
+
+def test_instructions_and_current_question_are_protected():
+    run = _run([
+        {"role": "system", "content": "Follow the answer format."},
+        {"role": "user", "content": "First context block."},
+        {"role": "user", "content": "Second context block."},
+        {"role": "user", "content": "What is the answer?"},
+    ])
+    manifest = run["context_units"]
+    assert manifest["protected_message_indices"] == [0, 3]
+    assert {unit["message_index"] for unit in manifest["units"]} == {1, 2}
     assert all(unit["message_index"] != 3 for unit in manifest["units"])
 
 
@@ -75,20 +87,20 @@ def test_trailing_prefill_is_protected_and_no_user_falls_back_to_final_message()
         {"role": "user", "content": "current"},
         {"role": "assistant", "content": "prefill"},
     ], run_id="run_prefill")
-    assert with_user["context_units"]["protected_message_indices"] == [1, 2]
-    assert all(unit["message_index"] == 0 for unit in with_user["context_units"]["units"])
+    assert with_user["context_units"]["protected_message_indices"] == [0, 1, 2]
+    assert with_user["context_units"]["units"] == []
 
     no_user = _run([
         {"role": "system", "content": "rules"},
         {"role": "assistant", "content": "last"},
     ], run_id="run_no_user")
-    assert no_user["context_units"]["protected_message_indices"] == [1]
-    assert [unit["message_index"] for unit in no_user["context_units"]["units"]] == [0]
+    assert no_user["context_units"]["protected_message_indices"] == [0, 1]
+    assert no_user["context_units"]["units"] == []
 
 
 def test_explicit_sources_win_and_nested_parent_child_is_not_selected_together():
     content = "abcdefghij"
-    messages = [{"role": "system", "content": content}, {"role": "user", "content": "q"}]
+    messages = [{"role": "user", "content": content}, {"role": "user", "content": "q"}]
     messages[0]["_clozn_sources"] = [
         {"source_id": "parent", "unicode_range": [0, 10], "provenance_kind": "message"},
         {"source_id": "left", "unicode_range": [0, 5], "parent_source_id": "parent",
@@ -110,9 +122,27 @@ def test_explicit_sources_win_and_nested_parent_child_is_not_selected_together()
     assert all(unit["derivation"] == "caller_explicit" for unit in manifest["units"])
 
 
+def test_explicit_sources_keep_canonical_ids_across_whitespace_separators():
+    content = "alpha\nbeta\ngamma"
+    messages = [{"role": "user", "content": content}, {"role": "user", "content": "q"}]
+    messages[0]["_clozn_sources"] = [
+        {"source_id": "a", "unicode_range": [0, 5], "provenance_kind": "message"},
+        {"source_id": "b", "unicode_range": [6, 10], "provenance_kind": "message"},
+        {"source_id": "c", "unicode_range": [11, 16], "provenance_kind": "message"},
+    ]
+    receipt = build_context_receipt(messages=messages, run_id="run_explicit_gaps", privacy="full")
+    run = {"id": "run_explicit_gaps", "messages": deepcopy(messages), "context_receipt": receipt}
+
+    manifest = build_context_unit_manifest(run)
+
+    canonical = [source["source_id"] for source in receipt["delivered"][0]["sources"]]
+    assert manifest["default_source_ids"] == canonical
+    assert all(unit["derivation"] == "caller_explicit" for unit in manifest["units"])
+
+
 def test_unicode_offsets_and_strict_resolver_bind_to_recorded_bytes():
     content = "# A\ncafé 🙂 東京\n\n# B\nfin"
-    run = _run([{"role": "system", "content": content}, {"role": "user", "content": "q"}],
+    run = _run([{"role": "user", "content": content}, {"role": "user", "content": "q"}],
                run_id="run_unicode")
     manifest = run["context_units"]
     for unit in manifest["units"]:
@@ -128,7 +158,7 @@ def test_unicode_offsets_and_strict_resolver_bind_to_recorded_bytes():
 
 
 def test_manifest_and_canonical_ids_are_deterministic():
-    messages = [{"role": "system", "content": "# A\nα\n\n# B\n🙂"}, {"role": "user", "content": "q"}]
+    messages = [{"role": "user", "content": "# A\nα\n\n# B\n🙂"}, {"role": "user", "content": "q"}]
     first = _run(messages, run_id="run_determinism")
     second = _run(messages, run_id="run_determinism")
     assert first["context_receipt"] == second["context_receipt"]
@@ -136,7 +166,7 @@ def test_manifest_and_canonical_ids_are_deterministic():
 
 
 def test_drifted_message_refuses_an_existing_auto_source():
-    run = _run([{"role": "system", "content": "# A\nalpha\n\n# B\nbeta"}, {"role": "user", "content": "q"}],
+    run = _run([{"role": "user", "content": "# A\nalpha\n\n# B\nbeta"}, {"role": "user", "content": "q"}],
                run_id="run_drift")
     source_id = run["context_units"]["default_source_ids"][0]
     run["messages"][0]["content"] += " tampered"
@@ -145,6 +175,6 @@ def test_drifted_message_refuses_an_existing_auto_source():
 
 
 def test_manifest_schema_is_valid():
-    run = _run([{"role": "system", "content": "# A\na\n\n# B\nb"}, {"role": "user", "content": "q"}],
+    run = _run([{"role": "user", "content": "# A\na\n\n# B\nb"}, {"role": "user", "content": "q"}],
                run_id="run_schema")
     schemas.validate(run["context_units"])

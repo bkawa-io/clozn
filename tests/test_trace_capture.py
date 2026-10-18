@@ -16,7 +16,6 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))   # research/ (runlog lives here)
 import clozn.runs.store as runlog
-from clozn.readouts import workspace_lens
 
 
 # --------------------------------------------------------------------------- fixtures
@@ -332,61 +331,6 @@ def test_record_persists_engine_trace(tmp_path, monkeypatch):
     assert run["trace"]["confidence"] == [0.95, 0.42, 0.88]
     # the low-confidence flag is derived from trace.confidence (0.42 < 0.3 is False, so not flagged here)
     assert "low-confidence" not in run["flags"]
-
-
-def test_record_does_not_auto_mock_workspace_readouts(tmp_path, monkeypatch):
-    monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path))
-    steps = runlog.accumulate_ar_events(fake_engine_frames())
-    rid = runlog.record(source="engine_chat", client="test", model="clozn-qwen (engine)",
-                        messages=[{"role": "user", "content": "hi"}], response="The cat sat", trace=steps)
-    assert "workspace_readouts" not in runlog.get_run(rid)["trace"]
-
-
-def test_record_attaches_provider_workspace_readouts(tmp_path, monkeypatch):
-    monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path))
-    steps = runlog.accumulate_ar_events(fake_engine_frames())
-
-    def provider(rid, trace):
-        return workspace_lens.readouts_from_concepts(
-            rid, trace, {"considered": [{"label": "dragon/fear/RPG", "rel": 0.82}], "layer": 15},
-            provider="engine_concepts", layer=15)
-
-    rid = runlog.record(source="engine_chat", client="test", model="clozn-qwen (engine)",
-                        messages=[{"role": "user", "content": "hi"}], response="The cat sat",
-                        trace=steps, workspace_provider=provider)
-    readouts = runlog.get_run(rid)["trace"]["workspace_readouts"]
-    assert len(readouts) == 3
-    assert readouts[0]["type"] == "workspace_readout"
-    assert readouts[0]["run_id"] == rid
-    assert readouts[0]["provider"] == "engine_concepts"
-    assert readouts[0]["provider_type"] == "engine_concepts"
-    assert readouts[0]["readout_kind"] == "concept"
-    assert {"label", "score"} <= set(readouts[0]["top_readouts"][0])
-    assert all("entropy" in r for r in readouts)
-
-
-def test_ready_workspace_readouts_are_preserved(tmp_path, monkeypatch):
-    monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path))
-    ready = {
-        "tokens": ["x"],
-        "confidence": [0.8],
-        "workspace_readouts": [{
-            "type": "workspace_readout",
-            "run_id": "external",
-            "token_index": 0,
-            "token_text": "x",
-            "layer": 1,
-            "position": 0,
-            "top_readouts": [{"label": "uncertainty", "score": 0.2}],
-            "entropy": 0.1,
-            "provider": "fixture",
-        }],
-    }
-    rid = runlog.record(source="cli", messages=[{"role": "user", "content": "q"}], response="x", trace=ready)
-    readout = runlog.get_run(rid)["trace"]["workspace_readouts"][0]
-    assert readout["provider"] == "fixture"
-    assert readout["provider_type"] == "mock"
-    assert readout["readout_kind"] == "risk"
 
 
 def test_record_low_confidence_flag_from_trace(tmp_path, monkeypatch):

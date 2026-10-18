@@ -1,42 +1,21 @@
-# docs/ — architecture & technical
+# Clozn documentation
 
-The design docs, indexed. Read top-down: the synthesis first, then the per-layer deep dives.
+Current product documents:
 
-## Start here
+- [V1_POC_PLAN.md](V1_POC_PLAN.md) — scoped implementation plan and definition of done.
+- [CAPABILITIES.md](CAPABILITIES.md) — exact v1 keep/cut boundary.
+- [ARCHITECTURE.md](ARCHITECTURE.md) — process, storage, and evidence ownership.
+- [OPENAI_COMPATIBILITY.md](OPENAI_COMPATIBILITY.md) — public text API contract.
+- [STUDIO.md](STUDIO.md) — browser journey and evidence rules.
+- [STUDIO_SURFACE_CONTRACT.md](STUDIO_SURFACE_CONTRACT.md) — routes consumed by Studio.
+- [DEVELOPMENT.md](DEVELOPMENT.md) — source build and validation commands.
+- [REAL_RUNTIME_SMOKE.md](REAL_RUNTIME_SMOKE.md) — live v1 acceptance procedure.
+- [V1_LIVE_QUALIFICATION.md](V1_LIVE_QUALIFICATION.md) — reference backend evidence.
+- [RUNTIME_SPLIT.md](RUNTIME_SPLIT.md) — public gateway/private worker boundary.
+- [MODEL_SUPPORT.md](MODEL_SUPPORT.md) — initial model support limits.
+- [NATIVE_DISTRIBUTION.md](NATIVE_DISTRIBUTION.md) — native binary release status.
+- [LLAMA_SERVER_COMPATIBILITY.md](LLAMA_SERVER_COMPATIBILITY.md) — accepted launch flag aliases.
+- [SEAMS.md](SEAMS.md) — explicit command and route registration rules.
 
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** — the synthesis: one product, the layers, the
-  state-stream protocol, the interp maturity ladder. *How the whole thing fits.*
-- **[CAPABILITIES.md](CAPABILITIES.md)** — the single current matrix for merged, released,
-  qualified, and limited capabilities.
-- **[CLOZN_FEATURE_MAP.md](CLOZN_FEATURE_MAP.md)** — the comprehensive code-derived map of product
-  features, available information, actions, evidence types, and capability boundaries.
-- **[STUDIO_RELEASE_CHECKLIST.md](STUDIO_RELEASE_CHECKLIST.md)** — the acceptance-gated Studio and
-  backend release checklist.
-- **[STUDIO_SURFACE_CONTRACT.md](STUDIO_SURFACE_CONTRACT.md)** — canonical Studio routes, evidence
-  boundaries, and explicit-operation rules.
-- **[STUDIO_LIVE_QUALIFICATION.md](STUDIO_LIVE_QUALIFICATION.md)** — the
-  repeatable real-GGUF gateway smoke and hands-on Studio browser evidence.
-
-## Per-layer design
-
-- **[STUDIO.md](STUDIO.md)** — the studio UI: pages, panels, and what each surface shows.
-- **[design/UX_FOUNDATION.md](design/UX_FOUNDATION.md)** — the capability-driven information
-  architecture, workspace model, evidence hierarchy, and single-run investigation frame.
-- **[MODEL_SUPPORT.md](MODEL_SUPPORT.md)** — which model families run, and on which paths. Use
-  `clozn qualify MODEL --plan` for a model-free qualification readiness report; it does not qualify
-  or install an artifact.
-- **[MANAGED_MODELS.md](MANAGED_MODELS.md)** — the single- and multi-model runtime, exact identities,
-  routing, preloading, cold loading, and verified-idle eviction.
-- **[WORKSPACE_LENS.md](WORKSPACE_LENS.md)** — the J-lens: how it's fitted, what it can and
-  cannot claim, and the trace fixture format.
-- **[RUNTIME_SPLIT.md](RUNTIME_SPLIT.md)** — how the Python package splits between the pure
-  library and the served runtime.
-
-## Protocol
-
-- **[../protocol/README.md](../protocol/README.md)** — the state-stream contract the engine
-  emits and the studio consumes.
-
-The four non-negotiable invariants (honesty-first, the seam, tests-as-oracle,
-substrate-agnostic) hold across all of the above — see
-[ARCHITECTURE.md](ARCHITECTURE.md).
+Documents under `docs/design/` are retained design references and are not current product capability
+claims.

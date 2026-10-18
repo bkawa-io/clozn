@@ -6,6 +6,7 @@ experiments, and readouts—live here. Training and calibration are offline lab
 jobs and cannot be selected as alternate serving substrates.
 """
 import json
+import logging
 import os
 import secrets
 import subprocess
@@ -22,6 +23,8 @@ from clozn.server.request_gate import RequestGate, rejection_response   # noqa: 
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer   # noqa: E402
 
+_log = logging.getLogger(__name__)
+
 POST_GATE = RequestGate.from_env()
 
 # POST_GATE protects worker-shaped state outside the request-local generation paths. Checkpoint,
@@ -30,18 +33,15 @@ POST_GATE = RequestGate.from_env()
 # process cannot prove is safe to run concurrently with generation (see WorkerGateRegistry.acquire_all's
 # docstring), so this remains a DELIBERATELY SMALL allowlist of POST paths audited to touch NEITHER the
 # substrate's generation state NOR anything else worker-scoped:
-#   /capture/tier -- a bare settings-file flag (clozn.runs.capture_mode), unrelated to SUB entirely.
 #   /cancel       -- cancellation control does not select a worker or start generation.
 # Every other POST -- fork/checkpoint/replay/journal and everything else NOT in _GENERATION_POST_PATHS
 # below -- still reads or writes worker-shaped state and stays fully serialized through POST_GATE. The
 # risk of a wrong "this is safe" call here is a corrupted run record, so the bar is "audited to touch
 # nothing substrate-shaped", not a coarse heuristic like "looks read-only".
-_GATE_EXEMPT_POSTS = frozenset({"/capture/tier", "/cancel"})
+_GATE_EXEMPT_POSTS = frozenset({"/cancel"})
 
 # RT-05: the closed set of routes that resolve a model through
-# clozn.server.model_routing.select_for_handler (ADR 004's native/OpenAI/
-# Ollama generation surfaces -- see docs/design/004-multi-model-routing-
-# contract.md's Protocol table). do_POST does NOT acquire POST_GATE for
+# clozn.server.model_routing.select_for_handler. do_POST does NOT acquire POST_GATE for
 # these; select_for_handler acquires a PER-WORKER generation gate itself,
 # AFTER selection (and any RT-04 cold-load coalescing) succeeds -- see that
 # function's docstring for why gating must happen there, not here. This lets
@@ -54,11 +54,7 @@ _GATE_EXEMPT_POSTS = frozenset({"/capture/tier", "/cancel"})
 # prove is worker-agnostic must never run concurrently with generation on
 # a worker it might touch.
 _GENERATION_POST_PATHS = frozenset({
-    "/api/clozn/generate",
     "/v1/chat/completions",
-    "/v1/responses",
-    "/api/generate",
-    "/api/chat",
 })
 
 try:
@@ -72,43 +68,12 @@ except Exception:
 # Product startup always installs the router. ``None`` keeps route modules importable for isolated tests.
 MODEL_ROUTER = None
 PUBLIC_MODEL_ID = None
-STRUCTURED_MODE = "auto"
 
 
 class EngineUnavailable(RuntimeError):
     """Raised when the engine is completely UNREACHABLE (connection refused / host down -- a raw
     urllib.error.URLError, never even got an HTTP response), as opposed to EngineError (the engine
     responded, but with a non-2xx JSON error). Routes translate this to a consistent 502 response."""
-
-
-def _engine_unreachable_message() -> str:
-    """The one canonical "the engine isn't there" message, shared by every caller that needs to tell a
-    dead engine apart from some other failure (the receipt/rederive/swap_receipt routes,
-    EngineSubstrate.jlens) -- so the wording is identical everywhere, not re-typed per call site."""
-    return "selected model worker is not reachable"
-
-
-def _engine_reachable(sub=None) -> bool:
-    """True iff the selected substrate has an engine client to ask and a live GET /health round-trip
-    on it actually connects. Used by routes whose underlying op
-    (receipts.receipt/rederive/replay -- all documented "never raise into the caller") swallows a
-    dead-engine URLError into an ambiguous None/False result: probing here on that ambiguous path (never
-    on the happy path) lets the route tell "the engine is down" apart from "bad request/other failure"
-    without threading exceptions through that deliberate no-raise contract.
-
-    Returns True (i.e. "don't blame the engine") when there's no engine client available at all to probe,
-    OR it has no `.health` method -- a duck-typed test substrate with no `.engine` (or one that doesn't
-    implement health(), like several route tests' fakes), or a runtime with none configured -- so a
-    failure that has nothing to do with engine connectivity keeps its ordinary generic message instead of
-    being mislabeled "engine not reachable"."""
-    eng = getattr(sub, "engine", None) if sub is not None else None
-    if eng is None or not hasattr(eng, "health"):
-        return True
-    try:
-        eng.health()
-        return True
-    except Exception:
-        return False
 
 
 def _git_commit():
@@ -157,7 +122,7 @@ def _qwen_generation_meta(max_new=None, sample=True, stream=None):
     })
 
 
-# REPRODUCE_AND_PROVE_PLAN S5: settings-exposed interactive-chat sampling (Ollama/llama.cpp's canonical
+# REPRODUCE_AND_PROVE_PLAN S5: settings-exposed interactive-chat sampling (llama.cpp's canonical
 # defaults -- model-agnostic, since clozn serves any GGUF). "sampling" is the master on/off; OFF (or a
 # caller that explicitly asked for greedy, e.g. every receipt/replay/forced-scoring call) always decodes
 # temperature 0, byte-identical to pre-S5 behavior. The FULL regime (top_k/top_p included) is enforced by
@@ -188,7 +153,7 @@ def _resolve_sampling(want_sample):
     HONESTY: the full regime -- temperature/repeat_penalty/top_k/top_p/seed -- reaches the engine's
     sampler (engine/core/serve/server_shared.hpp's sample_from -> engine/core/src/sample.cpp: a
     temperature-scaled softmax, repetition penalty, then top-k + top-p nucleus truncation before an
-    inverse-CDF draw). So a sampled reply lands on the same Ollama distribution the user knows. The
+    inverse-CDF draw). So a sampled reply follows the configured llama.cpp distribution. The
     greedy path (temperature 0 / this returning None) is the argmax and ignores every one of them --
     top_k/top_p included -- so receipts and forced-greedy replay stay bit-exact."""
     if not want_sample:
@@ -260,94 +225,6 @@ def _engine_generation_meta(max_new=None, stream=None, sample=None, stop=None):
     })
 
 
-def _pers(name):
-    return os.path.join(CLOZN_DIR, name)
-
-
-# The honest J-lens provenance for the Run Inspector panel (J3), sourced from ~/.clozn/jlens/manifest.json
-# (the sidecar the engine loaded). The `note` is verbatim from JLENS_ENGINE_PLAN.md -- a disposition, not a
-# verified thought; a linear lens always emits something. Read once (cached); missing/broken manifest still
-# yields the honest note (fit_model/layers just stay unfilled). Never raises.
-_JLENS_NOTE = ("fitted linear Jacobian lens, transferred to this GGUF; a per-token 'disposed to say' read, "
-               "NOT the model's literal thought — a linear lens always emits something.")
-
-
-def _jlens_provenance():
-    cached = getattr(_jlens_provenance, "_cached", None)
-    if cached is not None:
-        return dict(cached)
-    prov = {"kind": "jacobian_lens", "fit_model": None, "layers": [], "note": _JLENS_NOTE}
-    try:
-        with open(os.path.join(_pers("jlens"), "manifest.json"), encoding="utf-8") as f:
-            m = json.load(f)
-        prov["layers"] = [int(x) for x in (m.get("layers") or [])]
-        model = str(m.get("model", "")).split("/")[-1].replace("-Instruct", "")
-        fo = m.get("fitted_on") or {}
-        bits = [b for b in ["HF", fo.get("quant"),
-                            (f"{fo.get('n_prompts')} prompts" if fo.get("n_prompts") else None)] if b]
-        if model:
-            prov["fit_model"] = f"{model} ({', '.join(bits)})" if bits else model
-    except Exception:
-        pass
-    _jlens_provenance._cached = dict(prov)
-    return dict(prov)
-
-
-def _jlens_run_text(run):
-    """The text a run's J-lens should read + a source label the panel shows so it's honest about WHAT was
-    read. Prefer the stored `response` (the reply whose tokens the chips annotate); else the last user
-    message (a prompt-only run). ('' , 'none') when there's nothing to read."""
-    if not isinstance(run, dict):
-        return "", "none"
-    resp = run.get("response")
-    if isinstance(resp, str) and resp.strip():
-        return resp, "response"
-    msgs = run.get("messages") if isinstance(run.get("messages"), list) else []
-    for m in reversed(msgs):
-        if isinstance(m, dict) and m.get("role") == "user" and str(m.get("content", "")).strip():
-            return str(m["content"]), "last_user_message"
-    return "", "none"
-
-
-def _jlens_workspace_readouts(res, run_id):
-    """Map a J-lens readout into the protocol's workspace_readout shape (SPEC.md / WORKSPACE_LENS.md),
-    provider_type 'jacobian_lens', readout_kind 'token' -- one event per position, so the same readout can
-    ride the existing event spine. Additive/opt-in (request `protocol:true`); the panel uses tokens+readouts."""
-    layer = res.get("layer")
-    toks = res.get("tokens") or []
-    rows = res.get("readouts") or []
-    out = []
-    for i, row in enumerate(rows):
-        out.append({
-            "type": "workspace_readout", "run_id": run_id,
-            "token_index": i, "token_text": (toks[i] if i < len(toks) else None),
-            "layer": layer, "position": i,
-            "provider": f"jacobian_lens_l{layer}", "provider_type": "jacobian_lens",
-            "readout_kind": "token",
-            "top_readouts": [{"label": r.get("piece"), "score": r.get("score")} for r in (row or [])],
-        })
-    return out
-
-
-def _jlens_envelope(res, run_id, text_source, want_protocol=False):
-    """Shape EngineSubstrate.jlens's normalized dict into the J3 frontend contract. `res` is either
-    {available:False, reason} or {available:True, layer, available_layers, n_tokens, tokens, readouts}
-    (+ an `error` string when the layer was unknown). Carries the honest provenance block when available.
-    HTTP is always 200 -- absence is a clean, renderable state, never an error."""
-    if not res.get("available"):
-        return {"available": False, "run_id": run_id, "reason": res.get("reason", "J-lens unavailable")}
-    out = {"available": True, "run_id": run_id,
-           "layer": res.get("layer"), "available_layers": res.get("available_layers", []),
-           "text_source": text_source, "n_tokens": int(res.get("n_tokens", 0) or 0),
-           "tokens": res.get("tokens", []), "readouts": res.get("readouts", []),
-           "provenance": _jlens_provenance()}
-    if res.get("error"):                       # unknown layer etc. -- surfaced cleanly (layers already listed)
-        out["error"] = res["error"]
-    if want_protocol:                          # bonus: also ride the workspace_readout protocol shape
-        out["workspace_readouts"] = _jlens_workspace_readouts(res, run_id)
-    return out
-
-
 def _engine_tmpl(engine, messages, usage_out=None):
     """Render chat `messages` to a prompt string using the ENGINE-LOADED MODEL'S OWN chat template
     (POST /apply_template -> llama_chat_apply_template over the GGUF's tokenizer.chat_template). THIS is
@@ -367,36 +244,8 @@ def _engine_tmpl(engine, messages, usage_out=None):
     return engine.apply_template(messages)
 
 
-# ------- message inspection/export and canonical effective-prompt assembly --------------------------
-from clozn.server.message_assembly import (                                              # noqa: E402
-    _last_user, _export_markdown,
-)
-from clozn.experiments.effective_prompt import inject_block                              # noqa: E402
-
 SUB = None         # the active substrate object
 SUBNAME = "engine"  # product server has one substrate; PyTorch model work lives in the lab
-
-# One process-wide time-travel SnapshotStore: the bounded, CPU-offloaded ring of per-turn
-# KV snapshots. Built lazily from timetravel.get_config() (cap / byte-budget). Only ever holds real KV
-# payloads when the `timetravel_snapshots` gate is ON (the RAM rule); branch RECORDING (the transcript
-# transform -> child run) does not need it and works regardless. None until first requested.
-SNAPSHOTS = None
-
-
-def _snap_store():
-    """The process-wide time-travel SnapshotStore, built lazily with the persisted ring config. Never
-    raises -- a config hiccup falls back to the module defaults."""
-    global SNAPSHOTS
-    if SNAPSHOTS is None:
-        try:
-            import clozn.replay.timetravel as timetravel
-            cfg = timetravel.get_config()
-            SNAPSHOTS = timetravel.SnapshotStore(cap=cfg["cap"], budget_mb=cfg["budget_mb"])
-        except Exception:
-            import clozn.replay.timetravel as timetravel
-            SNAPSHOTS = timetravel.SnapshotStore()
-    return SNAPSHOTS
-
 
 # ------- substrates: extracted to clozn/server/substrates.py; re-exported here (the seam) -----------
 # app.py remains the canonical module: routes read ctx.<name> and tests patch cs.<name> on THIS module.
@@ -411,58 +260,39 @@ from clozn.server.substrates import (                                           
 # claims a path. Unknown POST routes return a normal 404 after every family declines them.
 #
 # runs.try_get_fallback (the generic GET /runs/<id>) is registered LAST in _GET_ROUTES, deliberately --
-# every more-specific /runs/<id>/<suffix> family (receipts' /export, runs' own /timeline etc.) must get
-# first refusal, since they all share the "/runs/" prefix the fallback also matches.
+# every more-specific /runs/<id>/<suffix> family must get first refusal, since they all share the
+# "/runs/" prefix the fallback also matches.
 import types as _types                                                # noqa: E402
 
 from clozn.server import static as _static_routes                     # noqa: E402
 from clozn.server.routes import health as _health_routes              # noqa: E402
 from clozn.server.routes import runs as _runs_routes                  # noqa: E402
-from clozn.server.routes import receipts as _receipts_routes          # noqa: E402
-from clozn.server.routes import replay as _replay_routes              # noqa: E402
-from clozn.server.routes import corrective_retries as _corrective_retry_routes  # noqa: E402
-from clozn.server.routes import timetravel as _timetravel_routes      # noqa: E402
-from clozn.server.routes import ollama as _ollama_routes              # noqa: E402
 from clozn.server.routes import openai as _openai_routes              # noqa: E402
-from clozn.server.routes import engine as _engine_routes              # noqa: E402
-from clozn.server.routes import models as _models_routes              # noqa: E402 (local GGUF inventory)
-from clozn.server.routes import readouts as _readouts_routes          # noqa: E402
-# Inspector route families: journal actuary, model diff (F8).
-from clozn.server.routes import provenance as _provenance_routes       # noqa: E402
-from clozn.server.routes import causal_trace as _causal_trace_routes   # noqa: E402
-from clozn.server.routes import journal as _journal_routes             # noqa: E402
-from clozn.server.routes import card as _card_routes                        # noqa: E402
-from clozn.server.routes import diff as _diff_routes                   # noqa: E402
-from clozn.server.routes import receipt_link as _receipt_link_routes   # noqa: E402 (ambient delivery ch.1)
-from clozn.server.routes import influence_map as _influence_map_routes # noqa: E402
-from clozn.server.routes import contracts as _contracts_routes         # noqa: E402 (hook vocab + replay, P4.2)
 
 from clozn.server.routes import _autoload as _route_autoload          # noqa: E402
 
 _runs_fallback_routes = _types.SimpleNamespace(try_get=_runs_routes.try_get_fallback)
 
-# Route families that opted in via CLOZN_ROUTE_AUTOLOAD, so a new endpoint is a new file rather than
-# another edit to the two lists below. Discovered once at import, not per request.
+# Route families in the checked-in allowlist. A source file or marker alone cannot expose an
+# endpoint. The manifest is loaded once at import, not per request.
 _autoloaded_routes = _route_autoload.discover()
 
-# Autoloaded GET families are spliced in BEFORE _runs_fallback_routes, never appended after it: the
+# Manifested GET families are spliced in BEFORE _runs_fallback_routes, never appended after it: the
 # fallback matches the whole "/runs/" prefix, so anything landing behind it would be shadowed -- and
 # shadowed as a wrong-shaped 200 rather than a 404, which is far harder to spot. See _autoload.py.
-_GET_ROUTES = [_static_routes, _health_routes, _runs_routes, _receipts_routes,
-              _timetravel_routes, _ollama_routes, _openai_routes, _engine_routes,
-              _models_routes,
-              _journal_routes, _card_routes, _diff_routes, _receipt_link_routes,
-              _influence_map_routes, _contracts_routes,
-              *_route_autoload.with_try_get(_autoloaded_routes),
-              _runs_fallback_routes]
-_POST_ROUTES = [_health_routes, _receipts_routes,
-               _corrective_retry_routes, _replay_routes,
-               _timetravel_routes,
-               _ollama_routes, _openai_routes, _engine_routes, _readouts_routes,
-               _journal_routes, _diff_routes,
-               _receipt_link_routes, _influence_map_routes, _contracts_routes,
-               _provenance_routes, _causal_trace_routes,
-               *_route_autoload.with_try_post(_autoloaded_routes)]
+_GET_ROUTES = [
+    _static_routes,
+    _health_routes,
+    _openai_routes,
+    _runs_routes,
+    *_route_autoload.with_try_get(_autoloaded_routes),
+    _runs_fallback_routes,
+]
+_POST_ROUTES = [
+    _openai_routes,
+    *_route_autoload.with_try_post(_autoloaded_routes),
+]
+_DELETE_ROUTES = [_runs_routes]
 
 
 def active_sub(h):
@@ -566,7 +396,7 @@ def make_handler():
                 return
             self.send_response(204)
             send_cors_headers(self)
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
             requested = self.headers.get("Access-Control-Request-Headers")
             self.send_header("Access-Control-Allow-Headers", requested or DEFAULT_ALLOW_HEADERS)
             self.send_header("Access-Control-Max-Age", "600")
@@ -575,68 +405,25 @@ def make_handler():
 
         def _client(self, ua):
             ua = (ua or "").lower()
-            for k, v in (("open-webui", "Open WebUI"), ("openwebui", "Open WebUI"), ("cursor", "Cursor"),
-                         ("vscode", "VS Code"), ("python-requests", "script"), ("httpx", "script"),
+            for k, v in (("cursor", "Cursor"), ("vscode", "VS Code"),
+                         ("python-requests", "script"), ("httpx", "script"),
                          ("openai-python", "script"), ("curl", "curl"), ("mozilla", "browser")):
                 if k in ua:
                     return v
             return ua[:24] or "unknown"
 
-        def _workspace_lens_provider(self, messages, response, error=None):
-            """Return a provider callback for real concept readouts, if the brain stack is live.
-
-            Preferred path: C++ engine activations -> SAE concepts (`engine_concepts`).
-            Fallback path: loaded Python Qwen activations -> SAE/probe concepts (`sae/probe`).
-            No mock data is attached to real runs from here.
-            """
-            request_sub = active_sub(self)
-            request_engine = active_engine(self)
-            if error or not response or not (
-                request_sub and getattr(request_sub, "brain", None)
-            ):
-                return None
-            text = str(response or _last_user(messages) or "").strip()[:300]
-            if not text:
-                return None
-
-            def provider(rid, norm_trace):
-                from clozn.readouts import workspace_lens
-                if not norm_trace or not norm_trace.get("tokens"):
-                    return []
-                if request_engine is not None:
-                    try:
-                        data = request_sub.brain.concepts_from_engine(
-                            text, request_engine, 15
-                        )
-                        return workspace_lens.readouts_from_concepts(
-                            rid, norm_trace, data, provider="engine_concepts", layer=data.get("layer"))
-                    except Exception:
-                        pass
-                try:
-                    data = request_sub.brain.concepts_only(text)
-                    return workspace_lens.readouts_from_concepts(
-                        rid, norm_trace, data, provider="sae/probe", layer=15)
-                except Exception:
-                    return []
-
-            return provider
-
         def _log_run(self, source, messages, response, model, started, error=None, trace=None,
                      mem_out=None, finish_reason=None, finish_reason_fallback=None, extra_meta=None,
-                     output_contract=None, sections=None):
+                     output_contract=None):
             """Persist this interaction as an inspectable run (never let logging break the request).
             mem_out: the {final_prompt, assembled_messages, actual_prompt_tokens?} record the generation
             path filled in -- what the substrate actually did with this turn.
             extra_meta (optional): additional {key: value} pairs folded into the run's `meta` block on top
-            of the substrate/build-commit/capture-tier fields this method already assembles -- e.g. sse.py
+            of the substrate/build-commit fields this method already assembles -- e.g. sse.py
             tags a failed stream with {"stream_failure": "client_disconnected" | "worker_disconnected"} so
             the Runs page (and anyone reading the record later) can tell those two failure modes apart
             instead of both just showing an opaque `error` string. None-valued entries are dropped (same
             "don't record a guess" rule _without_unknowns applies elsewhere).
-            `sections` (optional): the caller's own explicit-or-auto prompt-section manifest (see
-            clozn.runs.sections) -- e.g. openai.py's /v1/chat/completions builds one from the incoming
-            messages before this is called. Threaded straight through to runlog.record; this method does
-            not itself derive or augment it.
             Returns the new run's id (str) on success, else None -- any failure along the way is swallowed,
             never raised. The M5 any-client bridge surfaces this id to the caller; None means "nothing to
             surface", not an error the request should see."""
@@ -713,15 +500,6 @@ def make_handler():
                 elif finish_reason_fallback:
                     meta.setdefault("finish_reason_source", "fallback")
                     meta.setdefault("finish_reason_fallback", finish_reason_fallback)
-                try:                                          # CAPTURE TIER: record it, and drop the trace at light
-                    from clozn.runs import capture_mode
-                    tier = capture_mode.tier()
-                    meta = {**meta, "capture_tier": tier}
-                    if not capture_mode.captures_trace(tier):
-                        trace = None                          # light: text + finish_reason + metadata only
-                except Exception:
-                    pass
-                workspace_provider = self._workspace_lens_provider(messages, response, error)
                 # The pre-template message list the substrate actually handed to the renderer. It was
                 # gated on prompt-memory mode; with memory gone the substrate records it unconditionally.
                 assembled_messages = mo.get("assembled_messages")
@@ -742,57 +520,29 @@ def make_handler():
                 request_started = getattr(self, "_request_wall_started", None)
                 if isinstance(request_started, (int, float)) and request_started <= time.time():
                     started = min(started, request_started)
-                # `sections` (prompt-section influence manifest) is threaded straight through to
-                # runlog.record below, exactly as the caller passed it in -- see this method's own
-                # docstring for why nothing here derives or augments it anymore.
                 record_kwargs = dict(
                     source=source, client=self._client(self.headers.get("User-Agent", "")),
                     model=str(model), substrate=request_subname, messages=messages, response=response,
                     started=started, error=error,
                     trace=trace, finish_reason=finish_reason, meta=meta,
                     assembled_messages=assembled_messages, final_prompt=final_prompt,
-                    workspace_provider=workspace_provider, identity=identity,
+                    identity=identity,
                     reasoning=reasoning, session_key=session_key,
                     client_key=client_key, client_key_source=client_key_source,
                     project_key=project_key,
-                    output_contract=output_contract, sections=sections,
+                    output_contract=output_contract,
                 )
                 rid = runlog.record(**record_kwargs)
-                self._maybe_snapshot_turn(rid, messages, trace, error)
                 self._last_logged_run_id = rid
                 return rid                        # M5 bridge: the run id, for callers that want to surface it
-            except Exception:
-                return None                        # logging must never break the request -- no id to surface
-
-        def _maybe_snapshot_turn(self, rid, messages, trace, error):
-            """TIME-TRAVEL (#6): when the snapshot gate is ON, register this turn in the bounded ring so the
-            Run Inspector's rewind/branch reflects real recorded turns and the ring's bounded eviction runs
-            in production. Fully guarded + gated OFF by default (the RAM rule). NOTE: the studio chat path is
-            STATELESS (an HF generate() builds its own cache and discards it), so v1
-            records a DESCRIPTOR-only snapshot (turn index + token count, zero offloaded bytes) -- honest,
-            and enough for the branch bookkeeping. Capturing the live KV payload here (the re-prefill fast
-            path) needs the generation path to hand back its cache: the documented next rung."""
-            try:
-                if not rid or error:
-                    return
-                import clozn.replay.timetravel as timetravel
-                if not timetravel.enabled():
-                    return
-                store = _snap_store()
-                if store is None:
-                    return
-                turn = max(0, len(timetravel.message_turns(messages)) - 1)   # this reply's turn index
-                # `trace` is a raw per-token step LIST here (runlog normalizes it later) -> len == tokens;
-                # tolerate a pre-normalized {tokens:[...]} dict too. 0 when no trace was captured.
-                if isinstance(trace, list):
-                    n_tok = len(trace)
-                elif isinstance(trace, dict):
-                    n_tok = len(trace.get("tokens", []) or [])
-                else:
-                    n_tok = 0
-                store.snapshot_turn(rid, turn, n_tok=n_tok, meta={"stateless": True})
-            except Exception:
-                pass
+            except Exception as exc:
+                # Keep compatibility callers alive, but leave an actionable
+                # request-scoped reason for the transport layer. A generated
+                # reply must not be mistaken for a durable run merely because
+                # this best-effort seam swallowed the failure.
+                self._last_recording_error = f"{type(exc).__name__}: {exc}"
+                _log.warning("run recording failed: %s", self._last_recording_error)
+                return None
 
         def do_GET(self):
             self._last_logged_run_id = None
@@ -815,10 +565,29 @@ def make_handler():
                     return
             self._json(404, {"error": "GET " + p})
 
+        def do_DELETE(self):
+            if self._reject_untrusted_origin():
+                return
+            p = self.path.split("?", 1)[0].rstrip("/") or "/"
+            for mod in _DELETE_ROUTES:
+                try:
+                    if mod.try_delete(self, p):
+                        return
+                except Exception as exc:
+                    import traceback
+                    traceback.print_exc()
+                    self._json(500, {
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "route": p,
+                    })
+                    return
+            self._json(404, {"error": "DELETE " + p})
+
         def do_POST(self):
             from clozn.server.model_routing import clear_handler_selection
             clear_handler_selection(self)
             self._last_logged_run_id = None
+            self._last_recording_error = None
             self._request_wall_started = time.time()
             self._gateway_timing_phases = []
             if self._reject_untrusted_origin():
@@ -979,14 +748,13 @@ def make_handler():
     return H
 
 
-def build_server(*, host: str, port: int, engine, model_router,
-                 public_model_id=None, structured_mode="auto"):
+def build_server(*, host: str, port: int, engine, model_router, public_model_id=None):
     """Build the public HTTP server around the supervisor-owned model router.
 
     The globals are intentional: route modules resolve the active request through
     this module, while the returned server owns only socket and thread lifetime.
     """
-    global SUB, SUBNAME, RUNTIME_KIND, ENGINE, MODEL_ROUTER, PUBLIC_MODEL_ID, STRUCTURED_MODE
+    global SUB, SUBNAME, RUNTIME_KIND, ENGINE, MODEL_ROUTER, PUBLIC_MODEL_ID
     if engine is None:
         raise RuntimeError("the product gateway needs a private model worker")
     if model_router is None:
@@ -997,35 +765,9 @@ def build_server(*, host: str, port: int, engine, model_router,
     ENGINE = engine
     MODEL_ROUTER = model_router
     PUBLIC_MODEL_ID = public_model_id or None
-    STRUCTURED_MODE = structured_mode
     SUB, managed_engine = model_router.control_pair()
     if managed_engine is not None:
         ENGINE = managed_engine
-    if structured_mode == "required":
-        from clozn.server import structured_io
-        identity = {}
-        try:
-            identity = dict(SUB.identity_meta() or {})
-        except Exception:
-            pass
-        health = {}
-        try:
-            health = dict(ENGINE.health() or {})
-        except Exception:
-            pass
-        native = health.get("native_chat_io") if isinstance(health, dict) else None
-        pipeline = {
-            key: native.get(key)
-            for key in ("executor_id", "renderer_id", "grammar_id", "parser_id")
-        } if isinstance(native, dict) else {}
-        registry = structured_io.resolve_qualification_registry(
-            identity,
-            artifact_root=(os.environ.get("CLOZN_ARTIFACTS_DIR") or os.path.join(CLOZN_DIR, "artifacts")),
-        )
-        for feature in ("tools", "json_object", "json_schema"):
-            structured_io.require_qualification(identity, feature,
-                                                 runtime_pipeline=pipeline,
-                                                 registry=registry)
     # RT-05: warm the run store's SQLite schema single-threaded, before
     # ThreadingHTTPServer starts dispatching request handler threads.
     try:

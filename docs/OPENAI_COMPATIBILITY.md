@@ -1,222 +1,66 @@
-# OpenAI client compatibility
+# OpenAI text API compatibility
 
-**Status (2026-07-31):** Clozn implements a deliberately small, strict subset of the OpenAI HTTP API.
-This is an endpoint/field contract, not a claim of full platform compatibility. Behavior-bearing fields
-that Clozn cannot honor return an OpenAI-shaped HTTP 400 instead of being silently ignored.
+Clozn implements a strict text-only subset. It does not claim full OpenAI API compatibility.
 
-The field inventory was checked against OpenAI's official
-[Chat Completions](https://developers.openai.com/api/reference/resources/chat/methods/create) reference.
-OpenAI recommends the Responses API for new platform integrations; Clozn implements only the narrow
-non-streaming text subset documented below.
+## Endpoints
 
-## Endpoint matrix
-
-| Method and path | Status | Notes |
-|---|---|---|
-| `GET /v1/models` | supported | one currently loaded local model |
-| `POST /v1/chat/completions` | supported subset | text, plus fail-closed qualified tools/structured output; one choice; streaming or non-streaming |
-| `POST /v1/responses` | supported subset | non-streaming text `input` with optional `instructions`; uses the same instrumented chat path |
-| embeddings, audio, images, files, batches, fine-tuning | unsupported | no routes |
-| stored chat list/get/update/delete | unsupported | Clozn's local run journal is a different API |
-
-The native instrumented stream is `POST /api/clozn/generate`; it is intentionally outside `/v1` so
-Clozn state events never leak into a standard OpenAI stream.
-
-## Chat Completions request fields
-
-| Field | Status | Exact behavior |
-|---|---|---|
-| `model` | supported | labels the response/run; the gateway still serves its one loaded worker |
-| `messages` | supported subset | non-empty text `{role, content}` objects; roles `system`, `user`, `assistant`; `developer` is normalized to `system`. Qualified tool requests additionally accept one assistant tool call followed by a matching `tool` result message. |
-| `max_tokens` | supported | positive integer |
-| `max_completion_tokens` | supported alias | normalized to `max_tokens`; sending both is a 400 |
-| `stream` | supported | boolean; standard `chat.completion.chunk` SSE + `[DONE]` |
-| `stop` | supported subset | one string or 1--4 strings; native worker termination and cross-token matching |
-| `stream_options` | supported subset | only `include_usage` boolean; `true` adds an exact terminal usage chunk |
-| `temperature`, `top_p`, `seed` | supported | forwarded into the request's sampler; explicit fields override Studio's persisted sampling default |
-| `n` | one only | `1`/null accepted and stripped; any other value is a 400 |
-| `top_k`, `repeat_penalty` | Clozn extensions | forwarded to the engine sampler |
-| `clozn_trust`, `clozn_receipt`, `clozn_receipt_mode`, `clozn_lens` | Clozn extensions | opt-in confidence spans, receipt delivery (`off`, `exceptions`, or `always`), and live J-lens readout |
-| `clozn_sources` | Clozn extension | optional exact source metadata with required `message_index` and `unicode_range`; verified `byte_range`, client source identity/label, `provenance_kind`, and `parent_source_id` support multiple or nested sources in one message |
-| `tools` | qualified subset | up to 32 strict function definitions; Clozn returns at most one call and never executes it |
-| `tool_choice` | qualified subset | `"auto"` activates the one-tool contract; `"none"` is an explicit text bypass |
-| `parallel_tool_calls` | false for active tools | omitted/`false` accepted; `true` is rejected when the tool contract is active |
-| `response_format` | qualified subset | `{"type":"json_object"}` or a restricted `strict:true` `json_schema`; `{"type":"text"}` is neutral |
-
-Message content arrays (images/audio/files), message `name`, deprecated `functions`/`function_call`, multiple
-calls in one assistant turn, and other unlisted message fields are rejected. Valid single-call tool history is
-passed to the native llama-common template renderer after gateway validation. A continuation may omit current
-`tools` to request an ordinary final text answer; historical arguments are schema-checked when a matching current
-definition exists.
-Sampler fields omitted by the client use Clozn's persisted interactive defaults (initially temperature 0.8,
-top-p 0.9, top-k 40, repetition penalty 1.1); fields explicitly present in the request override them.
-
-These fields are accepted **only at a neutral value**, removed before generation, and documented here as
-ignored for client interoperability:
-
-| Field | Accepted neutral values |
+| Endpoint | Status |
 |---|---|
-| `user` | string or null |
-| `frequency_penalty`, `presence_penalty` | `0` or null |
-| `logprobs` | `false` or null |
-| `top_logprobs` | `0` or null |
-| `audio`, `prediction` | null only |
-| `logit_bias`, `metadata` | empty object or null |
-| deprecated `functions` | empty list or null |
-| deprecated `function_call` | `"none"` or null |
-| `modalities` | `["text"]` or null |
-| `store` | `false` or null |
-| `service_tier` | `"auto"`, `"default"`, or null |
-| `stream_options` | other fields are rejected; `include_usage` is supported |
+| `GET /v1/models` | Supported; returns the one configured public model identity |
+| `POST /v1/chat/completions` | Supported for one text choice, streaming or non-streaming |
 
-Any behavior-bearing value outside the supported subset—nonzero frequency/presence penalties, multiple
-choices, and so on—is a 400 with that field in `error.param`.
-Unknown top-level fields are also rejected.
+There is no public Responses, Assistants, embeddings, images, audio, batches, tools, structured output,
+or Ollama-compatible API in v1.
 
-`clozn_sources` is journal metadata only: it does not alter the standard message list or prompt text.
-Exact `unicode_range` values use half-open Unicode code-point coordinates in the named message;
-Clozn derives the corresponding UTF-8 `byte_range` and rejects a supplied byte range that disagrees.
-`source_id` is the optional client identity; the Context Receipt mints a content-bound canonical `src_`
-identity. Overlapping ranges must be explicitly nested with `parent_source_id`; unrelated overlaps and
-cycles are rejected.
-It is refused on request modes that cannot preserve the identity contract (currently structured-I/O
-qualification and guard-v1 transforms), rather than being silently dropped.
+## Request fields
 
-## Responses subset
+Implemented fields:
 
-`POST /v1/responses` accepts `model`, optional string `instructions`, required string `input` (and
-optionally a text-only message array), `temperature`, `top_p`, and `max_output_tokens`. It is
-`stream:false` only. Multimodal input, tools, and unknown behavior-bearing fields fail closed. The request
-is normalized into the same text-chat messages and instrumented substrate used by Chat Completions, so it
-creates exactly one ordinary Clozn run and uses the worker's authoritative usage counts.
+- `model`
+- `messages`
+- `max_tokens` or `max_completion_tokens`
+- `temperature`, `top_p`, `top_k`, `repeat_penalty`, and integer `seed`
+- `stream`
+- `stop`
+- `stream_options.include_usage`
+- `clozn_sources`
 
-## Qualified structured I/O (Phase 2.8)
+Messages must be `{role, content}` objects with string content. Roles are `developer`, `system`, `user`,
+or `assistant`; `developer` is normalized to `system` for local GGUF templates. Extra message fields and
+multimodal content are rejected.
 
-Structured I/O is fail-closed and disabled by default. `CLOZN_STRUCTURED_IO_QUALIFICATIONS` may point to
-an explicit qualification registry v2. Each entry binds the exact active `model_sha256`, exact
-`template_fingerprint`, enabled feature (`tools`, `json_object`, and/or `json_schema`), schema-subset ID,
-all four native worker IDs (atomic executor, llama-common renderer, AR grammar, and llama-common parser),
-the public native-message validator ID, and passing suite evidence. The request's `model` string is only a
-response label and cannot qualify or spoof the loaded substrate. Runtime-reported pipeline drift also fails
-closed. Clozn ships no prequalified real-model entry at this stage.
+`clozn_sources` supplies exact source ranges without changing the message text. Each item names a
+`message_index`, label/identity metadata, and a half-open Unicode range. Nested ranges require an explicit
+parent and overlapping peers are rejected. Canonical source IDs are minted from the recorded bytes, not
+trusted from the client.
 
-The public contract is intentionally narrow:
+The following common fields are accepted only at neutral values and then removed: `n:1`, `user`, zero
+frequency/presence penalties, `logprobs:false`, `top_logprobs:0`, empty `logit_bias`, text-only
+`modalities`, `store:false`, empty `metadata`, and the default service tier. Any behavior-bearing value
+or unknown field returns HTTP 400 with a named `error.param` and typed code.
 
-- Up to 32 strict function definitions and at most one returned call. `tool_choice` supports `"auto"` and
-  `"none"`; tools and a non-text `response_format` are mutually exclusive. Clozn serializes the call for
-  the client but never executes it. Active structured I/O cannot be combined with `clozn_trust`,
-  `clozn_receipt`, `clozn_receipt_mode`, or `clozn_lens` in this slice.
-- A following request may carry the assistant's single `tool_calls` item and one immediately matching
-  `role:"tool"` result. These are validated and sent as message history to the native template renderer
-  without changing the journal's original OpenAI message history; the continuation may omit `tools` when it
-  only wants final text.
-- `json_object` requires one JSON object. `json_schema` requires `strict:true` and a root object using
-  Clozn's bounded subset: scalar `type`, object properties/required keys with
-  `additionalProperties:false`, arrays with typed `items`, length/item bounds, numeric bounds,
-  descriptions, and same-type enums. References, composition, regexes, formats, defaults, and conditional
-  schemas are rejected rather than approximated.
-- The worker performs one buffered, atomic render → AR grammar-constrained generate → parse operation. It
-  retains llama-common's grammar, trigger, stop, reasoning-tag, and parser state across the operation; lazy
-  tool grammars are suspended only while a recognized reasoning block is active. Client-held prepared
-  descriptors are not accepted for generation.
-- Llama-common owns template-specific parsing into an assistant message and optional `reasoning_content`.
-  The gateway then validates that native message, tool name/arguments, and schema without parsing or repairing
-  model syntax. Think tags cannot be stripped to repair a tool name or argument, and native call IDs are not
-  trusted for public association. Native parse failure, schema-invalid output, or length truncation becomes a
-  typed HTTP 502 and one errored journal run; generation is not silently retried.
-- Structured streaming is buffer-then-validate, not token-live. No model-derived SSE bytes are committed
-  until parsing succeeds. Tool calls are then emitted as standard indexed `tool_calls` deltas with terminal
-  `finish_reason:"tool_calls"`, the additive `clozn_run_id`, and `[DONE]`.
+In particular, `tools`, `tool_choice`, `response_format`, and former `clozn_*` behavior controls are
+unsupported.
 
-Every structured request that reaches generation records the raw model output, native parser message or error,
-strict validator input/result, normalized request contract, exact qualification and pipeline, public call
-ID/finish decision, and outcome in the run's `clozn.output_contract.v2` evidence. A validated result is not
-returned unless this evidence persists; a journal failure is a typed 502. An unqualified request fails before
-generation and creates no run.
+## Responses and recording
 
-This is a model-free-tested native/gateway contract, not a broad local-model compatibility claim. Exact
-qualification remains opt-in through the existing registry/artifact path. `clozn serve --structured auto`
-keeps the current fail-closed behavior, `--structured off` rejects active structured requests, and
-`--structured required` refuses startup unless all three supported structured modes are exactly qualified.
-The bounded real-model qualification battery and a successful Open WebUI two-request tool loop remain
-separate acceptance work.
+Non-streaming replies use `chat.completion` with one choice at index 0. Streaming replies use
+`chat.completion.chunk` frames followed by `[DONE]`. Native worker events never appear on this public
+stream.
 
-## Response boundary
+Unknown token usage is omitted rather than reported as zero. When the worker exposes exact prompt and
+completion counts, Clozn returns standard usage fields. Worker EOS maps to `stop`; a token limit maps to
+`length` and adds an output-truncated warning.
 
-- Chat response objects/chunks use the standard object names and one choice at index 0.
-- Every accepted Chat Completions request crosses Clozn's instrumented substrate and is written to the local
-  run journal with its delivered messages, rendered prompt, corrective policy, trace, and finish/failure
-  state.
-- Non-streaming chat responses may add `clozn_run_id` and `X-Clozn-Run-Id`; opt-in Clozn fields are additive.
-- Token usage is omitted when unknown. Clozn no longer fabricates zero prompt/completion token counts.
-- When available, usage comes from the executing worker's final rendered prompt and decoder accounting;
-  the gateway never re-tokenizes messages. `include_usage:true` is emitted as a final choices-empty SSE
-  chunk before `[DONE]`.
-- Finish reasons map worker EOS to `stop` and token limits to `length`. A worker failure is an error, never a
-  successful `stop`.
-- A proven `length` stop also adds `clozn_warnings: [{"code":"output_truncated", ...}]` to non-stream
-  responses and the terminal stream chunk. Non-stream responses additionally carry
-  `X-Clozn-Warning: output-truncated`; this warns that the reply may be incomplete and does not claim the
-  input prompt was truncated (overlong prompts are rejected).
-- Token-live chat streams cannot return a run id in headers because the run is persisted after headers are
-  sent. They are still finalized as one journal run after the stream ends. A buffered
-  structured stream is validated and journaled first, so it can also return `X-Clozn-Run-Id`.
-- Model-emitted `<think>...</think>` scratch text is excluded from `message.content`, streaming deltas,
-  echoed assistant history, and the public token trace. Prompt-prefilled and
-  unclosed think blocks are handled without leaking partial reasoning. The stripped text remains local in
-  the run's versioned reasoning evidence for Replay inspection; it is not returned on the OpenAI wire.
+Every successful generation is durably recorded. Non-streaming replies add `clozn_run_id` to the body
+and `X-Clozn-Run-Id` to headers. A live stream cannot know its ID before headers are sent, so its terminal
+chunk carries `clozn_run_id`. A recording failure is an upstream error, not a successful unsaved reply.
 
-Unqualified structured request example:
+Model-emitted `<think>` blocks are removed from public answer/history content and token traces. Their
+local reasoning evidence remains separate in the run journal.
 
-```json
-{
-  "error": {
-    "message": "exact loaded model/template identity is not in the structured-I/O qualification registry",
-    "type": "invalid_request_error",
-    "param": "tools",
-    "code": "model_not_qualified"
-  }
-}
-```
+## Coverage
 
-## Test evidence
-
-- `tests/test_openai_compat.py` exercises the field table without a model or network.
-- `tests/test_openai_client_compat.py` starts the real gateway with a fake substrate and drives model list,
-  non-streaming chat, streaming chat, and a typed 400 through the real `openai` Python package.
-- `tests/test_structured_io.py` exercises the strict request contract, qualification registry v2, exact native
-  pipeline matching, native-message validator, schema validator, typed errors, and model-free Python-envelope
-  harness without qualifying that harness for public use.
-- `tests/test_engine_chat_io.py` and `tests/test_engine_substrate_native_chat.py` exercise the private atomic
-  request/response contract, pipeline and model evidence, native parse failures, steering layers, and
-  trace folding without a model.
-- `tests/test_openai_structured_client_compat.py` drives the real gateway through OpenAI Python 2.46.0
-  against a fake atomic native result with exact identity and pipeline: one tool call, tool-result continuation,
-  buffered tool SSE, `json_object`, unqualified rejection, native parse failure, and malformed-message
-  journaling. It does not qualify a real model.
-- `engine/core/tests/test_chat_template_renderer.cpp` model-free-tests llama-common rendering, native parsing,
-  grammar extraction, tool history, JSON schema, and fail-closed structured request validation;
-  `engine/core/tests/test_generate.cpp` covers AR grammar ownership and reasoning-block gating.
-- CI pins `openai==2.46.0` in the CPU Python lane, so the SDK integration test cannot silently skip there.
-- `tests/test_runtime_architecture.py` and `tests/test_product_smoke.py` guard the standard-vs-native stream
-  envelope boundary.
-- `tests/test_think_tags.py` plus the OpenAI/Ollama streaming integration tests prove chunk-split think tags
-  never enter public answer/history content while their journal evidence remains inspectable.
-
-## Run association
-
-Non-streaming Chat Completions responses expose `clozn_run_id` in the body and `X-Clozn-Run-Id` in headers.
-Token-live chat streams cannot know the finalized journal ID before their headers are committed, so the
-ordinary terminal OpenAI chat chunk carries additive `clozn_run_id` before `[DONE]`; Ollama NDJSON does the same on its
-`done: true` object. Buffered structured streams finish and journal generation before committing SSE, so
-they return both the header and the terminal extension.
-
-Clients that need a side-channel can send `X-Clozn-Client-Id` and/or `X-Clozn-Session-Id` (1–128 visible
-ASCII characters). Raw values are never journaled: Clozn stores install-local HMAC fingerprints, excludes
-them from portable receipt exports, and supports exact `GET /runs/latest` lookup. `GET /runs/watch` and
-`clozn watch` use insertion-order cursors rather than generation start time, so a slow overlapping request
-cannot be skipped when it finishes late.
-
-The released-client versions, exact exercised surfaces, expected rejections, and Open WebUI status are
-published in [CLIENT_CONFORMANCE.md](CLIENT_CONFORMANCE.md). A protocol-shaped request is never counted as
-a released-client pass; the matrix labels source audits and scheduled-but-not-yet-green lanes separately.
+`tests/test_openai_compat.py` pins request normalization and rejection. `tests/test_openai_client_compat.py`
+drives model listing, non-streaming chat, streaming chat, recording failures, and unsupported tools through
+the real gateway with the OpenAI Python client when that optional test dependency is present.

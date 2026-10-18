@@ -1,108 +1,89 @@
-"""Opt-in discovery for NEW route families, so adding one is a pure file addition.
+"""Explicit registration manifest for server route modules.
 
-Same problem and same shape as clozn/cli/commands/_autoload.py, one layer down: clozn/server/app.py
-hand-wires ~25 route modules into `_GET_ROUTES` and `_POST_ROUTES`, so every feature that adds an
-endpoint edits the same two lists and every parallel branch conflicts there.
+Only modules named in :data:`ROUTE_MODULES` enter the gateway dispatch tables. The module-local
+``CLOZN_ROUTE_AUTOLOAD`` marker remains a second assertion: a mistaken manifest entry is diagnosed,
+not silently exposed. Merely adding or restoring a source file cannot create a public endpoint.
 
-A module that opts in is dispatched without app.py changing:
-
-    # clozn/server/routes/experiments.py
-    CLOZN_ROUTE_AUTOLOAD = True
-
-    def try_get(h, p):
-        if p == "/experiments":
-            h._json(200, {"experiments": [...]})
-            return True
-        return False
-
-`try_get(h, p)` and `try_post(h, p, body)` are both optional -- a module is added to whichever lists it
-has a handler for. Returning truthy means "I handled this"; falsy means "not mine, keep looking", which
-is exactly the existing contract every hand-wired module already follows.
-
-ORDER IS SEMANTIC HERE, NOT COSMETIC
-------------------------------------
-`_GET_ROUTES` ends with the generic `GET /runs/<id>` fallback, and app.py's comment is explicit that
-this is deliberate: every more-specific `/runs/<id>/<suffix>` family must get first refusal, because
-they all share the prefix the fallback also matches. So autoloaded GET modules are spliced in BEFORE
-that fallback, never appended after it. Appending would make a new `/runs/<id>/anything` route
-unreachable -- and it would fail as a wrong-shaped 200 from the fallback rather than a 404, which is
-the kind of bug that takes an afternoon to see.
-
-Within the autoloaded group, order is by module name, so the dispatch order is deterministic and a
-route family's behavior does not depend on filesystem iteration order.
-
-FAILURE BEHAVIOR
-----------------
-A module that opts in and then fails to import is recorded in LOAD_FAILURES and reported on stderr --
-never swallowed (roadmap rule 3). The server still starts, so a broken route family does not take down
-the gateway that `clozn doctor` and every other route need. tests/test_route_autoload.py asserts
-LOAD_FAILURES is empty, which is what makes a broken route a hard CI failure rather than a warning.
+Order is semantic. Manifested GET handlers are inserted before the generic ``GET /runs/<id>``
+fallback, and module names are sorted for deterministic first-refusal behavior.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 import importlib
-import os
 import sys
 
 MARKER = "CLOZN_ROUTE_AUTOLOAD"
-
 _PACKAGE = "clozn.server.routes"
-_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# (module_name, exception) for every route module that opted in but could not be loaded.
+# The v1 product has one context reader/effects family, one reduction family, the context receipt
+# disclosure, and parent/reduced-child comparison. Restoring any other route file does not expose it.
+ROUTE_MODULES = (
+    "context_investigation_v1",
+    "context_receipt",
+    "engine",
+    "minimal_context",
+    "run_compare",
+)
+
+# (module_name, exception) for every manifested route module that could not be loaded.
 LOAD_FAILURES: list[tuple[str, BaseException]] = []
 
 
-def _candidates() -> list[str]:
-    """Module names in this package whose SOURCE mentions the marker, sorted for deterministic
-    dispatch order. Private and test modules are skipped outright."""
-    names = []
-    try:
-        entries = sorted(os.listdir(_DIR))
-    except OSError:
-        return []
-    for entry in entries:
-        if not entry.endswith(".py") or entry.startswith("_") or entry.startswith("test_"):
-            continue
-        try:
-            with open(os.path.join(_DIR, entry), encoding="utf-8") as handle:
-                if MARKER not in handle.read():
-                    continue
-        except OSError:
-            continue
-        names.append(entry[:-3])
-    return names
+def _candidates(module_names: Iterable[str] | None = None) -> list[str]:
+    """Return a validated, deterministic route registration list."""
+    names = list(ROUTE_MODULES if module_names is None else module_names)
+    invalid = [name for name in names if not isinstance(name, str) or not name.isidentifier()]
+    if invalid:
+        raise ValueError(f"invalid route module names: {invalid!r}")
+    if len(names) != len(set(names)):
+        raise ValueError("duplicate route module names in registration manifest")
+    return sorted(names)
 
 
-def discover() -> list:
-    """Every route module that sets `CLOZN_ROUTE_AUTOLOAD = True`, in deterministic order.
+def discover(module_names: Iterable[str] | None = None) -> list:
+    """Import and validate every route module in the explicit manifest.
 
-    Never raises: a broken module is recorded in LOAD_FAILURES and announced on stderr, leaving the
-    rest of the gateway serving.
+    A broken manifested module is recorded in :data:`LOAD_FAILURES` and announced on stderr, leaving
+    the rest of the gateway available for diagnosis.
     """
     found = []
-    for name in _candidates():
+    for name in _candidates(module_names):
         dotted = f"{_PACKAGE}.{name}"
         try:
             module = importlib.import_module(dotted)
             if getattr(module, MARKER, False) is not True:
-                continue
+                raise AttributeError(f"is manifested but does not set {MARKER} = True")
             if not hasattr(module, "try_get") and not hasattr(module, "try_post"):
                 raise AttributeError(
-                    f"sets {MARKER} = True but defines neither try_get(h, p) nor try_post(h, p, body)")
+                    f"sets {MARKER} = True but defines neither "
+                    "try_get(h, p) nor try_post(h, p, body)")
             found.append(module)
-        except BaseException as exc:            # noqa: BLE001 -- deliberately broad; see module docstring
+        except BaseException as exc:  # noqa: BLE001 -- diagnostics must survive broken extensions
             LOAD_FAILURES.append((dotted, exc))
-            print(f"clozn: route module {dotted} failed to load: "
-                  f"{type(exc).__name__}: {exc}", file=sys.stderr)
+            print(
+                f"clozn: route module {dotted} failed to load: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
     return found
 
 
 def with_try_get(modules) -> list:
-    """Those of `modules` that handle GET. Splice BEFORE the /runs/<id> fallback -- see the docstring."""
-    return [m for m in modules if hasattr(m, "try_get")]
+    """Return manifested GET handlers for insertion before the generic run fallback."""
+    return [module for module in modules if hasattr(module, "try_get")]
 
 
 def with_try_post(modules) -> list:
-    """Those of `modules` that handle POST."""
-    return [m for m in modules if hasattr(m, "try_post")]
+    """Return manifested POST handlers."""
+    return [module for module in modules if hasattr(module, "try_post")]
+
+
+__all__ = [
+    "LOAD_FAILURES",
+    "MARKER",
+    "ROUTE_MODULES",
+    "discover",
+    "with_try_get",
+    "with_try_post",
+]

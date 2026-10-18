@@ -1,6 +1,6 @@
 /* Vendored verbatim from llama.cpp's examples/gguf-hash/deps/rotate-bits/rotate-bits.h (public
-   domain, Igor Pavlov / Wei Dai's Crypto++, 2010-06-11). clozn's own checkpoint-export payload
-   hash (see engine/core/serve/checkpoint_codec.hpp) uses this instead of reaching into llama.cpp's
+   domain, Igor Pavlov / Wei Dai's Crypto++, 2010-06-11). Clozn's exact-reference digest helper
+   (see engine/core/serve/sha256.hpp) uses this instead of reaching into llama.cpp's
    examples tree, so it does not depend on that tree surviving future bootstrap_llama.py re-vendors
    (examples/ is not built by CLOZN_BUILD_GGML at all). */
 

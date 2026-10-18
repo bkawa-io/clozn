@@ -11,7 +11,7 @@ from clozn.runs.context_units import build_context_unit_manifest
 
 
 def _run(content: str, *, run_id: str = "run_universe", explicit: bool = False) -> dict:
-    messages = [{"role": "system", "content": content}, {"role": "user", "content": "current"}]
+    messages = [{"role": "user", "content": content}, {"role": "user", "content": "current"}]
     if explicit:
         messages[0]["_clozn_sources"] = [
             {"source_id": "left", "unicode_range": [0, len(content) // 2], "provenance_kind": "message"},
@@ -47,7 +47,7 @@ def test_over_cap_merges_deterministically_without_losing_exact_coverage():
 
 def test_explicit_nested_structure_is_preserved_and_bound_failure_is_typed():
     content = "abcdefghij"
-    messages = [{"role": "system", "content": content}, {"role": "user", "content": "current"}]
+    messages = [{"role": "user", "content": content}, {"role": "user", "content": "current"}]
     messages[0]["_clozn_sources"] = [
         {"source_id": "parent", "unicode_range": [0, 10], "provenance_kind": "message"},
         {"source_id": "left", "unicode_range": [0, 5], "parent_source_id": "parent", "provenance_kind": "message"},
@@ -61,6 +61,26 @@ def test_explicit_nested_structure_is_preserved_and_bound_failure_is_typed():
     assert artifact["condition"]["code"] == "explicit_units_exceed_max_units"
     assert artifact["source_count"] == 2
     schemas.validate(artifact)
+
+
+def test_explicit_sources_separated_by_whitespace_form_the_search_universe():
+    content = "alpha\nbeta\ngamma"
+    messages = [{"role": "user", "content": content}, {"role": "user", "content": "current"}]
+    messages[0]["_clozn_sources"] = [
+        {"source_id": "a", "unicode_range": [0, 5], "provenance_kind": "message"},
+        {"source_id": "b", "unicode_range": [6, 10], "provenance_kind": "message"},
+        {"source_id": "c", "unicode_range": [11, 16], "provenance_kind": "message"},
+    ]
+    receipt = build_context_receipt(messages=messages, run_id="run_gap_universe", privacy="full")
+    run = {"id": "run_gap_universe", "messages": deepcopy(messages), "context_receipt": receipt}
+    run["context_units"] = build_context_unit_manifest(run)
+
+    artifact = plan_context_search_universe(run, run["context_units"], max_units=3)
+
+    canonical = [source["source_id"] for source in receipt["delivered"][0]["sources"]]
+    assert artifact["status"] == "planned"
+    assert artifact["source_ids"] == canonical
+    assert artifact["coverage"]["explicit_source_count"] == 3
 
 
 def test_manifest_change_changes_universe_identity():

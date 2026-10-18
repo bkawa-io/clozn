@@ -23,7 +23,6 @@ from typing import Any
 SCHEMA_VERSION = "clozn.text-span-addresses.v1"
 CONTEXT_SCHEMA = "clozn.context-receipt.v1"
 INFLUENCE_SCHEMA = "clozn.context_answer_influence.v1"
-INFLUENCE_EXPORT_SCHEMA = "clozn.context-answer-influence-export.v1"
 
 OFFSET_CONTRACT = {
     "unit": "unicode_code_points",
@@ -239,9 +238,8 @@ def make_text_span_address(
                 # portable basis hash.
                 drift_reason = recorded_hash_mismatch_reason
     else:
-        # A portable metadata-only influence export already has exact offsets
-        # and full basis/span digests.  That is sufficient to address the span,
-        # but never sufficient to expose its text.
+        # Metadata-only evidence with exact offsets and full basis/span digests
+        # is sufficient to address the span, but never to expose its text.
         if expected_basis is None or expected_span is None:
             reason = "source_text_redacted" if redacted else "canonical_basis_unavailable"
             return _unresolved_address(
@@ -510,10 +508,8 @@ def _influence_projection(run_id: str, artifact: dict, *,
     if not isinstance(artifact, dict):
         raise ValueError("influence artifact must be an object")
     schema = artifact.get("schema_version") or artifact.get("schema")
-    if schema not in {INFLUENCE_SCHEMA, INFLUENCE_EXPORT_SCHEMA}:
-        raise ValueError(
-            f"influence artifact must be {INFLUENCE_SCHEMA} or {INFLUENCE_EXPORT_SCHEMA}"
-        )
+    if schema != INFLUENCE_SCHEMA:
+        raise ValueError(f"influence artifact must be {INFLUENCE_SCHEMA}")
     source_record = {"schema": schema}
     status = artifact.get("status")
     if isinstance(status, str) and status:
@@ -833,7 +829,7 @@ def build_persisted_text_span_addresses(
         influence = None
     else:
         source_schema = influence.get("schema_version") or influence.get("schema")
-        if source_schema not in {INFLUENCE_SCHEMA, INFLUENCE_EXPORT_SCHEMA}:
+        if source_schema != INFLUENCE_SCHEMA:
             source_status = {
                 "schema": INFLUENCE_SCHEMA,
                 "native_status": "failed",

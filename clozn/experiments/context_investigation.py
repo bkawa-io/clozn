@@ -394,6 +394,13 @@ def project_source_loci(
     loci: list[dict[str, Any]] = []
     index = 0
     while index < len(values):
+        # Stop/control tokens can carry measured score deltas without occupying answer text (for example
+        # an EOS token with span [len(answer), len(answer)]). They remain in the scored observation and
+        # aggregate continuation delta, but cannot become a selectable text locus. Treat them as a hard
+        # grouping boundary so their effect is not silently attributed to an adjacent visible token.
+        if spans[index][1] <= spans[index][0]:
+            index += 1
+            continue
         value = float(values[index])
         if abs(value) <= floor_nats:
             index += 1
@@ -402,6 +409,8 @@ def project_source_loci(
         start = index
         index += 1
         while index < len(values):
+            if spans[index][1] <= spans[index][0]:
+                break
             current = float(values[index])
             same_sign = current > floor_nats if direction == "support" else current < -floor_nats
             if not same_sign:

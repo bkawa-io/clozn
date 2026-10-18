@@ -1,12 +1,12 @@
 """process_guard -- OS-level parent-death guard for spawned C++ worker processes.
 
-Stage 0 of ``docs/design/008-single-process-runtime.md`` (ADR 008 section 3.3) is implemented. It
-protects every spawned C++ worker. The Python gateway shares the supervisor lifetime, while each worker
-still holds GPU VRAM and binds a private loopback port; an unguarded worker after an abnormal supervisor
-death would be invisible and useless.
+The guard protects spawned C++ workers where the host OS exposes a suitable primitive. The Python
+gateway shares the supervisor lifetime, while each worker still holds accelerator memory and binds a
+private loopback port; an unguarded worker after an abnormal supervisor death would be invisible and
+useless.
 
 This module is exclusively about that UNGRACEFUL case. The graceful path -- ``RuntimeStack.stop()``
-calling ``worker_registry.stop_all()`` / terminating the gateway from ``cmd_serve``'s ``finally``
+stopping the worker / terminating the gateway from ``cmd_serve``'s ``finally``
 (``clozn/cli/runtime_process.py``, ``clozn/cli/commands/serve.py``) -- already works today and is
 untouched by anything here.
 
@@ -16,7 +16,7 @@ functions, in this order::
     proc = subprocess.Popen(args, ..., **process_guard.subprocess_kwargs())   # BEFORE spawn (Linux hook)
     process_guard.guard(proc)                                                  # AFTER spawn (Windows hook)
 
-Platform coverage (see ADR 008 section 3.3 for the full reasoning):
+Platform coverage:
 
   * Linux   -- ``prctl(PR_SET_PDEATHSIG)`` via ``preexec_fn``. Real, OS-enforced: the kernel signals the
               child the moment the thread that forked it exits, for any reason.
@@ -64,7 +64,7 @@ _PR_SET_PDEATHSIG = 1
 # module is imported unconditionally on every platform (including Windows, where `signal.SIGKILL` does
 # not exist), and this constant is only ever handed to a syscall on Linux. SIGKILL specifically (not
 # SIGTERM) because the point is a worker holding VRAM that MUST go away -- a signal the worker could
-# catch, ignore, or hang while handling defeats the guard's whole purpose. Matches ADR 008 section 3.3.
+# catch, ignore, or hang while handling defeats the guard's whole purpose.
 _LINUX_PDEATHSIG = 9
 
 
@@ -116,7 +116,7 @@ def _linux_preexec() -> None:
     contract). Deliberately does nothing but one ctypes call against the ALREADY-loaded ``_LIBC`` --
     see :func:`_load_libc`'s docstring for why nothing heavier is safe here. Must never raise: an
     exception in ``preexec_fn`` surfaces to the parent as an opaque, hard-to-diagnose ``Popen`` failure
-    with no useful traceback (Stage 0's hazard list), so every failure mode here is swallowed silently
+    with no useful traceback, so every failure mode here is swallowed silently
     -- the child simply proceeds unguarded rather than never launching at all.
     """
     try:
@@ -134,7 +134,7 @@ _JOB_LOCK = None  # lazily a threading.Lock(); see _job_lock()
 # alive: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE fires the instant the job's LAST handle closes. A handle
 # stashed only in a local that goes out of scope (or any wrapper object relying on garbage collection to
 # release OS resources, e.g. `_winapi.Handle`) would close early and kill every assigned child
-# IMMEDIATELY instead of on parent death -- see the module docstring and Stage 0's hazard list. Storing
+# IMMEDIATELY instead of on parent death -- see the module docstring. Storing
 # a bare int at module scope sidesteps that risk entirely: nothing about normal Python GC ever closes a
 # plain integer, and the OS only reclaims the handle when this whole process exits (gracefully or not),
 # which is exactly the lifetime the guard needs.
@@ -208,7 +208,7 @@ def _win_extended_limit_info_type():
 def _create_job_object():
     """Create and configure ONE Job Object with ``KILL_ON_JOB_CLOSE``. Returns a raw handle (plain
     ctypes/py int) or ``None`` on any failure -- never raises (callers still wrap this, belt and
-    suspenders, since Stage 0's hazard list calls out install failures explicitly).
+    suspenders, since install failures must degrade safely).
     """
     kernel32 = _win_kernel32()
     kernel32.CreateJobObjectW.restype = ctypes.c_void_p
@@ -282,7 +282,7 @@ def _windows_guard(proc) -> bool:
 
     # `Popen._handle` is semi-private -- there is no public `subprocess` API that exposes a raw Windows
     # process HANDLE, and every stdlib-only Job Object recipe (this one included) relies on the same
-    # attribute (ADR 008 section 3.3 names this as a known, small, accepted risk; a `pywin32` dependency
+    # attribute (a known, small, accepted risk; a `pywin32` dependency
     # would avoid it but this project has never taken one -- see `pyproject.toml`'s stdlib-only rule).
     # `getattr` with a default so a future CPython that renames/removes it degrades instead of raising.
     #
@@ -359,10 +359,10 @@ def guard(proc) -> bool:
         _warn_once(
             "platform-unguarded",
             f"no parent-death guard exists on this platform ({sys.platform!r}) -- there is no kernel "
-            "primitive equivalent to Linux's PR_SET_PDEATHSIG or a Windows Job Object here (see "
-            "docs/design/008-single-process-runtime.md section 3.3). If this process is killed "
+            "primitive equivalent to Linux's PR_SET_PDEATHSIG or a Windows Job Object here. If this "
+            "process is killed "
             "ungracefully (SIGKILL, a crash), its children will orphan and must be reaped manually "
-            "(`clozn stop`, or a process manager).",
+            "(terminate clozn-server directly or use a process manager).",
         )
         return False
     except Exception as exc:

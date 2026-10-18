@@ -3,12 +3,11 @@
 WHY NOT jsonschema
 ------------------
 pyproject.toml declares `dependencies = []` on purpose: the product CLI/gateway supervisor never imports
-Torch, transformers, or anything else outside the stdlib, and the `product-minimal` CI lane asserts
-`clozn.server.app` imports with none of them installed (see docs/RUNTIME_SPLIT.md). A schema validator
-that every stored artifact passes through sits squarely on that path, so it cannot be the thing that
-introduces clozn's first hard install-time dependency. This module is the alternative: ~200 lines
-covering the keywords the artifact schemas in defs/ actually need, and raising a clear error on any
-keyword it does NOT implement rather than silently ignoring it.
+Torch, Transformers, or anything else outside the stdlib. The main product suite enforces that boundary
+with only pytest installed. A schema validator that every stored artifact passes through sits squarely
+on that path, so it cannot introduce Clozn's first hard install-time dependency. This module is the
+alternative: ~200 lines covering the keywords the artifact schemas in defs/ actually need, and raising
+a clear error on any keyword it does NOT implement rather than silently ignoring it.
 
 THAT LAST PART IS THE WHOLE POINT
 ---------------------------------

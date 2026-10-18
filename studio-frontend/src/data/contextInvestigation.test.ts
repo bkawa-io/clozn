@@ -6,8 +6,7 @@ import {
   decodeContextInvestigationReader,
 } from "./contextInvestigation";
 import { contextInvestigationApi } from "./contextInvestigationClient";
-import { decodeEffectsSearchJob } from "./contextInvestigationJobs";
-import serverEffectsSearchResultFixture from "../../../tests/fixtures/schemas/clozn.context-investigation-effects-search-job-result.v1/valid__partial.json";
+import { decodeContextEffectsJob } from "./contextInvestigationJobs";
 
 const runId = "run / α";
 const baselineObservationId = "obs_baseline";
@@ -141,15 +140,15 @@ function queryDocument(): WireDocument {
   };
 }
 
-function effectsSearchJobDocument(state = "completed"): WireDocument {
+function effectsJobDocument(state = "completed"): WireDocument {
   const document: WireDocument = {
-    schema_version: "clozn.influence-map-job.v1",
+    schema_version: "clozn.analysis-job.v1",
     job_id: "infjob_fixture",
     run_id: runId,
-    kind: "context_investigation_effects_search",
+    kind: "context_investigation_effects",
     state,
     progress: {
-      phase: state === "completed" ? "done" : "coarse_scalar_scoring",
+      phase: state === "completed" ? "done" : "scoring_recorded_continuation",
       completed_units: state === "completed" ? 1 : 0,
       total_units: 1,
       percent: state === "completed" ? 100 : 0,
@@ -161,56 +160,14 @@ function effectsSearchJobDocument(state = "completed"): WireDocument {
     updated_at: "2026-10-08T00:00:01+00:00",
   };
   if (state === "completed") document.result = {
-    schema_version: "clozn.context-investigation-effects-search-job-result.v1",
-    run_id: runId,
-    source_ids: ["source-a"],
-    refine_threshold_nats: .25,
-    budget: { max_coarse_arms: 1, max_fine_arms: 1, max_joint_arms: 0 },
-    budget_usage: {
-      limits: { max_coarse_arms: 1, max_fine_arms: 1, max_joint_arms: 0 },
-      new_slots_reserved_before_cancellation: { coarse: 1, fine: 1, joint: 0 },
-      cache_or_prior_hits: { coarse: 0, fine: 0, joint: 0 },
-      exhausted: { coarse: false, fine: false, joint: false },
-      control_outside_intervention_budget: true,
-      actual_work: {
-        control: { executed: 1, reused: 0, not_executed: 0 },
-        interventions: {
-          executed_by_phase: { coarse: 1, fine: 1, joint: 0 },
-          reused_by_phase: { coarse: 0, fine: 0, joint: 0 },
-          skipped_by_phase: { coarse: 0, fine: 0, joint: 0 },
-        },
-        model_measurements_executed_total: 3,
-        model_measurements_reused_total: 0,
-        model_measurements_skipped_total: 0,
-        saved_model_measurements_total: 0,
-        saved_work_breakdown: {},
-      },
-    },
-    native_screening_requested: false,
-    coverage: { source_count: 1 },
-    arms: [{
-      phase: "fine",
-      source_ids: ["source-a"],
-      selection_reason: "user_requested_drilldown",
-      execution_state: "completed",
-      execution_disposition: "executed",
-      evidence_status: "trusted",
-      delta_nats: .4,
-      observation_id: "obs_a",
-      proof_grade: "trusted",
-      reused_from_phase: null,
-      numerical_regime: "scalar_reference",
-      execution_identity: { kind: "clozn.score-tokens-scalar-reference.v1" },
-      diagnostics: {},
-    }],
-    experiments: { coarse_experiment_id: "exp_coarse", refinement_experiment_id: "exp_fine" },
-    search_spec: {},
-    reader_projection: {
-      experiment_id: "exp_reader",
-      status: "partial",
-      control_observation_id: "obs_baseline",
-      trusted_singleton_source_ids: ["source-a"],
-    },
+    schema_version: "clozn.context-investigation-effects-job-result.v1",
+    experiment_id: "exp_reader",
+    source_count: 2,
+    completed_source_count: 1,
+    unavailable_source_count: 1,
+    failed_source_count: 0,
+    not_measured_source_count: 0,
+    state: "completed",
   };
   return document;
 }
@@ -521,44 +478,30 @@ describe("Context Investigation query contract", () => {
   });
 });
 
-describe("Context Investigation effects-search job contract", () => {
-  it("consumes the server schema fixture rather than a frontend-only approximation", () => {
-    const snapshot = effectsSearchJobDocument();
-    snapshot.result = structuredClone(serverEffectsSearchResultFixture);
-    snapshot.result.run_id = runId;
-    const job = decodeEffectsSearchJob(snapshot, "/job", runId);
-
-    expect(job.result?.actualWork.modelMeasurementsExecutedTotal).toBe(3);
-    expect(job.result?.arms[0]).toEqual(expect.objectContaining({
-      phase: "coarse",
-      evidenceStatus: "trusted",
-      numericalRegime: "scalar_reference",
-      executionIdentity: { kind: "clozn.score-tokens-scalar-reference.v1" },
+describe("Context Effects job contract", () => {
+  it("decodes progress and direct source-measurement counts", () => {
+    const job = decodeContextEffectsJob(effectsJobDocument(), "/job", runId);
+    expect(job.state).toBe("completed");
+    expect(job.result).toEqual(expect.objectContaining({
+      experimentId: "exp_reader",
+      sourceCount: 2,
+      completedSourceCount: 1,
+      unavailableSourceCount: 1,
     }));
   });
 
-  it("decodes progress, arm evidence state, actual work, and reader publication", () => {
-    const job = decodeEffectsSearchJob(effectsSearchJobDocument(), "/job", runId);
-    expect(job.state).toBe("completed");
-    expect(job.result?.arms[0].evidenceStatus).toBe("trusted");
-    expect(job.result?.actualWork.modelMeasurementsExecutedTotal).toBe(3);
-    expect(job.result?.readerProjection.trustedSingletonSourceIds).toEqual(["source-a"]);
-  });
-
-  it("rejects malformed execution identities instead of inferring an exact regime", () => {
-    const snapshot = effectsSearchJobDocument();
-    snapshot.result.arms[0].execution_identity = "scalar";
-    expect(() => decodeEffectsSearchJob(snapshot, "/job", runId)).toThrow(
-      /execution_identity.*object/,
-    );
+  it("rejects inconsistent source status counts", () => {
+    const snapshot = effectsJobDocument();
+    snapshot.result.completed_source_count = 2;
+    expect(() => decodeContextEffectsJob(snapshot, "/job", runId)).toThrow(/add up/);
   });
 
   it("rejects cross-run and completed-without-result snapshots", () => {
-    expect(() => decodeEffectsSearchJob(
-      { ...effectsSearchJobDocument(), run_id: "run_other" }, "/job", runId,
+    expect(() => decodeContextEffectsJob(
+      { ...effectsJobDocument(), run_id: "run_other" }, "/job", runId,
     )).toThrow(/requested Run/);
-    expect(() => decodeEffectsSearchJob(
-      { ...effectsSearchJobDocument("running"), state: "completed" }, "/job", runId,
+    expect(() => decodeContextEffectsJob(
+      { ...effectsJobDocument("running"), state: "completed" }, "/job", runId,
     )).toThrow(/result/);
   });
 });
@@ -615,37 +558,25 @@ describe("Context Investigation read client", () => {
   });
 });
 
-describe("Context Investigation effects-search client", () => {
-  it("starts a closed budgeted search and decodes the queued job", async () => {
-    const queued = effectsSearchJobDocument("queued");
+describe("Context Effects client", () => {
+  it("starts one direct measurement job for canonical source IDs", async () => {
+    const queued = effectsJobDocument("queued");
     const fetchMock = vi.fn().mockResolvedValue(json(queued, 202));
     vi.stubGlobal("fetch", fetchMock);
 
-    const job = await contextInvestigationApi.startEffectsSearch(runId, {
+    const job = await contextInvestigationApi.startEffects(runId, {
       sourceIds: ["source-a"],
-      coarseGroupSize: 1,
-      refineThresholdNats: .25,
-      drilldownSourceIds: ["source-a"],
-      budget: { maxCoarseArms: 1, maxFineArms: 1, maxJointArms: 0 },
-      executionPolicy: "trusted_scalar_only",
     });
 
     expect(job.state).toBe("queued");
     const [endpoint, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(endpoint).toBe("/runs/run%20%2F%20%CE%B1/context-investigation/effects-search/jobs");
+    expect(endpoint).toBe("/runs/run%20%2F%20%CE%B1/context-investigation/effects/jobs");
     expect(init.method).toBe("POST");
-    expect(JSON.parse(String(init.body))).toEqual({
-      source_ids: ["source-a"],
-      coarse_group_size: 1,
-      refine_threshold_nats: .25,
-      drilldown_source_ids: ["source-a"],
-      budget: { max_coarse_arms: 1, max_fine_arms: 1, max_joint_arms: 0 },
-      execution_policy: "trusted_scalar_only",
-    });
+    expect(JSON.parse(String(init.body))).toEqual({ source_ids: ["source-a"] });
   });
 
   it("polls and cancels the same encoded job resource", async () => {
-    const running = effectsSearchJobDocument("running");
+    const running = effectsJobDocument("running");
     const cancelling = {
       ...running,
       state: "cancelling",
@@ -657,12 +588,12 @@ describe("Context Investigation effects-search client", () => {
       .mockResolvedValueOnce(json(cancelling));
     vi.stubGlobal("fetch", fetchMock);
 
-    await contextInvestigationApi.effectsSearchJob(runId, "job / α");
-    await contextInvestigationApi.cancelEffectsSearch(runId, "job / α");
+    await contextInvestigationApi.effectsJob(runId, "job / α");
+    await contextInvestigationApi.cancelEffects(runId, "job / α");
 
-    expect(fetchMock.mock.calls[0][0]).toContain("effects-search/jobs/job%20%2F%20%CE%B1");
+    expect(fetchMock.mock.calls[0][0]).toContain("effects/jobs/job%20%2F%20%CE%B1");
     expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({ method: "GET" }));
-    expect(fetchMock.mock.calls[1][0]).toContain("effects-search/jobs/job%20%2F%20%CE%B1/cancel");
+    expect(fetchMock.mock.calls[1][0]).toContain("effects/jobs/job%20%2F%20%CE%B1/cancel");
     expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({ method: "POST" }));
   });
 });

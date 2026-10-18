@@ -38,18 +38,6 @@ def test_record_returns_id_and_persists(store):
     assert rec["id"] == rid
 
 
-def test_watch_cursor_uses_journal_insertion_order_not_generation_start(store):
-    first = store.record(source="api", messages=[{"role": "user", "content": "fast"}],
-                         response="first", started=2000.0, ended=2001.0)
-    cursor = store.cursor_for_run(first)
-    # This request started much earlier but finalized after the cursor was captured.
-    late = store.record(source="api", messages=[{"role": "user", "content": "slow"}],
-                        response="second", started=1000.0, ended=2002.0)
-    page = store.runs_after(cursor)
-    assert [run["id"] for run in page["runs"]] == [late]
-    assert store.latest_run()["id"] == late
-
-
 def test_association_filters_are_exact_and_derived_runs_default_off(store):
     from clozn.runs.association import client_key, session_key
     ck = client_key("client-a")
@@ -598,20 +586,6 @@ def test_get_run_rejects_non_string_or_empty_id(store):
     assert store.get_run(123) is None
 
 
-def test_update_tiny_tests_rejects_traversal_and_writes_nothing_outside_runs_dir(store, tmp_path):
-    """`clozn test --attach` reaches attachments.update_tiny_tests(rid, ...) with a CLI-supplied rid --
-    same guard, same contract (False on a bad id), and this is the WRITE side: confirm nothing lands
-    outside RUNS_DIR at all, not just that the return value is honest."""
-    target = tmp_path / "config.json"
-    target.write_text('{"api_key": "super-secret"}', encoding="utf-8")
-    os.makedirs(store.RUNS_DIR, exist_ok=True)
-
-    assert store.update_tiny_tests("../config", [{"a": 1}]) is False
-    assert store.update_tiny_tests("..\\config", [{"a": 1}]) is False
-    assert target.read_text(encoding="utf-8") == '{"api_key": "super-secret"}'   # untouched
-    assert not os.path.isfile(os.path.join(store.RUNS_DIR, "config.json"))       # nothing spilled inside either
-
-
 # -------------------------------------------------------------- round-2 pressure test #1 (HIGH): atomic writes
 # record() and update_tiny_tests() are the other two user-data JSON writers sharing the same defect memory
 # cards / settings had: open(path, "w") then json.dump(obj, f) truncates the target BEFORE a non-
@@ -631,19 +605,6 @@ def test_record_bad_meta_fails_cleanly_and_leaves_other_runs_untouched(store):
     after = set(os.listdir(store.RUNS_DIR))
     assert after == before                                    # no stray/truncated file left behind
     assert store.get_run(good_rid)["response"] == "ok"        # the earlier good run is untouched
-
-
-def test_update_tiny_tests_bad_payload_fails_cleanly_and_leaves_the_run_record_untouched(store):
-    rid = store.record(source="cli", messages=[{"role": "user", "content": "hi"}], response="ok")
-    assert store.update_tiny_tests(rid, [{"name": "t1", "passed": True}]) is True
-    assert store.get_run(rid)["tiny_tests"] == [{"name": "t1", "passed": True}]
-
-    # a nested set inside the list -- update_tiny_tests coerces the outer value with list(), but a
-    # non-serializable value nested inside an entry still reaches json.dumps
-    ok = store.update_tiny_tests(rid, [{"name": "t2", "detail": {1, 2, 3}}])
-    assert ok is False
-
-    assert store.get_run(rid)["tiny_tests"] == [{"name": "t1", "passed": True}]   # prior attachment survives
 
 
 def test_pruning_keeps_at_most_KEEP(store, monkeypatch):

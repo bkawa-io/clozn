@@ -81,7 +81,6 @@ def _identity(template="b" * 32):
         "engine_build": "test-engine",
         "context_size": 4096,
         "backend": "cpu",
-        "white_box_flags": {"sae": False, "jlens": False, "attn_knockout": False},
     }
 def _eligible_run():
     return {

@@ -8,10 +8,7 @@
 // ctx.pool / ctx.jlens / ... (each register fn re-binds local aliases so the moved body stays verbatim).
 #pragma once
 
-#include <functional>
-#include <optional>
-
-#include "server_shared.hpp"            // GgmlModel, ContextPool, ConceptProbes, SaeServe, JlensServe, json
+#include "server_shared.hpp"            // GgmlModel, ContextPool, json
 #include "chat_template_renderer.hpp"   // isolated full-GGUF Jinja renderer
 
 namespace httplib { class Server; }  // fwd-decl: the header needn't pull in the single-header httplib
@@ -23,32 +20,19 @@ namespace clozn {
 struct ServerContext {
     std::shared_ptr<GgmlModel> model;
     ContextPool& pool;
-    ConceptProbes& concept_probes;   // READ: sharp early-layer tap (white-box display)
-    ConceptProbes& steer_probes;     // WRITE: mid-depth tap (steering control vector)
-    SaeServe& sae_serve;
-    JlensServe& jlens;
     ChatTemplateRenderer& chat_templates;
     int n_ctx;
-    int mask_token;
     bool ar_mode;
-    int gpu_layers;
     std::string model_path;
     // Runtime identity copied from server_main after startup.  Persistent reference-match
     // sessions are worker-local and bind to this generation; they never accept caller identities.
     std::string worker_generation_id;
     std::string model_sha256;
     std::string tokenizer_sha256;
-    // Bounded worker-local checkpoint lookup. The store owns records; callers receive a copy, so
-    // no request pins FIFO capacity or a pooled context after lookup. Empty until main constructs
-    // the generation-scoped store, then valid for the full server listen lifetime.
-    std::function<std::optional<EngineCheckpoint>(const std::string&)> find_checkpoint;
 };
 
-// Route-family registrars (one per routes_*.cpp). server_main.cpp calls each after building the context.
-void register_jlens_routes(httplib::Server& svr, ServerContext& ctx);
-void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx);  // /harvest, /harvest/layers, /score, /apply_template
-void register_score_variants_routes(httplib::Server& svr, ServerContext& ctx); // private screening-only native scorer
-void register_state_routes(httplib::Server& svr, ServerContext& ctx);     // /state, /intervene
+// Route-family registrars linked into the private v1 worker.
+void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx);  // /score, /apply_template
 void register_reference_match_routes(httplib::Server& svr, ServerContext& ctx); // private native-many probe
 
 }  // namespace clozn

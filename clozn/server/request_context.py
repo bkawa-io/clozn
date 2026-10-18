@@ -62,7 +62,7 @@ class RequestContext:
                               (engine/core/include/clozn/events.hpp); chat_stream() captures it off the
                               first such frame it parses, the same way it already captures `engine_req`.
                               None until that frame arrives (or on a substrate/test double whose stream
-                              never emits one) -- read by clozn.server.ndjson (the Ollama NDJSON shim,
+                              never emits one) -- retained as private worker accounting,
                               roadmap Phase 2 #1) to fill an honest `prompt_eval_count`, never fabricated.
       cancelled             -- a threading.Event; see cancel()/is_cancelled().
     """

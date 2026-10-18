@@ -49,7 +49,7 @@ def test_stream_matches_batch_at_every_chunk_boundary():
         assert "delete" not in out + tail
 
 
-def test_assistant_history_only_is_sanitized_and_ollama_thinking_is_dropped():
+def test_assistant_history_only_is_sanitized_and_external_thinking_is_dropped():
     messages = [
         {"role": "system", "content": "keep <think> literally"},
         {"role": "user", "content": "what does </think> mean?"},

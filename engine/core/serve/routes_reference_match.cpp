@@ -4,8 +4,8 @@
 #include "httplib.h"
 #include "nlohmann/json.hpp"
 
-#include "checkpoint_codec.hpp"
 #include "server_context.hpp"
+#include "sha256.hpp"
 
 #include <algorithm>
 #include <chrono>

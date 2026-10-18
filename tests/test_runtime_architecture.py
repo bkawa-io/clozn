@@ -18,7 +18,6 @@ import clozn.settings as clozn_settings
 
 from clozn.runs import store
 from clozn.server import app
-from clozn.server import generation_gateway
 from clozn.server import http_policy
 from clozn.server import sse
 from clozn.server.request_gate import RequestGate
@@ -58,23 +57,6 @@ class SequencedProcess(FakeProcess):
         if len(self.codes) > 1:
             return self.codes.pop(0)
         return self.codes[0]
-
-
-class FakeResponse:
-    def __init__(self, lines=(), payload=b"{}", status=200):
-        self.lines = list(lines)
-        self.payload = payload
-        self.status = status
-        self.closed = False
-
-    def __iter__(self):
-        return iter(self.lines)
-
-    def read(self):
-        return self.payload
-
-    def close(self):
-        self.closed = True
 
 
 class CaptureHandler:
@@ -136,15 +118,6 @@ class RuntimeBoundaryTests(unittest.TestCase):
         parser = cli_main.build_parser()
         args = parser.parse_args(["serve", "model.gguf"])
         self.assertFalse(hasattr(args, "gateway_python"))
-
-    def test_worker_mode_is_explicit_not_inferred_from_vocabulary_tokens(self):
-        ar = engine_process._launch_args("worker", "gemma.gguf", 9000, {"chat": True}, False)
-        diffusion = engine_process._launch_args(
-            "worker", "llada.gguf", 9000, {"chat": True, "mask": 126336}, False
-        )
-        self.assertNotIn("--diffusion", ar)
-        self.assertIn("--diffusion", diffusion)
-        self.assertIn("--mask-token", diffusion)
 
     def test_context_override_reaches_the_private_worker(self):
         args = engine_process._launch_args(
@@ -517,78 +490,6 @@ class RuntimeBoundaryTests(unittest.TestCase):
         self.assertEqual(len(calls), 3)
         self.assertEqual(handle.restart_times, [111.0])
 
-    def test_product_substrate_switch_is_not_a_health_route(self):
-        handler = CaptureHandler()
-        self.assertFalse(health.try_post(handler, "/substrate", {"name": "qwen"}))
-
-    def test_engine_health_is_the_explicit_router_projection(self):
-        projection = {
-            "default_model_id": "qwen",
-            "preload_model_ids": ["qwen"],
-            "max_loaded_models": 1,
-            "configured_count": 1,
-            "resident_count": 1,
-            "models": [],
-        }
-        router = types.SimpleNamespace(runtime_status=lambda: dict(projection))
-        handler = CaptureHandler()
-        with mock.patch.object(app, "MODEL_ROUTER", router):
-            self.assertTrue(health.try_get(handler, "/engine/health"))
-        self.assertEqual(handler.code, 200)
-        self.assertEqual(handler.json, {"engine": {"managed": True, **projection}})
-
-
-
-    def test_native_stream_preserves_clozn_events(self):
-        frame = b'data: {"type":"tokens_committed","items":[{"piece":"x"}]}\n\n'
-        response = FakeResponse([frame])
-        original = generation_gateway._request
-        generation_gateway._request = lambda body, handler: response
-        handler = CaptureHandler()
-        try:
-            generation_gateway.native_completion(handler, {"prompt": "hi", "stream": True})
-        finally:
-            generation_gateway._request = original
-        self.assertEqual(handler.wfile.getvalue(), frame)
-        self.assertTrue(response.closed)
-        self.assertEqual(len(handler.log_calls), 1)
-        args, kwargs = handler.log_calls[0]
-        self.assertEqual(args[0], "native_api")
-        self.assertEqual(args[2], "x")
-        self.assertEqual(kwargs["extra_meta"]["native_surface"], "/api/clozn/generate")
-
-    def test_openai_chat_lens_stays_inside_standard_chunk_envelopes(self):
-        class LensSubstrate:
-            def chat_stream(self, messages, max_new, mem_out=None, lens=None, on_frame=None):
-                on_frame({"type": "jlens_live", "pieces": ["ready"]})
-                yield "ready"
-
-            def last_finish_reason(self):
-                return "stop"
-
-            def last_stream_trace(self):
-                return []
-
-        old_sub = app.SUB
-        handler = CaptureHandler()
-        app.SUB = LensSubstrate()
-        handler._route_sub = app.SUB
-        try:
-            sse.sse_chat(handler, [{"role": "user", "content": "hi"}], 8, "m",
-                         lens={"layer": 8})
-        finally:
-            app.SUB = old_sub
-        frames = []
-        for line in handler.wfile.getvalue().decode("utf-8").splitlines():
-            if line.startswith("data: ") and line != "data: [DONE]":
-                frames.append(json.loads(line[6:]))
-        self.assertTrue(frames)
-        self.assertTrue(any("clozn_lens" in frame for frame in frames))
-        self.assertTrue(all(frame.get("object") == "chat.completion.chunk" for frame in frames))
-        self.assertTrue(all(isinstance(frame.get("created"), int) for frame in frames))
-        self.assertTrue(all(isinstance(frame.get("choices"), list) and frame["choices"] for frame in frames))
-
-
 class GatewayHTTPPolicyTests(unittest.TestCase):
     def test_invalid_and_negative_content_lengths_are_rejected(self):
         for value in ("nope", "-1"):
@@ -663,23 +564,6 @@ class PostGateScopeTests(unittest.TestCase):
     carves out the two paths audited to touch neither generation state nor steer/memory (see the module
     comment above POST_GATE in app.py) -- and the gate's "cancelled" outcome (a client that vanished while
     queued, see RequestGateTests above) must surface as a distinct, documented status."""
-
-    def test_capture_tier_bypasses_the_gate_entirely(self):
-        calls = []
-        original = app.POST_GATE.acquire
-        app.POST_GATE.acquire = lambda *a, **kw: calls.append(1) or original()
-        old_settings = clozn_settings.SETTINGS_PATH
-        temp = tempfile.TemporaryDirectory(prefix="clozn-capture-tier-")
-        try:
-            clozn_settings.SETTINGS_PATH = os.path.join(temp.name, "studio_settings.json")
-            head, payload, _ = raw_gateway_request("POST", path="/capture/tier", body=b'{"tier": "deep"}')
-        finally:
-            app.POST_GATE.acquire = original
-            clozn_settings.SETTINGS_PATH = old_settings
-            temp.cleanup()
-        self.assertIn(" 200 ", head)
-        self.assertEqual(json.loads(payload.decode("utf-8")), {"ok": True, "tier": "deep"})
-        self.assertEqual(calls, [])                 # the gate was never even asked
 
     def test_unknown_post_uses_the_normal_gate_and_returns_not_found(self):
         calls = []

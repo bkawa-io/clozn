@@ -1,0 +1,33 @@
+{
+  "schema_version": "clozn.model-routing.v1",
+  "protocol": {"surface": "openai", "route": "/v1/chat/completions"},
+  "request": {"request_id": "route_1", "requested_model": null, "selection_source": "default"},
+  "policy": {"configured_model_id": "local", "omitted_model_policy": "configured_model", "unknown_model_policy": "error_no_fallback"},
+  "result": {
+    "status": "routed",
+    "lifecycle_state": "ready",
+    "receipt": {
+      "requested_model": null,
+      "selection_source": "default",
+      "resolved_model_id": "local",
+      "resolved_artifact": {"model_id": "local", "format": "gguf", "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      "runtime_key": {
+        "key_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "gguf_artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "context_size": 4096,
+        "backend": "cpu",
+        "template_fingerprint": "cccccccccccccccc",
+        "engine_build": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "worker_identity": {
+        "worker_id": "worker-1",
+        "worker_generation_id": "worker-1",
+        "worker_generation": 1,
+        "runtime_key_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "protocol_version": "1.1",
+        "engine_build": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "backend": "cpu"
+      }
+    }
+  }
+}

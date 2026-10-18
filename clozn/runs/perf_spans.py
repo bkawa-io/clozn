@@ -72,7 +72,7 @@ class SpanRecorder:
                 pass
 
     def as_phases(self) -> list[dict]:
-        """A defensive copy of the recorded spans, in `clozn.performance-trace.v1`'s `phases[]` shape."""
+        """A defensive copy of the generation timing spans recorded with the run."""
         return [dict(item) for item in self.spans]
 
 

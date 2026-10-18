@@ -4,27 +4,26 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Union
 
-from .evaluators import Evaluator, ExactReferenceMatch, ScoreRecordedContinuation, Generate, evaluator_from_dict
+from .evaluators import Evaluator, ExactReferenceMatch, ScoreRecordedContinuation, evaluator_from_dict
 from .batch import (
     ArmExecutionOutcome, ArmExecutionRequest, BatchExecutionError,
     BatchExecutionResult, scalar_batch,
 )
-from .interventions import DeleteSource, ForceToken, Intervention, SampleWith, intervention_from_dict
+from .interventions import DeleteSource, Intervention, intervention_from_dict
 from .kernel import Experiment
 from .observations import (
     Observation, ObservationError, ObservationIntegrityError, TokenScoreObservation,
-    GeneratedObservation, TokenScoreDelta, execution_observation_identity, observation_from_dict,
+    TokenScoreDelta, execution_observation_identity, observation_from_dict,
 )
 from .persistence import ExperimentArmView, ExperimentView, ObservationStore
 from .state import ExecutionState, canonical_json
-from .state_ref import ResolvedState
 
 
 SCHEMA_VERSION = "clozn.experiment-view.v2"
-ObservationLike = Union[Observation, TokenScoreObservation, GeneratedObservation]
+ObservationLike = Union[Observation, TokenScoreObservation]
 
 
-def _identity_for(state: ExecutionState | ResolvedState, evaluator: Evaluator,
+def _identity_for(state: ExecutionState, evaluator: Evaluator,
                  intervention: Intervention | None) -> dict[str, Any]:
     return execution_observation_identity(state, evaluator, intervention)
 
@@ -32,8 +31,6 @@ def _identity_for(state: ExecutionState | ResolvedState, evaluator: Evaluator,
 def _expected_type(evaluator: Evaluator):
     if isinstance(evaluator, ScoreRecordedContinuation):
         return TokenScoreObservation
-    if isinstance(evaluator, Generate):
-        return GeneratedObservation
     return Observation
 
 
@@ -42,8 +39,6 @@ def _allows_arms(evaluator: Evaluator, control: ObservationLike | None) -> bool:
         return False
     if isinstance(evaluator, ScoreRecordedContinuation):
         return isinstance(control, TokenScoreObservation) and control.status == "completed"
-    if isinstance(evaluator, Generate):
-        return isinstance(control, GeneratedObservation) and control.status == "completed"
     return type(control) is Observation and control.status == "exact_preserved"
 
 
@@ -61,7 +56,7 @@ class ExperimentResult:
         "requested_by", "persisted", "observation_store",
     )
 
-    def __init__(self, *, experiment_id: str, base: ExecutionState | ResolvedState, evaluator: Evaluator,
+    def __init__(self, *, experiment_id: str, base: ExecutionState, evaluator: Evaluator,
                  control: ObservationLike | None, arm_observations: list[ObservationLike | None] | tuple[ObservationLike | None, ...],
                  arm_interventions: list[Intervention | None] | tuple[Intervention | None, ...],
                  arm_ids: list[str] | tuple[str, ...] | None = None,
@@ -77,9 +72,9 @@ class ExperimentResult:
                  persisted: bool = False, observation_store: ObservationStore | None = None):
         if not isinstance(experiment_id, str) or not experiment_id:
             raise ValueError("ExperimentResult.experiment_id must be non-empty")
-        if not isinstance(base, (ExecutionState, ResolvedState)):
-            raise TypeError("ExperimentResult.base must be an ExecutionState or ResolvedState")
-        if not isinstance(evaluator, (ExactReferenceMatch, ScoreRecordedContinuation, Generate)):
+        if not isinstance(base, ExecutionState):
+            raise TypeError("ExperimentResult.base must be an ExecutionState")
+        if not isinstance(evaluator, (ExactReferenceMatch, ScoreRecordedContinuation)):
             raise TypeError("ExperimentResult.evaluator must be a supported evaluator")
         if state not in {"pending", "running", "completed", "cancelled", "failed", "blocked"}:
             raise ValueError("unsupported ExperimentResult state")
@@ -87,7 +82,7 @@ class ExperimentResult:
         observations = tuple(arm_observations)
         if len(interventions) != len(observations):
             raise ValueError("ExperimentResult arm interventions must align with observations")
-        if any(item is not None and not isinstance(item, (DeleteSource, ForceToken, SampleWith)) for item in interventions):
+        if any(item is not None and not isinstance(item, DeleteSource) for item in interventions):
             raise TypeError("ExperimentResult arm interventions must be typed interventions or None")
         ids = tuple(arm_ids or [
             "arm_" + str(index) for index in range(len(interventions))
@@ -225,10 +220,7 @@ class ExperimentResult:
             rows.append(row); interventions.append(intervention); observations.append(observation)
             states.append(row.state); ids.append(row.arm_id); obs_ids.append(row.observation_id)
         base_value = value.get("base")
-        base = (ResolvedState.from_dict(base_value)
-                if isinstance(base_value, Mapping)
-                and base_value.get("schema_version") == "clozn.experiment-resolved-state.v1"
-                else ExecutionState.from_dict(base_value))
+        base = ExecutionState.from_dict(base_value)
         return cls(
             experiment_id=value.get("experiment_id"), base=base,
             evaluator=evaluator, control=control, arm_observations=observations,
@@ -245,7 +237,7 @@ def _observation_from_dict(value: Mapping[str, Any]) -> ObservationLike:
 
 
 def _validate_returned_observation(observation: Any, expected_type: type,
-                                   state: ExecutionState | ResolvedState, evaluator: Evaluator,
+                                   state: ExecutionState, evaluator: Evaluator,
                                    intervention: Intervention | None) -> ObservationLike:
     compatible = (
         isinstance(observation, TokenScoreObservation)
@@ -260,7 +252,7 @@ def _validate_returned_observation(observation: Any, expected_type: type,
     return observation
 
 
-def _execute(adapter: Any, state: ExecutionState | ResolvedState, evaluator: Evaluator,
+def _execute(adapter: Any, state: ExecutionState, evaluator: Evaluator,
              intervention: Intervention | None, *, arm_id: str | None) -> ObservationLike:
     execute = getattr(adapter, "execute", None)
     if not callable(execute):
@@ -373,10 +365,7 @@ def run_experiment(experiment: Experiment, execution_adapter: Any, *, include_co
         )
     diagnostics["control_execution_disposition"] = control_disposition
 
-    # An unchanged Generate arm has the same semantic condition as its
-    # mandatory control.  Keep the control in the local cache too, so a
-    # non-durable Continue experiment does not execute the same condition a
-    # second time merely because there is no ObservationStore to query.
+    # Keep reusable control evidence in the local cache for duplicate-condition lookup.
     if control is not None and _reusable(control):
         observation_cache[control_identity["observation_key_sha256"]] = control
 

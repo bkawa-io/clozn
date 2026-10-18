@@ -7,7 +7,6 @@ blob.
 from __future__ import annotations
 
 from contextlib import closing
-import base64
 import hashlib
 import json
 import logging
@@ -18,9 +17,8 @@ import secrets
 import threading
 import time
 import uuid
-from copy import deepcopy
-
 from clozn._io import atomic_write_json
+from clozn.paths import data_path
 
 from . import schema
 from .summaries import SUMMARY_FIELDS, _flags, _summ, _summary, confidence_facts
@@ -33,11 +31,9 @@ from .trace import (
     _float_or_none,
     _int_or_none,
     _logprob,
-    _normalize_workspace_readouts,
     _norm_trace,
     _rounded_prob,
     _steps_from_parallel,
-    _with_workspace_readouts,
     accumulate_ar_events,
     finish_reason_from_frames,
     raw_finish_reason_from_frames,
@@ -46,7 +42,10 @@ from .trace import (
 )
 
 
-RUNS_DIR = os.path.join(os.path.expanduser("~/.clozn"), "runs")
+# v1 intentionally does not reuse the historical ~/.clozn/runs journal.  Keep
+# this as a module global because tests and embedders already inject a store by
+# replacing RUNS_DIR.
+RUNS_DIR = data_path("runs")
 KEEP = 1000
 _SAFE_RID = re.compile(r"^[A-Za-z0-9_-]+$")
 _OPAQUE_CLIENT_KEY = re.compile(r"^client_[0-9a-f]{24}$")
@@ -371,30 +370,20 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
            parent_run_id: str | None = None, changes_applied: dict | None = None,
            error: str | None = None, finish_reason: str | None = None,
            meta: dict | None = None, assembled_messages=None, final_prompt: str | None = None,
-           workspace_provider=None, identity: dict | None = None,
+           identity: dict | None = None,
            reasoning: dict | None = None, session_key: str | None = None,
            client_key: str | None = None, client_key_source: str | None = None,
            project_key: str | None = None,
            output_contract: dict | None = None,
-           sections: list | None = None,
-           time_machine_continuation_receipt: dict | None = None,
            _reserved_run_id: str | None = None) -> str | None:
     """Persist a completed run and return its id. Logging failures remain non-fatal.
 
     `identity` (roadmap S4.3): the immutable reproduction-identity block from
     clozn.runs.identity.runtime_identity -- model_sha256, template_fingerprint, engine_build,
     clozn_version, captured_at. A top-level field (like trace), not folded into
-    `meta`, so receipts.bundle and future consumers can read it without picking through REPRO_META_KEYS.
+    `meta`, so analysis consumers can read it without picking through generation metadata.
     Callers that don't pass one (older call sites, replay/fork, the CLI run path) simply get {} --
     honestly "no identity captured for this run," not a fabricated one.
-
-    `sections` (prompt-section influence foundation, clozn.runs.sections): the run's ablatable-section
-    manifest, if the caller built one -- explicit `clozn_section` tags or the deterministic auto-chunker,
-    per clozn.runs.sections's own docstring (a third source, memory-card locations, was cut from the
-    product along with the rest of memory on 2026-07-27). Stored as the top-level `sections` field ONLY
-    when non-empty; an old caller that never passes it (every replay/fork/timetravel call site today) gets
-    exactly the schema it always got -- no `sections` key at all, not a null or empty list -- so this is
-    purely additive and nothing downstream needs to special-case its absence.
 
     """
     try:
@@ -422,8 +411,6 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
                 norm_trace["steps"], implicit_open=implicit_think
             )
             public_trace = steps_to_trace(public_steps)
-            if "workspace_readouts" in norm_trace:
-                public_trace["workspace_readouts"] = norm_trace["workspace_readouts"]
             if reasoning_steps:
                 public_trace["reasoning_steps"] = reasoning_steps
             norm_trace = public_trace
@@ -440,7 +427,6 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
                 reasoning_doc.setdefault("trace_alignment", alignment)
         elif think.stripped and not reasoning_doc:
             reasoning_doc = think.journal()
-        norm_trace = _with_workspace_readouts(rid, norm_trace, workspace_provider)
         from .context_receipt import build_context_receipt, warnings_for
         context_receipt = build_context_receipt(
             messages=msgs,
@@ -502,26 +488,6 @@ def record(*, source: str, client: str = "unknown", model: str = "", substrate: 
         from . import context_units
         context_unit_manifest = context_units.build_context_unit_manifest(rec)
         rec["context_units"] = context_unit_manifest
-        if sections:
-            rec["sections"] = list(sections)
-        if time_machine_continuation_receipt is not None:
-            # ADR 010: the continuation child and its terminal exactness receipt are one immutable
-            # write.  The orchestrator reserves the run ID before generation so the schema-valid
-            # receipt can name the child before this transaction begins; refuse any mismatch rather
-            # than repairing lineage after persistence.
-            receipt = deepcopy(time_machine_continuation_receipt)
-            lineage = receipt.get("child_lineage")
-            if (
-                not isinstance(lineage, dict)
-                or receipt.get("status") != "completed"
-                or lineage.get("child_run_id") != rid
-                or lineage.get("requested_parent_run_id") != parent_run_id
-            ):
-                raise ValueError(
-                    "time_machine_continuation_receipt must describe this completed child")
-            from clozn import schemas
-            schemas.validate(receipt, "clozn.time-machine-continuation.v1")
-            rec["time_machine_continuation"] = receipt
         rec["flags"] = _flags(rec)
         if not _put(rec):
             return None
@@ -621,93 +587,6 @@ def latest_run(*, client: str | None = None, session_id: str | None = None,
     return rows[0] if rows else None
 
 
-def encode_cursor(recorded_ts: float, rid: str) -> str:
-    """Opaque exact `(recorded_ts, id)` cursor; float.hex avoids timestamp rounding loss."""
-    payload = json.dumps([float(recorded_ts).hex(), str(rid)], separators=(",", ":")).encode("utf-8")
-    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
-
-
-def decode_cursor(cursor: str) -> tuple[float, str]:
-    try:
-        text = str(cursor)
-        raw = base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
-        stamp, rid = json.loads(raw.decode("utf-8"))
-        value = float.fromhex(stamp)
-        if not _valid_rid(rid):
-            raise ValueError
-        return value, rid
-    except Exception as exc:
-        raise ValueError("invalid run cursor") from exc
-
-
-def cursor_for_run(rid: str) -> str | None:
-    if not _valid_rid(rid):
-        return None
-    _ensure()
-    with closing(_connect()) as db:
-        row = db.execute("SELECT recorded_ts, id FROM runs WHERE id = ?", (rid,)).fetchone()
-    return encode_cursor(row["recorded_ts"], row["id"]) if row else None
-
-
-def current_cursor() -> str | None:
-    _ensure()
-    with closing(_connect()) as db:
-        row = db.execute(
-            "SELECT recorded_ts, id FROM runs ORDER BY recorded_ts DESC, id DESC LIMIT 1"
-        ).fetchone()
-    return encode_cursor(row["recorded_ts"], row["id"]) if row else None
-
-
-def runs_after(cursor: str | None, *, limit: int = 100, client: str | None = None,
-               client_id: str | None = None, session_id: str | None = None,
-               model: str | None = None, include_derived: bool = False) -> dict:
-    """Oldest-first cursor page for `clozn watch`; every scanned row advances the cursor.
-
-    Advancing across filtered-out rows is deliberate: a watcher must not rescan unrelated traffic on
-    every poll, and the opaque tuple remains valid even if the referenced row is later pruned.
-    """
-    wanted = max(1, min(1000, int(limit)))
-    after_ts, after_id = decode_cursor(cursor) if cursor else (float("-inf"), "")
-    from .association import client_key, session_key
-    wanted_client = str(client).strip().casefold() if client is not None and str(client).strip() else None
-    wanted_client_id = client_key(client_id)
-    wanted_session = session_key(session_id)
-    wanted_model = str(model).strip().casefold() if model is not None and str(model).strip() else None
-    _ensure()
-    with closing(_connect()) as db:
-        rows = db.execute(
-            "SELECT recorded_ts, id, payload_json FROM runs "
-            "WHERE recorded_ts > ? OR (recorded_ts = ? AND id > ?) "
-            "ORDER BY recorded_ts ASC, id ASC",
-            (after_ts, after_ts, after_id),
-        ).fetchall()
-    out = []
-    scanned_ts, scanned_id = after_ts, after_id
-    for row in rows:
-        scanned_ts, scanned_id = float(row["recorded_ts"]), str(row["id"])
-        try:
-            run = json.loads(row["payload_json"])
-        except Exception:
-            continue
-        run.setdefault("recorded_ts", scanned_ts)
-        if not include_derived and str(run.get("source") or "") in _DERIVED_SOURCES:
-            continue
-        if wanted_client is not None and str(run.get("client") or "").casefold() != wanted_client:
-            continue
-        if wanted_client_id is not None and run.get("client_key") != wanted_client_id:
-            continue
-        if wanted_session is not None and run.get("session_key") != wanted_session:
-            continue
-        if wanted_model is not None and str(run.get("model") or "").casefold() != wanted_model:
-            continue
-        out.append(_summary(run))
-        if len(out) >= wanted:
-            break
-    next_cursor = (encode_cursor(scanned_ts, scanned_id)
-                   if scanned_id else cursor)
-    return {"runs": out, "next_cursor": next_cursor}
-
-
 def get_run(rid: str) -> dict | None:
     if not _valid_rid(rid):
         return None
@@ -734,7 +613,7 @@ def replace_run(rec: dict) -> bool:
 
 
 def iter_runs(*, limit: int | None = None) -> list[dict]:
-    """Return full records newest-first for lineage and offline analysis."""
+    """Return full records newest-first for bounded local analysis."""
     _ensure()
     sql = "SELECT payload_json FROM runs ORDER BY created_ts DESC, id DESC"
     params: tuple = ()
@@ -750,33 +629,3 @@ def iter_runs(*, limit: int | None = None) -> list[dict]:
         except Exception:
             continue
     return out
-
-
-def update_tiny_tests(rid: str, tiny_tests: list) -> bool:
-    from .attachments import update_tiny_tests as _update_tiny_tests
-    return _update_tiny_tests(rid, tiny_tests)
-
-
-def _load_runs() -> list[dict]:
-    from .lineage import _load_runs as _load
-    return _load()
-
-
-def _change_label(run: dict) -> str | None:
-    from .lineage import _change_label as _label
-    return _label(run)
-
-
-def _lineage_summary(run: dict, current_id: str | None = None) -> dict:
-    from .lineage import _lineage_summary as _summary_for_lineage
-    return _summary_for_lineage(run, current_id)
-
-
-def lineage(rid: str, limit: int = 500) -> dict | None:
-    from .lineage import lineage as _lineage
-    return _lineage(rid, limit)
-
-
-def lineage_family(rid: str, limit: int = 2000) -> list[dict] | None:
-    from .lineage import lineage_family as _lineage_family
-    return _lineage_family(rid, limit)

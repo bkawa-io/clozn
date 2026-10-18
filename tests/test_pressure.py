@@ -42,13 +42,11 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "engine", "client"))
 
 import clozn.runs.gc as gc                                   # noqa: E402
 import clozn.runs.store as store                               # noqa: E402
-from clozn.eval import store as eval_store                      # noqa: E402
 from clozn.server import app as cs                             # noqa: E402
 from clozn.server import sse                                    # noqa: E402
 from clozn.server.request_context import RequestContext, new_request_id  # noqa: E402
 from clozn.server.request_gate import RequestGate               # noqa: E402
 from clozn.server.routes import engine as engine_routes         # noqa: E402
-from clozn.server.routes import journal as journal_routes       # noqa: E402
 from clozn_engine import EngineClient                            # noqa: E402
 
 
@@ -416,13 +414,11 @@ class RecordingHandler:
         pass
 
     def _log_run(self, source, messages, response, model, started, error=None, trace=None,
-                mem_out=None, finish_reason=None, finish_reason_fallback=None, extra_meta=None,
-                sections=None):
+                mem_out=None, finish_reason=None, finish_reason_fallback=None, extra_meta=None):
         self.log_calls.append(dict(source=source, messages=messages, response=response, model=model,
                                    started=started, error=error, trace=trace, mem_out=mem_out,
                                    finish_reason=finish_reason,
-                                   finish_reason_fallback=finish_reason_fallback, extra_meta=extra_meta,
-                                   sections=sections))
+                                   finish_reason_fallback=finish_reason_fallback, extra_meta=extra_meta))
         return "run_test"
 
 
@@ -825,178 +821,6 @@ def test_engine_client_cancel_posts_req_id_under_req_key_verbatim(monkeypatch):
     assert seen["path"] == "/cancel"
     assert seen["body"] == {"req": "req_deadbeef"}
     assert out == {"cancelled": False, "req": "req_deadbeef"}
-
-
-# ======================================================================================================
-# 5. TRUTH-TIER CALIBRATION ENDPOINT (GET /journal/calibration -- reliability_bins + risk_coverage)
-# ======================================================================================================
-#
-# clozn/server/routes/journal.py's try_get() recomputes calibration.ece(pairs)["bins"] and
-# calibration.risk_coverage(pairs) live, on every request, from whatever `rows` were persisted by the
-# newest `clozn eval --save`. The saved payload is untrusted as far as this route is concerned, so these
-# tests hammer the row-to-pairs extraction (`r["score"], r["correct"]`,
-# gated on `r.get(...) is not None`) in journal.py and calibration.py's own `_clean()` against missing,
-# empty, and hostile row shapes -- using the same `_JSONCaptureHandler` + isolated profile lookup
-# pattern as section 4.
-
-def test_calibration_no_saved_report_returns_available_false_with_no_bins(monkeypatch):
-    """No `clozn eval --save` has ever run (or the registry was deleted/corrupted): lookup returns
-    None, and the route must answer available:false with neither reliability_bins nor risk_coverage
-    present at all -- not an empty list standing in for "we computed this and there was nothing", which
-    would be a different, stronger claim than "nothing was ever saved"."""
-    monkeypatch.setattr(eval_store, "load_latest_profile", lambda *a, **kw: None)
-    h = _JSONCaptureHandler()
-
-    claimed = journal_routes.try_get(h, "/journal/calibration")
-
-    assert claimed is True
-    assert h.code == 200
-    assert h.body["available"] is False
-    assert "reliability_bins" not in h.body
-    assert "risk_coverage" not in h.body
-
-
-def test_calibration_valid_rows_produce_well_formed_reliability_bins_and_risk_coverage(monkeypatch):
-    """Happy-path shape check pinned to exact numbers, not just "is a non-empty list": six rows spread
-    across six distinct 10%-wide bins, each with n=1, so every populated bin's mean_score/accuracy/gap is
-    exactly that one row's own values -- and the risk-coverage sweep is hand-verified point by point. This
-    locks down both the ReliabilityBin and CoveragePoint dataclass field names as they ride the wire."""
-    rows = [
-        {"score": 0.95, "correct": True},
-        {"score": 0.85, "correct": True},
-        {"score": 0.75, "correct": False},
-        {"score": 0.55, "correct": True},
-        {"score": 0.35, "correct": False},
-        {"score": 0.15, "correct": False},
-    ]
-    monkeypatch.setattr(eval_store, "load_latest_profile", lambda *a, **kw: {"saved_ts": 100.0, "rows": rows})
-    h = _JSONCaptureHandler()
-
-    claimed = journal_routes.try_get(h, "/journal/calibration")
-
-    assert claimed is True
-    assert h.body["available"] is True
-    bins = h.body["reliability_bins"]
-    assert len(bins) == 10                                          # fixed n_bins=10, empty bins included
-    for b in bins:
-        assert set(b.keys()) == {"lo", "hi", "n", "mean_score", "accuracy", "gap", "ci_lo", "ci_hi"}
-    populated = {round(b["lo"], 2): b for b in bins if b["n"] > 0}
-    assert set(populated) == {0.1, 0.3, 0.5, 0.7, 0.8, 0.9}
-    assert populated[0.9]["mean_score"] == pytest.approx(0.95) and populated[0.9]["accuracy"] == 1.0
-    assert populated[0.7]["accuracy"] == 0.0 and populated[0.7]["gap"] == pytest.approx(0.75)
-
-    rc = h.body["risk_coverage"]
-    assert len(rc) == 6
-    for pt in rc:
-        assert set(pt.keys()) == {"threshold", "coverage", "error", "n_answered"}
-    assert [pt["n_answered"] for pt in rc] == [1, 2, 3, 4, 5, 6]
-    assert rc[0]["error"] == 0.0                                    # top-scored item (.95) was correct
-    assert rc[2]["error"] == pytest.approx(1 / 3)                   # 3 answered, 1 wrong so far (.75)
-    assert rc[-1]["coverage"] == 1.0 and rc[-1]["error"] == 0.5
-
-
-def test_calibration_empty_rows_list_is_available_true_with_no_bins_key(monkeypatch):
-    """A saved report whose `rows` is present but an empty list (e.g. `clozn eval --save` ran against a
-    zero-item probe set): `rows` is falsy, so the route's `if rows:` guard skips the whole recompute block
-    entirely -- available stays true (a report WAS saved), but reliability_bins/risk_coverage must not
-    appear at all, not as empty lists silently standing in for "nothing to show"."""
-    monkeypatch.setattr(eval_store, "load_latest_profile", lambda *a, **kw: {"saved_ts": 100.0, "rows": []})
-    h = _JSONCaptureHandler()
-
-    claimed = journal_routes.try_get(h, "/journal/calibration")
-
-    assert claimed is True
-    assert h.body["available"] is True
-    assert "reliability_bins" not in h.body
-    assert "risk_coverage" not in h.body
-
-
-def test_calibration_rows_with_none_or_missing_score_or_correct_are_dropped_not_crashed(monkeypatch):
-    """Two hostile-but-plausible row shapes in one list: an explicit `"score": None` (an ungradeable item
-    upstream) and a row missing the "correct" key entirely (a truncated write, or an older schema version).
-    Both must be dropped by the `r.get(...) is not None` gate in journal.py BEFORE the `r["score"]`/
-    `r["correct"]` subscript ever runs -- a naive `r["correct"]` on the second row would KeyError. Because
-    `rows` itself is non-empty, the recompute block still runs; with zero valid pairs surviving the filter
-    it must still emit 10 empty bins (not crash, not silently drop the key) and an empty risk_coverage."""
-    rows = [{"score": None, "correct": True}, {"score": 0.5}]
-    monkeypatch.setattr(eval_store, "load_latest_profile", lambda *a, **kw: {"saved_ts": 100.0, "rows": rows})
-    h = _JSONCaptureHandler()
-
-    claimed = journal_routes.try_get(h, "/journal/calibration")
-
-    assert claimed is True
-    assert h.body["available"] is True
-    bins = h.body["reliability_bins"]
-    assert len(bins) == 10
-    assert all(b["n"] == 0 for b in bins)
-    assert all(b["mean_score"] is None and b["accuracy"] is None and b["gap"] is None for b in bins)
-    assert h.body["risk_coverage"] == []
-
-
-def test_calibration_non_bool_truthy_correct_values_silently_count_as_correct(monkeypatch):
-    """FINDING: calibration.py's `_clean()` docstring says `correct` is "coercible to bool" -- but Python's
-    bool() coerces ANY non-empty string, including the literal string "false", to True. A row written as
-    {"score": 0.9, "correct": "false"} (plausible from an eval harness that stringifies a Python bool
-    somewhere upstream, or a lossy CSV/JSON round-trip) is silently counted as a CORRECT answer here, not
-    dropped and not flagged. This pins down that current, surprising behavior so a future change to
-    `_clean()`'s coercion rule is a deliberate decision, not an accidental regression discovered in prod."""
-    rows = [
-        {"score": 0.9, "correct": "false"},
-        {"score": 0.9, "correct": "no"},
-        {"score": 0.9, "correct": True},
-    ]
-    monkeypatch.setattr(eval_store, "load_latest_profile", lambda *a, **kw: {"saved_ts": 100.0, "rows": rows})
-    h = _JSONCaptureHandler()
-
-    claimed = journal_routes.try_get(h, "/journal/calibration")
-
-    assert claimed is True
-    top_bin = h.body["reliability_bins"][-1]
-    assert top_bin["n"] == 3
-    assert top_bin["accuracy"] == 1.0          # all three -- including the two string rows -- count correct
-    assert top_bin["mean_score"] == pytest.approx(0.9)
-
-
-@pytest.mark.parametrize("all_correct", [True, False], ids=["all_correct", "all_wrong"])
-def test_calibration_all_correct_or_all_wrong_rows_do_not_crash_ece_or_risk_coverage(monkeypatch, all_correct):
-    """Single-outcome-class edge case: calibration.py's own fit_temperature() explicitly refuses an
-    all-right/all-wrong probe set (needs both outcomes to identify a transform). GET /journal/calibration
-    never calls fit_temperature() itself -- only ece()/risk_coverage() -- so this proves THOSE two stay
-    well-behaved (no division-by-zero, no crash) even at that single-class extreme, which any future change
-    wiring temperature fitting into this same route would need to preserve."""
-    rows = [{"score": s, "correct": all_correct} for s in (0.1, 0.3, 0.5, 0.7, 0.9)]
-    monkeypatch.setattr(eval_store, "load_latest_profile", lambda *a, **kw: {"saved_ts": 100.0, "rows": rows})
-    h = _JSONCaptureHandler()
-
-    claimed = journal_routes.try_get(h, "/journal/calibration")
-
-    assert claimed is True
-    populated = [b for b in h.body["reliability_bins"] if b["n"] > 0]
-    assert len(populated) == 5
-    expected_acc = 1.0 if all_correct else 0.0
-    assert all(b["accuracy"] == expected_acc for b in populated)
-
-    rc = h.body["risk_coverage"]
-    assert len(rc) == 5
-    expected_error = 0.0 if all_correct else 1.0
-    assert all(pt["error"] == expected_error for pt in rc)
-
-
-def test_calibration_rows_key_absent_entirely_behaves_like_empty_rows(monkeypatch):
-    """A hand-edited or incomplete profile missing `rows`: `out.get("rows") or []` must treat a missing
-    key identically to an empty list, never
-    KeyError and never diverge in behavior from the empty-list case. available stays true (a report WAS
-    saved) and saved_ago_s is still computed from the given saved_ts alone."""
-    monkeypatch.setattr(eval_store, "load_latest_profile", lambda *a, **kw: {"saved_ts": 123.0})
-    h = _JSONCaptureHandler()
-
-    claimed = journal_routes.try_get(h, "/journal/calibration")
-
-    assert claimed is True
-    assert h.body["available"] is True
-    assert "reliability_bins" not in h.body
-    assert "risk_coverage" not in h.body
-    assert h.body["saved_ago_s"] >= 0
 
 
 # ======================================================================================================

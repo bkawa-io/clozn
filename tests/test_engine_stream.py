@@ -287,7 +287,7 @@ def test_chat_stream_request_body_mirrors_engine_complete_traced(iso, monkeypatc
 # ==================================================================================== S5: interactive sampling
 
 def test_chat_stream_samples_by_default(iso, monkeypatch, fake_urlopen):
-    """The default-True `sample` arg inherits the persisted Ollama/llama.cpp params + a real seed:
+    """The default-True `sample` arg inherits the persisted llama.cpp params plus a real seed:
     temperature, rep_penalty, AND the top_k/top_p nucleus."""
     sub = _bare_engine_substrate(FakeEngine())
 

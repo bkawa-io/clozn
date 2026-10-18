@@ -3,7 +3,7 @@ reachable from Python and shaped for the receipts stack (rederive.py, forced rec
 built here). Two layers under test:
 
   * clozn_engine.EngineClient.score -- the thin SDK wrapper: request-body construction (prompt vs
-    prompt_ids precedence, continuation_ids vs continuation precedence, steer/steer_vec passthrough).
+    prompt_ids precedence and continuation_ids vs continuation precedence).
   * clozn_server.EngineSubstrate.score_tokens -- assembles the prompt EXACTLY like chat() does
     (inject_block + the worker template) from explicit inputs, which makes a stored run's
     with/without receipt arms reconstructable from the run record alone.
@@ -64,18 +64,12 @@ def test_score_continuation_text_fallback_when_no_ids(monkeypatch):
     assert "continuation_ids" not in seen["body"]
 
 
-def test_score_passes_topk_steer_and_steer_vec(monkeypatch):
+def test_score_passes_topk(monkeypatch):
     seen = {}
     ec = EngineClient(port=1)
     monkeypatch.setattr(ec, "_post", lambda path, body: seen.update(path=path, body=body) or {})
-    ec.score(prompt="p", continuation_ids=[1], topk=5,
-             steer={"coef": 1.0, "layer": 14}, steer_vec=[0.1, 0.2, 0.3])
+    ec.score(prompt="p", continuation_ids=[1], topk=5)
     assert seen["body"]["topk"] == 5
-    assert seen["body"]["steer"] == {"coef": 1.0, "layer": 14}
-    # steer_vec rides through flatten_values' float32 wire codec (like write_state's `values`), so it's
-    # only float32-exact, not float64-exact.
-    for got, want in zip(seen["body"]["steer_vec"], [0.1, 0.2, 0.3]):
-        assert abs(got - want) < 1e-6
 
 
 def test_score_omits_steer_fields_when_not_given(monkeypatch):
@@ -183,10 +177,7 @@ def test_score_tokens_tolerates_a_degraded_reply():
     assert sub.score_tokens([{"role": "user", "content": "hi"}], [1], block=None) == []
 
 
-# ============================================== continuation TEXT fallback + raw steer_vec passthrough
-# (rederive.py / forced receipts -- an old/light-tier run whose trace
-# lacks per-token ids falls back to scoring the stored `response` as continuation TEXT; the null-floor
-# control needs a raw steer direction with no named dial behind it.)
+# ================================================================= continuation text fallback
 
 def test_score_tokens_continuation_text_fallback_when_no_ids():
     fe = _FakeScoreEngine()
@@ -202,12 +193,3 @@ def test_score_tokens_continuation_ids_take_precedence_over_continuation_text():
     sub.score_tokens([{"role": "user", "content": "hi"}], [1, 2], continuation="ignored", block=None)
     assert fe.calls[-1]["continuation_ids"] == [1, 2]
     assert "continuation" not in fe.calls[-1]
-
-
-def test_score_tokens_forwards_explicit_raw_steer_vec():
-    fe = _FakeScoreEngine()
-    sub = _bare_engine_substrate(fe, steer=None)
-    sub.score_tokens([{"role": "user", "content": "hi"}], [1], block=None, steer_vec=[0.3, 0.4])
-    assert fe.calls[-1]["steer_vec"] == [0.3, 0.4]
-    # no self.steer -> layer 0 (the engine picks its OWN calibrated mid-depth band), NOT a hardcoded Qwen 14
-    assert fe.calls[-1]["steer"] == {"coef": 1.0, "layer": 0}

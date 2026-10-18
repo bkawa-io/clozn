@@ -9,12 +9,9 @@ lifecycle (queued/running/persisting/completed/failed/cancelled) is tracked and 
 Cancellation and persistence share one per-job lock: once a cancel response acknowledges cancellation,
 that job cannot subsequently enter its commit.
 
-`kind` distinguishes which action a job belongs to
-("influence_map" | "causal_trace" | "fork" | ...) purely for observability -- it changes no lifecycle
-behavior. One registry, one `JOBS` singleton, one capacity budget shared across every kind: a causal-
-trace job and an influence-map job compete for the SAME bounded thread pool and job-table slots, which
-is intentional (a single, honest capacity story rather than per-kind budgets that could be gamed by
-spreading load across kinds).
+`kind` distinguishes Context Effects from Minimal Context purely for observability; it changes no
+lifecycle behavior. One registry, one `JOBS` singleton, and one capacity budget are shared by both
+analyses so the process has one honest concurrency limit.
 """
 from __future__ import annotations
 
@@ -25,7 +22,7 @@ import threading
 import time
 import uuid
 
-JOB_SCHEMA = "clozn.influence-map-job.v1"
+JOB_SCHEMA = "clozn.analysis-job.v1"
 TERMINAL_STATES = frozenset({"completed", "failed", "cancelled"})
 
 
@@ -125,7 +122,7 @@ class JobControl:
                    certificate_candidate_kind: str | None = None) -> None:
         with self._job.lock:
             if self._job.cancel_event.is_set():
-                raise JobCancelled("influence-map job cancelled")
+                raise JobCancelled("analysis job cancelled")
             if self._job.state not in TERMINAL_STATES:
                 self._job.state = "running"
                 progress = _progress(phase, completed, total)
@@ -140,7 +137,7 @@ class JobControl:
         """Run the persistence callback only while cancellation is excluded."""
         with self._job.lock:
             if self._job.cancel_event.is_set():
-                raise JobCancelled("influence-map job cancelled before persistence")
+                raise JobCancelled("analysis job cancelled before persistence")
             self._job.state = "persisting"
             self._job.progress = _progress("persisting", 0, 1)
             self._job.updated_at = _now_iso()
@@ -230,17 +227,17 @@ class InfluenceJobRegistry:
             if isinstance(outcome, dict) and outcome.get("state") == "failed":
                 with job.lock:
                     if job.cancel_event.is_set() and not job.persisted:
-                        raise JobCancelled("influence-map job cancelled")
+                        raise JobCancelled("analysis job cancelled")
                     job.state = "failed"
                     job.error = dict(outcome.get("error") or {
-                        "code": "influence_map_job_failed",
-                        "message": "influence-map measurement did not produce available evidence",
+                        "code": "analysis_job_failed",
+                        "message": "analysis did not produce an available result",
                     })
                     job.updated_at = _now_iso()
             else:
                 with job.lock:
                     if job.cancel_event.is_set() and not job.persisted:
-                        raise JobCancelled("influence-map job cancelled")
+                        raise JobCancelled("analysis job cancelled")
                     job.state = "completed"
                     job.progress = _progress("done", 1, 1)
                     job.updated_at = _now_iso()

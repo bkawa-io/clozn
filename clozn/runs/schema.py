@@ -44,42 +44,6 @@ _STATEMENTS = (
     """CREATE INDEX IF NOT EXISTS runs_session_latest_idx
        ON runs(session_key, recorded_ts DESC, id DESC) WHERE session_key IS NOT NULL""",
     """
-    CREATE TABLE IF NOT EXISTS pinned_checkpoints (
-        run_id TEXT PRIMARY KEY,
-        pin_id TEXT NOT NULL,
-        pinned_ts REAL NOT NULL,
-        pinned_at TEXT NOT NULL,
-        note TEXT,
-        checkpoint_id TEXT NOT NULL,
-        source_worker_generation_id TEXT NOT NULL,
-        model_sha256 TEXT NOT NULL,
-        architecture TEXT NOT NULL,
-        n_embd INTEGER NOT NULL,
-        n_layer INTEGER NOT NULL,
-        vocab_size INTEGER NOT NULL,
-        n_ctx INTEGER NOT NULL,
-        protocol_version TEXT NOT NULL,
-        engine_version TEXT NOT NULL,
-        build_id TEXT NOT NULL,
-        llama_cpp_commit TEXT NOT NULL,
-        n_tokens INTEGER NOT NULL,
-        n_past INTEGER NOT NULL,
-        prompt_tokens INTEGER NOT NULL,
-        causal INTEGER NOT NULL,
-        has_sampler INTEGER NOT NULL,
-        has_steer INTEGER NOT NULL,
-        blob_sha256 TEXT NOT NULL,
-        kv_bytes INTEGER NOT NULL,
-        envelope_bytes INTEGER NOT NULL,
-        payload_sha256 TEXT NOT NULL,
-        manifest_json TEXT NOT NULL
-    )
-    """,
-    """CREATE INDEX IF NOT EXISTS pinned_checkpoints_pinned_idx
-       ON pinned_checkpoints(pinned_ts DESC, run_id DESC)""",
-    """CREATE INDEX IF NOT EXISTS pinned_checkpoints_blob_idx
-       ON pinned_checkpoints(blob_sha256)""",
-    """
     CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY,
         created_ts REAL NOT NULL,

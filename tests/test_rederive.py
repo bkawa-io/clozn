@@ -163,13 +163,6 @@ def test_score_arm_messages_override_takes_precedence_over_conditions():
     assert sub.calls[-1]["messages"] == ["override"]
 
 
-def test_score_arm_passes_steer_vec_through():
-    sub = FakeScoreSub(tokens=TOKENS)
-    conditions = {"messages": [], "continuation_ids": [1]}
-    rederive.score_arm(sub, conditions, steer_vec=[0.1, 0.2])
-    assert sub.calls[-1]["steer_vec"] == [0.1, 0.2]
-
-
 def test_score_arm_never_raises_on_a_scoring_exception():
     sub = FakeScoreSub(raises=True)
     conditions = {"messages": [], "continuation_ids": [1]}

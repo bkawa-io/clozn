@@ -77,10 +77,9 @@ def _dll_dirs_for(exe: str) -> list[str]:
 @dataclasses.dataclass(frozen=True)
 class EngineDiscovery:
     """The full result of one find_engine_ex() resolution -- what find_engine() trims to its historical
-    3-tuple, plus everything roadmap feature 01 wants recorded on every run: which of the four
-    precedence tiers produced this engine, and (when knowable) its backend and managed-install identity.
+    3-tuple, plus the discovery tier, backend, and available build identity recorded on every run.
 
-    `backend` is deliberately coarse ("cpu"/"gpu") for every tier except "managed": tiers 1/3/4 only ever
+    `backend` is deliberately coarse ("cpu"/"gpu") for every tier except "managed": other tiers only ever
     know GPU-or-not (a directory name, or an env var), never the exact accelerator, so claiming "cuda"
     there would be a guess this module has no evidence for. Only the managed tier's registry record (see
     clozn/setup/registry.py) carries a manifest-declared exact backend, so only it reports one.
@@ -117,11 +116,10 @@ def _env_override_candidate() -> "EngineDiscovery | None":
 
 
 def _managed_candidate() -> "EngineDiscovery | None":
-    """Tier 2. The active engine `clozn setup` installed, per ~/.clozn/engines/registry.json. Absent
+    """Tier 2. An active engine from the legacy managed registry. Absent
     entirely (returns None, not an error) when nothing has ever been installed, or when the registry's
-    `active` entry is stale (its entrypoint file was removed out of band) -- clozn.setup.registry's own
-    self-heal (prune_missing) is what a `clozn setup status` call reconciles; discovery here just moves
-    on to tier 3 rather than failing the whole lookup over one missing managed install."""
+    `active` entry is stale (its entrypoint file was removed out of band); discovery simply moves on to
+    the repository build rather than failing over one missing managed install."""
     from clozn.cli import main as ctx
     from clozn.setup import registry as setup_registry
 
@@ -163,7 +161,7 @@ def _repo_dev_build_candidates() -> list:
 
 def find_engine_ex(prefer_gpu=True) -> EngineDiscovery:
     """The full discovery result -- see EngineDiscovery. Precedence: ``CLOZN_ENGINE`` override ->
-    active managed engine (``clozn setup``) -> repository-local development build.
+    active legacy managed engine -> repository-local development build.
     ``prefer_gpu=False`` is the CLI's documented ``--cpu`` contract: it skips any
     candidate this function otherwise cannot prove is a CPU build, at every tier -- including refusing a
     GPU env override and falling through past a GPU managed install to whatever CPU candidate a later
@@ -189,15 +187,15 @@ def find_engine_ex(prefer_gpu=True) -> EngineDiscovery:
         if not candidates:
             raise ctx.CloznError(
                 "--cpu was requested, but no CPU engine build was found. "
-                "Build engine/core/build-serve as described in docs/DEVELOPMENT.md, or run `clozn "
-                "setup --backend cpu`."
+                "Build engine/core/build-serve as described in docs/DEVELOPMENT.md, or point "
+                "CLOZN_ENGINE at a CPU worker."
             )
         return candidates[0]
 
     if not candidates:
         raise ctx.CloznError(
-            "no engine found. Run `clozn setup` to install one, see docs/DEVELOPMENT.md to build one, "
-            "or set CLOZN_ENGINE."
+            "no engine found. See docs/DEVELOPMENT.md to build one, or set CLOZN_ENGINE to a prebuilt "
+            "clozn-server executable."
         )
     candidates.sort(key=lambda c: 0 if c.gpu else 1)
     return candidates[0]
@@ -268,6 +266,18 @@ def _env_with_dlls(dll_dirs: list[str], gpu: bool) -> dict:
 
 
 def _launch_args(exe: str, model: str, port: int, flags: dict, gpu: bool) -> list[str]:
+    removed = {
+        "mask": flags.get("mask"),
+        "sae": flags.get("sae"),
+        "jlens": flags.get("jlens"),
+        "adapter": flags.get("adapter"),
+        "extra_args": flags.get("extra_args"),
+    }
+    requested = sorted(name for name, value in removed.items() if value)
+    if requested:
+        raise ValueError(
+            "v1 worker does not support removed launch option(s): " + ", ".join(requested)
+        )
     args = [exe, model, "--port", str(port), "--host", "127.0.0.1"]
     if "gpu_layers" in flags:
         args += ["--gpu-layers", str(flags["gpu_layers"])]
@@ -280,16 +290,8 @@ def _launch_args(exe: str, model: str, port: int, flags: dict, gpu: bool) -> lis
         args += ["--batch", str(flags["batch"])]
     if flags.get("ubatch") is not None:
         args += ["--ubatch", str(flags["ubatch"])]
-    if "mask" in flags:
-        args += ["--diffusion", "--mask-token", str(flags["mask"])]
     if "eos" in flags:
         args += ["--eos", str(flags["eos"])]
-    if "sae" in flags:                        # passthrough only: dims must match, server refuses politely
-        args += ["--sae", flags["sae"]]
-        if "sae_k" in flags:
-            args += ["--sae-k", str(flags["sae_k"])]
-    if flags.get("jlens"):
-        args += ["--jlens", str(flags["jlens"])]
     if flags.get("_model_sha256"):
         args += ["--model-sha256", str(flags["_model_sha256"])]
     # The complete GGUF and its tokenizer metadata are distinct identity facets.  The latter is
@@ -297,21 +299,6 @@ def _launch_args(exe: str, model: str, port: int, flags: dict, gpu: bool) -> lis
     # candidate append-only turn.
     if flags.get("_tokenizer_sha256"):
         args += ["--tokenizer-sha256", str(flags["_tokenizer_sha256"])]
-    # A fine-tune adapter (LoRA). Given a first-class key rather than riding extra_args because the
-    # adapter is part of the run's REPRODUCTION IDENTITY -- what weights actually answered -- not a
-    # tuning knob, so callers that record identity need to read it back structurally. The engine
-    # ABORTS rather than serving the base model if the adapter will not attach, so there is no path
-    # where this silently does nothing.
-    if flags.get("adapter"):
-        args += ["--lora", str(flags["adapter"])]
-        if flags.get("adapter_scale") is not None:
-            args += ["--lora-scale", str(flags["adapter_scale"])]
-    # Generic passthrough for engine flags this mapping has no key for (first user:
-    # --no-flash-attn, which the provenance/attn-knockout mode requires -- flash attention fuses
-    # the softmax, so the weights never materialize). A list of literal argv tokens, appended
-    # verbatim; the engine itself rejects anything it doesn't understand.
-    if flags.get("extra_args"):
-        args += [str(a) for a in flags["extra_args"]]
     return args
 
 
@@ -357,33 +344,12 @@ def spawn_engine(
         dll_dirs = list(engine_discovery.dll_dirs)
         gpu = bool(engine_discovery.gpu)
     launch_flags = dict(flags)
-    disable_auto_jlens = (
-        launch_flags.pop("_disable_auto_jlens", False) is True
-    )
+    launch_flags.pop("_disable_auto_jlens", None)
     if os.path.isfile(model):
-        from clozn.artifacts.contracts import (ArtifactContractError, find_compatible_artifact,
-                                               gguf_identity)
+        from clozn.artifacts.contracts import gguf_identity
         identity = gguf_identity(model)
         launch_flags["_model_sha256"] = identity["sha256"]
         launch_flags["_tokenizer_sha256"] = identity["tokenizer_sha256"]
-        if disable_auto_jlens:
-            # Managed routing v1 cannot key a value-bearing J-lens artifact.
-            # Suppress legacy auto-discovery explicitly rather than launching
-            # evidence behavior absent from the immutable runtime key.
-            launch_flags.pop("jlens", None)
-        else:
-            try:
-                artifact_root = os.environ.get("CLOZN_ARTIFACTS_DIR") or os.path.join(ctx.HOME, "artifacts")
-                jlens_dir = find_compatible_artifact(
-                    "jlens", identity, artifact_root,
-                    explicit_dir=os.environ.get("CLOZN_JLENS_DIR") or launch_flags.get("jlens"),
-                )
-            except ArtifactContractError as error:
-                raise ctx.CloznError(f"J-lens artifact refused: {error}") from None
-            if jlens_dir:
-                launch_flags["jlens"] = jlens_dir
-            else:
-                launch_flags.pop("jlens", None)
     args = _launch_args(exe, model, port, launch_flags, gpu)
     proc = subprocess.Popen(args, env=_env_with_dlls(dll_dirs, gpu),
                             stdout=logf or subprocess.DEVNULL, stderr=subprocess.STDOUT,

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import threading
 
 from clozn.recipes.minimal_context import MinimalContextUnavailable, run_minimal_context
 from clozn.recipes.minimal_context_result_store import (
@@ -13,6 +14,9 @@ CLOZN_ROUTE_AUTOLOAD = True
 
 _MARKER = "/minimal-context"
 _KIND = "minimal_context"
+_MATERIALIZATION_LOCK = threading.Lock()
+_MAX_UNITS = 16
+_MAX_NEW_EXECUTIONS = 32
 
 
 class MinimalContextRouteError(ValueError):
@@ -37,38 +41,15 @@ def normalize_request(body: object) -> dict:
         body = {}
     if not isinstance(body, Mapping):
         raise MinimalContextRouteError("request body must be an object", code="invalid_body")
-    preservation = body.get("preservation")
-    if preservation is not None:
-        if not isinstance(preservation, Mapping):
-            raise MinimalContextRouteError("preservation must be an object", code="invalid_preservation")
-        kind = preservation.get("kind")
-        if kind == "teacher_forced_likelihood":
-            raise MinimalContextRouteError(
-                "teacher_forced_likelihood is no longer a Minimal Context product mode; use Context Effects",
-                code="minimal_context_mode_removed",
-            )
-        if kind not in {None, "exact_recorded_output"}:
-            raise MinimalContextRouteError(
-                "Minimal Context supports exact_recorded_output only",
-                code="unsupported_preservation",
-            )
-    universe = body.get("universe") or {}
-    if not isinstance(universe, Mapping):
-        raise MinimalContextRouteError("universe must be an object", code="invalid_universe")
-    max_units = universe.get("max_units", 50)
-    max_new = body.get("max_new_counterfactual_observations", 32)
-    for name, value in (("universe.max_units", max_units), ("max_new_counterfactual_observations", max_new)):
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise MinimalContextRouteError(f"{name} must be a non-negative integer", code="invalid_budget")
-    if max_units == 0:
-        raise MinimalContextRouteError("universe.max_units must be positive", code="invalid_universe")
-    attempt = body.get("attempt_inclusion_check", True)
-    if not isinstance(attempt, bool):
-        raise MinimalContextRouteError("attempt_inclusion_check must be a boolean", code="invalid_search_policy")
+    if body:
+        raise MinimalContextRouteError(
+            "Minimal Context uses the fixed v1 search policy; request body must be empty",
+            code="unsupported_search_policy",
+        )
     return {
-        "max_units": max_units,
-        "max_new_counterfactual_observations": max_new,
-        "attempt_inclusion_check": attempt,
+        "max_units": _MAX_UNITS,
+        "max_new_counterfactual_observations": _MAX_NEW_EXECUTIONS,
+        "attempt_inclusion_check": True,
     }
 
 
@@ -86,6 +67,60 @@ def _get_run_or_404(h, run_id: str):
         h._json(404, {"error": "run not found", "code": "minimal_context_run_not_found"})
         return None
     return run
+
+
+def _same_source_set(left, right) -> bool:
+    """Compare canonical source selections without treating display order as identity."""
+    left_ids = tuple(left)
+    right_ids = tuple(right)
+    return (
+        len(left_ids) == len(set(left_ids))
+        and len(right_ids) == len(set(right_ids))
+        and set(left_ids) == set(right_ids)
+    )
+
+
+def _existing_materialization(parent: Mapping[str, object], result) -> dict | None:
+    """Return the child already saved from this immutable Minimal Context result."""
+    import clozn.runs.store as runlog
+    from clozn.analysis.reduction_compare import compare_reduction
+
+    winner = result.best
+    if winner is None:
+        return None
+    for child in runlog.iter_runs():
+        if child.get("parent_run_id") != parent.get("id"):
+            continue
+        changes = child.get("changes_applied")
+        experiment = changes.get("experiment") if isinstance(changes, Mapping) else None
+        derived = experiment.get("derived_provenance") if isinstance(experiment, Mapping) else None
+        minimal = derived.get("minimal_context") if isinstance(derived, Mapping) else None
+        if not isinstance(minimal, Mapping) or minimal.get("result_id") != result.result_id:
+            continue
+        if any(experiment.get(key) != expected for key, expected in (
+            ("experiment_id", winner.experiment_id),
+            ("arm_id", winner.arm_id),
+            ("observation_id", winner.observation_id),
+        )):
+            continue
+        intervention = experiment.get("intervention")
+        if not isinstance(intervention, Mapping) or intervention.get("kind") != "delete_source":
+            continue
+        if not _same_source_set(
+            intervention.get("source_ids") or (), winner.removed_source_ids,
+        ):
+            continue
+        return {
+            "schema_version": "clozn.experiment-materialization.v1",
+            "state": "completed",
+            "parent_run_id": parent["id"],
+            "child_run_id": child["id"],
+            "experiment_id": winner.experiment_id,
+            "arm_id": winner.arm_id,
+            "intervention": dict(intervention),
+            "comparison": compare_reduction(parent, child),
+        }
+    return None
 
 
 def _job_worker(run: dict, sub, engine, request: dict, universe: dict):
@@ -143,7 +178,7 @@ def _job_worker(run: dict, sub, engine, request: dict, universe: dict):
     return worker
 
 
-def _start_job(h, run_id: str, body: dict) -> bool:
+def _start_job(h, run_id: str, body: object) -> bool:
     from clozn.server.influence_jobs import JOBS, JobCapacityError
     from clozn.server.model_routing import select_control_model_for_run
 
@@ -251,7 +286,7 @@ def try_post(h, path, body):
     if tail.startswith("/results/") and tail.endswith("/materialize"):
         return _materialize_result(h, run_id, tail[len("/results/"):-len("/materialize")], body)
     if tail == "/jobs":
-        return _start_job(h, run_id, body if isinstance(body, dict) else {})
+        return _start_job(h, run_id, body)
     if tail.startswith("/jobs/") and tail.endswith("/cancel"):
         job_id = tail[len("/jobs/"):-len("/cancel")]
         if not job_id or "/" in job_id:
@@ -350,31 +385,44 @@ def _materialize_result(h, run_id: str, result_id: str, body: object) -> bool:
         h._json(409, {"error": "winner arm is not a DeleteSource condition",
                       "code": "minimal_context_winner_intervention_mismatch"})
         return True
-    if tuple(arm.intervention.source_ids) != tuple(winner.removed_source_ids):
+    # ContextSelection canonicalizes its source IDs lexically, while the
+    # persisted winner preserves the declared universe order for display.
+    # Both sides are already duplicate-free; membership, not ordering, is the
+    # behavior-bearing intervention identity.
+    if not _same_source_set(arm.intervention.source_ids, winner.removed_source_ids):
         h._json(409, {"error": "winner arm deletion does not match the persisted result",
                       "code": "minimal_context_winner_intervention_mismatch"})
         return True
 
-    selection = select_control_model_for_run(h, parent.get("model"), route="/runs/<id>/minimal-context/results/materialize")
-    if selection is None:
-        return True
     try:
-        outcome = materialize_arm(
-            parent, winner.experiment_id, winner.arm_id, substrate=selection.sub,
-            reload_parent=runlog.get_run, observation_id=winner.observation_id,
-            require_preserved=True, observation_store=observations,
-            materialization_context={
-                "minimal_context": {
-                    "recipe": "minimal_context",
-                    "search_id": result.search_id,
-                    "result_id": result.result_id,
-                    "certificate": result.certificate,
-                    "objective": dict(result.objective),
-                    "retained_source_ids": list(winner.retained_source_ids),
-                    "removed_source_ids": list(winner.removed_source_ids),
-                },
-            },
-        )
+        # Saving a result is a product action, not a generic branching
+        # primitive. Serialize lookup + creation so retries and concurrent UI
+        # submissions resolve to one immutable child, including after restart.
+        with _MATERIALIZATION_LOCK:
+            outcome = _existing_materialization(parent, result)
+            if outcome is None:
+                selection = select_control_model_for_run(
+                    h, parent.get("model"),
+                    route="/runs/<id>/minimal-context/results/materialize",
+                )
+                if selection is None:
+                    return True
+                outcome = materialize_arm(
+                    parent, winner.experiment_id, winner.arm_id, substrate=selection.sub,
+                    reload_parent=runlog.get_run, observation_id=winner.observation_id,
+                    require_preserved=True, observation_store=observations,
+                    materialization_context={
+                        "minimal_context": {
+                            "recipe": "minimal_context",
+                            "search_id": result.search_id,
+                            "result_id": result.result_id,
+                            "certificate": result.certificate,
+                            "objective": dict(result.objective),
+                            "retained_source_ids": list(winner.retained_source_ids),
+                            "removed_source_ids": list(winner.removed_source_ids),
+                        },
+                    },
+                )
     except MaterializationError as exc:
         h._json(409, {"error": str(exc), "code": "minimal_context_materialization_rejected"})
         return True

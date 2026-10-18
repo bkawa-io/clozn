@@ -1,0 +1,42 @@
+.runs-surface { display: grid; gap: var(--space-section); width: min(1180px, 100%); margin: 0 auto; padding: var(--space-section); }
+.runs-heading, .run-composer > header, .run-index > header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-component); }
+.runs-heading h1, .run-composer h2, .run-index h2 { margin: 0; }
+.runs-heading > span { color: var(--text-secondary); font-family: var(--font-mono); font-size: 11px; }
+.run-composer, .run-index { border: var(--component-seam); border-radius: var(--radius-panel); background: var(--surface-panel); padding: var(--component-panel-padding); }
+.run-composer { display: grid; gap: var(--space-component); }
+.run-composer form { display: grid; gap: var(--space-component); }
+.run-composer label, .run-composer fieldset { display: grid; gap: 7px; min-width: 0; }
+.run-composer label > span, .run-composer legend { color: var(--text-primary); font-weight: 650; }
+.run-composer small { color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; font-weight: 400; }
+.run-composer textarea { width: 100%; resize: vertical; border: var(--component-seam); border-radius: var(--radius-control); background: var(--surface-sunken); color: var(--text-primary); font: inherit; line-height: 1.5; padding: 11px 12px; }
+.run-composer textarea:focus { outline: 2px solid var(--action-primary); outline-offset: 2px; }
+.run-composer fieldset { margin: 0; border: 0; padding: 0; }
+.context-block-editor { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-component); }
+.context-block-editor label { position: relative; }
+.context-block-editor label > button { justify-self: start; border: 0; background: transparent; color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; padding: 0; }
+.secondary-action, .composer-submit button { min-height: var(--component-control-height); border: 1px solid var(--action-primary); border-radius: var(--radius-control); background: transparent; color: var(--action-primary); padding: 0 var(--space-control); }
+.composer-submit { display: flex; align-items: center; justify-content: space-between; gap: var(--space-component); border-top: var(--component-seam); padding-top: var(--space-component); }
+.composer-submit p { margin: 0; color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; }
+.composer-submit button { background: var(--action-primary); color: var(--surface-base); font-weight: 700; }
+.composer-submit button:disabled, .secondary-action:disabled { opacity: .45; }
+.composer-error { margin: 0; color: var(--evidence-failed); }
+.composer-error span { display: block; color: var(--text-secondary); font-size: 12px; }
+.run-index { display: grid; gap: var(--space-component); }
+.run-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-component); }
+.run-card { position: relative; min-width: 0; border: var(--component-seam); border-radius: var(--radius-control); background: var(--surface-sunken); }
+.run-card > a { display: grid; gap: 9px; min-height: 190px; color: inherit; padding: var(--space-component); padding-bottom: 50px; text-decoration: none; }
+.run-card > a:hover { background: var(--surface-selection); }
+.run-card-heading, .run-card-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 7px; }
+.run-card-heading code, .run-card-heading time, .run-card-meta { color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; }
+.run-card h3 { margin: 0; font-size: 16px; line-height: 1.35; }
+.run-card p { display: -webkit-box; overflow: hidden; margin: 0; color: var(--text-secondary); line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.run-card-meta { justify-content: flex-start; }
+.run-card-meta span { border: var(--component-seam); border-radius: 999px; padding: 2px 7px; }
+.run-delete { position: absolute; right: var(--space-component); bottom: var(--space-component); border: 0; background: transparent; color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; }
+.run-delete:hover { color: var(--evidence-failed); }
+.runs-empty { margin: 0; color: var(--text-secondary); padding: var(--space-section) 0; text-align: center; }
+@media (max-width: 760px) {
+  .runs-surface { padding: var(--space-component); }
+  .context-block-editor, .run-grid { grid-template-columns: 1fr; }
+  .composer-submit { align-items: stretch; flex-direction: column; }
+}

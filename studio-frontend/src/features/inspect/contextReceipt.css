@@ -62,3 +62,18 @@
 @media (max-width: 560px) {
   .receipt-boundary { display: grid; align-items: start; }
 }
+.run-details-disclosure { width: min(1180px, 100%); margin: var(--space-component) auto 0; border: var(--component-seam); border-radius: var(--radius-control); background: var(--surface-panel); }
+.run-details-disclosure > summary { cursor: pointer; color: var(--text-secondary); font-family: var(--font-mono); font-size: 11px; padding: var(--space-component); }
+.run-details-disclosure[open] > summary { border-bottom: var(--component-seam); color: var(--text-primary); }
+.run-details-disclosure > p { padding: var(--space-component); color: var(--text-secondary); }
+.run-details-disclosure > p span { display: block; margin-top: 4px; }
+.run-details-body { display: grid; gap: var(--space-component); padding: var(--component-panel-padding); }
+.run-details-body > dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-tight); }
+.run-details-body > dl div { min-width: 0; border: var(--component-seam); background: var(--surface-sunken); padding: var(--space-tight); }
+.run-details-body dt { color: var(--text-secondary); font-size: 10px; }
+.run-details-body dd { overflow-wrap: anywhere; margin-top: 3px; }
+.run-details-body section { display: grid; gap: var(--space-tight); }
+.run-details-body ol { display: grid; gap: 6px; margin: 0; padding-left: 20px; }
+.run-details-body li { padding-left: 4px; }
+.run-details-body li span { display: block; color: var(--text-secondary); font-size: 11px; }
+@media (max-width: 760px) { .run-details-body > dl { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

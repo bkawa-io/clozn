@@ -22,13 +22,11 @@ CLOZN_MIN_PYTHON = (3, 11)   # mirrors pyproject.toml's requires-python -- keep 
 
 _OK, _WARN, _FAIL = "OK", "WARN", "FAIL"
 
-# Commands that reach a non-loopback host BY DESIGN (HuggingFace downloads, remote GGUF header reads).
+# Commands that reach a non-loopback host BY DESIGN (model/runtime downloads).
 # `--verify-offline` must never read as a blanket "this install is fully offline" -- it verifies that
-# nothing initiates outbound traffic *unexpectedly*; these two remain able to, on purpose, when invoked.
+# nothing initiates outbound traffic *unexpectedly*; these remain able to, on purpose, when invoked.
 _OUTBOUND_CAPABLE_COMMANDS = (
     "clozn pull <model> -- downloads a GGUF from HuggingFace",
-    "clozn plan <owner/repo/file> -- reads a remote GGUF header over HTTP Range before any download",
-    "clozn setup -- downloads a native engine manifest/archive from GitHub Releases (roadmap feature 01)",
 )
 
 
@@ -154,8 +152,8 @@ def _bootstrap_llama_pin(repo: str) -> "tuple[str, str] | None":
 
 def _check_engine(*, deep: bool = False) -> dict:
     """State 2 of roadmap feature 01's 4-state contract ("compatible engine installed"). Uses
-    find_engine_ex() (not the older 3-tuple find_engine()) so the detail line can say WHICH of the 4
-    discovery tiers produced this engine and, for a `clozn setup`-managed install, its recorded backend.
+    find_engine_ex() (not the older 3-tuple find_engine()) so the detail line can say which discovery
+    tier produced this engine and, for an existing managed install, its recorded backend.
     `deep=True` additionally launches the binary with `--version --json`
     (clozn.setup.install.qualify_entrypoint) and validates its embedded build identity; it stays a WARN,
     never a FAIL, on that outcome -- see this module's docstring on why doctor almost never fails
@@ -166,9 +164,9 @@ def _check_engine(*, deep: bool = False) -> dict:
         discovery = find_engine_ex(prefer_gpu=True)
     except CloznError:
         return _check("engine binary", _WARN,
-                      "no clozn-server build found. Pip installs the Python supervisor only -- run "
-                      "`clozn setup` to install one, build the C++ worker separately (see "
-                      "docs/DEVELOPMENT.md), or set CLOZN_ENGINE to a prebuilt clozn-server(.exe).")
+                      "no clozn-server build found. Pip installs the Python supervisor only -- build "
+                      "the C++ worker (see docs/DEVELOPMENT.md), or set CLOZN_ENGINE to a prebuilt "
+                      "clozn-server(.exe).")
     detail = (f"{discovery.exe} ({'GPU' if discovery.gpu else 'CPU'} build, "
               f"source={discovery.discovery_source})")
     if discovery.discovery_source == "managed" and discovery.engine_version:
@@ -205,24 +203,10 @@ def _check_engine(*, deep: bool = False) -> dict:
 
 
 def _check_core_inference_qualification() -> dict:
-    """State 3 of roadmap feature 01's 4-state contract. Always WARN, never OK: no bundled fixture GGUF
-    ships with clozn (checked -- there is none in this tree), and doctor is model-free/network-free by
-    design, so this can only ever honestly report "not verified", never "passed". See
-    clozn.setup.install.four_state_report, whose reasoning text this mirrors -- doctor's per-check shape
-    (one label/status/detail row) doesn't compose with that function's nested dict, so the text is
-    duplicated rather than the structure."""
+    """Report the model-free limit honestly: Doctor cannot qualify real inference without a fixture GGUF."""
     return _check("core inference qualification", _WARN,
                   "not verified (skipped): no bundled fixture model ships with clozn; run "
                   "`clozn run <model> \"hello\"` against a real model to verify inference yourself.")
-
-
-def _check_white_box_qualification() -> dict:
-    """State 4. Same honesty constraint as state 3, and the same roadmap non-goal this echoes: "Claiming
-    white-box qualification merely because core inference works" is explicitly listed as something this
-    feature must NOT do."""
-    return _check("white-box qualification", _WARN,
-                  "not verified (skipped): requires a model-specific J-lens/SAE artifact; run the "
-                  "relevant `clozn trace-circuit`/explain command against a real model to verify.")
 
 
 def _check_offline() -> dict:
@@ -326,12 +310,9 @@ def _run_all(*, verify_offline: bool = False, deep: bool = False) -> list:
         _check_studio(),
         _check_models(),
         _check_registry(),
-        # roadmap feature 01's 4-state contract ("Never compress these into a single 'installed'
-        # status"): one check row per state, always in this order, always all four present.
         _check_package_installed(),
         _check_engine(deep=deep),
         _check_core_inference_qualification(),
-        _check_white_box_qualification(),
     ]
     if verify_offline:
         checks.append(_check_bind_loopback())

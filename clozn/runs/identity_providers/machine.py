@@ -1,22 +1,12 @@
-"""clozn/runs/identity_providers/machine.py -- the machine/runtime identity facet performance diagnosis
-owns. clozn/runs/identity_ext.py's own module docstring names "machine/runtime identity by performance
-diagnosis" as one of the facets this seam exists for, and clozn/schemas/defs/clozn.run-identity.v1.json's
-`ext` description literally lists 'machine' as its worked example namespace -- this file is that facet.
+"""Machine/runtime identity facts recorded with runs.
 
-Lands at identity["ext"]["machine"], which is also what clozn.runs.perf_trace.build_trace() reads for the
-clozn.performance-trace.v1 artifact's `machine_identity` block (see that module).
+The provider lands at identity["ext"]["machine"] and records inexpensive process-global details that
+help explain why otherwise identical local runs may differ.
 
 CACHING IS A HARD REQUIREMENT, NOT A NICETY
 ----------------------------------------------
-identity(context) runs on the path that records EVERY real run -- clozn/runs/identity_ext.py's own
-docstring: "keep them cheap ... never make a network call." clozn.cli.commands.models._detect_vram_gb()
-shells out to `nvidia-smi` on every call, which is fine for `clozn plan` (one human-triggered invocation)
-but would be a real regression here: an uncached subprocess spawn on every chat turn taxes the one hot
-path this entire seam exists to protect. This module probes ONCE per process and caches the result
-(including a negative result -- "no nvidia-smi found" is itself worth not re-discovering every request)
-for the rest of the process's life, mirroring clozn.runs.identity's own model_hashes.json cache
-discipline for the identical reason: a fact that does not change mid-process should only be measured
-once.
+identity(context) runs on the path that records every real run. This module probes once per process
+and caches the result (including a negative result), because these facts do not change mid-process.
 """
 from __future__ import annotations
 

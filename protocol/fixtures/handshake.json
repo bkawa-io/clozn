@@ -12,37 +12,13 @@
   ],
   "capabilities": [
     "streaming",
-    "state_stream",
     "sampling",
-    "steering",
-    "infill",
-    "revise",
-    "sae",
-    "jlens",
-    "readout",
-    "attn_knockout",
-    "lora",
-    "score_arms",
-    "score_variants",
     "reference_match_arms",
     "persistent_parent_session",
-    "checkpoint",
-    "execution_fork",
-    "execution_fork_regimes",
-    "performance_timing",
-    "checkpoint_pin",
-    "time_machine_continuation"
+    "performance_timing"
   ],
   "stream_frame_envelope": [
     "req",
     "seq"
-  ],
-  "checkpoint_reference": {
-    "fields": [
-      "checkpoint_id",
-      "worker_generation_id"
-    ],
-    "checkpoint_id_semantics": "opaque_generation_scoped",
-    "worker_generation_precondition": "optional_for_in_process_compatibility"
-  }
+  ]
 }

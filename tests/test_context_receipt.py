@@ -1,4 +1,4 @@
-"""Context receipts: segment identity, termination normalization, privacy, and the context CLI."""
+"""Context receipts: segment identity, termination normalization, privacy, and reading."""
 from __future__ import annotations
 
 import json
@@ -6,7 +6,6 @@ import json
 import pytest
 
 import clozn.runs.store as runlog
-from clozn.cli import main as cli
 from clozn.runs.context_receipt import build_context_receipt, normalize_termination, read_receipt, \
     segment_id
 
@@ -429,96 +428,3 @@ def test_read_receipt_absent_when_no_context_receipt_field():
 
 
 # ---------------------------------------------------------------------------------------------------
-# CLI: clozn context last / show and --detailed
-# ---------------------------------------------------------------------------------------------------
-
-def test_context_last_uses_latest_organic_run_and_prints_both_sections(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    organic = runlog.record(
-        source="cli", client="cli", messages=[{"role": "user", "content": "raw question"}],
-        assembled_messages=[{"role": "user", "content": "raw question"}],
-        final_prompt="RENDERED QUESTION", response="partial", finish_reason="length",
-        meta={"max_tokens": 4}, started=1.0,
-    )
-    runlog.record(
-        source="replay", parent_run_id=organic,
-        messages=[{"role": "user", "content": "internal replay"}], response="child", started=2.0,
-    )
-
-    assert cli.main(["context", "last"]) == 0
-    output = capsys.readouterr().out
-    assert organic in output
-    assert "internal replay" not in output
-    assert "DELIVERED" in output and "raw question" in output
-    assert "ASSEMBLED" in output and "RENDERED PROMPT" in output and "RENDERED QUESTION" in output
-    assert "WARNING" in output and "reply may be incomplete" in output
-
-    assert cli.main(["context", "last", "--json"]) == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["run_id"] == organic
-    assert payload["context_receipt"]["schema_version"] == "clozn.context-receipt.v1"
-    assert isinstance(payload["context_receipt"]["delivered"], list)
-
-
-def test_context_show_looks_up_one_run_by_id(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    rid = runlog.record(source="cli", client="cli",
-                        messages=[{"role": "user", "content": "specific question"}],
-                        response="answer", started=1.0)
-    assert cli.main(["context", "show", rid]) == 0
-    assert "specific question" in capsys.readouterr().out
-
-    assert cli.main(["context", "show", "run_does_not_exist"]) != 0
-
-
-def test_context_detailed_shows_segments_and_transformations(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    rid = runlog.record(
-        source="cli", client="cli", messages=[{"role": "user", "content": "hi"}],
-        assembled_messages=[{"role": "user", "content": "hi"}],
-        final_prompt="RENDERED", response="ok", started=1.0,
-    )
-    assert cli.main(["context", "show", rid, "--detailed"]) == 0
-    output = capsys.readouterr().out
-    assert "SEGMENTS" in output
-    assert "TRANSFORMATIONS" in output
-    assert "template_transformed" in output
-
-
-def test_context_export_is_metadata_only_and_refuses_overwrite(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    rid = runlog.record(
-        source="cli",
-        messages=[{"role": "user", "content": "PRIVATE PROMPT"}],
-        assembled_messages=[{"role": "user", "content": "PRIVATE PROMPT"}],
-        final_prompt="RENDERED PRIVATE PROMPT",
-        response="PRIVATE RESPONSE",
-        started=1.0,
-    )
-    target = tmp_path / "receipt.json"
-    assert cli.main([
-        "context", "export", rid, "--out", str(target), "--privacy", "metadata_only"
-    ]) == 0
-    capsys.readouterr()
-    exported = json.loads(target.read_text(encoding="utf-8"))
-    assert exported["schema_version"] == "clozn.context-receipt-export.v1"
-    assert exported["privacy"] == "metadata_only"
-    assert exported["source_receipt_sha256"]
-    encoded = json.dumps(exported)
-    assert "PRIVATE PROMPT" not in encoded
-    assert "PRIVATE RESPONSE" not in encoded
-    assert cli.main([
-        "context", "export", rid, "--out", str(target), "--privacy", "metadata_only"
-    ]) != 0
-
-
-def test_reports_no_receipt_when_privacy_is_off(tmp_path, monkeypatch, capsys):
-    """Privacy-off runs have no context_receipt field at all."""
-    monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    rid = runlog.record(source="cli", client="cli", messages=[{"role": "user", "content": "hi"}],
-                        response="ok", started=1.0)
-    run = runlog.get_run(rid)
-    del run["context_receipt"]
-    monkeypatch.setattr(runlog, "get_run", lambda _rid: run)
-    assert cli.main(["context", "show", rid]) == 0
-    assert "no readable Context Receipt recorded" in capsys.readouterr().out

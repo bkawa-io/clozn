@@ -1,10 +1,5 @@
-// clozn/blocks.hpp — the shared attention-mask type + builder. The diffusion block manager
-// (Block/BlockPlan, C++ port of lab/clozn_lab/scheduler/blocks.py's semi-autoregressive block
-// diffusion) was removed with the diffusion program (THE_CUT) -- nothing partitions output into
-// blocks any more. Mask/block_id/attention_mask survive: clozn/model.hpp's ModelAdapter::forward()
-// still takes a Mask (the generic whole-board forward the concept-probe calibration and
-// clozn-probe-sweep drive with a fully-bidirectional one, block_len=0, to read a sentence's
-// activations in one shot -- an AR-relevant white-box read, not a diffusion generation).
+// clozn/blocks.hpp — the shared attention-mask type and builder used by the model seam.
+// A block length of zero produces a fully bidirectional mask.
 #pragma once
 
 #include <vector>

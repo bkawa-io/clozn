@@ -42,11 +42,11 @@ from datetime import datetime, timezone
 
 from clozn._io import atomic_write_json
 from clozn.artifacts.contracts import sha256_file
+from clozn.paths import data_path
 from clozn.runs import identity_ext
 
 
-_CACHE_DIR = os.path.join(os.path.expanduser("~/.clozn"), "cache")
-_CACHE_PATH = os.path.join(_CACHE_DIR, "model_hashes.json")
+_CACHE_PATH = data_path("cache", "model_hashes.json")
 
 _CHUNK_SIZE = 8 << 20   # 8 MiB -- matches clozn.artifacts.contracts.sha256_file's own default chunk size
 
@@ -188,7 +188,7 @@ def runtime_identity(*, model_path=None, model_sha256_hint=None, apply_template_
     must stay visible, not be faked as null. Never raises.
 
     `extra_context` is a dict of already-computed facts the CALLER knows and this function cannot
-    measure for itself -- engine discovery source, backend, artifact sha256, adapter path, machine
+    measure for itself -- engine discovery source, backend, artifact sha256, and machine
     identity. It is merged into the context handed to clozn.runs.identity_providers.* and is the
     supported way for a facet provider to see a value that lives in the CLI/supervisor layer rather
     than in this module's own arguments. Without it a provider could only report what runtime_identity
@@ -226,7 +226,7 @@ def runtime_identity(*, model_path=None, model_sha256_hint=None, apply_template_
         if version:
             out["clozn_version"] = version
 
-        # Feature-owned identity facets (engine artifact, adapter, machine/runtime, ...) contributed by
+        # Feature-owned identity facets (engine artifact, machine/runtime, ...) contributed by
         # clozn/runs/identity_providers/*.py. Kept out of this function's body on purpose: those facets
         # belong to different features, and merging them here by hand would make this one function the
         # thing every feature branch has to edit. collect() never raises and omits a namespace it could

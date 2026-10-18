@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { routeHref, type InspectRoute } from "../../app/router";
-import { describeError, isContractError } from "../../data/client";
+import { describeError, isContractError, studioApi } from "../../data/client";
+import type { ReductionComparison } from "../../data/runComparison";
 import {
   isTerminalMinimalContextJob,
   minimalContextApi,
@@ -23,12 +24,6 @@ type Resource<T> =
   | { phase: "malformed"; message: string };
 
 type BusyAction = "idle" | "starting" | "cancelling" | "materializing";
-
-const EXACT_REQUEST = {
-  maxUnits: 50,
-  maxNewCounterfactualObservations: 32,
-  attemptInclusionCheck: true,
-} as const;
 
 const CERTIFICATE_COPY = {
   EXACT_MINIMUM: {
@@ -306,7 +301,6 @@ function MaterializationPanel({
           <strong>Child Run created</strong>
           <code>{shortId(outcome.childRunId)}</code>
           <a href={routeHref({ surface: "inspect", runId: outcome.childRunId })}>Inspect child</a>
-          <a href={routeHref({ surface: "compare", runA: outcome.parentRunId, runB: outcome.childRunId })}>Compare parent and child</a>
         </div>
       ) : confirmation ? (
         <div className="minimal-materialization-confirm" role="group" aria-label="Confirm Minimal Context child Run">
@@ -322,6 +316,44 @@ function MaterializationPanel({
       )}
       {outcome?.state === "failed" && <p className="minimal-action-error" role="alert">{outcome.reason}</p>}
       {error && <p className="minimal-action-error" role="alert">{error}</p>}
+    </section>
+  );
+}
+
+function SavedReductionComparison({ parentRunId, childRunId }: { parentRunId: string; childRunId: string }) {
+  const [comparison, setComparison] = useState<Resource<ReductionComparison>>({ phase: "loading" });
+  useEffect(() => {
+    const controller = new AbortController();
+    setComparison({ phase: "loading" });
+    void studioApi.runComparison(parentRunId, childRunId, controller.signal).then((value) => {
+      if (!controller.signal.aborted) setComparison({ phase: "ready", value });
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) setComparison(resourceFailure(error));
+    });
+    return () => controller.abort();
+  }, [childRunId, parentRunId]);
+  if (comparison.phase === "loading") return <p className="minimal-primary-state" role="status">Loading saved reduction comparison…</p>;
+  if (comparison.phase === "unavailable" || comparison.phase === "malformed") {
+    return <p className="minimal-primary-state is-error" role="alert">Saved reduction comparison unavailable.<span>{comparison.message}</span></p>;
+  }
+  if (comparison.phase !== "ready") return null;
+  const result = comparison.value;
+  const tokens = result.renderedPromptTokens;
+  return (
+    <section className="minimal-comparison" aria-labelledby="minimal-comparison-title">
+      <header>
+        <div><span>SAVED REDUCTION</span><h3 id="minimal-comparison-title">Original vs reduced child</h3></div>
+        <strong>{result.preservation.exact ? "Exact preservation" : "Drift detected"}</strong>
+      </header>
+      <dl>
+        <div><dt>Answer</dt><dd>{result.preservation.answerExactMatch ? "Exact match" : "Changed"}</dd></div>
+        <div><dt>Stop behavior</dt><dd>{result.preservation.finishReasonMatch ? "Match" : "Changed"}</dd></div>
+        <div><dt>Generation identity</dt><dd>{result.generationIdentity.match ? "Match" : "Changed"}</dd></div>
+        <div><dt>Prompt tokens</dt><dd>{tokens.parent ?? "—"} → {tokens.child ?? "—"}</dd></div>
+        <div><dt>Tokens saved</dt><dd>{tokens.saved ?? "—"}</dd></div>
+        <div><dt>Sources removed</dt><dd>{result.context.removedSourceIds.length}</dd></div>
+      </dl>
+      <a href={routeHref({ surface: "inspect", runId: childRunId })}>Open reduced child</a>
     </section>
   );
 }
@@ -449,7 +481,7 @@ export function MinimalContextSurface({ route }: { route: InspectRoute }) {
     setConfirmMaterialization(false);
     setMaterializationError(undefined);
     try {
-      const next = await minimalContextApi.start(route.runId, EXACT_REQUEST, controller.signal);
+      const next = await minimalContextApi.start(route.runId, controller.signal);
       if (!controller.signal.aborted) {
         refreshedTerminalJob.current = undefined;
         setJob(next);
@@ -493,16 +525,13 @@ export function MinimalContextSurface({ route }: { route: InspectRoute }) {
   };
 
   const activeJob = Boolean(job && !isTerminalMinimalContextJob(job));
-  const sessionHref = route.sessionId
-    ? routeHref({ surface: "session", sessionId: route.sessionId, runId: route.runId })
-    : routeHref({ surface: "sessions" });
   const summaries = history.phase === "ready" ? history.value.results : [];
   return (
     <div className="inspect-surface minimal-context-surface">
       <header className="inspect-heading">
         <div>
-          <a className="back-link" href={sessionHref}>← {route.sessionId ? "Session" : "Sessions"}</a>
-          <h1>Inspect</h1>
+          <a className="back-link" href={routeHref({ surface: "runs" })}>← Runs</a>
+          <h1>Minimal Context</h1>
           <code>{shortId(route.runId)}</code>
         </div>
         {detail.phase === "ready" && (
@@ -536,7 +565,7 @@ export function MinimalContextSurface({ route }: { route: InspectRoute }) {
             </label>
             <div>
               <span>Bounded search</span>
-              <small>Up to 50 sources · 32 new counterfactual executions · inclusion check</small>
+              <small>Up to 16 sources · 32 new executions · inclusion check</small>
             </div>
             <button type="button" disabled={activeJob || busy !== "idle"} onClick={() => { void start(); }}>
               {busy === "starting" ? "Starting…" : summaries.length ? "Run exact search again" : "Run exact search"}
@@ -586,6 +615,12 @@ export function MinimalContextSurface({ route }: { route: InspectRoute }) {
               onDismiss={() => setConfirmMaterialization(false)}
               onConfirm={() => { void materialize(); }}
             />
+            {materialization?.state === "completed" && (
+              <SavedReductionComparison
+                parentRunId={materialization.parentRunId}
+                childRunId={materialization.childRunId}
+              />
+            )}
           </>
         )}
       </section>

@@ -2,49 +2,35 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 
-vi.mock("../features/inspect/Inspect", () => ({
-  InspectSurface: () => <div>Inspect surface</div>,
-}));
-vi.mock("../features/sessions/Sessions", () => ({
-  SessionsSurface: () => <div>Sessions surface</div>,
-}));
-vi.mock("../features/runtime/Runtime", () => ({
-  RuntimeSurface: () => <div>Runtime surface</div>,
-}));
-vi.mock("../features/compare/Compare", () => ({
-  CompareSurface: () => <div>Compare surface</div>,
-}));
+vi.mock("../features/inspect/Inspect", () => ({ InspectSurface: () => <div>Run workspace</div> }));
+vi.mock("../features/runs/Runs", () => ({ RunsSurface: () => <div>Runs surface</div> }));
 
 afterEach(() => {
   cleanup();
   window.location.hash = "";
 });
 
-describe("App Inspect navigation", () => {
-  it("links every shipped Inspect surface for the selected Run", () => {
-    window.location.hash = "#/inspect/run%20alpha?view=receipt&sessionId=session%20beta";
+describe("v1 Studio shell", () => {
+  it("shows only the run list at the neutral route", () => {
+    window.location.hash = "#/runs";
     render(<App />);
-
-    const navigation = screen.getByRole("navigation", { name: "Inspect views" });
-    expect(navigation).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Context effects" })).toHaveAttribute(
-      "href", "#/inspect/run%20alpha?view=context-effects&sessionId=session%20beta",
-    );
-    expect(screen.getByRole("link", { name: "Received context" })).toHaveAttribute(
-      "href", "#/inspect/run%20alpha?view=context&sessionId=session%20beta",
-    );
-    expect(screen.getByRole("link", { name: "Context receipt" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("link", { name: "Minimal context" })).toHaveAttribute(
-      "href", "#/inspect/run%20alpha?view=minimal-context&sessionId=session%20beta",
-    );
-    expect(screen.getByRole("link", { name: "Actions" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Claims" })).toBeInTheDocument();
+    expect(screen.getByText("Runs surface")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Runs" })).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByText("Sessions")).not.toBeInTheDocument();
+    expect(screen.queryByText("Runtime")).not.toBeInTheDocument();
+    expect(screen.queryByText("Compare")).not.toBeInTheDocument();
   });
 
-  it("treats the bare Inspect route as Context effects", () => {
-    window.location.hash = "#/inspect/run_alpha";
+  it("offers exactly the two run workspace modes", () => {
+    window.location.hash = "#/inspect/run%20alpha?view=minimal-context";
     render(<App />);
-
-    expect(screen.getByRole("link", { name: "Context effects" })).toHaveAttribute("aria-current", "page");
+    const navigation = screen.getByRole("navigation", { name: "Run workspace modes" });
+    expect(navigation).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Context Effects" })).toHaveAttribute(
+      "href", "#/inspect/run%20alpha?view=context-effects",
+    );
+    expect(screen.getByRole("link", { name: "Minimal Context" })).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByText("Received context")).not.toBeInTheDocument();
+    expect(screen.queryByText("Context receipt")).not.toBeInTheDocument();
   });
 });

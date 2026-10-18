@@ -68,7 +68,7 @@ def _assert_schema_current(db_path: str) -> None:
     try:
         run_schema.validate(db)
         tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert {"schema_meta", "runs", "pinned_checkpoints"}.issubset(tables)
+        assert {"schema_meta", "runs", "experiments"}.issubset(tables)
     finally:
         db.close()
 

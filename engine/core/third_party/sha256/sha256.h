@@ -1,6 +1,6 @@
 /* Vendored verbatim (plus the extern "C" guard below, added for clozn) from llama.cpp's
-   examples/gguf-hash/deps/sha256/sha256.h (public domain). clozn's checkpoint-export payload hash
-   (engine/core/serve/checkpoint_codec.hpp) uses this directly so it does not depend on llama.cpp's
+   examples/gguf-hash/deps/sha256/sha256.h (public domain). Clozn's exact-reference digest helper
+   (engine/core/serve/sha256.hpp) uses this directly so it does not depend on llama.cpp's
    examples/ tree surviving future bootstrap_llama.py re-vendors (examples/ is not built by
    CLOZN_BUILD_GGML at all). CMakeLists.txt compiles sha256.c as C++ (this project never enables a C
    toolchain) -- the extern "C" guard below is therefore load-bearing, not decorative: without it,

@@ -1,59 +1,24 @@
 import {
   ContractError,
-  decodeSession,
-  decodeSessionListDocument,
-  decodeSessionTrace,
-  decodeStandaloneRunsDocument,
-  type SessionRecord,
-  type SessionTrace,
-  type StandaloneRun,
+  decodeCreatedRun,
+  decodeRunDetails,
+  decodeRunsDocument,
+  type CreatedRun,
+  type RunDetails,
+  type RunSummary,
 } from "./contracts";
-import {
-  decodeLocalModels,
-  decodeRuntimeHealth,
-  type LocalModelRecord,
-  type RuntimeHealth,
-} from "./runtime";
-import { decodeRunComparison, type RunComparison } from "./runComparison";
-import {
-  decodeExperimentCells,
-  decodeExperimentDetail,
-  decodeExperimentList,
-  type ExperimentCellsDocument,
-  type ExperimentDetail,
-  type ExperimentListDocument,
-  type ExperimentSuite,
-} from "./experimentResults";
-import {
-  decodeContextReceipt,
-  type ContextReceiptView,
-} from "./contextReceipt";
-import {
-  decodeRunInvestigation,
-  decodeSpanAddressDocument,
-  type RunInvestigation,
-  type SpanAddressDocument,
-} from "./receivedContext";
-import {
-  bindRecordedResponse,
-  decodeClaimSupportDocument,
-  decodeRecordedRunResponse,
-  type ClaimSupportDocument,
-  type ClaimSupportEvidence,
-  type RecordedRunResponse,
-} from "./claimSupport";
+import { decodeRunComparison, type ReductionComparison } from "./runComparison";
+import { decodeContextReceipt, type ContextReceiptView } from "./contextReceipt";
 
 export class HttpError extends Error {
   readonly name = "HttpError";
 
-  constructor(readonly endpoint: string, readonly status: number, readonly statusText: string) {
-    super(`Request to ${endpoint} failed (${status} ${statusText})`);
+  constructor(readonly endpoint: string, readonly status: number, readonly detail: string) {
+    super(`Request to ${endpoint} failed (${status}): ${detail}`);
   }
 }
 
-async function getJson(endpoint: string, signal?: AbortSignal, acceptedStatuses: readonly number[] = [200]): Promise<unknown> {
-  const response = await fetch(endpoint, { method: "GET", signal, headers: { Accept: "application/json" } });
-  if (!acceptedStatuses.includes(response.status)) throw new HttpError(endpoint, response.status, response.statusText);
+async function responseJson(response: Response, endpoint: string): Promise<unknown> {
   try {
     return await response.json();
   } catch {
@@ -61,182 +26,113 @@ async function getJson(endpoint: string, signal?: AbortSignal, acceptedStatuses:
   }
 }
 
-function sessionPath(sessionId: string, suffix = ""): string {
-  if (!sessionId.trim()) throw new ContractError("client", "session id must not be blank");
-  return `/sessions/${encodeURIComponent(sessionId)}${suffix}`;
+async function getJson(endpoint: string, signal?: AbortSignal): Promise<unknown> {
+  const response = await fetch(endpoint, { method: "GET", signal, headers: { Accept: "application/json" } });
+  if (!response.ok) throw new HttpError(endpoint, response.status, response.statusText || "request failed");
+  return responseJson(response, endpoint);
 }
 
-function comparisonRunId(value: string, label: string): string {
-  if (!value.trim()) throw new ContractError("/runs/compare", `${label} must not be blank`);
-  return value;
+async function postJson(endpoint: string, body: unknown, signal?: AbortSignal): Promise<unknown> {
+  const response = await fetch(endpoint, {
+    method: "POST",
+    signal,
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = await responseJson(response, endpoint);
+  if (!response.ok) {
+    const row = payload && typeof payload === "object" && !Array.isArray(payload) ? payload as Record<string, unknown> : {};
+    const error = row.error;
+    const detail = typeof error === "string"
+      ? error
+      : error && typeof error === "object" && !Array.isArray(error) && typeof (error as Record<string, unknown>).message === "string"
+        ? String((error as Record<string, unknown>).message)
+        : response.statusText || "request failed";
+    throw new HttpError(endpoint, response.status, detail);
+  }
+  return payload;
 }
 
-function experimentId(value: string): string {
-  if (!value.trim()) throw new ContractError("/experiment-results", "experiment id must not be blank");
-  return value;
-}
-
-function contextReceiptRunId(value: string): string {
-  if (!value.trim()) throw new ContractError("/runs/<id>/context-receipt", "run id must not be blank");
-  return value;
-}
-
-function receivedContextRunId(value: string, endpoint: string): string {
+function runId(value: string, endpoint: string): string {
   if (!value.trim()) throw new ContractError(endpoint, "run id must not be blank");
   return value;
 }
 
+export interface RunDraft {
+  instructions: string;
+  contextBlocks: readonly string[];
+  question: string;
+}
+
+function generationRequest(draft: RunDraft): Record<string, unknown> {
+  const instructions = draft.instructions.trim();
+  const question = draft.question.trim();
+  const contextBlocks = draft.contextBlocks.map((block) => block.trim()).filter(Boolean);
+  if (!question) throw new ContractError("composer", "question must not be blank");
+  if (!contextBlocks.length) throw new ContractError("composer", "at least one context block is required");
+  if (contextBlocks.length > 16) throw new ContractError("composer", "at most 16 context blocks are supported");
+
+  const messages: Array<{ role: "system" | "user"; content: string }> = [];
+  if (instructions) messages.push({ role: "system", content: instructions });
+  const firstContextIndex = messages.length;
+  for (const content of contextBlocks) messages.push({ role: "user", content });
+  messages.push({ role: "user", content: question });
+
+  return {
+    messages,
+    max_tokens: 128,
+    temperature: 0,
+    clozn_sources: contextBlocks.map((content, index) => ({
+      message_index: firstContextIndex + index,
+      source_id: `context-${index + 1}`,
+      label: `Context ${index + 1}`,
+      unicode_range: [0, [...content].length],
+      provenance_kind: "client_supplied",
+    })),
+  };
+}
+
 export const studioApi = {
-  async sessions(signal?: AbortSignal): Promise<readonly SessionRecord[]> {
-    const endpoint = "/sessions";
-    return decodeSessionListDocument(await getJson(endpoint, signal), endpoint);
-  },
-
-  async session(sessionId: string, signal?: AbortSignal): Promise<SessionRecord> {
-    const endpoint = sessionPath(sessionId);
-    return decodeSession(await getJson(endpoint, signal), endpoint);
-  },
-
-  async sessionTracePage(sessionId: string, cursor: string | undefined, signal?: AbortSignal): Promise<SessionTrace> {
-    const base = sessionPath(sessionId, "/trace");
-    const query = new URLSearchParams({ limit: "100" });
-    if (cursor) query.set("cursor", cursor);
-    const endpoint = `${base}?${query}`;
-    return decodeSessionTrace(await getJson(endpoint, signal), endpoint);
-  },
-
-  /** Read every persisted trace page in backend order. The decoder runs before each page is accumulated. */
-  async sessionTrace(sessionId: string, signal?: AbortSignal): Promise<SessionTrace> {
-    let cursor: string | undefined;
-    let first: SessionTrace | undefined;
-    let latest: SessionTrace | undefined;
-    const turns: SessionTrace["turns"] = [];
-    const branches: SessionTrace["branches"] = [];
-    for (;;) {
-      const page = await this.sessionTracePage(sessionId, cursor, signal);
-      first ??= page;
-      latest = page;
-      turns.push(...page.turns);
-      branches.push(...page.branches);
-      if (!page.page.nextCursor) break;
-      if (page.page.nextCursor === cursor) throw new ContractError("/sessions/<id>/trace", "pagination cursor did not advance");
-      cursor = page.page.nextCursor;
-    }
-    if (!first || !latest) throw new ContractError("/sessions/<id>/trace", "no trace page was returned");
-    return { ...latest, turns, branches, page: { ...latest.page, cursor: first.page.cursor, count: turns.length } };
-  },
-
-  async standaloneRuns(signal?: AbortSignal): Promise<readonly StandaloneRun[]> {
+  async runs(signal?: AbortSignal): Promise<readonly RunSummary[]> {
     const endpoint = "/runs";
-    return decodeStandaloneRunsDocument(await getJson(endpoint, signal), endpoint);
+    return decodeRunsDocument(await getJson(endpoint, signal), endpoint);
   },
 
-  async runComparison(runAValue: string, runBValue: string, signal?: AbortSignal): Promise<RunComparison> {
+  async run(runIdValue: string, signal?: AbortSignal): Promise<RunDetails> {
+    const id = runId(runIdValue, "/runs/<id>");
+    const endpoint = `/runs/${encodeURIComponent(id)}`;
+    return decodeRunDetails(await getJson(endpoint, signal), endpoint, id);
+  },
+
+  async createRun(draft: RunDraft, signal?: AbortSignal): Promise<CreatedRun> {
+    const endpoint = "/v1/chat/completions";
+    return decodeCreatedRun(await postJson(endpoint, generationRequest(draft), signal), endpoint);
+  },
+
+  async deleteRun(runIdValue: string, signal?: AbortSignal): Promise<void> {
+    const id = runId(runIdValue, "/runs/<id>");
+    const endpoint = `/runs/${encodeURIComponent(id)}`;
+    const response = await fetch(endpoint, { method: "DELETE", signal, headers: { Accept: "application/json" } });
+    const payload = await responseJson(response, endpoint);
+    if (!response.ok) {
+      const row = payload && typeof payload === "object" && !Array.isArray(payload) ? payload as Record<string, unknown> : {};
+      throw new HttpError(endpoint, response.status, typeof row.error === "string" ? row.error : response.statusText || "request failed");
+    }
+  },
+
+  async runComparison(runAValue: string, runBValue: string, signal?: AbortSignal): Promise<ReductionComparison> {
     const base = "/runs/compare";
-    const runA = comparisonRunId(runAValue, "reference run id");
-    const runB = comparisonRunId(runBValue, "candidate run id");
-    if (runA === runB) throw new ContractError(base, "reference and candidate run ids must differ");
+    const runA = runId(runAValue, base);
+    const runB = runId(runBValue, base);
+    if (runA === runB) throw new ContractError(base, "original and reduced child run ids must differ");
     const endpoint = `${base}?${new URLSearchParams({ a: runA, b: runB })}`;
     return decodeRunComparison(await getJson(endpoint, signal), endpoint, runA, runB);
   },
 
-  async contextReceipt(
-    runIdValue: string,
-    signal?: AbortSignal,
-  ): Promise<ContextReceiptView> {
-    const runId = contextReceiptRunId(runIdValue);
-    const endpoint = `/runs/${encodeURIComponent(runId)}/context-receipt`;
-    return decodeContextReceipt(await getJson(endpoint, signal), endpoint, runId);
-  },
-
-  async runInvestigation(runIdValue: string, signal?: AbortSignal): Promise<RunInvestigation> {
-    const base = "/runs/<id>/investigation";
-    const runId = receivedContextRunId(runIdValue, base);
-    const endpoint = `/runs/${encodeURIComponent(runId)}/investigation`;
-    return decodeRunInvestigation(await getJson(endpoint, signal), endpoint, runId);
-  },
-
-  async spanAddresses(runIdValue: string, signal?: AbortSignal): Promise<SpanAddressDocument> {
-    const base = "/runs/<id>/span-addresses";
-    const runId = receivedContextRunId(runIdValue, base);
-    const endpoint = `/runs/${encodeURIComponent(runId)}/span-addresses`;
-    return decodeSpanAddressDocument(await getJson(endpoint, signal), endpoint, runId);
-  },
-
-  async claimSupport(runIdValue: string, signal?: AbortSignal): Promise<ClaimSupportDocument> {
-    const base = "/runs/<id>/claim-support";
-    const runId = receivedContextRunId(runIdValue, base);
-    const endpoint = `/runs/${encodeURIComponent(runId)}/claim-support`;
-    return decodeClaimSupportDocument(await getJson(endpoint, signal), endpoint, runId);
-  },
-
-  async recordedRunResponse(runIdValue: string, signal?: AbortSignal): Promise<RecordedRunResponse> {
-    const base = "/runs/<id>";
-    const runId = receivedContextRunId(runIdValue, base);
-    const endpoint = `/runs/${encodeURIComponent(runId)}`;
-    return decodeRecordedRunResponse(await getJson(endpoint, signal), endpoint, runId);
-  },
-
-  async claimSupportEvidence(runIdValue: string, signal?: AbortSignal): Promise<ClaimSupportEvidence> {
-    const base = "/runs/<id>/claim-support";
-    const runId = receivedContextRunId(runIdValue, base);
-    const [document, recorded] = await Promise.all([
-      this.claimSupport(runId, signal),
-      this.recordedRunResponse(runId, signal),
-    ]);
-    return bindRecordedResponse(document, recorded, base);
-  },
-
-  async experimentResults(signal?: AbortSignal): Promise<ExperimentListDocument> {
-    const endpoint = "/experiment-results";
-    return decodeExperimentList(await getJson(endpoint, signal), endpoint);
-  },
-
-  async experimentResult(idValue: string, signal?: AbortSignal): Promise<ExperimentDetail> {
-    const id = experimentId(idValue);
-    const endpoint = `/experiment-results/${encodeURIComponent(id)}`;
-    return decodeExperimentDetail(await getJson(endpoint, signal), endpoint, id);
-  },
-
-  async experimentCells(
-    idValue: string,
-    filter: { suite: ExperimentSuite; caseName: string; variant: string; seed: number },
-    signal?: AbortSignal,
-  ): Promise<ExperimentCellsDocument> {
-    const id = experimentId(idValue);
-    if (!filter.caseName.trim() || !filter.variant.trim() || !Number.isSafeInteger(filter.seed)) {
-      throw new ContractError("/experiment-results/<id>/cells", "cell coordinates must be complete");
-    }
-    const query = new URLSearchParams({
-      suite: filter.suite,
-      case: filter.caseName,
-      variant: filter.variant,
-      seed: String(filter.seed),
-    });
-    const endpoint = `/experiment-results/${encodeURIComponent(id)}/cells?${query}`;
-    const document = decodeExperimentCells(await getJson(endpoint, signal), endpoint, id);
-    const cell = document.cells[0];
-    if (
-      document.cells.length !== 1
-      || !cell
-      || cell.suite !== filter.suite
-      || cell.caseName !== filter.caseName
-      || cell.variant !== filter.variant
-      || cell.seed !== filter.seed
-    ) {
-      throw new ContractError(endpoint, "response does not contain exactly the requested cell");
-    }
-    return document;
-  },
-
-  async runtimeHealth(signal?: AbortSignal): Promise<RuntimeHealth> {
-    const endpoint = "/engine/health";
-    return decodeRuntimeHealth(await getJson(endpoint, signal), endpoint);
-  },
-
-  async localModels(signal?: AbortSignal): Promise<readonly LocalModelRecord[]> {
-    const endpoint = "/models/local";
-    return decodeLocalModels(await getJson(endpoint, signal), endpoint);
+  async contextReceipt(runIdValue: string, signal?: AbortSignal): Promise<ContextReceiptView> {
+    const id = runId(runIdValue, "/runs/<id>/context-receipt");
+    const endpoint = `/runs/${encodeURIComponent(id)}/context-receipt`;
+    return decodeContextReceipt(await getJson(endpoint, signal), endpoint, id);
   },
 };
 

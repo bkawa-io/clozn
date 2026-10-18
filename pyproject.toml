@@ -10,17 +10,15 @@ build-backend = "setuptools.build_meta"
 name = "clozn"
 # Single source of truth: clozn/__init__.__version__. `clozn version` prints this exact string.
 dynamic = ["version"]
-description = "A local-first, glass-box runtime for the models you run yourself -- view, steer, and prove."
+description = "See how context affects a local model's answer, then find a smaller context that preserves it."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 authors = [{ name = "Brigitte Kawaguchi" }]
-# Deliberately stdlib-only: the product CLI/gateway supervisor (this package) never imports Torch or
-# transformers -- that's the whole point of the product/lab split (see docs/RUNTIME_SPLIT.md and the
-# `product-minimal` CI lane, which asserts `clozn.server.app` imports with NO torch installed). Anything
-# an optional command needs beyond the stdlib (numpy for GGUF header parsing, etc.) is imported lazily
-# inside that command's function body, not declared as a hard install-time dependency here.
+# Deliberately stdlib-only: the product CLI, gateway, local GGUF inspection, and private-worker client
+# require no third-party Python runtime packages. The main Python CI lane runs the complete product suite
+# with only pytest installed and asserts that importing the gateway does not load Torch or Transformers.
 dependencies = []
 
 [project.urls]
@@ -37,5 +35,5 @@ version = { attr = "clozn.__version__" }
 # Package discovery + the studio/protocol asset remap live in setup.py, not here: `[tool.setuptools.
 # packages.find]` only discovers packages by walking real directory structure under `where`, so it cannot
 # produce a "clozn.studio" package out of a `studio/` directory it never looks inside (studio/ isn't
-# under clozn/, and has no __init__.py -- it's not Python code). That needs setup.py's `find_packages()` +
+# under clozn/ -- it is not part of the ordinary package tree). That needs setup.py's `find_packages()` +
 # two explicit entries. See setup.py's module docstring for the full reasoning.

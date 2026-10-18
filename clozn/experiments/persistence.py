@@ -11,14 +11,13 @@ from typing import Any
 from clozn.runs import store as run_store
 
 from .evaluators import Evaluator
-from .interventions import DeleteSource, ForceToken, Intervention, intervention_from_dict
+from .interventions import Intervention, intervention_from_dict
 from .kernel import Experiment
 from .observations import (
     Observation, ObservationError, ObservationIntegrityError, TokenScoreObservation,
-    GeneratedObservation, observation_from_dict, condition_for_intervention,
+    observation_from_dict, condition_for_intervention,
 )
 from .state import ExecutionState, canonical_json
-from .state_ref import ResolvedState
 
 
 EXPERIMENT_STORE_SCHEMA_VERSION = "clozn.experiment-store.v1"
@@ -122,7 +121,7 @@ class ExperimentView:
         "created_ts", "updated_ts", "requested_by", "persisted",
     )
 
-    def __init__(self, *, experiment_id: str, base: ExecutionState | ResolvedState, evaluator: Evaluator,
+    def __init__(self, *, experiment_id: str, base: ExecutionState, evaluator: Evaluator,
                  control: Observation | None, arm_rows: tuple[ExperimentArmView, ...],
                  state: str, diagnostics: Mapping[str, Any] | None = None,
                  timing: Mapping[str, Any] | None = None,

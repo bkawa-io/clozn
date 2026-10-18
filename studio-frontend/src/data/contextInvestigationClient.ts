@@ -7,20 +7,9 @@ import {
   type ContextInvestigationReader,
 } from "./contextInvestigation";
 import {
-  decodeEffectsSearchJob,
-  type EffectsSearchBudget,
-  type EffectsSearchExecutionPolicy,
-  type EffectsSearchJob,
+  decodeContextEffectsJob,
+  type ContextEffectsJob,
 } from "./contextInvestigationJobs";
-import {
-  decodeContextCounterfactualJob,
-  decodeCounterfactualMaterializationResult,
-  decodeRemoveSourceTestJob,
-  type ContextCounterfactualJob,
-  type CounterfactualMaterializationRequest,
-  type CounterfactualMaterializationResult,
-  type RemoveSourceTestJob,
-} from "./contextInvestigationActions";
 
 export interface ContextInvestigationQueryRequest {
   answerStart: number;
@@ -28,14 +17,8 @@ export interface ContextInvestigationQueryRequest {
   floorNats?: number;
 }
 
-export interface EffectsSearchRequest {
+export interface ContextEffectsRequest {
   sourceIds?: readonly string[];
-  coarseGroupSize?: number;
-  refineThresholdNats?: number;
-  drilldownSourceIds?: readonly string[];
-  jointSourceSets?: readonly (readonly string[])[];
-  budget: EffectsSearchBudget;
-  executionPolicy: EffectsSearchExecutionPolicy;
 }
 
 export class ContextInvestigationHttpError extends HttpError {
@@ -90,63 +73,17 @@ function identifier(value: string, name: string): string {
   return value;
 }
 
-function singleSourceBody(sourceId: string): string {
-  return JSON.stringify({ source_id: identifier(sourceId, "source id") });
-}
-
-function materializationBody(request: CounterfactualMaterializationRequest): string {
-  identifier(request.experimentId, "experiment id");
-  identifier(request.armId, "arm id");
-  identifier(request.observationId, "observation id");
-  return JSON.stringify({
-    experiment_id: request.experimentId,
-    arm_id: request.armId,
-    observation_id: request.observationId,
-  });
-}
-
-function positiveInteger(value: number | undefined, name: string): void {
-  if (value !== undefined && (!Number.isSafeInteger(value) || value < 1)) {
-    throw new ContractError("client", `${name} must be a positive integer`);
+function effectsBody(request: ContextEffectsRequest): Record<string, unknown> {
+  if (request.sourceIds === undefined) return {};
+  const sourceIds = [...request.sourceIds];
+  if (
+    !sourceIds.length
+    || sourceIds.some((sourceId) => !sourceId.trim())
+    || new Set(sourceIds).size !== sourceIds.length
+  ) {
+    throw new ContractError("client", "sourceIds must contain unique non-empty source IDs");
   }
-}
-
-function sourceIds(values: readonly string[] | undefined, name: string, minimum = 0): string[] | undefined {
-  if (values === undefined) return undefined;
-  const result = [...values];
-  if (result.length < minimum || result.some((value) => !value.trim()) || new Set(result).size !== result.length) {
-    throw new ContractError("client", `${name} must contain ${minimum ? `at least ${minimum} ` : ""}unique non-empty source IDs`);
-  }
-  return result;
-}
-
-function effectsSearchBody(request: EffectsSearchRequest): Record<string, unknown> {
-  positiveInteger(request.coarseGroupSize, "coarseGroupSize");
-  if (request.refineThresholdNats !== undefined
-      && (!Number.isFinite(request.refineThresholdNats) || request.refineThresholdNats < 0)) {
-    throw new ContractError("client", "refineThresholdNats must be a finite non-negative number");
-  }
-  const budgetValues = [request.budget.maxCoarseArms, request.budget.maxFineArms, request.budget.maxJointArms];
-  if (budgetValues.some((value) => !Number.isSafeInteger(value) || value < 0)) {
-    throw new ContractError("client", "effects-search budgets must be non-negative integers");
-  }
-  const sources = sourceIds(request.sourceIds, "sourceIds", request.sourceIds === undefined ? 0 : 1);
-  const drilldowns = sourceIds(request.drilldownSourceIds, "drilldownSourceIds");
-  const joints = request.jointSourceSets?.map((group, index) =>
-    sourceIds(group, `jointSourceSets[${index}]`, 2)!);
-  return {
-    ...(sources ? { source_ids: sources } : {}),
-    ...(request.coarseGroupSize !== undefined ? { coarse_group_size: request.coarseGroupSize } : {}),
-    ...(request.refineThresholdNats !== undefined ? { refine_threshold_nats: request.refineThresholdNats } : {}),
-    ...(drilldowns ? { drilldown_source_ids: drilldowns } : {}),
-    ...(joints ? { joint_source_sets: joints } : {}),
-    budget: {
-      max_coarse_arms: request.budget.maxCoarseArms,
-      max_fine_arms: request.budget.maxFineArms,
-      max_joint_arms: request.budget.maxJointArms,
-    },
-    execution_policy: request.executionPolicy,
-  };
+  return { source_ids: sourceIds };
 }
 
 function validateQueryRequest(request: ContextInvestigationQueryRequest): void {
@@ -163,8 +100,12 @@ export const contextInvestigationApi = {
   async reader(runId: string, signal?: AbortSignal): Promise<ContextInvestigationReader> {
     const base = runPath(runId, "reader");
     const endpoint = `${base}?floor_nats=0.1`;
-    const response = await fetch(endpoint, { method: "GET", signal, headers: { Accept: "application/json" } });
-    return decodeContextInvestigationReader(await responseJson(response, endpoint), endpoint, runId);
+    const response = await fetch(endpoint, {
+      method: "GET", signal, headers: { Accept: "application/json" },
+    });
+    return decodeContextInvestigationReader(
+      await responseJson(response, endpoint), endpoint, runId,
+    );
   },
 
   async query(
@@ -185,7 +126,9 @@ export const contextInvestigationApi = {
       headers: { Accept: "application/json", "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    const decoded = decodeContextInvestigationQuery(await responseJson(response, endpoint), endpoint);
+    const decoded = decodeContextInvestigationQuery(
+      await responseJson(response, endpoint), endpoint,
+    );
     if (decoded.selection && (
       decoded.selection.unicodeRange[0] !== request.answerStart
       || decoded.selection.unicodeRange[1] !== request.answerEnd
@@ -196,172 +139,53 @@ export const contextInvestigationApi = {
     return decoded;
   },
 
-  async startEffectsSearch(
+  async startEffects(
     runId: string,
-    request: EffectsSearchRequest,
+    request: ContextEffectsRequest = {},
     signal?: AbortSignal,
-  ): Promise<EffectsSearchJob> {
-    const endpoint = runPath(runId, "effects-search/jobs");
+  ): Promise<ContextEffectsJob> {
+    const endpoint = runPath(runId, "effects/jobs");
     const response = await fetch(endpoint, {
       method: "POST",
       signal,
       headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: JSON.stringify(effectsSearchBody(request)),
+      body: JSON.stringify(effectsBody(request)),
     });
-    return decodeEffectsSearchJob(await responseJson(response, endpoint, [202]), endpoint, runId);
+    return decodeContextEffectsJob(
+      await responseJson(response, endpoint, [202]), endpoint, runId,
+    );
   },
 
-  async effectsSearchJob(
+  async effectsJob(
     runId: string,
     jobId: string,
     signal?: AbortSignal,
-  ): Promise<EffectsSearchJob> {
-    if (!jobId.trim()) throw new ContractError("client", "job id must not be blank");
-    const endpoint = runPath(runId, `effects-search/jobs/${encodeURIComponent(jobId)}`);
+  ): Promise<ContextEffectsJob> {
+    identifier(jobId, "job id");
+    const endpoint = runPath(runId, `effects/jobs/${encodeURIComponent(jobId)}`);
     const response = await fetch(endpoint, {
       method: "GET", signal, headers: { Accept: "application/json" },
     });
-    return decodeEffectsSearchJob(await responseJson(response, endpoint), endpoint, runId);
+    return decodeContextEffectsJob(
+      await responseJson(response, endpoint), endpoint, runId,
+    );
   },
 
-  async cancelEffectsSearch(
+  async cancelEffects(
     runId: string,
     jobId: string,
     signal?: AbortSignal,
-  ): Promise<EffectsSearchJob> {
-    if (!jobId.trim()) throw new ContractError("client", "job id must not be blank");
-    const endpoint = runPath(runId, `effects-search/jobs/${encodeURIComponent(jobId)}/cancel`);
+  ): Promise<ContextEffectsJob> {
+    identifier(jobId, "job id");
+    const endpoint = runPath(runId, `effects/jobs/${encodeURIComponent(jobId)}/cancel`);
     const response = await fetch(endpoint, {
       method: "POST",
       signal,
       headers: { Accept: "application/json", "Content-Type": "application/json" },
       body: "{}",
     });
-    return decodeEffectsSearchJob(await responseJson(response, endpoint), endpoint, runId);
-  },
-
-  async startRemoveSourceTest(
-    runId: string,
-    sourceId: string,
-    signal?: AbortSignal,
-  ): Promise<RemoveSourceTestJob> {
-    const endpoint = runPath(runId, "remove-test/jobs");
-    const response = await fetch(endpoint, {
-      method: "POST",
-      signal,
-      headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: singleSourceBody(sourceId),
-    });
-    return decodeRemoveSourceTestJob(
-      await responseJson(response, endpoint, [202]), endpoint, runId, sourceId,
-    );
-  },
-
-  async removeSourceTestJob(
-    runId: string,
-    jobId: string,
-    sourceId: string,
-    signal?: AbortSignal,
-  ): Promise<RemoveSourceTestJob> {
-    identifier(jobId, "job id");
-    identifier(sourceId, "source id");
-    const endpoint = runPath(runId, `remove-test/jobs/${encodeURIComponent(jobId)}`);
-    const response = await fetch(endpoint, {
-      method: "GET", signal, headers: { Accept: "application/json" },
-    });
-    return decodeRemoveSourceTestJob(
-      await responseJson(response, endpoint), endpoint, runId, sourceId, jobId,
-    );
-  },
-
-  async cancelRemoveSourceTest(
-    runId: string,
-    jobId: string,
-    sourceId: string,
-    signal?: AbortSignal,
-  ): Promise<RemoveSourceTestJob> {
-    identifier(jobId, "job id");
-    identifier(sourceId, "source id");
-    const endpoint = runPath(runId, `remove-test/jobs/${encodeURIComponent(jobId)}/cancel`);
-    const response = await fetch(endpoint, {
-      method: "POST",
-      signal,
-      headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: "{}",
-    });
-    return decodeRemoveSourceTestJob(
-      await responseJson(response, endpoint), endpoint, runId, sourceId, jobId,
-    );
-  },
-
-  async startContextCounterfactual(
-    runId: string,
-    sourceId: string,
-    signal?: AbortSignal,
-  ): Promise<ContextCounterfactualJob> {
-    const endpoint = runPath(runId, "counterfactuals/jobs");
-    const response = await fetch(endpoint, {
-      method: "POST",
-      signal,
-      headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: singleSourceBody(sourceId),
-    });
-    return decodeContextCounterfactualJob(
-      await responseJson(response, endpoint, [202]), endpoint, runId, sourceId,
-    );
-  },
-
-  async contextCounterfactualJob(
-    runId: string,
-    jobId: string,
-    sourceId: string,
-    signal?: AbortSignal,
-  ): Promise<ContextCounterfactualJob> {
-    identifier(jobId, "job id");
-    identifier(sourceId, "source id");
-    const endpoint = runPath(runId, `counterfactuals/jobs/${encodeURIComponent(jobId)}`);
-    const response = await fetch(endpoint, {
-      method: "GET", signal, headers: { Accept: "application/json" },
-    });
-    return decodeContextCounterfactualJob(
-      await responseJson(response, endpoint), endpoint, runId, sourceId, jobId,
-    );
-  },
-
-  async cancelContextCounterfactual(
-    runId: string,
-    jobId: string,
-    sourceId: string,
-    signal?: AbortSignal,
-  ): Promise<ContextCounterfactualJob> {
-    identifier(jobId, "job id");
-    identifier(sourceId, "source id");
-    const endpoint = runPath(runId, `counterfactuals/jobs/${encodeURIComponent(jobId)}/cancel`);
-    const response = await fetch(endpoint, {
-      method: "POST",
-      signal,
-      headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: "{}",
-    });
-    return decodeContextCounterfactualJob(
-      await responseJson(response, endpoint), endpoint, runId, sourceId, jobId,
-    );
-  },
-
-  async materializeContextCounterfactual(
-    runId: string,
-    request: CounterfactualMaterializationRequest,
-    signal?: AbortSignal,
-  ): Promise<CounterfactualMaterializationResult> {
-    const endpoint = runPath(runId, "counterfactuals/materialize");
-    const response = await fetch(endpoint, {
-      method: "POST",
-      signal,
-      headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: materializationBody(request),
-    });
-    return decodeCounterfactualMaterializationResult(
-      await responseJson(response, endpoint, [201]), endpoint, runId, request,
+    return decodeContextEffectsJob(
+      await responseJson(response, endpoint), endpoint, runId,
     );
   },
 };

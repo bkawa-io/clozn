@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CPU-only base runtime build + unit tests -- POSIX mirror of build_core.bat. No CUDA, no ggml/llama.cpp:
-# just clozn_runtime + clozn_sha256 and their model-free unit tests (state_write, checkpoint_store).
+# just clozn_runtime plus the retained model-free planning and scoring tests.
 #
 # This is the one build_*.sh in this set with a real precedent already running elsewhere: it is exactly
 # what .github/workflows/ci.yml's `cpp` job configures/builds/tests on ubuntu-latest, on every push --

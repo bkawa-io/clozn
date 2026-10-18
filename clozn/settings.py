@@ -1,4 +1,4 @@
-"""The product's persisted settings store (``~/.clozn/studio_settings.json``).
+"""The product's persisted settings store (``~/.clozn/v1/studio_settings.json`` by default).
 
 Only keys in :data:`SUPPORTED_KEYS` belong to the current product contract. Reads
 ignore unknown fields and writes reject unknown keys, so stale or misspelled
@@ -22,21 +22,16 @@ import json
 import os
 
 from clozn._io import atomic_write_json
+from clozn.paths import data_root
 
-_CLOZN = os.path.expanduser("~/.clozn")
-SETTINGS_PATH = os.path.join(_CLOZN, "studio_settings.json")
+SETTINGS_PATH = os.path.join(data_root(), "studio_settings.json")
 SUPPORTED_KEYS = frozenset({
-    "capture_tier",
-    "receipt_footer_mode",
     "receipt_privacy",
     "sampling",
     "sample_temperature",
     "sample_top_p",
     "sample_top_k",
     "sample_repeat_penalty",
-    "timetravel_snapshots",
-    "timetravel_cap",
-    "timetravel_budget_mb",
 })
 
 

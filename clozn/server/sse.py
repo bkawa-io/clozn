@@ -33,31 +33,12 @@ from clozn.server import app as ctx
 from clozn.server.http_policy import send_cors_headers
 
 
-def sse_chat(handler, messages, max_new, model, lens=None, receipt=False, sample=True,
-             journal_messages=None, corrective_evidence=None, task=None, sections=None,
-             receipt_mode=None, stop=None, include_usage=False):
+def sse_chat(handler, messages, max_new, model, sample=True,
+             journal_messages=None, stop=None, include_usage=False):
     """Stream one /v1/chat/completions reply as OpenAI-style `chat.completion.chunk` frames over SSE,
     then log the run. `handler` is the live BaseHTTPRequestHandler (needs .wfile + ._log_run).
 
-    `sections` (prompt-section influence foundation): the caller's already-built explicit-or-auto section
-    manifest (see clozn.runs.sections / clozn.server.routes.openai's try_post), threaded straight through
-    to both `_log_run` calls below (success and error) so a streamed chat run gets the same manifest a
-    non-streamed one does. None (the default) is exactly today's behavior for any caller that predates this.
-
-    AMBIENT DELIVERY (AMBIENT_DELIVERY.md): `receipt` (the request's opt-in `clozn_receipt`, or the
-    server-wide default) appends the exception-only in-band footer as ONE final content chunk -- so the
-    run is logged before the finish chunk so the /r/<id> link has an id and trace. Off leaves content
-    chunks untouched.
-
-    F1 LIVE LENS: `lens` (from the request's opt-in `clozn_lens` field -- absent for every standard
-    OpenAI client, whose stream stays byte-identical) forwards to the substrate's chat_stream, and each
-    engine `jlens_live` frame is relayed as its own SSE frame `data: {"clozn_lens": {...}}` interleaved
-    with the delta chunks. Only substrates whose chat_stream accepts (lens, on_frame) can serve it --
-    currently the engine substrate; on any other, one honest error frame is sent and the chat proceeds
-    without the lens (the reply must never be held hostage by a readout)."""
-    if receipt_mode not in {"off", "exceptions", "always"}:
-        receipt_mode = "exceptions" if receipt else "off"
-
+    """
     handler.send_response(200)
     handler.send_header("Content-Type", "text/event-stream")
     handler.send_header("Cache-Control", "no-cache")
@@ -86,11 +67,6 @@ def sse_chat(handler, messages, max_new, model, lens=None, receipt=False, sample
                     owner="client", aggregation="overlapping",
                 )
 
-    def side_frame(obj):
-        # Keep the opt-in extension inside a valid chat.completion.chunk envelope. Strict clients can
-        # ignore the extra top-level field without encountering a foreign event shape on /v1/*.
-        chunk({}, extension={"clozn_lens": obj})
-
     import inspect
     try:
         params = inspect.signature(ctx.active_sub(handler).chat_stream).parameters
@@ -101,12 +77,6 @@ def sse_chat(handler, messages, max_new, model, lens=None, receipt=False, sample
         stream_kw["sample"] = sample
     if stop is not None and "stop" in params:
         stream_kw["stop"] = list(stop)
-    if lens:
-        if "lens" in params and "on_frame" in params:
-            stream_kw.update(lens=(lens if isinstance(lens, dict) else {}), on_frame=side_frame)
-        else:
-            side_frame({"error": "live lens needs the engine substrate (post-hoc: POST /runs/<id>/jlens)"})
-
     # An HF chat stream: a pure pass-through recorder rides along and the
     # per-token trace is assembled after the stream (SUB.last_stream_trace()) -- so the run gets the
     # Run Inspector timeline while the streamed chunks stay byte-identical (B3). runlog.record
@@ -119,10 +89,6 @@ def sse_chat(handler, messages, max_new, model, lens=None, receipt=False, sample
     t0 = time.time(); acc = []; memout = {}
     logged_messages = journal_messages if journal_messages is not None else messages
     policy_meta = {}
-    if corrective_evidence is not None:
-        policy_meta["corrective_policy"] = corrective_evidence
-    if task is not None:
-        policy_meta["clozn_task"] = task
     sub = ctx.active_sub(handler)
     gen = sub.chat_stream(messages, max_new, mem_out=memout, **stream_kw)
     disconnect_error = None
@@ -165,12 +131,11 @@ def sse_chat(handler, messages, max_new, model, lens=None, receipt=False, sample
                 req_ctx.cancel()          # durable record on the context itself, belt to gen.close()'s suspenders
             handler._log_run("openai_api", logged_messages, "".join(acc), model, t0,
                              error=f"client disconnected mid-stream: {disconnect_error}", mem_out=memout,
-                             extra_meta={**policy_meta, "stream_failure": "client_disconnected"},
-                             sections=sections)
+                             extra_meta={**policy_meta, "stream_failure": "client_disconnected"})
             return
         fr = sub.last_finish_reason() if hasattr(sub, "last_finish_reason") else None
         openai_fr = ctx._openai_finish_reason(fr)
-        # log the run FIRST (before the finish chunk) so the receipt footer can carry its /r/<id> link.
+        # Log before the terminal chunk so a completed stream always carries its durable run id.
         trace = sub.last_stream_trace() if hasattr(sub, "last_stream_trace") else None
         usage = None
         req = getattr(sub, "_request", None)
@@ -187,47 +152,18 @@ def sse_chat(handler, messages, max_new, model, lens=None, receipt=False, sample
         rid = handler._log_run("openai_api", logged_messages, "".join(acc), model, t0, trace=trace,
                                mem_out=memout, finish_reason=fr,
                                finish_reason_fallback=None if fr else openai_fr,
-                               extra_meta=run_meta or None, sections=sections)
-        if receipt_mode != "off" and rid:        # the footer, as one final content chunk
-            try:
-                import clozn.runs.store as _runlog
-                from clozn.runs import receipt_footer
-                host = handler.headers.get("Host") or "127.0.0.1"
-                foot = receipt_footer.footer(
-                    _runlog.get_run(rid), f"http://{host}/r/{rid}", mode=receipt_mode,
-                )
-                if foot:
-                    chunk({"content": foot})
-            except Exception:
-                pass                              # additive -- a footer hiccup never breaks the stream
-        # CALIBRATION BACKLOG #10 "ask/abstain bands": same metadata-only signal as the non-streaming
-        # route (see generation_gateway.policy_signal), delivered as one side-frame before the finish
-        # chunk -- silent (no frame at all) unless a matching, fitted calibration actually says "ask" or
-        # "abstain".
-        from clozn.server.generation_gateway import policy_verdict_and_signal
-        policy_trace = trace
-        if think_result is not None and think_result.stripped and isinstance(trace, list):
-            from clozn.runs.think_tags import prompt_opens_think, sanitize_steps
-            policy_trace, _, _ = sanitize_steps(
-                trace, implicit_open=prompt_opens_think(memout.get("final_prompt"))
-            )
-        # ONE _policy_verdict lookup feeds both the live ask/abstain-only signal below and the
-        # all-bands receipt persisted onto the run record -- policy_verdict_and_signal's own docstring
-        # explains why this must not be two separate calls.
-        policy, policy_verdict_meta = policy_verdict_and_signal(policy_trace, model, task=task)
-        if policy:
-            chunk({}, extension={"clozn_policy": policy})
-        # Persist the ALL-BANDS verdict (including 'answer', which the live signal above never
-        # surfaces) onto the run record, so a later reader of THIS run can tell whether the policy
-        # would have answered, asked, or abstained -- not just live callers. After the fact because the
-        # run must already be logged (rid assigned just above) before its own trace can be scored.
-        # Additive and best-effort: any hiccup here must never touch the SSE stream already in flight.
-        if rid and policy_verdict_meta:
-            try:
-                from clozn.runs.attachments import attach_policy_verdict
-                attach_policy_verdict(rid, policy_verdict_meta)
-            except Exception:
-                pass
+                               extra_meta=run_meta or None)
+        if rid is None:
+            message = "generation completed but its run could not be durably recorded"
+            detail = getattr(handler, "_last_recording_error", None)
+            if detail:
+                message += f": {detail}"
+            _write({}, extension={"error": {"message": message,
+                                              "type": "upstream_error",
+                                              "code": "journal_persistence_failed"}})
+            handler.wfile.write(b"data: [DONE]\n\n")
+            handler.wfile.flush()
+            return
         from clozn.runs.context_receipt import warnings_for
         cutoff_warnings = warnings_for(fr, {"max_tokens": int(max_new)})
         terminal = {}
@@ -244,11 +180,18 @@ def sse_chat(handler, messages, max_new, model, lens=None, receipt=False, sample
         # WORKER-DIES-MIDSTREAM (or any other chat_stream failure): see the module docstring. Distinct
         # from the client-disconnect branch above because this exception came from ITERATING `gen`
         # (reading the worker), never from writing to `handler.wfile`.
-        handler._log_run("openai_api", logged_messages, "".join(acc), model, t0, error=str(e), mem_out=memout,
-                         extra_meta={**policy_meta, "stream_failure": "worker_disconnected"},
-                         sections=sections)
+        rid = handler._log_run("openai_api", logged_messages, "".join(acc), model, t0, error=str(e), mem_out=memout,
+                               extra_meta={**policy_meta, "stream_failure": "worker_disconnected"})
+        recording_failed = rid is None
+        if recording_failed:
+            detail = getattr(handler, "_last_recording_error", None)
+            e = RuntimeError("generation failed and its run could not be durably recorded" +
+                             (f": {detail}" if detail else ""))
         try:
-            handler.wfile.write(("data: " + json.dumps({"error": str(e)}) + "\n\n").encode("utf-8"))
+            error_frame = {"error": str(e)}
+            if recording_failed:
+                error_frame["error_code"] = "journal_persistence_failed"
+            handler.wfile.write(("data: " + json.dumps(error_frame) + "\n\n").encode("utf-8"))
             handler.wfile.write(b"data: [DONE]\n\n")
             handler.wfile.flush()
         except Exception:

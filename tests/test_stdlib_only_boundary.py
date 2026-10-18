@@ -6,9 +6,9 @@ pyproject.toml declares `dependencies = []` and explains the rule: anything an o
 beyond the stdlib is imported lazily inside that command's function body, never at module scope. That is
 the promise `pip install clozn` makes.
 
-Nothing enforced it. The `product-minimal` CI lane is named "Torch-free boundary" and, by design,
-INSTALLS numpy before asserting torch is absent -- so a module-scope `import numpy` reachable from the
-product import path sailed through it. Two such imports had accumulated:
+The original Torch-free CI check installed NumPy before importing the product, so a module-scope
+``import numpy`` reachable from the product path could sail through it. Two such imports had
+accumulated:
 
   * clozn/receipts/swap_receipt.py imported clozn.analysis.concept_dir (steering math, numpy)
     at module scope, and read two of its constants as DEFAULT ARGUMENT values -- reachable from

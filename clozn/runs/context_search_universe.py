@@ -98,7 +98,8 @@ def _validate_partition(
     for index, sources in by_message.items():
         if not (0 <= index < len(basis_messages)):
             raise ContextSearchUniverseError("a selected source points outside the message basis")
-        length = len(basis_messages[index].get("content", ""))
+        content = basis_messages[index].get("content", "")
+        length = len(content)
         ordered = sorted(sources, key=lambda source: (_range(source), str(source["source_id"])))
         for left_index, left in enumerate(ordered):
             for right in ordered[left_index + 1:]:
@@ -109,14 +110,14 @@ def _validate_partition(
         cursor = 0
         for source in ordered:
             start, end = _range(source)
-            if start != cursor or end > length:
+            if start < cursor or end > length or content[cursor:start].strip():
                 raise ContextSearchUniverseError(
-                    f"selected sources do not exactly partition removable message {index}"
+                    f"selected sources do not partition removable content in message {index}"
                 )
             cursor = end
-        if cursor != length:
+        if content[cursor:].strip():
             raise ContextSearchUniverseError(
-                f"selected sources do not cover removable message {index}"
+                f"selected sources do not cover removable content in message {index}"
             )
 
 

@@ -1,6 +1,4 @@
-"""commands.models -- model discovery (`clozn models`), fetch (`clozn pull`), and the fit planner
-(`clozn plan`): "will it fit?" answered by reading only a GGUF's header -- a few MB at the front of the
-file -- never the multi-GB tensor payload, never a model load, never the GPU.
+"""commands.models -- model discovery (`clozn models`) and fetch (`clozn pull`).
 
 resolve_model()/_flags_for()/_friendly() are also used by the run/serve/explain command modules to turn a
 model name/path argument into a resolved GGUF + its launch flags.
@@ -22,7 +20,6 @@ resolve to the exact same strings this module's own copies used to).
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import time
 import urllib.error
@@ -52,8 +49,6 @@ KNOWN = [
 PULLABLE = {
     "qwen-0.5b": ("bartowski/Qwen2.5-0.5B-Instruct-GGUF",    "Qwen2.5-0.5B-Instruct-Q8_0.gguf"),
     "qwen":      ("bartowski/Qwen2.5-7B-Instruct-GGUF",      "Qwen2.5-7B-Instruct-Q4_K_M.gguf"),
-    # Wave 1 qualification checkpoints. Keep these exact: J-lenses (Q5) are tied to the base checkpoint,
-    # tokenizer, activation dimensions, and qualified GGUF digest.
     "qwen3.5":   ("unsloth/Qwen3.5-9B-GGUF",                  "Qwen3.5-9B-Q4_K_M.gguf"),
     "llama":     ("bartowski/Meta-Llama-3.1-8B-Instruct-GGUF", "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"),
     "gemma4":    ("ggml-org/gemma-4-E4B-it-GGUF",             "gemma-4-E4B-it-Q4_K_M.gguf"),
@@ -226,174 +221,3 @@ def cmd_pull(args):
         raise ctx.CloznError(f"download failed: {e}")
     print(f"saved {_friendly(dest)} ({os.path.getsize(dest) / 1e9:.1f}G).  "
           f"run it:  clozn run {_friendly(dest)} \"hello\"")
-
-
-# ------------------------------------------------------------------ plan (fit check, no download, no load)
-# `clozn plan <name|path|url>` answers "will it fit?" by reading only a GGUF's header -- a few MB at the
-# front of the file -- never the multi-GB tensor payload, never a model load, never the GPU. Local models
-# read straight off disk; a name `clozn pull` knows but hasn't fetched yet is read remotely over HTTP Range
-# against HuggingFace, so the fit check happens BEFORE the download it's trying to save you from.
-
-def _fmt_ctx(n) -> str:
-    if not n:
-        return "?"
-    return f"{n // 1024}k" if n % 1024 == 0 else str(n)
-
-
-def _detect_vram_gb():
-    """Best-effort local VRAM budget via `nvidia-smi` -- a driver metadata query, not a CUDA context: it
-    doesn't allocate anything or run compute, so it's consistent with this being a CPU-only, no-GPU-use
-    planner. Returns None (caller falls back to a default) if nvidia-smi isn't there or times out."""
-    try:
-        out = subprocess.run(["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
-                             capture_output=True, text=True, timeout=5)
-        if out.returncode == 0 and out.stdout.strip():
-            return round(float(out.stdout.strip().splitlines()[0]) / 1024, 1)
-    except Exception:
-        pass
-    return None
-
-
-def format_plan(name: str, header: dict, file_size_bytes: int, report: dict, vram_gb: float,
-                ctx_for_estimate: int = 8192, source_note: str = "") -> str:
-    """Pure dict(s)->text render of a fit_planner report (no I/O -- testable with canned dicts), e.g.:
-    'Qwen2.5 7B Instruct Q4_K_M -- 28 layers, 32k ctx, 4.4 GB file
-     on 16 GB VRAM: FITS (~est 5.3 GB at 8k ctx, KV-q8)'"""
-    quant = header.get("quant", "?")
-    n_layers = header.get("n_layers")
-    size_gb = (file_size_bytes or 0) / 1e9
-    verdict = f"{fmt.BOLD}FITS{fmt.RST}" if report["fits"] else f"{fmt.BOLD}WON'T FIT{fmt.RST}"
-    lines = [
-        f"{name} {quant} — {n_layers if n_layers is not None else '?'} layers, "
-        f"{_fmt_ctx(header.get('context_length'))} ctx, {size_gb:.1f} GB file"
-        + (f"  {fmt.DIM}{source_note}{fmt.RST}" if source_note else ""),
-        f"on {vram_gb:g} GB VRAM: {verdict}  (~est {report['est_vram_gb']:.1f} GB at "
-        f"{_fmt_ctx(ctx_for_estimate)} ctx, KV-q8)",
-    ]
-    if report.get("offload_hint"):
-        lines.append(f"  {report['offload_hint']}")
-    lines.append(f"{fmt.DIM}{report['note']}{fmt.RST}")
-    if header.get("quant_source") and header["quant_source"] != "general.file_type":
-        lines.append(f"{fmt.DIM}quant is a guess from the dominant tensor type ({header['quant_source']}).{fmt.RST}")
-    return "\n".join(lines)
-
-
-# --------------------------------------------------------------------- throughput predictor (model-free)
-# `clozn plan` also renders a decode-tok/s ROOFLINE: physics from throughput_predictor.py (memory-bandwidth
-# bound decode -- see that module's docstring), rendered here the same way format_plan renders fit_report.
-
-def format_throughput(est: dict) -> str:
-    """Pure dict->text render of a throughput_predictor.predict_throughput() estimate (no I/O -- testable
-    with canned dicts). Appended under format_plan's fit-check output in `clozn plan`."""
-    n_params = est.get("n_params") or 0
-    weight_bytes = est.get("weight_bytes") or 0.0
-    total_bytes = est.get("total_bytes_per_token") or 0.0
-    if not n_params or not total_bytes:
-        return (f"{fmt.DIM}predicted decode throughput: unavailable -- header didn't carry enough "
-                f"tensor/shape info to estimate.{fmt.RST}")
-
-    weight_gb = weight_bytes / 1e9
-    kv_mb = (est.get("kv_bytes_per_token") or 0.0) / 1e6
-    total_mb = total_bytes / 1e6
-    bw = est["bandwidth_gb_s"]
-    tok_s = est["predicted_tok_s"]
-    bpw_avg = weight_bytes * 8 / n_params
-
-    lines = [
-        f"predicted decode throughput: {fmt.BOLD}~{tok_s:.0f} tok/s{fmt.RST}  "
-        f"{fmt.DIM}(roofline @ {bw:g} GB/s assumed effective bandwidth){fmt.RST}",
-        f"  weight bytes/token: {weight_gb:.2f} GB  ({n_params / 1e9:.2f}B params @ ~{bpw_avg:.2f} bpw, "
-        f"exact from the GGUF's tensor shapes/types -- not the file size)",
-        f"  KV bytes/token:     {kv_mb:.1f} MB  (at {_fmt_ctx(est['ctx_for_estimate'])} ctx, "
-        f"{est['kv_bytes_per_element']:g}-byte/elem cache; grows as context fills -- this is the worst case "
-        f"at that context depth, not a constant)",
-        f"  total: {total_mb:.1f} MB/token  ->  {bw:g} GB/s / {total_mb:.1f} MB = ~{tok_s:.0f} tok/s",
-        f"{fmt.DIM}ROOFLINE, not a promise: this is a memory-bandwidth-bound estimate that ignores "
-        f"compute-bound prefill, batching, and real kernel efficiency (hardware rarely sustains 100% of "
-        f"theoretical bandwidth) -- it predicts the ORDER of tok/s, not the exact number. Calibrate "
-        f"against a live run for the real one (`--calibrate`, not yet wired -- see cmd_plan).{fmt.RST}",
-    ]
-    if est.get("unknown_params"):
-        n_tensors = sum(est["unknown_type_tensor_counts"].values())
-        lines.append(f"{fmt.DIM}note: {est['unknown_params']:,} params across {n_tensors} tensor(s) of "
-                     f"unrecognized ggml_type were excluded from the weight-byte total (extend "
-                     f"BPW_BY_GGML_TYPE in throughput_predictor.py).{fmt.RST}")
-    return "\n".join(lines)
-
-
-def cmd_plan(args):
-    from clozn.cli import fit_planner            # stdlib+urllib only; imported lazily like other clozn.* siblings
-    from clozn.cli import throughput_predictor as tp   # stdlib-only, model-free (see its module docstring)
-    from clozn.cli import main as ctx
-
-    vram_gb = args.vram if args.vram is not None else (_detect_vram_gb() or 16.0)
-    spec = args.model
-
-    # gguf_header_from_path/url raise ValueError ("not a GGUF file: ...") on a malformed header, or its
-    # subclass NeedMoreBytes on a truncated one (the header didn't fit even at max_bytes) -- both are
-    # facts about the FILE, not a bug in this command, so they get the same clean one-line CloznError
-    # exit every other bad-input path here already uses; main() only catches CloznError, so anything
-    # else here would otherwise surface as a raw traceback.
-    try:
-        if spec.startswith("http://") or spec.startswith("https://"):
-            header = fit_planner.gguf_header_from_url(spec)
-            size = header.get("file_size_bytes") or 0
-            name = header.get("name") or spec.rsplit("/", 1)[-1]
-            source_note = f"remote, not downloaded: {spec}"
-        else:
-            path = spec if (spec.lower().endswith(".gguf") and os.path.isfile(spec)) else None
-            if path is None:
-                try:
-                    path = resolve_model(spec)
-                except ctx.CloznError:
-                    if spec not in PULLABLE:
-                        raise
-                    repo, file = PULLABLE[spec]
-                    url = f"https://huggingface.co/{repo}/resolve/main/{file}"
-                    print(f"{fmt.DIM}- '{spec}' isn't downloaded yet -- reading its header straight off "
-                         f"HuggingFace (no download){fmt.RST}", file=sys.stderr)
-                    header = fit_planner.gguf_header_from_url(url)
-                    size = header.get("file_size_bytes") or 0
-                    name = spec
-                    source_note = f"not downloaded -- `clozn pull {spec}` fetches it: {url}"
-                    path = None
-            if path is not None:
-                header = fit_planner.gguf_header_from_path(path)
-                size = header["file_size_bytes"]
-                name = _friendly(path)
-                source_note = path
-    except ValueError as e:
-        raise ctx.CloznError(f"couldn't read '{spec}' as a GGUF: {e}")
-
-    report = fit_planner.fit_report(header, size, vram_gb)
-    print(format_plan(name, header, size, report, vram_gb, source_note=source_note))
-
-    bandwidth_gb_s = args.bandwidth_gb_s if getattr(args, "bandwidth_gb_s", None) is not None \
-        else tp.DEFAULT_BANDWIDTH_GB_S
-    est = tp.predict_throughput(header, bandwidth_gb_s=bandwidth_gb_s)
-    print()
-    print(format_throughput(est))
-
-    if getattr(args, "calibrate", False):
-        _cmd_plan_calibrate_stub(name)
-
-
-def _cmd_plan_calibrate_stub(name: str):
-    """Unavailable `clozn plan --calibrate` seam: boot the engine on this GGUF, run a short fixed-length
-    decode, measure the ACTUAL tok/s, and solve for this machine's real effective bandwidth
-    (bandwidth_gb_s = measured_tok_s * total_bytes_per_token / 1e9) so future `clozn plan` calls on this
-    machine can default to a calibrated constant instead of the generic RTX-5080-class guess.
-
-    This predictor stays pure-CPU and model-free. A live calibration implementation would:
-      1. resolve_model(name) -> path, launch the engine the same way `clozn run` does (engine_process.py)
-      2. run a short, fixed-length decode (e.g. 64-128 tokens, greedy, no --heat) and time it
-      3. measured_tok_s = tokens_generated / wall_clock_seconds
-      4. back out bandwidth_gb_s from measured_tok_s and this run's own total_bytes_per_token, then
-         report BOTH the roofline prediction and the calibrated number side by side
-      5. optionally cache the calibrated bandwidth_gb_s under ~/.clozn/config.json for future `plan` runs
-    """
-    print()
-    print(f"{fmt.BOLD}--calibrate: unavailable{fmt.RST}")
-    print(f"{fmt.DIM}this would boot the engine on {name}, run a short live decode, measure the ACTUAL "
-          f"tok/s, and use it to correct the assumed bandwidth above for this machine. Live calibration "
-          f"is not part of the current plan command.{fmt.RST}")

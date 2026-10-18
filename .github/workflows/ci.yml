@@ -1,9 +1,8 @@
 name: CI
 
-# Monorepo CPU lanes (Roadmap 0.8). Independent gates, all CPU:
-#   cpp     — the backend-free engine (scheduler + runtime), built with gcc + ctest.
-#   python  — the real product suite (`tests/` + `clozn/`, 1678+ tests) as the primary gate,
-#             plus the kernel's CPU reference. GPU-only / GGML tests are out of scope here (no GPU runner).
+# Independent product gates:
+#   cpp     — the backend-free engine scheduler/runtime, built with gcc + ctest.
+#   python  — the complete stdlib-only product suite (`tests/` + `clozn/`).
 #   packaging — clean-room install proof: build the wheel with the root pyproject.toml, install it into a
 #             brand-new venv, and prove `import clozn` / `clozn version` / `clozn doctor` all work outside
 #             this checkout (no repo-path hacks). See scripts/release/clean_room_install_test.py.
@@ -57,85 +56,32 @@ jobs:
       - name: Configure + build (no ggml, no CUDA — pure C++ scheduler/runtime)
         run: cmake -S engine/core -B engine/core/build-cpu -G Ninja -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build engine/core/build-cpu
-      - name: ctest (the 8 scheduler/runtime goldens)
+      - name: ctest (scheduler/runtime goldens)
         run: ctest --test-dir engine/core/build-cpu --output-on-failure
 
   python:
-    name: product suite + kernel reference
+    name: product suite — stdlib-only boundary
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - name: Install CPU torch + the pinned deps
-        # Verified empirically (clean venv): pytest/numpy/torch/transformers is the full minimal set
-        # for `tests/ clozn/ -q` -- no other runtime dependency is required.
+      - name: Install the test runner only
         run: |
           python -m pip install --upgrade pip
           pip install pytest
-          pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
-          pip install "transformers==4.57.6" "tokenizers==0.22.2" "numpy==2.4.6" \
-            "openai==2.46.0" "ollama==0.6.2"
-      - name: Install pinned official JavaScript client
-        run: npm ci --prefix tests/clients
-      - name: Product suite — the real clozn CLI + server tests (primary gate)
-        run: pytest tests/ clozn/ -q
-      - name: Kernel — CPU reference parity vs the lab
-        # Path fixed: the kernel moved from kernels/ to engine/kernels/ (reorg stage 5) and its test
-        # file was later renamed test_reference.py -> test_confidence_select_reference.py.
-        run: pytest engine/kernels/confidence_select/test_confidence_select_reference.py -q
-
-  product-minimal:
-    name: product gateway — Torch-free boundary (no torch installed)
-    runs-on: ubuntu-latest
-    # The product/lab split's enforcement lane. `clozn serve` must import + serve with NO PyTorch --
-    # inference is the C++ worker on a GGUF; torch/transformers are lab-only. This job installs the
-    # product-minimal deps ONLY (numpy + the path-based engine/client SDK; NO torch, NO transformers,
-    # NO engine/lab[dev]), so a stray top-level `import torch` reachable from clozn.server.app fails the
-    # build here instead of silently riding along in the full `python` lane above (which installs torch).
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install product-minimal deps (numpy only; deliberately NO torch/transformers/lab)
-        run: |
-          python -m pip install --upgrade pip
-          pip install "numpy==2.4.6"
-      - name: Product import is Torch-free (the boundary)
+      - name: Assert the product import stays Torch-free
         run: |
           python - <<'PY'
           import sys
           import clozn.server.app
           assert 'torch' not in sys.modules, 'torch leaked into the product import'
           assert 'transformers' not in sys.modules, 'transformers leaked into the product import'
-          assert all('engine/lab' not in p for p in sys.path), 'engine/lab is on the product sys.path'
-          print('product import: torch-free, transformers-free, no engine/lab on path')
+          print('product import: stdlib-only')
           PY
-      - name: Model-free product acceptance gate (runs with no torch installed)
-        # Validated locally with torch/transformers import-blocked: 36/36 pass. test_studio is
-        # intentionally excluded -- it touches the HF SteeringControl and is not a torch-free test.
-        run: python -m unittest -v tests.test_runtime_architecture tests.test_product_smoke
-
-  aider-client:
-    name: Aider 0.86.2 -> OpenAI-compatible gateway
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-      - name: Install the pinned released coding agent
-        run: |
-          python -m pip install --upgrade pip
-          pip install pytest "aider-chat==0.86.2"
-      - name: Real Aider subprocess conformance
-        run: pytest tests/test_aider_client_compat.py -q
+      - name: Product suite — the real clozn CLI + server tests (primary gate)
+        run: pytest tests/ clozn/ -q
 
   packaging:
     name: packaging — clean-room install (wheel, console entry point, doctor)

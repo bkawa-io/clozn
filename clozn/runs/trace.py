@@ -21,7 +21,6 @@ TRACE_KEYS = (
     # the public timeline so Replay can inspect them without continuation/fork/tool consumers ingesting
     # them as assistant content.
     "reasoning_steps",
-    "workspace_readouts",
 )
 
 
@@ -382,8 +381,6 @@ def _norm_trace(trace) -> dict:
             steps = _steps_from_parallel(norm)
             if steps:
                 norm["steps"] = steps
-        if "workspace_readouts" in trace:
-            norm["workspace_readouts"] = trace["workspace_readouts"]
         if isinstance(trace.get("reasoning_steps"), list):
             norm["reasoning_steps"] = [
                 step for i, raw in enumerate(trace["reasoning_steps"])
@@ -401,49 +398,3 @@ def normalize_trace(trace) -> dict:
     child traces and ordinary run traces continue to share one normalization contract.
     """
     return _norm_trace(trace)
-
-
-def _normalize_workspace_readouts(rid: str, readouts) -> list[dict]:
-    """Keep explicit readouts, filling the run id when a provider leaves it blank."""
-    out = []
-    for r in readouts or []:
-        if not isinstance(r, dict):
-            continue
-        item = dict(r)
-        item.setdefault("type", "workspace_readout")
-        if not item.get("run_id"):
-            item["run_id"] = rid
-        if not item.get("provider_type") or not item.get("readout_kind"):
-            try:
-                from clozn.readouts import workspace_lens
-
-                fields = workspace_lens.taxonomy_fields(item.get("provider"), item.get("readout_kind"))
-                if fields.get("provider_type") and not item.get("provider_type"):
-                    item["provider_type"] = fields["provider_type"]
-                if fields.get("readout_kind") and not item.get("readout_kind"):
-                    item["readout_kind"] = fields["readout_kind"]
-            except Exception:
-                pass
-        out.append(item)
-    return out
-
-
-def _with_workspace_readouts(rid: str, trace: dict, workspace_provider=None) -> dict:
-    """Attach explicit/provider Workspace Lens readouts to token traces."""
-    if not isinstance(trace, dict) or not trace.get("tokens"):
-        return trace
-    if trace.get("workspace_readouts"):
-        trace = dict(trace)
-        trace["workspace_readouts"] = _normalize_workspace_readouts(rid, trace["workspace_readouts"])
-        return trace
-    if workspace_provider is None:
-        return trace
-    try:
-        readouts = workspace_provider(rid, trace)
-        readouts = _normalize_workspace_readouts(rid, readouts)
-        if readouts:
-            trace = dict(trace)
-            trace["workspace_readouts"] = readouts
-    except Exception:
-        pass
-    return trace

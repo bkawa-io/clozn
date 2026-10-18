@@ -23,7 +23,6 @@ from clozn.experiments.runner import run_experiment
 from clozn.experiments.selections import ContextSelection, SelectionError
 from clozn.experiments.state import ExecutionState
 import clozn.runs.store as runlog
-from clozn.recipes.removability import can_remove, removability_message
 from clozn.runs.context_receipt import build_context_receipt
 from clozn import schemas
 
@@ -44,13 +43,12 @@ def _identity():
         "engine_build": "test-engine",
         "context_size": 4096,
         "backend": "cpu",
-        "white_box_flags": {"sae": False, "jlens": False, "attn_knockout": False},
     }
 
 
 def _run():
     messages = [
-        {"role": "system", "content": "stable context"},
+        {"role": "user", "content": "stable context"},
         {"role": "user", "content": "removable source"},
         {"role": "user", "content": "current question"},
     ]
@@ -311,7 +309,9 @@ def test_materialize_arm_persists_one_generic_child_and_returns_canonical_diff(t
         "kind": "delete_source", "source_ids": [source_ids[1]],
     }
     assert "minimal_context" not in str(child["changes_applied"])
-    assert outcome["comparison"]["first_divergence_view"]["state"] == "available"
+    assert outcome["comparison"]["preservation"]["exact"] is False
+    assert outcome["comparison"]["parent_run_id"] == run["id"]
+    assert outcome["comparison"]["child_run_id"] == outcome["child_run_id"]
     schemas.validate(outcome, "clozn.experiment-materialization.v1")
 
 
@@ -360,16 +360,3 @@ def test_failed_materialization_does_not_create_a_child(tmp_path, monkeypatch):
     assert "child_run_id" not in outcome
     assert runlog.list_runs(20) == []
     schemas.validate(outcome, "clozn.experiment-materialization.v1")
-
-def test_removability_recipe_is_thin_and_uses_preservation_language():
-    run, source_ids = _run()
-    result = can_remove(
-        run,
-        [source_ids[1]],
-        execution_adapter=DeleteSourceExactReferenceAdapter(ProbeSubstrate(), run=run),
-    )
-    arm_id = result.arms[0].arm_id
-    assert removability_message(result, arm_id).startswith(
-        "Deleting this source caused divergence at recorded answer token"
-    )
-    assert "irrelevant" not in removability_message(result, arm_id)
