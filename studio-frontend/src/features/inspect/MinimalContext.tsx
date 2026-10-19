@@ -565,7 +565,7 @@ export function MinimalContextSurface({ route }: { route: InspectRoute }) {
             </label>
             <div>
               <span>Bounded search</span>
-              <small>Up to 16 sources · 32 new executions · inclusion check</small>
+              <small>Configured source cap · 32 new executions · inclusion check</small>
             </div>
             <button type="button" disabled={activeJob || busy !== "idle"} onClick={() => { void start(); }}>
               {busy === "starting" ? "Starting…" : summaries.length ? "Run exact search again" : "Run exact search"}
