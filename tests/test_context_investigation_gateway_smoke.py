@@ -40,14 +40,11 @@ def _cancelled_job(**overrides):
 
 
 def test_cancellation_fixture_has_non_overlapping_exact_source_ranges():
-    text, sources = smoke._cancellation_source_fixture("nonce", 8)
+    text = smoke._cancellation_source_fixture("nonce", 8)
 
-    assert len(sources) == 8
-    for index, source in enumerate(sources, start=1):
-        start, end = source["unicode_range"]
-        assert text[start:end].startswith(f"Record {index:02d}:")
-        if index > 1:
-            assert sources[index - 2]["unicode_range"][1] < start
+    assert text.count("## Cancellation record") == 8
+    for index in range(1, 9):
+        assert f"Record {index:02d}:" in text
 
 
 def test_live_fixture_protects_instructions_and_question_but_marks_context_removable():
@@ -64,18 +61,13 @@ def test_live_fixture_protects_instructions_and_question_but_marks_context_remov
         client,
         model="fixture-model",
         context="Northstar launches May 22.",
-        sources=[{
-            "message_index": 0,
-            "source_id": "launch-date",
-            "unicode_range": [0, 26],
-        }],
         prompt="When does Northstar launch?",
         max_tokens=32,
     )
 
     assert run_id == "run_one"
     assert [message["role"] for message in client.body["messages"]] == ["system", "user", "user"]
-    assert client.body["clozn_sources"][0]["message_index"] == 1
+    assert "clozn_sources" not in client.body
     assert "clozn_receipt" not in client.body
 
 

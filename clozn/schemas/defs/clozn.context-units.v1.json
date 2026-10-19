@@ -47,11 +47,8 @@
         "byte_range": {"$ref": "#/$defs/range"},
         "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "source_kind": {"enum": ["whole_message", "source_span"]},
-        "derivation": {"enum": ["message_root", "auto_structural", "caller_explicit", "caller_fallback_root"]},
-        "provenance_kind": {"type": "string", "minLength": 1},
-        "client_source_id": {"type": "string", "minLength": 1},
-        "source_label": {"type": "string", "minLength": 1},
-        "parent_source_id": {"type": "string", "pattern": "^src_[0-9a-f]{24}$"}
+        "derivation": {"enum": ["message_root", "adaptive_markdown"]},
+        "provenance_kind": {"const": "message"}
       },
       "additionalProperties": false
     }

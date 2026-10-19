@@ -1,50 +1,58 @@
-"""Zero-config canonical context units for recorded chat runs.
+"""Deterministic Markdown-aware context units for recorded chat runs.
 
-Context units are a journal/evidence layer.  They are derived after a request
-has crossed the model boundary and their private source annotations are added
-only to the copy used to build the Context Receipt.  The messages sent to a
-chat template are never modified here.
-
-The unit identity is always the canonical Context Receipt identity: a
-``seg_`` whole-message root or a ``src_`` exact span.  This module deliberately
-does not mint IDs.  The receipt builder remains the one source-canonicalization
-authority, and the strict span bridge remains the one source-to-message
-resolver.
+Context units are derived from the exact message text after the request has
+crossed the model boundary. They never alter the prompt. A single flat,
+bounded partition is shared by Context Effects and Minimal Context; callers do
+not provide source ranges, labels, or hierarchy.
 """
 from __future__ import annotations
 
+import math
+import os
 import re
 from copy import deepcopy
 from typing import Any, Mapping
 
-SCHEMA = "clozn.context-units.v1"
 
-_LONG_MESSAGE_CHARS = 600
-_MIN_SPAN_CHARS = 200
-_HEADER_RE = re.compile(r"^#{1,6} ", re.MULTILINE)
-_HR_RE = re.compile(r"^(?:---|\*\*\*)[ \t]*$", re.MULTILINE)
+SCHEMA = "clozn.context-units.v1"
+MAX_CONTEXT_ARMS_ENV = "CLOZN_MAX_CONTEXT_ARMS"
+DEFAULT_MAX_CONTEXT_ARMS = 16
+MAX_CONTEXT_ARMS_CEILING = 64
+
+_HEADER_RE = re.compile(r"^#{1,6}[ \t]+", re.MULTILINE)
+_HR_RE = re.compile(r"^(?:---|\*\*\*|___)[ \t]*$", re.MULTILINE)
 _DOC_MARKER_RE = re.compile(
     r"^[ \t]*(?:Document[ \t]+\d+\b|\[\d+\])",
     re.MULTILINE | re.IGNORECASE,
 )
 _FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
-_XML_WRAP_RE = re.compile(r"<([a-zA-Z_][\w:-]*)>.*?</\1>", re.DOTALL)
+_XML_WRAP_RE = re.compile(r"<([a-zA-Z_][\w:-]*)\b[^>]*>.*?</\1>", re.DOTALL)
 _BLANK_LINE_RE = re.compile(r"\n[ \t]*\n+")
-_WS = " \t\r\n"
 
 
 def _text_of(message: Any) -> str:
-    return message.get("content") if isinstance(message, dict) and isinstance(message.get("content"), str) else ""
+    if isinstance(message, dict) and isinstance(message.get("content"), str):
+        return message["content"]
+    return ""
+
+
+def max_context_arms(environ: Mapping[str, str] | None = None) -> int:
+    """Return the configured analysis-arm cap, falling back safely on errors."""
+    values = os.environ if environ is None else environ
+    raw = values.get(MAX_CONTEXT_ARMS_ENV)
+    if raw is None:
+        return DEFAULT_MAX_CONTEXT_ARMS
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_CONTEXT_ARMS
+    if not 1 <= value <= MAX_CONTEXT_ARMS_CEILING:
+        return DEFAULT_MAX_CONTEXT_ARMS
+    return value
 
 
 def protected_message_indices(messages: list[dict]) -> set[int]:
-    """Return the conservatively protected messages in a chat-shaped list.
-
-    System/developer instructions are always protected. The final user message
-    is the current question; it and everything after it are protected,
-    including a trailing assistant prefill. When no user message exists, the
-    final message is protected as well.
-    """
+    """Return messages that must never become removable context units."""
     if not isinstance(messages, list) or not messages:
         return set()
     last_user = next(
@@ -56,18 +64,13 @@ def protected_message_indices(messages: list[dict]) -> set[int]:
         None,
     )
     instructions = {
-        index for index, message in enumerate(messages)
+        index
+        for index, message in enumerate(messages)
         if isinstance(message, dict) and message.get("role") in {"system", "developer"}
     }
     if last_user is None:
         return instructions | {len(messages) - 1}
     return instructions | set(range(last_user, len(messages)))
-
-
-def _has_explicit_sources(message: Any) -> bool:
-    """Whether a message carries caller source metadata in the journal shape."""
-    raw = message.get("_clozn_sources") if isinstance(message, dict) else None
-    return isinstance(raw, list) and bool(raw)
 
 
 def _protected_spans(text: str) -> list[tuple[int, int]]:
@@ -85,259 +88,174 @@ def _protected_spans(text: str) -> list[tuple[int, int]]:
 
 
 def _inside(position: int, spans: list[tuple[int, int]]) -> bool:
-    return any(start <= position < end for start, end in spans)
+    return any(start < position < end for start, end in spans)
 
 
-def _trim(text: str, start: int, end: int) -> tuple[int, int]:
-    while start < end and text[start] in _WS:
-        start += 1
-    while end > start and text[end - 1] in _WS:
-        end -= 1
-    return start, end
-
-
-def _paragraph_spans(text: str, start: int, end: int) -> list[tuple[int, int]]:
-    spans: list[tuple[int, int]] = []
-    position = start
-    for match in _BLANK_LINE_RE.finditer(text, start, end):
-        if match.start() > position:
-            spans.append((position, match.start()))
-        position = match.end()
-    if position < end:
-        spans.append((position, end))
-    return spans or [(start, end)]
-
-
-def _merge_small_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    if not spans:
-        return []
-    merged = [spans[0]]
-    for start, end in spans[1:]:
-        if end - start < _MIN_SPAN_CHARS:
-            merged[-1] = (merged[-1][0], end)
-        else:
-            merged.append((start, end))
-    while len(merged) > 1 and merged[0][1] - merged[0][0] < _MIN_SPAN_CHARS:
-        head = merged.pop(0)
-        merged[0] = (head[0], merged[0][1])
-    return merged
-
-
-def _structural_spans(text: str) -> list[tuple[int, int]]:
-    """Return deterministic semantic spans without minting another identity namespace."""
-    if not text:
-        return [(0, 0)]
-    protected = _protected_spans(text)
-    points = {
-        match.start()
-        for pattern in (_HEADER_RE, _HR_RE, _DOC_MARKER_RE)
-        for match in pattern.finditer(text)
-        if not _inside(match.start(), protected)
-    }
-    for start, end in protected:
-        points.update((start, end))
-    points.update((0, len(text)))
-
-    spans: list[tuple[int, int]] = []
-    for start, end in zip(sorted(points), sorted(points)[1:]):
-        if end <= start:
-            continue
-        if (start, end) in protected:
-            spans.append((start, end))
-            continue
-        trimmed_start, trimmed_end = _trim(text, start, end)
-        if trimmed_end <= trimmed_start:
-            continue
-        if trimmed_end - trimmed_start > _LONG_MESSAGE_CHARS:
-            fragments = [
-                _trim(text, fragment_start, fragment_end)
-                for fragment_start, fragment_end in _paragraph_spans(text, trimmed_start, trimmed_end)
-            ]
-            spans.extend(_merge_small_spans([
-                span for span in fragments if span[1] > span[0]
-            ]))
-        else:
-            spans.append((trimmed_start, trimmed_end))
-    return spans or [(0, len(text))]
-
-
-def _partition(text: str, semantic_spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    """Turn trimmed semantic spans into a contiguous partition of ``text``.
-
-    The structural chunker intentionally trims separator whitespace.  Context
-    units cannot do that because deletion must account for every code point.
-    Leading whitespace is assigned to the first unit, inter-span separators to
-    the following unit, and trailing whitespace to the final unit.  The rule is
-    deterministic and yields no gaps or overlaps.
-    """
-    n = len(text)
-    clean: list[tuple[int, int]] = []
-    for value in semantic_spans:
-        if not (isinstance(value, (list, tuple)) and len(value) == 2):
-            continue
-        start, end = value
-        if not isinstance(start, int) or not isinstance(end, int):
-            continue
-        start = max(0, min(start, n))
-        end = max(0, min(end, n))
-        if end > start:
-            clean.append((start, end))
-    clean.sort()
-    if not clean:
-        return [(0, n)] if n else []
-
-    # structural_spans() is ordered and non-overlapping today, but keeping
-    # this check local makes the partition contract explicit if that helper is
-    # ever extended.
-    normalized: list[tuple[int, int]] = []
-    for start, end in clean:
-        if normalized and start < normalized[-1][1]:
-            if end <= normalized[-1][1]:
-                continue
-            start = normalized[-1][1]
-        if end > start:
-            normalized.append((start, end))
-    if len(normalized) <= 1:
-        return [(0, n)] if n else []
-
+def _split_oversized(
+    text: str, start: int, end: int, *, maximum: int,
+) -> list[tuple[int, int]]:
+    """Split a large atom at a line edge, then at an exact character bound."""
     out: list[tuple[int, int]] = []
-    for index, (_semantic_start, semantic_end) in enumerate(normalized):
-        start = 0 if index == 0 else normalized[index - 1][1]
-        end = n if index == len(normalized) - 1 else semantic_end
-        if end <= start:
-            return [(0, n)] if n else []
-        out.append((start, end))
+    cursor = start
+    while end - cursor > maximum:
+        limit = cursor + maximum
+        cut = text.rfind("\n", cursor + max(1, maximum // 2), limit + 1)
+        if cut <= cursor:
+            cut = limit
+        else:
+            cut += 1
+        out.append((cursor, cut))
+        cursor = cut
+    if cursor < end:
+        out.append((cursor, end))
     return out
 
 
-def _message_auto_spans(message_index: int, message: dict) -> list[dict]:
-    text = _text_of(message)
+def _structural_atoms(text: str, *, maximum: int) -> list[tuple[int, int]]:
+    """Return a contiguous partition at basic Markdown/document boundaries."""
     if not text:
         return []
-    semantic = _structural_spans(text)
-    partition = _partition(text, semantic)
-    # A one-span result is deliberately retained as a useful diagnostic result
-    # but is not registered as src_: the receipt's existing seg_ root is the
-    # canonical whole-message variable in that case.
+    protected = _protected_spans(text)
+    points = {0, len(text)}
+    for pattern in (_HEADER_RE, _HR_RE, _DOC_MARKER_RE):
+        for match in pattern.finditer(text):
+            if not _inside(match.start(), protected):
+                points.add(match.start())
+    for match in _BLANK_LINE_RE.finditer(text):
+        if not _inside(match.end(), protected):
+            points.add(match.end())
+    for start, end in protected:
+        points.update((start, end))
+
+    ordered = sorted(points)
+    atoms: list[tuple[int, int]] = []
+    for start, end in zip(ordered, ordered[1:]):
+        if end > start:
+            atoms.extend(_split_oversized(text, start, end, maximum=maximum))
+    return atoms or [(0, len(text))]
+
+
+def _pack_atoms(
+    atoms: list[tuple[int, int]], *, target: int, minimum: int, maximum: int,
+) -> list[tuple[int, int]]:
+    """Pack adjacent atoms toward the adaptive target without creating gaps."""
+    if not atoms:
+        return []
+    chunks: list[tuple[int, int]] = []
+    current_start, current_end = atoms[0]
+    for start, end in atoms[1:]:
+        current_length = current_end - current_start
+        combined_length = end - current_start
+        should_close = (
+            current_length >= minimum
+            and (current_length >= target or combined_length > maximum)
+        )
+        if should_close:
+            chunks.append((current_start, current_end))
+            current_start, current_end = start, end
+        else:
+            current_end = end
+    chunks.append((current_start, current_end))
+
+    # The minimum is a packing preference, not permission to erase all useful
+    # structure. Keep a final small section when merging it would collapse the
+    # entire message to one arm.
+    if len(chunks) > 2 and chunks[-1][1] - chunks[-1][0] < minimum:
+        tail = chunks.pop()
+        previous = chunks.pop()
+        chunks.append((previous[0], tail[1]))
+    return chunks
+
+
+def _adaptive_sizes(total_characters: int, arm_limit: int) -> tuple[int, int, int]:
+    target = max(1, math.ceil(total_characters / arm_limit))
+    minimum = max(40, math.ceil(target / 2))
+    maximum = max(240, target * 2, minimum * 2)
+    return target, minimum, maximum
+
+
+def _merge_to_cap(
+    partitions: dict[int, list[tuple[int, int]]], arm_limit: int,
+) -> None:
+    """Merge the smallest adjacent pair until the global arm cap is met."""
+    while sum(len(spans) for spans in partitions.values()) > arm_limit:
+        candidates: list[tuple[int, int, int, int]] = []
+        for message_index, spans in partitions.items():
+            for position, (left, right) in enumerate(zip(spans, spans[1:])):
+                candidates.append((right[1] - left[0], message_index, left[0], position))
+        if not candidates:
+            # Separate messages cannot be represented by one exact receipt
+            # source. The search-universe planner reports this rare case as a
+            # typed bound failure; Studio's single context message avoids it.
+            return
+        _length, message_index, _start, position = min(candidates)
+        spans = partitions[message_index]
+        merged = (spans[position][0], spans[position + 1][1])
+        spans[position:position + 2] = [merged]
+
+
+def derive_auto_source_spans(
+    messages: list[dict], *, max_arms: int | None = None,
+) -> list[dict]:
+    """Derive the one flat, Markdown-aware source universe for a chat."""
+    if not isinstance(messages, list) or not messages:
+        return []
+    arm_limit = max_context_arms() if max_arms is None else max_arms
+    if isinstance(arm_limit, bool) or not isinstance(arm_limit, int) or arm_limit <= 0:
+        raise ValueError("max_arms must be a positive integer")
+
+    protected = protected_message_indices(messages)
+    eligible = [
+        (index, message, _text_of(message))
+        for index, message in enumerate(messages)
+        if index not in protected and isinstance(message, dict) and _text_of(message)
+    ]
+    total = sum(len(text) for _index, _message, text in eligible)
+    if not total:
+        return []
+    target, minimum, maximum = _adaptive_sizes(total, arm_limit)
+    partitions: dict[int, list[tuple[int, int]]] = {}
+    for index, _message, text in eligible:
+        atoms = _structural_atoms(text, maximum=maximum)
+        partitions[index] = _pack_atoms(
+            atoms, target=target, minimum=minimum, maximum=maximum,
+        )
+    _merge_to_cap(partitions, arm_limit)
+
     return [
         {
             "message_index": message_index,
             "unicode_range": [start, end],
             "source_kind": "source_span",
-            "derivation": "auto_structural",
+            "derivation": "adaptive_markdown",
         }
-        for start, end in partition
+        for message_index in sorted(partitions)
+        for start, end in partitions[message_index]
         if end > start
     ]
 
 
-def _message_auto_source_descriptors(message_index: int, message: dict) -> list[dict]:
-    """Build a deterministic binary hierarchy over one auto leaf partition.
-
-    The leaf ranges remain the default Context Units.  The additional parent
-    ranges are journal-only canonical identities that a bounded search
-    planner may select later.  Every parent is made from adjacent children in
-    document order; no semantic boundary or message boundary is crossed.
-    """
-    leaves = _message_auto_spans(message_index, message)
-    if len(leaves) <= 1:
-        return []
-
-    nodes: list[dict] = []
-    current: list[dict] = []
-    for index, leaf in enumerate(leaves):
-        node = {
-            "message_index": message_index,
-            "unicode_range": list(leaf["unicode_range"]),
-            "source_kind": "source_span",
-            "provenance_kind": "message",
-            "source_id": f"__clozn_auto_{message_index}_leaf_{index}",
-        }
-        current.append(node)
-        nodes.append(node)
-
-    level = 0
-    while len(current) > 1:
-        next_level: list[dict] = []
-        for pair_index in range(0, len(current), 2):
-            left = current[pair_index]
-            if pair_index + 1 >= len(current):
-                next_level.append(left)
-                continue
-            right = current[pair_index + 1]
-            parent = {
-                "message_index": message_index,
-                "unicode_range": [left["unicode_range"][0], right["unicode_range"][1]],
-                "source_kind": "source_span",
-                "provenance_kind": "message",
-                "source_id": f"__clozn_auto_{message_index}_node_{level}_{pair_index // 2}",
-                "children": [left, right],
-            }
-            left["parent_source_id"] = parent["source_id"]
-            right["parent_source_id"] = parent["source_id"]
-            next_level.append(parent)
-            nodes.append(parent)
-        current = next_level
-        level += 1
-
-    # The receipt canonicalizer consumes a flat list and resolves parent
-    # client IDs after all descriptors exist.  Parents first makes the stored
-    # catalog pleasant to inspect while the identity itself is order-free.
-    return sorted(nodes, key=lambda item: (
-        -(item["unicode_range"][1] - item["unicode_range"][0]),
-        item["unicode_range"][0],
-        item["source_id"],
-    ))
-
-
-def derive_auto_source_spans(messages: list[dict]) -> list[dict]:
-    """Derive uncapped structural spans for eligible chat messages.
-
-    This includes previous user messages, has no global span cap, and returns
-    canonical source descriptors rather than a second section namespace.
-    Returned ranges are already contiguous partitions for messages that
-    have more than one effective structural span; a one-span message is
-    returned as its whole-message span so callers can intentionally keep the
-    existing ``seg_`` root instead of minting a duplicate ``src_``.
-    """
-    if not isinstance(messages, list) or not messages:
-        return []
-    protected = protected_message_indices(messages)
-    out: list[dict] = []
-    for index, message in enumerate(messages):
-        if index in protected or not isinstance(message, dict) or _has_explicit_sources(message):
-            continue
-        out.extend(_message_auto_spans(index, message))
-    return out
-
-
 def annotate_auto_sources(messages: list[dict]) -> list[dict]:
-    """Return a journal-only copy carrying auto source descriptors.
-
-    Only genuinely subdivided eligible messages receive metadata.  Existing
-    caller metadata is copied byte-for-byte and never merged or relabeled.
-    The descriptors contain ranges but no source IDs; Context Receipt capture
-    canonicalizes them through its existing source machinery.
-    """
+    """Return a detached receipt copy with only server-derived source spans."""
     if not isinstance(messages, list):
         return []
     out = deepcopy(messages)
-    spans = derive_auto_source_spans(out)
+    for message in out:
+        if isinstance(message, dict):
+            message.pop("_clozn_sources", None)
     by_message: dict[int, list[dict]] = {}
-    for span in spans:
-        index = span["message_index"]
-        by_message.setdefault(index, []).append(span)
-    for index, message_spans in by_message.items():
-        if len(message_spans) <= 1:
+    for span in derive_auto_source_spans(out):
+        by_message.setdefault(span["message_index"], []).append(span)
+    for index, spans in by_message.items():
+        if len(spans) <= 1:
             continue
-        if not (0 <= index < len(out)) or not isinstance(out[index], dict):
-            continue
-        # The input has already been checked by derive_auto_source_spans(),
-        # but check again at the mutation boundary so this remains safe for a
-        # future caller that supplies a custom list-like object.
-        if _has_explicit_sources(out[index]):
-            continue
-        out[index]["_clozn_sources"] = _message_auto_source_descriptors(index, out[index])
+        out[index]["_clozn_sources"] = [
+            {
+                "unicode_range": list(span["unicode_range"]),
+                "provenance_kind": "message",
+            }
+            for span in spans
+        ]
     return out
 
 
@@ -349,8 +267,8 @@ def _source_rows_by_message(receipt: Mapping[str, Any]) -> dict[int, dict[str, l
     for index, row in enumerate(delivered):
         if not isinstance(row, dict):
             continue
-        root_id = row.get("segment_id")
         roots: list[dict] = []
+        root_id = row.get("segment_id")
         if isinstance(root_id, str) and root_id:
             roots.append({
                 "source_id": root_id,
@@ -361,18 +279,18 @@ def _source_rows_by_message(receipt: Mapping[str, Any]) -> dict[int, dict[str, l
                 "source_kind": "whole_message",
                 "provenance_kind": "message",
             })
-        for source in row.get("sources") if isinstance(row.get("sources"), list) else []:
-            if isinstance(source, dict) and isinstance(source.get("source_id"), str):
-                roots.append({**source, "source_kind": "source_span"})
-        rows_by_message[index] = {
-            "root": roots[:1],
-            "spans": roots[1:],
-        }
+        spans = [
+            {**source, "source_kind": "source_span"}
+            for source in row.get("sources", [])
+            if isinstance(source, dict) and isinstance(source.get("source_id"), str)
+        ] if isinstance(row.get("sources"), list) else []
+        rows_by_message[index] = {"root": roots, "spans": spans}
     return rows_by_message
 
 
-def _copy_source(source: Mapping[str, Any], *, message_index: int, role: str,
-                 derivation: str) -> dict:
+def _copy_source(
+    source: Mapping[str, Any], *, message_index: int, role: str, derivation: str,
+) -> dict:
     item = {
         "source_id": source["source_id"],
         "message_index": message_index,
@@ -382,8 +300,7 @@ def _copy_source(source: Mapping[str, Any], *, message_index: int, role: str,
         "source_kind": source["source_kind"],
         "derivation": derivation,
     }
-    for key in ("segment_id", "content_sha256", "provenance_kind", "client_source_id",
-                "source_label", "parent_source_id"):
+    for key in ("segment_id", "content_sha256", "provenance_kind"):
         if source.get(key) is not None:
             item[key] = source[key]
     return item
@@ -391,105 +308,23 @@ def _copy_source(source: Mapping[str, Any], *, message_index: int, role: str,
 
 def _range(source: Mapping[str, Any]) -> tuple[int, int] | None:
     value = source.get("unicode_range")
-    if not (isinstance(value, (list, tuple)) and len(value) == 2
-            and all(isinstance(part, int) and not isinstance(part, bool) for part in value)):
+    if not (
+        isinstance(value, (list, tuple)) and len(value) == 2
+        and all(isinstance(part, int) and not isinstance(part, bool) for part in value)
+    ):
         return None
     return int(value[0]), int(value[1])
 
 
-def _covers_partition(sources: list[Mapping[str, Any]], length: int, *, start: int = 0) -> bool:
-    ordered = sorted(sources, key=lambda source: (_range(source) or (length + 1, length + 1),
-                                                  str(source.get("source_id"))))
-    cursor = start
+def _covers_partition(sources: list[Mapping[str, Any]], length: int) -> bool:
+    ordered = sorted(sources, key=lambda source: (_range(source) or (length + 1, length + 1)))
+    cursor = 0
     for source in ordered:
         span = _range(source)
         if span is None or span[0] != cursor or span[1] <= span[0] or span[1] > length:
             return False
         cursor = span[1]
     return cursor == length
-
-
-def _covers_explicit_content(
-    sources: list[Mapping[str, Any]], text: str, *, start: int = 0, end: int | None = None,
-) -> bool:
-    """Whether exact caller spans cover all non-whitespace content without overlap.
-
-    Caller source annotations commonly omit separators between text blocks
-    (for example the newline between two retrieved paragraphs).  Those bytes
-    are fixed formatting, not a separately removable source.  Requiring the
-    canonical source ranges to absorb them would force Minimal Context to
-    replace the caller's identities with a whole-message root.
-    """
-    limit = len(text) if end is None else end
-    if not (0 <= start <= limit <= len(text)):
-        return False
-    ordered = sorted(sources, key=lambda source: (_range(source) or (limit + 1, limit + 1),
-                                                  str(source.get("source_id"))))
-    cursor = start
-    for source in ordered:
-        span = _range(source)
-        if span is None:
-            return False
-        source_start, source_end = span
-        if source_start < cursor or source_end <= source_start or source_end > limit:
-            return False
-        if text[cursor:source_start].strip():
-            return False
-        cursor = source_end
-    return not text[cursor:limit].strip()
-
-
-def _explicit_partition(message: dict, spans: list[dict], text: str) -> list[dict] | None:
-    """Choose an explicitly represented semantic partition, if one is provable."""
-    raw = message.get("_clozn_sources")
-    if not isinstance(raw, list) or not raw:
-        return None
-    exact_raw = [item for item in raw if isinstance(item, dict) and "unicode_range" in item]
-    if len(exact_raw) != len(raw):
-        return None
-
-    matched: list[dict] = []
-    for raw_item in exact_raw:
-        raw_range = raw_item.get("unicode_range")
-        client_id = raw_item.get("source_id", raw_item.get("client_source_id"))
-        candidates = [
-            source for source in spans
-            if source.get("unicode_range") == raw_range
-            and (client_id is None or source.get("client_source_id") == client_id)
-        ]
-        if len(candidates) != 1:
-            return None
-        matched.append(candidates[0])
-    by_id = {source.get("source_id"): source for source in matched}
-    if len(by_id) != len(matched):
-        return None
-
-    top = [
-        source for source in matched
-        if source.get("parent_source_id") not in by_id
-    ]
-    if not _covers_explicit_content(top, text):
-        return None
-
-    def refine(source: dict) -> list[dict]:
-        children = [
-            child for child in matched
-            if child.get("parent_source_id") == source.get("source_id")
-        ]
-        source_range = _range(source)
-        if source_range is None:
-            return [source]
-        parent_start, parent_end = source_range
-        if not children or not _covers_explicit_content(
-            children, text, start=parent_start, end=parent_end,
-        ):
-            return [source]
-        return [item for child in sorted(children, key=lambda item: _range(item) or (0, 0))
-                for item in refine(child)]
-
-    refined = [item for source in sorted(top, key=lambda item: _range(item) or (0, 0))
-               for item in refine(source)]
-    return refined if _covers_explicit_content(refined, text) else None
 
 
 def _failed_manifest(run_id: str, protected: list[int], message: str) -> dict:
@@ -505,14 +340,7 @@ def _failed_manifest(run_id: str, protected: list[int], message: str) -> dict:
 
 
 def build_context_unit_manifest(run: dict) -> dict:
-    """Build a finalized canonical context-unit manifest from a recorded run.
-
-    The receipt is authoritative.  The builder first asks the strict Context
-    Receipt resolver to prove the catalog against the run's current message
-    bytes, then chooses only IDs returned by that catalog.  Any reconciliation
-    failure returns an empty default universe with an explanatory error rather
-    than guessing coordinates or inventing source IDs.
-    """
+    """Bind the derived flat partition to canonical Context Receipt IDs."""
     run_id = run.get("id") if isinstance(run, dict) and isinstance(run.get("id"), str) else ""
     messages = run.get("messages") if isinstance(run, dict) else None
     if not isinstance(messages, list):
@@ -531,13 +359,12 @@ def build_context_unit_manifest(run: dict) -> dict:
         return _failed_manifest(run_id, protected, "run has no finalized Context Receipt")
 
     rows_by_message = _source_rows_by_message(receipt)
-    candidate_ids = [
+    candidate_ids = list(dict.fromkeys(
         source["source_id"]
         for rows in rows_by_message.values()
         for source in rows.get("root", []) + rows.get("spans", [])
         if isinstance(source.get("source_id"), str)
-    ]
-    candidate_ids = list(dict.fromkeys(candidate_ids))
+    ))
     if not candidate_ids:
         return _failed_manifest(run_id, protected, "finalized Context Receipt has no source catalog")
 
@@ -555,14 +382,13 @@ def build_context_unit_manifest(run: dict) -> dict:
     except Exception as exc:  # noqa: BLE001 - journal derivation fails closed
         return _failed_manifest(run_id, protected, f"strict receipt reconciliation failed: {exc}")
 
-    auto_spans = derive_auto_source_spans(messages)
-    auto_by_message: dict[int, list[dict]] = {}
-    for span in auto_spans:
-        auto_by_message.setdefault(span["message_index"], []).append(span)
+    expected_by_message: dict[int, list[dict]] = {}
+    for span in derive_auto_source_spans(messages):
+        expected_by_message.setdefault(span["message_index"], []).append(span)
 
     selected: list[dict] = []
     for index, message in enumerate(messages):
-        if index in protected or not isinstance(message, dict):
+        if index in protected or not isinstance(message, dict) or not _text_of(message):
             continue
         content = _text_of(message)
         sources = by_message.get(index, [])
@@ -571,35 +397,33 @@ def build_context_unit_manifest(run: dict) -> dict:
         if root is None:
             return _failed_manifest(run_id, protected, f"message {index} has no canonical whole-message root")
 
-        if _has_explicit_sources(message):
-            explicit = _explicit_partition(message, spans, content)
-            chosen = explicit if explicit else [root]
-            derivation = "caller_explicit" if explicit else "caller_fallback_root"
+        expected = expected_by_message.get(index, [])
+        if len(expected) <= 1:
+            chosen = [root]
+            derivation = "message_root"
         else:
-            expected = auto_by_message.get(index, [])
-            if len(expected) <= 1:
-                chosen = [root]
-                derivation = "message_root"
-            else:
-                expected_ranges = [tuple(item["unicode_range"]) for item in expected]
-                matches = [
-                    source for expected_range in expected_ranges
-                    for source in spans
-                    if _range(source) == expected_range
-                ]
-                if (len(matches) != len(expected_ranges)
-                        or len({source.get("source_id") for source in matches}) != len(matches)
-                        or not _covers_partition(matches, len(content))):
+            expected_ranges = [tuple(item["unicode_range"]) for item in expected]
+            chosen = []
+            for expected_range in expected_ranges:
+                matches = [source for source in spans if _range(source) == expected_range]
+                if len(matches) != 1:
                     return _failed_manifest(
                         run_id, protected,
-                        f"message {index} auto partition does not reconcile with the Context Receipt",
+                        f"message {index} derived partition does not reconcile with the Context Receipt",
                     )
-                chosen = sorted(matches, key=lambda source: _range(source) or (0, 0))
-                derivation = "auto_structural"
+                chosen.append(matches[0])
+            if not _covers_partition(chosen, len(content)):
+                return _failed_manifest(
+                    run_id, protected,
+                    f"message {index} derived partition does not cover the recorded context",
+                )
+            derivation = "adaptive_markdown"
 
         for source in chosen:
             selected.append(_copy_source(
-                source, message_index=index, role=str(message.get("role") or ""),
+                source,
+                message_index=index,
+                role=str(message.get("role") or ""),
                 derivation=derivation,
             ))
 
@@ -612,9 +436,12 @@ def build_context_unit_manifest(run: dict) -> dict:
 
 
 __all__ = [
+    "DEFAULT_MAX_CONTEXT_ARMS",
+    "MAX_CONTEXT_ARMS_ENV",
     "SCHEMA",
     "annotate_auto_sources",
     "build_context_unit_manifest",
     "derive_auto_source_spans",
+    "max_context_arms",
     "protected_message_indices",
 ]

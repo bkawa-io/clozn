@@ -204,18 +204,13 @@ def test_canonical_receipt_set_deletion_refuses_nontrivial_assembly_and_unknown_
 
 
 def _span_receipt_run():
-    content = "Prefix 😀 [policy α] + [question?] suffix"
-    messages = [{
-        "role": "user", "content": content,
-        "_clozn_sources": [
-            {"source_id": "policy", "unicode_range": [9, 19],
-             "provenance_kind": "retrieved_document", "label": "Policy"},
-            {"source_id": "policy-detail", "unicode_range": [10, 17],
-             "parent_source_id": "policy", "provenance_kind": "retrieved_document"},
-            {"source_id": "question", "unicode_range": [22, 33],
-             "provenance_kind": "conversation_turn"},
-        ],
-    }]
+    first = "## Policy\nPrefix 😀 policy α " + ("detail " * 10)
+    second = "## Evidence\nquestion " + ("fact " * 12)
+    content = first + "\n\n" + second
+    messages = [
+        {"role": "user", "content": content},
+        {"role": "user", "content": "current question"},
+    ]
     receipt = build_context_receipt(
         messages=messages, assembled_messages=messages, final_prompt="exact prompt",
         run_id="run_span_receipt", privacy="full",
@@ -228,34 +223,34 @@ def _span_receipt_run():
 def test_canonical_receipt_span_deletion_handles_unicode_multiple_ranges_and_never_renders_metadata():
     run = _span_receipt_run()
     spans = run["context_receipt"]["assembled"][0]["sources"]
-    policy = next(item for item in spans if item.get("client_source_id") == "policy")
-    question = next(item for item in spans if item.get("client_source_id") == "question")
+    policy, evidence = spans
 
-    result = span_bridge.resolve_context_receipt_source_set(run, [question["source_id"], policy["source_id"]])
+    result = span_bridge.resolve_context_receipt_source_set(run, [evidence["source_id"], policy["source_id"]])
 
-    assert result["canonical_source_ids"] == sorted([policy["source_id"], question["source_id"]])
-    assert result["messages"] == [{"role": "user", "content": "Prefix 😀  +  suffix"}]
+    assert result["canonical_source_ids"] == sorted([policy["source_id"], evidence["source_id"]])
+    assert result["messages"] == [
+        {"role": "user", "content": ""},
+        {"role": "user", "content": "current question"},
+    ]
     ranges = result["exact_removed_ranges"]
-    assert [item["unicode_range"] for item in ranges] == [[9, 19], [22, 33]]
-    assert ranges[0]["byte_range"] == [12, 23]  # 😀 consumes four UTF-8 bytes
+    assert ranges[0]["unicode_range"][0] == 0
+    assert ranges[-1]["unicode_range"][1] == len(run["messages"][0]["content"])
+    assert ranges[0]["byte_range"][1] > ranges[0]["unicode_range"][1]  # 😀 consumes four UTF-8 bytes
     assert all(item["source_kind"] == "source_span" and len(item["content_sha256"]) == 64
                for item in ranges)
     assert policy["source_id"] in result["available_source_ids"]
-    assert run["messages"][0]["content"] == "Prefix 😀 [policy α] + [question?] suffix"
+    assert run["messages"][0]["content"].startswith("## Policy\nPrefix 😀 policy α")
 
 
-def test_canonical_receipt_span_deletion_allows_structural_nested_request_as_one_union():
+def test_canonical_receipt_span_deletion_accepts_the_flat_partition_as_one_union():
     run = _span_receipt_run()
     spans = run["context_receipt"]["assembled"][0]["sources"]
-    parent = next(item for item in spans if item.get("client_source_id") == "policy")
-    child = next(item for item in spans if item.get("client_source_id") == "policy-detail")
+    left, right = spans
 
-    result = span_bridge.delete_context_receipt_sources(run, [parent["source_id"], child["source_id"]])
+    result = span_bridge.delete_context_receipt_sources(run, [left["source_id"], right["source_id"]])
 
-    assert result["messages"] == [{"role": "user", "content": "Prefix 😀  + [question?] suffix"}]
-    assert [item["source_id"] for item in result["exact_removed_ranges"]] == [
-        parent["source_id"], child["source_id"],
-    ]
+    assert result["messages"][0]["content"] == ""
+    assert [item["source_id"] for item in result["exact_removed_ranges"]] == [left["source_id"], right["source_id"]]
 
 
 def test_canonical_receipt_span_deletion_refuses_byte_or_content_drift_and_malformed_overlap():
@@ -273,16 +268,16 @@ def test_canonical_receipt_span_deletion_refuses_byte_or_content_drift_and_malfo
 
     run = _span_receipt_run()
     spans = run["context_receipt"]["assembled"][0]["sources"]
-    bad = next(item for item in spans if item.get("client_source_id") == "question")
+    bad = spans[1]
     content = run["messages"][0]["content"]
-    bad["unicode_range"] = [18, 33]  # overlaps policy but does not name it as a parent
-    bad["byte_range"] = [len(content[:18].encode("utf-8")), len(content[:33].encode("utf-8"))]
+    boundary = spans[0]["unicode_range"][1]
+    bad["unicode_range"] = [boundary - 3, bad["unicode_range"][1]]
+    bad["byte_range"] = [len(content[:boundary - 3].encode("utf-8")), len(content[:bad["unicode_range"][1]].encode("utf-8"))]
     from clozn.runs.context_receipt import _canonical_source_id, _content_sha256
-    bad["content_sha256"] = _content_sha256(content[18:33])
+    bad["content_sha256"] = _content_sha256(content[boundary - 3:bad["unicode_range"][1]])
     bad["source_id"] = _canonical_source_id(
         segment=bad["segment_id"], unicode_range=bad["unicode_range"], byte_range=bad["byte_range"],
         content_sha256=bad["content_sha256"], provenance_kind=bad["provenance_kind"],
-        client_source_id=bad["client_source_id"], parent_source_id=None,
     )
     with pytest.raises(span_bridge.ContextReceiptSourceResolutionError, match="overlap"):
         span_bridge.delete_context_receipt_sources(run, [bad["source_id"]])
@@ -291,11 +286,10 @@ def test_canonical_receipt_span_deletion_refuses_byte_or_content_drift_and_malfo
 def test_matched_length_neutralization_is_unicode_exact_and_separate_from_deletion():
     run = _span_receipt_run()
     spans = run["context_receipt"]["assembled"][0]["sources"]
-    parent = next(item for item in spans if item.get("client_source_id") == "policy")
-    child = next(item for item in spans if item.get("client_source_id") == "policy-detail")
+    left, right = spans
 
-    neutral = span_bridge.neutralize_context_receipt_sources(run, [child["source_id"], parent["source_id"]])
-    deleted = span_bridge.delete_context_receipt_sources(run, [parent["source_id"]])
+    neutral = span_bridge.neutralize_context_receipt_sources(run, [right["source_id"], left["source_id"]])
+    deleted = span_bridge.delete_context_receipt_sources(run, [left["source_id"], right["source_id"]])
 
     original = run["messages"][0]["content"]
     changed = neutral["messages"][0]["content"]
@@ -309,17 +303,17 @@ def test_matched_length_neutralization_is_unicode_exact_and_separate_from_deleti
     }
     assert len(changed) == len(original)
     assert len(changed.encode("utf-8")) < len(original.encode("utf-8"))  # α becomes recipe ASCII
-    filler = matched_length_neutral_filler(10)
-    assert changed == original[:9] + filler + original[19:]
+    filler = matched_length_neutral_filler(len(original))
+    assert changed == filler
     assert len(neutral["exact_neutralized_ranges"]) == 2
     assert neutral["effective_neutralized_ranges"] == [{
-        "message_index": 0, "unicode_range": [9, 19],
-        "original_content_sha256": parent["content_sha256"],
+        "message_index": 0, "unicode_range": [0, len(original)],
+        "original_content_sha256": hashlib.sha256(original.encode("utf-8")).hexdigest(),
         "replacement_content_sha256": hashlib.sha256(filler.encode("utf-8")).hexdigest(),
-        "original_unicode_code_points": 10, "replacement_unicode_code_points": 10,
-        "original_utf8_bytes": 11, "replacement_utf8_bytes": len(filler.encode("utf-8")),
+        "original_unicode_code_points": len(original), "replacement_unicode_code_points": len(original),
+        "original_utf8_bytes": len(original.encode("utf-8")), "replacement_utf8_bytes": len(filler.encode("utf-8")),
     }]
-    assert deleted["messages"][0]["content"] == "Prefix 😀  + [question?] suffix"
+    assert deleted["messages"][0]["content"] == ""
     assert neutral["intervened_context_digest"] != deleted["intervened_context_digest"]
     assert run["messages"][0]["content"] == original
 

@@ -19,6 +19,7 @@ from clozn.experiments.state import ExecutionState
 import clozn.recipes.context_effects as context_effects_recipe
 from clozn.recipes.context_effects import measure_context_effects, project_context_effects
 from clozn.runs.context_receipt import build_context_receipt
+from clozn.runs.context_units import build_context_unit_manifest
 
 
 CONTRACT = {
@@ -53,6 +54,7 @@ def _run():
         messages=messages, assembled_messages=messages, final_prompt=run["final_prompt"],
         run_id=run["id"], privacy="full",
     )
+    run["context_units"] = build_context_unit_manifest(run)
     return run, [segment["segment_id"] for segment in run["context_receipt"]["assembled"]]
 
 

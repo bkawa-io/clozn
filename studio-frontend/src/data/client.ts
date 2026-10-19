@@ -60,35 +60,26 @@ function runId(value: string, endpoint: string): string {
 
 export interface RunDraft {
   instructions: string;
-  contextBlocks: readonly string[];
+  context: string;
   question: string;
 }
 
 function generationRequest(draft: RunDraft): Record<string, unknown> {
   const instructions = draft.instructions.trim();
   const question = draft.question.trim();
-  const contextBlocks = draft.contextBlocks.map((block) => block.trim()).filter(Boolean);
+  const context = draft.context.trim();
   if (!question) throw new ContractError("composer", "question must not be blank");
-  if (!contextBlocks.length) throw new ContractError("composer", "at least one context block is required");
-  if (contextBlocks.length > 16) throw new ContractError("composer", "at most 16 context blocks are supported");
+  if (!context) throw new ContractError("composer", "context must not be blank");
 
   const messages: Array<{ role: "system" | "user"; content: string }> = [];
   if (instructions) messages.push({ role: "system", content: instructions });
-  const firstContextIndex = messages.length;
-  for (const content of contextBlocks) messages.push({ role: "user", content });
+  messages.push({ role: "user", content: context });
   messages.push({ role: "user", content: question });
 
   return {
     messages,
     max_tokens: 128,
     temperature: 0,
-    clozn_sources: contextBlocks.map((content, index) => ({
-      message_index: firstContextIndex + index,
-      source_id: `context-${index + 1}`,
-      label: `Context ${index + 1}`,
-      unicode_range: [0, [...content].length],
-      provenance_kind: "client_supplied",
-    })),
   };
 }
 

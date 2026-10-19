@@ -21,7 +21,7 @@ This is a scoped rebuild, with working checkpoints between changes. A new infere
 
 Studio has a run list with a New run action and one run workspace with two modes: **Context Effects** and **Minimal Context**. Comparison belongs to the reduction result. Received context, provenance, and runtime details become expandable information in that workspace. Session navigation, a separate runtime dashboard, and a general comparison workbench leave the product.
 
-The composer is deliberately small: question, optional instructions, and plain-text context blocks. The example populates these fields and executes a real run. Document ingestion, retrieval, website fetching, project indexing, and a full chat application are outside v1.
+The composer is deliberately small: question, optional instructions, and one Markdown/plain-text context. Clozn derives a bounded flat partition using basic Markdown structure; clients do not submit source blocks or source ranges. The example populates these fields and executes a real run. Document ingestion, retrieval, website fetching, project indexing, and a full chat application are outside v1.
 
 **2. Keep/cut decisions**
 

@@ -77,7 +77,7 @@ include `clozn_run_id` and `X-Clozn-Run-Id`; the terminal streaming chunk includ
 
 Studio has a run list/composer and one run workspace:
 
-1. create a run from a question, optional instructions, and text context blocks;
+1. create a run from a question, optional instructions, and one Markdown/plain-text context;
 2. inspect input and output in Context Effects;
 3. measure how removing a recorded source changes the likelihood of selected answer text;
 4. run Minimal Context and cancel it if needed;
@@ -87,7 +87,8 @@ Studio has a run list/composer and one run workspace:
 Context Effects and Minimal Context use the same canonical source identities. Context Effects is a
 teacher-forced intervention measurement; Minimal Context separately verifies the recorded answer and
 stop behavior. Low measured effect, unmeasured, unavailable, failed, and exact-preserved are distinct
-states.
+states. Clozn derives a flat Markdown-aware context partition automatically; `CLOZN_MAX_CONTEXT_ARMS`
+sets its maximum number of analysis arms (default 16).
 
 ## Data and privacy
 

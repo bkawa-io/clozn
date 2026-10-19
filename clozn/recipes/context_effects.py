@@ -29,30 +29,20 @@ class _NoExactlyRemovableSource(ValueError):
 
 
 def _receipt_source_universe(run: Mapping[str, Any]) -> list[str]:
-    receipt = run.get("context_receipt") if isinstance(run.get("context_receipt"), Mapping) else {}
-    delivered = receipt.get("delivered")
-    if not isinstance(delivered, list):
+    """Return the same derived default units consumed by Minimal Context."""
+    manifest = run.get("context_units") if isinstance(run.get("context_units"), Mapping) else {}
+    source_ids = manifest.get("default_source_ids")
+    if not isinstance(source_ids, list):
         return []
     result: list[str] = []
     seen: set[str] = set()
-    for segment in delivered:
-        if not isinstance(segment, Mapping):
+    for source_id in source_ids:
+        if not isinstance(source_id, str) or not source_id or source_id in seen:
             continue
-        sources = segment.get("sources")
-        candidates = [
-            item.get("source_id") for item in sources
-            if isinstance(sources, list) and isinstance(item, Mapping)
-            and isinstance(item.get("source_id"), str) and item.get("source_id")
-        ] if isinstance(sources, list) else []
-        if not candidates:
-            candidates = [segment.get("segment_id")]
-        for source_id in candidates:
-            if not isinstance(source_id, str) or not source_id or source_id in seen:
-                continue
-            if not (source_id.startswith("src_") or source_id.startswith("seg_")):
-                continue
-            seen.add(source_id)
-            result.append(source_id)
+        if not (source_id.startswith("src_") or source_id.startswith("seg_")):
+            continue
+        seen.add(source_id)
+        result.append(source_id)
     return result
 
 
@@ -108,7 +98,7 @@ def _source_universe(run: Mapping[str, Any], source_ids: Iterable[str] | None) -
         return values, "explicit"
     values = _receipt_source_universe(run)
     if not values:
-        raise ValueError("no canonical Context Receipt sources are available")
+        raise _NoExactlyRemovableSource(_NO_EXACTLY_REMOVABLE_SOURCE)
     # Auto discovery is conservative: a source that cannot be deleted exactly,
     # including the protected current request, is not silently displayed as an
     # effect arm.
@@ -121,7 +111,7 @@ def _source_universe(run: Mapping[str, Any], source_ids: Iterable[str] | None) -
         removable.append(source_id)
     if not removable:
         raise _NoExactlyRemovableSource(_NO_EXACTLY_REMOVABLE_SOURCE)
-    return removable, "canonical_context_receipt"
+    return removable, "canonical_context_units"
 
 
 @dataclass(frozen=True)
@@ -230,7 +220,7 @@ def plan_context_effects_reader(
             execution_state=ExecutionState.from_run(run),
             display_source_ids=tuple(_receipt_display_source_universe(run)),
             measurement_source_ids=(),
-            source_universe_basis="canonical_context_receipt",
+            source_universe_basis="canonical_context_units",
             reason=_NO_EXACTLY_REMOVABLE_SOURCE_READER_REASON,
             reason_code=_NO_EXACTLY_REMOVABLE_SOURCE_CODE,
         )

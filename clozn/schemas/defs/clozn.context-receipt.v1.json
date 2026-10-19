@@ -31,13 +31,7 @@
         "source_type": {"type": "string", "enum": ["message"]},
         "source_label": {
           "type": "string",
-          "description": "Explicit client label when supplied through clozn_sources; otherwise the message role."
-        },
-        "client_source_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 256,
-          "description": "Optional stable client identity supplied explicitly at the request boundary. Unique within a request; never inferred."
+          "description": "The recorded message role."
         },
         "original_order": {"type": "integer", "minimum": 0},
         "delivered_bytes": {"type": "integer", "minimum": 0},
@@ -69,12 +63,7 @@
           "description": "Exact half-open UTF-8 byte range derived from unicode_range."
         },
         "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "client_source_id": {"type": "string", "minLength": 1, "maxLength": 256},
-        "source_label": {"type": "string", "minLength": 1, "maxLength": 256},
-        "provenance_kind": {
-          "enum": ["message", "retrieved_document", "tool_result", "system_instruction", "conversation_turn", "client_supplied"]
-        },
-        "parent_source_id": {"type": "string", "pattern": "^src_[0-9a-f]{24}$"}
+        "provenance_kind": {"const": "message"}
       },
       "additionalProperties": false
     },

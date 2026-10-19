@@ -9,8 +9,8 @@ retained copy.
 
 SEGMENT IDENTITY -- the contract features 07/08/10 build on
 -------------------------------------------------------------
-A segment is one user-visible unit; v1 makes that exactly one chat message (clozn has no sub-message
-attachment/document-chunk concept -- see the schema file's top-level description). Its id is
+A segment is one user-visible message. Markdown-aware source spans may partition
+eligible context inside that message for analysis. Its id is
 ``"seg_" + sha256(role + "\\n" + content)[:16]``, computed ONCE at the delivered boundary and carried
 through unchanged -- never recomputed from content at a later stage, because recomputing would break
 stability exactly when a transformation touches the content, which is the one case an id needs to
@@ -55,17 +55,6 @@ OUTPUT_TRUNCATED = "output_truncated"
 SCHEMA_VERSION = "clozn.context-receipt.v1"
 
 
-# ``clozn_sources`` is deliberately metadata-only.  These values describe why
-# the client says a precisely addressed source exists; they do not change how
-# the message is rendered or sent to the model.  Keep this small closed
-# vocabulary at the public boundary so a typo never turns into an invented
-# provenance category in a Context Receipt.
-SOURCE_PROVENANCE_KINDS = frozenset({
-    "message", "retrieved_document", "tool_result", "system_instruction",
-    "conversation_turn", "client_supplied",
-})
-
-
 # ---------------------------------------------------------------------------------------------------
 # segment identity
 # ---------------------------------------------------------------------------------------------------
@@ -87,24 +76,11 @@ def _content_sha256(content: str) -> str:
 
 
 def _canonical_source_id(*, segment: str, unicode_range: list[int], byte_range: list[int],
-                         content_sha256: str, provenance_kind: str,
-                         client_source_id: str | None,
-                         parent_source_id: str | None) -> str:
-    """A stable exact-source identity, never a client-controlled identifier.
-
-    ``segment`` commits the role + complete message text (and the duplicate
-    occurrence where applicable); the range and source-content digest commit
-    the selected bytes.  Client labels are intentionally excluded, while a
-    client identity/provenance/structural parent is included: changing any of
-    those facts changes the claimed source, not merely its display name.  A
-    child commits its *canonical* parent identity (not merely the parent client
-    label), so changes to any structural ancestor also change the child ID.
-    """
+                         content_sha256: str, provenance_kind: str = "message") -> str:
+    """Return the stable identity of one server-derived exact source span."""
     canonical = {
         "byte_range": byte_range,
-        "client_source_id": client_source_id,
         "content_sha256": content_sha256,
-        "parent_source_id": parent_source_id,
         "provenance_kind": provenance_kind,
         "segment_id": segment,
         "unicode_range": unicode_range,
@@ -132,54 +108,23 @@ def _range_pair(value, *, upper: int) -> list[int] | None:
 
 def _canonical_message_sources(message: dict, *, segment: str, message_index: int,
                                content: str) -> list[dict]:
-    """Canonicalize the private journal metadata for one exact message.
-
-    The OpenAI adapter validates this input before it reaches the journal.  We
-    nevertheless re-derive every byte offset and digest here because receipt
-    capture is also a public, directly callable seam.  A malformed direct
-    caller gets no speculative source record rather than a receipt that later
-    claims it can faithfully delete unknown bytes.
-    """
+    """Canonicalize the server-derived flat source partition for one message."""
     raw_sources = message.get("_clozn_sources")
     if raw_sources is None:
-        # A message without exact source spans remains represented by its seg_
-        # root. Do not manufacture a duplicate src_ source.
         raw_sources = []
     if not isinstance(raw_sources, list):
         return []
 
     candidates: list[dict] = []
-    client_ids: set[str] = set()
     for raw in raw_sources:
         if not isinstance(raw, dict):
             return []
-        # A source without an explicit exact range cannot support a src_
-        # identity; its enclosing seg_ root remains the evidence boundary.
         if "unicode_range" not in raw:
-            continue
+            return []
         unicode_range = _range_pair(raw.get("unicode_range"), upper=len(content))
         if unicode_range is None:
             return []
         byte_range = [_byte_offset(content, unicode_range[0]), _byte_offset(content, unicode_range[1])]
-        supplied_bytes = raw.get("byte_range")
-        if supplied_bytes is not None and _range_pair(supplied_bytes, upper=len(content.encode("utf-8"))) != byte_range:
-            return []
-        client_source_id = raw.get("client_source_id", raw.get("source_id"))
-        if client_source_id is not None:
-            if not isinstance(client_source_id, str) or not client_source_id or client_source_id in client_ids:
-                return []
-            client_ids.add(client_source_id)
-        label = raw.get("label", raw.get("source_label"))
-        if label is not None and (not isinstance(label, str) or not label):
-            return []
-        provenance_kind = raw.get("provenance_kind", "message")
-        if not isinstance(provenance_kind, str) or provenance_kind not in SOURCE_PROVENANCE_KINDS:
-            return []
-        parent_client_source_id = raw.get("parent_source_id")
-        if parent_client_source_id is not None and (
-            not isinstance(parent_client_source_id, str) or not parent_client_source_id
-        ):
-            return []
         selected = content[unicode_range[0]:unicode_range[1]]
         source_sha256 = _content_sha256(selected)
         item = {
@@ -188,95 +133,25 @@ def _canonical_message_sources(message: dict, *, segment: str, message_index: in
             "unicode_range": unicode_range,
             "byte_range": byte_range,
             "content_sha256": source_sha256,
-            "provenance_kind": provenance_kind,
+            "provenance_kind": "message",
         }
-        if client_source_id is not None:
-            item["client_source_id"] = client_source_id
-        if label is not None:
-            item["source_label"] = label
-        if parent_client_source_id is not None:
-            # Resolved after all sibling source IDs exist.
-            item["_parent_client_source_id"] = parent_client_source_id
+        item["source_id"] = _canonical_source_id(
+            segment=segment, unicode_range=item["unicode_range"], byte_range=item["byte_range"],
+            content_sha256=item["content_sha256"],
+        )
         candidates.append(item)
 
-    source_by_client_id = {
-        item["client_source_id"]: item for item in candidates if item.get("client_source_id")
-    }
-    def _mint(item: dict, active: set[int]) -> str | None:
-        existing = item.get("source_id")
-        if isinstance(existing, str):
-            return existing
-        marker = id(item)
-        if marker in active:
-            return None
-        active.add(marker)
-        parent_client_id = item.get("_parent_client_source_id")
-        parent_source_id = None
-        if parent_client_id is not None:
-            parent = source_by_client_id.get(parent_client_id)
-            if parent is None or parent is item:
-                return None
-            parent_start, parent_end = parent["unicode_range"]
-            child_start, child_end = item["unicode_range"]
-            if not (parent_start <= child_start and child_end <= parent_end):
-                return None
-            parent_source_id = _mint(parent, active)
-            if parent_source_id is None:
-                return None
-            item["parent_source_id"] = parent_source_id
-        source_id = _canonical_source_id(
-            segment=segment, unicode_range=item["unicode_range"], byte_range=item["byte_range"],
-            content_sha256=item["content_sha256"], provenance_kind=item["provenance_kind"],
-            client_source_id=item.get("client_source_id"), parent_source_id=parent_source_id,
-        )
-        item["source_id"] = source_id
-        active.remove(marker)
-        return source_id
-
-    seen_source_ids: set[str] = set()
-    for item in candidates:
-        if _mint(item, set()) is None or item["source_id"] in seen_source_ids:
+    ordered = sorted(candidates, key=lambda item: item["unicode_range"])
+    for left, right in zip(ordered, ordered[1:]):
+        if left["unicode_range"][1] > right["unicode_range"][0]:
             return []
-        seen_source_ids.add(item["source_id"])
-        item.pop("_parent_client_source_id", None)
-
-    # An overlap has one safe interpretation only: one source is an explicit
-    # structural descendant of the other.  Do not infer ancestry from ranges.
-    by_id = {item["source_id"]: item for item in candidates}
-
-    def _is_ancestor(ancestor_id: str, child: dict) -> bool:
-        parent_id = child.get("parent_source_id")
-        seen: set[str] = set()
-        while isinstance(parent_id, str) and parent_id and parent_id not in seen:
-            if parent_id == ancestor_id:
-                return True
-            seen.add(parent_id)
-            parent = by_id.get(parent_id)
-            parent_id = parent.get("parent_source_id") if isinstance(parent, dict) else None
-        return False
-
-    for left_index, left in enumerate(candidates):
-        for right in candidates[left_index + 1:]:
-            left_start, left_end = left["unicode_range"]
-            right_start, right_end = right["unicode_range"]
-            if max(left_start, right_start) >= min(left_end, right_end):
-                continue
-            left_contains_right = left_start <= right_start and right_end <= left_end
-            right_contains_left = right_start <= left_start and left_end <= right_end
-            if not (
-                (left_contains_right and _is_ancestor(left["source_id"], right))
-                or (right_contains_left and _is_ancestor(right["source_id"], left))
-            ):
-                return []
-    return candidates
+    if len({item["source_id"] for item in ordered}) != len(ordered):
+        return []
+    return ordered
 
 
 def _delivered_segments(messages) -> list[dict]:
-    """One segment per message in `messages`, in order, with a stable, content-derived id.
-
-    ``source_id``/``source_label`` are private journal metadata produced only by the explicit
-    ``clozn_sources`` request extension.  They never ride into the rendered prompt.
-    """
+    """One segment per message, plus any server-derived flat source spans."""
     seen: dict[tuple[str, str], int] = {}
     out = []
     for index, message in enumerate(messages or []):
@@ -288,20 +163,14 @@ def _delivered_segments(messages) -> list[dict]:
         occurrence = seen.get(key, 0)
         seen[key] = occurrence + 1
         text = content if isinstance(content, str) else ""
-        explicit_label = message.get("source_label")
-        explicit_id = message.get("source_id")
         segment = {
             "segment_id": segment_id(role, content, occurrence=occurrence),
             "source_type": "message",
-            "source_label": (
-                explicit_label if isinstance(explicit_label, str) and explicit_label else role
-            ),
+            "source_label": role,
             "original_order": index,
             "delivered_bytes": len(text.encode("utf-8")),
             "content_hash": _content_hash(content),
         }
-        if isinstance(explicit_id, str) and explicit_id:
-            segment["client_source_id"] = explicit_id
         sources = _canonical_message_sources(
             message, segment=segment["segment_id"], message_index=index, content=text,
         )
@@ -355,8 +224,6 @@ def _assembled_segments(delivered_segments, delivered_messages, assembled_messag
             "included": True,
             "content_hash": _content_hash(content),
         }
-        if matched_segment is not None and matched_segment.get("client_source_id"):
-            assembled["client_source_id"] = matched_segment["client_source_id"]
         if matched_segment is not None and isinstance(matched_segment.get("sources"), list):
             # Exact (role, content) matching above proves these code-point and
             # UTF-8 offsets still identify the same bytes.  Update only the

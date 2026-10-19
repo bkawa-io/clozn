@@ -12,18 +12,14 @@ from clozn.replay.span_bridge import (
 from clozn.runs.context_receipt import build_context_receipt
 from clozn.runs.context_units import (
     build_context_unit_manifest,
+    derive_auto_source_spans,
+    max_context_arms,
     protected_message_indices,
 )
 
 
-def _run(messages: list[dict], *, run_id: str = "run_units", explicit: bool = False) -> dict:
+def _run(messages: list[dict], *, run_id: str = "run_units") -> dict:
     source_messages = deepcopy(messages)
-    if explicit:
-        source_messages[0]["_clozn_sources"] = [
-            {"source_id": "left", "unicode_range": [0, 5], "provenance_kind": "message"},
-            {"source_id": "right", "unicode_range": [5, len(source_messages[0]["content"])],
-             "provenance_kind": "message"},
-        ]
     receipt = build_context_receipt(messages=source_messages, run_id=run_id, privacy="full")
     run = {"id": run_id, "messages": deepcopy(messages), "context_receipt": receipt}
     run["context_units"] = build_context_unit_manifest(run)
@@ -35,7 +31,7 @@ def test_structured_message_is_partitioned_without_a_duplicate_root():
     run = _run([{"role": "user", "content": content}, {"role": "user", "content": "q"}])
     manifest = run["context_units"]
 
-    assert len(manifest["default_source_ids"]) >= 3
+    assert len(manifest["default_source_ids"]) >= 2
     assert all(source_id.startswith("src_") for source_id in manifest["default_source_ids"])
     ranges = [unit["unicode_range"] for unit in manifest["units"]]
     assert ranges[0][0] == 0
@@ -98,46 +94,37 @@ def test_trailing_prefill_is_protected_and_no_user_falls_back_to_final_message()
     assert no_user["context_units"]["units"] == []
 
 
-def test_explicit_sources_win_and_nested_parent_child_is_not_selected_together():
-    content = "abcdefghij"
-    messages = [{"role": "user", "content": content}, {"role": "user", "content": "q"}]
-    messages[0]["_clozn_sources"] = [
-        {"source_id": "parent", "unicode_range": [0, 10], "provenance_kind": "message"},
-        {"source_id": "left", "unicode_range": [0, 5], "parent_source_id": "parent",
-         "provenance_kind": "message"},
-        {"source_id": "right", "unicode_range": [5, 10], "parent_source_id": "parent",
-         "provenance_kind": "message"},
-    ]
-    receipt = build_context_receipt(messages=messages, run_id="run_explicit", privacy="full")
-    run = {"id": "run_explicit", "messages": deepcopy(messages), "context_receipt": receipt}
-    manifest = build_context_unit_manifest(run)
+def test_client_source_annotations_are_ignored_and_replaced_by_derived_units():
+    content = "# Alpha\n" + "a" * 80 + "\n\n# Beta\n" + "b" * 80
+    messages = [{
+        "role": "user",
+        "content": content,
+        "_clozn_sources": [{
+            "source_id": "client-choice",
+            "unicode_range": [0, len(content)],
+            "provenance_kind": "client_supplied",
+        }],
+    }, {"role": "user", "content": "q"}]
+    run = _run(messages, run_id="run_ignored_client_sources")
 
-    ids = manifest["default_source_ids"]
-    assert len(ids) == 2
-    assert all(item.startswith("src_") for item in ids)
-    assert not any(
-        source.get("source_id") in ids and source.get("parent_source_id") in ids
-        for source in receipt["delivered"][0]["sources"]
+    assert len(run["context_units"]["default_source_ids"]) == 2
+    assert all(unit["derivation"] == "adaptive_markdown" for unit in run["context_units"]["units"])
+    assert all(
+        source.get("client_source_id") != "client-choice"
+        for source in run["context_receipt"]["delivered"][0].get("sources", [])
     )
-    assert all(unit["derivation"] == "caller_explicit" for unit in manifest["units"])
 
 
-def test_explicit_sources_keep_canonical_ids_across_whitespace_separators():
-    content = "alpha\nbeta\ngamma"
+def test_arm_cap_is_configurable_and_merges_adjacent_markdown_chunks(monkeypatch):
+    content = "\n\n".join(f"# Section {index}\n" + (str(index) * 60) for index in range(12))
     messages = [{"role": "user", "content": content}, {"role": "user", "content": "q"}]
-    messages[0]["_clozn_sources"] = [
-        {"source_id": "a", "unicode_range": [0, 5], "provenance_kind": "message"},
-        {"source_id": "b", "unicode_range": [6, 10], "provenance_kind": "message"},
-        {"source_id": "c", "unicode_range": [11, 16], "provenance_kind": "message"},
-    ]
-    receipt = build_context_receipt(messages=messages, run_id="run_explicit_gaps", privacy="full")
-    run = {"id": "run_explicit_gaps", "messages": deepcopy(messages), "context_receipt": receipt}
 
-    manifest = build_context_unit_manifest(run)
-
-    canonical = [source["source_id"] for source in receipt["delivered"][0]["sources"]]
-    assert manifest["default_source_ids"] == canonical
-    assert all(unit["derivation"] == "caller_explicit" for unit in manifest["units"])
+    assert len(derive_auto_source_spans(messages, max_arms=3)) == 3
+    monkeypatch.setenv("CLOZN_MAX_CONTEXT_ARMS", "5")
+    assert max_context_arms() == 5
+    assert len(derive_auto_source_spans(messages)) <= 5
+    monkeypatch.setenv("CLOZN_MAX_CONTEXT_ARMS", "not-an-integer")
+    assert max_context_arms() == 16
 
 
 def test_unicode_offsets_and_strict_resolver_bind_to_recorded_bytes():

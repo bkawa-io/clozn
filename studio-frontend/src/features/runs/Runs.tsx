@@ -11,12 +11,12 @@ type RunsState =
 
 const EXAMPLE: RunDraft = {
   instructions: "Answer from the supplied facts. Return only the requested value.",
-  contextBlocks: [
-    "The launch code is ORCHID-731.",
-    "The launch site is North Annex.",
-    "The launch window begins at dawn.",
-    "The authorized badge color is amber.",
-  ],
+  context: [
+    "## Launch code\nThe launch code is ORCHID-731.",
+    "## Launch site\nThe launch site is North Annex.",
+    "## Launch window\nThe launch window begins at dawn.",
+    "## Badge\nThe authorized badge color is amber.",
+  ].join("\n\n"),
   question: "According to the supplied facts, what is the launch code? Answer with the code only.",
 };
 
@@ -34,31 +34,26 @@ function shortId(value: string): string {
 
 function Composer({ onCreated }: { onCreated: (runId: string) => void }) {
   const [instructions, setInstructions] = useState("");
-  const [contextBlocks, setContextBlocks] = useState([""]);
+  const [context, setContext] = useState("");
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const validBlocks = contextBlocks.filter((block) => block.trim());
 
   function loadExample() {
     setInstructions(EXAMPLE.instructions);
-    setContextBlocks([...EXAMPLE.contextBlocks]);
+    setContext(EXAMPLE.context);
     setQuestion(EXAMPLE.question);
     setError(undefined);
   }
 
-  function updateBlock(index: number, value: string) {
-    setContextBlocks((current) => current.map((block, currentIndex) => currentIndex === index ? value : block));
-  }
-
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!question.trim() || !validBlocks.length || busy) return;
+    if (!question.trim() || !context.trim() || busy) return;
     const controller = new AbortController();
     setBusy(true);
     setError(undefined);
     try {
-      const created = await studioApi.createRun({ instructions, contextBlocks, question }, controller.signal);
+      const created = await studioApi.createRun({ instructions, context, question }, controller.signal);
       onCreated(created.runId);
     } catch (requestError: unknown) {
       setError(describeError(requestError));
@@ -77,30 +72,17 @@ function Composer({ onCreated }: { onCreated: (runId: string) => void }) {
           <span>Instructions <small>optional · protected</small></span>
           <textarea value={instructions} disabled={busy} onChange={(event) => setInstructions(event.target.value)} rows={2} placeholder="How should the model answer?" />
         </label>
-        <fieldset>
-          <legend>Context blocks <small>measured and reducible</small></legend>
-          <div className="context-block-editor">
-            {contextBlocks.map((block, index) => (
-              <label key={index}>
-                <span>Context {index + 1}</span>
-                <textarea value={block} disabled={busy} onChange={(event) => updateBlock(index, event.target.value)} rows={3} placeholder="Paste one source block" />
-                {contextBlocks.length > 1 && (
-                  <button type="button" disabled={busy} onClick={() => setContextBlocks((current) => current.filter((_item, currentIndex) => currentIndex !== index))}>Remove</button>
-                )}
-              </label>
-            ))}
-          </div>
-          <button type="button" className="secondary-action" disabled={busy || contextBlocks.length >= 16} onClick={() => setContextBlocks((current) => [...current, ""])}>
-            Add context block
-          </button>
-        </fieldset>
+        <label className="composer-context">
+          <span>Context <small>Markdown-aware · measured and reducible</small></span>
+          <textarea value={context} disabled={busy} onChange={(event) => setContext(event.target.value)} rows={10} placeholder="Paste context; Markdown headings and paragraphs guide automatic chunking" required />
+        </label>
         <label className="composer-question">
           <span>Question <small>protected</small></span>
           <textarea value={question} disabled={busy} onChange={(event) => setQuestion(event.target.value)} rows={3} placeholder="What should the model answer?" required />
         </label>
         <div className="composer-submit">
-          <p>{validBlocks.length} of 16 context blocks · answer limit 128 tokens</p>
-          <button type="submit" disabled={busy || !question.trim() || !validBlocks.length}>{busy ? "Creating run…" : "Create run"}</button>
+          <p>Context is chunked automatically · answer limit 128 tokens</p>
+          <button type="submit" disabled={busy || !question.trim() || !context.trim()}>{busy ? "Creating run…" : "Create run"}</button>
         </div>
         {error && <p className="composer-error" role="alert">Run creation failed. <span>{error}</span></p>}
       </form>

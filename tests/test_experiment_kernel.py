@@ -237,19 +237,13 @@ def test_strict_resolver_deletes_whole_message_and_protects_current_request():
 
 
 def test_strict_resolver_handles_exact_spans_and_multiple_canonical_sources():
+    content = "## Keep\n" + ("keep " * 12) + "\n\n## Drop\n" + ("drop " * 12)
     messages = [
         {"role": "system", "content": "stable context"},
-        {
-            "role": "user", "content": "keep REMOVE and DROP",
-            "_clozn_sources": [
-                {"source_id": "remove", "unicode_range": [5, 11], "provenance_kind": "retrieved_document"},
-                {"source_id": "drop", "unicode_range": [16, 20], "provenance_kind": "retrieved_document"},
-            ],
-        },
+        {"role": "user", "content": content},
         {"role": "user", "content": "current question"},
     ]
-    clean_messages = [{key: value for key, value in message.items() if key != "_clozn_sources"}
-                      for message in messages]
+    clean_messages = deepcopy(messages)
     run = {
         "id": "run_experimental_spans",
         "messages": clean_messages,
@@ -267,7 +261,9 @@ def test_strict_resolver_handles_exact_spans_and_multiple_canonical_sources():
         run, DeleteSource(ContextSelection(list(reversed(span_ids))))
     )
     assert resolved["canonical_source_ids"] == sorted(span_ids)
-    assert resolved["messages"][1]["content"] == "keep  and "
+    assert [message["content"] for message in resolved["messages"]] == [
+        "stable context", "", "current question",
+    ]
 
 
 def test_stale_parent_cannot_materialize():

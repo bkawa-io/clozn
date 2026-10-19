@@ -15,8 +15,9 @@ then find and save a smaller context that preserves it exactly.
 - Worker protocol: `1.1`
 - Data: isolated v1 root supplied through `CLOZN_DATA_ROOT`
 
-The fixture supplies four exact context blocks: launch code, launch site,
-launch window, and badge color. The question asks for the launch code only.
+The fixture supplies one Markdown context with sections for launch code, launch site,
+launch window, and badge color. Clozn derives the four analysis chunks. The question asks for the
+launch code only.
 
 ## Repeatable gate
 

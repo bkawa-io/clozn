@@ -10,8 +10,16 @@ clozn studio --port 8080 --open
 ## Run list and composer
 
 The landing view lists durable runs and offers New run. The composer accepts a question, optional
-instructions, and plain-text context blocks. The working example populates those fields and executes a
-real run; it is not a static mock.
+instructions, and one Markdown or plain-text context. Clozn uses headings, fenced blocks, document
+markers, and paragraph boundaries to derive a bounded flat source partition automatically. The working
+example populates those fields and executes a real run; it is not a static mock.
+
+The default arm limit is 16 and can be set from 1 through 64 with
+`CLOZN_MAX_CONTEXT_ARMS`. For total removable length `L` and arm limit `A`, the POC uses a target of
+`ceil(L/A)`, a preferred minimum of `max(40, ceil(target/2))`, and a preferred maximum of
+`max(240, target*2)`. It packs adjacent Markdown pieces toward those sizes, then merges the smallest
+adjacent chunks until it reaches the cap. Instructions, the current question, and any trailing prefill
+remain protected.
 
 ## Run workspace
 

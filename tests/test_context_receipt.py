@@ -81,7 +81,7 @@ def test_delivered_segments_carry_order_label_and_hash():
     assert delivered[0]["segment_id"] != delivered[1]["segment_id"]
 
 
-def test_explicit_client_source_identity_is_carried_and_never_regenerated():
+def test_client_source_identity_fields_do_not_change_receipt_identity():
     receipt = build_context_receipt(
         messages=[
             {
@@ -96,46 +96,41 @@ def test_explicit_client_source_identity_is_carried_and_never_regenerated():
     )
     delivered = receipt["delivered"][0]
     assembled = receipt["assembled"][0]
-    assert delivered["client_source_id"] == "doc-stable-7"
-    assert delivered["source_label"] == "Policy handbook"
+    assert "client_source_id" not in delivered
+    assert delivered["source_label"] == "user"
     assert assembled["segment_id"] == delivered["segment_id"]
-    assert assembled["client_source_id"] == "doc-stable-7"
+    assert "client_source_id" not in assembled
 
 
-def test_exact_source_spans_are_canonical_metadata_only_with_utf8_offsets_and_structural_parent():
-    content = "before 😀 [document α] after"
+def test_derived_source_spans_are_flat_canonical_metadata_with_utf8_offsets():
+    first = "## Document\nbefore 😀 document α " + ("one " * 12)
+    second = "## Notes\nafter " + ("two " * 12)
+    content = first + "\n\n" + second
     receipt = build_context_receipt(
-        messages=[{
-            "role": "user", "content": content,
-            "_clozn_sources": [
-                {"source_id": "document", "unicode_range": [9, 21],
-                 "provenance_kind": "retrieved_document", "label": "Handbook"},
-                {"source_id": "paragraph", "unicode_range": [10, 18],
-                 "parent_source_id": "document", "provenance_kind": "retrieved_document"},
-            ],
-        }],
-        assembled_messages=[{"role": "user", "content": content}],
+        messages=[{"role": "user", "content": content}, {"role": "user", "content": "question"}],
+        assembled_messages=[{"role": "user", "content": content}, {"role": "user", "content": "question"}],
         run_id="run_span_capture",
     )
 
     delivered = receipt["delivered"][0]
-    parent, child = delivered["sources"]
-    assert parent["source_id"].startswith("src_")
-    assert parent["unicode_range"] == [9, 21]
-    assert parent["byte_range"] == [12, 25]
-    assert len(parent["content_sha256"]) == 64
-    assert child["parent_source_id"] == parent["source_id"]
+    left, right = delivered["sources"]
+    assert left["source_id"].startswith("src_")
+    assert left["unicode_range"] == [0, len(first) + 2]
+    assert left["byte_range"][1] > left["unicode_range"][1]
+    assert right["unicode_range"] == [len(first) + 2, len(content)]
+    assert len(left["content_sha256"]) == 64
+    assert "parent_source_id" not in left and "parent_source_id" not in right
     assert receipt["assembled"][0]["sources"] == delivered["sources"]
-    assert "content" not in parent
+    assert "content" not in left
 
 
-def test_whole_message_source_identity_stays_a_single_segment_root_without_duplicate_span():
+def test_short_message_stays_a_single_segment_root_without_duplicate_span():
     receipt = build_context_receipt(
         messages=[{"role": "user", "content": "whole source", "source_id": "whole-doc"}],
         run_id="run_whole_source",
     )
     segment = receipt["delivered"][0]
-    assert segment["client_source_id"] == "whole-doc"
+    assert "client_source_id" not in segment
     assert "sources" not in segment
 
 

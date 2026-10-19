@@ -18,6 +18,7 @@ from clozn.experiments.selections import AnswerSelection
 from clozn.recipes.context_effects import measure_context_effects, plan_context_effects
 from clozn.recipes.context_effects import plan_context_effects_reader
 from clozn.runs.context_receipt import build_context_receipt
+from clozn.runs.context_units import build_context_unit_manifest
 
 from tests.test_context_effects_kernel import ScoreSubstrate, _run
 
@@ -47,6 +48,7 @@ def _protected_only_run():
         run_id=run["id"],
         privacy="full",
     )
+    run["context_units"] = build_context_unit_manifest(run)
     return run
 
 
@@ -117,7 +119,7 @@ def test_reader_plan_preserves_prose_without_minting_an_empty_q2_experiment():
         "evaluator": "score_recorded_continuation",
         "intervention": "delete_source",
         "source_universe": [],
-        "source_universe_basis": "canonical_context_receipt",
+        "source_universe_basis": "canonical_context_units",
         "completed_source_count": 0,
         "unavailable_source_count": 0,
         "failed_source_count": 0,
@@ -276,23 +278,14 @@ def test_answer_query_reuses_vectors_and_ranks_signed_effects():
 
 
 def test_exact_span_display_address_is_not_shortened():
+    first = "## Removal\n" + ("remove " * 12)
+    second = "## Other\n" + ("other " * 12)
+    content = first + "\n\n" + second
     messages = [
-        {
-            "role": "user",
-            "content": "before REMOVE after",
-            "_clozn_sources": [{
-                "source_id": "remove",
-                "label": "Removal source",
-                "unicode_range": [7, 13],
-                "provenance_kind": "retrieved_document",
-            }],
-        },
+        {"role": "user", "content": content},
         {"role": "user", "content": "current question"},
     ]
-    clean = [
-        {key: value for key, value in message.items() if key != "_clozn_sources"}
-        for message in messages
-    ]
+    clean = deepcopy(messages)
     run = {
         "id": "run_context_investigation_span",
         "messages": clean,
@@ -304,10 +297,12 @@ def test_exact_span_display_address_is_not_shortened():
         "response": "yes",
         "trace": {"steps": [{"token_id": 1, "piece": "yes"}]},
     }
+    run["context_units"] = build_context_unit_manifest(run)
     span_id = run["context_receipt"]["delivered"][0]["sources"][0]["source_id"]
     plan = plan_context_effects(run, source_ids=[span_id])
     document = build_context_investigation_reader(run, plan, observation_store=MemoryStore())
     source = next(item for item in document["sources"] if item["source_id"] == span_id)
     assert source["granularity"] == "exact_span"
-    assert source["unicode_range"] == [7, 13]
-    assert source["display_unicode_range"] == [7, 13]
+    expected = run["context_receipt"]["delivered"][0]["sources"][0]["unicode_range"]
+    assert source["unicode_range"] == expected
+    assert source["display_unicode_range"] == expected

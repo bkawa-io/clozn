@@ -36,11 +36,9 @@ export interface MinimalContextUniverse {
   universeId: string;
   basisContextUnitsDigest: string;
   policy: {
-    kind: "bounded_structural_partition";
-    version: "bounded_structural_partition.v1";
+    kind: "flat_markdown_partition";
+    version: "flat_markdown_partition.v1";
     maxUnits: number;
-    merge: "smallest_adjacent_auto_siblings_leftmost.v1";
-    explicitOverCap: "typed_bound_exceeded";
   };
   sourceIds: readonly string[];
   sourceCount: number;
@@ -50,8 +48,7 @@ export interface MinimalContextUniverse {
     removableContentCovered: true;
     partitionVerified: true;
     completeCatalogSourceCount: number;
-    explicitSourceCount: number;
-    selectedSourceCount?: number;
+    selectedSourceCount: number;
   };
   status: "planned" | "bound_exceeded";
   condition?: { code: string; message: string };
@@ -430,7 +427,7 @@ function decodeUniverse(
   if (!/^[0-9a-f]{64}$/.test(digest)) fail(endpoint, `${path}.basis_context_units_digest`, "must be a lowercase SHA-256 digest");
 
   const rawPolicy = record(required(row, "policy", endpoint, path), endpoint, `${path}.policy`);
-  closed(rawPolicy, ["kind", "version", "max_units", "merge", "explicit_over_cap"], endpoint, `${path}.policy`);
+  closed(rawPolicy, ["kind", "version", "max_units"], endpoint, `${path}.policy`);
   const sourceIds = strings(required(row, "source_ids", endpoint, path), endpoint, `${path}.source_ids`);
   const sourceIdPattern = /^(?:seg_[0-9a-f]{16}(?:_[0-9]+)?|src_[0-9a-f]{24})$/;
   sourceIds.forEach((sourceId, index) => {
@@ -442,8 +439,7 @@ function decodeUniverse(
   const rawCoverage = record(required(row, "coverage", endpoint, path), endpoint, `${path}.coverage`);
   closed(rawCoverage, [
     "protected_message_indices", "removable_message_indices", "removable_content_covered",
-    "partition_verified", "complete_catalog_source_count", "explicit_source_count",
-    "selected_source_count",
+    "partition_verified", "complete_catalog_source_count", "selected_source_count",
   ], endpoint, `${path}.coverage`);
   const protectedMessageIndices = counts(required(rawCoverage, "protected_message_indices", endpoint, `${path}.coverage`), endpoint, `${path}.coverage.protected_message_indices`);
   const removableMessageIndices = counts(required(rawCoverage, "removable_message_indices", endpoint, `${path}.coverage`), endpoint, `${path}.coverage.removable_message_indices`);
@@ -452,10 +448,8 @@ function decodeUniverse(
   const removableContentCovered = booleanValue(required(rawCoverage, "removable_content_covered", endpoint, `${path}.coverage`), endpoint, `${path}.coverage.removable_content_covered`);
   const partitionVerified = booleanValue(required(rawCoverage, "partition_verified", endpoint, `${path}.coverage`), endpoint, `${path}.coverage.partition_verified`);
   if (!removableContentCovered || !partitionVerified) fail(endpoint, `${path}.coverage`, "must claim the schema-required verified complete partition");
-  const selectedSourceCount = "selected_source_count" in rawCoverage
-    ? count(rawCoverage.selected_source_count, endpoint, `${path}.coverage.selected_source_count`)
-    : undefined;
-  if (selectedSourceCount !== undefined && selectedSourceCount !== sourceCount) {
+  const selectedSourceCount = count(required(rawCoverage, "selected_source_count", endpoint, `${path}.coverage`), endpoint, `${path}.coverage.selected_source_count`);
+  if (selectedSourceCount !== sourceCount) {
     fail(endpoint, `${path}.coverage.selected_source_count`, "does not match source_count");
   }
 
@@ -478,11 +472,9 @@ function decodeUniverse(
     universeId,
     basisContextUnitsDigest: digest,
     policy: {
-      kind: oneOf(required(rawPolicy, "kind", endpoint, `${path}.policy`), ["bounded_structural_partition"] as const, endpoint, `${path}.policy.kind`),
-      version: oneOf(required(rawPolicy, "version", endpoint, `${path}.policy`), ["bounded_structural_partition.v1"] as const, endpoint, `${path}.policy.version`),
+      kind: oneOf(required(rawPolicy, "kind", endpoint, `${path}.policy`), ["flat_markdown_partition"] as const, endpoint, `${path}.policy.kind`),
+      version: oneOf(required(rawPolicy, "version", endpoint, `${path}.policy`), ["flat_markdown_partition.v1"] as const, endpoint, `${path}.policy.version`),
       maxUnits: positiveCount(required(rawPolicy, "max_units", endpoint, `${path}.policy`), endpoint, `${path}.policy.max_units`),
-      merge: oneOf(required(rawPolicy, "merge", endpoint, `${path}.policy`), ["smallest_adjacent_auto_siblings_leftmost.v1"] as const, endpoint, `${path}.policy.merge`),
-      explicitOverCap: oneOf(required(rawPolicy, "explicit_over_cap", endpoint, `${path}.policy`), ["typed_bound_exceeded"] as const, endpoint, `${path}.policy.explicit_over_cap`),
     },
     sourceIds,
     sourceCount,
@@ -492,8 +484,7 @@ function decodeUniverse(
       removableContentCovered: true,
       partitionVerified: true,
       completeCatalogSourceCount: count(required(rawCoverage, "complete_catalog_source_count", endpoint, `${path}.coverage`), endpoint, `${path}.coverage.complete_catalog_source_count`),
-      explicitSourceCount: count(required(rawCoverage, "explicit_source_count", endpoint, `${path}.coverage`), endpoint, `${path}.coverage.explicit_source_count`),
-      ...(selectedSourceCount === undefined ? {} : { selectedSourceCount }),
+      selectedSourceCount,
     },
     status,
     condition,

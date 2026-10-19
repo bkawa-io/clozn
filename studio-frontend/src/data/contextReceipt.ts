@@ -28,13 +28,7 @@ export type ReceiptTerminationReason =
   | "tool_call"
   | "content_filter"
   | "unknown";
-export type ReceiptProvenanceKind =
-  | "message"
-  | "retrieved_document"
-  | "tool_result"
-  | "system_instruction"
-  | "conversation_turn"
-  | "client_supplied";
+export type ReceiptProvenanceKind = "message";
 
 export interface ReceiptSourceSpan {
   sourceId: string;
@@ -44,9 +38,6 @@ export interface ReceiptSourceSpan {
   byteRange: readonly [number, number];
   contentSha256: string;
   provenanceKind: ReceiptProvenanceKind;
-  clientSourceId?: string;
-  sourceLabel?: string;
-  parentSourceId?: string;
 }
 
 export interface ReceiptSegment {
@@ -54,7 +45,6 @@ export interface ReceiptSegment {
   sourceType: "message";
   originalOrder: number;
   sourceLabel?: string;
-  clientSourceId?: string;
   deliveredBytes?: number;
   deliveredTokens?: number;
   included?: boolean;
@@ -133,10 +123,7 @@ const TERMINATION_REASONS = [
 ] as const;
 const PRIVACY_TIERS = ["full", "metadata_only", "hashes_only", "off"] as const;
 const REDACTION_STATES = ["full", "redacted", "hash_only"] as const;
-const PROVENANCE_KINDS = [
-  "message", "retrieved_document", "tool_result", "system_instruction",
-  "conversation_turn", "client_supplied",
-] as const;
+const PROVENANCE_KINDS = ["message"] as const;
 
 const SEGMENT_ID = /^seg_[0-9a-f]{16}(?:_[0-9]+)?$/;
 const SOURCE_ID = /^src_[0-9a-f]{24}$/;
@@ -227,7 +214,7 @@ function decodeSourceSpan(
   const row = object(value, endpoint, path);
   closed(row, [
     "source_id", "segment_id", "message_index", "unicode_range", "byte_range", "content_sha256",
-    "client_source_id", "source_label", "provenance_kind", "parent_source_id",
+    "provenance_kind",
   ], endpoint, path);
   const decodedSegmentId = pattern(required(row, "segment_id", endpoint, path), SEGMENT_ID, "a segment id", endpoint, `${path}.segment_id`);
   if (decodedSegmentId !== segmentId) fail(endpoint, `${path}.segment_id`, "must match its containing segment");
@@ -240,18 +227,6 @@ function decodeSourceSpan(
     contentSha256: pattern(required(row, "content_sha256", endpoint, path), SHA256, "a lowercase SHA-256 digest", endpoint, `${path}.content_sha256`),
     provenanceKind: oneOf(required(row, "provenance_kind", endpoint, path), PROVENANCE_KINDS, endpoint, `${path}.provenance_kind`),
   };
-  if ("client_source_id" in row) {
-    span.clientSourceId = nonEmptyText(row.client_source_id, endpoint, `${path}.client_source_id`);
-    if (span.clientSourceId.length > 256) fail(endpoint, `${path}.client_source_id`, "must be at most 256 characters");
-  }
-  if ("source_label" in row) {
-    span.sourceLabel = nonEmptyText(row.source_label, endpoint, `${path}.source_label`);
-    if (span.sourceLabel.length > 256) fail(endpoint, `${path}.source_label`, "must be at most 256 characters");
-  }
-  if ("parent_source_id" in row) {
-    span.parentSourceId = pattern(row.parent_source_id, SOURCE_ID, "a canonical source id", endpoint, `${path}.parent_source_id`);
-    if (span.parentSourceId === span.sourceId) fail(endpoint, `${path}.parent_source_id`, "must not reference itself");
-  }
   return span;
 }
 
@@ -264,10 +239,6 @@ function decodeSegment(value: unknown, endpoint: string, path: string): ReceiptS
     originalOrder: nonNegativeInteger(required(row, "original_order", endpoint, path), endpoint, `${path}.original_order`),
   };
   if ("source_label" in row) segment.sourceLabel = text(row.source_label, endpoint, `${path}.source_label`);
-  if ("client_source_id" in row) {
-    segment.clientSourceId = nonEmptyText(row.client_source_id, endpoint, `${path}.client_source_id`);
-    if (segment.clientSourceId.length > 256) fail(endpoint, `${path}.client_source_id`, "must be at most 256 characters");
-  }
   if ("delivered_bytes" in row) segment.deliveredBytes = nonNegativeInteger(row.delivered_bytes, endpoint, `${path}.delivered_bytes`);
   if ("delivered_tokens" in row) segment.deliveredTokens = nonNegativeInteger(row.delivered_tokens, endpoint, `${path}.delivered_tokens`);
   if ("included" in row) segment.included = booleanValue(row.included, endpoint, `${path}.included`);

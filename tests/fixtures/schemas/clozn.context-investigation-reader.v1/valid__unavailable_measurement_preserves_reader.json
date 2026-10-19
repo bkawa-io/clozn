@@ -10,7 +10,7 @@
     "evaluator": "score_recorded_continuation",
     "intervention": "delete_source",
     "source_universe": [],
-    "source_universe_basis": "canonical_context_receipt",
+    "source_universe_basis": "canonical_context_units",
     "completed_source_count": 0,
     "unavailable_source_count": 0,
     "failed_source_count": 0,

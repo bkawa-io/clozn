@@ -82,7 +82,7 @@ def _poll_job(client: Client, *, run_id: str, job: dict, timeout: float) -> dict
     return current
 
 
-def _source_fixture(nonce: str) -> tuple[str, list[dict]]:
+def _source_fixture(nonce: str) -> str:
     paragraphs = [
         ("launch-code", "Launch code", "The launch code is ORCHID-731."),
         ("launch-site", "Launch site", "The launch site is North Annex."),
@@ -93,24 +93,10 @@ def _source_fixture(nonce: str) -> tuple[str, list[dict]]:
             f"The authorized badge color is amber. Qualification nonce: {nonce}.",
         ),
     ]
-    text = "\n".join(paragraph for _source_id, _label, paragraph in paragraphs)
-    sources = []
-    cursor = 0
-    for source_id, label, paragraph in paragraphs:
-        start = text.index(paragraph, cursor)
-        end = start + len(paragraph)
-        sources.append({
-            "message_index": 0,
-            "source_id": source_id,
-            "label": label,
-            "provenance_kind": "retrieved_document",
-            "unicode_range": [start, end],
-        })
-        cursor = end
-    return text, sources
+    return "\n\n".join(f"## {label}\n{paragraph}" for _source_id, label, paragraph in paragraphs)
 
 
-def _cancellation_source_fixture(nonce: str, source_count: int) -> tuple[str, list[dict]]:
+def _cancellation_source_fixture(nonce: str, source_count: int) -> str:
     _expect(source_count >= 8, "cancellation fixture needs at least eight sources")
     paragraphs = [
         (
@@ -123,21 +109,7 @@ def _cancellation_source_fixture(nonce: str, source_count: int) -> tuple[str, li
         )
         for index in range(1, source_count + 1)
     ]
-    text = "\n".join(paragraph for _source_id, _label, paragraph in paragraphs)
-    sources = []
-    cursor = 0
-    for source_id, label, paragraph in paragraphs:
-        start = text.index(paragraph, cursor)
-        end = start + len(paragraph)
-        sources.append({
-            "message_index": 0,
-            "source_id": source_id,
-            "label": label,
-            "provenance_kind": "retrieved_document",
-            "unicode_range": [start, end],
-        })
-        cursor = end
-    return text, sources
+    return "\n\n".join(f"## {label}\n{paragraph}" for _source_id, label, paragraph in paragraphs)
 
 
 def _validate_cancelled_effects(job: dict, *, reader_after: dict, source_count: int) -> dict:
@@ -163,12 +135,8 @@ def _validate_cancelled_effects(job: dict, *, reader_after: dict, source_count: 
     }
 
 
-def _create_run(client: Client, *, model: str, context: str, sources: list[dict], prompt: str,
+def _create_run(client: Client, *, model: str, context: str, prompt: str,
                 max_tokens: int) -> tuple[str, dict]:
-    context_sources = [
-        {**source, "message_index": 1}
-        for source in sources
-    ]
     status, generated = client.post("/v1/chat/completions", {
         "model": model,
         "messages": [
@@ -176,7 +144,6 @@ def _create_run(client: Client, *, model: str, context: str, sources: list[dict]
             {"role": "user", "content": context},
             {"role": "user", "content": prompt},
         ],
-        "clozn_sources": context_sources,
         "max_tokens": max_tokens,
         "temperature": 0,
     })
@@ -194,12 +161,11 @@ def run_cancellation(
     cancel_delay: float,
 ) -> dict:
     started = time.monotonic()
-    context, source_metadata = _cancellation_source_fixture(str(time.time_ns()), source_count)
+    context = _cancellation_source_fixture(str(time.time_ns()), source_count)
     run_id, generated = _create_run(
         client,
         model=model,
         context=context,
-        sources=source_metadata,
         prompt=(
             "Produce a verification ledger with one numbered line for every supplied record, "
             "in order. Copy each record number, call sign, and status."
@@ -271,12 +237,11 @@ def run(client: Client, *, model: str | None, job_timeout: float) -> dict:
         model = str(rows[0].get("id")) if status == 200 and rows and isinstance(rows[0], dict) else ""
     _expect(bool(model), "gateway did not expose a model identity")
 
-    context, source_metadata = _source_fixture(str(time.time_ns()))
+    context = _source_fixture(str(time.time_ns()))
     run_id, _generated = _create_run(
         client,
         model=model,
         context=context,
-        sources=source_metadata,
         prompt="According to the supplied facts, what is the launch code? Answer with the code only.",
         max_tokens=24,
     )
@@ -284,8 +249,8 @@ def run(client: Client, *, model: str | None, job_timeout: float) -> dict:
     status, reader_before = client.get(reader_path)
     _expect(status == 200, f"reader returned HTTP {status}: {reader_before}")
     universe = reader_before.get("measurement", {}).get("source_universe")
-    _expect(isinstance(universe, list) and len(universe) == len(source_metadata), (
-        f"reader source universe did not preserve all exact sources: {universe}"
+    _expect(isinstance(universe, list) and len(universe) == 4, (
+        f"reader source universe did not expose all derived Markdown chunks: {universe}"
     ))
 
     status, job_start = client.post(_job_path(run_id), {"source_ids": universe})

@@ -9,13 +9,13 @@ from clozn.recipes.minimal_context_result_store import (
     MinimalContextResultStore, MinimalContextResultStoreError, current_binding,
 )
 from clozn import schemas
+from clozn.runs.context_units import max_context_arms
 
 CLOZN_ROUTE_AUTOLOAD = True
 
 _MARKER = "/minimal-context"
 _KIND = "minimal_context"
 _MATERIALIZATION_LOCK = threading.Lock()
-_MAX_UNITS = 16
 _MAX_NEW_EXECUTIONS = 32
 
 
@@ -47,7 +47,7 @@ def normalize_request(body: object) -> dict:
             code="unsupported_search_policy",
         )
     return {
-        "max_units": _MAX_UNITS,
+        "max_units": max_context_arms(),
         "max_new_counterfactual_observations": _MAX_NEW_EXECUTIONS,
         "attempt_inclusion_check": True,
     }

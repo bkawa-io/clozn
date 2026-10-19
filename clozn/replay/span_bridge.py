@@ -158,9 +158,6 @@ def _receipt_source_catalog(segments: list[dict], messages: list[dict], *, label
             "content_sha256": _content_sha256(content), "role": message["role"],
             "source_kind": "whole_message", "provenance_kind": "message",
         }
-        for key in ("client_source_id", "source_label"):
-            if isinstance(segment.get(key), str) and segment[key]:
-                root[key] = segment[key]
         catalog.append(root)
         raw_spans = segment.get("sources")
         if raw_spans is None:
@@ -186,7 +183,7 @@ def _receipt_source_catalog(segments: list[dict], messages: list[dict], *, label
             if raw.get("content_sha256") != content_sha256:
                 raise ContextReceiptSourceResolutionError("Context Receipt span does not match current message bytes")
             provenance_kind = raw.get("provenance_kind")
-            if not isinstance(provenance_kind, str) or not provenance_kind:
+            if provenance_kind != "message":
                 raise ContextReceiptSourceResolutionError("Context Receipt span provenance_kind is malformed")
             item = {
                 "source_id": source_id, "segment_id": segment_id, "message_index": message_index,
@@ -194,60 +191,21 @@ def _receipt_source_catalog(segments: list[dict], messages: list[dict], *, label
                 "content_sha256": content_sha256, "role": message["role"],
                 "source_kind": "source_span", "provenance_kind": provenance_kind,
             }
-            for key in ("client_source_id", "source_label", "parent_source_id"):
-                if raw.get(key) is not None:
-                    if not isinstance(raw[key], str) or not raw[key]:
-                        raise ContextReceiptSourceResolutionError(f"Context Receipt span {key} is malformed")
-                    item[key] = raw[key]
             spans[source_id] = item
 
-        def verify(item: dict, active: set[str]) -> None:
-            if item.get("_verified"):
-                return
-            source_id = item["source_id"]
-            if source_id in active:
-                raise ContextReceiptSourceResolutionError("Context Receipt span hierarchy contains a cycle")
-            active.add(source_id)
-            parent_id = item.get("parent_source_id")
-            if parent_id is not None:
-                parent = spans.get(parent_id)
-                if parent is None:
-                    raise ContextReceiptSourceResolutionError("Context Receipt structural parent is unavailable")
-                verify(parent, active)
-                if not (parent["unicode_range"][0] <= item["unicode_range"][0]
-                        and item["unicode_range"][1] <= parent["unicode_range"][1]):
-                    raise ContextReceiptSourceResolutionError("Context Receipt structural child is outside parent")
+        for item in spans.values():
             expected_id = _canonical_source_id(
                 segment=segment_id, unicode_range=item["unicode_range"], byte_range=item["byte_range"],
-                content_sha256=item["content_sha256"], provenance_kind=item["provenance_kind"],
-                client_source_id=item.get("client_source_id"), parent_source_id=parent_id,
+                content_sha256=item["content_sha256"],
             )
-            if source_id != expected_id:
+            if item["source_id"] != expected_id:
                 raise ContextReceiptSourceResolutionError("Context Receipt source ID does not bind current bytes")
-            item["_verified"] = True
-            active.remove(source_id)
-
-        for item in spans.values():
-            verify(item, set())
         source_values = list(spans.values())
-        for item in source_values:
-            item.pop("_verified", None)
-        def ancestor(ancestor_id: str, child: dict) -> bool:
-            parent_id = child.get("parent_source_id")
-            while isinstance(parent_id, str):
-                if parent_id == ancestor_id:
-                    return True
-                parent = spans.get(parent_id)
-                parent_id = parent.get("parent_source_id") if parent else None
-            return False
         for left_index, left in enumerate(source_values):
             for right in source_values[left_index + 1:]:
                 ls, le = left["unicode_range"]; rs, re = right["unicode_range"]
                 if max(ls, rs) < min(le, re):
-                    if not ((ls <= rs and re <= le and ancestor(left["source_id"], right))
-                            or (rs <= ls and le <= re and ancestor(right["source_id"], left))):
-                        raise ContextReceiptSourceResolutionError(
-                            "Context Receipt spans overlap without structural nesting")
+                    raise ContextReceiptSourceResolutionError("Context Receipt spans overlap")
         catalog.extend(sorted(source_values, key=lambda x: (x["unicode_range"], x["source_id"])))
     return catalog
 

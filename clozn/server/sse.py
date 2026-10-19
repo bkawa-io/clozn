@@ -34,7 +34,7 @@ from clozn.server.http_policy import send_cors_headers
 
 
 def sse_chat(handler, messages, max_new, model, sample=True,
-             journal_messages=None, stop=None, include_usage=False):
+             stop=None, include_usage=False):
     """Stream one /v1/chat/completions reply as OpenAI-style `chat.completion.chunk` frames over SSE,
     then log the run. `handler` is the live BaseHTTPRequestHandler (needs .wfile + ._log_run).
 
@@ -87,7 +87,7 @@ def sse_chat(handler, messages, max_new, model, sample=True,
     # Instead it is an additive top-level field on the ordinary terminal finish chunk, before [DONE].
     # Strict OpenAI clients ignore unknown fields while sidecars and Studio can correlate the exact run.
     t0 = time.time(); acc = []; memout = {}
-    logged_messages = journal_messages if journal_messages is not None else messages
+    logged_messages = messages
     policy_meta = {}
     sub = ctx.active_sub(handler)
     gen = sub.chat_stream(messages, max_new, mem_out=memout, **stream_kw)

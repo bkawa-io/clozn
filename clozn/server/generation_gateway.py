@@ -62,7 +62,6 @@ def instrumented_chat(
     source: str,
     extra_meta: dict | None = None,
     stop: list[str] | None = None,
-    journal_messages: list | None = None,
 ) -> InstrumentedChatResult:
     """Generate one text response and durably record the resulting run evidence."""
     sub = ctx.active_sub(handler)
@@ -72,7 +71,7 @@ def instrumented_chat(
     started = time.time()
     trace_steps = []
     memout = {}
-    logged_messages = journal_messages if journal_messages is not None else messages
+    logged_messages = messages
     chat_kw = {"trace_out": trace_steps, "mem_out": memout}
     if stop is not None:
         chat_kw["stop"] = list(stop)

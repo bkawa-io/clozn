@@ -14,7 +14,7 @@ describe("Studio API client", () => {
 
     await expect(studioApi.createRun({
       instructions: " Be concise. ",
-      contextBlocks: [" Northstar launches May 22. ", "A😀B"],
+      context: " # Northstar\nNorthstar launches May 22.\n\n# Code\nA😀B ",
       question: " When does Northstar launch? ",
     })).resolves.toEqual({ runId: "run_new", answer: "May 22." });
 
@@ -25,42 +25,20 @@ describe("Studio API client", () => {
     expect(JSON.parse(String(init.body))).toEqual({
       messages: [
         { role: "system", content: "Be concise." },
-        { role: "user", content: "Northstar launches May 22." },
-        { role: "user", content: "A😀B" },
+        { role: "user", content: "# Northstar\nNorthstar launches May 22.\n\n# Code\nA😀B" },
         { role: "user", content: "When does Northstar launch?" },
       ],
       max_tokens: 128,
       temperature: 0,
-      clozn_sources: [
-        {
-          message_index: 1,
-          source_id: "context-1",
-          label: "Context 1",
-          unicode_range: [0, 26],
-          provenance_kind: "client_supplied",
-        },
-        {
-          message_index: 2,
-          source_id: "context-2",
-          label: "Context 2",
-          unicode_range: [0, 3],
-          provenance_kind: "client_supplied",
-        },
-      ],
     });
   });
 
-  it("rejects an empty or over-limit removable context before dispatch", async () => {
+  it("rejects empty context before dispatch", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(studioApi.createRun({ instructions: "", contextBlocks: ["  "], question: "Question" }))
+    await expect(studioApi.createRun({ instructions: "", context: "  ", question: "Question" }))
       .rejects.toBeInstanceOf(ContractError);
-    await expect(studioApi.createRun({
-      instructions: "",
-      contextBlocks: Array.from({ length: 17 }, (_, index) => `Context ${index}`),
-      question: "Question",
-    })).rejects.toThrow(/at most 16/);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

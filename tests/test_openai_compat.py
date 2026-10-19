@@ -74,128 +74,13 @@ def test_chat_rejects_removed_message_extensions():
     assert caught.value.code == "invalid_parameter"
 
 
-def test_chat_accepts_exact_source_metadata_without_putting_it_in_messages():
-    out = normalize_chat_request({
-        "messages": [
-            {"role": "system", "content": "Policy"},
-            {"role": "user", "content": "Document text"},
-        ],
-        "clozn_sources": [
-            {"message_index": 1, "source_id": "customer-handbook", "label": "Customer handbook",
-             "unicode_range": [0, 13]},
-        ],
-    })
-    assert out["messages"][1] == {"role": "user", "content": "Document text"}
-    assert out["_clozn_sources"] == [{
-        "message_index": 1,
-        "source_id": "customer-handbook",
-        "label": "Customer handbook",
-        "unicode_range": [0, 13],
-        "byte_range": [0, 13],
-        "provenance_kind": "message",
-    }]
-
-
-def test_chat_rejects_source_without_exact_range():
+def test_chat_rejects_client_supplied_source_metadata():
     with pytest.raises(CompatibilityError) as caught:
         normalize_chat_request({
             "messages": [{"role": "user", "content": "Document text"}],
-            "clozn_sources": [{"message_index": 0, "source_id": "document"}],
-        })
-    assert caught.value.param == "clozn_sources[0].unicode_range"
-
-
-def test_chat_accepts_multiple_exact_unicode_sources_on_one_message_and_derives_utf8_ranges():
-    out = normalize_chat_request({
-        "messages": [{"role": "user", "content": "x 😀 policy + question"}],
-        "clozn_sources": [
-            {"message_index": 0, "source_id": "policy", "unicode_range": [4, 10],
-             "provenance_kind": "retrieved_document"},
-            {"message_index": 0, "source_id": "question", "unicode_range": [13, 21],
-             "provenance_kind": "conversation_turn"},
-        ],
-    })
-    sources = out["_clozn_sources"]
-    assert [item["unicode_range"] for item in sources] == [[4, 10], [13, 21]]
-    assert sources[0]["byte_range"] == [7, 13]
-    assert out["messages"] == [{"role": "user", "content": "x 😀 policy + question"}]
-
-
-def test_chat_rejects_non_nested_overlapping_exact_source_ranges():
-    with pytest.raises(CompatibilityError) as caught:
-        normalize_chat_request({
-            "messages": [{"role": "user", "content": "abcdefgh"}],
-            "clozn_sources": [
-                {"message_index": 0, "source_id": "a", "unicode_range": [1, 5]},
-                {"message_index": 0, "source_id": "b", "unicode_range": [4, 7]},
-            ],
+            "clozn_sources": [{"message_index": 0, "unicode_range": [0, 13]}],
         })
     assert caught.value.param == "clozn_sources"
-
-
-def test_chat_rejects_source_byte_range_that_does_not_match_unicode_utf8_boundary():
-    with pytest.raises(CompatibilityError) as caught:
-        normalize_chat_request({
-            "messages": [{"role": "user", "content": "😀 abc"}],
-            "clozn_sources": [{
-                "message_index": 0, "source_id": "emoji", "unicode_range": [0, 1],
-                "byte_range": [0, 1],
-            }],
-        })
-    assert caught.value.param == "clozn_sources[0].byte_range"
-
-
-def test_chat_accepts_explicit_structural_parent_for_nested_exact_source_ranges():
-    out = normalize_chat_request({
-        "messages": [{"role": "user", "content": "[section paragraph]"}],
-        "clozn_sources": [
-            {"message_index": 0, "source_id": "section", "unicode_range": [0, 19]},
-            {"message_index": 0, "source_id": "paragraph", "unicode_range": [1, 18],
-             "parent_source_id": "section"},
-        ],
-    })
-    assert out["_clozn_sources"][1]["parent_source_id"] == "section"
-
-
-@pytest.mark.parametrize("sources", [
-    [{"message_index": 0, "source_id": "self", "unicode_range": [0, 4],
-      "parent_source_id": "self"}],
-    [
-        {"message_index": 0, "source_id": "a", "unicode_range": [0, 4],
-         "parent_source_id": "b"},
-        {"message_index": 0, "source_id": "b", "unicode_range": [0, 4],
-         "parent_source_id": "a"},
-    ],
-])
-def test_chat_rejects_cyclic_source_hierarchies(sources):
-    with pytest.raises(CompatibilityError, match="acyclic"):
-        normalize_chat_request({
-            "messages": [{"role": "user", "content": "text"}],
-            "clozn_sources": sources,
-        })
-
-
-@pytest.mark.parametrize("sources,param", [
-    (
-        [
-            {"message_index": 0, "source_id": "duplicate", "unicode_range": [0, 6]},
-            {"message_index": 1, "source_id": "duplicate", "unicode_range": [0, 8]},
-        ],
-        "clozn_sources[1].source_id",
-    ),
-    ([{"message_index": 4, "source_id": "missing", "unicode_range": [0, 1]}],
-     "clozn_sources[0].message_index"),
-])
-def test_chat_rejects_ambiguous_source_metadata(sources, param):
-    with pytest.raises(CompatibilityError) as caught:
-        normalize_chat_request({
-            "messages": [
-                {"role": "system", "content": "Policy"},
-                {"role": "user", "content": "Question"},
-            ],
-            "clozn_sources": sources,
-        })
-    assert caught.value.param == param
 
 
 def test_chat_accepts_and_strips_documented_neutral_values():

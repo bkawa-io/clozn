@@ -23,7 +23,7 @@ describe("Runs surface", () => {
     expect(screen.getByDisplayValue(/what is the launch code/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Create run" }));
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
-      contextBlocks: expect.arrayContaining(["The launch code is ORCHID-731."]),
+      context: expect.stringContaining("The launch code is ORCHID-731."),
       question: expect.stringContaining("what is the launch code"),
     }), expect.any(AbortSignal)));
     await waitFor(() => expect(window.location.hash).toBe("#/inspect/run_new"));

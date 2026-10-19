@@ -77,7 +77,7 @@ export function RunDetailsDisclosure({ runId }: { runId: string }) {
               <ol>
                 {receipt.delivered.map((segment) => (
                   <li key={segment.segmentId}>
-                    <strong>{segment.sourceLabel ?? segment.clientSourceId ?? `Message ${segment.originalOrder + 1}`}</strong>
+                    <strong>{segment.sourceLabel ?? `Message ${segment.originalOrder + 1}`}</strong>
                     <span>{segment.sources?.length ?? 0} source{segment.sources?.length === 1 ? "" : "s"} · {segment.deliveredBytes ?? "?"} bytes</span>
                   </li>
                 ))}

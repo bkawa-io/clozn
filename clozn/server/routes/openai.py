@@ -34,7 +34,6 @@ def try_post(h, p, body):
     except CompatibilityError as exc:
         _api_error(h, 400, str(exc), param=exc.param, code=exc.code)
         return True
-    source_metadata = body.pop("_clozn_sources", [])
     from clozn.server.model_routing import select_for_handler
     selection = select_for_handler(
         h, body, surface="openai", route="/v1/chat/completions"
@@ -55,31 +54,16 @@ def try_post(h, p, body):
     from clozn.runs.think_tags import sanitize_messages
     msgs = sanitize_messages(msgs)
 
-    delivered_messages = msgs
-    journal_delivered_messages = [dict(message) for message in delivered_messages]
-    sources_by_message: dict[int, list[dict]] = {}
-    for source in source_metadata:
-        index = source["message_index"]
-        sources_by_message.setdefault(index, []).append(dict(source))
-    for index, sources in sources_by_message.items():
-        # Source metadata belongs only to the journal copy.  ``msgs`` remains
-        # exactly the client-visible message list handed to the chat template.
-        journal_delivered_messages[index]["_clozn_sources"] = sources
-
-    msgs = delivered_messages
-    journal_messages = journal_delivered_messages if source_metadata else None
     if body.get("stream") and getattr(sub, "chat_stream", None):
         from clozn.server import sse
         sse.sse_chat(h, msgs, mx, selected_model, sample=sample,
-                     stop=body.get("stop"), include_usage=bool((body.get("stream_options") or {}).get("include_usage")),
-                     journal_messages=journal_messages)
+                     stop=body.get("stop"), include_usage=bool((body.get("stream_options") or {}).get("include_usage")))
         return True
     from clozn.server.generation_gateway import instrumented_chat
     try:
         generated = instrumented_chat(h, msgs, model=selected_model, max_tokens=mx,
                                       sample=sample, source="openai_api",
-                                      stop=body.get("stop"),
-                                      journal_messages=journal_messages)
+                                      stop=body.get("stop"))
     except Exception as exc:
         from clozn.server.generation_gateway import RunRecordingError
         if isinstance(exc, RunRecordingError):

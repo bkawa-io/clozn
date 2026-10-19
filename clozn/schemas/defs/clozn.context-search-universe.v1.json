@@ -14,13 +14,11 @@
     "basis_context_units_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "policy": {
       "type": "object",
-      "required": ["kind", "version", "max_units", "merge", "explicit_over_cap"],
+      "required": ["kind", "version", "max_units"],
       "properties": {
-        "kind": {"const": "bounded_structural_partition"},
-        "version": {"const": "bounded_structural_partition.v1"},
-        "max_units": {"type": "integer", "minimum": 1},
-        "merge": {"const": "smallest_adjacent_auto_siblings_leftmost.v1"},
-        "explicit_over_cap": {"const": "typed_bound_exceeded"}
+        "kind": {"const": "flat_markdown_partition"},
+        "version": {"const": "flat_markdown_partition.v1"},
+        "max_units": {"type": "integer", "minimum": 1}
       },
       "additionalProperties": false
     },
@@ -33,7 +31,7 @@
       "type": "object",
       "required": [
         "protected_message_indices", "removable_message_indices", "removable_content_covered",
-        "partition_verified", "complete_catalog_source_count", "explicit_source_count"
+        "partition_verified", "complete_catalog_source_count", "selected_source_count"
       ],
       "properties": {
         "protected_message_indices": {"type": "array", "items": {"type": "integer", "minimum": 0}},
@@ -41,7 +39,6 @@
         "removable_content_covered": {"const": true},
         "partition_verified": {"const": true},
         "complete_catalog_source_count": {"type": "integer", "minimum": 0},
-        "explicit_source_count": {"type": "integer", "minimum": 0},
         "selected_source_count": {"type": "integer", "minimum": 0}
       },
       "additionalProperties": false

@@ -23,16 +23,13 @@ Implemented fields:
 - `stream`
 - `stop`
 - `stream_options.include_usage`
-- `clozn_sources`
 
 Messages must be `{role, content}` objects with string content. Roles are `developer`, `system`, `user`,
 or `assistant`; `developer` is normalized to `system` for local GGUF templates. Extra message fields and
 multimodal content are rejected.
 
-`clozn_sources` supplies exact source ranges without changing the message text. Each item names a
-`message_index`, label/identity metadata, and a half-open Unicode range. Nested ranges require an explicit
-parent and overlapping peers are rejected. Canonical source IDs are minted from the recorded bytes, not
-trusted from the client.
+Context source ranges are not a request field. Clozn derives a bounded, Markdown-aware partition from
+the recorded context text for Context Effects and Minimal Context.
 
 The following common fields are accepted only at neutral values and then removed: `n:1`, `user`, zero
 frequency/presence penalties, `logprobs:false`, `top_logprobs:0`, empty `logit_bias`, text-only
