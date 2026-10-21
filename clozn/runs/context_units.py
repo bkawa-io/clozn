@@ -51,29 +51,7 @@ def max_context_arms(environ: Mapping[str, str] | None = None) -> int:
     return value
 
 
-def protected_message_indices(messages: list[dict]) -> set[int]:
-    """Return messages that must never become removable context units."""
-    if not isinstance(messages, list) or not messages:
-        return set()
-    last_user = next(
-        (
-            index
-            for index in range(len(messages) - 1, -1, -1)
-            if isinstance(messages[index], dict) and messages[index].get("role") == "user"
-        ),
-        None,
-    )
-    instructions = {
-        index
-        for index, message in enumerate(messages)
-        if isinstance(message, dict) and message.get("role") in {"system", "developer"}
-    }
-    if last_user is None:
-        return instructions | {len(messages) - 1}
-    return instructions | set(range(last_user, len(messages)))
-
-
-def _protected_spans(text: str) -> list[tuple[int, int]]:
+def _indivisible_spans(text: str) -> list[tuple[int, int]]:
     spans = sorted(
         [(match.start(), match.end()) for match in _FENCE_RE.finditer(text)]
         + [(match.start(), match.end()) for match in _XML_WRAP_RE.finditer(text)]
@@ -115,16 +93,16 @@ def _structural_atoms(text: str, *, maximum: int) -> list[tuple[int, int]]:
     """Return a contiguous partition at basic Markdown/document boundaries."""
     if not text:
         return []
-    protected = _protected_spans(text)
+    indivisible = _indivisible_spans(text)
     points = {0, len(text)}
     for pattern in (_HEADER_RE, _HR_RE, _DOC_MARKER_RE):
         for match in pattern.finditer(text):
-            if not _inside(match.start(), protected):
+            if not _inside(match.start(), indivisible):
                 points.add(match.start())
     for match in _BLANK_LINE_RE.finditer(text):
-        if not _inside(match.end(), protected):
+        if not _inside(match.end(), indivisible):
             points.add(match.end())
-    for start, end in protected:
+    for start, end in indivisible:
         points.update((start, end))
 
     ordered = sorted(points)
@@ -204,11 +182,10 @@ def derive_auto_source_spans(
     if isinstance(arm_limit, bool) or not isinstance(arm_limit, int) or arm_limit <= 0:
         raise ValueError("max_arms must be a positive integer")
 
-    protected = protected_message_indices(messages)
     eligible = [
         (index, message, _text_of(message))
         for index, message in enumerate(messages)
-        if index not in protected and isinstance(message, dict) and _text_of(message)
+        if isinstance(message, dict) and _text_of(message)
     ]
     total = sum(len(text) for _index, _message, text in eligible)
     if not total:
@@ -327,12 +304,11 @@ def _covers_partition(sources: list[Mapping[str, Any]], length: int) -> bool:
     return cursor == length
 
 
-def _failed_manifest(run_id: str, protected: list[int], message: str) -> dict:
+def _failed_manifest(run_id: str, message: str) -> dict:
     return {
         "schema_version": SCHEMA,
         "run_id": run_id,
         "basis": "messages",
-        "protected_message_indices": protected,
         "units": [],
         "default_source_ids": [],
         "error": message,
@@ -344,19 +320,17 @@ def build_context_unit_manifest(run: dict) -> dict:
     run_id = run.get("id") if isinstance(run, dict) and isinstance(run.get("id"), str) else ""
     messages = run.get("messages") if isinstance(run, dict) else None
     if not isinstance(messages, list):
-        return _failed_manifest(run_id, [], "run.messages is not a message list")
-    protected = sorted(protected_message_indices(messages))
+        return _failed_manifest(run_id, "run.messages is not a message list")
     base = {
         "schema_version": SCHEMA,
         "run_id": run_id,
         "basis": "messages",
-        "protected_message_indices": protected,
         "units": [],
         "default_source_ids": [],
     }
     receipt = run.get("context_receipt") if isinstance(run, dict) else None
     if not isinstance(receipt, dict):
-        return _failed_manifest(run_id, protected, "run has no finalized Context Receipt")
+        return _failed_manifest(run_id, "run has no finalized Context Receipt")
 
     rows_by_message = _source_rows_by_message(receipt)
     candidate_ids = list(dict.fromkeys(
@@ -366,7 +340,7 @@ def build_context_unit_manifest(run: dict) -> dict:
         if isinstance(source.get("source_id"), str)
     ))
     if not candidate_ids:
-        return _failed_manifest(run_id, protected, "finalized Context Receipt has no source catalog")
+        return _failed_manifest(run_id, "finalized Context Receipt has no source catalog")
 
     try:
         from clozn.replay.span_bridge import resolve_context_receipt_source_set
@@ -380,7 +354,7 @@ def build_context_unit_manifest(run: dict) -> dict:
             if isinstance(source, dict) and isinstance(source.get("message_index"), int):
                 by_message.setdefault(source["message_index"], []).append(source)
     except Exception as exc:  # noqa: BLE001 - journal derivation fails closed
-        return _failed_manifest(run_id, protected, f"strict receipt reconciliation failed: {exc}")
+        return _failed_manifest(run_id, f"strict receipt reconciliation failed: {exc}")
 
     expected_by_message: dict[int, list[dict]] = {}
     for span in derive_auto_source_spans(messages):
@@ -388,14 +362,14 @@ def build_context_unit_manifest(run: dict) -> dict:
 
     selected: list[dict] = []
     for index, message in enumerate(messages):
-        if index in protected or not isinstance(message, dict) or not _text_of(message):
+        if not isinstance(message, dict) or not _text_of(message):
             continue
         content = _text_of(message)
         sources = by_message.get(index, [])
         root = next((source for source in sources if source.get("source_kind") == "whole_message"), None)
         spans = [source for source in sources if source.get("source_kind") == "source_span"]
         if root is None:
-            return _failed_manifest(run_id, protected, f"message {index} has no canonical whole-message root")
+            return _failed_manifest(run_id, f"message {index} has no canonical whole-message root")
 
         expected = expected_by_message.get(index, [])
         if len(expected) <= 1:
@@ -408,13 +382,13 @@ def build_context_unit_manifest(run: dict) -> dict:
                 matches = [source for source in spans if _range(source) == expected_range]
                 if len(matches) != 1:
                     return _failed_manifest(
-                        run_id, protected,
+                        run_id,
                         f"message {index} derived partition does not reconcile with the Context Receipt",
                     )
                 chosen.append(matches[0])
             if not _covers_partition(chosen, len(content)):
                 return _failed_manifest(
-                    run_id, protected,
+                    run_id,
                     f"message {index} derived partition does not cover the recorded context",
                 )
             derivation = "adaptive_markdown"
@@ -429,7 +403,7 @@ def build_context_unit_manifest(run: dict) -> dict:
 
     default_ids = [source["source_id"] for source in selected]
     if len(default_ids) != len(set(default_ids)):
-        return _failed_manifest(run_id, protected, "default source universe contains duplicate canonical IDs")
+        return _failed_manifest(run_id, "default source universe contains duplicate canonical IDs")
     base["units"] = selected
     base["default_source_ids"] = default_ids
     return base
@@ -443,5 +417,4 @@ __all__ = [
     "build_context_unit_manifest",
     "derive_auto_source_spans",
     "max_context_arms",
-    "protected_message_indices",
 ]

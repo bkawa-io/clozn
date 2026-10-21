@@ -73,7 +73,6 @@ function result(overrides: Partial<MinimalContextDurableResult> = {}): MinimalCo
       sourceIds: ["source-keep", "source-drop"],
       sourceCount: 2,
       coverage: {
-        protectedMessageIndices: [2],
         removableMessageIndices: [0, 1],
         removableContentCovered: true,
         partitionVerified: true,

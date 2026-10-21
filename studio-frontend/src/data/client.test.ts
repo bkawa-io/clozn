@@ -5,7 +5,7 @@ import { studioApi } from "./client";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Studio API client", () => {
-  it("builds the protected-instructions, removable-context, protected-question request", async () => {
+  it("builds one ordinary prompt whose complete message text is analyzable", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       clozn_run_id: "run_new",
       choices: [{ message: { role: "assistant", content: "May 22." } }],
@@ -14,8 +14,7 @@ describe("Studio API client", () => {
 
     await expect(studioApi.createRun({
       instructions: " Be concise. ",
-      context: " # Northstar\nNorthstar launches May 22.\n\n# Code\nA😀B ",
-      question: " When does Northstar launch? ",
+      prompt: " # Northstar\nNorthstar launches May 22.\n\n# Question\nWhen does Northstar launch? ",
     })).resolves.toEqual({ runId: "run_new", answer: "May 22." });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -25,19 +24,18 @@ describe("Studio API client", () => {
     expect(JSON.parse(String(init.body))).toEqual({
       messages: [
         { role: "system", content: "Be concise." },
-        { role: "user", content: "# Northstar\nNorthstar launches May 22.\n\n# Code\nA😀B" },
-        { role: "user", content: "When does Northstar launch?" },
+        { role: "user", content: "# Northstar\nNorthstar launches May 22.\n\n# Question\nWhen does Northstar launch?" },
       ],
       max_tokens: 128,
       temperature: 0,
     });
   });
 
-  it("rejects empty context before dispatch", async () => {
+  it("rejects an empty prompt before dispatch", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(studioApi.createRun({ instructions: "", context: "  ", question: "Question" }))
+    await expect(studioApi.createRun({ instructions: "", prompt: "  " }))
       .rejects.toBeInstanceOf(ContractError);
     expect(fetchMock).not.toHaveBeenCalled();
   });

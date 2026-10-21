@@ -177,6 +177,7 @@ def test_chat_completions_carries_clozn_run_id_that_resolves_to_the_logged_run(i
     assert logged["meta"]["max_tokens"] == 256
     assert logged["response"] == "A plain reply."
     assert logged["messages"] == [{"role": "user", "content": "hi there"}]
+    assert [unit["message_index"] for unit in logged["context_units"]["units"]] == [0]
 
 
 

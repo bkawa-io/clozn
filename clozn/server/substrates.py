@@ -22,11 +22,11 @@ from clozn.server.request_context import RequestContext   # backlog #2: per-requ
 
 def _minimal_context_batch_workers() -> int:
     """Bounded opt-in concurrency for independent engine context slots."""
-    raw = os.environ.get("CLOZN_MINIMAL_CONTEXT_BATCH_WORKERS", "2")
+    raw = os.environ.get("CLOZN_MINIMAL_CONTEXT_BATCH_WORKERS", "1")
     try:
         return max(1, min(8, int(raw)))
     except (TypeError, ValueError):
-        return 2
+        return 1
 
 
 def _experimental_native_reference_match_arms_enabled() -> bool:
@@ -253,7 +253,11 @@ class EngineSubstrate:
         req.trace = list(steps)
         if mem_out is not None:
             req.prompt_manifest = dict(mem_out)
-        return reply_raw.strip()
+        # Preserve the exact committed token text. Trimming here makes the
+        # public/stored answer disagree with its recorded token pieces (most
+        # visibly when a length-limited answer ends in a newline), which makes
+        # teacher-forced scoring correctly reject the run as stale.
+        return reply_raw
 
     def last_divergence(self):
         """The early-stop verdict from the most recent chat(): (diverged, diverged_at). (None, None) when

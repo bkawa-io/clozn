@@ -39,11 +39,12 @@ class ContextSearchDispatcher:
 
     def __init__(self, run: Mapping[str, Any], universe: Mapping[str, Any], *, substrate: Any = None,
                  engine: Any = None, observation_store: ObservationStore | None = None,
-                 execution_adapter: Any = None, evaluator: ExactReferenceMatch | None = None,
+                 execution_adapter: Any = None, evaluator: Any = None,
                  execution_strategy: str = "auto",
                  prompt_token_counter: Callable[[Sequence[Mapping[str, Any]]], int] | None = None,
                  render_messages: Callable[[tuple[str, ...]], Sequence[Mapping[str, Any]]] | None = None,
-                 cancel: Callable[[], bool] | None = None):
+                 cancel: Callable[[], bool] | None = None,
+                 _allow_non_exact_evaluator: bool = False):
         if not isinstance(run, Mapping) or not isinstance(run.get("id"), str) or not run["id"]:
             raise ValueError("ContextSearchDispatcher requires a recorded run")
         if not isinstance(universe, Mapping):
@@ -57,7 +58,7 @@ class ContextSearchDispatcher:
         self.source_ids = tuple(source_ids)
         self.state = state
         self.evaluator = evaluator or ExactReferenceMatch()
-        if not isinstance(self.evaluator, ExactReferenceMatch):
+        if not isinstance(self.evaluator, ExactReferenceMatch) and not _allow_non_exact_evaluator:
             raise TypeError("context search supports ExactReferenceMatch only")
         self.observation_store = observation_store
         self.substrate = substrate

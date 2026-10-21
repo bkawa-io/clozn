@@ -14,7 +14,6 @@ from clozn.runs.context_units import (
     build_context_unit_manifest,
     derive_auto_source_spans,
     max_context_arms,
-    protected_message_indices,
 )
 
 
@@ -31,26 +30,27 @@ def test_structured_message_is_partitioned_without_a_duplicate_root():
     run = _run([{"role": "user", "content": content}, {"role": "user", "content": "q"}])
     manifest = run["context_units"]
 
-    assert len(manifest["default_source_ids"]) >= 2
-    assert all(source_id.startswith("src_") for source_id in manifest["default_source_ids"])
-    ranges = [unit["unicode_range"] for unit in manifest["units"]]
+    context_units = [unit for unit in manifest["units"] if unit["message_index"] == 0]
+    assert len(context_units) >= 2
+    assert all(unit["source_id"].startswith("src_") for unit in context_units)
+    ranges = [unit["unicode_range"] for unit in context_units]
     assert ranges[0][0] == 0
     assert ranges[-1][1] == len(content)
     assert all(left[1] == right[0] for left, right in zip(ranges, ranges[1:]))
-    assert "seg_" not in manifest["default_source_ids"]
+    assert any(unit["message_index"] == 1 for unit in manifest["units"])
 
 
 def test_short_unstructured_message_keeps_the_existing_root():
     run = _run([{"role": "user", "content": "A short context note."}, {"role": "user", "content": "q"}])
     manifest = run["context_units"]
 
-    assert len(manifest["default_source_ids"]) == 1
-    assert manifest["default_source_ids"][0].startswith("seg_")
-    assert manifest["units"][0]["derivation"] == "message_root"
+    assert len(manifest["default_source_ids"]) == 2
+    assert all(source_id.startswith("seg_") for source_id in manifest["default_source_ids"])
+    assert all(unit["derivation"] == "message_root" for unit in manifest["units"])
     assert not run["context_receipt"]["delivered"][0].get("sources")
 
 
-def test_previous_user_and_assistant_are_context_but_current_turn_is_protected():
+def test_every_role_and_turn_is_part_of_the_context_universe():
     messages = [
         {"role": "system", "content": "rules"},
         {"role": "user", "content": "previous question"},
@@ -60,11 +60,10 @@ def test_previous_user_and_assistant_are_context_but_current_turn_is_protected()
     run = _run(messages)
     manifest = run["context_units"]
 
-    assert manifest["protected_message_indices"] == [0, 3]
-    assert {unit["message_index"] for unit in manifest["units"]} == {1, 2}
+    assert {unit["message_index"] for unit in manifest["units"]} == {0, 1, 2, 3}
 
 
-def test_instructions_and_current_question_are_protected():
+def test_instructions_and_current_question_are_removable_sources():
     run = _run([
         {"role": "system", "content": "Follow the answer format."},
         {"role": "user", "content": "First context block."},
@@ -72,26 +71,30 @@ def test_instructions_and_current_question_are_protected():
         {"role": "user", "content": "What is the answer?"},
     ])
     manifest = run["context_units"]
-    assert manifest["protected_message_indices"] == [0, 3]
-    assert {unit["message_index"] for unit in manifest["units"]} == {1, 2}
-    assert all(unit["message_index"] != 3 for unit in manifest["units"])
+    assert {unit["message_index"] for unit in manifest["units"]} == {0, 1, 2, 3}
+    assert {unit["role"] for unit in manifest["units"]} == {"system", "user"}
 
 
-def test_trailing_prefill_is_protected_and_no_user_falls_back_to_final_message():
+def test_trailing_prefill_and_chats_without_user_messages_are_analyzable():
     with_user = _run([
         {"role": "system", "content": "rules"},
         {"role": "user", "content": "current"},
         {"role": "assistant", "content": "prefill"},
     ], run_id="run_prefill")
-    assert with_user["context_units"]["protected_message_indices"] == [0, 1, 2]
-    assert with_user["context_units"]["units"] == []
+    assert {unit["message_index"] for unit in with_user["context_units"]["units"]} == {0, 1, 2}
 
     no_user = _run([
         {"role": "system", "content": "rules"},
         {"role": "assistant", "content": "last"},
     ], run_id="run_no_user")
-    assert no_user["context_units"]["protected_message_indices"] == [0, 1]
-    assert no_user["context_units"]["units"] == []
+    assert {unit["message_index"] for unit in no_user["context_units"]["units"]} == {0, 1}
+
+
+def test_single_current_user_message_is_analyzable():
+    run = _run([{"role": "user", "content": "Why did the model answer this way?"}])
+
+    assert len(run["context_units"]["units"]) == 1
+    assert run["context_units"]["units"][0]["message_index"] == 0
 
 
 def test_client_source_annotations_are_ignored_and_replaced_by_derived_units():
@@ -107,8 +110,12 @@ def test_client_source_annotations_are_ignored_and_replaced_by_derived_units():
     }, {"role": "user", "content": "q"}]
     run = _run(messages, run_id="run_ignored_client_sources")
 
-    assert len(run["context_units"]["default_source_ids"]) == 2
-    assert all(unit["derivation"] == "adaptive_markdown" for unit in run["context_units"]["units"])
+    assert len(run["context_units"]["default_source_ids"]) == 3
+    assert all(
+        unit["derivation"] == "adaptive_markdown"
+        for unit in run["context_units"]["units"]
+        if unit["message_index"] == 0
+    )
     assert all(
         source.get("client_source_id") != "client-choice"
         for source in run["context_receipt"]["delivered"][0].get("sources", [])
@@ -133,12 +140,13 @@ def test_unicode_offsets_and_strict_resolver_bind_to_recorded_bytes():
                run_id="run_unicode")
     manifest = run["context_units"]
     for unit in manifest["units"]:
+        message_content = run["messages"][unit["message_index"]]["content"]
         start, end = unit["unicode_range"]
         byte_start, byte_end = unit["byte_range"]
-        selected = content[start:end]
+        selected = message_content[start:end]
         assert selected
-        assert content[:start].encode("utf-8").__len__() == byte_start
-        assert content[:end].encode("utf-8").__len__() == byte_end
+        assert len(message_content[:start].encode("utf-8")) == byte_start
+        assert len(message_content[:end].encode("utf-8")) == byte_end
         assert unit["content_sha256"]
     resolved = resolve_context_receipt_source_set(run, manifest["default_source_ids"])
     assert len(resolved["exact_removed_ranges"]) == len(manifest["units"])

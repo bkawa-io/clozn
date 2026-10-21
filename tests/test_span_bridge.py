@@ -177,15 +177,17 @@ def _strict_receipt_run():
     }
 
 
-def test_canonical_receipt_set_deletion_is_whole_message_and_preserves_remaining_order():
+def test_canonical_receipt_set_deletion_clears_text_and_preserves_chat_structure():
     run = _strict_receipt_run()
     ids = [segment["segment_id"] for segment in run["context_receipt"]["assembled"]]
     # Deliberately provide input in reverse order.  IDs are canonicalized for
-    # provenance while the untouched messages retain original prompt order.
+    # provenance while every role wrapper retains original prompt order.
     result = span_bridge.delete_context_receipt_sources(run, [ids[3], ids[1]])
 
     assert result["canonical_source_ids"] == sorted([ids[1], ids[3]])
-    assert [message["content"] for message in result["messages"]] == ["system stays", "keep B"]
+    assert [message["content"] for message in result["messages"]] == [
+        "system stays", "", "keep B", "",
+    ]
     assert [item["message_index"] for item in result["exact_removed_ranges"]] == [1, 3]
     assert len(result["basis_digest"]) == len(result["intervened_context_digest"]) == 64
     assert run["messages"][1]["content"] == "remove A"  # no mutation

@@ -1,0 +1,27 @@
+{
+  "schema_version": "clozn.lean-context-result.v1",
+  "run_id": "run_example",
+  "search_id": "lean_0123456789abcdef01234567",
+  "status": "completed",
+  "base_execution_fingerprint": "fingerprint",
+  "claim": {"kind": "best_found_within_budget", "minimum_proven": true},
+  "tolerance": {
+    "profile": "balanced.v1",
+    "mean_positive_support_loss_nats_per_token": 0.05,
+    "max_token_support_loss_nats": 0.7
+  },
+  "policy": {},
+  "universe": {},
+  "original": null,
+  "best": null,
+  "reduction": null,
+  "trials": [],
+  "budget": {
+    "max_new_executions": 16,
+    "used_new_executions": 0,
+    "reused_observation_count": 0,
+    "exhausted": false,
+    "blocked_by_budget": false
+  },
+  "stopping_reason": "search_policy_complete"
+}

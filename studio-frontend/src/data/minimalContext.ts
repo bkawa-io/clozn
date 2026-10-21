@@ -43,7 +43,6 @@ export interface MinimalContextUniverse {
   sourceIds: readonly string[];
   sourceCount: number;
   coverage: {
-    protectedMessageIndices: readonly number[];
     removableMessageIndices: readonly number[];
     removableContentCovered: true;
     partitionVerified: true;
@@ -438,12 +437,10 @@ function decodeUniverse(
 
   const rawCoverage = record(required(row, "coverage", endpoint, path), endpoint, `${path}.coverage`);
   closed(rawCoverage, [
-    "protected_message_indices", "removable_message_indices", "removable_content_covered",
+    "removable_message_indices", "removable_content_covered",
     "partition_verified", "complete_catalog_source_count", "selected_source_count",
   ], endpoint, `${path}.coverage`);
-  const protectedMessageIndices = counts(required(rawCoverage, "protected_message_indices", endpoint, `${path}.coverage`), endpoint, `${path}.coverage.protected_message_indices`);
   const removableMessageIndices = counts(required(rawCoverage, "removable_message_indices", endpoint, `${path}.coverage`), endpoint, `${path}.coverage.removable_message_indices`);
-  if (new Set(protectedMessageIndices).size !== protectedMessageIndices.length) fail(endpoint, `${path}.coverage.protected_message_indices`, "must not contain duplicates");
   if (new Set(removableMessageIndices).size !== removableMessageIndices.length) fail(endpoint, `${path}.coverage.removable_message_indices`, "must not contain duplicates");
   const removableContentCovered = booleanValue(required(rawCoverage, "removable_content_covered", endpoint, `${path}.coverage`), endpoint, `${path}.coverage.removable_content_covered`);
   const partitionVerified = booleanValue(required(rawCoverage, "partition_verified", endpoint, `${path}.coverage`), endpoint, `${path}.coverage.partition_verified`);
@@ -479,7 +476,6 @@ function decodeUniverse(
     sourceIds,
     sourceCount,
     coverage: {
-      protectedMessageIndices,
       removableMessageIndices,
       removableContentCovered: true,
       partitionVerified: true,

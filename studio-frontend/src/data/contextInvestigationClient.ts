@@ -10,6 +10,7 @@ import {
   decodeContextEffectsJob,
   type ContextEffectsJob,
 } from "./contextInvestigationJobs";
+import { decodeLeanContextJob, type LeanContextJob } from "./leanContext";
 
 export interface ContextInvestigationQueryRequest {
   answerStart: number;
@@ -187,5 +188,47 @@ export const contextInvestigationApi = {
     return decodeContextEffectsJob(
       await responseJson(response, endpoint), endpoint, runId,
     );
+  },
+
+  async startLeanContext(runId: string, signal?: AbortSignal): Promise<LeanContextJob> {
+    const endpoint = runPath(runId, "lean-context/jobs");
+    const response = await fetch(endpoint, {
+      method: "POST",
+      signal,
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: "{}",
+    });
+    return decodeLeanContextJob(
+      await responseJson(response, endpoint, [202]), endpoint, runId,
+    );
+  },
+
+  async leanContextJob(
+    runId: string,
+    jobId: string,
+    signal?: AbortSignal,
+  ): Promise<LeanContextJob> {
+    identifier(jobId, "job id");
+    const endpoint = runPath(runId, `lean-context/jobs/${encodeURIComponent(jobId)}`);
+    const response = await fetch(endpoint, {
+      method: "GET", signal, headers: { Accept: "application/json" },
+    });
+    return decodeLeanContextJob(await responseJson(response, endpoint), endpoint, runId);
+  },
+
+  async cancelLeanContext(
+    runId: string,
+    jobId: string,
+    signal?: AbortSignal,
+  ): Promise<LeanContextJob> {
+    identifier(jobId, "job id");
+    const endpoint = runPath(runId, `lean-context/jobs/${encodeURIComponent(jobId)}/cancel`);
+    const response = await fetch(endpoint, {
+      method: "POST",
+      signal,
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: "{}",
+    });
+    return decodeLeanContextJob(await responseJson(response, endpoint), endpoint, runId);
   },
 };

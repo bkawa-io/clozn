@@ -34,13 +34,13 @@ class MemoryStore(ObservationStore):
         return self.view
 
 
-def _protected_only_run():
+def _single_message_run(content="only current request"):
     run, _source_ids = _run()
-    messages = [{"role": "user", "content": "only current request"}]
-    run["id"] = "run_context_investigation_protected_only"
+    messages = [{"role": "user", "content": content}]
+    run["id"] = "run_context_investigation_single_message"
     run["messages"] = deepcopy(messages)
     run["assembled_messages"] = deepcopy(messages)
-    run["final_prompt"] = "only current request"
+    run["final_prompt"] = content
     run["context_receipt"] = build_context_receipt(
         messages=messages,
         assembled_messages=messages,
@@ -93,8 +93,16 @@ def test_reader_before_measurement_has_context_and_answer_without_model_work():
     schemas.validate(document, "clozn.context-investigation-reader.v1")
 
 
+def test_single_current_request_is_an_executable_effect_source():
+    run = _single_message_run()
+    plan = plan_context_effects(run)
+
+    assert len(plan.measurement_source_ids) == 1
+    assert plan.measurement_source_ids == tuple(run["context_units"]["default_source_ids"])
+
+
 def test_reader_plan_preserves_prose_without_minting_an_empty_q2_experiment():
-    run = _protected_only_run()
+    run = _single_message_run("")
     with pytest.raises(ValueError, match="no automatically discovered sources are exactly removable"):
         plan_context_effects(run)
 
@@ -125,9 +133,7 @@ def test_reader_plan_preserves_prose_without_minting_an_empty_q2_experiment():
         "failed_source_count": 0,
         "not_measured_source_count": 0,
     }
-    assert [block["text"] for block in document["context"]["blocks"]] == [
-        "only current request",
-    ]
+    assert [block["text"] for block in document["context"]["blocks"]] == [""]
     assert document["answer"]["text"] == run["response"]
     assert document["sources"]
     assert {source["measurement"]["status"] for source in document["sources"]} == {
@@ -142,7 +148,7 @@ def test_reader_plan_preserves_prose_without_minting_an_empty_q2_experiment():
     schemas.validate(document, "clozn.context-investigation-reader.v1")
 
 
-def test_reader_projects_direct_loci_and_keeps_protected_display_source_unmeasured():
+def test_reader_projects_direct_loci_and_keeps_unselected_display_source_unmeasured():
     run, source_ids = _run()
     plan = plan_context_effects(run, source_ids=source_ids[:2])
     view = _view(run, source_ids[:2])
@@ -152,8 +158,8 @@ def test_reader_projects_direct_loci_and_keeps_protected_display_source_unmeasur
 
     assert document["status"] == "completed"
     assert document["measurement"]["completed_source_count"] == 2
-    protected = next(item for item in document["sources"] if item["source_id"] == source_ids[2])
-    assert protected["measurement"]["status"] == "not_measured"
+    unselected = next(item for item in document["sources"] if item["source_id"] == source_ids[2])
+    assert unselected["measurement"]["status"] == "not_measured"
     assert document["loci"]
     details = project_locus_details(document, document["loci"][0]["locus_id"])
     assert details["experiment"]["experiment_id"] == view.experiment_id

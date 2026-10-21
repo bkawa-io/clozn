@@ -17,7 +17,7 @@ def _run(content: str, *, run_id: str = "run_universe") -> dict:
     return run
 
 
-def test_derived_universe_is_used_unchanged_and_protected_turn_is_absent():
+def test_derived_universe_includes_every_nonempty_message():
     content = "\n\n".join(f"# H{i}\n" + (str(i) * 50) for i in range(12))
     run = _run(content)
     original = list(run["context_units"]["default_source_ids"])
@@ -26,7 +26,7 @@ def test_derived_universe_is_used_unchanged_and_protected_turn_is_absent():
 
     assert artifact["status"] == "planned"
     assert artifact["source_ids"] == original
-    assert artifact["coverage"]["protected_message_indices"] == [1]
+    assert artifact["coverage"]["removable_message_indices"] == [0, 1]
     assert artifact["policy"] == {
         "kind": "flat_markdown_partition",
         "version": "flat_markdown_partition.v1",

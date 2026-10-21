@@ -12,7 +12,6 @@ from clozn.replay.span_bridge import (
     ContextReceiptSourceResolutionError,
     resolve_context_receipt_source_set,
 )
-from clozn.runs.context_units import protected_message_indices
 
 
 SCHEMA = "clozn.context-search-universe.v1"
@@ -54,7 +53,6 @@ def _validate_partition(
     unit_by_id: Mapping[str, Mapping[str, Any]],
     catalog_by_id: Mapping[str, Mapping[str, Any]],
     basis_messages: list[dict],
-    protected: set[int],
 ) -> None:
     by_message: dict[int, list[Mapping[str, Any]]] = {}
     for source_id in selected_ids:
@@ -62,8 +60,6 @@ def _validate_partition(
         index = source.get("message_index")
         if not isinstance(index, int):
             raise ContextSearchUniverseError("a selected source has no message index")
-        if index in protected:
-            raise ContextSearchUniverseError("the search universe includes a protected message")
         unit = unit_by_id[source_id]
         if unit.get("message_index") != index or _range(unit) != _range(source):
             raise ContextSearchUniverseError("Context Unit and receipt source ranges disagree")
@@ -119,11 +115,6 @@ def plan_context_search_universe(
     messages = run.get("messages")
     if not isinstance(messages, list) or not messages:
         raise ContextSearchUniverseError("run.messages must be a non-empty message list")
-    expected_protected = sorted(protected_message_indices(messages))
-    protected = manifest.get("protected_message_indices")
-    if protected != expected_protected:
-        raise ContextSearchUniverseError("Context Units protected-message partition is stale")
-
     units = manifest.get("units")
     source_ids = manifest.get("default_source_ids")
     if not isinstance(units, list) or not isinstance(source_ids, list) or not source_ids:
@@ -152,7 +143,6 @@ def plan_context_search_universe(
         unit_by_id=unit_by_id,
         catalog_by_id=catalog_by_id,
         basis_messages=basis_messages,
-        protected=set(protected),
     )
 
     policy_doc = {
@@ -162,7 +152,6 @@ def plan_context_search_universe(
     }
     basis_digest = _digest(manifest)
     coverage = {
-        "protected_message_indices": list(protected),
         "removable_message_indices": sorted({catalog_by_id[sid]["message_index"] for sid in source_ids}),
         "removable_content_covered": True,
         "partition_verified": True,

@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.lean-context-result.v1",
+  "title": "Budgeted tolerant Lean Context result",
+  "$defs": {
+    "loss": {
+      "type": "object",
+      "required": [
+        "answer_token_count",
+        "positive_loss_token_count",
+        "mean_positive_support_loss_nats_per_token",
+        "max_token_support_loss_nats"
+      ],
+      "properties": {
+        "answer_token_count": {"type": "integer", "minimum": 1},
+        "positive_loss_token_count": {"type": "integer", "minimum": 0},
+        "mean_positive_support_loss_nats_per_token": {"type": "number", "minimum": 0},
+        "max_token_support_loss_nats": {"type": "number", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "candidate": {
+      "type": "object",
+      "required": [
+        "retained_source_ids",
+        "removed_source_ids",
+        "rendered_prompt_token_cost",
+        "tolerance_status",
+        "loss",
+        "evidence"
+      ],
+      "properties": {
+        "retained_source_ids": {"type": "array", "items": {"type": "string"}},
+        "removed_source_ids": {"type": "array", "items": {"type": "string"}},
+        "rendered_prompt_token_cost": {"type": "integer", "minimum": 0},
+        "tolerance_status": {"enum": ["within_tolerance", "outside_tolerance", null]},
+        "loss": {"anyOf": [{"$ref": "#/$defs/loss"}, {"type": "null"}]},
+        "evidence": {"type": ["object", "null"], "additionalProperties": true}
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "search_id",
+    "status",
+    "base_execution_fingerprint",
+    "claim",
+    "tolerance",
+    "policy",
+    "universe",
+    "original",
+    "best",
+    "reduction",
+    "trials",
+    "budget",
+    "stopping_reason"
+  ],
+  "properties": {
+    "schema_version": {"const": "clozn.lean-context-result.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "search_id": {"type": "string", "pattern": "^lean_[0-9a-f]{24}$"},
+    "status": {"enum": ["completed", "unavailable", "cancelled"]},
+    "reason": {"type": "string"},
+    "reason_code": {"type": "string"},
+    "base_execution_fingerprint": {"type": "string", "minLength": 1},
+    "claim": {
+      "type": "object",
+      "required": ["kind", "minimum_proven"],
+      "properties": {
+        "kind": {"const": "best_found_within_budget"},
+        "minimum_proven": {"const": false}
+      },
+      "additionalProperties": false
+    },
+    "tolerance": {
+      "type": "object",
+      "required": [
+        "profile",
+        "mean_positive_support_loss_nats_per_token",
+        "max_token_support_loss_nats"
+      ],
+      "properties": {
+        "profile": {"const": "balanced.v1"},
+        "mean_positive_support_loss_nats_per_token": {"type": "number", "minimum": 0},
+        "max_token_support_loss_nats": {"type": "number", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "policy": {"type": "object", "additionalProperties": true},
+    "universe": {"type": "object", "additionalProperties": true},
+    "original": {"anyOf": [{"$ref": "#/$defs/candidate"}, {"type": "null"}]},
+    "best": {"anyOf": [{"$ref": "#/$defs/candidate"}, {"type": "null"}]},
+    "reduction": {"type": ["object", "null"], "additionalProperties": true},
+    "trials": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "ordinal",
+          "stage",
+          "retained_source_ids",
+          "removed_source_ids",
+          "rendered_prompt_token_cost",
+          "classification",
+          "disposition",
+          "tolerance_status",
+          "loss",
+          "evidence"
+        ],
+        "properties": {
+          "ordinal": {"type": "integer", "minimum": 0},
+          "stage": {"type": "string"},
+          "retained_source_ids": {"type": "array", "items": {"type": "string"}},
+          "removed_source_ids": {"type": "array", "items": {"type": "string"}},
+          "rendered_prompt_token_cost": {"type": "integer", "minimum": 0},
+          "classification": {"enum": ["preserves", "diverged", "unknown"]},
+          "disposition": {"enum": ["executed", "reused", "not_executed"]},
+          "tolerance_status": {"enum": ["within_tolerance", "outside_tolerance", null]},
+          "loss": {"anyOf": [{"$ref": "#/$defs/loss"}, {"type": "null"}]},
+          "evidence": {"type": ["object", "null"], "additionalProperties": true}
+        },
+        "additionalProperties": false
+      }
+    },
+    "budget": {
+      "type": "object",
+      "required": [
+        "max_new_executions",
+        "used_new_executions",
+        "reused_observation_count",
+        "exhausted",
+        "blocked_by_budget"
+      ],
+      "properties": {
+        "max_new_executions": {"type": "integer", "minimum": 0},
+        "used_new_executions": {"type": "integer", "minimum": 0},
+        "reused_observation_count": {"type": "integer", "minimum": 0},
+        "exhausted": {"type": "boolean"},
+        "blocked_by_budget": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "stopping_reason": {"enum": ["search_policy_complete", "budget_exhausted", "search_unavailable", "cancelled"]}
+  },
+  "additionalProperties": false
+}

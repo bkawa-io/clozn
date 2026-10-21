@@ -47,7 +47,7 @@ def test_cancellation_fixture_has_non_overlapping_exact_source_ranges():
         assert f"Record {index:02d}:" in text
 
 
-def test_live_fixture_protects_instructions_and_question_but_marks_context_removable():
+def test_live_fixture_sends_plain_messages_without_client_source_annotations():
     class Client:
         body = None
 

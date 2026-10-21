@@ -17,7 +17,6 @@ from clozn.replay.span_bridge import (
     resolve_context_receipt_source_set,
 )
 from clozn.runs.answer_preservation import assess_exact_eligibility
-from clozn.runs.context_units import protected_message_indices
 
 from .evaluators import ExactReferenceMatch
 from .batch import ArmExecutionOutcome, ArmExecutionRequest, BatchExecutionResult
@@ -114,16 +113,6 @@ def resolve_delete_source(run: Mapping[str, Any], intervention: DeleteSource) ->
         resolved = resolve_context_receipt_source_set(dict(run), list(intervention.source_ids))
     except ContextReceiptSourceResolutionError:
         raise
-    protected = protected_message_indices(run.get("messages"))
-    selected_ranges = resolved.get("exact_removed_ranges") or []
-    protected_ranges = [
-        item for item in selected_ranges
-        if isinstance(item, Mapping) and item.get("message_index") in protected
-    ]
-    if protected_ranges:
-        raise ExecutionAdapterError(
-            "the current request and following message suffix are protected from source deletion"
-        )
     return resolved
 
 

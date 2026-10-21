@@ -64,7 +64,6 @@ function resultDocument(includeBinding = true): WireDocument {
       source_ids: [sourceA, sourceB],
       source_count: 2,
       coverage: {
-        protected_message_indices: [2],
         removable_message_indices: [0, 1],
         removable_content_covered: true,
         partition_verified: true,

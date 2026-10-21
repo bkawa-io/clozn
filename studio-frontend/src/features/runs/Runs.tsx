@@ -11,13 +11,13 @@ type RunsState =
 
 const EXAMPLE: RunDraft = {
   instructions: "Answer from the supplied facts. Return only the requested value.",
-  context: [
+  prompt: [
     "## Launch code\nThe launch code is ORCHID-731.",
     "## Launch site\nThe launch site is North Annex.",
     "## Launch window\nThe launch window begins at dawn.",
     "## Badge\nThe authorized badge color is amber.",
+    "## Question\nAccording to the supplied facts, what is the launch code? Answer with the code only.",
   ].join("\n\n"),
-  question: "According to the supplied facts, what is the launch code? Answer with the code only.",
 };
 
 function formatTime(run: RunSummary): string {
@@ -34,26 +34,24 @@ function shortId(value: string): string {
 
 function Composer({ onCreated }: { onCreated: (runId: string) => void }) {
   const [instructions, setInstructions] = useState("");
-  const [context, setContext] = useState("");
-  const [question, setQuestion] = useState("");
+  const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
   function loadExample() {
     setInstructions(EXAMPLE.instructions);
-    setContext(EXAMPLE.context);
-    setQuestion(EXAMPLE.question);
+    setPrompt(EXAMPLE.prompt);
     setError(undefined);
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!question.trim() || !context.trim() || busy) return;
+    if (!prompt.trim() || busy) return;
     const controller = new AbortController();
     setBusy(true);
     setError(undefined);
     try {
-      const created = await studioApi.createRun({ instructions, context, question }, controller.signal);
+      const created = await studioApi.createRun({ instructions, prompt }, controller.signal);
       onCreated(created.runId);
     } catch (requestError: unknown) {
       setError(describeError(requestError));
@@ -64,25 +62,21 @@ function Composer({ onCreated }: { onCreated: (runId: string) => void }) {
   return (
     <section className="run-composer" aria-labelledby="new-run-title">
       <header>
-        <div><span className="eyebrow">NEW RUN</span><h2 id="new-run-title">Ask with context</h2></div>
+        <div><span className="eyebrow">NEW RUN</span><h2 id="new-run-title">Send a prompt</h2></div>
         <button type="button" className="secondary-action" disabled={busy} onClick={loadExample}>Load example</button>
       </header>
       <form onSubmit={(event) => { void submit(event); }}>
         <label className="composer-instructions">
-          <span>Instructions <small>optional · protected</small></span>
+          <span>Instructions <small>optional · analyzed</small></span>
           <textarea value={instructions} disabled={busy} onChange={(event) => setInstructions(event.target.value)} rows={2} placeholder="How should the model answer?" />
         </label>
-        <label className="composer-context">
-          <span>Context <small>Markdown-aware · measured and reducible</small></span>
-          <textarea value={context} disabled={busy} onChange={(event) => setContext(event.target.value)} rows={10} placeholder="Paste context; Markdown headings and paragraphs guide automatic chunking" required />
-        </label>
-        <label className="composer-question">
-          <span>Question <small>protected</small></span>
-          <textarea value={question} disabled={busy} onChange={(event) => setQuestion(event.target.value)} rows={3} placeholder="What should the model answer?" required />
+        <label className="composer-prompt">
+          <span>Prompt <small>all input text is analyzed</small></span>
+          <textarea value={prompt} disabled={busy} onChange={(event) => setPrompt(event.target.value)} rows={13} placeholder="Enter a question, conversation text, or Markdown context" required />
         </label>
         <div className="composer-submit">
-          <p>Context is chunked automatically · answer limit 128 tokens</p>
-          <button type="submit" disabled={busy || !question.trim() || !context.trim()}>{busy ? "Creating run…" : "Create run"}</button>
+          <p>Input is chunked automatically · answer limit 128 tokens</p>
+          <button type="submit" disabled={busy || !prompt.trim()}>{busy ? "Creating run…" : "Create run"}</button>
         </div>
         {error && <p className="composer-error" role="alert">Run creation failed. <span>{error}</span></p>}
       </form>
@@ -98,7 +92,7 @@ function RunCard({ run, onDelete }: { run: RunSummary; onDelete: (run: RunSummar
           <code>{shortId(run.id)}</code>
           <time dateTime={run.createdAt ?? undefined}>{formatTime(run)}</time>
         </div>
-        <h3>{run.promptSummary || "Question not recorded"}</h3>
+        <h3>{run.promptSummary || "Prompt not recorded"}</h3>
         <p>{run.responseSummary || "No recorded answer"}</p>
         <div className="run-card-meta">
           <span>{run.model || "Model not recorded"}</span>

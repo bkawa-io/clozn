@@ -219,7 +219,11 @@ def assess_exact_eligibility(run: Mapping[str, Any], sub: Any = None,
         if contract["sampling"].get("seed") is None:
             reasons.append("sampled_replay_not_proven")
 
-    from clozn.experiments.execution_facts import parent_runtime_projection, runtime_projection
+    from clozn.experiments.execution_facts import (
+        parent_runtime_projection,
+        runtime_projection,
+        runtime_projections_equivalent,
+    )
     recorded_runtime = None
     try:
         recorded_runtime = parent_runtime_projection(run)
@@ -233,7 +237,9 @@ def assess_exact_eligibility(run: Mapping[str, Any], sub: Any = None,
         current_projection = _runtime_projection_for_sub(run, sub)
     if current_projection is None:
         reasons.append("runtime_identity_unavailable")
-    elif recorded_runtime is not None and current_projection != recorded_runtime:
+    elif recorded_runtime is not None and not runtime_projections_equivalent(
+        current_projection, recorded_runtime,
+    ):
         if current_projection.get("template_fingerprint") != recorded_runtime.get("template_fingerprint"):
             reasons.append("template_mismatch")
         else:

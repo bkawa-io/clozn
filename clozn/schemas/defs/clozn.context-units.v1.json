@@ -5,16 +5,12 @@
   "description": "A deterministic journal-only default search universe over canonical Context Receipt roots and exact source spans. The manifest never changes the messages or rendered prompt sent to the model.",
   "type": "object",
   "required": [
-    "schema_version", "run_id", "basis", "protected_message_indices", "units", "default_source_ids"
+    "schema_version", "run_id", "basis", "units", "default_source_ids"
   ],
   "properties": {
     "schema_version": {"const": "clozn.context-units.v1"},
     "run_id": {"type": "string", "minLength": 1},
     "basis": {"const": "messages"},
-    "protected_message_indices": {
-      "type": "array",
-      "items": {"type": "integer", "minimum": 0}
-    },
     "units": {
       "type": "array",
       "items": {"$ref": "#/$defs/unit"}

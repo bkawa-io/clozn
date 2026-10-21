@@ -145,6 +145,14 @@ def test_engine_scalar_wrapper_declares_its_actual_worker_strategy(monkeypatch):
     assert substrate.score_tokens_many_execution_strategy == "scalar_http_concurrent"
 
 
+def test_engine_scalar_wrapper_defaults_to_serial_for_the_single_worker(monkeypatch):
+    from clozn.server import app as cs
+
+    substrate = object.__new__(cs.EngineSubstrate)
+    monkeypatch.delenv("CLOZN_MINIMAL_CONTEXT_BATCH_WORKERS", raising=False)
+    assert substrate.score_tokens_many_execution_strategy == "scalar_serial"
+
+
 def test_scalar_and_native_batch_exact_results_preserve_mixed_divergence_and_termination():
     scalar = ScalarSubstrate()
     expected = [scalar.probe_reference_match(**arm) for arm in _probe_arms()]

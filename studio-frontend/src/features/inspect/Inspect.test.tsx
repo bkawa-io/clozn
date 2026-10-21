@@ -7,6 +7,7 @@ import type {
 } from "../../data/contextInvestigation";
 import { contextInvestigationApi } from "../../data/contextInvestigationClient";
 import type { ContextEffectsJob } from "../../data/contextInvestigationJobs";
+import type { LeanContextJob } from "../../data/leanContext";
 import { InspectSurface } from "./Inspect";
 
 const runId = "run_alpha";
@@ -345,6 +346,74 @@ function effectsJobFixture(
         state: "completed",
       },
     } : {}),
+  };
+}
+
+function leanContextJobFixture(): LeanContextJob {
+  return {
+    schemaVersion: "clozn.analysis-job.v1",
+    jobId: "infjob_lean_ui",
+    runId,
+    kind: "context_investigation_lean_context",
+    state: "completed",
+    progress: { phase: "done", completedUnits: 1, totalUnits: 1, percent: 100 },
+    cancelRequested: false,
+    cancellable: false,
+    cached: false,
+    result: {
+      schemaVersion: "clozn.lean-context-result.v1",
+      runId,
+      searchId: "lean_ui",
+      status: "completed",
+      claim: { kind: "best_found_within_budget", minimumProven: false },
+      tolerance: {
+        profile: "balanced.v1",
+        meanPositiveSupportLossNatsPerToken: .05,
+        maxTokenSupportLossNats: .7,
+      },
+      sourceIds: ["source-a", "source b"],
+      original: {
+        retainedSourceIds: ["source-a", "source b"],
+        removedSourceIds: [],
+        renderedPromptTokenCost: 120,
+        toleranceStatus: "within_tolerance",
+        loss: {
+          answerTokenCount: 3,
+          positiveLossTokenCount: 0,
+          meanPositiveSupportLossNatsPerToken: 0,
+          maxTokenSupportLossNats: 0,
+        },
+        observationId: "obs-original",
+      },
+      best: {
+        retainedSourceIds: ["source-a"],
+        removedSourceIds: ["source b"],
+        renderedPromptTokenCost: 72,
+        toleranceStatus: "within_tolerance",
+        loss: {
+          answerTokenCount: 3,
+          positiveLossTokenCount: 1,
+          meanPositiveSupportLossNatsPerToken: .02,
+          maxTokenSupportLossNats: .12,
+        },
+        observationId: "obs-best",
+      },
+      reduction: {
+        removedPromptTokens: 48,
+        retainedPromptTokenFraction: .6,
+        removedSourceCount: 1,
+        retainedSourceCount: 1,
+      },
+      trials: [],
+      budget: {
+        maxNewExecutions: 16,
+        usedNewExecutions: 4,
+        reusedObservationCount: 2,
+        exhausted: false,
+        blockedByBudget: false,
+      },
+      stoppingReason: "search_policy_complete",
+    },
   };
 }
 
@@ -722,6 +791,59 @@ describe("Inspect surface", () => {
     const block = document.querySelector(".context-block");
     expect(block).toHaveClass("has-whole-measurement");
     expect(block).toHaveAttribute("data-source-ids", '["source-a"]');
+  });
+
+  it("turns an expanded context pane into a heatmap and restores the linked layout on collapse", async () => {
+    vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(readerFixture());
+    const view = render(<InspectSurface route={{ surface: "inspect", runId }} />);
+
+    await screen.findByText("Measured");
+    fireEvent.click(screen.getAllByRole("button", { name: "Expand heatmap" })[0]);
+
+    expect(view.container.querySelector(".inspect-reader")).toHaveClass("is-expanded-context");
+    const heated = view.container.querySelector<HTMLElement>('.context-segment[data-source-ids="[\\"source-a\\"]"]');
+    expect(heated).toHaveAttribute("data-heat", "true");
+    expect(heated?.style.getPropertyValue("--heat-alpha")).not.toBe("");
+    fireEvent.mouseEnter(heated!);
+    expect(await screen.findByText("Linked text")).toBeInTheDocument();
+    expect(screen.getByText("+0.42 Δ")).toBeInTheDocument();
+
+    fireEvent.click(heated!);
+    expect(window.location.hash).toBe("#/inspect/run_alpha?answerStart=3&answerEnd=4&sourceId=source-a");
+    fireEvent.click(screen.getByRole("button", { name: "Collapse" }));
+    expect(view.container.querySelector(".inspect-reader")).not.toHaveClass("is-expanded");
+    expect(view.container.querySelector('[data-heat="true"]')).not.toBeInTheDocument();
+  });
+
+  it("ranks context and answer influence and opens a ranking in the linked view", async () => {
+    vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(readerFixture());
+    render(<InspectSurface route={{ surface: "inspect", runId }} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Efficiency" }));
+    expect(screen.getByRole("heading", { name: "Influence overview" })).toBeInTheDocument();
+    expect(screen.getByText("This measures influence, not correctness.", { exact: false })).toBeInTheDocument();
+    const sourceText = screen.getByText("A😀B", { selector: ".ranking-copy strong" });
+    fireEvent.click(sourceText.closest("button")!);
+
+    expect(window.location.hash).toBe("#/inspect/run_alpha?answerStart=3&answerEnd=4&sourceId=source-a");
+    expect(screen.getByRole("button", { name: "Linked view" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("runs Lean Context and labels the result as best-found rather than minimal", async () => {
+    vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(readerFixture());
+    const start = vi.spyOn(contextInvestigationApi, "startLeanContext")
+      .mockResolvedValue(leanContextJobFixture());
+    render(<InspectSurface route={{ surface: "inspect", runId }} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Lean Context" }));
+    fireEvent.click(screen.getByRole("button", { name: "Find lean context" }));
+
+    await waitFor(() => expect(start).toHaveBeenCalledWith(runId, expect.any(AbortSignal)));
+    const promptTokens = await screen.findByText("Prompt tokens");
+    expect(promptTokens.closest("article")).toHaveTextContent("120 → 72");
+    expect(screen.getByText("60%")).toBeInTheDocument();
+    expect(screen.getByText("Best found within this search budget. It is not a proof of the mathematically smallest context.")).toBeInTheDocument();
+    expect(screen.getByText("context", { selector: ".lean-removed li" })).toBeInTheDocument();
   });
 
 });

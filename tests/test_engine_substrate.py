@@ -15,7 +15,7 @@ Covers:
   * EngineSubstrate.__init__: builds when ENGINE is configured and raises when it is not; the lazy
     model_family/model_id/model_sha256 identity resolution (cooldown-gated retry while the engine is
     down at startup).
-  * EngineSubstrate.chat(): returns the engine's text (stripped), fills request outputs, and captures
+  * EngineSubstrate.chat(): returns the engine's exact text, fills request outputs, and captures
     the exact rendered final_prompt.
   * run_meta() reproducibility metadata and S5 interactive-sampling resolution.
   * RequestContext: the per-call bundle chat()/chat_stream() publish as self._request (backlog #2).
@@ -180,10 +180,10 @@ def test_identity_never_refetches_once_resolved(iso, monkeypatch):
 
 # ==================================================================================== chat() basics
 
-def test_chat_returns_the_engines_text_stripped(iso, fake_engine, monkeypatch):
+def test_chat_preserves_the_engines_exact_committed_text(iso, fake_engine, monkeypatch):
     fake_engine.text = "  hello there  "
     sub = cs.EngineSubstrate(engine=fake_engine)
-    assert sub.chat([{"role": "user", "content": "hi"}]) == "hello there"
+    assert sub.chat([{"role": "user", "content": "hi"}]) == "  hello there  "
     assert len(fake_engine.calls) == 1             # the .complete() fallback actually ran
 
 

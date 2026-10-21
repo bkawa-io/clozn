@@ -28,6 +28,10 @@ import {
   type ContextEffectsJob,
 } from "../../data/contextInvestigationJobs";
 import {
+  isTerminalLeanContextJob,
+  type LeanContextJob,
+} from "../../data/leanContext";
+import {
   codePointLength,
   isValidCodePointRange,
   segmentAnnotatedText,
@@ -48,6 +52,7 @@ type Resource<T> =
 type OptionalResource<T> = { phase: "idle" } | Resource<T>;
 type EvidenceDirection = "support" | "suppression" | "mixed";
 type MobilePane = "context" | "answer";
+type InvestigationView = "links" | "efficiency" | "lean";
 
 interface ActiveRange extends CodePointRange {
   key: string;
@@ -207,6 +212,58 @@ function plural(count: number, singular: string, pluralForm = `${singular}s`): s
 function excerpt(value: string, limit = 64): string {
   const compact = value.replace(/\s+/g, " ").trim();
   return compact.length > limit ? `${compact.slice(0, limit - 1).trimEnd()}…` : compact;
+}
+
+function sourceInfluence(source: ContextInvestigationSource | undefined): number {
+  if (!source || source.summary.totalContinuationDeltaNats === null) return 0;
+  return Math.abs(source.summary.totalContinuationDeltaNats);
+}
+
+function heatDirection(value: number): EvidenceDirection {
+  if (value > 0) return "support";
+  if (value < 0) return "suppression";
+  return "mixed";
+}
+
+function heatStyle(intensity: number): CSSProperties {
+  const normalized = Math.max(0, Math.min(1, intensity));
+  return { "--heat-alpha": `${Math.round(5 + normalized * 25)}%` } as CSSProperties;
+}
+
+function sourceRecordedText(
+  reader: ContextInvestigationReader,
+  source: ContextInvestigationSource,
+): string {
+  const block = reader.context.blocks.find((item) => item.messageIndex === source.messageIndex);
+  return block
+    ? sliceCodePoints(block.text, source.unicodeRange[0], source.unicodeRange[1])
+    : source.label ?? source.sourceId;
+}
+
+function strongestSource(
+  sourceIds: readonly string[],
+  sourceById: ReadonlyMap<string, ContextInvestigationSource>,
+): ContextInvestigationSource | undefined {
+  return sourceIds
+    .flatMap((sourceId) => {
+      const source = sourceById.get(sourceId);
+      return source ? [source] : [];
+    })
+    .sort((left, right) => sourceInfluence(right) - sourceInfluence(left))[0];
+}
+
+function strongestLocusForSource(
+  reader: ContextInvestigationReader,
+  sourceId: string,
+): ContextInvestigationLocus | undefined {
+  return reader.loci
+    .filter((locus) => locus.sourceId === sourceId)
+    .sort((left, right) => right.absoluteDeltaNats - left.absoluteDeltaNats)[0];
+}
+
+function directionForLoci(loci: readonly ContextInvestigationLocus[]): EvidenceDirection {
+  const directions = new Set(loci.map((locus) => locus.direction));
+  return directions.size === 1 ? [...directions][0] : "mixed";
 }
 
 function elementSourceIds(element: HTMLElement): string[] {
@@ -522,7 +579,11 @@ function ContextPane({
   focusedSourceId,
   directionBySource,
   canFocus,
+  expanded,
+  maxInfluence,
   onFocusSource,
+  onPreviewSource,
+  onToggleExpanded,
 }: {
   reader: ContextInvestigationReader;
   paneRef: RefObject<HTMLElement | null>;
@@ -530,7 +591,11 @@ function ContextPane({
   focusedSourceId?: string;
   directionBySource: ReadonlyMap<string, EvidenceDirection>;
   canFocus: boolean;
+  expanded: boolean;
+  maxInfluence: number;
   onFocusSource: (sourceId: string) => void;
+  onPreviewSource: (sourceId?: string) => void;
+  onToggleExpanded: () => void;
 }) {
   const sourceById = useMemo(() => new Map(reader.sources.map((source) => [source.sourceId, source])), [reader.sources]);
   const sourcesByMessage = useMemo(() => {
@@ -546,6 +611,12 @@ function ContextPane({
     <section className="inspect-pane context-pane" ref={paneRef} aria-labelledby="inspect-context-heading">
       <header className="inspect-pane-heading">
         <h2 id="inspect-context-heading">Context</h2>
+        <button
+          className="pane-expand"
+          type="button"
+          aria-expanded={expanded}
+          onClick={onToggleExpanded}
+        >{expanded ? "Collapse" : "Expand heatmap"}</button>
       </header>
       <div className="inspect-prose context-prose">
         {reader.context.blocks.map((block) => {
@@ -554,7 +625,10 @@ function ContextPane({
           const wholeSources = blockSources.filter((source) => source.granularity === "whole_segment");
           const wholeIds = wholeSources.map((source) => source.sourceId);
           const relatedWhole = wholeIds.filter((id) => activeSourceIds.has(id));
-          const focusableWhole = canFocus && relatedWhole.length === 1 ? relatedWhole[0] : undefined;
+          const strongestWhole = strongestSource(wholeIds, sourceById);
+          const focusableWhole = expanded
+            ? strongestWhole?.sourceId
+            : canFocus && relatedWhole.length === 1 ? relatedWhole[0] : undefined;
           const wholeDirections = new Set(relatedWhole.map((id) => directionBySource.get(id)).filter(Boolean));
           const wholeDirection = wholeDirections.size === 1
             ? [...wholeDirections][0]
@@ -581,7 +655,15 @@ function ContextPane({
               className={blockClasses.join(" ")}
               data-message-index={block.messageIndex}
               data-source-ids={wholeIds.length ? JSON.stringify(wholeIds) : undefined}
-              data-direction={wholeDirection}
+              data-direction={expanded && strongestWhole && strongestWhole.summary.totalContinuationDeltaNats !== null
+                ? heatDirection(strongestWhole.summary.totalContinuationDeltaNats)
+                : wholeDirection}
+              data-heat={expanded && strongestWhole ? "true" : undefined}
+              style={expanded && strongestWhole
+                ? heatStyle(sourceInfluence(strongestWhole) / Math.max(maxInfluence, 1e-9))
+                : undefined}
+              onMouseEnter={expanded && focusableWhole ? () => onPreviewSource(focusableWhole) : undefined}
+              onMouseLeave={expanded && focusableWhole ? () => onPreviewSource(undefined) : undefined}
             >
               {focusableWhole && (
                 <button
@@ -593,18 +675,30 @@ function ContextPane({
               )}
               {segments.map((segment) => {
                 const related = segment.annotationIds.filter((id) => activeSourceIds.has(id));
-                const focusableSource = canFocus && related.length === 1 ? related[0] : undefined;
+                const strongest = strongestSource(segment.annotationIds, sourceById);
+                const focusableSource = expanded
+                  ? strongest?.sourceId
+                  : canFocus && related.length === 1 ? related[0] : undefined;
                 const directions = new Set(related.map((id) => directionBySource.get(id)).filter(Boolean));
                 const direction = directions.size === 1 ? [...directions][0] : directions.size > 1 ? "mixed" : undefined;
+                const heatValue = strongest?.summary.totalContinuationDeltaNats;
                 return (
                   <span
                     key={`${block.messageIndex}:${segment.start}:${segment.end}`}
                     className={contextSegmentClass(segment, sourceById, activeSourceIds, focusedSourceId)}
                     data-source-ids={segment.annotationIds.length ? JSON.stringify(segment.annotationIds) : undefined}
-                    data-direction={direction}
+                    data-direction={expanded && heatValue !== null && heatValue !== undefined
+                      ? heatDirection(heatValue)
+                      : direction}
+                    data-heat={expanded && strongest ? "true" : undefined}
+                    style={expanded && strongest
+                      ? heatStyle(sourceInfluence(strongest) / Math.max(maxInfluence, 1e-9))
+                      : undefined}
                     role={focusableSource ? "button" : undefined}
                     tabIndex={focusableSource ? 0 : undefined}
                     aria-label={focusableSource ? `Focus “${excerpt(segment.text)}”. ${sourceStatusLabel(sourceById.get(focusableSource)?.measurement.status ?? "not_measured")}.` : undefined}
+                    onMouseEnter={expanded && focusableSource ? () => onPreviewSource(focusableSource) : undefined}
+                    onMouseLeave={expanded && focusableSource ? () => onPreviewSource(undefined) : undefined}
                     onClick={focusableSource ? () => onFocusSource(focusableSource) : undefined}
                     onKeyDown={focusableSource ? (event) => {
                       if (event.key === "Enter" || event.key === " ") {
@@ -630,9 +724,12 @@ function AnswerPane({
   activeRange,
   lockedRange,
   lockedRelationshipCount,
+  expanded,
+  maxInfluence,
   onPreview,
   onLock,
   onClear,
+  onToggleExpanded,
 }: {
   reader: ContextInvestigationReader;
   paneRef: RefObject<HTMLElement | null>;
@@ -640,9 +737,12 @@ function AnswerPane({
   activeRange?: ActiveRange;
   lockedRange?: ActiveRange;
   lockedRelationshipCount?: number;
+  expanded: boolean;
+  maxInfluence: number;
   onPreview: (range?: ActiveRange) => void;
   onLock: (range: ActiveRange) => void;
   onClear: () => void;
+  onToggleExpanded: () => void;
 }) {
   const interactive = useMemo(() => segments.filter((segment) => segment.annotationIds.length > 0), [segments]);
   const interactiveIndex = useMemo(
@@ -661,6 +761,10 @@ function AnswerPane({
       : interactive[0] ? rangeKey(interactive[0]) : undefined;
   const locusSourceById = useMemo(
     () => new Map(reader.loci.map((locus) => [locus.locusId, locus.sourceId])),
+    [reader.loci],
+  );
+  const locusById = useMemo(
+    () => new Map(reader.loci.map((locus) => [locus.locusId, locus])),
     [reader.loci],
   );
   const focusAt = (index: number) => {
@@ -696,7 +800,15 @@ function AnswerPane({
     <section className="inspect-pane answer-pane" ref={paneRef} aria-labelledby="inspect-answer-heading">
       <header className="inspect-pane-heading">
         <h2 id="inspect-answer-heading">Answer</h2>
-        {reader.answer.status === "available" && <span>{plural(reader.answer.tokens.length, "token")}</span>}
+        <div className="pane-heading-actions">
+          {reader.answer.status === "available" && <span>{plural(reader.answer.tokens.length, "token")}</span>}
+          <button
+            className="pane-expand"
+            type="button"
+            aria-expanded={expanded}
+            onClick={onToggleExpanded}
+          >{expanded ? "Collapse" : "Expand heatmap"}</button>
+        </div>
       </header>
       {reader.answer.status === "available" ? (
         <div className="inspect-prose answer-prose">
@@ -717,6 +829,11 @@ function AnswerPane({
               const relationshipNoun = locked && lockedRelationshipCount !== undefined
                 ? "above-floor relationship"
                 : "measured relationship";
+              const segmentLoci = segment.annotationIds.flatMap((id) => {
+                const locus = locusById.get(id);
+                return locus ? [locus] : [];
+              });
+              const segmentInfluence = segmentLoci.reduce((sum, locus) => sum + locus.absoluteDeltaNats, 0);
               return (
                 <span
                   key={range.key}
@@ -727,6 +844,11 @@ function AnswerPane({
                   className={`answer-segment${measured ? " has-measurement" : ""}${active ? " is-active" : ""}${locked ? " is-locked" : ""}`}
                   data-answer-start={segment.start}
                   data-answer-end={segment.end}
+                  data-direction={expanded && segmentLoci.length ? directionForLoci(segmentLoci) : undefined}
+                  data-heat={expanded && segmentLoci.length ? "true" : undefined}
+                  style={expanded && segmentLoci.length
+                    ? heatStyle(segmentInfluence / Math.max(maxInfluence, 1e-9))
+                    : undefined}
                   role={measured ? "button" : undefined}
                   tabIndex={measured ? (range.key === effectiveRovingKey ? 0 : -1) : undefined}
                   aria-pressed={measured ? Boolean(locked) : undefined}
@@ -998,6 +1120,76 @@ function EvidenceInspector({
   );
 }
 
+function HeatmapPeek({
+  reader,
+  pane,
+  sourceId,
+  range,
+}: {
+  reader: ContextInvestigationReader;
+  pane: MobilePane;
+  sourceId?: string;
+  range?: ActiveRange;
+}) {
+  const sourceById = useMemo(
+    () => new Map(reader.sources.map((source) => [source.sourceId, source])),
+    [reader.sources],
+  );
+  const loci = useMemo(() => {
+    if (pane === "context" && sourceId) {
+      return reader.loci
+        .filter((locus) => locus.sourceId === sourceId)
+        .sort((left, right) => right.absoluteDeltaNats - left.absoluteDeltaNats);
+    }
+    if (pane === "answer" && range) {
+      return reader.loci
+        .filter((locus) => rangesIntersect(range, tupleRange(locus.answerUnicodeRange)))
+        .sort((left, right) => right.absoluteDeltaNats - left.absoluteDeltaNats);
+    }
+    return [];
+  }, [pane, range, reader.loci, sourceId]);
+  const source = sourceId ? sourceById.get(sourceId) : undefined;
+  if (!source && !range) {
+    return (
+      <aside className="heatmap-peek" aria-live="polite">
+        <span className="eyebrow">Heatmap</span>
+        <p>Hover highlighted text to preview its strongest links. Click to pin the evidence.</p>
+      </aside>
+    );
+  }
+  return (
+    <aside className="heatmap-peek" aria-live="polite">
+      <div>
+        <span className="eyebrow">{pane === "context" ? "Context span" : "Answer span"}</span>
+        <p>{source
+          ? excerpt(source.label?.trim() || sourceRecordedText(reader, source), 180)
+          : reader.answer.status === "available" && range
+            ? excerpt(sliceCodePoints(reader.answer.text, range.start, range.end), 180)
+            : "Selection unavailable"}</p>
+      </div>
+      <div>
+        <span className="eyebrow">Linked text</span>
+        {loci.length ? (
+          <ul>
+            {loci.slice(0, 3).map((locus) => {
+              const linkedSource = sourceById.get(locus.sourceId);
+              return (
+                <li key={locus.locusId}>
+                  <span className={`evidence-state direction-${locus.direction}`}>{directionLabel(locus.direction)}</span>
+                  <strong>{locus.deltaNats > 0 ? "+" : ""}{locus.deltaNats.toFixed(2)} Δ</strong>
+                  <span>{pane === "context"
+                    ? excerpt(locus.answerText, 110)
+                    : excerpt(linkedSource ? sourceRecordedText(reader, linkedSource) : locus.sourceId, 110)}</span>
+                </li>
+              );
+            })}
+          </ul>
+        ) : <p>No above-floor link was recorded for this text.</p>}
+      </div>
+    </aside>
+  );
+}
+
 function InspectReader({
   reader,
   route,
@@ -1006,6 +1198,8 @@ function InspectReader({
   route: InspectRoute;
 }) {
   const [hoveredRange, setHoveredRange] = useState<ActiveRange | undefined>();
+  const [hoveredSourceId, setHoveredSourceId] = useState<string | undefined>();
+  const [expandedPane, setExpandedPane] = useState<MobilePane | undefined>();
   const [mobilePane, setMobilePane] = useState<MobilePane>("answer");
   const contextRef = useRef<HTMLElement>(null);
   const answerRef = useRef<HTMLElement>(null);
@@ -1019,6 +1213,18 @@ function InspectReader({
       : undefined;
   }, [answer, route.answerEnd, route.answerStart]);
   const activeRange = lockedRange ?? hoveredRange;
+  const maxSourceInfluence = useMemo(
+    () => Math.max(0, ...reader.sources.map(sourceInfluence)),
+    [reader.sources],
+  );
+  const maxAnswerInfluence = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const locus of reader.loci) {
+      const key = `${locus.answerUnicodeRange[0]}:${locus.answerUnicodeRange[1]}`;
+      totals.set(key, (totals.get(key) ?? 0) + locus.absoluteDeltaNats);
+    }
+    return Math.max(0, ...totals.values());
+  }, [reader.loci]);
 
   const answerSegments = useMemo(() => {
     if (!answer) return [];
@@ -1089,6 +1295,7 @@ function InspectReader({
   const focusedSourceId = lockedRange && route.sourceId && activeSourceIds.includes(route.sourceId)
     ? route.sourceId
     : undefined;
+  const displayedFocusedSourceId = hoveredSourceId ?? focusedSourceId;
   const directionBySource = useMemo(() => {
     if (queryAboveFloorEffects) {
       return new Map(queryAboveFloorEffects.map((effect) => [effect.sourceId, effect.direction]));
@@ -1114,13 +1321,13 @@ function InspectReader({
     directionBySource,
   );
   const visibleSourceIds = useMemo(() => {
-    if (focusedSourceId) return new Set([focusedSourceId]);
+    if (displayedFocusedSourceId) return new Set([displayedFocusedSourceId]);
     const visible = geometry.relationships
       .filter((relationship) => relationship.offscreen === undefined && relationship.localY !== undefined)
       .map((relationship) => relationship.sourceId);
     const candidates = visible.length ? visible : activeSourceIds;
     return new Set(candidates.slice(0, MAX_TRANSIENT_PATHS));
-  }, [activeSourceIds, focusedSourceId, geometry.relationships]);
+  }, [activeSourceIds, displayedFocusedSourceId, geometry.relationships]);
 
   const setCoordinate = useCallback((range?: ActiveRange, sourceId?: string) => {
     window.location.hash = routeHref(range ? {
@@ -1152,6 +1359,29 @@ function InspectReader({
     setCoordinate(lockedRange, next);
     if (next) setMobilePane("context");
   }, [focusedSourceId, lockedRange, setCoordinate]);
+
+  const previewContextSource = useCallback((sourceId?: string) => {
+    setHoveredSourceId(sourceId);
+    if (lockedRange) return;
+    const locus = sourceId ? strongestLocusForSource(reader, sourceId) : undefined;
+    setHoveredRange(locus ? {
+      start: locus.answerUnicodeRange[0],
+      end: locus.answerUnicodeRange[1],
+      key: `${locus.answerUnicodeRange[0]}:${locus.answerUnicodeRange[1]}`,
+    } : undefined);
+  }, [lockedRange, reader]);
+
+  const lockContextSource = useCallback((sourceId: string) => {
+    const locus = strongestLocusForSource(reader, sourceId);
+    if (!locus) return;
+    setHoveredSourceId(undefined);
+    setHoveredRange(undefined);
+    setCoordinate({
+      start: locus.answerUnicodeRange[0],
+      end: locus.answerUnicodeRange[1],
+      key: `${locus.answerUnicodeRange[0]}:${locus.answerUnicodeRange[1]}`,
+    }, sourceId);
+  }, [reader, setCoordinate]);
 
   useEffect(() => {
     if (!focusedSourceId || !contextRef.current) return;
@@ -1211,16 +1441,24 @@ function InspectReader({
         <button type="button" aria-pressed={mobilePane === "answer"} onClick={() => setMobilePane("answer")}>Answer</button>
       </div>
       <SequenceOverview reader={reader} activeRange={activeRange} directions={activeDirections} />
-      <div className={`inspect-reader mobile-${mobilePane}${lockedRange ? " has-lock" : ""}`}>
+      <div className={`inspect-reader mobile-${mobilePane}${lockedRange ? " has-lock" : ""}${expandedPane ? ` is-expanded is-expanded-${expandedPane}` : ""}`}>
         <div className="inspect-pane-slot context-slot">
           <ContextPane
             reader={reader}
             paneRef={contextRef}
             activeSourceIds={relatedSet}
-            focusedSourceId={focusedSourceId}
+            focusedSourceId={displayedFocusedSourceId}
             directionBySource={directionBySource}
             canFocus={Boolean(lockedRange)}
-            onFocusSource={focusSource}
+            expanded={expandedPane === "context"}
+            maxInfluence={maxSourceInfluence}
+            onFocusSource={expandedPane === "context" ? lockContextSource : focusSource}
+            onPreviewSource={previewContextSource}
+            onToggleExpanded={() => {
+              setHoveredSourceId(undefined);
+              setHoveredRange(undefined);
+              setExpandedPane((current) => current === "context" ? undefined : "context");
+            }}
           />
           <div className="local-registration-layer context-registration" aria-hidden="true">
             {displayedRelationships.filter((relationship) => relationship.localY !== undefined).map((relationship) => (
@@ -1237,7 +1475,7 @@ function InspectReader({
           geometry={geometry}
           activeRange={activeRange}
           locked={Boolean(lockedRange)}
-          focusedSourceId={focusedSourceId}
+          focusedSourceId={displayedFocusedSourceId}
           visibleSourceIds={visibleSourceIds}
           sourceLabels={sourceLabels}
           onFocusSource={focusSource}
@@ -1252,7 +1490,12 @@ function InspectReader({
             activeRange={activeRange}
             lockedRange={lockedRange}
             lockedRelationshipCount={lockedRange && query.phase === "ready" ? activeSourceIds.length : undefined}
-            onPreview={setHoveredRange}
+            expanded={expandedPane === "answer"}
+            maxInfluence={maxAnswerInfluence}
+            onPreview={(range) => {
+              setHoveredSourceId(undefined);
+              setHoveredRange(range);
+            }}
             onLock={(range) => {
               if (rangesEqual(lockedRange, range)) setCoordinate();
               else {
@@ -1261,6 +1504,11 @@ function InspectReader({
               }
             }}
             onClear={() => setCoordinate()}
+            onToggleExpanded={() => {
+              setHoveredSourceId(undefined);
+              setHoveredRange(undefined);
+              setExpandedPane((current) => current === "answer" ? undefined : "answer");
+            }}
           />
           <div className="local-registration-layer answer-registration" aria-hidden="true">
             {activeRange && geometry.answerLocalY !== undefined && (
@@ -1269,6 +1517,14 @@ function InspectReader({
           </div>
         </div>
       </div>
+      {expandedPane && (
+        <HeatmapPeek
+          reader={reader}
+          pane={expandedPane}
+          sourceId={expandedPane === "context" ? hoveredSourceId ?? focusedSourceId : undefined}
+          range={expandedPane === "answer" ? activeRange : undefined}
+        />
+      )}
       {route.answerStart !== undefined && !lockedRange && (
         <p className="selection-unavailable" role="status">Selection unavailable.</p>
       )}
@@ -1440,14 +1696,336 @@ function EffectsPanel({
   );
 }
 
+interface AnswerInfluenceRow {
+  range: ActiveRange;
+  text: string;
+  influence: number;
+  direction: EvidenceDirection;
+  sourceCount: number;
+}
+
+function EfficiencyOverview({
+  reader,
+  onOpenSource,
+  onOpenAnswer,
+}: {
+  reader: ContextInvestigationReader;
+  onOpenSource: (sourceId: string, range: ActiveRange) => void;
+  onOpenAnswer: (range: ActiveRange) => void;
+}) {
+  const contextRows = useMemo(() => reader.sources
+    .filter((source) => source.measurement.status === "measured")
+    .map((source) => ({
+      source,
+      text: source.label?.trim() || sourceRecordedText(reader, source),
+      influence: sourceInfluence(source),
+      locus: strongestLocusForSource(reader, source.sourceId),
+    }))
+    .sort((left, right) => right.influence - left.influence), [reader]);
+  const answerRows = useMemo(() => {
+    const grouped = new Map<string, ContextInvestigationLocus[]>();
+    for (const locus of reader.loci) {
+      const key = `${locus.answerUnicodeRange[0]}:${locus.answerUnicodeRange[1]}`;
+      const current = grouped.get(key) ?? [];
+      current.push(locus);
+      grouped.set(key, current);
+    }
+    return [...grouped.values()].map<AnswerInfluenceRow>((loci) => {
+      const [first] = loci;
+      const range = {
+        start: first.answerUnicodeRange[0],
+        end: first.answerUnicodeRange[1],
+        key: `${first.answerUnicodeRange[0]}:${first.answerUnicodeRange[1]}`,
+      };
+      return {
+        range,
+        text: first.answerText,
+        influence: loci.reduce((sum, locus) => sum + locus.absoluteDeltaNats, 0),
+        direction: directionForLoci(loci),
+        sourceCount: new Set(loci.map((locus) => locus.sourceId)).size,
+      };
+    }).sort((left, right) => right.influence - left.influence);
+  }, [reader.loci]);
+  const maxContext = contextRows[0]?.influence ?? 0;
+  const maxAnswer = answerRows[0]?.influence ?? 0;
+  const contextHighlights = contextRows.length > 1
+    ? [{ row: contextRows[0], label: "Highest" }, { row: contextRows[contextRows.length - 1], label: "Lowest" }]
+    : contextRows.map((row) => ({ row, label: "Highest" }));
+  const answerHighlights = answerRows.length > 1
+    ? [{ row: answerRows[0], label: "Highest" }, { row: answerRows[answerRows.length - 1], label: "Lowest" }]
+    : answerRows.map((row) => ({ row, label: "Highest" }));
+  return (
+    <section className="efficiency-overview" aria-labelledby="efficiency-heading">
+      <header className="overview-heading">
+        <div>
+          <span className="eyebrow">Summary</span>
+          <h2 id="efficiency-heading">Influence overview</h2>
+        </div>
+        <p>Ranks measured text by its recorded-answer effect. This measures influence, not correctness.</p>
+      </header>
+      <div className="efficiency-grid">
+        <section aria-labelledby="context-ranking-heading">
+          <header>
+            <h3 id="context-ranking-heading">Context</h3>
+            <span>{plural(contextRows.length, "measured span")}</span>
+          </header>
+          {contextRows.length ? (
+            <ol className="influence-ranking">
+              {contextHighlights.map(({ row, label }) => (
+                <li key={row.source.sourceId}>
+                  <button
+                    type="button"
+                    disabled={!row.locus}
+                    onClick={() => {
+                      if (!row.locus) return;
+                      onOpenSource(row.source.sourceId, {
+                        start: row.locus.answerUnicodeRange[0],
+                        end: row.locus.answerUnicodeRange[1],
+                        key: `${row.locus.answerUnicodeRange[0]}:${row.locus.answerUnicodeRange[1]}`,
+                      });
+                    }}
+                  >
+                    <span className="ranking-copy">
+                      <span>{label}</span>
+                      <strong>{excerpt(row.text, 116)}</strong>
+                      <small>{row.source.summary.totalContinuationDeltaNats !== null
+                        ? `${row.source.summary.totalContinuationDeltaNats > 0 ? "+" : ""}${row.source.summary.totalContinuationDeltaNats.toFixed(2)} total Δ nats`
+                        : "No score"}</small>
+                    </span>
+                    <span className="ranking-meter" aria-hidden="true"><i style={{ "--meter-size": `${maxContext ? row.influence / maxContext * 100 : 0}%` } as CSSProperties} /></span>
+                  </button>
+                </li>
+              ))}
+            </ol>
+          ) : <p className="overview-empty">Measure Context Effects to rank context.</p>}
+        </section>
+        <section aria-labelledby="answer-ranking-heading">
+          <header>
+            <h3 id="answer-ranking-heading">Answer</h3>
+            <span>{plural(answerRows.length, "affected span")}</span>
+          </header>
+          {answerRows.length ? (
+            <ol className="influence-ranking">
+              {answerHighlights.map(({ row, label }) => (
+                <li key={row.range.key}>
+                  <button type="button" onClick={() => onOpenAnswer(row.range)}>
+                    <span className="ranking-copy">
+                      <span>{label}</span>
+                      <strong>{excerpt(row.text, 116)}</strong>
+                      <small>{row.influence.toFixed(2)} absolute Δ nats · {plural(row.sourceCount, "source")}</small>
+                    </span>
+                    <span className={`ranking-meter direction-${row.direction}`} aria-hidden="true"><i style={{ "--meter-size": `${maxAnswer ? row.influence / maxAnswer * 100 : 0}%` } as CSSProperties} /></span>
+                  </button>
+                </li>
+              ))}
+            </ol>
+          ) : <p className="overview-empty">No above-floor answer effects were recorded.</p>}
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function LeanContextPanel({
+  reader,
+  route,
+}: {
+  reader: ContextInvestigationReader;
+  route: InspectRoute;
+}) {
+  const [job, setJob] = useState<LeanContextJob | undefined>();
+  const [action, setAction] = useState<"idle" | "starting" | "cancelling">("idle");
+  const [error, setError] = useState<string | undefined>();
+  const [pollRevision, setPollRevision] = useState(0);
+  const actionController = useRef<AbortController | undefined>(undefined);
+
+  useEffect(() => {
+    actionController.current?.abort();
+    actionController.current = undefined;
+    setJob(undefined);
+    setAction("idle");
+    setError(undefined);
+    setPollRevision(0);
+  }, [route.runId]);
+
+  useEffect(() => {
+    if (!job || isTerminalLeanContextJob(job)) return undefined;
+    const controller = new AbortController();
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const next = await contextInvestigationApi.leanContextJob(
+          route.runId, job.jobId, controller.signal,
+        );
+        if (controller.signal.aborted) return;
+        setJob(next);
+        if (!isTerminalLeanContextJob(next)) {
+          timer = window.setTimeout(() => { void poll(); }, 750);
+        }
+      } catch (pollError: unknown) {
+        if (!controller.signal.aborted) setError(describeError(pollError));
+      }
+    };
+    void poll();
+    return () => {
+      controller.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [job?.jobId, job?.state, pollRevision, route.runId]);
+
+  const start = async () => {
+    actionController.current?.abort();
+    const controller = new AbortController();
+    actionController.current = controller;
+    setAction("starting");
+    setError(undefined);
+    try {
+      const next = await contextInvestigationApi.startLeanContext(route.runId, controller.signal);
+      if (!controller.signal.aborted) setJob(next);
+    } catch (startError: unknown) {
+      if (!controller.signal.aborted) setError(describeError(startError));
+    } finally {
+      if (!controller.signal.aborted) setAction("idle");
+    }
+  };
+
+  const cancel = async () => {
+    if (!job?.cancellable) return;
+    actionController.current?.abort();
+    const controller = new AbortController();
+    actionController.current = controller;
+    setAction("cancelling");
+    setError(undefined);
+    try {
+      const next = await contextInvestigationApi.cancelLeanContext(
+        route.runId, job.jobId, controller.signal,
+      );
+      if (!controller.signal.aborted) setJob(next);
+    } catch (cancelError: unknown) {
+      if (!controller.signal.aborted) setError(describeError(cancelError));
+    } finally {
+      if (!controller.signal.aborted) setAction("idle");
+    }
+  };
+
+  const result = job?.result;
+  const removedSources = result?.best?.removedSourceIds.flatMap((sourceId) => {
+    const source = reader.sources.find((item) => item.sourceId === sourceId);
+    return source ? [source] : [];
+  }) ?? [];
+  const active = Boolean(job && !isTerminalLeanContextJob(job));
+  return (
+    <section className="lean-context-panel" aria-labelledby="lean-context-heading">
+      <header className="overview-heading">
+        <div>
+          <span className="eyebrow">Bounded search</span>
+          <h2 id="lean-context-heading">Lean Context</h2>
+        </div>
+        <p>Searches for a leaner context within a 16-execution budget while the recorded answer stays inside the balanced loss tolerance.</p>
+      </header>
+      <div className="lean-controls">
+        <div className="lean-tolerance">
+          <span className="eyebrow">Balanced tolerance</span>
+          <strong>≤ 0.05 mean loss · ≤ 0.70 max token loss</strong>
+          <small>Only probability lost from the recorded answer counts; gains do not offset losses.</small>
+        </div>
+        {active ? (
+          <button type="button" disabled={!job?.cancellable || action !== "idle"} onClick={() => { void cancel(); }}>
+            {action === "cancelling" ? "Cancelling…" : "Cancel search"}
+          </button>
+        ) : (
+          <button type="button" disabled={!reader.measurement.sourceUniverse.length || action !== "idle"} onClick={() => { void start(); }}>
+            {action === "starting" ? "Starting…" : job ? "Run again" : "Find lean context"}
+          </button>
+        )}
+      </div>
+      {job && (
+        <div className={`lean-progress state-${job.state}`} role="status" aria-live="polite">
+          <span>{job.state === "completed" ? "Search complete" : job.state === "failed" ? "Search failed" : job.state === "cancelled" ? "Search cancelled" : phaseLabel(job.progress.phase)}</span>
+          <strong>{job.progress.percent.toFixed(0)}%</strong>
+          {!isTerminalLeanContextJob(job) && <progress max="100" value={job.progress.percent} />}
+          {job.error && <small className="is-failed">{job.error.message}</small>}
+        </div>
+      )}
+      {result?.status === "completed" && result.original && result.best && result.reduction && (
+        <div className="lean-result">
+          <div className="lean-result-summary">
+            <article>
+              <span>Prompt tokens</span>
+              <strong>{result.original.renderedPromptTokenCost} <i>→</i> {result.best.renderedPromptTokenCost}</strong>
+              <small>{result.reduction.removedPromptTokens} removed</small>
+            </article>
+            <article>
+              <span>Context retained</span>
+              <strong>{(result.reduction.retainedPromptTokenFraction * 100).toFixed(0)}%</strong>
+              <small>{plural(result.reduction.retainedSourceCount, "span")} retained</small>
+            </article>
+            <article>
+              <span>Search work</span>
+              <strong>{result.budget.usedNewExecutions} / {result.budget.maxNewExecutions}</strong>
+              <small>{plural(result.budget.reusedObservationCount, "measurement")} reused</small>
+            </article>
+          </div>
+          <p className="lean-claim">Best found within this search budget. It is not a proof of the mathematically smallest context.</p>
+          <section className="lean-removed" aria-labelledby="lean-removed-heading">
+            <header>
+              <h3 id="lean-removed-heading">Removed context</h3>
+              <span>{plural(removedSources.length, "span")}</span>
+            </header>
+            {removedSources.length ? (
+              <ol>
+                {removedSources.map((source) => (
+                  <li key={source.sourceId}>{excerpt(source.label?.trim() || sourceRecordedText(reader, source), 180)}</li>
+                ))}
+              </ol>
+            ) : <p>No tested reduction stayed inside the balanced tolerance.</p>}
+          </section>
+          {result.best.loss && (
+            <div className="lean-loss">
+              <span>Best candidate loss</span>
+              <strong>{result.best.loss.meanPositiveSupportLossNatsPerToken.toFixed(3)} mean · {result.best.loss.maxTokenSupportLossNats.toFixed(3)} max nats</strong>
+              <small>{plural(result.best.loss.positiveLossTokenCount, "answer token")} lost support</small>
+            </div>
+          )}
+        </div>
+      )}
+      {result && result.status !== "completed" && (
+        <p className="lean-unavailable">{result.reason ?? "Lean Context is unavailable for this run."}</p>
+      )}
+      {!job && <p className="lean-empty">Run this after Context Effects to reuse its single-source measurements and spend the remaining budget on combined removals.</p>}
+      {error && (
+        <p className="effects-search-error" role="alert">
+          <span>{error}</span>
+          {active && <button type="button" onClick={() => {
+            setError(undefined);
+            setPollRevision((value) => value + 1);
+          }}>Retry status</button>}
+        </p>
+      )}
+    </section>
+  );
+}
+
 function ContextInspectSurface({ route }: { route: InspectRoute }) {
   const [readerRevision, setReaderRevision] = useState(0);
+  const [view, setView] = useState<InvestigationView>("links");
   const readerLoader = useCallback(
     (signal: AbortSignal) => contextInvestigationApi.reader(route.runId, signal),
     [route.runId],
   );
   const readerResource = useResource(`${route.runId}:${readerRevision}`, readerLoader);
   const refreshReader = useCallback(() => setReaderRevision((value) => value + 1), []);
+  useEffect(() => setView("links"), [route.runId]);
+  const openLinks = useCallback((range: ActiveRange, sourceId?: string) => {
+    setView("links");
+    window.location.hash = routeHref({
+      surface: "inspect",
+      runId: route.runId,
+      answerStart: range.start,
+      answerEnd: range.end,
+      ...(sourceId ? { sourceId } : {}),
+    });
+  }, [route.runId]);
   return (
     <div className="inspect-surface">
       <header className="inspect-heading">
@@ -1479,9 +2057,28 @@ function ContextInspectSurface({ route }: { route: InspectRoute }) {
                   {readerResource.value.reason}
                 </p>
               )}
-              {readerResource.value.answer.status === "available" || readerResource.value.context.blocks.length > 0
-                ? <InspectReader reader={readerResource.value} route={route} />
-                : <p className="inspect-state is-unavailable">Recorded prose unavailable.</p>}
+              <nav className="investigation-views" aria-label="Investigation view">
+                <button type="button" aria-current={view === "links" ? "page" : undefined} onClick={() => setView("links")}>Linked view</button>
+                <button type="button" aria-current={view === "efficiency" ? "page" : undefined} onClick={() => setView("efficiency")}>Efficiency</button>
+                <button type="button" aria-current={view === "lean" ? "page" : undefined} onClick={() => setView("lean")}>Lean Context</button>
+              </nav>
+              {readerResource.value.answer.status === "available" || readerResource.value.context.blocks.length > 0 ? (
+                <>
+                  <div hidden={view !== "links"}>
+                    <InspectReader reader={readerResource.value} route={route} />
+                  </div>
+                  <div hidden={view !== "efficiency"}>
+                    <EfficiencyOverview
+                      reader={readerResource.value}
+                      onOpenSource={(sourceId, range) => openLinks(range, sourceId)}
+                      onOpenAnswer={(range) => openLinks(range)}
+                    />
+                  </div>
+                  <div hidden={view !== "lean"}>
+                    <LeanContextPanel reader={readerResource.value} route={route} />
+                  </div>
+                </>
+              ) : <p className="inspect-state is-unavailable">Recorded prose unavailable.</p>}
             </>
           )}
         </section>

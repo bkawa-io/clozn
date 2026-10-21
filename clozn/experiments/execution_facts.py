@@ -138,6 +138,33 @@ def runtime_projection(value: Any, *, run_meta: Mapping | None = None) -> dict |
     }
 
 
+def runtime_projections_equivalent(left: Any, right: Any) -> bool:
+    """Compare runtime projections while honoring the routed GPU abstraction.
+
+    Model routing deliberately uses ``gpu`` as the portable backend identity,
+    while a live worker reports the concrete implementation (``metal`` or
+    ``cuda``).  Those spellings describe the same routed backend; every other
+    behavior-bearing runtime facet must still match exactly.
+    """
+    if not isinstance(left, Mapping) or not isinstance(right, Mapping):
+        return False
+    for key in ("model_sha256", "template_fingerprint", "engine_build", "context_size"):
+        if left.get(key) != right.get(key):
+            return False
+    left_backend = left.get("backend")
+    right_backend = right.get("backend")
+    if left_backend == right_backend:
+        return isinstance(left_backend, str) and bool(left_backend)
+    gpu_backends = {"gpu", "cuda", "metal"}
+    return (
+        isinstance(left_backend, str)
+        and isinstance(right_backend, str)
+        and left_backend.strip().lower() in gpu_backends
+        and right_backend.strip().lower() in gpu_backends
+        and "gpu" in {left_backend.strip().lower(), right_backend.strip().lower()}
+    )
+
+
 def parent_runtime_projection(parent_run: Mapping[str, Any]) -> dict | None:
     """Resolve recorded runtime identity, failing closed on contradictions."""
     if not isinstance(parent_run, Mapping):
@@ -164,7 +191,9 @@ def parent_runtime_projection(parent_run: Mapping[str, Any]) -> dict | None:
                                      and parent_run.get("model") == resolved_model):
         return None
     recorded_runtime = runtime_projection(identity, run_meta=meta)
-    if recorded_runtime is not None and recorded_runtime != authoritative:
+    if recorded_runtime is not None and not runtime_projections_equivalent(
+        recorded_runtime, authoritative,
+    ):
         return None
     expected = {name: authoritative[name] for name in
                 ("model_sha256", "template_fingerprint", "engine_build", "context_size", "backend")}
@@ -203,5 +232,5 @@ def parent_runtime_projection(parent_run: Mapping[str, Any]) -> dict | None:
 __all__ = [
     "KNOWN_CHANGES", "RECONSTRUCTED_CHANGES", "RECONSTRUCTION_DIFFERENCES",
     "finite_number", "is_int", "json_copy", "parent_execution_fingerprint",
-    "parent_runtime_projection", "runtime_projection", "sha256",
+    "parent_runtime_projection", "runtime_projection", "runtime_projections_equivalent", "sha256",
 ]

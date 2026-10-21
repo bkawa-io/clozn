@@ -14,23 +14,24 @@ This is a scoped rebuild, with working checkpoints between changes. A new infere
 **1. The complete v1 experience**
 
 1. Start one local model and open Studio through one documented launch path.
-2. Create a run from a question and text context, load a working example, or open a run recorded through the local text API.
-3. See input and output side by side in Context Effects. Select answer text or a context source to explore measured relationships in either direction.
+2. Create a run from a text prompt, load a working example, or open a run recorded through the local text API.
+3. See input and output side by side in Context Effects. Select answer text or a context source to explore measured relationships in either direction, expand either side into a heatmap, summarize influence extremes, or search for Lean Context under fixed probability-loss tolerances.
 4. Choose Reduce context. See real progress, cancel if needed, and review the best verified result within the search budget.
 5. Save the reduced run, compare it with its original, and reopen both after restarting Clozn.
 
 Studio has a run list with a New run action and one run workspace with two modes: **Context Effects** and **Minimal Context**. Comparison belongs to the reduction result. Received context, provenance, and runtime details become expandable information in that workspace. Session navigation, a separate runtime dashboard, and a general comparison workbench leave the product.
 
-The composer is deliberately small: question, optional instructions, and one Markdown/plain-text context. Clozn derives a bounded flat partition using basic Markdown structure; clients do not submit source blocks or source ranges. The example populates these fields and executes a real run. Document ingestion, retrieval, website fetching, project indexing, and a full chat application are outside v1.
+The composer is deliberately small: one Markdown/plain-text prompt and optional instructions. Clozn derives a bounded flat partition across every non-empty input message using basic Markdown structure; clients do not submit source blocks or source ranges. The example populates these fields and executes a real run. Document ingestion, retrieval, website fetching, project indexing, and a full chat application are outside v1.
 
 **2. Keep/cut decisions**
 
 | Area | v1 decision | Boundary |
 |---|---|---|
 | Local generation | Keep | One loaded GGUF, one qualified generation configuration, text streaming, cancellation, durable recording. |
-| Context Effects visual | Keep as the default | Input/output text, bidirectional selection, stable text ranges, directional measured effects, keyboard access, explicit unmeasured/unavailable states. |
+| Context Effects visual | Keep as the default | Linked input/output text, pane-expanded heatmaps, influence extremes, bidirectional selection, stable text ranges, directional measured effects, keyboard access, explicit unmeasured/unavailable states. |
+| Lean Context | Add as a bounded Context Effects view | Reuse compatible single-source score observations; search combined removals under fixed balanced teacher-forced loss tolerances; report best found within 16 new executions and never claim a proven minimum. |
 | Context Effects orchestration | Simplify | One measurement action and a bounded policy. Remove execution-strategy selectors, joint-effect exploration, and the public coarse/fine tuning interface. Keep an internal optimization only when the qualified demo needs it. |
-| Minimal Context | Keep | Exact preservation, fewer rendered input tokens, bounded search, protected instructions/question, cancellation, durable result, verified child creation. |
+| Minimal Context | Keep | Exact preservation, fewer rendered input tokens, bounded search across all input text, cancellation, durable result, verified child creation. |
 | Run comparison | Narrow | Original versus its reduced child: retained/removed context, rendered token counts, answer match, and generation identity. |
 | Run storage and evidence | Keep and simplify | Immutable run/evidence records, integrity checks, source ranges, basic deletion, and necessary blob cleanup. |
 | Local text API | Keep a documented subset | Chat completions and model identity/listing; text-only messages and supported generation fields. Unsupported behavior-bearing fields receive clear errors. |
@@ -50,7 +51,7 @@ Every feature deletion includes its public registration, implementation used onl
 
 **3. Scientific and product contracts to preserve**
 
-Context Effects and Minimal Context use the same recorded source identities and range mappings. The reduction universe is a declared set of legal, non-overlapping removable units derived from that catalogue. Nested display spans may remain visible without becoming independently deletable overlapping units. Instructions and the current question are protected.
+Context Effects and Minimal Context use the same recorded source identities and range mappings. The reduction universe is a declared set of legal, non-overlapping removable units derived from that catalogue. Nested display spans may remain visible without becoming independently deletable overlapping units. Every non-empty message body is eligible, including instructions and the latest user message; only structural chat-template syntax stays outside the source universe.
 
 Context Effects removes a source and scores the recorded continuation. Links mean a measured change in the likelihood of selected output tokens under that intervention. Preserve the sign and measurement coverage. A whole-block measurement must be shown at whole-block granularity; precise text selection must not manufacture finer evidence. Low measured effect, unmeasured, failed, and unavailable remain distinct.
 
@@ -149,7 +150,7 @@ Preserve relevant coverage in `tests/test_context_effects_kernel.py`, `test_cont
 
 | Gate | Required evidence |
 |---|---|
-| Source mapping | Unicode, repeated text, template boundaries, protected units, nested ranges, and bidirectional selections resolve to the actual recorded spans. |
+| Source mapping | Unicode, repeated text, template boundaries, nested ranges, and bidirectional selections resolve to the actual recorded spans. |
 | Effects | A known relevant-source intervention changes recorded-answer scores; low-effect, unmeasured, unavailable, stale, and failed cases render distinctly. Tested scoring agrees with its trusted reference policy. |
 | Reduction | Full output and stop behavior match under the recorded contract. Joint removal is verified. Token objective, zero improvement, exhausted budget, and stronger-proof labels are correct. |
 | Saving | Reduced child has valid evidence and parent linkage; retries are idempotent; original is unchanged; stale or drifting replay cannot produce a verified result. |

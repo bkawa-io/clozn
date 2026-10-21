@@ -49,11 +49,9 @@ def _receipt_source_universe(run: Mapping[str, Any]) -> list[str]:
 def _receipt_display_source_universe(run: Mapping[str, Any]) -> list[str]:
     """Return every canonical source that the Context Receipt records as delivered.
 
-    The Q2 measurement universe is intentionally narrower: a source can be
-    visible in the received-context reader while being protected or otherwise
-    ineligible for an automatic one-source deletion arm.  Keep this display
-    catalogue derived from receipt order and never infer sources from prompt
-    text or the rendered final prompt.
+    The display catalogue includes both whole-message roots and any nested
+    automatic chunks. The measurement universe chooses one non-overlapping
+    partition from that catalogue.
     """
     receipt = run.get("context_receipt") if isinstance(run.get("context_receipt"), Mapping) else {}
     delivered = receipt.get("delivered")
@@ -99,9 +97,8 @@ def _source_universe(run: Mapping[str, Any], source_ids: Iterable[str] | None) -
     values = _receipt_source_universe(run)
     if not values:
         raise _NoExactlyRemovableSource(_NO_EXACTLY_REMOVABLE_SOURCE)
-    # Auto discovery is conservative: a source that cannot be deleted exactly,
-    # including the protected current request, is not silently displayed as an
-    # effect arm.
+    # Auto discovery is conservative: a source that cannot be deleted exactly
+    # is not silently presented as an executable effect arm.
     removable: list[str] = []
     for source_id in values:
         try:
@@ -206,9 +203,9 @@ def plan_context_effects_reader(
 ) -> ContextEffectsPlan | ContextEffectsUnavailablePlan:
     """Plan the pure linked reader without weakening executable Q2 planning.
 
-    A default plan whose canonical receipt sources are all protected or
-    otherwise not exactly removable still has a faithful read projection.  In
-    that one condition, return a typed unavailable plan with no Experiment.
+    A default plan with no exactly removable canonical source still has a
+    faithful read projection. In that condition, return a typed unavailable
+    plan with no Experiment.
     Every other planning error remains an error, and :func:`plan_context_effects`
     continues to reject an empty executable measurement universe.
     """

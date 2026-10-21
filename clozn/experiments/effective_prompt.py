@@ -8,7 +8,6 @@ from typing import Any
 
 from clozn.receipts.rederive import with_arm_conditions
 from clozn.replay.span_bridge import resolve_context_receipt_source_set
-from clozn.runs.context_units import protected_message_indices
 
 from .interventions import DeleteSource
 from .selections import ContextSelection
@@ -82,13 +81,6 @@ def resolve_effective_prompt(run: Mapping[str, Any], intervention: DeleteSource 
             f"canonical Context Receipt source resolution failed: {exc}",
             reason="intervention_unavailable",
         ) from exc
-    ranges = resolved.get("exact_removed_ranges") or []
-    protected = protected_message_indices(run.get("messages"))
-    if any(isinstance(item, Mapping) and item.get("message_index") in protected for item in ranges):
-        raise EffectivePromptUnavailable(
-            "the current request and following message suffix are protected from source deletion",
-            reason="protected_source",
-        )
     basis = str(resolved.get("basis") or "")
     block = conditions.get("block") if basis != "assembled_messages" else None
     return EffectivePrompt(

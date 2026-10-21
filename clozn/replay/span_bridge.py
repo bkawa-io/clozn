@@ -231,8 +231,9 @@ def resolve_context_receipt_source_set(run: dict, removed_source_ids: Iterable[s
     transformed/inserted/omitted assembly is deliberately refused rather than
     translating IDs through text similarity or stale positions.
 
-    ``seg_`` roots have whole-message deletion semantics;
-    ``src_`` descriptors delete only their proved exact range, right-to-left.
+    ``seg_`` roots delete the message's complete content while retaining its
+    role wrapper; ``src_`` descriptors delete only their proved exact range,
+    right-to-left.
     The return includes a detached render-safe ``messages`` override, exact
     ranges, source catalog, and deterministic digest evidence.  No caller may
     receive a partially mapped deletion.
@@ -310,9 +311,6 @@ def resolve_context_receipt_source_set(run: dict, removed_source_ids: Iterable[s
             "source_kind": source["source_kind"],
         })
     selected = [by_id[source_id] for source_id in requested]
-    whole_removed = {
-        item["message_index"] for item in selected if item["source_kind"] == "whole_message"
-    }
     # Receipt/journal metadata must never ride into either the baseline score
     # condition or an intervened replay.  Return the same clean basis callers
     # need for their baseline, so the sole score mutation is exact source text.
@@ -323,8 +321,6 @@ def resolve_context_receipt_source_set(run: dict, removed_source_ids: Iterable[s
     remaining = [deepcopy(message) for message in clean_basis_messages]
     ranges_by_message: dict[int, list[list[int]]] = {}
     for source in selected:
-        if source["source_kind"] == "whole_message" or source["message_index"] in whole_removed:
-            continue
         ranges_by_message.setdefault(source["message_index"], []).append(list(source["unicode_range"]))
     # Delete a merged structural source union right-to-left.  Merging makes a
     # selected parent+child one exact deletion, rather than applying stale
@@ -334,7 +330,6 @@ def resolve_context_receipt_source_set(run: dict, removed_source_ids: Iterable[s
         for start, end in reversed(_merged_ranges(ranges)):
             content = content[:start] + content[end:]
         remaining[message_index]["content"] = content
-    remaining = [message for index, message in enumerate(remaining) if index not in whole_removed]
     # These keys are durable journal/receipt evidence, never chat-template
     # input.  A replay can therefore use the same exact mutation result as a
     # score arm without accidentally rendering its source annotations.
@@ -359,9 +354,8 @@ def resolve_context_receipt_source_set(run: dict, removed_source_ids: Iterable[s
 def delete_context_receipt_sources(run: dict, removed_source_ids: Iterable[str]) -> dict:
     """Alias naming the operation performed by :func:`resolve_context_receipt_source_set`.
 
-    Keeping this public verb makes callers choose the strict whole-message
-    path instead of mistaking the legacy span bridge for canonical source-set
-    deletion.
+    Keeping this public verb makes callers choose the strict canonical path
+    instead of mistaking the legacy span bridge for source-set deletion.
     """
     return resolve_context_receipt_source_set(run, removed_source_ids)
 
@@ -397,7 +391,7 @@ def neutralize_context_receipt_sources(run: dict, source_ids: Iterable[str]) -> 
     deletion remains the canonical source-removal intervention, while this
     function records a separately named robustness control.  It reuses the
     deletion resolver only for the source catalog/current-byte proof and never
-    uses its deleted messages.  Thus a parent/child source selection is merged
+    uses its text-deleted messages. Thus a parent/child source selection is merged
     into one exact replacement union, while its complete requested-source
     evidence remains available for audit.
     """
@@ -421,9 +415,8 @@ def neutralize_context_receipt_sources(run: dict, source_ids: Iterable[str]) -> 
                 "canonical source resolver omitted a requested neutralization source")
         offsets = item.get("unicode_range")
         if not isinstance(offsets, list) or len(offsets) != 2 or offsets[0] == offsets[1]:
-            # An empty whole-message root is meaningful for delete (role and
-            # template structure still change), but it has no source text for
-            # a neutralization control.  Refuse, never label a no-op as one.
+            # An empty whole-message root has no source text for a
+            # neutralization control. Refuse, never label a no-op as one.
             raise ContextReceiptSourceResolutionError(
                 "matched-length neutralization requires non-empty source content")
         selected.append(item)

@@ -14,7 +14,11 @@ import math
 from typing import Any
 
 from clozn.receipts.rederive import score_arm, with_arm_conditions
-from .execution_facts import parent_runtime_projection, runtime_projection as _runtime_projection
+from .execution_facts import (
+    parent_runtime_projection,
+    runtime_projection as _runtime_projection,
+    runtime_projections_equivalent,
+)
 
 from .batch import ArmExecutionOutcome, ArmExecutionRequest, BatchExecutionResult
 from .evaluators import ScoreRecordedContinuation
@@ -66,7 +70,7 @@ def _runtime_binding(run: Mapping[str, Any], substrate: Any) -> tuple[dict[str, 
         current = None
     if recorded is None or current is None:
         return None, "runtime_identity_unavailable"
-    if current != recorded:
+    if not runtime_projections_equivalent(current, recorded):
         reason = "template_mismatch" if current.get("template_fingerprint") != recorded.get("template_fingerprint") else "runtime_identity_mismatch"
         return None, reason
     return recorded, None

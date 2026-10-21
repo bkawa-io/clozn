@@ -23,6 +23,9 @@ from clozn.recipes.context_effects import (
     plan_context_effects,
     plan_context_effects_reader,
 )
+from clozn.recipes.lean_context import run_lean_context
+from clozn.runs.context_search_universe import plan_context_search_universe
+from clozn.runs.context_units import max_context_arms
 
 
 CLOZN_ROUTE_AUTOLOAD = True
@@ -30,9 +33,11 @@ CLOZN_ROUTE_AUTOLOAD = True
 _PREFIX = "/runs/"
 _SUFFIX = "/context-investigation"
 _KIND = "context_investigation_effects"
+_LEAN_KIND = "context_investigation_lean_context"
 _READER_SCHEMA = "clozn.context-investigation-reader.v1"
 _QUERY_SCHEMA = "clozn.context-investigation-query.v1"
 _EFFECTS_RESULT_SCHEMA = "clozn.context-investigation-effects-job-result.v1"
+_LEAN_RESULT_SCHEMA = "clozn.lean-context-result.v1"
 
 
 class ContextInvestigationRouteError(ValueError):
@@ -256,6 +261,109 @@ def _start_effects_job(h, run_id: str, body) -> bool:
     return True
 
 
+def _normalize_lean_request(body: object) -> dict:
+    if body is None:
+        body = {}
+    if not isinstance(body, Mapping):
+        raise ContextInvestigationRouteError("request body must be an object", code="invalid_body")
+    if body:
+        raise ContextInvestigationRouteError(
+            "Lean Context v1 uses the fixed balanced tolerance profile and accepts no options",
+            code="unsupported_lean_context_request",
+        )
+    return {}
+
+
+def _lean_job_worker(run: Mapping[str, object], sub, engine, universe_id: str):
+    def worker(control):
+        import clozn.runs.store as runlog
+        from clozn.server.influence_jobs import JobCancelled
+
+        latest = runlog.get_run(run.get("id"))
+        if latest is None:
+            return {"state": "failed", "error": {
+                "code": "lean_context_run_deleted",
+                "message": "recorded run no longer exists",
+            }}
+        current_universe = plan_context_search_universe(
+            latest, latest.get("context_units"), max_units=max_context_arms(),
+        )
+        if current_universe.get("universe_id") != universe_id:
+            return {"state": "failed", "error": {
+                "code": "lean_context_run_changed",
+                "message": "recorded Run or context-unit universe changed while the job was queued",
+            }}
+        control.checkpoint(phase="searching_lean_context", completed=0, total=16)
+        result = run_lean_context(
+            latest,
+            substrate=sub,
+            engine=engine,
+            observation_store=ObservationStore(),
+            cancel=control.cancel_requested,
+        )
+        if control.cancel_requested():
+            raise JobCancelled("Lean Context search cancelled")
+        control.checkpoint(
+            phase="validating_lean_context",
+            completed=result.get("budget", {}).get("used_new_executions", 0),
+            total=result.get("budget", {}).get("max_new_executions", 16),
+        )
+        control.attach_result(_validated(result, _LEAN_RESULT_SCHEMA))
+        return {"state": "completed"}
+
+    return worker
+
+
+def _start_lean_job(h, run_id: str, body) -> bool:
+    from clozn.server.influence_jobs import JOBS, JobCapacityError
+    from clozn.server.model_routing import select_control_model_for_run
+
+    run = _get_run(h, run_id)
+    if run is None:
+        return True
+    try:
+        _normalize_lean_request(body)
+        universe = plan_context_search_universe(
+            run, run.get("context_units"), max_units=max_context_arms(),
+        )
+    except ContextInvestigationRouteError as exc:
+        h._json(exc.status, {"error": str(exc), "code": exc.code})
+        return True
+    except Exception as exc:
+        h._json(409, {"error": str(exc), "code": "lean_context_universe_unavailable"})
+        return True
+    if universe.get("status") != "planned":
+        condition = universe.get("condition") if isinstance(universe.get("condition"), Mapping) else {}
+        h._json(409, {
+            "error": condition.get("message", "Lean Context universe is unavailable"),
+            "code": condition.get("code", "lean_context_universe_unavailable"),
+            "universe": universe,
+        })
+        return True
+    selection = select_control_model_for_run(
+        h, run.get("model"), route="/runs/<id>/context-investigation/lean-context/jobs",
+    )
+    if selection is None:
+        return True
+    if not callable(getattr(selection.sub, "score_tokens", None)):
+        h._json(503, {
+            "error": "recorded continuation scoring is unavailable",
+            "code": "lean_context_score_capability_unavailable",
+        })
+        return True
+    try:
+        job = JOBS.start(
+            run_id,
+            _lean_job_worker(run, selection.sub, selection.engine, str(universe["universe_id"])),
+            kind=_LEAN_KIND,
+        )
+    except JobCapacityError as exc:
+        h._json(429, {"error": str(exc), "code": "context_investigation_job_capacity"})
+        return True
+    h._json(202, job)
+    return True
+
+
 def _query(h, run_id: str, body) -> bool:
     run = _get_run(h, run_id)
     if run is None:
@@ -358,6 +466,17 @@ def try_get(h, path):
         else:
             h._json(200, job)
         return True
+    if tail.startswith("/lean-context/jobs/"):
+        job_id = tail[len("/lean-context/jobs/"):]
+        if not job_id or "/" in job_id:
+            return False
+        from clozn.server.influence_jobs import JOBS
+        job = JOBS.get(run_id, job_id)
+        if job is None or job.get("kind") != _LEAN_KIND:
+            h._json(404, {"error": "Lean Context job not found", "code": "job_not_found"})
+        else:
+            h._json(200, job)
+        return True
     return False
 
 
@@ -368,6 +487,8 @@ def try_post(h, path, body):
     run_id, tail = parsed
     if tail == "/effects/jobs":
         return _start_effects_job(h, run_id, body)
+    if tail == "/lean-context/jobs":
+        return _start_lean_job(h, run_id, body)
     if tail.startswith("/effects/jobs/") and tail.endswith("/cancel"):
         job_id = tail[len("/effects/jobs/"):-len("/cancel")]
         if not job_id or "/" in job_id:
@@ -380,6 +501,21 @@ def try_post(h, path, body):
         )
         if job is None:
             h._json(404, {"error": "Context Effects job not found", "code": "job_not_found"})
+        else:
+            h._json(200, job)
+        return True
+    if tail.startswith("/lean-context/jobs/") and tail.endswith("/cancel"):
+        job_id = tail[len("/lean-context/jobs/"):-len("/cancel")]
+        if not job_id or "/" in job_id:
+            return False
+        from clozn.server.influence_jobs import JOBS
+        current = JOBS.get(run_id, job_id)
+        job = (
+            JOBS.cancel(run_id, job_id)
+            if current is not None and current.get("kind") == _LEAN_KIND else None
+        )
+        if job is None:
+            h._json(404, {"error": "Lean Context job not found", "code": "job_not_found"})
         else:
             h._json(200, job)
         return True

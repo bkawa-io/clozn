@@ -224,16 +224,20 @@ def test_control_failure_blocks_arms_honestly():
     assert len(substrate.calls) == 0
 
 
-def test_strict_resolver_deletes_whole_message_and_protects_current_request():
+def test_strict_resolver_clears_whole_message_text_including_current_request():
     run, source_ids = _run()
     resolved = resolve_delete_source(
         run, DeleteSource(ContextSelection([source_ids[1]])),
     )
     assert [item["content"] for item in resolved["messages"]] == [
-        "stable context", "current question",
+        "stable context", "", "current question",
     ]
-    with pytest.raises(Exception, match="protected"):
-        resolve_delete_source(run, DeleteSource(ContextSelection([source_ids[2]])))
+    current_removed = resolve_delete_source(
+        run, DeleteSource(ContextSelection([source_ids[2]])),
+    )
+    assert [item["content"] for item in current_removed["messages"]] == [
+        "stable context", "removable source", "",
+    ]
 
 
 def test_strict_resolver_handles_exact_spans_and_multiple_canonical_sources():

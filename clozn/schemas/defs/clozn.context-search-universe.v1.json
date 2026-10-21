@@ -30,11 +30,10 @@
     "coverage": {
       "type": "object",
       "required": [
-        "protected_message_indices", "removable_message_indices", "removable_content_covered",
+        "removable_message_indices", "removable_content_covered",
         "partition_verified", "complete_catalog_source_count", "selected_source_count"
       ],
       "properties": {
-        "protected_message_indices": {"type": "array", "items": {"type": "integer", "minimum": 0}},
         "removable_message_indices": {"type": "array", "items": {"type": "integer", "minimum": 0}},
         "removable_content_covered": {"const": true},
         "partition_verified": {"const": true},

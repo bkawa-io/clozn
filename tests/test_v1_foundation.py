@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import importlib
 
-from clozn.experiments.execution_facts import runtime_projection
+from clozn.experiments.execution_facts import runtime_projection, runtime_projections_equivalent
 from clozn.paths import DEFAULT_DATA_ROOT, data_path, data_root
 from clozn.runs import store as run_store
 
@@ -47,3 +47,19 @@ def test_runtime_projection_rejects_conflicting_explicit_engine_digests():
         "ext": {"engine_artifact": {"artifact_sha256": "c" * 64}},
     }
     assert runtime_projection(value) is None
+
+
+def test_routed_gpu_runtime_accepts_a_concrete_metal_worker_backend():
+    common = {
+        "model_sha256": "a" * 64,
+        "template_fingerprint": "b" * 16,
+        "engine_build": "test-engine",
+        "context_size": 4096,
+    }
+    routed = runtime_projection({**common, "backend": "gpu"})
+    worker = runtime_projection({**common, "backend": "metal"})
+
+    assert runtime_projections_equivalent(routed, worker) is True
+    assert runtime_projections_equivalent(
+        routed, runtime_projection({**common, "backend": "cpu"}),
+    ) is False

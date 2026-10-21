@@ -1,0 +1,56 @@
+{
+  "schema_version": "clozn.lean-context-result.v1",
+  "run_id": "run_example",
+  "search_id": "lean_0123456789abcdef01234567",
+  "status": "completed",
+  "base_execution_fingerprint": "fingerprint",
+  "claim": {"kind": "best_found_within_budget", "minimum_proven": false},
+  "tolerance": {
+    "profile": "balanced.v1",
+    "mean_positive_support_loss_nats_per_token": 0.05,
+    "max_token_support_loss_nats": 0.7
+  },
+  "policy": {"version": "balanced_recorded_continuation_loss.v1"},
+  "universe": {"source_ids": ["seg_a"]},
+  "original": {
+    "retained_source_ids": ["seg_a"],
+    "removed_source_ids": [],
+    "rendered_prompt_token_cost": 10,
+    "tolerance_status": "within_tolerance",
+    "loss": {
+      "answer_token_count": 2,
+      "positive_loss_token_count": 0,
+      "mean_positive_support_loss_nats_per_token": 0,
+      "max_token_support_loss_nats": 0
+    },
+    "evidence": {"observation_id": "obs_a"}
+  },
+  "best": {
+    "retained_source_ids": [],
+    "removed_source_ids": ["seg_a"],
+    "rendered_prompt_token_cost": 2,
+    "tolerance_status": "within_tolerance",
+    "loss": {
+      "answer_token_count": 2,
+      "positive_loss_token_count": 1,
+      "mean_positive_support_loss_nats_per_token": 0.01,
+      "max_token_support_loss_nats": 0.02
+    },
+    "evidence": {"observation_id": "obs_b"}
+  },
+  "reduction": {
+    "removed_prompt_tokens": 8,
+    "retained_prompt_token_fraction": 0.2,
+    "removed_source_count": 1,
+    "retained_source_count": 0
+  },
+  "trials": [],
+  "budget": {
+    "max_new_executions": 16,
+    "used_new_executions": 1,
+    "reused_observation_count": 0,
+    "exhausted": false,
+    "blocked_by_budget": false
+  },
+  "stopping_reason": "search_policy_complete"
+}

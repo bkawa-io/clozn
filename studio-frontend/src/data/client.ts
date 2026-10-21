@@ -60,21 +60,17 @@ function runId(value: string, endpoint: string): string {
 
 export interface RunDraft {
   instructions: string;
-  context: string;
-  question: string;
+  prompt: string;
 }
 
 function generationRequest(draft: RunDraft): Record<string, unknown> {
   const instructions = draft.instructions.trim();
-  const question = draft.question.trim();
-  const context = draft.context.trim();
-  if (!question) throw new ContractError("composer", "question must not be blank");
-  if (!context) throw new ContractError("composer", "context must not be blank");
+  const prompt = draft.prompt.trim();
+  if (!prompt) throw new ContractError("composer", "prompt must not be blank");
 
   const messages: Array<{ role: "system" | "user"; content: string }> = [];
   if (instructions) messages.push({ role: "system", content: instructions });
-  messages.push({ role: "user", content: context });
-  messages.push({ role: "user", content: question });
+  messages.push({ role: "user", content: prompt });
 
   return {
     messages,
