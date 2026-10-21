@@ -240,6 +240,8 @@ int main(int argc, char** argv) {
             {"reference_match_arms", true},
             {"persistent_parent_session", true},
             {"performance_timing", true},
+            {"prompt_prefix_cache", true},
+            {"score_prefix_cache", true},
         };
         const json build = engine_build_info();
         const std::string backend = build.value("backend", std::string("cpu"));
@@ -377,18 +379,22 @@ int main(int argc, char** argv) {
                     duration_ns](const std::function<void(const Event&)>& on_event) {
             std::vector<PerformancePhase> phases = request_phases;
             const PerfClock::time_point worker_start_started = PerfClock::now();
-            ContextPool::Lease lease = pool.acquire();
+            ContextPool::Lease lease = reference_tokens.empty()
+                ? pool.acquire_generation(prompt_ids) : pool.acquire();
             phases.push_back(PerformancePhase{
                 "worker_start", "clozn_worker", duration_ns(worker_start_started)});
             if (!startup_timing_claimed.exchange(true, std::memory_order_relaxed)) {
                 phases.insert(phases.end(), startup_timing_phases.begin(), startup_timing_phases.end());
             }
-            (*lease).set_causal(true);
             (*lease).set_emit_activations(false);
-            return generate_ar(
+            GenerateResult result = generate_ar(
                 *lease, prompt_ids, config, on_event, sample, nullptr,
                 reference_tokens.empty() ? nullptr : &reference_tokens,
-                grammar, nullptr, -1, nullptr, &phases);
+                grammar, nullptr, -1, nullptr, &phases,
+                reference_tokens.empty() ? lease.cached_prompt_prefix() : 0);
+            if (reference_tokens.empty())
+                lease.commit_generation_cache(result.resident_tokens);
+            return result;
         };
 
         const bool user_stop_active = grammar != nullptr;
@@ -414,7 +420,9 @@ int main(int argc, char** argv) {
                                          {"choices", json::array({{{"text", result.text}, {"index", 0},
                                               {"finish_reason", finish_reason(result.reason)}}})},
                                          {"usage", {{"prompt_tokens", static_cast<int>(prompt_ids.size())},
-                                                    {"completion_tokens", result.new_tokens}}},
+                                                    {"completion_tokens", result.new_tokens},
+                                                    {"cached_prompt_tokens", result.cached_prompt_tokens},
+                                                    {"evaluated_prompt_tokens", result.evaluated_prompt_tokens}}},
                                          {"termination", {{"kind", user_stop_active && result.reason == "stop"
                                                   ? "user_stop_sequence" : result.reason}}}};
                         if (result.ref_active) {
@@ -446,7 +454,9 @@ int main(int argc, char** argv) {
                               {"finish_reason", finish_reason(result.reason)}}})},
                          {"usage", {{"prompt_tokens", static_cast<int>(prompt_ids.size())},
                                     {"completion_tokens", result.new_tokens},
-                                    {"steps_total", result.steps_total}}},
+                                    {"steps_total", result.steps_total},
+                                    {"cached_prompt_tokens", result.cached_prompt_tokens},
+                                    {"evaluated_prompt_tokens", result.evaluated_prompt_tokens}}},
                          {"termination", {{"kind", user_stop_active && result.reason == "stop"
                                   ? "user_stop_sequence" : result.reason}}}};
             if (result.ref_active) {

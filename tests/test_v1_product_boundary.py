@@ -153,7 +153,8 @@ def test_private_worker_advertises_only_v1_capabilities():
     fixture = json.loads((ROOT / "protocol/fixtures/handshake.json").read_text(encoding="utf-8"))
     assert fixture["capabilities"] == [
         "streaming", "sampling", "reference_match_arms",
-        "persistent_parent_session", "performance_timing",
+        "persistent_parent_session", "performance_timing", "prompt_prefix_cache",
+        "score_prefix_cache",
     ]
 
     source = (ROOT / "engine/core/serve/server_main.cpp").read_text(encoding="utf-8")

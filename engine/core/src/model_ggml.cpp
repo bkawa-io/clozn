@@ -976,21 +976,35 @@ ForwardResult GgmlAdapter::ar_forward(const std::vector<int>& tokens, int n_past
 }
 
 ForwardResult GgmlAdapter::ar_forward_score(const std::vector<int>& tokens,
-                                            const std::vector<int>& logits_for) {
+                                            const std::vector<int>& logits_for,
+                                            int cached_prefix) {
     const int len = static_cast<int>(tokens.size());
     if (len <= 0) throw std::invalid_argument("ar_forward_score: empty tokens");
     if (len > n_ctx_) throw std::invalid_argument("ar_forward_score: exceeds n_ctx");
+    if (cached_prefix < 0 || cached_prefix > len)
+        throw std::invalid_argument("ar_forward_score: cached prefix out of range");
     for (int p : logits_for)
         if (p < 0 || p >= len)
             throw std::invalid_argument("ar_forward_score: logits_for position out of range");
 
-    // Score from a clean KV (position 0): teacher-forcing is a one-shot stateless read over the WHOLE
-    // sequence, never incremental, so nothing from a prior request's cache may leak in.
-    llama_memory_clear(llama_get_memory(ctx_), true);
-    frozen_end_ = 0;
-    boundary_row_.clear();
-    write_from_ = 0;
-    decoded_tokens_ += len;
+    int decode_from = 0;
+    if (cached_prefix > 0) {
+        if (!causal_)
+            throw std::invalid_argument("ar_forward_score: cached prefix requires causal attention");
+        if (ar_seq_size(0) < cached_prefix)
+            throw std::invalid_argument("ar_forward_score: cached prefix exceeds resident seq-0 KV");
+        const int first_logits = logits_for.empty()
+            ? len : *std::min_element(logits_for.begin(), logits_for.end());
+        decode_from = std::min(cached_prefix, first_logits);
+        evict_from(decode_from);
+        frozen_end_ = 0;
+        boundary_row_.clear();
+        write_from_ = decode_from;
+    } else {
+        // Historical scalar-reference path: reset attention mode and every KV sequence.
+        set_causal(true);
+    }
+    decoded_tokens_ += len - decode_from;
 
     // Mark ONLY the requested positions for logits output -- everything else (typically most of the
     // prompt) costs no unembedding matmul, just the KV it contributes.
@@ -1011,7 +1025,7 @@ ForwardResult GgmlAdapter::ar_forward_score(const std::vector<int>& tokens,
         attn_capture_query_ >= 0 || !head_writes_.empty() || !head_cap_layers_.empty() ||
         !ffn_writes_.empty() || !ffn_cap_layers_.empty();
     const int decode_limit = callback_sensitive ? std::min(n_batch_, n_ubatch_) : n_batch_;
-    for (int chunk_from = 0; chunk_from < len; chunk_from += decode_limit) {
+    for (int chunk_from = decode_from; chunk_from < len; chunk_from += decode_limit) {
         const int chunk_rows = std::min(decode_limit, len - chunk_from);
         write_from_ = chunk_from;
         tap_buf_.clear();
@@ -1059,8 +1073,8 @@ ForwardResult GgmlAdapter::ar_forward_score(const std::vector<int>& tokens,
     }
     if (aggregate_capture) {
         cap_bufs_ = std::move(captured);
-        cap_rows_ = len;
-        fire_capture(0, len);
+        cap_rows_ = len - decode_from;
+        fire_capture(decode_from, len);
     }
     return out;
 }

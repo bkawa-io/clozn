@@ -152,6 +152,27 @@ def test_generation_timing_from_worker_terminal_event():
     }
 
 
+def test_generation_timing_preserves_prompt_prefix_cache_metrics():
+    frames = [{
+        "type": "gen_finished",
+        "new_tokens": 4,
+        "steps_total": 4,
+        "timing": {
+            "schema_version": "clozn.worker-timing.v1",
+            "unit": "nanoseconds",
+            "phases": [{"name": "prefill", "duration_ns": 12}],
+            "metrics": {
+                "cached_prompt_tokens": 3993,
+                "evaluated_prompt_tokens": 16,
+            },
+        },
+    }]
+
+    timing = runlog.generation_timing_from_frames(frames)
+    assert timing["cached_prompt_tokens"] == 3993
+    assert timing["evaluated_prompt_tokens"] == 16
+
+
 def test_finish_reason_none_when_absent_or_garbage():
     assert runlog.finish_reason_from_frames([]) is None
     assert runlog.finish_reason_from_frames(None) is None

@@ -54,6 +54,12 @@ struct GenerateResult {
     bool ref_active = false;     // a reference was supplied => divergence checking was armed this run
     bool diverged = false;       // true => stopped at diverged_at; false (+ref_active) => matched fully
     int diverged_at = -1;        // generation index of the first divergent token (-1 if none/inactive)
+    // Private serving-state handoff. The worker keeps this exact token prefix beside the pooled
+    // context whose seq-0 KV covers it, so a later ordinary chat request can reuse it. It is not
+    // serialized as generation evidence.
+    std::vector<int> resident_tokens;
+    int cached_prompt_tokens = 0;
+    int evaluated_prompt_tokens = 0;
 };
 
 }  // namespace clozn

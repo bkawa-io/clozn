@@ -422,9 +422,12 @@ public:
     // in-place causal head, same convention as ar_forward: row i's logits already predict token i+1).
     // Long sequences are split into logical batches of at most n_batch rows. n_batch defaults to
     // n_ctx for compatibility, but it is independent from n_ctx and n_ubatch when configured.
-    // Always scores from a cold KV (never reuses another request's cache): teacher-forcing is a
-    // one-shot, stateless read, and the pooled context is shared across requests.
-    ForwardResult ar_forward_score(const std::vector<int>& tokens, const std::vector<int>& logits_for);
+    // `cached_prefix` is an exact-token prefix already resident in seq 0. Zero keeps the historical
+    // cold path. A positive value preserves only positions before both the mismatch and the first
+    // requested logits row; requested rows are always recomputed because KV does not retain logits.
+    ForwardResult ar_forward_score(const std::vector<int>& tokens,
+                                   const std::vector<int>& logits_for,
+                                   int cached_prefix = 0);
 
     // Forward-HARVEST (the §3.1 "activation harvesting at scale" path): one causal forward over a
     // whole text and ALL its per-token residuals at the tap layer — NOT just the last row like

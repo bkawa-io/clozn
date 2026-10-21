@@ -164,7 +164,9 @@ def _score_execution_proof(execution: Mapping[str, Any]) -> tuple[str, bool]:
     trusted = bool(
         execution.get("qualified")
         and execution.get("evidence_use") == "trusted"
-        and execution.get("numerical_regime") == "scalar_reference"
+        and execution.get("numerical_regime") in {
+            "scalar_reference", "scalar_prefix_cached_v1",
+        }
         and execution.get("execution_strategy") in {"scalar_serial", "scalar_http_concurrent"}
     )
     if trusted:
@@ -186,12 +188,22 @@ def _score_execution_before_dispatch(substrate: Any) -> dict[str, Any]:
             "execution_identity": {}, "execution_metadata": {},
         }
     strategy = "scalar_http_concurrent" if declared == "scalar_http_concurrent" and many_enabled else "scalar_serial"
+    regime = getattr(substrate, "score_tokens_many_numerical_regime", "scalar_reference")
+    identity = getattr(substrate, "score_tokens_many_execution_identity", None)
+    if not isinstance(identity, Mapping):
+        identity = {"kind": "clozn.score-tokens-scalar-reference.v1"}
+    qualified = bool(
+        regime == "scalar_reference"
+        or (
+            regime == "scalar_prefix_cached_v1"
+            and identity.get("kind") == "clozn.score-tokens-scalar-prefix-cache.v1"
+            and identity.get("parity_contract") == "bit_exact_float32_logprobs"
+        )
+    )
     return {
-        "execution_strategy": strategy, "numerical_regime": "scalar_reference",
-        "evidence_use": "trusted", "qualified": True,
-        "execution_identity": {
-            "kind": "clozn.score-tokens-scalar-reference.v1",
-        },
+        "execution_strategy": strategy, "numerical_regime": regime,
+        "evidence_use": "trusted" if qualified else "unqualified", "qualified": qualified,
+        "execution_identity": dict(identity),
         "execution_metadata": {},
     }
 

@@ -70,6 +70,7 @@ void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx) {
         }
         static const std::set<std::string> allowed{
             "prompt", "prompt_ids", "continuation", "continuation_ids", "topk",
+            "use_prefix_cache",
         };
         if (reject_unknown_fields(body, allowed, res)) return;
 
@@ -128,6 +129,13 @@ void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx) {
                 return;
             }
         }
+        if (body.contains("use_prefix_cache") && !body["use_prefix_cache"].is_boolean()) {
+            res.status = 400;
+            res.set_content(json{{"error", "use_prefix_cache must be a boolean"}}.dump(),
+                            "application/json");
+            return;
+        }
+        const bool use_prefix_cache = body.value("use_prefix_cache", true);
 
         const int n_prompt = static_cast<int>(prompt_ids.size());
         const int n_continuation = static_cast<int>(continuation_ids.size());
@@ -148,11 +156,18 @@ void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx) {
 
         try {
             ForwardResult forward;
+            ScorePrefixPlan prefix_plan = plan_score_prefix_reuse(
+                static_cast<int>(tokens.size()), 0, logits_for.front());
             {
-                ContextPool::Lease lease = ctx.pool.acquire();
+                ContextPool::Lease lease = use_prefix_cache
+                    ? ctx.pool.acquire_score(tokens) : ctx.pool.acquire();
                 GgmlAdapter& adapter = *lease;
-                adapter.set_causal(true);
-                forward = adapter.ar_forward_score(tokens, logits_for);
+                adapter.set_emit_activations(false);
+                const int cached_prefix = use_prefix_cache ? lease.cached_score_prefix() : 0;
+                prefix_plan = plan_score_prefix_reuse(
+                    static_cast<int>(tokens.size()), cached_prefix, logits_for.front());
+                forward = adapter.ar_forward_score(tokens, logits_for, cached_prefix);
+                if (use_prefix_cache) lease.commit_score_cache(tokens);
             }
 
             json scored = json::array();
@@ -196,7 +211,12 @@ void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx) {
 
             json response{{"n_prompt", n_prompt}, {"n_cont", n_continuation},
                           {"prompt_ids", prompt_ids}, {"tokens", std::move(scored)},
-                          {"sum_logprob", sum_logprob}};
+                          {"sum_logprob", sum_logprob},
+                          {"cache", {{"matched_tokens", prefix_plan.matched_tokens},
+                                     {"cached_tokens", prefix_plan.cached_tokens},
+                                     {"evaluated_tokens", prefix_plan.evaluated_tokens}}},
+                          {"numerical_regime", prefix_plan.cached_tokens > 0
+                              ? "scalar_prefix_cached_v1" : "scalar_reference"}};
             if (boundary_approximate) response["boundary_approximate"] = true;
             res.set_content(dump_json(response), "application/json");
         } catch (const std::exception& error) {

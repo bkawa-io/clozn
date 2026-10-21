@@ -228,6 +228,19 @@ terminal `gen_finished` event (and to the `meta.kind="end"` StateStep control fr
 Fields are additive: an older worker may omit `timing` and clients must continue to accept the legacy
 `wall_ms`/`tok_per_s` fields. Durations are measured in the named process's monotonic domain. A client
 must never subtract a worker offset from a gateway offset; it may only sum non-overlapping durations.
+
+Workers advertising `capabilities.prompt_prefix_cache: true` preserve the exact seq-0 token/KV
+prefix from an ordinary completion and reuse the longest match on the next ordinary completion.
+Evidence-producing reference completions remain on the cold path. Completion `usage` and worker
+timing metrics report `cached_prompt_tokens` and `evaluated_prompt_tokens`; a full prompt hit still
+evaluates its final token once to recover the next-token logits row.
+
+Workers advertising `capabilities.score_prefix_cache: true` may preserve an exact-token KV prefix
+between serial `/score` calls. The first requested logits row and all following rows are always
+recomputed because KV state does not contain historical logits. `/score` reports `cache.matched_tokens`,
+`cache.cached_tokens`, `cache.evaluated_tokens`, and a `numerical_regime`; callers can send
+`use_prefix_cache: false` to force the cold scalar-reference path for parity checks. The qualified v1
+contract is bit-exact float32 per-token log-probability parity with that cold path.
 Missing phases are absent, never reported as zero or inferred from wall time. `aggregation:"overlapping"`
 and `"context_only"` phases remain useful attribution but do not contribute to known in-request time.
 

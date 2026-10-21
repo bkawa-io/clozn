@@ -137,11 +137,14 @@ class EngineClient:
         continuation_ids: Sequence[int] | None = None,
         continuation: str | None = None,
         topk: int = 0,
+        use_prefix_cache: bool = True,
     ) -> dict:
         """Teacher-force one continuation through the trusted scalar score route."""
         if not isinstance(topk, int) or isinstance(topk, bool) or topk < 0:
             raise ValueError("topk must be a non-negative integer")
-        body: dict[str, Any] = {"topk": topk}
+        if not isinstance(use_prefix_cache, bool):
+            raise ValueError("use_prefix_cache must be a boolean")
+        body: dict[str, Any] = {"topk": topk, "use_prefix_cache": use_prefix_cache}
         if prompt_ids is not None:
             body["prompt_ids"] = _integer_ids(prompt_ids, "prompt_ids", nonempty=True)
         elif prompt is not None:

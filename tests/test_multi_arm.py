@@ -135,6 +135,22 @@ def test_score_many_keeps_undeclared_many_method_on_scalar_reference_path():
     assert len(substrate.score_calls) == 3
 
 
+def test_scalar_prefix_cache_regime_is_explicit_and_trusted():
+    substrate = ScalarSubstrate()
+    substrate.score_tokens_many_numerical_regime = "scalar_prefix_cached_v1"
+    substrate.score_tokens_many_execution_identity = {
+        "kind": "clozn.score-tokens-scalar-prefix-cache.v1",
+        "parity_contract": "bit_exact_float32_logprobs",
+    }
+
+    result = score_tokens_many(substrate, _score_arms())
+
+    assert result.numerical_regime == "scalar_prefix_cached_v1"
+    assert result.qualified is True
+    assert result.trusted is True
+    assert result.execution_identity["parity_contract"] == "bit_exact_float32_logprobs"
+
+
 def test_engine_scalar_wrapper_declares_its_actual_worker_strategy(monkeypatch):
     from clozn.server import app as cs
 

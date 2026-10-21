@@ -270,15 +270,29 @@ _SCALAR_SCORE_EXECUTION_IDENTITY = {
 }
 
 
-def _scalar_score_result(rows: list[Any], *, strategy: str,
+def _scalar_score_result(rows: list[Any], *, substrate: Any, strategy: str,
                          metadata: Mapping[str, Any] | None = None) -> ScoreTokensManyResult:
+    regime = getattr(substrate, "score_tokens_many_numerical_regime", "scalar_reference")
+    if not isinstance(regime, str):
+        regime = "scalar_reference"
+    identity = getattr(substrate, "score_tokens_many_execution_identity", None)
+    if not isinstance(identity, Mapping):
+        identity = _SCALAR_SCORE_EXECUTION_IDENTITY
+    qualified = bool(
+        regime == "scalar_reference"
+        or (
+            regime == "scalar_prefix_cached_v1"
+            and identity.get("kind") == "clozn.score-tokens-scalar-prefix-cache.v1"
+            and identity.get("parity_contract") == "bit_exact_float32_logprobs"
+        )
+    )
     return ScoreTokensManyResult(
         results=tuple(deepcopy(rows)),
         execution_strategy=strategy,
-        numerical_regime="scalar_reference",
-        evidence_use="trusted",
-        qualified=True,
-        execution_identity=deepcopy(_SCALAR_SCORE_EXECUTION_IDENTITY),
+        numerical_regime=regime,
+        evidence_use="trusted" if qualified else "unqualified",
+        qualified=qualified,
+        execution_identity=deepcopy(dict(identity)),
         metadata=deepcopy(dict(metadata or {})),
     )
 
@@ -305,7 +319,7 @@ def score_tokens_many(
     if declared != "scalar_http_concurrent" or not many_enabled:
         return _scalar_score_result(
             _scalar(scalar, normalised, cancel=cancel),
-            strategy="scalar_serial",
+            substrate=substrate, strategy="scalar_serial",
         )
 
     rows, envelopes = _native_many(
@@ -313,7 +327,7 @@ def score_tokens_many(
     )
     metadata = envelopes[0] if len(envelopes) == 1 else {"groups": envelopes}
     return _scalar_score_result(
-        rows, strategy="scalar_http_concurrent", metadata=metadata,
+        rows, substrate=substrate, strategy="scalar_http_concurrent", metadata=metadata,
     )
 def probe_reference_match_many(substrate: Any, arms: Iterable[Mapping[str, Any]], *, cancel: Any = None,
                                proof_grade: bool = True) -> list[Any]:

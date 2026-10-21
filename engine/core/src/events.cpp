@@ -85,7 +85,9 @@ std::string timing_json_impl(const GenFinished& e) {
         out += "}";
     }
     out += "],\"metrics\":{\"prompt_tokens\":" + std::to_string(e.prompt_tokens)
-         + ",\"generated_tokens\":" + std::to_string(e.new_tokens);
+         + ",\"generated_tokens\":" + std::to_string(e.new_tokens)
+         + ",\"cached_prompt_tokens\":" + std::to_string(e.cached_prompt_tokens)
+         + ",\"evaluated_prompt_tokens\":" + std::to_string(e.evaluated_prompt_tokens);
     if (e.prompt_tok_per_s >= 0.0)
         out += ",\"prompt_tokens_per_second\":" + num(e.prompt_tok_per_s);
     if (e.decode_tok_per_s >= 0.0)

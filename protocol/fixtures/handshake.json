@@ -15,7 +15,9 @@
     "sampling",
     "reference_match_arms",
     "persistent_parent_session",
-    "performance_timing"
+    "performance_timing",
+    "prompt_prefix_cache",
+    "score_prefix_cache"
   ],
   "stream_frame_envelope": [
     "req",

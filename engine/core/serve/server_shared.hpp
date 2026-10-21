@@ -6,6 +6,7 @@
 #include "clozn/events.hpp"
 #include "clozn/generate_ar.hpp"
 #include "clozn/model_ggml.hpp"
+#include "clozn/prompt_prefix_cache.hpp"
 
 #include "ggml.h"
 
@@ -17,7 +18,6 @@
 #include <map>
 #include <memory>
 #include <mutex>
-#include <queue>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -186,34 +186,97 @@ inline std::string sse_data(const Event& event, const GgmlModel& model,
 // A bounded pool of contexts over one shared model. Persistent exact-reference sessions use one
 // additional dedicated context so ordinary scalar confirmation remains available.
 class ContextPool {
+    struct Slot {
+        std::unique_ptr<GgmlAdapter> adapter;
+        std::vector<int> resident_generation_tokens;
+        std::vector<int> resident_score_tokens;
+        bool generation_cache_valid = false;
+        bool score_cache_valid = false;
+    };
+
 public:
     ContextPool(std::shared_ptr<GgmlModel> model, int workers, int n_ctx,
                 bool flash_attention = true, int n_batch = 0, int n_ubatch = 0)
         : model_(std::move(model)), flash_attention_(flash_attention) {
         for (int i = 0; i < workers; ++i) {
-            adapters_.push_back(std::make_unique<GgmlAdapter>(
-                model_, n_ctx, flash_attention_, n_batch, n_ubatch));
-            free_.push(adapters_.back().get());
+            auto slot = std::make_unique<Slot>();
+            slot->adapter = std::make_unique<GgmlAdapter>(
+                model_, n_ctx, flash_attention_, n_batch, n_ubatch);
+            free_.push_back(slot.get());
+            slots_.push_back(std::move(slot));
         }
     }
 
     class Lease {
     public:
-        Lease(ContextPool& pool, GgmlAdapter* adapter) : pool_(pool), adapter_(adapter) {}
+        Lease(ContextPool& pool, Slot* slot, int cached_prompt_prefix = 0,
+              bool generation = false, bool score = false)
+            : pool_(pool), slot_(slot), cached_prompt_prefix_(cached_prompt_prefix),
+              generation_(generation), score_(score) {}
         ~Lease() {
-            if (adapter_ != nullptr) pool_.release(adapter_);
+            if (slot_ != nullptr) {
+                if (generation_ && !generation_committed_) {
+                    slot_->resident_generation_tokens.clear();
+                    slot_->generation_cache_valid = false;
+                }
+                if (score_ && !score_committed_) {
+                    slot_->resident_score_tokens.clear();
+                    slot_->score_cache_valid = false;
+                }
+                pool_.release(slot_);
+            }
         }
         Lease(const Lease&) = delete;
         Lease& operator=(const Lease&) = delete;
-        Lease(Lease&& other) noexcept : pool_(other.pool_), adapter_(other.adapter_) {
-            other.adapter_ = nullptr;
+        Lease(Lease&& other) noexcept
+            : pool_(other.pool_), slot_(other.slot_),
+              cached_prompt_prefix_(other.cached_prompt_prefix_),
+              generation_(other.generation_),
+              generation_committed_(other.generation_committed_),
+              score_(other.score_), score_committed_(other.score_committed_) {
+            other.slot_ = nullptr;
         }
         Lease& operator=(Lease&&) = delete;
-        GgmlAdapter& operator*() const { return *adapter_; }
+        GgmlAdapter& operator*() const { return *slot_->adapter; }
+        int cached_prompt_prefix() const { return cached_prompt_prefix_; }
+        int cached_score_prefix() const { return cached_prompt_prefix_; }
+
+        void commit_generation_cache(std::vector<int> resident_tokens) {
+            if (!generation_)
+                throw std::logic_error("generation cache commit requires a generation lease");
+            if (resident_tokens.empty() ||
+                slot_->adapter->ar_seq_size(0) != static_cast<int>(resident_tokens.size())) {
+                slot_->resident_generation_tokens.clear();
+                slot_->generation_cache_valid = false;
+            } else {
+                slot_->resident_generation_tokens = std::move(resident_tokens);
+                slot_->generation_cache_valid = true;
+            }
+            generation_committed_ = true;
+        }
+
+        void commit_score_cache(std::vector<int> resident_tokens) {
+            if (!score_)
+                throw std::logic_error("score cache commit requires a score lease");
+            if (resident_tokens.empty() ||
+                slot_->adapter->ar_seq_size(0) != static_cast<int>(resident_tokens.size())) {
+                slot_->resident_score_tokens.clear();
+                slot_->score_cache_valid = false;
+            } else {
+                slot_->resident_score_tokens = std::move(resident_tokens);
+                slot_->score_cache_valid = true;
+            }
+            score_committed_ = true;
+        }
 
     private:
         ContextPool& pool_;
-        GgmlAdapter* adapter_;
+        Slot* slot_;
+        int cached_prompt_prefix_ = 0;
+        bool generation_ = false;
+        bool generation_committed_ = false;
+        bool score_ = false;
+        bool score_committed_ = false;
     };
 
     class PersistentLease {
@@ -240,9 +303,74 @@ public:
     Lease acquire() {
         std::unique_lock<std::mutex> lock(mutex_);
         available_.wait(lock, [&] { return !free_.empty(); });
-        GgmlAdapter* adapter = free_.front();
-        free_.pop();
-        return Lease(*this, adapter);
+        Slot* slot = free_.back();
+        free_.pop_back();
+        slot->resident_generation_tokens.clear();
+        slot->resident_score_tokens.clear();
+        slot->generation_cache_valid = false;
+        slot->score_cache_valid = false;
+        return Lease(*this, slot);
+    }
+
+    Lease acquire_generation(const std::vector<int>& prompt_tokens) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        available_.wait(lock, [&] { return !free_.empty(); });
+        auto best = free_.begin();
+        int best_prefix = -1;
+        for (auto it = free_.begin(); it != free_.end(); ++it) {
+            Slot* candidate = *it;
+            int prefix = 0;
+            if (candidate->generation_cache_valid && candidate->adapter->causal() &&
+                candidate->adapter->ar_seq_size(0) ==
+                    static_cast<int>(candidate->resident_generation_tokens.size())) {
+                prefix = exact_token_prefix_length(
+                    candidate->resident_generation_tokens, prompt_tokens);
+            }
+            if (prefix > best_prefix) {
+                best = it;
+                best_prefix = prefix;
+            }
+        }
+        Slot* slot = *best;
+        free_.erase(best);
+        slot->resident_score_tokens.clear();
+        slot->score_cache_valid = false;
+        if (best_prefix <= 0) {
+            slot->resident_generation_tokens.clear();
+            slot->generation_cache_valid = false;
+            best_prefix = 0;
+        }
+        return Lease(*this, slot, best_prefix, true);
+    }
+
+    Lease acquire_score(const std::vector<int>& tokens) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        available_.wait(lock, [&] { return !free_.empty(); });
+        auto best = free_.begin();
+        int best_prefix = -1;
+        for (auto it = free_.begin(); it != free_.end(); ++it) {
+            Slot* candidate = *it;
+            int prefix = 0;
+            if (candidate->score_cache_valid && candidate->adapter->causal() &&
+                candidate->adapter->ar_seq_size(0) ==
+                    static_cast<int>(candidate->resident_score_tokens.size())) {
+                prefix = exact_token_prefix_length(candidate->resident_score_tokens, tokens);
+            }
+            if (prefix > best_prefix) {
+                best = it;
+                best_prefix = prefix;
+            }
+        }
+        Slot* slot = *best;
+        free_.erase(best);
+        slot->resident_generation_tokens.clear();
+        slot->generation_cache_valid = false;
+        if (best_prefix <= 0) {
+            slot->resident_score_tokens.clear();
+            slot->score_cache_valid = false;
+            best_prefix = 0;
+        }
+        return Lease(*this, slot, best_prefix, false, true);
     }
 
     PersistentLease acquire_persistent() {
@@ -260,22 +388,33 @@ public:
         }
     }
 
-    int size() const { return static_cast<int>(adapters_.size()); }
-    int n_ctx() const { return adapters_.empty() ? 0 : adapters_.front()->n_ctx(); }
-    int n_batch() const { return adapters_.empty() ? 0 : adapters_.front()->n_batch(); }
-    int n_ubatch() const { return adapters_.empty() ? 0 : adapters_.front()->n_ubatch(); }
+    int size() const { return static_cast<int>(slots_.size()); }
+    int n_ctx() const { return slots_.empty() ? 0 : slots_.front()->adapter->n_ctx(); }
+    int n_batch() const { return slots_.empty() ? 0 : slots_.front()->adapter->n_batch(); }
+    int n_ubatch() const { return slots_.empty() ? 0 : slots_.front()->adapter->n_ubatch(); }
 
     std::map<std::string, std::size_t> memory_breakdown() {
-        if (adapters_.empty()) return {};
-        auto lease = acquire();
-        return (*lease).memory_breakdown();
+        if (slots_.empty()) return {};
+        std::unique_lock<std::mutex> lock(mutex_);
+        available_.wait(lock, [&] { return !free_.empty(); });
+        Slot* slot = free_.back();
+        free_.pop_back();
+        lock.unlock();
+        try {
+            const auto result = slot->adapter->memory_breakdown();
+            release(slot);
+            return result;
+        } catch (...) {
+            release(slot);
+            throw;
+        }
     }
 
 private:
-    void release(GgmlAdapter* adapter) {
+    void release(Slot* slot) {
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            free_.push(adapter);
+            free_.push_back(slot);
         }
         available_.notify_one();
     }
@@ -286,8 +425,8 @@ private:
     }
 
     std::shared_ptr<GgmlModel> model_;
-    std::vector<std::unique_ptr<GgmlAdapter>> adapters_;
-    std::queue<GgmlAdapter*> free_;
+    std::vector<std::unique_ptr<Slot>> slots_;
+    std::vector<Slot*> free_;
     std::mutex mutex_;
     std::condition_variable available_;
     bool persistent_active_ = false;

@@ -69,6 +69,12 @@ add_executable(test_target_logprob_reduction tests/test_target_logprob_reduction
 target_include_directories(test_target_logprob_reduction PRIVATE include)
 add_test(NAME target_logprob_reduction COMMAND test_target_logprob_reduction)
 
+# Ordinary chat prompt-cache planning is exact-token-only and model-free. The full-prefix case must
+# retain one bridge token to recover the next-token logits row.
+add_executable(test_prompt_prefix_cache tests/test_prompt_prefix_cache.cpp)
+target_include_directories(test_prompt_prefix_cache PRIVATE include)
+add_test(NAME prompt_prefix_cache COMMAND test_prompt_prefix_cache)
+
 # --- L0 ggml adapter (Phase 3, slice 3) ---
 # Optional + heavy: this builds the vendored llama.cpp. Default OFF so the runtime-only
 # build (and CI) stay fast and dependency-free — the runtime library above never links a

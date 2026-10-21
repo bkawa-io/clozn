@@ -183,7 +183,11 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
                            // Already-measured worker phases for this request (template/tokenization)
                            // plus optional process-startup context. Their clocks are the same worker
                            // steady clock, but offsets may be absent when their local origin differs.
-                           const std::vector<PerformancePhase>* request_phases = nullptr);
+                           const std::vector<PerformancePhase>* request_phases = nullptr,
+                           // Exact-token prefix already resident in seq 0 of `adapter`. Ordinary
+                           // chat serving supplies this from ContextPool; evidence paths leave it
+                           // at zero and retain their historical cold-prefill numerics.
+                           int cached_prompt_prefix = 0);
 
 // ADR 010 exact appended-turn continuation.  This is intentionally NOT a convenience wrapper around
 // generate_ar(resume_from): that older resume path bridge-decodes the historical last token to recover

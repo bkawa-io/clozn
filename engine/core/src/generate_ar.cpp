@@ -1,4 +1,5 @@
 #include "clozn/generate_ar.hpp"
+#include "clozn/prompt_prefix_cache.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -212,7 +213,8 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
                            const EngineCheckpoint* resume_from,
                            int resume_truncate_to,
                            const int* force_first_token,
-                           const std::vector<PerformancePhase>* request_phases) {
+                           const std::vector<PerformancePhase>* request_phases,
+                           int cached_prompt_prefix) {
     if (prompt_ids.empty()) throw std::invalid_argument("prompt_ids must be non-empty");
     if (config.max_new < 1) throw std::invalid_argument("max_new must be >= 1");
     if (resume_from != nullptr) {
@@ -229,6 +231,11 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
     } else if (resume_truncate_to >= 0) {
         throw std::invalid_argument("resume_truncate_to requires resume_from");
     }
+    if (cached_prompt_prefix < 0 ||
+        cached_prompt_prefix > static_cast<int>(prompt_ids.size()))
+        throw std::invalid_argument("cached_prompt_prefix is outside the prompt");
+    if (resume_from != nullptr && cached_prompt_prefix != 0)
+        throw std::invalid_argument("cached_prompt_prefix cannot be combined with resume_from");
     if (force_first_token != nullptr && *force_first_token < 0)
         throw std::invalid_argument("force_first_token must be a valid (non-negative) token id");
 
@@ -270,13 +277,20 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
     const int p = (resume_from != nullptr)
                       ? ((resume_truncate_to >= 0) ? resume_truncate_to : resume_from->n_past)
                       : static_cast<int>(prompt_ids.size());
+    const PromptPrefixPlan prefix_plan = plan_prompt_prefix_reuse(p, cached_prompt_prefix);
     emit(GenStarted{0, p, 0, config.max_new});  // block_len 0: AR has no blocks
 
     // Causal attention + a fresh KV cache -- EXCEPT on a KV-blob resume, where load_checkpoint
     // itself sets the mode and installs the saved cache (set_causal here would clear the very
     // state being restored). A steering control vector set by the caller persists across decodes
     // (it's on the context, independent of the attention mode).
-    if (resume_from == nullptr) adapter.set_causal(true);
+    if (resume_from == nullptr && cached_prompt_prefix == 0) adapter.set_causal(true);
+    if (cached_prompt_prefix > 0) {
+        if (!adapter.causal())
+            throw std::invalid_argument("cached prompt prefix requires causal attention");
+        if (adapter.ar_seq_size(0) < cached_prompt_prefix)
+            throw std::invalid_argument("cached prompt prefix exceeds resident seq-0 KV");
+    }
 
     const int base = 0;  // n_past the prompt decode starts from
 
@@ -328,12 +342,24 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
     const clock::time_point prefill_start = clock::now();
     ForwardResult fwd;
     int n_past;
+    int evaluated_prompt_tokens = p;
     if (resume_from != nullptr) {
         adapter.load_checkpoint(*resume_from);
         const int np = p;  // == resume_truncate_to when set, else resume_from->n_past (unchanged)
         adapter.evict_from(np - 1);
         fwd = adapter.ar_forward({resume_from->tokens[static_cast<size_t>(np - 1)]}, np - 1);
         n_past = np;
+        evaluated_prompt_tokens = 1;
+    } else if (cached_prompt_prefix > 0) {
+        // A reused KV prefix carries no logits row. If the whole prompt matches, re-decode only its
+        // final token (the same bridge used by checkpoint resume). Otherwise preserve [0, prefix)
+        // and decode only the newly appended/changed suffix.
+        adapter.evict_from(prefix_plan.decode_from);
+        fwd = adapter.ar_forward(
+            std::vector<int>(prompt_ids.begin() + prefix_plan.decode_from, prompt_ids.begin() + p),
+            prefix_plan.decode_from);
+        n_past = p;
+        evaluated_prompt_tokens = prefix_plan.evaluated_tokens;
     } else {
         fwd = adapter.ar_forward(prompt_ids, base);
         n_past = base + p;
@@ -480,6 +506,10 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
     result.ref_active = ref_active;    // divergence checking was armed (a reference was supplied)
     result.diverged = diverged;        // true => stopped early at diverged_at; false + ref_active => matched fully
     result.diverged_at = diverged_at;  // generation index of the first divergent token (-1 if none)
+    result.resident_tokens.assign(seq.begin(), seq.begin() + n_past);
+    result.evaluated_prompt_tokens = evaluated_prompt_tokens;
+    result.cached_prompt_tokens = resume_from == nullptr
+        ? std::max(0, p - evaluated_prompt_tokens) : 0;
     // Truncated to `p` for the same reason `seq` above is: a resumed execution-fork must never
     // report the checkpoint's PAST-truncate_to tail as part of this run's board (that tail is being
     // regenerated, not replayed). Identical to `prompt_ids` whenever p == prompt_ids.size().
@@ -491,12 +521,13 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
     const double prefill_s = static_cast<double>(prefill_ns) / 1e9;
     const double tok_per_s = decode_s > 0 ? result.new_tokens / decode_s : 0.0;
     const double prompt_tok_per_s =
-        (resume_from == nullptr && prefill_s > 0) ? p / prefill_s : -1.0;
+        (resume_from == nullptr && prefill_s > 0) ? evaluated_prompt_tokens / prefill_s : -1.0;
     std::vector<PerformancePhase> timing_phases =
         request_phases != nullptr ? *request_phases : std::vector<PerformancePhase>{};
     PerformancePhase prefill_phase{"prefill", "clozn_worker", prefill_ns,
         std::chrono::duration_cast<std::chrono::nanoseconds>(prefill_start - t_start).count()};
     if (resume_from != nullptr) prefill_phase.includes = {"kv_restore", "bridge_decode"};
+    else if (cached_prompt_prefix > 0) prefill_phase.includes = {"prompt_prefix_cache"};
     timing_phases.push_back(std::move(prefill_phase));
     timing_phases.push_back(PerformancePhase{
         "decode", "clozn_worker", decode_ns,
@@ -506,7 +537,8 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
             "stream_flush", "clozn_worker", event_delivery_ns, -1, "exclusive"});
     }
     emit(GenFinished{t > 0 ? t - 1 : 0, result.reason, result.new_tokens, wall_ms, t, tok_per_s,
-                     std::move(timing_phases), p, prompt_tok_per_s, tok_per_s});
+                     std::move(timing_phases), p, prompt_tok_per_s, tok_per_s,
+                     result.cached_prompt_tokens, result.evaluated_prompt_tokens});
     result.events = std::move(events);
     return result;
 }

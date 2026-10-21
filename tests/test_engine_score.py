@@ -34,7 +34,12 @@ def test_score_sends_prompt_text_and_continuation_ids(monkeypatch):
     monkeypatch.setattr(ec, "_post", lambda path, body: seen.update(path=path, body=body) or {"ok": True})
     ec.score(prompt="hello", continuation_ids=[1, 2, 3])
     assert seen["path"] == "/score"
-    assert seen["body"] == {"topk": 0, "prompt": "hello", "continuation_ids": [1, 2, 3]}
+    assert seen["body"] == {
+        "topk": 0,
+        "use_prefix_cache": True,
+        "prompt": "hello",
+        "continuation_ids": [1, 2, 3],
+    }
 
 
 def test_score_prompt_ids_take_precedence_over_prompt_text(monkeypatch):
@@ -70,6 +75,14 @@ def test_score_passes_topk(monkeypatch):
     monkeypatch.setattr(ec, "_post", lambda path, body: seen.update(path=path, body=body) or {})
     ec.score(prompt="p", continuation_ids=[1], topk=5)
     assert seen["body"]["topk"] == 5
+
+
+def test_score_can_force_the_cold_reference_path(monkeypatch):
+    seen = {}
+    ec = EngineClient(port=1)
+    monkeypatch.setattr(ec, "_post", lambda path, body: seen.update(path=path, body=body) or {})
+    ec.score(prompt="p", continuation_ids=[1], use_prefix_cache=False)
+    assert seen["body"]["use_prefix_cache"] is False
 
 
 def test_score_omits_steer_fields_when_not_given(monkeypatch):
@@ -151,6 +164,30 @@ def test_score_tokens_forwards_continuation_ids_as_ints_and_topk():
     sub.score_tokens([{"role": "user", "content": "hi"}], [1.0, 2.0, 3], block=None, topk=5)
     assert fe.calls[-1]["continuation_ids"] == [1, 2, 3]
     assert fe.calls[-1]["topk"] == 5
+
+
+def test_score_tokens_many_reports_aggregate_prefix_cache_work(monkeypatch):
+    monkeypatch.setenv("CLOZN_MINIMAL_CONTEXT_BATCH_WORKERS", "1")
+    fe = _FakeScoreEngine(reply={
+        "tokens": [{"id": 1, "piece": "x", "logprob": -0.1}],
+        "cache": {"matched_tokens": 90, "cached_tokens": 80, "evaluated_tokens": 20},
+        "numerical_regime": "scalar_prefix_cached_v1",
+    })
+    sub = _bare_engine_substrate(fe, steer=None)
+
+    result = sub.score_tokens_many([
+        {"messages": [{"role": "user", "content": "a"}], "continuation_ids": [1]},
+        {"messages": [{"role": "user", "content": "b"}], "continuation_ids": [1]},
+    ])
+
+    assert len(result["results"]) == 2
+    assert result["prompt_prefix_cache"] == {
+        "request_count": 2,
+        "cache_hit_count": 2,
+        "matched_tokens": 180,
+        "cached_tokens": 160,
+        "evaluated_tokens": 40,
+    }
 
 
 

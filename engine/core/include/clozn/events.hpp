@@ -100,6 +100,8 @@ struct GenFinished {
     int prompt_tokens = 0;
     double prompt_tok_per_s = -1.0;
     double decode_tok_per_s = -1.0;
+    int cached_prompt_tokens = 0;
+    int evaluated_prompt_tokens = 0;
 };
 
 // White-box feature tap (Tier 2): per-pass concept-feature activations on the active block. `features`

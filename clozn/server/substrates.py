@@ -74,6 +74,24 @@ class EngineSubstrate:
     score_tokens_many_proof_grade = True
 
     @property
+    def score_tokens_many_numerical_regime(self):
+        return (
+            "scalar_prefix_cached_v1"
+            if getattr(self, "_score_prefix_cache", False)
+            else "scalar_reference"
+        )
+
+    @property
+    def score_tokens_many_execution_identity(self):
+        if getattr(self, "_score_prefix_cache", False):
+            return {
+                "kind": "clozn.score-tokens-scalar-prefix-cache.v1",
+                "parity_contract": "bit_exact_float32_logprobs",
+                "cold_fallback": "use_prefix_cache=false",
+            }
+        return {"kind": "clozn.score-tokens-scalar-reference.v1"}
+
+    @property
     def score_tokens_many_execution_strategy(self):
         return "scalar_http_concurrent" if _minimal_context_batch_workers() > 1 else "scalar_serial"
 
@@ -102,6 +120,7 @@ class EngineSubstrate:
         self._identity_lock = threading.Lock()
         self._identity_last_attempt = 0.0
         self._native_reference_match_arms = False
+        self._score_prefix_cache = False
         self.last_native_reference_match_metrics = None
         self._request: RequestContext | None = None
         self._resolve_identity()
@@ -117,6 +136,9 @@ class EngineSubstrate:
             capabilities = (h or {}).get("capabilities") if isinstance(h, dict) else {}
             self._native_reference_match_arms = bool(
                 isinstance(capabilities, dict) and capabilities.get("reference_match_arms") is True
+            )
+            self._score_prefix_cache = bool(
+                isinstance(capabilities, dict) and capabilities.get("score_prefix_cache") is True
             )
             fam, _info = _engine_model_info((h or {}).get("model", ""))
             self._model_family_val = fam
@@ -268,6 +290,18 @@ class EngineSubstrate:
             return None, None
         return request.diverged, request.diverged_at
 
+    def _score_tokens_response(self, messages, continuation_ids=None, *, continuation=None,
+                               block=None, topk=0):
+        """Return the private worker's complete scalar scoring envelope."""
+        assembled = inject_block(messages, block)
+        prompt = ctx._engine_tmpl(self.engine, assembled)
+        kw = {}
+        if continuation_ids is not None:
+            kw["continuation_ids"] = [int(t) for t in continuation_ids]
+        elif continuation is not None:
+            kw["continuation"] = str(continuation)
+        return self.engine.score(prompt=prompt, topk=int(topk), **kw)
+
     def score_tokens(self, messages, continuation_ids=None, *, continuation=None, block=None, topk=0):
         """Teacher-forced per-token logprob under an explicit context block.
 
@@ -287,26 +321,46 @@ class EngineSubstrate:
         continuation token, in the SAME order as continuation_ids (or the engine's own retokenization
         of `continuation` text).
         """
-        assembled = inject_block(messages, block)
-        prompt = ctx._engine_tmpl(self.engine, assembled)
-        kw = {}
-        if continuation_ids is not None:
-            kw["continuation_ids"] = [int(t) for t in continuation_ids]
-        elif continuation is not None:
-            kw["continuation"] = str(continuation)
-        r = self.engine.score(prompt=prompt, topk=int(topk), **kw)
+        r = self._score_tokens_response(
+            messages, continuation_ids, continuation=continuation, block=block, topk=topk,
+        )
         return r.get("tokens", [])
 
     def score_tokens_many(self, arms, *, cancel=None):
         """Score arms through the trusted scalar worker route with bounded concurrency."""
         from clozn.experiments.multi_arm import concurrent_many, serial_many
 
+        def detailed(**arm):
+            response = self._score_tokens_response(**arm)
+            raw_cache = response.get("cache")
+            return {
+                "tokens": response.get("tokens", []),
+                "cache": dict(raw_cache) if isinstance(raw_cache, Mapping) else {},
+                "numerical_regime": response.get("numerical_regime"),
+            }
+
         workers = _minimal_context_batch_workers()
         if workers <= 1:
-            return serial_many(self.score_tokens, arms, cancel=cancel)
-        return concurrent_many(
-            self.score_tokens, arms, cancel=cancel, max_workers=workers,
-        )
+            rows = serial_many(detailed, arms, cancel=cancel)
+        else:
+            rows = concurrent_many(detailed, arms, cancel=cancel, max_workers=workers)
+
+        cache_rows = [row["cache"] for row in rows if isinstance(row.get("cache"), dict)]
+        valid_cache_rows = [row for row in cache_rows if all(
+            isinstance(row.get(field), int) and not isinstance(row.get(field), bool)
+            and row[field] >= 0
+            for field in ("matched_tokens", "cached_tokens", "evaluated_tokens")
+        )]
+        metadata = {}
+        if valid_cache_rows:
+            metadata["prompt_prefix_cache"] = {
+                "request_count": len(valid_cache_rows),
+                "cache_hit_count": sum(row["cached_tokens"] > 0 for row in valid_cache_rows),
+                "matched_tokens": sum(row["matched_tokens"] for row in valid_cache_rows),
+                "cached_tokens": sum(row["cached_tokens"] for row in valid_cache_rows),
+                "evaluated_tokens": sum(row["evaluated_tokens"] for row in valid_cache_rows),
+            }
+        return {"results": [row["tokens"] for row in rows], **metadata}
     def probe_reference_match(self, messages, reference_token_ids, *, generation_contract,
                               explicit_conditions=None):
         """Run one non-journaling exact recorded-answer probe.

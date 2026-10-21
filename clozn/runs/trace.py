@@ -346,6 +346,8 @@ def generation_timing_from_frames(frames) -> dict:
             if isinstance(worker_metrics, dict):
                 prompt_rate = worker_metrics.get("prompt_tokens_per_second")
                 decode_rate = worker_metrics.get("decode_tokens_per_second")
+                cached_prompt_tokens = worker_metrics.get("cached_prompt_tokens")
+                evaluated_prompt_tokens = worker_metrics.get("evaluated_prompt_tokens")
                 if (
                     isinstance(prompt_rate, (int, float)) and not isinstance(prompt_rate, bool)
                     and math.isfinite(float(prompt_rate)) and prompt_rate >= 0
@@ -356,6 +358,18 @@ def generation_timing_from_frames(frames) -> dict:
                     and math.isfinite(float(decode_rate)) and decode_rate >= 0
                 ):
                     timing["generation_tokens_per_second"] = decode_rate
+                if (
+                    isinstance(cached_prompt_tokens, int)
+                    and not isinstance(cached_prompt_tokens, bool)
+                    and cached_prompt_tokens >= 0
+                ):
+                    timing["cached_prompt_tokens"] = cached_prompt_tokens
+                if (
+                    isinstance(evaluated_prompt_tokens, int)
+                    and not isinstance(evaluated_prompt_tokens, bool)
+                    and evaluated_prompt_tokens >= 0
+                ):
+                    timing["evaluated_prompt_tokens"] = evaluated_prompt_tokens
         new_tokens = obj.get("new_tokens")
         steps_total = obj.get("steps_total")
         if isinstance(new_tokens, int) and not isinstance(new_tokens, bool) and new_tokens >= 0:
