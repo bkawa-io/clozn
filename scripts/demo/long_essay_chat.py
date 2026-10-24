@@ -107,12 +107,12 @@ def _request(base_url: str, method: str, path: str, body: dict | None = None,
 
 
 def _stream_turn(base_url: str, model: str, messages: list[dict], *, turn: int,
-                 max_tokens: int, timeout: float) -> tuple[str, dict]:
+                 max_tokens: int, temperature: float, timeout: float) -> tuple[str, dict]:
     body = {
         "model": model,
         "messages": messages,
         "max_tokens": max_tokens,
-        "temperature": 0.7,
+        "temperature": temperature,
         "top_p": 0.9,
         "top_k": 40,
         "repeat_penalty": 1.08,
@@ -283,6 +283,7 @@ def main() -> int:
     parser.add_argument("--base-url", default="http://127.0.0.1:8080")
     parser.add_argument("--model", default=None)
     parser.add_argument("--timeout", type=float, default=1800.0)
+    parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--analyze", action="store_true")
     parser.add_argument("--output", type=Path)
     parser.add_argument(
@@ -325,7 +326,7 @@ def main() -> int:
         max_tokens = 128 if index == len(TURNS) else 240
         assistant_text, metrics = _stream_turn(
             args.base_url, args.model, messages, turn=index,
-            max_tokens=max_tokens, timeout=args.timeout,
+            max_tokens=max_tokens, temperature=args.temperature, timeout=args.timeout,
         )
         messages.append({"role": "assistant", "content": assistant_text})
         transcript.append({"turn": index, "user": user_text, "assistant": assistant_text})
@@ -341,6 +342,7 @@ def main() -> int:
     report = {
         "schema": "clozn.long-essay-chat-qualification.v1",
         "model": args.model,
+        "temperature": args.temperature,
         "turn_count": len(TURNS),
         "final_run_id": final_run_id,
         "turns": turns,

@@ -315,6 +315,7 @@ public:
     long long last_prefill_logical_rows() const { return last_prefill_logical_rows_; }
     long long last_prefill_physical_rows() const { return last_prefill_physical_rows_; }
     long long last_prefill_reused_rows() const { return last_prefill_reused_rows_; }
+    int last_score_cached_tokens() const { return last_score_cached_tokens_; }
 
     // White-box activation tap (Tier 2): when on, forward() fills ForwardResult.activations with the
     // per-position hidden state (llama_get_embeddings_ith) for the active block. Default off => empty
@@ -546,7 +547,7 @@ public:
     // (generate_ar with resume_from) needs it for the one-token bridge decode: evict the last
     // saved position, re-decode its token there to recover the sampling row the blob doesn't
     // carry. Well-defined at any time; positions below `pos` are untouched.
-    void evict_from(int pos);
+    bool evict_from(int pos);
 
 private:
     // Decode board[from, to) at absolute positions [from, to), reusing whatever KV currently
@@ -650,6 +651,7 @@ private:
     long long last_prefill_logical_rows_ = 0;
     long long last_prefill_physical_rows_ = 0;
     long long last_prefill_reused_rows_ = 0;
+    int last_score_cached_tokens_ = 0;
     // Each chain owns a target-probability sampler. target_logprob_states_ aliases the sampler
     // contexts so the requested token can be updated between continuation steps.
     std::vector<llama_sampler*> target_logprob_chains_;

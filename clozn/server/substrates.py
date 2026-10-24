@@ -775,6 +775,11 @@ class EngineSubstrate:
                 except Exception:
                     continue
                 frames.append(obj)
+                worker_error = obj.get("error")
+                if worker_error:
+                    if isinstance(worker_error, dict):
+                        worker_error = worker_error.get("message") or json.dumps(worker_error)
+                    raise RuntimeError(f"engine stream failed: {worker_error}")
                 if req.engine_req is None:
                     # StreamEnvelope (server_shared.hpp) stamps `req` on EVERY frame of this stream, so
                     # the first one parsed already carries it -- capture once here rather than waiting

@@ -39,7 +39,8 @@ bool ChatTemplateRenderer::available() const noexcept {
 
 std::string ChatTemplateRenderer::apply(
     const std::vector<std::pair<std::string, std::string>>& messages,
-    bool add_assistant) const {
+    bool add_assistant,
+    bool enable_thinking) const {
     if (!available()) {
         throw std::runtime_error("model has no embedded chat template");
     }
@@ -49,6 +50,7 @@ std::string ChatTemplateRenderer::apply(
         inputs.messages.push_back(common_chat_msg{message.first, message.second});
     }
     inputs.add_generation_prompt = add_assistant;
+    inputs.enable_thinking = enable_thinking;
     inputs.use_jinja = true;
     return common_chat_templates_apply(impl_->templates.get(), inputs).prompt;
 }

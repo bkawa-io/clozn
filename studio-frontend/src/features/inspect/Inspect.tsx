@@ -34,6 +34,7 @@ import {
 import {
   codePointLength,
   isValidCodePointRange,
+  semanticTextRanges,
   segmentAnnotatedText,
   sliceCodePoints,
   type AnnotatedTextSegment,
@@ -56,6 +57,18 @@ type InvestigationView = "links" | "efficiency" | "lean";
 
 interface ActiveRange extends CodePointRange {
   key: string;
+}
+
+interface AnswerHeat {
+  support: number;
+  suppression: number;
+  total: number;
+  direction: EvidenceDirection;
+}
+
+interface AnswerHeatCeilings {
+  support: number;
+  suppression: number;
 }
 
 interface RelationshipGeometry {
@@ -164,6 +177,72 @@ function rangesIntersect(left: CodePointRange, right: CodePointRange): boolean {
   return left.start < right.end && right.start < left.end;
 }
 
+function semanticRangeFor(
+  ranges: readonly CodePointRange[],
+  target: CodePointRange,
+): ActiveRange {
+  const selected = ranges
+    .filter((range) => rangesIntersect(range, target))
+    .sort((left, right) => {
+      const leftOverlap = Math.min(left.end, target.end) - Math.max(left.start, target.start);
+      const rightOverlap = Math.min(right.end, target.end) - Math.max(right.start, target.start);
+      return rightOverlap - leftOverlap || left.start - right.start;
+    })[0] ?? target;
+  return { ...selected, key: rangeKey(selected) };
+}
+
+function locusInfluenceInRange(
+  locus: ContextInvestigationLocus,
+  answerTokens: readonly { unicodeRange: UnicodeRange }[],
+  range: CodePointRange,
+): number {
+  return locus.perTokenDeltaNats.reduce((sum, delta, offset) => {
+    const token = answerTokens[locus.answerTokenRange[0] + offset];
+    return token && rangesIntersect(tupleRange(token.unicodeRange), range)
+      ? sum + Math.abs(delta)
+      : sum;
+  }, 0);
+}
+
+function locusDeltaInRange(
+  locus: ContextInvestigationLocus,
+  answerTokens: readonly { unicodeRange: UnicodeRange }[],
+  range: CodePointRange,
+): number {
+  return locus.perTokenDeltaNats.reduce((sum, delta, offset) => {
+    const token = answerTokens[locus.answerTokenRange[0] + offset];
+    return token && rangesIntersect(tupleRange(token.unicodeRange), range) ? sum + delta : sum;
+  }, 0);
+}
+
+function answerHeatForRange(
+  loci: readonly ContextInvestigationLocus[],
+  answerTokens: readonly { unicodeRange: UnicodeRange }[],
+  range: CodePointRange,
+): AnswerHeat {
+  let support = 0;
+  let suppression = 0;
+  for (const locus of loci) {
+    const delta = locusDeltaInRange(locus, answerTokens, range);
+    if (delta > 0) support += delta;
+    else suppression += Math.abs(delta);
+  }
+  return {
+    support,
+    suppression,
+    total: support + suppression,
+    direction: support > 0 && suppression > 0
+      ? "mixed"
+      : support > 0 ? "support" : suppression > 0 ? "suppression" : "mixed",
+  };
+}
+
+function robustCeiling(values: readonly number[]): number {
+  const positive = values.filter((value) => value > 0).sort((left, right) => left - right);
+  if (!positive.length) return 0;
+  return positive[Math.max(0, Math.ceil(positive.length * .9) - 1)];
+}
+
 function statusLabel(status: ReaderStatus): string {
   switch (status) {
     case "completed": return "Measured";
@@ -226,8 +305,21 @@ function heatDirection(value: number): EvidenceDirection {
 }
 
 function heatStyle(intensity: number): CSSProperties {
-  const normalized = Math.max(0, Math.min(1, intensity));
-  return { "--heat-alpha": `${Math.round(5 + normalized * 25)}%` } as CSSProperties;
+  const normalized = Math.sqrt(Math.max(0, Math.min(1, intensity)));
+  return { "--heat-alpha": `${Math.round(7 + normalized * 35)}%` } as CSSProperties;
+}
+
+function answerHeatStyle(heat: AnswerHeat, ceilings: AnswerHeatCeilings): CSSProperties {
+  const alpha = (value: number, ceiling: number) => value <= 0
+    ? "0%"
+    : `${Math.round(7 + Math.sqrt(Math.min(1, value / Math.max(ceiling, 1e-9))) * 35)}%`;
+  const supportAlpha = alpha(heat.support, ceilings.support);
+  const suppressionAlpha = alpha(heat.suppression, ceilings.suppression);
+  return {
+    "--heat-alpha": heat.direction === "suppression" ? suppressionAlpha : supportAlpha,
+    "--heat-support-alpha": supportAlpha,
+    "--heat-suppression-alpha": suppressionAlpha,
+  } as CSSProperties;
 }
 
 function sourceRecordedText(
@@ -725,7 +817,7 @@ function AnswerPane({
   lockedRange,
   lockedRelationshipCount,
   expanded,
-  maxInfluence,
+  heatCeilings,
   onPreview,
   onLock,
   onClear,
@@ -738,7 +830,7 @@ function AnswerPane({
   lockedRange?: ActiveRange;
   lockedRelationshipCount?: number;
   expanded: boolean;
-  maxInfluence: number;
+  heatCeilings: AnswerHeatCeilings;
   onPreview: (range?: ActiveRange) => void;
   onLock: (range: ActiveRange) => void;
   onClear: () => void;
@@ -767,6 +859,7 @@ function AnswerPane({
     () => new Map(reader.loci.map((locus) => [locus.locusId, locus])),
     [reader.loci],
   );
+  const answerTokens = reader.answer.status === "available" ? reader.answer.tokens : [];
   const focusAt = (index: number) => {
     const next = interactive[Math.max(0, Math.min(interactive.length - 1, index))];
     if (next) {
@@ -833,7 +926,7 @@ function AnswerPane({
                 const locus = locusById.get(id);
                 return locus ? [locus] : [];
               });
-              const segmentInfluence = segmentLoci.reduce((sum, locus) => sum + locus.absoluteDeltaNats, 0);
+              const heat = answerHeatForRange(segmentLoci, answerTokens, range);
               return (
                 <span
                   key={range.key}
@@ -844,22 +937,22 @@ function AnswerPane({
                   className={`answer-segment${measured ? " has-measurement" : ""}${active ? " is-active" : ""}${locked ? " is-locked" : ""}`}
                   data-answer-start={segment.start}
                   data-answer-end={segment.end}
-                  data-direction={expanded && segmentLoci.length ? directionForLoci(segmentLoci) : undefined}
+                  data-direction={expanded && heat.total ? heat.direction : undefined}
                   data-heat={expanded && segmentLoci.length ? "true" : undefined}
-                  style={expanded && segmentLoci.length
-                    ? heatStyle(segmentInfluence / Math.max(maxInfluence, 1e-9))
+                  style={expanded && heat.total
+                    ? answerHeatStyle(heat, heatCeilings)
                     : undefined}
                   role={measured ? "button" : undefined}
                   tabIndex={measured ? (range.key === effectiveRovingKey ? 0 : -1) : undefined}
                   aria-pressed={measured ? Boolean(locked) : undefined}
                   aria-label={measured ? `${segment.text}; ${plural(announcedCount, relationshipNoun)}` : undefined}
-                  onMouseEnter={measured && !lockedRange ? () => onPreview(range) : undefined}
-                  onMouseLeave={measured && !lockedRange ? () => onPreview(undefined) : undefined}
+                  onMouseEnter={measured && (expanded || !lockedRange) ? () => onPreview(range) : undefined}
+                  onMouseLeave={measured && (expanded || !lockedRange) ? () => onPreview(undefined) : undefined}
                   onFocus={measured ? () => {
                     setRovingKey(range.key);
-                    if (!lockedRange) onPreview(range);
+                    if (expanded || !lockedRange) onPreview(range);
                   } : undefined}
-                  onBlur={measured && !lockedRange ? () => onPreview(undefined) : undefined}
+                  onBlur={measured && (expanded || !lockedRange) ? () => onPreview(undefined) : undefined}
                   onClick={measured ? () => onLock(range) : undefined}
                   onKeyDown={measured ? (event) => handleKey(event, segment, index) : undefined}
                 >{segment.text}</span>
@@ -1135,30 +1228,44 @@ function HeatmapPeek({
     () => new Map(reader.sources.map((source) => [source.sourceId, source])),
     [reader.sources],
   );
-  const loci = useMemo(() => {
+  const links = useMemo(() => {
+    let loci: ContextInvestigationLocus[] = [];
     if (pane === "context" && sourceId) {
-      return reader.loci
-        .filter((locus) => locus.sourceId === sourceId)
-        .sort((left, right) => right.absoluteDeltaNats - left.absoluteDeltaNats);
+      loci = reader.loci.filter((locus) => locus.sourceId === sourceId);
+    } else if (pane === "answer" && range) {
+      loci = reader.loci.filter((locus) => rangesIntersect(range, tupleRange(locus.answerUnicodeRange)));
     }
-    if (pane === "answer" && range) {
-      return reader.loci
-        .filter((locus) => rangesIntersect(range, tupleRange(locus.answerUnicodeRange)))
-        .sort((left, right) => right.absoluteDeltaNats - left.absoluteDeltaNats);
-    }
-    return [];
-  }, [pane, range, reader.loci, sourceId]);
+    return loci.map((locus) => ({
+      locus,
+      delta: pane === "answer" && range && reader.answer.status === "available"
+        ? locusDeltaInRange(locus, reader.answer.tokens, range)
+        : locus.deltaNats,
+    })).filter((item) => item.delta !== 0)
+      .sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta));
+  }, [pane, range, reader.answer, reader.loci, sourceId]);
   const source = sourceId ? sourceById.get(sourceId) : undefined;
+  const support = links.reduce((total, item) => item.delta > 0 ? total + item.delta : total, 0);
+  const suppression = links.reduce((total, item) => item.delta < 0 ? total + Math.abs(item.delta) : total, 0);
+  const linkedSourceCount = new Set(links.map((item) => item.locus.sourceId)).size;
+  const key = (
+    <header className="heatmap-key">
+      <span className="eyebrow">Heatmap</span>
+      <span className="heatmap-key-item direction-support"><i />Support</span>
+      <span className="heatmap-key-item direction-suppression"><i />Suppression</span>
+      <span className="heatmap-key-intensity"><i />Lower <b /> Higher |Δ|</span>
+    </header>
+  );
   if (!source && !range) {
     return (
-      <aside className="heatmap-peek" aria-live="polite">
-        <span className="eyebrow">Heatmap</span>
-        <p>Hover highlighted text to preview its strongest links. Click to pin the evidence.</p>
+      <aside className="heatmap-peek is-empty" aria-live="polite">
+        {key}
+        <p>Hover or focus highlighted text to preview its corresponding text. Click to pin the selection.</p>
       </aside>
     );
   }
   return (
     <aside className="heatmap-peek" aria-live="polite">
+      {key}
       <div>
         <span className="eyebrow">{pane === "context" ? "Context span" : "Answer span"}</span>
         <p>{source
@@ -1166,17 +1273,23 @@ function HeatmapPeek({
           : reader.answer.status === "available" && range
             ? excerpt(sliceCodePoints(reader.answer.text, range.start, range.end), 180)
             : "Selection unavailable"}</p>
+        <div className="heatmap-totals" aria-label={`${support.toFixed(2)} support delta nats, ${suppression.toFixed(2)} suppression delta nats, ${linkedSourceCount} linked sources`}>
+          <span className="direction-support">+{support.toFixed(2)} support</span>
+          <span className="direction-suppression">−{suppression.toFixed(2)} suppression</span>
+          <span>{plural(linkedSourceCount, "linked source")}</span>
+        </div>
       </div>
       <div>
-        <span className="eyebrow">Linked text</span>
-        {loci.length ? (
+        <span className="eyebrow">Corresponding text</span>
+        {links.length ? (
           <ul>
-            {loci.slice(0, 3).map((locus) => {
+            {links.slice(0, 3).map(({ locus, delta }) => {
               const linkedSource = sourceById.get(locus.sourceId);
+              const direction = delta > 0 ? "support" : "suppression";
               return (
                 <li key={locus.locusId}>
-                  <span className={`evidence-state direction-${locus.direction}`}>{directionLabel(locus.direction)}</span>
-                  <strong>{locus.deltaNats > 0 ? "+" : ""}{locus.deltaNats.toFixed(2)} Δ</strong>
+                  <span className={`evidence-state direction-${direction}`}>{directionLabel(direction)}</span>
+                  <strong>{delta > 0 ? "+" : ""}{delta.toFixed(2)} Δ</strong>
                   <span>{pane === "context"
                     ? excerpt(locus.answerText, 110)
                     : excerpt(linkedSource ? sourceRecordedText(reader, linkedSource) : locus.sourceId, 110)}</span>
@@ -1205,6 +1318,10 @@ function InspectReader({
   const answerRef = useRef<HTMLElement>(null);
   const mapRef = useRef<HTMLDivElement>(null);
   const answer = reader.answer.status === "available" ? reader.answer : undefined;
+  const answerPhraseRanges = useMemo(
+    () => answer ? semanticTextRanges(answer.text) : [],
+    [answer],
+  );
   const lockedRange = useMemo<ActiveRange | undefined>(() => {
     if (!answer || route.answerStart === undefined || route.answerEnd === undefined) return undefined;
     const range = { start: route.answerStart, end: route.answerEnd };
@@ -1212,35 +1329,49 @@ function InspectReader({
       ? { ...range, key: rangeKey(range) }
       : undefined;
   }, [answer, route.answerEnd, route.answerStart]);
-  const activeRange = lockedRange ?? hoveredRange;
+  const previewingExpanded = Boolean(expandedPane && (hoveredRange || hoveredSourceId));
+  const activeRange = previewingExpanded ? hoveredRange : lockedRange ?? hoveredRange;
   const maxSourceInfluence = useMemo(
-    () => Math.max(0, ...reader.sources.map(sourceInfluence)),
+    () => robustCeiling(reader.sources.map(sourceInfluence)),
     [reader.sources],
   );
-  const maxAnswerInfluence = useMemo(() => {
-    const totals = new Map<string, number>();
-    for (const locus of reader.loci) {
-      const key = `${locus.answerUnicodeRange[0]}:${locus.answerUnicodeRange[1]}`;
-      totals.set(key, (totals.get(key) ?? 0) + locus.absoluteDeltaNats);
-    }
-    return Math.max(0, ...totals.values());
-  }, [reader.loci]);
 
   const answerSegments = useMemo(() => {
     if (!answer) return [];
-    const annotations = reader.loci.map((locus) => ({
-      id: locus.locusId,
-      start: locus.answerUnicodeRange[0],
-      end: locus.answerUnicodeRange[1],
-    }));
+    const exact = expandedPane === "answer";
+    const annotations = reader.loci.flatMap((locus) => {
+      const locusRange = tupleRange(locus.answerUnicodeRange);
+      const ranges = exact
+        ? [locusRange]
+        : answerPhraseRanges.filter((range) => rangesIntersect(range, locusRange));
+      return ranges.map((range) => ({ id: locus.locusId, ...range }));
+    });
     if (lockedRange && !annotations.some((item) => item.start === lockedRange.start && item.end === lockedRange.end)) {
-      annotations.push({ id: "locked-selection", start: lockedRange.start, end: lockedRange.end });
+      const ranges = exact
+        ? [lockedRange]
+        : answerPhraseRanges.filter((range) => rangesIntersect(range, lockedRange));
+      annotations.push(...ranges.map((range) => ({ id: "locked-selection", ...range })));
     }
     return segmentAnnotatedText(answer.text, annotations).map((segment) => ({
       ...segment,
       annotationIds: segment.annotationIds.filter((id) => id !== "locked-selection"),
     }));
-  }, [answer, lockedRange, reader.loci]);
+  }, [answer, answerPhraseRanges, expandedPane, lockedRange, reader.loci]);
+  const answerHeatCeilings = useMemo<AnswerHeatCeilings>(() => {
+    if (!answer) return { support: 0, suppression: 0 };
+    const locusById = new Map(reader.loci.map((locus) => [locus.locusId, locus]));
+    const heats = answerSegments.flatMap((segment) => {
+      const loci = segment.annotationIds.flatMap((id) => {
+        const locus = locusById.get(id);
+        return locus ? [locus] : [];
+      });
+      return loci.length ? [answerHeatForRange(loci, answer.tokens, segment)] : [];
+    });
+    return {
+      support: robustCeiling(heats.map((heat) => heat.support)),
+      suppression: robustCeiling(heats.map((heat) => heat.suppression)),
+    };
+  }, [answer, answerSegments, reader.loci]);
 
   const queryLoader = useMemo(() => lockedRange && reader.capabilities.contextEffects === "measurable"
     ? (signal: AbortSignal) => contextInvestigationApi.query(route.runId, {
@@ -1282,9 +1413,9 @@ function InspectReader({
       return [source.sourceId, excerpt(source.label?.trim() || recordedText || source.sourceId)];
     }));
   }, [reader.context.blocks, reader.sources]);
-  const queryAboveFloorEffects = useMemo(() => lockedRange && query.phase === "ready"
+  const queryAboveFloorEffects = useMemo(() => lockedRange && !previewingExpanded && query.phase === "ready"
     ? query.value.effects.filter(isAboveFloorEffect)
-    : undefined, [lockedRange, query]);
+    : undefined, [lockedRange, previewingExpanded, query]);
   const activeSourceIds = useMemo(() => [...new Set(
     (queryAboveFloorEffects ?? activeLoci).map((item) => item.sourceId),
   )].filter((sourceId) => sourceById.has(sourceId)).sort((left, right) => {
@@ -1362,26 +1493,22 @@ function InspectReader({
 
   const previewContextSource = useCallback((sourceId?: string) => {
     setHoveredSourceId(sourceId);
-    if (lockedRange) return;
     const locus = sourceId ? strongestLocusForSource(reader, sourceId) : undefined;
-    setHoveredRange(locus ? {
-      start: locus.answerUnicodeRange[0],
-      end: locus.answerUnicodeRange[1],
-      key: `${locus.answerUnicodeRange[0]}:${locus.answerUnicodeRange[1]}`,
-    } : undefined);
-  }, [lockedRange, reader]);
+    setHoveredRange(locus
+      ? semanticRangeFor(answerPhraseRanges, tupleRange(locus.answerUnicodeRange))
+      : undefined);
+  }, [answerPhraseRanges, reader]);
 
   const lockContextSource = useCallback((sourceId: string) => {
     const locus = strongestLocusForSource(reader, sourceId);
     if (!locus) return;
     setHoveredSourceId(undefined);
     setHoveredRange(undefined);
-    setCoordinate({
-      start: locus.answerUnicodeRange[0],
-      end: locus.answerUnicodeRange[1],
-      key: `${locus.answerUnicodeRange[0]}:${locus.answerUnicodeRange[1]}`,
-    }, sourceId);
-  }, [reader, setCoordinate]);
+    setCoordinate(
+      semanticRangeFor(answerPhraseRanges, tupleRange(locus.answerUnicodeRange)),
+      sourceId,
+    );
+  }, [answerPhraseRanges, reader, setCoordinate]);
 
   useEffect(() => {
     if (!focusedSourceId || !contextRef.current) return;
@@ -1489,9 +1616,11 @@ function InspectReader({
             segments={answerSegments}
             activeRange={activeRange}
             lockedRange={lockedRange}
-            lockedRelationshipCount={lockedRange && query.phase === "ready" ? activeSourceIds.length : undefined}
+            lockedRelationshipCount={lockedRange && query.phase === "ready"
+              ? query.value.effects.filter(isAboveFloorEffect).length
+              : undefined}
             expanded={expandedPane === "answer"}
-            maxInfluence={maxAnswerInfluence}
+            heatCeilings={answerHeatCeilings}
             onPreview={(range) => {
               setHoveredSourceId(undefined);
               setHoveredRange(range);
@@ -1516,15 +1645,15 @@ function InspectReader({
             )}
           </div>
         </div>
+        {expandedPane && (
+          <HeatmapPeek
+            reader={reader}
+            pane={expandedPane}
+            sourceId={expandedPane === "context" ? hoveredSourceId ?? focusedSourceId : undefined}
+            range={expandedPane === "answer" ? activeRange : undefined}
+          />
+        )}
       </div>
-      {expandedPane && (
-        <HeatmapPeek
-          reader={reader}
-          pane={expandedPane}
-          sourceId={expandedPane === "context" ? hoveredSourceId ?? focusedSourceId : undefined}
-          range={expandedPane === "answer" ? activeRange : undefined}
-        />
-      )}
       {route.answerStart !== undefined && !lockedRange && (
         <p className="selection-unavailable" role="status">Selection unavailable.</p>
       )}
@@ -1650,6 +1779,7 @@ function EffectsPanel({
   };
 
   const active = Boolean(job && !isTerminalContextEffectsJob(job));
+  const progressPending = Boolean(active && job?.progress.completedUnits === 0);
   return (
     <section className="effects-search-panel" aria-label="Context measurement">
       <div className="effects-search-copy">
@@ -1671,8 +1801,13 @@ function EffectsPanel({
       {job && (
         <div className={`effects-search-progress state-${job.state}`} role="status" aria-live="polite">
           <span>{job.state === "completed" ? "Completed" : job.state === "failed" ? "Failed" : job.state === "cancelled" ? "Cancelled" : phaseLabel(job.progress.phase)}</span>
-          <strong>{job.progress.percent.toFixed(0)}%</strong>
-          {!isTerminalContextEffectsJob(job) && <progress max="100" value={job.progress.percent} />}
+          <strong>{progressPending ? "Working…" : `${job.progress.percent.toFixed(0)}%`}</strong>
+          {!isTerminalContextEffectsJob(job) && (
+            progressPending ? <progress max="100" /> : <progress max="100" value={job.progress.percent} />
+          )}
+          {progressPending && (
+            <small>Local scoring can take several minutes. Progress updates when the current model batch finishes.</small>
+          )}
           {job.result && (
             <small>
               {job.result.completedSourceCount} measured · {job.result.unavailableSourceCount} unavailable · {job.result.failedSourceCount} failed · {job.result.notMeasuredSourceCount} not measured
@@ -1713,6 +1848,11 @@ function EfficiencyOverview({
   onOpenSource: (sourceId: string, range: ActiveRange) => void;
   onOpenAnswer: (range: ActiveRange) => void;
 }) {
+  const answer = reader.answer.status === "available" ? reader.answer : undefined;
+  const answerPhraseRanges = useMemo(
+    () => answer ? semanticTextRanges(answer.text) : [],
+    [answer],
+  );
   const contextRows = useMemo(() => reader.sources
     .filter((source) => source.measurement.status === "measured")
     .map((source) => ({
@@ -1723,29 +1863,34 @@ function EfficiencyOverview({
     }))
     .sort((left, right) => right.influence - left.influence), [reader]);
   const answerRows = useMemo(() => {
-    const grouped = new Map<string, ContextInvestigationLocus[]>();
+    if (!answer) return [];
+    const grouped = new Map<string, { range: CodePointRange; loci: ContextInvestigationLocus[] }>();
     for (const locus of reader.loci) {
-      const key = `${locus.answerUnicodeRange[0]}:${locus.answerUnicodeRange[1]}`;
-      const current = grouped.get(key) ?? [];
-      current.push(locus);
-      grouped.set(key, current);
+      const locusRange = tupleRange(locus.answerUnicodeRange);
+      for (const range of answerPhraseRanges.filter((item) => rangesIntersect(item, locusRange))) {
+        const key = rangeKey(range);
+        const current = grouped.get(key) ?? { range, loci: [] };
+        current.loci.push(locus);
+        grouped.set(key, current);
+      }
     }
-    return [...grouped.values()].map<AnswerInfluenceRow>((loci) => {
-      const [first] = loci;
+    return [...grouped.values()].map<AnswerInfluenceRow>(({ range: groupedRange, loci }) => {
       const range = {
-        start: first.answerUnicodeRange[0],
-        end: first.answerUnicodeRange[1],
-        key: `${first.answerUnicodeRange[0]}:${first.answerUnicodeRange[1]}`,
+        ...groupedRange,
+        key: rangeKey(groupedRange),
       };
       return {
         range,
-        text: first.answerText,
-        influence: loci.reduce((sum, locus) => sum + locus.absoluteDeltaNats, 0),
+        text: sliceCodePoints(answer.text, range.start, range.end),
+        influence: loci.reduce(
+          (sum, locus) => sum + locusInfluenceInRange(locus, answer.tokens, range),
+          0,
+        ),
         direction: directionForLoci(loci),
         sourceCount: new Set(loci.map((locus) => locus.sourceId)).size,
       };
     }).sort((left, right) => right.influence - left.influence);
-  }, [reader.loci]);
+  }, [answer, answerPhraseRanges, reader.loci]);
   const maxContext = contextRows[0]?.influence ?? 0;
   const maxAnswer = answerRows[0]?.influence ?? 0;
   const contextHighlights = contextRows.length > 1
@@ -1778,11 +1923,10 @@ function EfficiencyOverview({
                     disabled={!row.locus}
                     onClick={() => {
                       if (!row.locus) return;
-                      onOpenSource(row.source.sourceId, {
-                        start: row.locus.answerUnicodeRange[0],
-                        end: row.locus.answerUnicodeRange[1],
-                        key: `${row.locus.answerUnicodeRange[0]}:${row.locus.answerUnicodeRange[1]}`,
-                      });
+                      onOpenSource(
+                        row.source.sourceId,
+                        semanticRangeFor(answerPhraseRanges, tupleRange(row.locus.answerUnicodeRange)),
+                      );
                     }}
                   >
                     <span className="ranking-copy">
@@ -1914,6 +2058,7 @@ function LeanContextPanel({
     return source ? [source] : [];
   }) ?? [];
   const active = Boolean(job && !isTerminalLeanContextJob(job));
+  const progressPending = Boolean(active && job?.progress.completedUnits === 0);
   return (
     <section className="lean-context-panel" aria-labelledby="lean-context-heading">
       <header className="overview-heading">
@@ -1921,7 +2066,7 @@ function LeanContextPanel({
           <span className="eyebrow">Bounded search</span>
           <h2 id="lean-context-heading">Lean Context</h2>
         </div>
-        <p>Searches for a leaner context within a 16-execution budget while the recorded answer stays inside the balanced loss tolerance.</p>
+        <p>Searches for a leaner context using up to 16 new model executions while the recorded answer stays inside the balanced loss tolerance. Compatible prior measurements are reused without using that budget.</p>
       </header>
       <div className="lean-controls">
         <div className="lean-tolerance">
@@ -1942,8 +2087,13 @@ function LeanContextPanel({
       {job && (
         <div className={`lean-progress state-${job.state}`} role="status" aria-live="polite">
           <span>{job.state === "completed" ? "Search complete" : job.state === "failed" ? "Search failed" : job.state === "cancelled" ? "Search cancelled" : phaseLabel(job.progress.phase)}</span>
-          <strong>{job.progress.percent.toFixed(0)}%</strong>
-          {!isTerminalLeanContextJob(job) && <progress max="100" value={job.progress.percent} />}
+          <strong>{progressPending ? "Working…" : `${job.progress.percent.toFixed(0)}%`}</strong>
+          {!isTerminalLeanContextJob(job) && (
+            progressPending ? <progress max="100" /> : <progress max="100" value={job.progress.percent} />
+          )}
+          {progressPending && (
+            <small>Existing measurements are reused first. New model work reports after the current search batch finishes.</small>
+          )}
           {job.error && <small className="is-failed">{job.error.message}</small>}
         </div>
       )}
@@ -1992,7 +2142,7 @@ function LeanContextPanel({
       {result && result.status !== "completed" && (
         <p className="lean-unavailable">{result.reason ?? "Lean Context is unavailable for this run."}</p>
       )}
-      {!job && <p className="lean-empty">Run this after Context Effects to reuse its single-source measurements and spend the remaining budget on combined removals.</p>}
+      {!job && <p className="lean-empty">Run this after Context Effects to reuse compatible single-source measurements, then spend up to 16 new executions on combined removals.</p>}
       {error && (
         <p className="effects-search-error" role="alert">
           <span>{error}</span>

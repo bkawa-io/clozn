@@ -53,8 +53,9 @@ Every successful generation is durably recorded. Non-streaming replies add `cloz
 and `X-Clozn-Run-Id` to headers. A live stream cannot know its ID before headers are sent, so its terminal
 chunk carries `clozn_run_id`. A recording failure is an upstream error, not a successful unsaved reply.
 
-Model-emitted `<think>` blocks are removed from public answer/history content and token traces. Their
-local reasoning evidence remains separate in the run journal.
+The text-only endpoint asks model templates for ordinary answer mode rather than optional extended
+thinking. If a model emits `<think>` blocks anyway, they are removed from public answer/history content
+and token traces; their local reasoning evidence remains separate in the run journal.
 
 ## Coverage
 

@@ -343,6 +343,7 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
     ForwardResult fwd;
     int n_past;
     int evaluated_prompt_tokens = p;
+    bool prompt_prefix_reused = false;
     if (resume_from != nullptr) {
         adapter.load_checkpoint(*resume_from);
         const int np = p;  // == resume_truncate_to when set, else resume_from->n_past (unchanged)
@@ -354,12 +355,20 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
         // A reused KV prefix carries no logits row. If the whole prompt matches, re-decode only its
         // final token (the same bridge used by checkpoint resume). Otherwise preserve [0, prefix)
         // and decode only the newly appended/changed suffix.
-        adapter.evict_from(prefix_plan.decode_from);
-        fwd = adapter.ar_forward(
-            std::vector<int>(prompt_ids.begin() + prefix_plan.decode_from, prompt_ids.begin() + p),
-            prefix_plan.decode_from);
+        if (adapter.evict_from(prefix_plan.decode_from)) {
+            fwd = adapter.ar_forward(
+                std::vector<int>(prompt_ids.begin() + prefix_plan.decode_from, prompt_ids.begin() + p),
+                prefix_plan.decode_from);
+            evaluated_prompt_tokens = prefix_plan.evaluated_tokens;
+            prompt_prefix_reused = true;
+        } else {
+            // Qwen3.5 and other hybrid/recurrent caches cannot roll back arbitrary history unless
+            // llama.cpp was configured with enough recurrent snapshots. Preserve correctness by
+            // reprefilling from a clean cache; prefix reuse remains an optimization, never a contract.
+            adapter.set_causal(true);
+            fwd = adapter.ar_forward(prompt_ids, base);
+        }
         n_past = p;
-        evaluated_prompt_tokens = prefix_plan.evaluated_tokens;
     } else {
         fwd = adapter.ar_forward(prompt_ids, base);
         n_past = base + p;
@@ -508,7 +517,7 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
     result.diverged_at = diverged_at;  // generation index of the first divergent token (-1 if none)
     result.resident_tokens.assign(seq.begin(), seq.begin() + n_past);
     result.evaluated_prompt_tokens = evaluated_prompt_tokens;
-    result.cached_prompt_tokens = resume_from == nullptr
+    result.cached_prompt_tokens = resume_from == nullptr && prompt_prefix_reused
         ? std::max(0, p - evaluated_prompt_tokens) : 0;
     // Truncated to `p` for the same reason `seq` above is: a resumed execution-fork must never
     // report the checkpoint's PAST-truncate_to tail as part of this run's board (that tail is being
@@ -527,7 +536,7 @@ GenerateResult generate_ar(GgmlAdapter& adapter,
     PerformancePhase prefill_phase{"prefill", "clozn_worker", prefill_ns,
         std::chrono::duration_cast<std::chrono::nanoseconds>(prefill_start - t_start).count()};
     if (resume_from != nullptr) prefill_phase.includes = {"kv_restore", "bridge_decode"};
-    else if (cached_prompt_prefix > 0) prefill_phase.includes = {"prompt_prefix_cache"};
+    else if (prompt_prefix_reused) prefill_phase.includes = {"prompt_prefix_cache"};
     timing_phases.push_back(std::move(prefill_phase));
     timing_phases.push_back(PerformancePhase{
         "decode", "clozn_worker", decode_ns,

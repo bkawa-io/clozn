@@ -87,14 +87,20 @@ class EngineClient:
         return self._post("/v1/completions", body)
 
     def apply_template(self, messages: Sequence[Mapping[str, Any]],
-                       add_assistant: bool = True) -> str:
+                       add_assistant: bool = True,
+                       enable_thinking: bool = False) -> str:
         """Render messages with the loaded model's embedded chat template."""
-        return self.apply_template_info(messages, add_assistant=add_assistant)["prompt"]
+        return self.apply_template_info(
+            messages,
+            add_assistant=add_assistant,
+            enable_thinking=enable_thinking,
+        )["prompt"]
 
     def apply_template_info(
         self,
         messages: Sequence[Mapping[str, Any]],
         add_assistant: bool = True,
+        enable_thinking: bool = False,
         include_token_ids: bool = False,
     ) -> dict[str, Any]:
         """Render messages and return the worker-authoritative prompt token count."""
@@ -103,6 +109,7 @@ class EngineClient:
         body: dict[str, Any] = {
             "messages": [dict(message) for message in messages],
             "add_assistant": bool(add_assistant),
+            "enable_thinking": bool(enable_thinking),
         }
         if include_token_ids:
             body["include_token_ids"] = True

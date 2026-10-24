@@ -36,7 +36,11 @@ def test_apply_template_sends_messages_and_add_assistant(monkeypatch):
     msgs = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
     out = ec.apply_template(msgs)
     assert seen["path"] == "/apply_template"
-    assert seen["body"] == {"messages": msgs, "add_assistant": True}
+    assert seen["body"] == {
+        "messages": msgs,
+        "add_assistant": True,
+        "enable_thinking": False,
+    }
     assert out == "P"
 
 
@@ -50,6 +54,21 @@ def test_apply_template_add_assistant_false(monkeypatch):
     )
     ec.apply_template([{"role": "user", "content": "hi"}], add_assistant=False)
     assert seen["body"]["add_assistant"] is False
+
+
+def test_apply_template_can_enable_model_thinking(monkeypatch):
+    seen = {}
+    ec = EngineClient(port=1)
+    monkeypatch.setattr(
+        ec, "_post",
+        lambda path, body: seen.update(path=path, body=body)
+        or {"prompt": "P", "prompt_tokens": 1},
+    )
+    ec.apply_template(
+        [{"role": "user", "content": "hi"}],
+        enable_thinking=True,
+    )
+    assert seen["body"]["enable_thinking"] is True
 
 
 def test_apply_template_returns_the_prompt_field(monkeypatch):

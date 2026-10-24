@@ -1,16 +1,41 @@
 # Clozn
 
-Clozn shows how context affects a local model's answer, then searches for a smaller context that
-preserves that answer.
+> Context attribution for everyday local inference. **Work in progress.**
 
-The v1 proof of concept is deliberately narrow:
+Wondering how your context is influencing a model? Which parts of an answer actually depend on your
+conversation, documents, or instructions—and which survive without them? Is the model ignoring
+something you said? Want evidence without building a notebook or instrumenting your chat app?
 
-- one local GGUF and one private native worker;
-- a run list and composer in Studio;
-- Context Effects over recorded source ranges;
-- Minimal Context with exact answer/termination verification;
-- original-versus-reduced comparison and basic run deletion; and
-- a text-only OpenAI Chat Completions API.
+**Clozn can help.**
+
+Clozn is a local, text-only OpenAI-compatible chat gateway with context attribution built in. Point an
+existing chat client at Clozn, chat with a local GGUF model as usual, then open the recorded response in
+Studio. Clozn automatically partitions the complete message history and runs removal experiments to
+show which context spans support or suppress each part of the answer.
+
+Clozn builds on the context-attribution research direction established by
+[ContextCite](https://github.com/MadryLab/context-cite), bringing research-inspired measurements into
+an everyday chat loop. The v1 POC uses its own direct, teacher-forced removal scoring rather than being
+a port of ContextCite's estimator.
+
+![Clozn's expanded answer heatmap links answer spans to influential context](docs/assets/context-effects-heatmap.png)
+
+*Answer heatmap: color and intensity encode support or suppression; selecting a span reveals its
+strongest corresponding context.*
+
+Analysis requires additional model passes and can take minutes on local hardware. Chat generation
+itself remains a normal OpenAI-compatible request.
+
+## What the v1 POC includes
+
+The proof of concept is deliberately narrow:
+
+- a text-only OpenAI Chat Completions API for one local GGUF model;
+- automatic Markdown-aware chunking across every input message;
+- Context Effects linking context spans to answer spans;
+- linked, heatmap, influence-ranking, and bounded Lean Context views;
+- Minimal Context with exact answer and termination verification; and
+- durable local runs, original-versus-reduced comparison, and basic deletion.
 
 Research workbenches, J-lens/SAE views, steering, snapshots, model comparison suites, tools/structured
 output, Responses, and Ollama-compatible APIs are not part of v1. See the

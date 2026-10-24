@@ -39,6 +39,12 @@ export interface ValidateCodePointRangeOptions {
   readonly allowEmpty?: boolean;
 }
 
+export interface SemanticTextRangeOptions {
+  readonly minLength?: number;
+  readonly targetLength?: number;
+  readonly maxLength?: number;
+}
+
 /** Materialize the string using JavaScript's code-point iterator, which keeps surrogate pairs whole. */
 export function toCodePoints(text: string): string[] {
   return Array.from(text);
@@ -121,6 +127,107 @@ export function sliceCodePoints(text: string, start: number, end: number): strin
   const range = { start, end };
   assertValidCodePointRange(text, range);
   return toCodePoints(text).slice(start, end).join("");
+}
+
+/**
+ * Divide prose into stable, readable display ranges without changing its coordinate system.
+ * Sentence and paragraph endings win; long sentences fall back to clauses, then word boundaries.
+ * The result always covers the source text exactly and never splits a Unicode code point.
+ */
+export function semanticTextRanges(
+  text: string,
+  options: SemanticTextRangeOptions = {},
+): CodePointRange[] {
+  const points = toCodePoints(text);
+  if (points.length === 0) return [];
+
+  const minLength = options.minLength ?? 24;
+  const targetLength = options.targetLength ?? 72;
+  const maxLength = options.maxLength ?? 120;
+  if (
+    !Number.isSafeInteger(minLength) || !Number.isSafeInteger(targetLength)
+    || !Number.isSafeInteger(maxLength) || minLength < 1
+    || targetLength < minLength || maxLength < targetLength
+  ) {
+    throw new RangeError("Semantic range lengths must be positive integers ordered min <= target <= max");
+  }
+
+  const sentenceEnd = new Set([".", "!", "?", "。", "！", "？"]);
+  const sentenceEndWithoutSpace = new Set(["。", "！", "？"]);
+  const clauseEnd = new Set([",", ";", ":", "—", "–", "，", "；", "："]);
+  const clauseEndWithoutSpace = new Set(["—", "–", "，", "；", "："]);
+  const candidates = (start: number, finish: number) => {
+    const strong: number[] = [];
+    const clause: number[] = [];
+    const word: number[] = [];
+    for (let boundary = start + minLength; boundary <= finish; boundary += 1) {
+      const previous = points[boundary - 1];
+      const next = points[boundary];
+      const afterWhitespace = /\s/u.test(previous) && (next === undefined || !/\s/u.test(next));
+      const afterPunctuation = next === undefined || !/\s/u.test(next);
+      let previousNonWhitespace = boundary - 1;
+      while (previousNonWhitespace >= start && /\s/u.test(points[previousNonWhitespace])) {
+        previousNonWhitespace -= 1;
+      }
+      const mark = points[previousNonWhitespace];
+      if (
+        previous === "\n"
+        || (sentenceEnd.has(mark) && (afterWhitespace || (afterPunctuation && sentenceEndWithoutSpace.has(mark))))
+      ) {
+        strong.push(boundary);
+      } else if (
+        clauseEnd.has(mark)
+        && (afterWhitespace || (afterPunctuation && clauseEndWithoutSpace.has(mark)))
+      ) {
+        clause.push(boundary);
+      } else if (afterWhitespace) {
+        word.push(boundary);
+      }
+    }
+    return { strong, clause, word };
+  };
+  const nearestTarget = (values: readonly number[], start: number): number | undefined =>
+    [...values].sort((left, right) =>
+      Math.abs(left - start - targetLength) - Math.abs(right - start - targetLength)
+      || left - right,
+    )[0];
+
+  const ranges: CodePointRange[] = [];
+  let start = 0;
+  while (start < points.length) {
+    const remaining = points.length - start;
+    if (remaining <= targetLength) {
+      ranges.push({ start, end: points.length });
+      break;
+    }
+
+    const finish = Math.min(points.length, start + maxLength);
+    const choices = candidates(start, finish);
+    const leavesReadableTail = (boundary: number) =>
+      points.length - boundary === 0 || points.length - boundary >= minLength;
+    const strong = choices.strong.filter(leavesReadableTail);
+    let end = nearestTarget(strong, start);
+
+    // Inside the hard maximum, only a natural sentence/paragraph ending warrants another phrase.
+    if (end === undefined && remaining <= maxLength) {
+      ranges.push({ start, end: points.length });
+      break;
+    }
+    end ??= nearestTarget(choices.clause, start);
+    end ??= nearestTarget(choices.word, start);
+    end ??= finish;
+    ranges.push({ start, end });
+    start = end;
+  }
+
+  if (ranges.length > 1) {
+    const tail = ranges[ranges.length - 1];
+    const previous = ranges[ranges.length - 2];
+    if (tail.end - tail.start < minLength && tail.end - previous.start <= maxLength) {
+      ranges.splice(ranges.length - 2, 2, { start: previous.start, end: tail.end });
+    }
+  }
+  return ranges;
 }
 
 /** Convert a Python code-point offset to a DOM/string UTF-16 index. */

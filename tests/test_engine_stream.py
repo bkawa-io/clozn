@@ -167,6 +167,19 @@ def test_chat_stream_skips_empty_pieces(iso, monkeypatch):
     assert pieces == ["ok"]                          # the empty piece at pos 0 is never yielded
 
 
+def test_chat_stream_raises_worker_error_frames(iso, monkeypatch):
+    calls = _patch_urlopen(monkeypatch, [
+        _sse_line({"error": "generation failed: cached prefix decode failed"}),
+        b"data: [DONE]\n",
+    ])
+    sub = _bare_engine_substrate(FakeEngine())
+
+    with pytest.raises(RuntimeError, match="cached prefix decode failed"):
+        list(sub.chat_stream([{"role": "user", "content": "hi"}]))
+
+    assert calls[-1]["resp"].closed is True
+
+
 def test_chat_stream_omits_the_block_when_prompt_block_for_returns_none(iso, monkeypatch, fake_urlopen):
     sub = _bare_engine_substrate(FakeEngine())
 

@@ -97,7 +97,8 @@ public:
 
     bool available() const noexcept;
     std::string apply(const std::vector<std::pair<std::string, std::string>>& messages,
-                      bool add_assistant) const;
+                      bool add_assistant,
+                      bool enable_thinking = false) const;
     PreparedChat prepare(const ChatTemplateRequest& request) const;
     ParsedChat parse(const PreparedChat& prepared,
                      const std::string& model_output,

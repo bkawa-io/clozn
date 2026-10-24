@@ -52,6 +52,26 @@ struct TriePrefillRow {
     std::vector<int> terminal_arms;
 };
 
+std::vector<TriePrefillRow> flatten_prefix_trie(
+        const PrefixTrieNode& root, size_t reserve_rows) {
+    std::vector<TriePrefillRow> rows;
+    rows.reserve(reserve_rows);
+    std::vector<const PrefixTrieNode*> pending;
+    pending.reserve(reserve_rows);
+    for (auto child = root.children.rbegin(); child != root.children.rend(); ++child)
+        pending.push_back(child->second.get());
+    while (!pending.empty()) {
+        const PrefixTrieNode* node = pending.back();
+        pending.pop_back();
+        rows.push_back(TriePrefillRow{
+            node->token, node->position, node->seq_ids, node->terminal_arms});
+        // Push in reverse key order so the explicit stack preserves the recursive pre-order walk.
+        for (auto child = node->children.rbegin(); child != node->children.rend(); ++child)
+            pending.push_back(child->second.get());
+    }
+    return rows;
+}
+
 // llama.cpp's backend-sampler API is the only public path in this vendored revision that can
 // transform model-output logits before their automatic device-to-host copy.  This sampler computes
 // the full softmax where the output head lives, gathers one caller-selected vocabulary entry, and
@@ -392,9 +412,9 @@ GgmlAdapter::~GgmlAdapter() {
     // backend intentionally left initialized (see note above).
 }
 
-void GgmlAdapter::evict_from(int pos) {
+bool GgmlAdapter::evict_from(int pos) {
     // Drop KV for board positions [pos, inf).
-    llama_memory_seq_rm(llama_get_memory(ctx_), 0, pos, -1);
+    return llama_memory_seq_rm(llama_get_memory(ctx_), 0, pos, -1);
 }
 
 void GgmlAdapter::reset_ar_kv() {
@@ -988,6 +1008,7 @@ ForwardResult GgmlAdapter::ar_forward_score(const std::vector<int>& tokens,
             throw std::invalid_argument("ar_forward_score: logits_for position out of range");
 
     int decode_from = 0;
+    last_score_cached_tokens_ = 0;
     if (cached_prefix > 0) {
         if (!causal_)
             throw std::invalid_argument("ar_forward_score: cached prefix requires causal attention");
@@ -995,11 +1016,19 @@ ForwardResult GgmlAdapter::ar_forward_score(const std::vector<int>& tokens,
             throw std::invalid_argument("ar_forward_score: cached prefix exceeds resident seq-0 KV");
         const int first_logits = logits_for.empty()
             ? len : *std::min_element(logits_for.begin(), logits_for.end());
-        decode_from = std::min(cached_prefix, first_logits);
-        evict_from(decode_from);
-        frozen_end_ = 0;
-        boundary_row_.clear();
-        write_from_ = decode_from;
+        const int candidate_decode_from = std::min(cached_prefix, first_logits);
+        if (evict_from(candidate_decode_from)) {
+            decode_from = candidate_decode_from;
+            last_score_cached_tokens_ = decode_from;
+            frozen_end_ = 0;
+            boundary_row_.clear();
+            write_from_ = decode_from;
+        } else {
+            // Hybrid/recurrent caches cannot generally roll back to an arbitrary historical token.
+            // Fall back to an exact cold pass instead of leaving the cache half-reused and failing
+            // the decode. The caller reports this as scalar_reference, never as cached work.
+            set_causal(true);
+        }
     } else {
         // Historical scalar-reference path: reset attention mode and every KV sequence.
         set_causal(true);
@@ -1860,17 +1889,8 @@ std::vector<ForwardResult> GgmlAdapter::ar_forward_prefill_batch(
         node->terminal_arms.push_back(arm);
     }
 
-    std::vector<TriePrefillRow> rows;
-    rows.reserve(static_cast<size_t>(logical_rows));
-    auto emit_rows = [&](auto&& self, const PrefixTrieNode& node) -> void {
-        for (const auto& entry : node.children) {
-            const PrefixTrieNode& child = *entry.second;
-            rows.push_back(TriePrefillRow{
-                child.token, child.position, child.seq_ids, child.terminal_arms});
-            self(self, child);
-        }
-    };
-    emit_rows(emit_rows, root);
+    std::vector<TriePrefillRow> rows = flatten_prefix_trie(
+        root, static_cast<size_t>(logical_rows));
     if (rows.empty())
         throw std::runtime_error("ar_forward_prefill_batch: trie produced no rows");
     if (rows.size() > static_cast<size_t>(n_ctx_))
@@ -1989,17 +2009,8 @@ TargetLogprobBatchResult GgmlAdapter::ar_forward_prefill_batch_target_logprobs(
         node->terminal_arms.push_back(arm);
     }
 
-    std::vector<TriePrefillRow> rows;
-    rows.reserve(static_cast<size_t>(logical_rows));
-    auto emit_rows = [&](auto&& self, const PrefixTrieNode& node) -> void {
-        for (const auto& entry : node.children) {
-            const PrefixTrieNode& child = *entry.second;
-            rows.push_back(TriePrefillRow{
-                child.token, child.position, child.seq_ids, child.terminal_arms});
-            self(self, child);
-        }
-    };
-    emit_rows(emit_rows, root);
+    std::vector<TriePrefillRow> rows = flatten_prefix_trie(
+        root, static_cast<size_t>(logical_rows));
     if (rows.empty())
         throw std::runtime_error(
             "ar_forward_prefill_batch_target_logprobs: trie produced no rows");

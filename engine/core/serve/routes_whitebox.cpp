@@ -167,6 +167,11 @@ void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx) {
                 prefix_plan = plan_score_prefix_reuse(
                     static_cast<int>(tokens.size()), cached_prefix, logits_for.front());
                 forward = adapter.ar_forward_score(tokens, logits_for, cached_prefix);
+                if (adapter.last_score_cached_tokens() != prefix_plan.cached_tokens) {
+                    prefix_plan.cached_tokens = adapter.last_score_cached_tokens();
+                    prefix_plan.evaluated_tokens =
+                        static_cast<int>(tokens.size()) - prefix_plan.cached_tokens;
+                }
                 if (use_prefix_cache) lease.commit_score_cache(tokens);
             }
 
@@ -235,7 +240,7 @@ void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx) {
             return;
         }
         static const std::set<std::string> allowed{
-            "messages", "add_assistant", "include_token_ids",
+            "messages", "add_assistant", "enable_thinking", "include_token_ids",
         };
         if (reject_unknown_fields(body, allowed, res)) return;
         if (!body.contains("messages") || !body["messages"].is_array() || body["messages"].empty()) {
@@ -267,9 +272,11 @@ void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx) {
         }
 
         const bool add_assistant = body.value("add_assistant", true);
+        const bool enable_thinking = body.value("enable_thinking", false);
         const bool include_token_ids = body.value("include_token_ids", false);
         try {
-            const std::string prompt = ctx.chat_templates.apply(messages, add_assistant);
+            const std::string prompt = ctx.chat_templates.apply(
+                messages, add_assistant, enable_thinking);
             const std::vector<int> prompt_token_ids = ctx.model->encode(prompt);
             json response{{"prompt", prompt},
                           {"prompt_tokens", static_cast<int>(prompt_token_ids.size())},

@@ -5,6 +5,7 @@ import {
   codePointLength,
   codePointOffsetToUtf16Index,
   isValidCodePointRange,
+  semanticTextRanges,
   segmentAnnotatedText,
   sliceCodePoints,
   toCodePoints,
@@ -114,5 +115,55 @@ describe("annotated text segmentation", () => {
       .toThrow(InvalidCodePointRangeError);
     expect(() => segmentAnnotatedText("abc", [{ id: "", start: 0, end: 1 }]))
       .toThrow(TypeError);
+  });
+});
+
+describe("semantic text ranges", () => {
+  it("uses sentence boundaries for readable phrases and covers the text exactly", () => {
+    const text = "The first sentence explains one idea. The second sentence adds another useful detail. A final sentence closes it.";
+    const ranges = semanticTextRanges(text, { minLength: 16, targetLength: 42, maxLength: 60 });
+
+    expect(ranges.map((range) => sliceCodePoints(text, range.start, range.end))).toEqual([
+      "The first sentence explains one idea. ",
+      "The second sentence adds another useful detail. ",
+      "A final sentence closes it.",
+    ]);
+    expect(ranges[0].start).toBe(0);
+    expect(ranges.at(-1)?.end).toBe(codePointLength(text));
+    expect(ranges.every((range, index) => index === 0 || ranges[index - 1].end === range.start)).toBe(true);
+  });
+
+  it("falls back to clause and word boundaries without splitting Unicode code points", () => {
+    const text = "Emoji 🌕 stay whole while this deliberately long clause keeps moving, then another deliberately long clause follows without a sentence ending";
+    const ranges = semanticTextRanges(text, { minLength: 18, targetLength: 34, maxLength: 46 });
+
+    expect(ranges.length).toBeGreaterThan(1);
+    expect(ranges.map((range) => sliceCodePoints(text, range.start, range.end)).join("")).toBe(text);
+    expect(ranges.every((range) => range.end - range.start <= 46)).toBe(true);
+    expect(ranges.some((range) => sliceCodePoints(text, range.start, range.end).includes("🌕"))).toBe(true);
+  });
+
+  it("keeps short prose as one phrase and rejects incoherent sizing", () => {
+    expect(semanticTextRanges("Hi 🌕!")).toEqual([{ start: 0, end: 5 }]);
+    expect(() => semanticTextRanges("text", { minLength: 10, targetLength: 5 }))
+      .toThrow(RangeError);
+  });
+
+  it("does not split an ASCII abbreviation between its periods", () => {
+    const text = "During the emergency, branches logged visits after five p.m., demonstrating how familiar access helped residents. The next sentence adds detail.";
+    const ranges = semanticTextRanges(text, { minLength: 20, targetLength: 58, maxLength: 82 });
+    const pieces = ranges.map((range) => sliceCodePoints(text, range.start, range.end));
+
+    expect(pieces.join("")).toBe(text);
+    expect(pieces.every((piece) => !piece.endsWith(" p.") && !piece.startsWith("m."))).toBe(true);
+  });
+
+  it("does not treat punctuation inside a number as a clause boundary", () => {
+    const text = "During the emergency, branches logged 2,400 visits after five p.m., demonstrating how familiar access helped residents. The next sentence adds detail.";
+    const ranges = semanticTextRanges(text, { minLength: 20, targetLength: 44, maxLength: 62 });
+    const pieces = ranges.map((range) => sliceCodePoints(text, range.start, range.end));
+
+    expect(pieces.join("")).toBe(text);
+    expect(pieces.every((piece) => !piece.endsWith("2,") && !piece.startsWith("400"))).toBe(true);
   });
 });

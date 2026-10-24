@@ -1,9 +1,9 @@
 # Clozn v1 POC plan
 
-Status: implementation complete on `codex/v1-poc-foundation` for the scoped code, package, Studio,
-native-worker, live backend, and manual browser gates.
+Status: implemented on `main` for the scoped code, package, Studio, native worker, live backend, and
+manual browser gates. Current qualification evidence is recorded in `docs/V1_LIVE_QUALIFICATION.md`.
 
-Prepared 2026-10-12 against `c66cedbd715fe5899a5b2b0977b84902e1793f21`.
+Originally prepared 2026-10-12 against `c66cedbd715fe5899a5b2b0977b84902e1793f21`.
 
 **Product promise:** See how context affects an answer, then find a smaller context that preserves it.
 
@@ -16,8 +16,8 @@ This is a scoped rebuild, with working checkpoints between changes. A new infere
 1. Start one local model and open Studio through one documented launch path.
 2. Create a run from a text prompt, load a working example, or open a run recorded through the local text API.
 3. See input and output side by side in Context Effects. Select answer text or a context source to explore measured relationships in either direction, expand either side into a heatmap, summarize influence extremes, or search for Lean Context under fixed probability-loss tolerances.
-4. Choose Reduce context. See real progress, cancel if needed, and review the best verified result within the search budget.
-5. Save the reduced run, compare it with its original, and reopen both after restarting Clozn.
+4. Use Lean Context for a bounded probability-loss reduction, or Minimal Context for exact answer and stop preservation. See honest progress, cancel if needed, and review the best result found within the selected search contract.
+5. Save an exact Minimal Context result, compare it with its original, and reopen both after restarting Clozn.
 
 Studio has a run list with a New run action and one run workspace with two modes: **Context Effects** and **Minimal Context**. Comparison belongs to the reduction result. Received context, provenance, and runtime details become expandable information in that workspace. Session navigation, a separate runtime dashboard, and a general comparison workbench leave the product.
 
