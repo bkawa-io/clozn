@@ -220,10 +220,10 @@ function Demo() {
           <div className="demo-hero-copy">
             <div>
               <span>Context observability for local models</span>
-              <h1 id="demo-hero-title">See what your context actually did.</h1>
+              <h1 id="demo-hero-title">Your model answered. What made it say that?</h1>
             </div>
             <div>
-              <p>Measure which prompt and retrieved passages support or suppress each part of an answer. Then find the smallest context that preserves it.</p>
+              <p>CLOZN measures which prompt and retrieved passages support or suppress each part of an answer—then finds the smallest context that preserves it.</p>
               <nav aria-label="Demo actions">
                 <a className="demo-primary-action" href="#demo">Explore the recorded demo ↓</a>
                 <a href={repo}>View the source ↗</a>

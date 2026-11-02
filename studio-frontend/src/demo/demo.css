@@ -6,21 +6,21 @@
 .demo-page { padding: 0; scroll-behavior: smooth; }
 .demo-page.is-tool-view { padding: var(--space-component); }
 
-.demo-question-band { display: grid; grid-template-columns: auto minmax(0, 1fr); min-height: 36px; overflow: hidden; border-bottom: 1px solid var(--border-subtle); background: var(--surface-well); }
-.demo-question-band > span { z-index: 2; display: flex; align-items: center; border-right: 1px solid var(--border-subtle); background: var(--surface-well); color: var(--brand-lichen); font-family: var(--font-mono); font-size: 8px; font-weight: 600; letter-spacing: .13em; padding: 0 var(--space-component); text-transform: uppercase; white-space: nowrap; }
+.demo-question-band { display: grid; grid-template-columns: auto minmax(0, 1fr); min-height: 58px; overflow: hidden; border-bottom: 1px solid var(--border-subtle); background: var(--surface-well); }
+.demo-question-band > span { z-index: 2; display: flex; align-items: center; border-right: 1px solid var(--border-subtle); background: var(--surface-well); color: var(--brand-lichen); font-family: var(--font-mono); font-size: 9px; font-weight: 600; letter-spacing: .13em; padding: 0 clamp(var(--space-component), 2vw, var(--space-section)); text-transform: uppercase; white-space: nowrap; }
 .demo-question-band > div { display: flex; min-width: 0; overflow: hidden; mask-image: linear-gradient(90deg, transparent, rgb(0 0 0) 32px, rgb(0 0 0) calc(100% - 32px), transparent); }
-.demo-question-track { display: flex; width: max-content; animation: demo-question-marquee 48s linear infinite; }
+.demo-question-track { display: flex; width: max-content; animation: demo-question-marquee 58s linear infinite; }
 .demo-question-track > span { display: flex; flex-shrink: 0; align-items: center; }
-.demo-question-track strong { display: inline-flex; align-items: center; gap: var(--space-group); color: var(--text-secondary); font-size: clamp(14px, 1vw, 16px); font-weight: 450; letter-spacing: .005em; padding-left: var(--space-group); white-space: nowrap; }
-.demo-question-track strong i { width: 3px; height: 3px; margin-right: var(--space-group); border-radius: 50%; background: var(--evidence-suppression); }
+.demo-question-track strong { display: inline-flex; align-items: center; gap: var(--space-group); color: var(--text-primary); font-size: clamp(18px, 1.45vw, 23px); font-weight: 480; letter-spacing: -.012em; line-height: 1; padding-left: var(--space-group); white-space: nowrap; }
+.demo-question-track strong i { width: 4px; height: 4px; margin-right: var(--space-group); border-radius: 50%; background: var(--evidence-suppression); box-shadow: 0 0 10px color-mix(in srgb, var(--evidence-suppression) 42%, transparent); }
 .demo-question-band:hover .demo-question-track { animation-play-state: paused; }
 @keyframes demo-question-marquee { to { transform: translateX(-50%); } }
 
-.demo-hero { padding: clamp(30px, 4vw, 58px) clamp(var(--space-component), 3.2vw, var(--space-major)) var(--space-major); background:
+.demo-hero { padding: clamp(24px, 3vw, 46px) clamp(var(--space-component), 3.2vw, var(--space-major)) var(--space-major); background:
   radial-gradient(circle at 72% 28%, color-mix(in srgb, var(--evidence-support) 7%, transparent), transparent 32%),
   radial-gradient(circle at 82% 70%, color-mix(in srgb, var(--evidence-suppression) 6%, transparent), transparent 28%),
   var(--surface-workspace); }
-.demo-hero-copy { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(320px, .7fr); gap: clamp(var(--space-section), 5vw, 88px); align-items: end; max-width: 1680px; margin: 0 auto clamp(28px, 3vw, 46px); }
+.demo-hero-copy { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(320px, .7fr); gap: clamp(var(--space-section), 5vw, 88px); align-items: end; max-width: 1680px; margin: 0 auto clamp(22px, 2.4vw, 36px); }
 .demo-hero-copy > div { display: grid; gap: var(--space-component); }
 .demo-hero-copy > div:first-child { gap: var(--space-control); }
 .demo-hero-copy span { color: var(--brand-lichen); font-family: var(--font-mono); font-size: 9px; font-weight: 600; letter-spacing: .13em; text-transform: uppercase; }
