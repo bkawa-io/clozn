@@ -53,7 +53,7 @@ export function RunDetailsDisclosure({ runId }: { runId: string }) {
     <details className="run-details-disclosure" onToggle={(event) => {
       if (event.currentTarget.open) load();
     }}>
-      <summary>Context, provenance, and runtime details</summary>
+      <summary>Run details</summary>
       {state.phase === "idle" && <p>Open to read stored details.</p>}
       {state.phase === "loading" && <p role="status">Reading stored details…</p>}
       {(state.phase === "unavailable" || state.phase === "malformed") && (

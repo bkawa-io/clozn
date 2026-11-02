@@ -11,6 +11,13 @@
     "unavailable_source_count",
     "failed_source_count",
     "not_measured_source_count",
+    "executed_score_count",
+    "reused_score_count",
+    "elapsed_seconds",
+    "scoring_mode",
+    "evidence_quality",
+    "execution_strategy",
+    "numerical_regime",
     "state"
   ],
   "properties": {
@@ -21,6 +28,60 @@
     "unavailable_source_count": {"type": "integer", "minimum": 0},
     "failed_source_count": {"type": "integer", "minimum": 0},
     "not_measured_source_count": {"type": "integer", "minimum": 0},
+    "executed_score_count": {"type": "integer", "minimum": 0},
+    "reused_score_count": {"type": "integer", "minimum": 0},
+    "elapsed_seconds": {"type": "number", "minimum": 0},
+    "scoring_mode": {"enum": ["fast", "exact"]},
+    "evidence_quality": {"enum": ["approximate", "exact"]},
+    "execution_strategy": {"type": "string", "minLength": 1},
+    "numerical_regime": {"type": "string", "minLength": 1},
+    "timing_detail": {"type": "object"},
+    "batching": {
+      "type": "object",
+      "required": [
+        "requested_sequence_batch_size",
+        "batch_count",
+        "arm_batch_sizes",
+        "sequence_batch_sizes",
+        "control_batched"
+      ],
+      "properties": {
+        "requested_sequence_batch_size": {"type": ["integer", "null"], "minimum": 1},
+        "batch_count": {"type": "integer", "minimum": 0},
+        "arm_batch_sizes": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 0}
+        },
+        "sequence_batch_sizes": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 1}
+        },
+        "control_batched": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "execution_plan": {
+      "type": "object",
+      "required": [
+        "policy",
+        "selected_strategy",
+        "reason",
+        "prompt_tokens",
+        "continuation_tokens",
+        "sequence_count",
+        "native_sequence_batch_size"
+      ],
+      "properties": {
+        "policy": {"const": "clozn.fast-path-auto.v1"},
+        "selected_strategy": {"enum": ["native_prefix_trie", "scalar_prefix_cache"]},
+        "reason": {"type": "string", "minLength": 1},
+        "prompt_tokens": {"type": ["integer", "null"], "minimum": 1},
+        "continuation_tokens": {"type": ["integer", "null"], "minimum": 1},
+        "sequence_count": {"type": "integer", "minimum": 1},
+        "native_sequence_batch_size": {"type": "integer", "minimum": 1, "maximum": 16}
+      },
+      "additionalProperties": false
+    },
     "state": {"type": "string"}
   }
 }

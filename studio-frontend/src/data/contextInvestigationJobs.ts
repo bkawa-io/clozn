@@ -19,6 +19,13 @@ export interface ContextEffectsResult {
   unavailableSourceCount: number;
   failedSourceCount: number;
   notMeasuredSourceCount: number;
+  executedScoreCount: number;
+  reusedScoreCount: number;
+  elapsedSeconds: number;
+  scoringMode: "fast" | "exact";
+  evidenceQuality: "approximate" | "exact";
+  executionStrategy: string;
+  numericalRegime: string;
   state: string;
 }
 
@@ -100,6 +107,10 @@ export function decodeContextEffectsResult(
   const unavailableSourceCount = count(required(row, "unavailable_source_count", endpoint, "$.result"), endpoint, "$.result.unavailable_source_count");
   const failedSourceCount = count(required(row, "failed_source_count", endpoint, "$.result"), endpoint, "$.result.failed_source_count");
   const notMeasuredSourceCount = count(required(row, "not_measured_source_count", endpoint, "$.result"), endpoint, "$.result.not_measured_source_count");
+  const executedScoreCount = count(required(row, "executed_score_count", endpoint, "$.result"), endpoint, "$.result.executed_score_count");
+  const reusedScoreCount = count(required(row, "reused_score_count", endpoint, "$.result"), endpoint, "$.result.reused_score_count");
+  const elapsedSeconds = finite(required(row, "elapsed_seconds", endpoint, "$.result"), endpoint, "$.result.elapsed_seconds");
+  if (elapsedSeconds < 0) fail(endpoint, "$.result.elapsed_seconds", "must be non-negative");
   if (completedSourceCount + unavailableSourceCount + failedSourceCount + notMeasuredSourceCount !== sourceCount) {
     fail(endpoint, "$.result", "source status counts must add up to source_count");
   }
@@ -116,6 +127,23 @@ export function decodeContextEffectsResult(
     unavailableSourceCount,
     failedSourceCount,
     notMeasuredSourceCount,
+    executedScoreCount,
+    reusedScoreCount,
+    elapsedSeconds,
+    scoringMode: oneOf(
+      required(row, "scoring_mode", endpoint, "$.result"),
+      ["fast", "exact"] as const,
+      endpoint,
+      "$.result.scoring_mode",
+    ),
+    evidenceQuality: oneOf(
+      required(row, "evidence_quality", endpoint, "$.result"),
+      ["approximate", "exact"] as const,
+      endpoint,
+      "$.result.evidence_quality",
+    ),
+    executionStrategy: text(required(row, "execution_strategy", endpoint, "$.result"), endpoint, "$.result.execution_strategy"),
+    numericalRegime: text(required(row, "numerical_regime", endpoint, "$.result"), endpoint, "$.result.numerical_regime"),
     state: text(required(row, "state", endpoint, "$.result"), endpoint, "$.result.state"),
   };
 }

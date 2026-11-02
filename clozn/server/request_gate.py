@@ -35,6 +35,7 @@ class RequestGate:
         self._slots = threading.BoundedSemaphore(self.capacity)
         self._turn = threading.Lock()
         self._state_lock = threading.Lock()
+        self._state_changed = threading.Condition(self._state_lock)
         self._active = 0
         self._waiting = 0
 
@@ -59,8 +60,9 @@ class RequestGate:
         pre-cancellation behavior byte-for-byte (one `Lock.acquire(timeout=...)` call, not a poll loop)."""
         if not self._slots.acquire(blocking=False):
             return "full"
-        with self._state_lock:
+        with self._state_changed:
             self._waiting += 1
+            self._state_changed.notify_all()
         acquired = False
         cancelled = False
         try:
@@ -79,21 +81,53 @@ class RequestGate:
                         cancelled = True
                         break
         finally:
-            with self._state_lock:
+            with self._state_changed:
                 self._waiting -= 1
+                self._state_changed.notify_all()
             if not acquired:
                 self._slots.release()
         if not acquired:
             return "cancelled" if cancelled else "timeout"
-        with self._state_lock:
+        with self._state_changed:
             self._active = 1
+            self._state_changed.notify_all()
         return None
 
+    def acquire_background(self, cancel_check=None, poll_interval: float = 0.05) -> str | None:
+        """Acquire one low-priority worker turn.
+
+        Background work does not consume a foreground queue slot. It starts
+        only while no foreground request is waiting, and it rechecks that
+        condition after every foreground turn. A foreground request arriving
+        during an in-flight background score waits for that one score, then
+        wins the next turn before background work can continue.
+        """
+        deadline = time.monotonic() + self.wait_timeout
+        while True:
+            if cancel_check is not None and cancel_check():
+                return "cancelled"
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return "timeout"
+            with self._state_changed:
+                if self._waiting == 0 and self._turn.acquire(blocking=False):
+                    self._active = 1
+                    self._state_changed.notify_all()
+                    return None
+                self._state_changed.wait(timeout=min(poll_interval, remaining))
+
     def release(self) -> None:
-        with self._state_lock:
+        with self._state_changed:
             self._active = 0
-        self._turn.release()
-        self._slots.release()
+            self._turn.release()
+            self._slots.release()
+            self._state_changed.notify_all()
+
+    def release_background(self) -> None:
+        with self._state_changed:
+            self._active = 0
+            self._turn.release()
+            self._state_changed.notify_all()
 
     def snapshot(self) -> dict:
         with self._state_lock:
@@ -193,6 +227,14 @@ class WorkerGateRegistry:
         if outcome is not None:
             return outcome, None
         return None, gate.release
+
+    def acquire_background(self, worker_key, *, cancel_check=None):
+        """Admit one score call only after queued foreground generation."""
+        gate = self._gates[worker_key]
+        outcome = gate.acquire_background(cancel_check=cancel_check)
+        if outcome is not None:
+            return outcome, None
+        return None, gate.release_background
 
     def acquire_all(self, *, cancel_check=None):
         """Exclude every configured worker's generation turn at once.

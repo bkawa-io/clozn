@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
 from clozn import schemas
 from clozn.experiments.persistence import ObservationStore
 from clozn.experiments.score_context_search import continuation_support_loss
@@ -85,4 +87,39 @@ def test_lean_context_reuses_context_effects_observations_without_new_scoring(
     assert result["budget"]["used_new_executions"] == 0
     assert result["budget"]["reused_observation_count"] > 0
     assert lean_substrate.calls == []
+    schemas.validate(result)
+
+
+def test_lean_context_regenerates_full_and_reduced_prompts_with_one_greedy_budget():
+    run, source_ids = _run()
+    calls = []
+
+    def regenerate(messages, max_new, stop):
+        calls.append({
+            "messages": deepcopy(list(messages)),
+            "max_new": max_new,
+            "stop": list(stop),
+        })
+        contents = [str(message.get("content", "")) for message in messages]
+        return "full answer" if "current question" in contents else "lean answer"
+
+    result = run_lean_context(
+        run,
+        substrate=ScoreSubstrate(),
+        engine=TokenCountingEngine(),
+        regenerate=regenerate,
+    )
+
+    assert len(calls) == 2
+    assert calls[0]["max_new"] == calls[1]["max_new"] == 4
+    assert calls[0]["stop"] == calls[1]["stop"] == []
+    assert result["generation_comparison"] == {
+        "status": "completed",
+        "decode_mode": "greedy",
+        "max_new_tokens": 4,
+        "full_context": {"text": "full answer", "matches_recorded": False},
+        "lean_context": {"text": "lean answer", "matches_recorded": False},
+        "exact_match": False,
+        "normalized_match": False,
+    }
     schemas.validate(result)

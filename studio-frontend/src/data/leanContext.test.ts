@@ -44,6 +44,15 @@ function resultDocument() {
       },
       evidence: { observation_id: "obs-best" },
     },
+    generation_comparison: {
+      status: "completed",
+      decode_mode: "greedy",
+      max_new_tokens: 40,
+      full_context: { text: "Hi 🌕!", matches_recorded: true },
+      lean_context: { text: "Hi moon!", matches_recorded: false },
+      exact_match: false,
+      normalized_match: false,
+    },
     reduction: {
       removed_prompt_tokens: 38,
       retained_prompt_token_fraction: .62,
@@ -58,6 +67,7 @@ function resultDocument() {
       exhausted: false,
       blocked_by_budget: false,
     },
+    elapsed_seconds: 5,
     stopping_reason: "search_policy_complete",
   };
 }
@@ -97,6 +107,15 @@ describe("Lean Context boundary", () => {
     });
     expect(job.result?.budget.reusedObservationCount).toBe(2);
     expect(job.result?.best?.loss?.meanPositiveSupportLossNatsPerToken).toBe(.02);
+    expect(job.result?.generationComparison).toEqual({
+      status: "completed",
+      decodeMode: "greedy",
+      maxNewTokens: 40,
+      fullContext: { text: "Hi 🌕!", matchesRecorded: true },
+      leanContext: { text: "Hi moon!", matchesRecorded: false },
+      exactMatch: false,
+      normalizedMatch: false,
+    });
   });
 
   it("rejects a backend result that overclaims a proven minimum", () => {
@@ -107,18 +126,18 @@ describe("Lean Context boundary", () => {
     expect(() => decodeLeanContextJob(document, "/lean", runId)).toThrow(ContractError);
   });
 
-  it("starts the fixed-profile search with an empty body on the Run-scoped endpoint", async () => {
+  it("starts the fixed-tolerance search with a configurable execution budget", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
       JSON.stringify(jobDocument("queued")),
       { status: 202, headers: { "Content-Type": "application/json" } },
     ));
 
-    const job = await contextInvestigationApi.startLeanContext(runId);
+    const job = await contextInvestigationApi.startLeanContext(runId, { maxNewExecutions: 32 });
 
     expect(job.state).toBe("queued");
     expect(fetchMock).toHaveBeenCalledWith(
       "/runs/run%20lean%2F%CE%B1/context-investigation/lean-context/jobs",
-      expect.objectContaining({ method: "POST", body: "{}" }),
+      expect.objectContaining({ method: "POST", body: '{"max_new_executions":32}' }),
     );
   });
 });

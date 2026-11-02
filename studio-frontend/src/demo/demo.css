@@ -1,0 +1,11 @@
+.demo-shell .studio-topbar nav { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-group); color: var(--text-secondary); }
+.demo-shell .studio-topbar nav a:hover { color: var(--text-primary); text-decoration: underline; }
+.demo-shell .studio-topbar nav [aria-current="page"] { align-self: stretch; display: grid; place-items: center; border-bottom: 2px solid var(--text-primary); color: var(--text-primary); }
+.demo-heading { margin-bottom: var(--space-tight); }
+.demo-heading > span { color: var(--text-tertiary); font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; }
+.demo-lean-surface .lean-context-document { max-height: none; overflow: visible; }
+
+@media (max-width: 720px) {
+  .demo-shell .studio-topbar nav { gap: var(--space-control); }
+  .demo-shell .studio-topbar nav a:nth-last-child(-n + 2) { display: none; }
+}

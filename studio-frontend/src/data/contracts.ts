@@ -62,7 +62,34 @@ export interface RunSummary {
   promptSummary?: string | null;
   responseSummary?: string | null;
   parentRunId?: string | null;
+  conversationId?: string | null;
+  conversationTurn?: number | null;
+  conversationSize?: number | null;
+  analysisStatus?: "not_measured" | "partial" | "completed" | "stale" | "unavailable" | null;
+  analysisSourceCount?: number | null;
+  analysisCompletedSourceCount?: number | null;
+  analysisScoringMode?: "fast" | "exact";
   flags: readonly string[];
+}
+
+function optionalCount(row: JsonRecord, key: string, endpoint: string, path: string): number | null | undefined {
+  return optional(row, key, (value, fieldPath) => {
+    const parsed = nullableNumber(value, endpoint, fieldPath);
+    if (parsed !== null && (!Number.isSafeInteger(parsed) || parsed < 0)) {
+      fail(endpoint, fieldPath, "must be a non-negative integer or null");
+    }
+    return parsed;
+  }, endpoint, path);
+}
+
+function optionalAnalysisStatus(row: JsonRecord, endpoint: string, path: string): RunSummary["analysisStatus"] {
+  return optional(row, "analysis_status", (value, fieldPath) => {
+    if (value === null) return null;
+    if (!["not_measured", "partial", "completed", "stale", "unavailable"].includes(String(value))) {
+      fail(endpoint, fieldPath, "has an unsupported analysis status");
+    }
+    return value as NonNullable<RunSummary["analysisStatus"]>;
+  }, endpoint, path);
 }
 
 export function decodeRunsDocument(value: unknown, endpoint = "/runs"): readonly RunSummary[] {
@@ -78,6 +105,16 @@ export function decodeRunsDocument(value: unknown, endpoint = "/runs"): readonly
       promptSummary: optional(item, "prompt_summary", (v, p) => nullableText(v, endpoint, p), endpoint, path),
       responseSummary: optional(item, "response_summary", (v, p) => nullableText(v, endpoint, p), endpoint, path),
       parentRunId: optional(item, "parent_run_id", (v, p) => nullableText(v, endpoint, p), endpoint, path),
+      conversationId: optional(item, "conversation_id", (v, p) => nullableText(v, endpoint, p), endpoint, path),
+      conversationTurn: optionalCount(item, "conversation_turn", endpoint, path),
+      conversationSize: optionalCount(item, "conversation_size", endpoint, path),
+      analysisStatus: optionalAnalysisStatus(item, endpoint, path),
+      analysisSourceCount: optionalCount(item, "analysis_source_count", endpoint, path),
+      analysisCompletedSourceCount: optionalCount(item, "analysis_completed_source_count", endpoint, path),
+      analysisScoringMode: optional(item, "analysis_scoring_mode", (value, fieldPath) => {
+        if (value !== "fast" && value !== "exact") fail(endpoint, fieldPath, "has an unsupported scoring mode");
+        return value;
+      }, endpoint, path),
       flags: optional(item, "flags", (v, p) => array(v, endpoint, p).map((flag, flagIndex) => (
         nonEmptyText(flag, endpoint, `${p}[${flagIndex}]`)
       )), endpoint, path) ?? [],
@@ -90,7 +127,15 @@ export interface RunDetails {
   model?: string;
   substrate?: string;
   parentRunId?: string | null;
+  messages: readonly RunMessage[];
+  response?: string;
   identity: JsonRecord;
+}
+
+export interface RunMessage {
+  role: string;
+  content: string;
+  name?: string;
 }
 
 export function decodeRunDetails(value: unknown, endpoint: string, expectedRunId: string): RunDetails {
@@ -102,6 +147,20 @@ export function decodeRunDetails(value: unknown, endpoint: string, expectedRunId
     model: optional(row, "model", (v, p) => nonEmptyText(v, endpoint, p), endpoint, "$"),
     substrate: optional(row, "substrate", (v, p) => nonEmptyText(v, endpoint, p), endpoint, "$"),
     parentRunId: optional(row, "parent_run_id", (v, p) => nullableText(v, endpoint, p), endpoint, "$"),
+    messages: optional(row, "messages", (value, messagesPath) => (
+      array(value, endpoint, messagesPath).map((entry, index) => {
+        const messagePath = `${messagesPath}[${index}]`;
+        const message = object(entry, endpoint, messagePath);
+        return {
+          role: nonEmptyText(required(message, "role", endpoint, messagePath), endpoint, `${messagePath}.role`),
+          content: text(required(message, "content", endpoint, messagePath), endpoint, `${messagePath}.content`),
+          ...(message.name === undefined ? {} : {
+            name: nonEmptyText(message.name, endpoint, `${messagePath}.name`),
+          }),
+        };
+      })
+    ), endpoint, "$") ?? [],
+    response: optional(row, "response", (v, p) => text(v, endpoint, p), endpoint, "$"),
     identity: "identity" in row ? object(row.identity, endpoint, "$.identity") : {},
   };
 }

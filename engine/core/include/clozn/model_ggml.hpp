@@ -497,7 +497,7 @@ public:
     // llama.cpp backend sampler per resident sequence; end always detaches and frees them.  While
     // the scope is active, use only the two *_target_logprobs methods below: ordinary ForwardResult
     // methods require full vocabulary rows and intentionally do not understand reduced outputs.
-    void begin_target_logprob_reduction(int n_sequences);
+    void begin_target_logprob_reduction(int n_sequences, bool use_backend_reduction = true);
     void end_target_logprob_reduction() noexcept;
     TargetLogprobBatchResult ar_forward_prefill_batch_target_logprobs(
         const std::vector<std::vector<int>>& prompts, int target_token);

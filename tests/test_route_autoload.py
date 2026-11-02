@@ -63,8 +63,6 @@ def test_production_route_manifest_is_explicit_and_stable():
         "context_investigation_v1",
         "context_receipt",
         "engine",
-        "minimal_context",
-        "run_compare",
     )
     assert _autoload._candidates() == sorted(_autoload.ROUTE_MODULES)
 

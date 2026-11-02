@@ -1,0 +1,40 @@
+{
+  "schema_version": "clozn.context-interactions-result.v1",
+  "run_id": "run_fixture",
+  "status": "running",
+  "stop_reason": null,
+  "seed": 0,
+  "claim": {
+    "kind": "exploratory_sampled_marginals",
+    "redundancy_proven": false
+  },
+  "source_ids": ["seg_a", "seg_b"],
+  "budget": {
+    "max_new_executions": 16,
+    "used_new_executions": 3,
+    "reused_observation_count": 1,
+    "completed_pairs": 1
+  },
+  "source_estimates": [
+    {
+      "source_id": "seg_a",
+      "sample_count": 1,
+      "unique_pair_count": 1,
+      "mean_marginal_nats": 1.25,
+      "sample_stddev_nats": null,
+      "leave_one_out_nats": null,
+      "mean_minus_leave_one_out_nats": null
+    },
+    {
+      "source_id": "seg_b",
+      "sample_count": 0,
+      "unique_pair_count": 0,
+      "mean_marginal_nats": null,
+      "sample_stddev_nats": null,
+      "leave_one_out_nats": null,
+      "mean_minus_leave_one_out_nats": null
+    }
+  ],
+  "elapsed_seconds": null,
+  "best": null
+}

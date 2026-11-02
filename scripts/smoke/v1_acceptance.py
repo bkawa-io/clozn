@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
-"""Live two-feature acceptance path for the Clozn v1 product.
+"""Live Context Effects + Lean Context acceptance path for Clozn v1.
 
-The harness attaches to an already running ``clozn serve`` gateway and proves
-the retained journey over one fresh recorded run:
-
-1. Context Effects records and publishes trusted source evidence.
-2. Minimal Context verifies a smaller prompt under the recorded contract.
-3. Saving the immutable result creates one exact child, and retries reuse it.
-4. Parent, result, and child are all readable from durable storage.
+The harness attaches to an already running ``clozn serve`` gateway, records a
+fresh run, measures Context Effects, and proves that Lean Context returns a
+smaller tested prompt plus fresh full/lean generations.
 
 Example::
 
@@ -29,118 +25,90 @@ _expect = effects_smoke._expect
 _quoted = effects_smoke._quoted
 
 
-def _poll_minimal_context(
+def _poll_lean_context(
     client: Client, *, root: str, job: dict, timeout: float,
 ) -> dict:
     job_id = job.get("job_id")
-    _expect(isinstance(job_id, str) and job_id, "Minimal Context start omitted job_id")
+    _expect(isinstance(job_id, str) and job_id, "Lean Context start omitted job_id")
     deadline = time.monotonic() + timeout
     current = job
     while current.get("state") not in {"completed", "failed", "cancelled"}:
         if time.monotonic() >= deadline:
-            raise SmokeFailure(f"Minimal Context job {job_id} did not finish within {timeout:g}s")
+            raise SmokeFailure(f"Lean Context job {job_id} did not finish within {timeout:g}s")
         time.sleep(0.05)
-        status, current = client.get(root + f"/jobs/{_quoted(job_id)}")
-        _expect(status == 200, f"Minimal Context poll returned HTTP {status}: {current}")
+        status, current = client.get(root + f"/{_quoted(job_id)}")
+        _expect(status == 200, f"Lean Context poll returned HTTP {status}: {current}")
     return current
 
 
-def _minimal_context(
+def _lean_context(
     client: Client, *, run_id: str, expected_source_ids: list[str], job_timeout: float,
 ) -> dict:
-    root = f"/runs/{_quoted(run_id)}/minimal-context"
-    status, started = client.post(root + "/jobs", {})
-    _expect(status == 202, f"Minimal Context start returned HTTP {status}: {started}")
-    terminal = _poll_minimal_context(client, root=root, job=started, timeout=job_timeout)
-    _expect(terminal.get("state") == "completed", f"Minimal Context failed: {terminal}")
+    root = f"/runs/{_quoted(run_id)}/context-investigation/lean-context/jobs"
+    status, started = client.post(root, {"max_new_executions": 16})
+    _expect(status == 202, f"Lean Context start returned HTTP {status}: {started}")
+    terminal = _poll_lean_context(client, root=root, job=started, timeout=job_timeout)
+    _expect(terminal.get("state") == "completed", f"Lean Context failed: {terminal}")
     result = terminal.get("result") if isinstance(terminal.get("result"), dict) else {}
-    _expect(result.get("schema_version") == "clozn.minimal-context-search-result.v2", (
-        f"Minimal Context returned no typed result: {terminal}"
+    _expect(result.get("schema_version") == "clozn.lean-context-result.v1", (
+        f"Lean Context returned no typed result: {terminal}"
     ))
-    _expect(result.get("status") == "completed", f"Minimal Context did not complete: {result}")
+    _expect(result.get("status") == "completed", f"Lean Context did not complete: {result}")
     universe = result.get("universe") if isinstance(result.get("universe"), dict) else {}
     _expect(universe.get("source_ids") == expected_source_ids, (
-        "Minimal Context did not use the same canonical source identities as Context Effects: "
+        "Lean Context did not use the same canonical source identities as Context Effects: "
         f"{universe.get('source_ids')} != {expected_source_ids}"
     ))
     best = result.get("best") if isinstance(result.get("best"), dict) else {}
     removed = best.get("removed_source_ids") if isinstance(best.get("removed_source_ids"), list) else []
     retained = best.get("retained_source_ids") if isinstance(best.get("retained_source_ids"), list) else []
-    _expect(best.get("observation_status") == "exact_preserved", (
-        f"Minimal Context winner is not exact-preserved: {best}"
-    ))
-    _expect(bool(removed), f"qualification fixture produced no verified reduction: {result}")
+    _expect(bool(removed), f"qualification fixture produced no tested reduction: {result}")
     _expect(set(removed).isdisjoint(retained), f"winner source sets overlap: {best}")
     _expect(set(removed) | set(retained) == set(expected_source_ids), (
         f"winner source sets do not cover the declared universe: {best}"
     ))
     reduction = result.get("reduction") if isinstance(result.get("reduction"), dict) else {}
+    original = result.get("original") if isinstance(result.get("original"), dict) else {}
+    original_tokens = original.get("rendered_prompt_token_cost")
+    retained_tokens = best.get("rendered_prompt_token_cost")
     _expect(
-        isinstance(reduction.get("retained_prompt_token_cost"), int)
-        and isinstance(reduction.get("original_prompt_token_cost"), int)
-        and reduction["retained_prompt_token_cost"] < reduction["original_prompt_token_cost"],
+        isinstance(original_tokens, int)
+        and isinstance(retained_tokens, int)
+        and retained_tokens < original_tokens,
         f"winner did not reduce rendered prompt tokens: {reduction}",
     )
-
-    result_id = result.get("result_id")
-    _expect(isinstance(result_id, str) and result_id, "Minimal Context result omitted result_id")
-    status, listing = client.get(root + "/results")
-    rows = listing.get("results") if isinstance(listing.get("results"), list) else []
-    _expect(status == 200 and any(row.get("result_id") == result_id for row in rows), (
-        f"durable Minimal Context result was not listed: {listing}"
+    comparison = (
+        result.get("generation_comparison")
+        if isinstance(result.get("generation_comparison"), dict)
+        else {}
+    )
+    full = comparison.get("full_context") if isinstance(comparison.get("full_context"), dict) else {}
+    lean = comparison.get("lean_context") if isinstance(comparison.get("lean_context"), dict) else {}
+    _expect(comparison.get("status") == "completed", f"fresh generations failed: {comparison}")
+    _expect(isinstance(full.get("text"), str) and isinstance(lean.get("text"), str), (
+        f"fresh generation texts are missing: {comparison}"
     ))
-    status, reopened_result = client.get(root + f"/results/{_quoted(result_id)}")
-    _expect(status == 200 and reopened_result.get("result_id") == result_id, (
-        f"durable Minimal Context result could not be reopened: {reopened_result}"
-    ))
-    _expect(reopened_result.get("current_binding", {}).get("status") == "current", (
-        f"new Minimal Context result is already stale: {reopened_result}"
-    ))
-
-    materialize_path = root + f"/results/{_quoted(result_id)}/materialize"
-    first_status, first = client.post(materialize_path, {})
-    second_status, second = client.post(materialize_path, {})
-    _expect(first_status == 201 and first.get("state") == "completed", (
-        f"Minimal Context materialization failed: HTTP {first_status} {first}"
-    ))
-    _expect(second_status == 201 and second.get("state") == "completed", (
-        f"Minimal Context materialization retry failed: HTTP {second_status} {second}"
-    ))
-    child_run_id = first.get("child_run_id")
-    _expect(isinstance(child_run_id, str) and child_run_id, (
-        f"Minimal Context materialization omitted child_run_id: {first}"
-    ))
-    _expect(second.get("child_run_id") == child_run_id, (
-        "Minimal Context materialization was not idempotent: "
-        f"{child_run_id} != {second.get('child_run_id')}"
-    ))
-    parent_status, parent = client.get(f"/runs/{_quoted(run_id)}")
-    child_status, child = client.get(f"/runs/{_quoted(child_run_id)}")
-    _expect(parent_status == 200 and parent.get("id") == run_id, "parent Run could not be reopened")
-    _expect(child_status == 200 and child.get("id") == child_run_id, "reduced child Run could not be reopened")
-    _expect(child.get("parent_run_id") == run_id, f"child lost its parent binding: {child}")
-    _expect(child.get("response") == parent.get("response"), (
-        f"reduced child did not preserve the recorded answer exactly: {child.get('response')!r}"
-    ))
-
+    budget = result.get("budget") if isinstance(result.get("budget"), dict) else {}
     return {
-        "result_id": result_id,
-        "certificate": result.get("certificate"),
-        "stopping_reason": result.get("stopping_reason"),
+        "search_id": result.get("search_id"),
         "source_count": len(expected_source_ids),
         "retained_source_count": len(retained),
         "removed_source_count": len(removed),
-        "original_prompt_tokens": reduction.get("original_prompt_token_cost"),
-        "retained_prompt_tokens": reduction.get("retained_prompt_token_cost"),
-        "reduction_percent": reduction.get("percent"),
-        "child_run_id": child_run_id,
+        "original_prompt_tokens": original_tokens,
+        "retained_prompt_tokens": retained_tokens,
+        "reduction_percent": (
+            (100.0 * reduction.get("removed_prompt_tokens", 0) / original_tokens)
+            if original_tokens else 0.0
+        ),
+        "used_new_executions": budget.get("used_new_executions"),
+        "fresh_answers_exact_match": comparison.get("exact_match"),
     }
 
 
 def run(client: Client, *, model: str | None, job_timeout: float) -> dict:
     started = time.monotonic()
     effects = effects_smoke.run(client, model=model, job_timeout=job_timeout)
-    minimal = _minimal_context(
+    lean = _lean_context(
         client, run_id=effects["run_id"],
         expected_source_ids=list(effects["source_ids"]), job_timeout=job_timeout,
     )
@@ -155,7 +123,7 @@ def run(client: Client, *, model: str | None, job_timeout: float) -> dict:
             "source_id": effects["source_id"],
             "source_ids": effects["source_ids"],
         },
-        "minimal_context": minimal,
+        "lean_context": lean,
         "inspect_url": effects["inspect_url"],
     }
 

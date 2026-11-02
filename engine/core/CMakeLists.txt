@@ -69,6 +69,12 @@ add_executable(test_target_logprob_reduction tests/test_target_logprob_reduction
 target_include_directories(test_target_logprob_reduction PRIVATE include)
 add_test(NAME target_logprob_reduction COMMAND test_target_logprob_reduction)
 
+# Native recorded-continuation score-many uses a model-agnostic exact-token trie.
+# Keep its unified-KV capacity accounting independently testable without a GGUF.
+add_executable(test_teacher_forced_score_many tests/test_teacher_forced_score_many.cpp)
+target_include_directories(test_teacher_forced_score_many PRIVATE include)
+add_test(NAME teacher_forced_score_many COMMAND test_teacher_forced_score_many)
+
 # Ordinary chat prompt-cache planning is exact-token-only and model-free. The full-prefix case must
 # retain one bridge token to recover the next-token logits row.
 add_executable(test_prompt_prefix_cache tests/test_prompt_prefix_cache.cpp)

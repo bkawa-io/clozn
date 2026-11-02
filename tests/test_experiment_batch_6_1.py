@@ -14,8 +14,6 @@ from clozn.experiments.runner import run_experiment
 from clozn.experiments.scoring import DeleteSourceRecordedContinuationScoreAdapter
 from clozn.experiments.selections import ContextSelection
 from clozn.experiments.state import ExecutionState
-from clozn.recipes.minimal_context import run_minimal_context
-from clozn.runs.context_units import build_context_unit_manifest
 from clozn.runs import store as run_store
 from clozn.runs.context_receipt import build_context_receipt
 
@@ -316,7 +314,6 @@ def test_shared_parent_adapter_creates_probes_promotes_and_reuses_parent_without
     adapter.close()
     assert engine.closed == ["shared-session"]
 
-
 def test_shared_parent_promotion_failure_preserves_observation_and_closes_session():
     run, source_ids = _run()
     run["behavior"]["active_dials"] = {}
@@ -382,32 +379,3 @@ def test_shared_parent_cancellation_keeps_completed_child_and_closes_session():
     assert result.arms[1].state == "cancelled"
     assert result.arms[1].observation_id is None
     assert engine.closed == ["shared-session"]
-
-
-def test_scalar_and_shared_parent_qualification_match_observations_and_search_result():
-    run, _source_ids = _run()
-    run["behavior"]["active_dials"] = {}
-    run["context_units"] = build_context_unit_manifest(run)
-    prompt_cost = lambda messages: sum(len(str(item.get("content", ""))) for item in messages)
-
-    scalar = run_minimal_context(
-        deepcopy(run), substrate=ProbeSubstrate(), prompt_token_counter=prompt_cost,
-        max_new_counterfactual_observations=8, execution_strategy="scalar",
-    )
-    engine = _SharedEngine()
-    shared = run_minimal_context(
-        deepcopy(run), substrate=_SharedSubstrate(), engine=engine,
-        prompt_token_counter=prompt_cost, max_new_counterfactual_observations=8,
-        execution_strategy="shared_parent",
-    )
-
-    assert scalar.status == shared.status == "completed"
-    assert scalar.search_id == shared.search_id
-    assert scalar.certificate == shared.certificate
-    assert scalar.best == shared.best
-    assert scalar.trials == shared.trials
-    assert scalar.trajectory == shared.trajectory
-    assert scalar.budget.used_new_executions == shared.budget.used_new_executions
-    assert engine.closed == ["shared-session"]
-    assert engine.probe_rounds
-    assert engine.shared_work < engine.naive_work

@@ -1,0 +1,21 @@
+{
+  "schema_version": "clozn.context-interactions-result.v1",
+  "run_id": "run_fixture",
+  "status": "completed",
+  "stop_reason": "execution_budget",
+  "seed": 0,
+  "claim": {
+    "kind": "exploratory_sampled_marginals",
+    "redundancy_proven": true
+  },
+  "source_ids": ["seg_a"],
+  "budget": {
+    "max_new_executions": 4,
+    "used_new_executions": 4,
+    "reused_observation_count": 0,
+    "completed_pairs": 1
+  },
+  "source_estimates": [],
+  "elapsed_seconds": 1.0,
+  "best": null
+}

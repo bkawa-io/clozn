@@ -181,8 +181,10 @@ def run_cancellation(
     status, reader_before = client.get(reader_path)
     _expect(status == 200, f"cancellation reader returned HTTP {status}: {reader_before}")
     universe = reader_before.get("measurement", {}).get("source_universe")
-    _expect(isinstance(universe, list) and len(universe) == source_count, (
-        f"cancellation reader lost exact sources: {universe}"
+    expected_source_count = source_count + 2
+    _expect(isinstance(universe, list) and len(universe) == expected_source_count, (
+        "cancellation reader did not retain the surrounding messages and exact fixture sources: "
+        f"{universe}"
     ))
 
     status, started_job = client.post(_job_path(run_id), {"source_ids": universe})
@@ -222,7 +224,7 @@ def run_cancellation(
         "cancel_delay_seconds": cancel_delay,
         "elapsed_seconds": round(time.monotonic() - started, 3),
         **_validate_cancelled_effects(
-            terminal, reader_after=reader_after, source_count=source_count,
+            terminal, reader_after=reader_after, source_count=expected_source_count,
         ),
     }
 
@@ -249,8 +251,16 @@ def run(client: Client, *, model: str | None, job_timeout: float) -> dict:
     status, reader_before = client.get(reader_path)
     _expect(status == 200, f"reader returned HTTP {status}: {reader_before}")
     universe = reader_before.get("measurement", {}).get("source_universe")
-    _expect(isinstance(universe, list) and len(universe) == 4, (
-        f"reader source universe did not expose all derived Markdown chunks: {universe}"
+    sources = reader_before.get("sources") if isinstance(reader_before.get("sources"), list) else []
+    fixture_sources = [
+        row for row in sources
+        if isinstance(row, dict)
+        and row.get("message_index") == 1
+        and row.get("source_id") in (universe or [])
+    ]
+    _expect(isinstance(universe, list) and len(universe) == 6 and len(fixture_sources) == 4, (
+        "reader source universe did not expose the two surrounding messages and all four "
+        f"derived Markdown chunks: {universe}"
     ))
 
     status, job_start = client.post(_job_path(run_id), {"source_ids": universe})

@@ -20,9 +20,9 @@ from clozn.server import app as ctx   # the seam: live server state + patchable 
 from clozn.server.request_context import RequestContext   # backlog #2: per-request isolation (see EngineSubstrate)
 
 
-def _minimal_context_batch_workers() -> int:
+def _score_batch_workers() -> int:
     """Bounded opt-in concurrency for independent engine context slots."""
-    raw = os.environ.get("CLOZN_MINIMAL_CONTEXT_BATCH_WORKERS", "1")
+    raw = os.environ.get("CLOZN_SCORE_BATCH_WORKERS", "1")
     try:
         return max(1, min(8, int(raw)))
     except (TypeError, ValueError):
@@ -37,6 +37,19 @@ def _experimental_native_reference_match_arms_enabled() -> bool:
     has qualified the execution regime.
     """
     return os.environ.get("CLOZN_ENABLE_NATIVE_REFERENCE_MATCH_ARMS", "").lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _experimental_native_teacher_forced_score_many_enabled() -> bool:
+    """Opt into native exact-prefix-trie scoring for engineering measurements.
+
+    The route is model-family agnostic and falls back to scalar on any runtime
+    refusal, but its current multi-sequence float regime is not yet trusted
+    evidence. Keeping this explicit prevents an available capability from
+    silently changing production attribution numbers.
+    """
+    return os.environ.get("CLOZN_ENABLE_NATIVE_SCORE_MANY", "").lower() in {
         "1", "true", "yes", "on",
     }
 
@@ -75,6 +88,11 @@ class EngineSubstrate:
 
     @property
     def score_tokens_many_numerical_regime(self):
+        if (
+            _experimental_native_teacher_forced_score_many_enabled()
+            and getattr(self, "_native_teacher_forced_score_many", False)
+        ):
+            return "native_prefix_trie_target_logprob_v1"
         return (
             "scalar_prefix_cached_v1"
             if getattr(self, "_score_prefix_cache", False)
@@ -83,6 +101,15 @@ class EngineSubstrate:
 
     @property
     def score_tokens_many_execution_identity(self):
+        if (
+            _experimental_native_teacher_forced_score_many_enabled()
+            and getattr(self, "_native_teacher_forced_score_many", False)
+        ):
+            return {
+                "kind": "clozn.teacher-forced-score-many.native-prefix-trie.v1",
+                "parity_contract": None,
+                "scalar_fallback": "/score",
+            }
         if getattr(self, "_score_prefix_cache", False):
             return {
                 "kind": "clozn.score-tokens-scalar-prefix-cache.v1",
@@ -93,7 +120,12 @@ class EngineSubstrate:
 
     @property
     def score_tokens_many_execution_strategy(self):
-        return "scalar_http_concurrent" if _minimal_context_batch_workers() > 1 else "scalar_serial"
+        if (
+            _experimental_native_teacher_forced_score_many_enabled()
+            and getattr(self, "_native_teacher_forced_score_many", False)
+        ):
+            return "native_prefix_trie"
+        return "scalar_http_concurrent" if _score_batch_workers() > 1 else "scalar_serial"
 
     # IDENTITY LAZY RE-RESOLUTION (engine-down pressure test finding #2): a down-at-startup engine pays
     # this ~2s connect-refused tax (this host's control fact) at most once per cooldown window on lazy
@@ -120,6 +152,7 @@ class EngineSubstrate:
         self._identity_lock = threading.Lock()
         self._identity_last_attempt = 0.0
         self._native_reference_match_arms = False
+        self._native_teacher_forced_score_many = False
         self._score_prefix_cache = False
         self.last_native_reference_match_metrics = None
         self._request: RequestContext | None = None
@@ -136,6 +169,10 @@ class EngineSubstrate:
             capabilities = (h or {}).get("capabilities") if isinstance(h, dict) else {}
             self._native_reference_match_arms = bool(
                 isinstance(capabilities, dict) and capabilities.get("reference_match_arms") is True
+            )
+            self._native_teacher_forced_score_many = bool(
+                isinstance(capabilities, dict)
+                and capabilities.get("teacher_forced_score_many") is True
             )
             self._score_prefix_cache = bool(
                 isinstance(capabilities, dict) and capabilities.get("score_prefix_cache") is True
@@ -326,9 +363,59 @@ class EngineSubstrate:
         )
         return r.get("tokens", [])
 
-    def score_tokens_many(self, arms, *, cancel=None):
-        """Score arms through the trusted scalar worker route with bounded concurrency."""
+    def score_tokens_many_native(self, arms, *, cancel=None):
+        """Attempt one generic native prefix-trie score batch without fallback."""
+        arms = list(arms)
+        if not (
+            getattr(self, "_native_teacher_forced_score_many", False)
+            and callable(getattr(self.engine, "teacher_forced_score_many", None))
+            and 1 <= len(arms) <= 16
+        ):
+            raise RuntimeError("native teacher-forced score-many is unavailable")
+        if cancel is not None:
+            cancelled = cancel() if callable(cancel) else (
+                cancel.is_set() if callable(getattr(cancel, "is_set", None)) else bool(cancel)
+            )
+            if cancelled:
+                from clozn.experiments.multi_arm import BatchCancelled
+                raise BatchCancelled("native score-many cancelled before dispatch")
+
+        continuation_ids = None
+        native_arms = []
+        for arm in arms:
+            ids = arm.get("continuation_ids")
+            if not isinstance(ids, (list, tuple)) or not ids:
+                raise ValueError("native scoring requires continuation_ids on every arm")
+            current_ids = [int(token) for token in ids]
+            if continuation_ids is None:
+                continuation_ids = current_ids
+            elif current_ids != continuation_ids:
+                raise ValueError("native scoring requires one shared continuation")
+            if int(arm.get("topk", 0)) != 0:
+                raise ValueError("native scoring supports only topk=0")
+            assembled = inject_block(arm["messages"], arm.get("block"))
+            native_arms.append({
+                "prompt": ctx._engine_tmpl(self.engine, assembled),
+            })
+        response = self.engine.teacher_forced_score_many(
+            native_arms,
+            continuation_ids=continuation_ids,
+            topk=0,
+        )
+        result_rows = response.get("results")
+        if not isinstance(result_rows, list) or len(result_rows) != len(arms):
+            raise RuntimeError("native score-many returned the wrong arm count")
+        return {
+            "results": [row.get("tokens", []) for row in result_rows],
+            "numerical_regime": response.get("numerical_regime"),
+            "qualified": response.get("qualified") is True,
+            "execution": deepcopy(response.get("execution") or {}),
+        }
+
+    def _score_tokens_many_scalar(self, arms, *, cancel=None, native_fallback_reason=None):
+        """Run the existing scalar score-many wrapper and aggregate cache work."""
         from clozn.experiments.multi_arm import concurrent_many, serial_many
+        arms = list(arms)
 
         def detailed(**arm):
             response = self._score_tokens_response(**arm)
@@ -339,7 +426,7 @@ class EngineSubstrate:
                 "numerical_regime": response.get("numerical_regime"),
             }
 
-        workers = _minimal_context_batch_workers()
+        workers = _score_batch_workers()
         if workers <= 1:
             rows = serial_many(detailed, arms, cancel=cancel)
         else:
@@ -360,7 +447,27 @@ class EngineSubstrate:
                 "cached_tokens": sum(row["cached_tokens"] for row in valid_cache_rows),
                 "evaluated_tokens": sum(row["evaluated_tokens"] for row in valid_cache_rows),
             }
+        if native_fallback_reason is not None:
+            metadata["native_fallback"] = {
+                "used": True,
+                "reason": native_fallback_reason,
+                "execution_strategy": "scalar",
+            }
         return {"results": [row["tokens"] for row in rows], **metadata}
+
+    def score_tokens_many(self, arms, *, cancel=None):
+        """Use opt-in native scoring for benchmarks, with transparent scalar fallback."""
+        arms = list(arms)
+        if _experimental_native_teacher_forced_score_many_enabled():
+            try:
+                return self.score_tokens_many_native(arms, cancel=cancel)
+            except Exception as exc:
+                return self._score_tokens_many_scalar(
+                    arms,
+                    cancel=cancel,
+                    native_fallback_reason=f"{type(exc).__name__}: {exc}",
+                )
+        return self._score_tokens_many_scalar(arms, cancel=cancel)
     def probe_reference_match(self, messages, reference_token_ids, *, generation_contract,
                               explicit_conditions=None):
         """Run one non-journaling exact recorded-answer probe.
@@ -559,7 +666,7 @@ class EngineSubstrate:
                     # scalar path rather than turning an experiment into proof.
                     self.last_native_reference_match_metrics = None
 
-        workers = _minimal_context_batch_workers()
+        workers = _score_batch_workers()
         if workers <= 1:
             return serial_many(self.probe_reference_match, native_arms, cancel=cancel)
         return concurrent_many(self.probe_reference_match, native_arms, cancel=cancel, max_workers=workers)

@@ -59,6 +59,11 @@ export type ContextInvestigationAnswer =
       fidelity: "recorded_run_trace" | "baseline_token_score_observation";
       observationId: string | null;
     }
+  | {
+      status: "text_only";
+      text: string;
+      sha256: string;
+    }
   | { status: "unavailable" };
 
 export interface DeleteSourceIntervention {
@@ -350,7 +355,7 @@ function decodeAnswerToken(value: unknown, endpoint: string, path: string): Cont
 
 function decodeAnswer(value: unknown, endpoint: string, path: string): ContextInvestigationAnswer {
   const row = record(value, endpoint, path);
-  const status = oneOf(required(row, "status", endpoint, path), ["available", "unavailable"] as const, endpoint, `${path}.status`);
+  const status = oneOf(required(row, "status", endpoint, path), ["available", "text_only", "unavailable"] as const, endpoint, `${path}.status`);
   if (status === "unavailable") {
     if ("text" in row || "tokens" in row || "observation_id" in row) fail(endpoint, path, "must not carry available answer evidence when unavailable");
     return { status };
@@ -359,6 +364,12 @@ function decodeAnswer(value: unknown, endpoint: string, path: string): ContextIn
   const answerText = text(required(row, "text", endpoint, path), endpoint, `${path}.text`);
   const sha256 = nonEmptyText(required(row, "sha256", endpoint, path), endpoint, `${path}.sha256`);
   if (!SHA256.test(sha256)) fail(endpoint, `${path}.sha256`, "must be a lowercase SHA-256 digest");
+  if (status === "text_only") {
+    if ("tokens" in row || "fidelity" in row || "observation_id" in row) {
+      fail(endpoint, path, "text-only answer must not claim token-aligned evidence");
+    }
+    return { status, text: answerText, sha256 };
+  }
   const tokens = list(required(row, "tokens", endpoint, path), endpoint, `${path}.tokens`)
     .map((item, index) => decodeAnswerToken(item, endpoint, `${path}.tokens[${index}]`));
   const fidelity = oneOf(

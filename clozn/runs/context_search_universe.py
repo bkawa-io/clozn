@@ -88,7 +88,7 @@ def plan_context_search_universe(
     run: Mapping[str, Any],
     context_units: Mapping[str, Any],
     *,
-    max_units: int = 16,
+    max_units: int = 64,
     policy: str = POLICY,
 ) -> dict:
     """Validate and expose the same bounded units produced during capture."""

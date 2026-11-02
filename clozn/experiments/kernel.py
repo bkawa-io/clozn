@@ -1,4 +1,4 @@
-"""The model-free experiment plan shared by Context Effects and Minimal Context."""
+"""The model-free experiment plan shared by context analyses."""
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping

@@ -11,6 +11,7 @@ from clozn.experiments.context_investigation import (
     project_locus_details,
     project_source_loci,
     query_answer_effects,
+    summarize_context_investigation,
 )
 from clozn.experiments.observations import TokenScoreObservation
 from clozn.experiments.persistence import ExperimentView, ObservationNotFound, ObservationStore
@@ -32,6 +33,34 @@ class MemoryStore(ObservationStore):
         if self.view is None:
             raise ObservationNotFound(experiment_id)
         return self.view
+
+
+def test_compact_context_investigation_summary_avoids_locus_projection():
+    run, source_ids = _run()
+    plan = plan_context_effects(run, source_ids=source_ids[:2])
+
+    assert summarize_context_investigation(
+        run, plan, observation_store=MemoryStore(),
+    ) == {
+        "status": "not_measured",
+        "source_count": 2,
+        "completed_source_count": 0,
+        "unavailable_source_count": 0,
+        "failed_source_count": 0,
+        "not_measured_source_count": 2,
+    }
+
+    completed = summarize_context_investigation(
+        run, plan, observation_store=MemoryStore(_view(run, source_ids[:2])),
+    )
+    assert completed == {
+        "status": "completed",
+        "source_count": 2,
+        "completed_source_count": 2,
+        "unavailable_source_count": 0,
+        "failed_source_count": 0,
+        "not_measured_source_count": 0,
+    }
 
 
 def _single_message_run(content="only current request"):
@@ -90,6 +119,27 @@ def test_reader_before_measurement_has_context_and_answer_without_model_work():
     ]
     assert document["answer"]["text"] == "same answer"
     assert document["loci"] == []
+    schemas.validate(document, "clozn.context-investigation-reader.v1")
+
+
+def test_reader_keeps_recorded_answer_text_when_token_trace_is_missing():
+    run, source_ids = _run()
+    run["trace"] = {"unavailable": "trace blob missing"}
+    plan = plan_context_effects(run, source_ids=source_ids[:2])
+
+    document = build_context_investigation_reader(
+        run, plan, observation_store=MemoryStore(),
+    )
+
+    assert document["status"] == "not_measured"
+    assert document["answer"] == {
+        "status": "text_only",
+        "text": run["response"],
+        "sha256": document["answer"]["sha256"],
+    }
+    assert len(document["answer"]["sha256"]) == 64
+    assert document["capabilities"]["context_effects"] == "measurable"
+    assert document["capabilities"]["answer_selection_projection"] == "unavailable"
     schemas.validate(document, "clozn.context-investigation-reader.v1")
 
 

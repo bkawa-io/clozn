@@ -241,6 +241,15 @@ recomputed because KV state does not contain historical logits. `/score` reports
 `cache.cached_tokens`, `cache.evaluated_tokens`, and a `numerical_regime`; callers can send
 `use_prefix_cache: false` to force the cold scalar-reference path for parity checks. The qualified v1
 contract is bit-exact float32 per-token log-probability parity with that cold path.
+
+Workers advertising `capabilities.teacher_forced_score_many: true` accept the private additive
+`POST /v1/teacher-forced-score-many` route. The request carries 1–16 independent `prompt` or
+`prompt_ids` arms plus one shared non-empty `continuation_ids` array. The worker pre-fills an
+exact-token prefix trie, then teacher-forces the continuation across all resident sequence IDs.
+This capability is architecture-neutral and does not imply numerical qualification: callers must
+inspect `qualified`, `numerical_regime`, and `execution`, and must retry scalar `/score` when the
+route is unavailable or unqualified for their evidence use.
+
 Missing phases are absent, never reported as zero or inferred from wall time. `aggregation:"overlapping"`
 and `"context_only"` phases remain useful attribution but do not contribute to known in-request time.
 

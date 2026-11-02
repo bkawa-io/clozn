@@ -56,7 +56,7 @@ def _verify_wheel_manifest(wheel_path: str) -> None:
         "clozn_engine/__init__.py",
         "clozn/studio/app/index.html",
         "clozn/schemas/defs/clozn.context-investigation-effects-job-result.v1.json",
-        "clozn/schemas/defs/clozn.minimal-context-search-result.v2.json",
+        "clozn/schemas/defs/clozn.lean-context-result.v1.json",
     }
     forbidden = (
         "clozn_client/",
@@ -74,6 +74,14 @@ def _verify_wheel_manifest(wheel_path: str) -> None:
         "clozn/schemas/defs/clozn.context-answer-influence-export.v1.json",
         "clozn/schemas/defs/clozn.receipt-privacy-transaction.v1.json",
         "clozn/schemas/defs/clozn.model-lock.v1.json",
+        "clozn/schemas/defs/clozn.minimal-context-search-result.v2.json",
+        "clozn/schemas/defs/clozn.experiment-materialization.v1.json",
+        "clozn/server/routes/minimal_context.py",
+        "clozn/server/routes/run_compare.py",
+        "clozn/recipes/minimal_context.py",
+        "clozn/recipes/minimal_context_result_store.py",
+        "clozn/analysis/reduction_compare.py",
+        "clozn/experiments/materialize.py",
     )
     with zipfile.ZipFile(wheel_path) as archive:
         names = set(archive.namelist())

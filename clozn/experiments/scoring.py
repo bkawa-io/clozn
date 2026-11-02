@@ -160,7 +160,8 @@ def _thaw(value: Any) -> Any:
     return value
 
 
-def _score_execution_proof(execution: Mapping[str, Any]) -> tuple[str, bool]:
+def _score_execution_evidence(execution: Mapping[str, Any]) -> tuple[str, bool, bool]:
+    """Return (proof grade, usable, trusted) for one score-many execution."""
     trusted = bool(
         execution.get("qualified")
         and execution.get("evidence_use") == "trusted"
@@ -170,8 +171,20 @@ def _score_execution_proof(execution: Mapping[str, Any]) -> tuple[str, bool]:
         and execution.get("execution_strategy") in {"scalar_serial", "scalar_http_concurrent"}
     )
     if trusted:
-        return "trusted", True
-    return "unqualified", False
+        return "trusted", True, True
+    approximate = bool(
+        execution.get("evidence_use") == "approximate"
+        and execution.get("numerical_regime") in {
+            "native_prefix_trie_target_logprob_v1",
+            "native_prefix_trie_host_float32_v1",
+        }
+        and execution.get("execution_strategy") == "native_prefix_trie"
+        and (execution.get("execution_identity") or {}).get("kind") ==
+            "clozn.teacher-forced-score-many.native-prefix-trie.v1"
+    )
+    if approximate:
+        return "approximate", True, False
+    return "unqualified", False, False
 
 
 def _score_execution_before_dispatch(substrate: Any) -> dict[str, Any]:
@@ -182,6 +195,17 @@ def _score_execution_before_dispatch(substrate: Any) -> dict[str, Any]:
         and callable(getattr(substrate, "score_tokens_many", None))
     )
     if isinstance(declared, str) and (declared == "native" or declared.startswith("native_")) and many_enabled:
+        identity = getattr(substrate, "score_tokens_many_execution_identity", None)
+        if isinstance(identity, Mapping) and isinstance(identity.get("approximate_contract"), str):
+            return {
+                "execution_strategy": declared,
+                "numerical_regime": getattr(
+                    substrate, "score_tokens_many_numerical_regime",
+                    "native_prefix_trie_target_logprob_v1",
+                ),
+                "evidence_use": "approximate", "qualified": False,
+                "execution_identity": dict(identity), "execution_metadata": {},
+            }
         return {
             "execution_strategy": declared, "numerical_regime": "unqualified_native",
             "evidence_use": "unqualified", "qualified": False,
@@ -284,7 +308,8 @@ class DeleteSourceRecordedContinuationScoreAdapter:
             "scorer": "clozn.receipts.rederive.score_arm",
             "evaluator": "score_recorded_continuation",
             "method": "teacher_forced_score_tokens",
-            "proof_grade": "trusted",
+            "proof_grade": "approximate" if evaluator.scoring_mode == "fast" else "trusted",
+            "scoring_mode": evaluator.scoring_mode,
             "runtime_binding": runtime,
         }
         if runtime_reason:
@@ -347,6 +372,8 @@ class DeleteSourceRecordedContinuationScoreAdapter:
             arm_id=arm_id, run=run, state=state, evaluator=evaluator, intervention=intervention,
             conditions=score_conditions,
             raw_tokens=tokens, provenance=provenance,
+            proof_grade="approximate" if evaluator.scoring_mode == "fast" else "trusted",
+            trusted=evaluator.scoring_mode == "exact",
         )
 
     def execute_control(self, state: ExecutionState, *,
@@ -362,7 +389,7 @@ class DeleteSourceRecordedContinuationScoreAdapter:
         execution: Mapping[str, Any],
     ) -> tuple[ArmExecutionOutcome, ...]:
         strategy = str(execution.get("execution_strategy") or "scalar_serial")
-        proof_grade, trusted = _score_execution_proof(execution)
+        proof_grade, usable, trusted = _score_execution_evidence(execution)
         completed_rows = list(getattr(exc, "completed", ()) or ())
         completed_indices = tuple(getattr(exc, "completed_indices", ()) or ())
         if not completed_indices:
@@ -379,13 +406,13 @@ class DeleteSourceRecordedContinuationScoreAdapter:
         outcomes: list[ArmExecutionOutcome] = []
         for index, (request, payload) in enumerate(prepared):
             if index in completed_by_index:
-                if trusted:
+                if usable:
                     observation = _score_observation(
                         arm_id=request.arm_id, run=run, state=request.state, evaluator=request.evaluator,
                         intervention=request.intervention, conditions=payload,
                         raw_tokens=completed_by_index[index], provenance=payload["provenance"],
                         diagnostics={"partial_batch": True},
-                        proof_grade=proof_grade, trusted=True,
+                        proof_grade=proof_grade, trusted=trusted,
                     )
                 else:
                     observation = TokenScoreObservation(
@@ -465,7 +492,10 @@ class DeleteSourceRecordedContinuationScoreAdapter:
                 "scorer": "clozn.receipts.rederive.score_arm",
                 "evaluator": "score_recorded_continuation",
                 "method": "teacher_forced_score_tokens",
-                "proof_grade": "trusted",
+                "proof_grade": (
+                    "approximate" if request.evaluator.scoring_mode == "fast" else "trusted"
+                ),
+                "scoring_mode": request.evaluator.scoring_mode,
                 "runtime_binding": runtime,
             }
             if runtime_reason or not expected_ids or request.state.recorded_answer_token_identity.get("token_ids_sha256") != digest(expected_ids):
@@ -540,7 +570,7 @@ class DeleteSourceRecordedContinuationScoreAdapter:
             execution = detailed.provenance()
             raw_rows = list(detailed.results)
         except (BatchCancelled, MultiArmError) as exc:
-            proof_grade, _trusted = _score_execution_proof(execution)
+            proof_grade, _usable, _trusted = _score_execution_evidence(execution)
             for _request, payload in prepared:
                 payload["provenance"].update(deepcopy(execution))
                 payload["provenance"]["proof_grade"] = proof_grade
@@ -553,16 +583,16 @@ class DeleteSourceRecordedContinuationScoreAdapter:
             )
         if len(raw_rows) != len(prepared):
             raise ScoreExecutionError("score batch returned the wrong arm count")
-        proof_grade, trusted = _score_execution_proof(execution)
+        proof_grade, usable, trusted = _score_execution_evidence(execution)
         for (request, payload), raw_tokens in zip(prepared, raw_rows):
             payload["provenance"].update(deepcopy(execution))
             payload["provenance"]["proof_grade"] = proof_grade
-            if trusted:
+            if usable:
                 observation = _score_observation(
                     arm_id=request.arm_id, run=run, state=request.state, evaluator=request.evaluator,
                     intervention=request.intervention, conditions=payload, raw_tokens=raw_tokens,
                     provenance=payload["provenance"],
-                    diagnostics=execution, proof_grade=proof_grade, trusted=True,
+                    diagnostics=execution, proof_grade=proof_grade, trusted=trusted,
                 )
             else:
                 observation = TokenScoreObservation(

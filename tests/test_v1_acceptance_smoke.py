@@ -14,77 +14,56 @@ finally:
 
 
 class FakeClient:
-    def __init__(self):
-        self.materializations = 0
-
     def post(self, path, body):
-        if path.endswith("/minimal-context/jobs"):
+        assert body == {"max_new_executions": 16}
+        if path.endswith("/context-investigation/lean-context/jobs"):
             return 202, {"job_id": "job_one", "state": "queued"}
-        if path.endswith("/materialize"):
-            self.materializations += 1
-            return 201, {
-                "state": "completed",
-                "child_run_id": "run_child",
-            }
         raise AssertionError(f"unexpected POST {path}: {body}")
 
     def get(self, path):
-        if path.endswith("/minimal-context/jobs/job_one"):
+        if path.endswith("/context-investigation/lean-context/jobs/job_one"):
             return 200, {
                 "state": "completed",
                 "result": {
-                    "schema_version": "clozn.minimal-context-search-result.v2",
-                    "result_id": "mcres_one",
+                    "schema_version": "clozn.lean-context-result.v1",
+                    "search_id": "search_one",
                     "status": "completed",
-                    "certificate": "INCLUSION_MINIMUM",
-                    "stopping_reason": "inclusion_minimum_proven",
                     "universe": {"source_ids": ["src_a", "src_b"]},
                     "best": {
                         "retained_source_ids": ["src_a"],
                         "removed_source_ids": ["src_b"],
-                        "observation_status": "exact_preserved",
+                        "rendered_prompt_token_cost": 12,
                     },
+                    "original": {"rendered_prompt_token_cost": 20},
                     "reduction": {
-                        "original_prompt_token_cost": 20,
-                        "retained_prompt_token_cost": 12,
-                        "percent": 40.0,
+                        "removed_prompt_tokens": 8,
                     },
+                    "generation_comparison": {
+                        "status": "completed",
+                        "full_context": {"text": "answer"},
+                        "lean_context": {"text": "answer"},
+                        "exact_match": True,
+                    },
+                    "budget": {"used_new_executions": 3},
                 },
-            }
-        if path.endswith("/minimal-context/results"):
-            return 200, {"results": [{"result_id": "mcres_one"}]}
-        if path.endswith("/minimal-context/results/mcres_one"):
-            return 200, {
-                "result_id": "mcres_one",
-                "current_binding": {"status": "current", "reason": None},
-            }
-        if path == "/runs/run_parent":
-            return 200, {"id": "run_parent", "response": "answer"}
-        if path == "/runs/run_child":
-            return 200, {
-                "id": "run_child", "parent_run_id": "run_parent", "response": "answer",
             }
         raise AssertionError(f"unexpected GET {path}")
 
 
-def test_minimal_context_acceptance_requires_durable_idempotent_child():
-    client = FakeClient()
-
-    report = smoke._minimal_context(
-        client, run_id="run_parent", expected_source_ids=["src_a", "src_b"],
+def test_lean_context_acceptance_requires_reduction_and_fresh_answers():
+    report = smoke._lean_context(
+        FakeClient(), run_id="run_parent", expected_source_ids=["src_a", "src_b"],
         job_timeout=1,
     )
 
-    assert client.materializations == 2
     assert report == {
-        "result_id": "mcres_one",
-        "certificate": "INCLUSION_MINIMUM",
-        "stopping_reason": "inclusion_minimum_proven",
+        "search_id": "search_one",
         "source_count": 2,
         "retained_source_count": 1,
         "removed_source_count": 1,
         "original_prompt_tokens": 20,
         "retained_prompt_tokens": 12,
         "reduction_percent": 40.0,
-        "child_run_id": "run_child",
+        "used_new_executions": 3,
+        "fresh_answers_exact_match": True,
     }

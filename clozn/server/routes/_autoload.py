@@ -16,14 +16,12 @@ import sys
 MARKER = "CLOZN_ROUTE_AUTOLOAD"
 _PACKAGE = "clozn.server.routes"
 
-# The v1 product has one context reader/effects family, one reduction family, the context receipt
-# disclosure, and parent/reduced-child comparison. Restoring any other route file does not expose it.
+# The v1 product has one context reader/effects/reduction family plus the context receipt disclosure.
+# Restoring any other route file does not expose it.
 ROUTE_MODULES = (
     "context_investigation_v1",
     "context_receipt",
     "engine",
-    "minimal_context",
-    "run_compare",
 )
 
 # (module_name, exception) for every manifested route module that could not be loaded.

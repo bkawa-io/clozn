@@ -167,6 +167,13 @@ function effectsJobDocument(state = "completed"): WireDocument {
     unavailable_source_count: 1,
     failed_source_count: 0,
     not_measured_source_count: 0,
+    executed_score_count: 1,
+    reused_score_count: 1,
+    elapsed_seconds: 2.5,
+    scoring_mode: "fast",
+    evidence_quality: "approximate",
+    execution_strategy: "native_prefix_trie",
+    numerical_regime: "native_prefix_trie_target_logprob_v1",
     state: "completed",
   };
   return document;
@@ -236,6 +243,33 @@ describe("Context Investigation reader contract", () => {
     notMeasured.capabilities.measurement = "not_measured";
 
     expect(decodeContextInvestigationReader(notMeasured).status).toBe("not_measured");
+  });
+
+  it("keeps recorded response text when token-aligned answer evidence is not ready", () => {
+    const textOnly = readerDocument();
+    textOnly.status = "not_measured";
+    textOnly.measurement.status = "not_measured";
+    textOnly.measurement.completed_source_count = 0;
+    textOnly.measurement.not_measured_source_count = 1;
+    textOnly.measurement.baseline_observation_id = null;
+    textOnly.answer = { status: "text_only", text: "Hi 🌕!", sha256: "a".repeat(64) };
+    textOnly.sources[0].measurement.status = "not_measured";
+    textOnly.sources[0].measurement.experiment_id = null;
+    textOnly.sources[0].measurement.arm_id = null;
+    textOnly.sources[0].measurement.observation_id = null;
+    delete textOnly.sources[0].measurement.intervention;
+    textOnly.sources[0].summary = {
+      max_abs_token_delta_nats: null,
+      total_continuation_delta_nats: null,
+      above_floor_locus_count: 0,
+    };
+    textOnly.sources[0].loci = [];
+    textOnly.loci = [];
+    textOnly.capabilities.measurement = "not_measured";
+    textOnly.capabilities.answer_selection_projection = "unavailable";
+
+    const decoded = decodeContextInvestigationReader(textOnly, "/reader", runId);
+    expect(decoded.answer).toEqual({ status: "text_only", text: "Hi 🌕!", sha256: "a".repeat(64) });
   });
 
   it.each(["unavailable", "failed"] as const)("decodes partial reader coverage with an explicitly %s source", (sourceStatus) => {
@@ -487,6 +521,9 @@ describe("Context Effects job contract", () => {
       sourceCount: 2,
       completedSourceCount: 1,
       unavailableSourceCount: 1,
+      scoringMode: "fast",
+      evidenceQuality: "approximate",
+      executionStrategy: "native_prefix_trie",
     }));
   });
 
@@ -521,6 +558,32 @@ describe("Context Investigation read client", () => {
     );
   });
 
+  it("requests a configured reader projection without running model work", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json(readerDocument()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await contextInvestigationApi.reader(runId, undefined, {
+      granularity: "adaptive", maxArms: 12,
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/runs/run%20%2F%20%CE%B1/context-investigation/reader?floor_nats=0.1&granularity=adaptive&max_arms=12",
+    );
+  });
+
+  it("requests a reader projection for an explicit custom source selection", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json(readerDocument()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await contextInvestigationApi.reader(runId, undefined, {
+      sourceIds: ["source-a", "source b"],
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/runs/run%20%2F%20%CE%B1/context-investigation/reader?floor_nats=0.1&source_id=source-a&source_id=source+b",
+    );
+  });
+
   it("POSTs a pure-read JSON query and verifies the returned coordinate and floor", async () => {
     const response = queryDocument();
     response.measurement_floor_nats = 0.2;
@@ -544,6 +607,44 @@ describe("Context Investigation read client", () => {
         body: JSON.stringify({ answer_start: 3, answer_end: 4, floor_nats: 0.2 }),
       }),
     );
+  });
+
+  it("keeps an answer projection on the configured source partition", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json(queryDocument()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await contextInvestigationApi.query(runId, {
+      answerStart: 3,
+      answerEnd: 4,
+      granularity: "message",
+      maxArms: 3,
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({
+      answer_start: 3,
+      answer_end: 4,
+      granularity: "message",
+      max_arms: 3,
+    });
+  });
+
+  it("keeps an answer projection on an explicit custom source selection", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json(queryDocument()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await contextInvestigationApi.query(runId, {
+      answerStart: 3,
+      answerEnd: 4,
+      sourceIds: ["source-a"],
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({
+      answer_start: 3,
+      answer_end: 4,
+      source_ids: ["source-a"],
+    });
   });
 
   it("rejects invalid requests, mismatched projections, and HTTP errors", async () => {
@@ -573,6 +674,20 @@ describe("Context Effects client", () => {
     expect(endpoint).toBe("/runs/run%20%2F%20%CE%B1/context-investigation/effects/jobs");
     expect(init.method).toBe("POST");
     expect(JSON.parse(String(init.body))).toEqual({ source_ids: ["source-a"] });
+  });
+
+  it("starts a budgeted Markdown-granularity job", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json(effectsJobDocument("queued"), 202));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await contextInvestigationApi.startEffects(runId, {
+      granularity: "adaptive", maxArms: 12, scoringMode: "fast",
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({
+      granularity: "adaptive", max_arms: 12, scoring_mode: "fast",
+    });
   });
 
   it("polls and cancels the same encoded job resource", async () => {

@@ -7,7 +7,6 @@ import {
   type RunDetails,
   type RunSummary,
 } from "./contracts";
-import { decodeRunComparison, type ReductionComparison } from "./runComparison";
 import { decodeContextReceipt, type ContextReceiptView } from "./contextReceipt";
 
 export class HttpError extends Error {
@@ -105,15 +104,6 @@ export const studioApi = {
       const row = payload && typeof payload === "object" && !Array.isArray(payload) ? payload as Record<string, unknown> : {};
       throw new HttpError(endpoint, response.status, typeof row.error === "string" ? row.error : response.statusText || "request failed");
     }
-  },
-
-  async runComparison(runAValue: string, runBValue: string, signal?: AbortSignal): Promise<ReductionComparison> {
-    const base = "/runs/compare";
-    const runA = runId(runAValue, base);
-    const runB = runId(runBValue, base);
-    if (runA === runB) throw new ContractError(base, "original and reduced child run ids must differ");
-    const endpoint = `${base}?${new URLSearchParams({ a: runA, b: runB })}`;
-    return decodeRunComparison(await getJson(endpoint, signal), endpoint, runA, runB);
   },
 
   async contextReceipt(runIdValue: string, signal?: AbortSignal): Promise<ContextReceiptView> {

@@ -69,15 +69,12 @@ def test_exact_gateway_module_boundary():
         "clozn.server.routes.runs",
         "clozn.server.routes.context_investigation_v1",
         "clozn.server.routes.context_receipt",
-        "clozn.server.routes.minimal_context",
-        "clozn.server.routes.run_compare",
         "runs_fallback",
     ]
     assert post_names == [
         "clozn.server.routes.openai",
         "clozn.server.routes.context_investigation_v1",
         "clozn.server.routes.engine",
-        "clozn.server.routes.minimal_context",
     ]
     assert app._DELETE_ROUTES == [runs]
 
@@ -154,7 +151,7 @@ def test_private_worker_advertises_only_v1_capabilities():
     assert fixture["capabilities"] == [
         "streaming", "sampling", "reference_match_arms",
         "persistent_parent_session", "performance_timing", "prompt_prefix_cache",
-        "score_prefix_cache",
+        "score_prefix_cache", "teacher_forced_score_many",
     ]
 
     source = (ROOT / "engine/core/serve/server_main.cpp").read_text(encoding="utf-8")
@@ -242,10 +239,13 @@ def test_removed_research_products_have_no_shippable_python_modules():
         "clozn/experiments/reconstructed_execution.py",
         "clozn/experiments/state_ref.py",
         "clozn/experiments/stats.py",
+        "clozn/experiments/materialize.py",
         "clozn/replay/test_span_bridge.py",
+        "clozn/replay/replay.py",
         "clozn/analysis/model_diff.py",
         "clozn/analysis/run_diff.py",
         "clozn/analysis/provenance.py",
+        "clozn/analysis/reduction_compare.py",
         "clozn/receipts/coalition.py",
         "clozn/receipts/hook_vocabulary.py",
         "clozn/receipts/intervention_manifest.py",
@@ -261,6 +261,8 @@ def test_removed_research_products_have_no_shippable_python_modules():
         "clozn/server/routes/replay.py",
         "clozn/server/routes/sessions.py",
         "clozn/server/routes/span_addresses.py",
+        "clozn/server/routes/minimal_context.py",
+        "clozn/server/routes/run_compare.py",
         "clozn/server/card_html.py",
         "clozn/server/ndjson.py",
         "clozn/qualification/__init__.py",
@@ -270,7 +272,14 @@ def test_removed_research_products_have_no_shippable_python_modules():
         "clozn/readouts/sae7b.py",
         "clozn/readouts/workspace_lens.py",
         "scripts/bench/batched_receipts.py",
+        "scripts/bench/native_reference_match.py",
+        "scripts/bench/parent_anchor_geometry.py",
+        "scripts/bench/parent_anchor_native.py",
+        "scripts/bench/persistent_parent_session.py",
+        "scripts/bench/prefix_reuse_ceiling.py",
+        "clozn/runs/parent_anchor_geometry.py",
         "scripts/demo/minimal_context_50_to_3.py",
+        "scripts/demo/long_essay_chat.py",
         "scripts/smoke/engine_substrate.py",
         "scripts/smoke/product_runtime.py",
         "tests/clients/package.json",
@@ -288,5 +297,14 @@ def test_removed_research_products_have_no_shippable_python_modules():
         "tests/fixtures/schemas/clozn.receipt-privacy-transaction.v1",
         "clozn/schemas/defs/clozn.checkpoint-reference.v2.json",
         "clozn/schemas/defs/clozn.experiment-generated-observation.v2.json",
+        "clozn/schemas/defs/clozn.experiment-materialization.v1.json",
+        "clozn/schemas/defs/clozn.minimal-context-search-result.v2.json",
+        "clozn/recipes/minimal_context.py",
+        "clozn/recipes/minimal_context_result_store.py",
+        "studio-frontend/src/data/minimalContext.ts",
+        "studio-frontend/src/data/runComparison.ts",
+        "studio-frontend/src/features/inspect/MinimalContext.tsx",
+        "docs/V1_POC_PLAN.md",
+        "docs/V1_LIVE_QUALIFICATION.md",
     )
     assert all(not (ROOT / path).exists() for path in removed)

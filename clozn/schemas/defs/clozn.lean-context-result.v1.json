@@ -38,6 +38,39 @@
         "evidence": {"type": ["object", "null"], "additionalProperties": true}
       },
       "additionalProperties": false
+    },
+    "generated_answer": {
+      "type": "object",
+      "required": ["text", "matches_recorded"],
+      "properties": {
+        "text": {"type": "string"},
+        "matches_recorded": {"type": ["boolean", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "generation_comparison": {
+      "type": "object",
+      "required": [
+        "status",
+        "decode_mode",
+        "max_new_tokens",
+        "full_context",
+        "lean_context",
+        "exact_match",
+        "normalized_match"
+      ],
+      "properties": {
+        "status": {"enum": ["completed", "unavailable"]},
+        "decode_mode": {"const": "greedy"},
+        "max_new_tokens": {"type": ["integer", "null"], "minimum": 1},
+        "full_context": {"anyOf": [{"$ref": "#/$defs/generated_answer"}, {"type": "null"}]},
+        "lean_context": {"anyOf": [{"$ref": "#/$defs/generated_answer"}, {"type": "null"}]},
+        "exact_match": {"type": ["boolean", "null"]},
+        "normalized_match": {"type": ["boolean", "null"]},
+        "reason": {"type": "string"},
+        "reason_code": {"type": "string"}
+      },
+      "additionalProperties": false
     }
   },
   "type": "object",
@@ -53,9 +86,11 @@
     "universe",
     "original",
     "best",
+    "generation_comparison",
     "reduction",
     "trials",
     "budget",
+    "elapsed_seconds",
     "stopping_reason"
   ],
   "properties": {
@@ -93,6 +128,7 @@
     "universe": {"type": "object", "additionalProperties": true},
     "original": {"anyOf": [{"$ref": "#/$defs/candidate"}, {"type": "null"}]},
     "best": {"anyOf": [{"$ref": "#/$defs/candidate"}, {"type": "null"}]},
+    "generation_comparison": {"$ref": "#/$defs/generation_comparison"},
     "reduction": {"type": ["object", "null"], "additionalProperties": true},
     "trials": {
       "type": "array",
@@ -143,6 +179,7 @@
       },
       "additionalProperties": false
     },
+    "elapsed_seconds": {"type": "number", "minimum": 0},
     "stopping_reason": {"enum": ["search_policy_complete", "budget_exhausted", "search_unavailable", "cancelled"]}
   },
   "additionalProperties": false

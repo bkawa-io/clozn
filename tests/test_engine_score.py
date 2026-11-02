@@ -102,6 +102,59 @@ def test_score_returns_the_raw_engine_reply(monkeypatch):
     assert ec.score(prompt="p", continuation_ids=[1, 2]) == canned
 
 
+def test_teacher_forced_score_many_sends_independent_prompts_and_shared_continuation(monkeypatch):
+    seen = {}
+    ec = EngineClient(port=1)
+    monkeypatch.setattr(
+        ec,
+        "_post",
+        lambda path, body: seen.update(path=path, body=body) or {
+            "results": [{"tokens": []}, {"tokens": []}],
+            "qualified": False,
+        },
+    )
+    response = ec.teacher_forced_score_many(
+        [{"prompt": "alpha"}, {"prompt_ids": [7, 8]}],
+        continuation_ids=[10, 11],
+    )
+    assert seen == {
+        "path": "/v1/teacher-forced-score-many",
+        "body": {
+            "arms": [{"prompt": "alpha"}, {"prompt_ids": [7, 8]}],
+            "continuation_ids": [10, 11],
+            "topk": 0,
+            "reduction": "backend_target",
+        },
+    }
+    assert response["qualified"] is False
+
+
+def test_teacher_forced_score_many_rejects_ambiguous_or_extended_arms():
+    ec = EngineClient(port=1)
+    for arm in (
+        {},
+        {"prompt": "x", "prompt_ids": [1]},
+        {"prompt": "x", "messages": []},
+    ):
+        try:
+            ec.teacher_forced_score_many([arm], continuation_ids=[2])
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"arm should have been rejected: {arm!r}")
+
+
+def test_teacher_forced_score_many_rejects_invalid_worker_shape(monkeypatch):
+    ec = EngineClient(port=1)
+    monkeypatch.setattr(ec, "_post", lambda path, body: {"results": []})
+    try:
+        ec.teacher_forced_score_many([{"prompt": "x"}], continuation_ids=[2])
+    except Exception as error:
+        assert "wrong arm count" in str(error)
+    else:
+        raise AssertionError("invalid native response should have failed closed")
+
+
 # ==================================================================================== EngineSubstrate.score_tokens
 
 class _FakeScoreEngine:
@@ -122,6 +175,36 @@ class _FakeScoreEngine:
     def score(self, **kw):
         self.calls.append(kw)
         return self._reply
+
+
+class _FakeNativeScoreEngine(_FakeScoreEngine):
+    def __init__(self, *, fail_native=False):
+        super().__init__({
+            "tokens": [{"id": 1, "piece": "x", "logprob": -0.1}],
+            "cache": {"matched_tokens": 0, "cached_tokens": 0, "evaluated_tokens": 2},
+            "numerical_regime": "scalar_reference",
+        })
+        self.native_calls = []
+        self.fail_native = fail_native
+
+    def teacher_forced_score_many(self, arms, *, continuation_ids, topk=0):
+        self.native_calls.append({
+            "arms": list(arms), "continuation_ids": list(continuation_ids), "topk": topk,
+        })
+        if self.fail_native:
+            raise RuntimeError("native route unavailable for this shape")
+        return {
+            "results": [
+                {"tokens": [{"id": continuation_ids[0], "piece": "x", "logprob": -0.2}]}
+                for _arm in arms
+            ],
+            "numerical_regime": "native_prefix_trie_target_logprob_v1",
+            "qualified": False,
+            "execution": {
+                "kind": "clozn.teacher-forced-score-many.native-prefix-trie.v1",
+                "prefix_rows_reused": 10,
+            },
+        }
 
 
 def _bare_engine_substrate(engine, steer):
@@ -167,7 +250,7 @@ def test_score_tokens_forwards_continuation_ids_as_ints_and_topk():
 
 
 def test_score_tokens_many_reports_aggregate_prefix_cache_work(monkeypatch):
-    monkeypatch.setenv("CLOZN_MINIMAL_CONTEXT_BATCH_WORKERS", "1")
+    monkeypatch.setenv("CLOZN_SCORE_BATCH_WORKERS", "1")
     fe = _FakeScoreEngine(reply={
         "tokens": [{"id": 1, "piece": "x", "logprob": -0.1}],
         "cache": {"matched_tokens": 90, "cached_tokens": 80, "evaluated_tokens": 20},
@@ -188,6 +271,40 @@ def test_score_tokens_many_reports_aggregate_prefix_cache_work(monkeypatch):
         "cached_tokens": 160,
         "evaluated_tokens": 40,
     }
+
+
+def test_score_tokens_many_can_use_explicit_unqualified_native_path(monkeypatch):
+    monkeypatch.setenv("CLOZN_ENABLE_NATIVE_SCORE_MANY", "1")
+    engine = _FakeNativeScoreEngine()
+    sub = _bare_engine_substrate(engine, steer=None)
+    sub._native_teacher_forced_score_many = True
+
+    result = sub.score_tokens_many([
+        {"messages": [{"role": "user", "content": "a"}], "continuation_ids": [1]},
+        {"messages": [{"role": "user", "content": "b"}], "continuation_ids": [1]},
+    ])
+
+    assert len(engine.native_calls) == 1
+    assert result["numerical_regime"] == "native_prefix_trie_target_logprob_v1"
+    assert result["qualified"] is False
+    assert len(result["results"]) == 2
+
+
+def test_score_tokens_many_native_refusal_falls_back_to_scalar(monkeypatch):
+    monkeypatch.setenv("CLOZN_ENABLE_NATIVE_SCORE_MANY", "1")
+    engine = _FakeNativeScoreEngine(fail_native=True)
+    sub = _bare_engine_substrate(engine, steer=None)
+    sub._native_teacher_forced_score_many = True
+
+    result = sub.score_tokens_many([
+        {"messages": [{"role": "user", "content": "a"}], "continuation_ids": [1]},
+        {"messages": [{"role": "user", "content": "b"}], "continuation_ids": [1]},
+    ])
+
+    assert len(engine.native_calls) == 1
+    assert len(engine.calls) == 2
+    assert result["native_fallback"]["used"] is True
+    assert result["native_fallback"]["execution_strategy"] == "scalar"
 
 
 

@@ -5,5 +5,12 @@
   "unavailable_source_count": 0,
   "failed_source_count": 0,
   "not_measured_source_count": 0,
+  "executed_score_count": 0,
+  "reused_score_count": 0,
+  "elapsed_seconds": 0,
+  "scoring_mode": "exact",
+  "evidence_quality": "exact",
+  "execution_strategy": "scalar_serial",
+  "numerical_regime": "scalar_reference",
   "state": "completed"
 }

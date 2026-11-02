@@ -484,6 +484,59 @@ def test_list_runs_newest_first(store):
     assert ids == [r3, r2, r1]                            # newest first
 
 
+def test_list_runs_groups_exact_openai_history_without_semantic_matching(store):
+    first_messages = [{"role": "user", "content": "Help me draft an essay."}]
+    first = store.record(
+        source="openai_api", messages=first_messages, response="What is your thesis?",
+        started=1000.0, ended=1000.1,
+    )
+    second = store.record(
+        source="openai_api",
+        messages=[
+            *first_messages,
+            {"role": "assistant", "content": "What is your thesis?"},
+            {"role": "user", "content": "Libraries are resilience infrastructure."},
+        ],
+        response="That gives us a clear direction.", started=2000.0, ended=2000.1,
+    )
+    unrelated = store.record(
+        source="openai_api",
+        messages=[{"role": "user", "content": "Help me draft an essay!"}],
+        response="What topic?", started=3000.0, ended=3000.1,
+    )
+
+    rows = {row["id"]: row for row in store.list_runs()}
+    assert rows[first]["conversation_id"] == first
+    assert rows[second]["conversation_id"] == first
+    assert rows[first]["conversation_turn"] == 1
+    assert rows[second]["conversation_turn"] == 2
+    assert rows[second]["conversation_size"] == 2
+    assert rows[unrelated]["conversation_id"] == unrelated
+    assert rows[unrelated]["conversation_size"] == 1
+
+
+def test_list_runs_prefers_the_opaque_session_key_for_grouping(store):
+    from clozn.runs.association import session_key
+
+    opaque = session_key("chat-window-a")
+    first = store.record(
+        source="openai_api", session_key=opaque,
+        messages=[{"role": "user", "content": "first"}], response="one",
+        started=1000.0, ended=1000.1,
+    )
+    second = store.record(
+        source="openai_api", session_key=opaque,
+        messages=[{"role": "user", "content": "not a prefix"}], response="two",
+        started=2000.0, ended=2000.1,
+    )
+
+    rows = {row["id"]: row for row in store.list_runs()}
+    assert rows[first]["conversation_id"] == opaque
+    assert rows[second]["conversation_id"] == opaque
+    assert rows[first]["conversation_turn"] == 1
+    assert rows[second]["conversation_turn"] == 2
+
+
 def test_list_runs_returns_summary_fields_only(store):
     store.record(source="cli", messages=[{"role": "user", "content": "hi"}], response="yo")
     rows = store.list_runs()

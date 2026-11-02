@@ -40,15 +40,16 @@
 .receipt-disclosure { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-control) var(--space-component); align-items: center; border-top: var(--component-seam); background: var(--surface-shell-transition); padding: var(--component-panel-padding); }
 .receipt-disclosure > div:first-child { display: grid; gap: var(--space-micro); }
 .receipt-disclosure > div:first-child p { max-width: 70ch; color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
-.receipt-disclosure > button { border: 1px solid var(--action-primary); border-radius: var(--radius-control); background: var(--surface-selection); color: var(--action-primary); font-family: var(--font-mono); font-size: 9px; padding: 0 var(--space-control); }
-.receipt-disclosure > button:disabled { cursor: default; opacity: .45; }
+.receipt-disclosure > button { border: 1px solid var(--action-secondary-edge); border-radius: var(--radius-control); background: var(--action-secondary); color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; padding: 0 var(--space-control); }
+.receipt-disclosure > button:hover { border-color: var(--mark-calibration); background: var(--action-secondary-hover); color: var(--text-primary); }
+.receipt-disclosure > button:disabled { color: var(--text-disabled); cursor: default; opacity: 1; }
 .receipt-disclosure-state, .receipt-prompt-disclosure { grid-column: 1 / -1; }
 .receipt-disclosure-state { color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; }
 .receipt-prompt-disclosure { display: grid; gap: var(--space-tight); border-top: 1px solid var(--border-subtle); padding-top: var(--space-control); }
 .receipt-prompt-disclosure strong { font-size: 12px; }
 .receipt-prompt-disclosure p { color: var(--status-warning); font-family: var(--font-mono); font-size: 9px; }
 .receipt-prompt-disclosure pre { max-height: 420px; overflow: auto; border: 1px solid var(--border-subtle); border-radius: var(--radius-data); background: var(--surface-well); font: 10px/1.55 var(--font-mono); padding: var(--space-component); white-space: pre-wrap; }
-.receipt-boundary { display: flex; align-items: baseline; gap: var(--space-component); margin-top: var(--space-section); border-left: 2px solid var(--action-primary); background: var(--surface-selection); padding: var(--space-control) var(--space-component); }
+.receipt-boundary { display: flex; align-items: baseline; gap: var(--space-component); margin-top: var(--space-section); border-left: 2px solid var(--mark-registration); background: var(--surface-bay); padding: var(--space-control) var(--space-component); }
 .receipt-boundary strong { font-size: 12px; white-space: nowrap; }
 .receipt-boundary p { color: var(--text-secondary); font-size: 12px; }
 
@@ -62,7 +63,7 @@
 @media (max-width: 560px) {
   .receipt-boundary { display: grid; align-items: start; }
 }
-.run-details-disclosure { width: min(1180px, 100%); margin: var(--space-component) auto 0; border: var(--component-seam); border-radius: var(--radius-control); background: var(--surface-panel); }
+.run-details-disclosure { width: auto; margin: 0 var(--component-panel-padding) var(--space-component); border: var(--component-seam); border-radius: var(--radius-control); background: var(--surface-panel); }
 .run-details-disclosure > summary { cursor: pointer; color: var(--text-secondary); font-family: var(--font-mono); font-size: 11px; padding: var(--space-component); }
 .run-details-disclosure[open] > summary { border-bottom: var(--component-seam); color: var(--text-primary); }
 .run-details-disclosure > p { padding: var(--space-component); color: var(--text-secondary); }

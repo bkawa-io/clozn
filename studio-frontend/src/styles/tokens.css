@@ -1,152 +1,180 @@
 /*
- * CLOZN Studio theme layers:
- * reference values -> semantic material/state values -> component aliases.
- * Feature CSS consumes only the semantic and component layers below.
+ * CLOZN Theme v3 — Electric Lichen / Amethyst / Opaline
+ * Reference values -> semantic values -> component aliases.
+ * Feature styles consume semantic/component tokens only.
  */
-:root {
-  color-scheme: light;
-
-  /* Reference: Lunar Nacre */
-  --ref-lunar-outer: #fbfcff;
-  --ref-lunar-transition: #f4f6ff;
-  --ref-lunar-edge: #eaedf8;
-  --ref-lunar-workspace: #ffffff;
-  --ref-lunar-bay: #f4fbff;
-  --ref-lunar-well: #eaf7fb;
-  --ref-lunar-ink: #151725;
-  --ref-lunar-muted: #697086;
-
-  /* Reference: Black Pearl */
-  --ref-pearl-outer: #06080d;
-  --ref-pearl-transition: #0a0d14;
-  --ref-pearl-edge: #03050a;
-  --ref-pearl-workspace: #10131a;
-  --ref-pearl-bay: #151a21;
-  --ref-pearl-well: #090d12;
-  --ref-pearl-ink: #f5f4fa;
-  --ref-pearl-muted: #999dab;
-
-  /* Reference: semantic materials and visualization series */
-  --ref-blue-ion-core: #087f92;
-  --ref-blue-ion-bright: #3bc7d8;
-  --ref-blue-ion-deep: #075e6d;
-  --ref-mineral-mint: #2f9e78;
-  --ref-burnished-amber: #b97922;
-  --ref-spectrometer-magenta: #c13f7a;
-  --ref-cold-crimson: #c44354;
-  --ref-silver-blue: #747d96;
-  --ref-cryogenic-cyan: #4bb9c7;
-  --ref-lunar-violet: #7775b5;
-  --ref-series-silver: #7890a8;
-  --ref-spectral-pink: #cb6f9d;
-
-  /* Reference: geometry and type */
-  --ref-space-micro: 4px;
-  --ref-space-tight: 8px;
-  --ref-space-control: 12px;
-  --ref-space-component: 16px;
-  --ref-space-group: 24px;
-  --ref-space-section: 32px;
-  --ref-space-major: 48px;
-  --ref-radius-data: 4px;
-  --ref-radius-control: 7px;
-  --ref-radius-panel: 10px;
-  --ref-radius-shell: 16px;
-  --ref-control-compact: 30px;
-  --ref-control-standard: 36px;
-  --ref-target-min: 32px;
-  --ref-font-sans: "Spline Sans Variable", "Spline Sans", "Avenir Next", Avenir, "Segoe UI", sans-serif;
-  --ref-font-mono: "Spline Sans Mono Variable", "Spline Sans Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-}
-
-[data-theme="lunar"],
-:root:not([data-theme]) {
-  color-scheme: light;
-  --surface-shell: var(--ref-lunar-outer);
-  --surface-shell-transition: var(--ref-lunar-transition);
-  --surface-edge: var(--ref-lunar-edge);
-  --surface-workspace: var(--ref-lunar-workspace);
-  --surface-bay: var(--ref-lunar-bay);
-  --surface-well: var(--ref-lunar-well);
-  --text-primary: var(--ref-lunar-ink);
-  --text-secondary: var(--ref-lunar-muted);
-  --text-tertiary: var(--ref-silver-blue);
-  --text-inverse: var(--ref-lunar-workspace);
-  --border-etched: rgb(64 74 124 / 29%);
-  --border-subtle: rgb(70 80 132 / 16%);
-  --border-strong: rgb(49 61 111 / 42%);
-  --surface-selection: rgb(8 127 146 / 10%);
-  --shell-highlight: rgb(255 255 255 / 88%);
-  --shell-cast: linear-gradient(115deg, rgb(75 185 199 / 8%), transparent 28%, rgb(119 117 181 / 6%) 64%, transparent 86%);
-  --action-primary: var(--ref-blue-ion-core);
-  --action-hover: var(--ref-blue-ion-deep);
-  --action-bright: var(--ref-blue-ion-bright);
-  --focus-outer: var(--ref-lunar-workspace);
-}
-
-[data-theme="pearl"] {
+:root,
+[data-theme="clozn-dark"] {
   color-scheme: dark;
-  --surface-shell: var(--ref-pearl-outer);
-  --surface-shell-transition: var(--ref-pearl-transition);
-  --surface-edge: var(--ref-pearl-edge);
-  --surface-workspace: var(--ref-pearl-workspace);
-  --surface-bay: var(--ref-pearl-bay);
-  --surface-well: var(--ref-pearl-well);
-  --text-primary: var(--ref-pearl-ink);
-  --text-secondary: var(--ref-pearl-muted);
-  --text-tertiary: var(--ref-silver-blue);
-  --text-inverse: var(--ref-pearl-edge);
-  --border-etched: rgb(177 190 223 / 30%);
-  --border-subtle: rgb(177 190 223 / 15%);
-  --border-strong: rgb(196 208 238 / 44%);
-  --surface-selection: rgb(59 199 216 / 13%);
-  --shell-highlight: rgb(245 244 250 / 7%);
-  --shell-cast: linear-gradient(110deg, rgb(75 185 199 / 8%), transparent 28%, rgb(119 117 181 / 10%) 62%, rgb(193 63 122 / 4%) 100%);
-  --action-primary: var(--ref-blue-ion-bright);
-  --action-hover: var(--ref-blue-ion-core);
-  --action-bright: var(--ref-blue-ion-bright);
-  --focus-outer: var(--ref-pearl-edge);
-}
 
-:root {
-  /* Semantic state layer */
-  --status-info: var(--action-primary);
-  --status-success: var(--ref-mineral-mint);
-  --status-warning: var(--ref-burnished-amber);
-  --status-anomaly: var(--ref-spectrometer-magenta);
-  --status-failure: var(--ref-cold-crimson);
-  --status-unknown: var(--ref-silver-blue);
-  --viz-primary: var(--action-primary);
-  --viz-secondary: var(--ref-cryogenic-cyan);
-  --viz-tertiary: var(--ref-lunar-violet);
-  --evidence-measured: var(--ref-series-silver);
-  --evidence-support: var(--ref-cryogenic-cyan);
-  --evidence-suppression: var(--ref-lunar-violet);
-  --evidence-below-floor: var(--ref-series-silver);
-  --evidence-not-measured: var(--ref-silver-blue);
+  /* Signature palette: data direction and user attention are separate. */
+  --brand-lichen: #B9E871;
+  --brand-core: #ECECF0;
+  --signal-support: #B9E871;
+  --signal-support-peak: #DDF7A9;
+  --signal-suppression: #BA8EE9;
+  --signal-suppression-active: #BA8EE9;
+  --signal-suppression-text: #D7B8F4;
+  --opaline: #ECECF0;
+  --opaline-hover: #F8F8FA;
+  --opaline-pressed: #D8D8DF;
+
+  /* Selected dark chassis */
+  --clozn-shell: #08070A;
+  --clozn-workspace: #111015;
+  --clozn-secondary: #171419;
+  --clozn-inset: #0C0A0E;
+
+  /* Working companion neutrals */
+  --clozn-text-primary: #F1F0F2;
+  --clozn-text-secondary: #ABA6AF;
+  --clozn-text-tertiary: #89858E;
+  --clozn-text-disabled: #66616A;
+  --clozn-hairline: #302F33;
+  --clozn-engraved: #454349;
+  --clozn-calibration: #77727A;
+  --clozn-registration: #A9A4AC;
+
+  /* Graphical influence ramps: rails, lines, marks, and legends. */
+  --support-ramp-0: #23272A;
+  --support-ramp-1: #304139;
+  --support-ramp-2: #3C5F4C;
+  --support-ramp-3: #578E57;
+  --support-ramp-4: #82BF65;
+  --support-ramp-5: #B9E871;
+  --support-ramp-6: #DDF7A9;
+  --suppression-ramp-0: #23272A;
+  --suppression-ramp-1: #373644;
+  --suppression-ramp-2: #534761;
+  --suppression-ramp-3: #725989;
+  --suppression-ramp-4: #946FBB;
+  --suppression-ramp-5: #BA8EE9;
+
+  /* Reading-safe fills are deliberately darker than graphical marks. */
+  --heatmap-support-fill-0: transparent;
+  --heatmap-support-fill-1: #23272A;
+  --heatmap-support-fill-2: #29322F;
+  --heatmap-support-fill-3: #304139;
+  --heatmap-support-fill-4: #3B5242;
+  --heatmap-support-fill-5: #4B6C4D;
+  --heatmap-suppression-fill-0: transparent;
+  --heatmap-suppression-fill-1: #24232A;
+  --heatmap-suppression-fill-2: #302B38;
+  --heatmap-suppression-fill-3: #3B3248;
+  --heatmap-suppression-fill-4: #493959;
+  --heatmap-suppression-fill-5: #594571;
+
+  /* Surface and text semantics */
+  --surface-shell: var(--clozn-shell);
+  --surface-shell-transition: var(--clozn-secondary);
+  --surface-edge: var(--clozn-shell);
+  --surface-workspace: var(--clozn-workspace);
+  --surface-bay: var(--clozn-secondary);
+  --surface-well: var(--clozn-inset);
+  --surface-panel: var(--clozn-workspace);
+  --surface-sunken: var(--clozn-inset);
+  --text-primary: var(--clozn-text-primary);
+  --text-secondary: var(--clozn-text-secondary);
+  --text-tertiary: var(--clozn-text-tertiary);
+  --text-disabled: var(--clozn-text-disabled);
+  --text-inverse: var(--clozn-workspace);
+  --border-subtle: var(--clozn-hairline);
+  --border-etched: var(--clozn-engraved);
+  --border-strong: var(--clozn-calibration);
+  --mark-calibration: var(--clozn-calibration);
+  --mark-registration: var(--clozn-registration);
+  --shell-highlight: transparent;
+
+  /* Opaline denotes user attention; execution remains distinct from model support. */
+  --selection-edge: var(--opaline);
+  --selection-hover: var(--opaline-hover);
+  --selection-tint: rgb(236 236 240 / 5.5%);
+  /* Text contours need a hue of their own so they do not disappear into body copy. */
+  --selection-contour: #70D7FF;
+  --selection-contour-halo: rgb(8 8 13 / 82%);
+  --selection-on: var(--clozn-workspace);
+  --surface-selection: var(--selection-tint);
+  --action-primary: var(--opaline);
+  --action-primary-hover: var(--opaline-hover);
+  --action-primary-pressed: var(--opaline-pressed);
+  --action-hover: var(--action-primary-hover);
+  --action-pressed: var(--action-primary-pressed);
+  --action-bright: var(--opaline-hover);
+  --action-on-primary: var(--clozn-workspace);
+  --action-secondary: #1B1820;
+  --action-secondary-hover: #24212A;
+  --action-secondary-edge: var(--clozn-engraved);
+  --focus-outer: var(--clozn-text-primary);
+
+  /* Operational state, deliberately separate from attribution. */
+  --status-info: var(--clozn-registration);
+  --status-success: #65B19A;
+  --status-warning: #E8B45E;
+  --status-failure: #F06C64;
+  --status-unknown: var(--clozn-text-tertiary);
+  --status-anomaly: var(--clozn-text-tertiary);
+
+  /* Attribution */
+  --viz-primary: var(--selection-edge);
+  --viz-secondary: var(--signal-support);
+  --viz-tertiary: var(--signal-suppression);
+  --evidence-measured: var(--clozn-registration);
+  --evidence-support: var(--signal-support);
+  --evidence-support-low: var(--support-ramp-2);
+  --evidence-support-medium: var(--support-ramp-3);
+  --evidence-support-peak: var(--signal-support-peak);
+  --evidence-suppression: var(--signal-suppression);
+  --evidence-suppression-low: var(--suppression-ramp-2);
+  --evidence-suppression-medium: var(--suppression-ramp-3);
+  --evidence-suppression-active: var(--signal-suppression-active);
+  --evidence-suppression-text: var(--signal-suppression-text);
+  --evidence-below-floor: var(--clozn-calibration);
+  --evidence-not-measured: var(--clozn-text-tertiary);
   --evidence-unavailable: var(--status-unknown);
   --evidence-failed: var(--status-failure);
-  --evidence-spectral-pink: var(--ref-spectral-pink);
-  --font-sans: var(--ref-font-sans);
-  --font-mono: var(--ref-font-mono);
-  --space-micro: var(--ref-space-micro);
-  --space-tight: var(--ref-space-tight);
-  --space-control: var(--ref-space-control);
-  --space-component: var(--ref-space-component);
-  --space-group: var(--ref-space-group);
-  --space-section: var(--ref-space-section);
-  --space-major: var(--ref-space-major);
-  --radius-data: var(--ref-radius-data);
-  --radius-control: var(--ref-radius-control);
-  --radius-panel: var(--ref-radius-panel);
 
-  /* Component layer */
+  /* Type */
+  --font-sans: "Spline Sans Variable", "Spline Sans", "Avenir Next", Avenir, "Segoe UI", sans-serif;
+  --font-mono: "Spline Sans Mono Variable", "Spline Sans Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --font-display: "Tenor Sans", "Spline Sans Variable", "Spline Sans", sans-serif;
+
+  /* Geometry and spacing */
+  --space-micro: 4px;
+  --space-tight: 8px;
+  --space-control: 12px;
+  --space-component: 16px;
+  --space-group: 24px;
+  --space-section: 32px;
+  --space-major: 48px;
+  --radius-data: 0px;
+  --radius-control: 2px;
+  --radius-panel: 1px;
+  --radius-inspector: 4px;
+  --radius-shell: 5px;
+  --datum-small: 4px;
+  --datum-medium: 6px;
+  --datum-large: 8px;
+  --tick-minor: 3px;
+  --tick-medium: 5px;
+  --tick-major: 8px;
+
+  /* Components */
   --component-card-padding: var(--space-component);
   --component-panel-padding: var(--space-group);
   --component-seam: 1px solid var(--border-etched);
-  --component-control-height: var(--ref-control-standard);
-  --component-target-min: var(--ref-target-min);
+  --component-control-height: 36px;
+  --component-target-min: 32px;
   --component-scrubber-width: 40px;
   --component-scrubber-mark: 32px;
-  --component-shadow: 0 12px 30px rgb(31 41 78 / 10%), 0 2px 6px rgb(31 41 78 / 7%);
+  --component-shadow: 0 14px 32px rgb(0 0 0 / 38%), 0 2px 7px rgb(0 0 0 / 30%);
+
+  /* Transition-only motion */
+  --transition-hover: 110ms;
+  --transition-press: 90ms;
+  --transition-tab: 160ms;
+  --transition-select: 150ms;
+  --transition-thread: 190ms;
+  --transition-panel: 220ms;
+  --transition-tooltip: 130ms;
+  --ease-instrument: cubic-bezier(.2, 0, .2, 1);
 }

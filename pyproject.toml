@@ -23,6 +23,9 @@ dependencies = []
 
 [project.urls]
 Homepage = "https://github.com/bkawa-io/clozn"
+Demo = "https://bkawa-io.github.io/clozn/"
+Documentation = "https://github.com/bkawa-io/clozn/tree/main/docs"
+Issues = "https://github.com/bkawa-io/clozn/issues"
 
 [project.scripts]
 # Matches `python -m clozn` (clozn/__main__.py) and clozn.cmd/clozn.sh exactly -- one entry point, three

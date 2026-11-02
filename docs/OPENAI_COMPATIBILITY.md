@@ -29,7 +29,7 @@ or `assistant`; `developer` is normalized to `system` for local GGUF templates. 
 multimodal content are rejected.
 
 Context source ranges are not a request field. Clozn derives a bounded, Markdown-aware partition from
-the recorded context text for Context Effects and Minimal Context.
+the recorded context text for Context Effects and Lean Context.
 
 The following common fields are accepted only at neutral values and then removed: `n:1`, `user`, zero
 frequency/presence penalties, `logprobs:false`, `top_logprobs:0`, empty `logit_bias`, text-only

@@ -2,7 +2,7 @@
 
 Context units are derived from the exact message text after the request has
 crossed the model boundary. They never alter the prompt. A single flat,
-bounded partition is shared by Context Effects and Minimal Context; callers do
+bounded partition is shared by Context Effects and Lean Context; callers do
 not provide source ranges, labels, or hierarchy.
 """
 from __future__ import annotations
@@ -18,6 +18,9 @@ SCHEMA = "clozn.context-units.v1"
 MAX_CONTEXT_ARMS_ENV = "CLOZN_MAX_CONTEXT_ARMS"
 DEFAULT_MAX_CONTEXT_ARMS = 16
 MAX_CONTEXT_ARMS_CEILING = 64
+MAX_CONTEXT_UNITS_ENV = "CLOZN_MAX_CONTEXT_UNITS"
+DEFAULT_MAX_CONTEXT_UNITS = 64
+MAX_CONTEXT_UNITS_CEILING = 64
 
 _HEADER_RE = re.compile(r"^#{1,6}[ \t]+", re.MULTILINE)
 _HR_RE = re.compile(r"^(?:---|\*\*\*|___)[ \t]*$", re.MULTILINE)
@@ -48,6 +51,21 @@ def max_context_arms(environ: Mapping[str, str] | None = None) -> int:
         return DEFAULT_MAX_CONTEXT_ARMS
     if not 1 <= value <= MAX_CONTEXT_ARMS_CEILING:
         return DEFAULT_MAX_CONTEXT_ARMS
+    return value
+
+
+def max_context_units(environ: Mapping[str, str] | None = None) -> int:
+    """Return the exact-unit safety ceiling, independent of execution budgets."""
+    values = os.environ if environ is None else environ
+    raw = values.get(MAX_CONTEXT_UNITS_ENV)
+    if raw is None:
+        return DEFAULT_MAX_CONTEXT_UNITS
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_CONTEXT_UNITS
+    if not 1 <= value <= MAX_CONTEXT_UNITS_CEILING:
+        return DEFAULT_MAX_CONTEXT_UNITS
     return value
 
 
@@ -411,10 +429,13 @@ def build_context_unit_manifest(run: dict) -> dict:
 
 __all__ = [
     "DEFAULT_MAX_CONTEXT_ARMS",
+    "DEFAULT_MAX_CONTEXT_UNITS",
     "MAX_CONTEXT_ARMS_ENV",
+    "MAX_CONTEXT_UNITS_ENV",
     "SCHEMA",
     "annotate_auto_sources",
     "build_context_unit_manifest",
     "derive_auto_source_spans",
     "max_context_arms",
+    "max_context_units",
 ]

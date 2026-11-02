@@ -14,6 +14,7 @@ from clozn.runs.context_units import (
     build_context_unit_manifest,
     derive_auto_source_spans,
     max_context_arms,
+    max_context_units,
 )
 
 
@@ -132,6 +133,15 @@ def test_arm_cap_is_configurable_and_merges_adjacent_markdown_chunks(monkeypatch
     assert len(derive_auto_source_spans(messages)) <= 5
     monkeypatch.setenv("CLOZN_MAX_CONTEXT_ARMS", "not-an-integer")
     assert max_context_arms() == 16
+
+
+def test_exact_unit_ceiling_is_separate_from_partition_arm_target(monkeypatch):
+    assert max_context_units() == 64
+    assert max_context_arms() == 16
+    monkeypatch.setenv("CLOZN_MAX_CONTEXT_UNITS", "32")
+    assert max_context_units() == 32
+    monkeypatch.setenv("CLOZN_MAX_CONTEXT_UNITS", "not-an-integer")
+    assert max_context_units() == 64
 
 
 def test_unicode_offsets_and_strict_resolver_bind_to_recorded_bytes():

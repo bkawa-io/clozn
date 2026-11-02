@@ -5,15 +5,18 @@ from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 import hashlib
 import json
+import time
 from typing import Any
 
 from clozn.experiments.context_search import ContextSearchUnavailable
+from clozn.experiments.effective_prompt import render_effective_prompt_for_retained
 from clozn.experiments.persistence import ObservationStore
 from clozn.experiments.score_context_search import ScoreContextSearchDispatcher
 from clozn.experiments.search import canonical_search_policy, run_adaptive_search
 from clozn.experiments.state import ExecutionState
+from clozn.runs.answer_preservation import generation_contract_from_run
 from clozn.runs.context_search_universe import plan_context_search_universe
-from clozn.runs.context_units import max_context_arms
+from clozn.runs.context_units import max_context_units
 
 
 SCHEMA_VERSION = "clozn.lean-context-result.v1"
@@ -21,6 +24,11 @@ POLICY_VERSION = "balanced_recorded_continuation_loss.v1"
 DEFAULT_MEAN_LOSS_TOLERANCE_NATS = 0.05
 DEFAULT_MAX_TOKEN_LOSS_TOLERANCE_NATS = 0.70
 DEFAULT_MAX_NEW_EXECUTIONS = 16
+
+
+def _with_elapsed(result: dict[str, Any], started: float) -> dict[str, Any]:
+    result["elapsed_seconds"] = max(0.0, time.perf_counter() - started)
+    return result
 
 
 def _digest(value: Any) -> str:
@@ -54,6 +62,94 @@ def _policy(max_new_executions: int) -> dict[str, Any]:
     }
 
 
+def _generation_unavailable(reason: str, reason_code: str) -> dict[str, Any]:
+    return {
+        "status": "unavailable",
+        "decode_mode": "greedy",
+        "max_new_tokens": None,
+        "full_context": None,
+        "lean_context": None,
+        "exact_match": None,
+        "normalized_match": None,
+        "reason": reason,
+        "reason_code": reason_code,
+    }
+
+
+def _generation_comparison(
+    run: Mapping[str, Any],
+    *,
+    source_ids: Sequence[str],
+    retained_source_ids: Sequence[str],
+    regenerate: Callable[[Sequence[Mapping[str, Any]], int, Sequence[str]], str] | None,
+    generation_progress: Callable[[str, int, int], None] | None,
+    cancel: Callable[[], bool] | None,
+) -> dict[str, Any]:
+    """Run a deterministic full-vs-lean generation pair.
+
+    The historical response is deliberately not used as the full-context arm:
+    both arms are freshly decoded greedily with the same prompt renderer and
+    token budget, so any text difference is attributable to context rather than
+    sampling or a stale worker process.
+    """
+    if regenerate is None:
+        return _generation_unavailable(
+            "fresh answer generation was not requested",
+            "generation_runner_unavailable",
+        )
+    contract, contract_reason = generation_contract_from_run(run)
+    if contract is None:
+        return _generation_unavailable(
+            "the recorded generation token budget could not be reconstructed",
+            contract_reason or "generation_contract_unavailable",
+        )
+    max_new = int(contract["max_new"])
+    stop = tuple(str(value) for value in contract["stop"])
+    try:
+        full_messages = render_effective_prompt_for_retained(run, source_ids, source_ids)
+        lean_messages = render_effective_prompt_for_retained(
+            run, source_ids, retained_source_ids,
+        )
+        if cancel is not None and cancel():
+            return _generation_unavailable(
+                "fresh answer generation was cancelled",
+                "generation_cancelled",
+            )
+        if generation_progress is not None:
+            generation_progress("full_context", 0, 2)
+        full_text = str(regenerate(full_messages, max_new, stop))
+        if cancel is not None and cancel():
+            return _generation_unavailable(
+                "fresh answer generation was cancelled",
+                "generation_cancelled",
+            )
+        if generation_progress is not None:
+            generation_progress("lean_context", 1, 2)
+        lean_text = str(regenerate(lean_messages, max_new, stop))
+    except Exception as exc:
+        return _generation_unavailable(
+            f"fresh answer generation failed: {exc}",
+            "generation_failed",
+        )
+
+    recorded = run.get("response") if isinstance(run.get("response"), str) else None
+    return {
+        "status": "completed",
+        "decode_mode": "greedy",
+        "max_new_tokens": max_new,
+        "full_context": {
+            "text": full_text,
+            "matches_recorded": full_text == recorded if recorded is not None else None,
+        },
+        "lean_context": {
+            "text": lean_text,
+            "matches_recorded": lean_text == recorded if recorded is not None else None,
+        },
+        "exact_match": full_text == lean_text,
+        "normalized_match": full_text.strip() == lean_text.strip(),
+    }
+
+
 def _unavailable(
     *,
     run_id: str,
@@ -83,6 +179,10 @@ def _unavailable(
         "universe": deepcopy(dict(universe)),
         "original": None,
         "best": None,
+        "generation_comparison": _generation_unavailable(
+            "Lean Context search did not produce a candidate",
+            "search_unavailable",
+        ),
         "reduction": None,
         "trials": [],
         "budget": {
@@ -109,6 +209,8 @@ def run_lean_context(
     execution_adapter: Any = None,
     prompt_token_counter: Callable[[Sequence[Mapping[str, Any]]], int] | None = None,
     render_messages: Callable[[tuple[str, ...]], Sequence[Mapping[str, Any]]] | None = None,
+    regenerate: Callable[[Sequence[Mapping[str, Any]], int, Sequence[str]], str] | None = None,
+    generation_progress: Callable[[str, int, int], None] | None = None,
     cancel: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Find the cheapest directly tested context within the fixed score tolerance.
@@ -124,7 +226,12 @@ def run_lean_context(
         raise ValueError("max_new_executions must be a non-negative integer")
     if observation_store is not None and not isinstance(observation_store, ObservationStore):
         raise TypeError("observation_store must be an ObservationStore")
-    resolved_max_units = max_context_arms() if max_units is None else max_units
+    if regenerate is not None and not callable(regenerate):
+        raise TypeError("regenerate must be callable when supplied")
+    if generation_progress is not None and not callable(generation_progress):
+        raise TypeError("generation_progress must be callable when supplied")
+    started = time.perf_counter()
+    resolved_max_units = max_context_units() if max_units is None else max_units
     state = ExecutionState.from_run(run)
     universe = plan_context_search_universe(
         run, run.get("context_units"), max_units=resolved_max_units,
@@ -141,12 +248,12 @@ def run_lean_context(
     })[:24]
     if universe.get("status") != "planned":
         condition = universe.get("condition") if isinstance(universe.get("condition"), Mapping) else {}
-        return _unavailable(
+        return _with_elapsed(_unavailable(
             run_id=run["id"], state=state, universe=universe, search_id=search_id,
             tolerance=tolerance, policy=policy, max_new_executions=max_new_executions,
             reason=str(condition.get("message") or "context search universe is unavailable"),
             reason_code=str(condition.get("code") or "universe_unavailable"),
-        )
+        ), started)
 
     dispatcher: ScoreContextSearchDispatcher | None = None
     try:
@@ -187,11 +294,11 @@ def run_lean_context(
             },
         )
     except (ContextSearchUnavailable, ValueError, TypeError) as exc:
-        return _unavailable(
+        return _with_elapsed(_unavailable(
             run_id=run["id"], state=state, universe=universe, search_id=search_id,
             tolerance=tolerance, policy=policy, max_new_executions=max_new_executions,
             reason=str(exc), reason_code=getattr(exc, "reason", "search_execution_unavailable"),
-        )
+        ), started)
     finally:
         if dispatcher is not None:
             try:
@@ -201,12 +308,12 @@ def run_lean_context(
 
     control = searched.control_evidence
     if searched.status == "control_failed" or control is None or not control.observation_id:
-        return _unavailable(
+        return _with_elapsed(_unavailable(
             run_id=run["id"], state=state, universe=universe, search_id=search_id,
             tolerance=tolerance, policy=policy, max_new_executions=max_new_executions,
             reason=control.observation_status if control is not None else "control unavailable",
             reason_code="score_control_unavailable",
-        )
+        ), started)
 
     source_ids = tuple(str(value) for value in universe["source_ids"])
 
@@ -261,7 +368,15 @@ def run_lean_context(
     original_cost = original["rendered_prompt_token_cost"]
     best_cost = best["rendered_prompt_token_cost"]
     removed_tokens = max(0, original_cost - best_cost)
-    return {
+    generation_comparison = _generation_comparison(
+        run,
+        source_ids=source_ids,
+        retained_source_ids=best["retained_source_ids"],
+        regenerate=regenerate,
+        generation_progress=generation_progress,
+        cancel=cancel,
+    )
+    return _with_elapsed({
         "schema_version": SCHEMA_VERSION,
         "run_id": run["id"],
         "search_id": search_id,
@@ -276,6 +391,7 @@ def run_lean_context(
         "universe": deepcopy(dict(universe)),
         "original": original,
         "best": best,
+        "generation_comparison": generation_comparison,
         "reduction": {
             "removed_prompt_tokens": removed_tokens,
             "retained_prompt_token_fraction": (best_cost / original_cost) if original_cost else 1.0,
@@ -287,7 +403,7 @@ def run_lean_context(
         "stopping_reason": (
             "budget_exhausted" if searched.budget.blocked_by_budget else "search_policy_complete"
         ),
-    }
+    }, started)
 
 
 __all__ = [

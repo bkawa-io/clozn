@@ -23,7 +23,7 @@ def test_bootstrap_creates_the_complete_current_schema(tmp_path):
         schema.validate(db)
         assert _tables(db) == {
             "schema_meta", "runs", "sessions", "experiments",
-            "experiment_arms", "observations", "minimal_context_results",
+            "experiment_arms", "observations",
         }
     finally:
         db.close()

@@ -27,6 +27,23 @@ export interface LeanContextCandidate {
   observationId: string | null;
 }
 
+export interface LeanContextGeneratedAnswer {
+  text: string;
+  matchesRecorded: boolean | null;
+}
+
+export interface LeanContextGenerationComparison {
+  status: "completed" | "unavailable";
+  decodeMode: "greedy";
+  maxNewTokens: number | null;
+  fullContext: LeanContextGeneratedAnswer | null;
+  leanContext: LeanContextGeneratedAnswer | null;
+  exactMatch: boolean | null;
+  normalizedMatch: boolean | null;
+  reason?: string;
+  reasonCode?: string;
+}
+
 export interface LeanContextTrial {
   ordinal: number;
   stage: string;
@@ -55,6 +72,7 @@ export interface LeanContextResult {
   sourceIds: readonly string[];
   original: LeanContextCandidate | null;
   best: LeanContextCandidate | null;
+  generationComparison: LeanContextGenerationComparison;
   reduction: {
     removedPromptTokens: number;
     retainedPromptTokenFraction: number;
@@ -69,6 +87,7 @@ export interface LeanContextResult {
     exhausted: boolean;
     blockedByBudget: boolean;
   };
+  elapsedSeconds: number;
   stoppingReason: "search_policy_complete" | "budget_exhausted" | "search_unavailable" | "cancelled";
 }
 
@@ -110,6 +129,11 @@ function text(value: unknown, endpoint: string, path: string): string {
   return value;
 }
 
+function stringValue(value: unknown, endpoint: string, path: string): string {
+  if (typeof value !== "string") fail(endpoint, path, "must be a string");
+  return value;
+}
+
 function booleanValue(value: unknown, endpoint: string, path: string): boolean {
   if (typeof value !== "boolean") fail(endpoint, path, "must be a boolean");
   return value;
@@ -147,6 +171,11 @@ function nullableRecord(value: unknown, endpoint: string, path: string): JsonRec
   return value === null ? null : record(value, endpoint, path);
 }
 
+function nullableBoolean(value: unknown, endpoint: string, path: string): boolean | null {
+  if (value === null) return null;
+  return booleanValue(value, endpoint, path);
+}
+
 function decodeLoss(value: unknown, endpoint: string, path: string): LeanContextLoss | null {
   const row = nullableRecord(value, endpoint, path);
   if (!row) return null;
@@ -177,6 +206,52 @@ function decodeCandidate(value: unknown, endpoint: string, path: string): LeanCo
       ? null
       : text(observationId, endpoint, `${path}.evidence.observation_id`),
   };
+}
+
+function decodeGeneratedAnswer(
+  value: unknown,
+  endpoint: string,
+  path: string,
+): LeanContextGeneratedAnswer | null {
+  const row = nullableRecord(value, endpoint, path);
+  if (!row) return null;
+  return {
+    text: stringValue(required(row, "text", endpoint, path), endpoint, `${path}.text`),
+    matchesRecorded: nullableBoolean(
+      required(row, "matches_recorded", endpoint, path), endpoint, `${path}.matches_recorded`,
+    ),
+  };
+}
+
+function decodeGenerationComparison(
+  value: unknown,
+  endpoint: string,
+  path: string,
+): LeanContextGenerationComparison {
+  const row = record(value, endpoint, path);
+  const rawMaxNewTokens = required(row, "max_new_tokens", endpoint, path);
+  const comparison: LeanContextGenerationComparison = {
+    status: oneOf(required(row, "status", endpoint, path), ["completed", "unavailable"] as const, endpoint, `${path}.status`),
+    decodeMode: oneOf(required(row, "decode_mode", endpoint, path), ["greedy"] as const, endpoint, `${path}.decode_mode`),
+    maxNewTokens: rawMaxNewTokens === null ? null : count(rawMaxNewTokens, endpoint, `${path}.max_new_tokens`),
+    fullContext: decodeGeneratedAnswer(required(row, "full_context", endpoint, path), endpoint, `${path}.full_context`),
+    leanContext: decodeGeneratedAnswer(required(row, "lean_context", endpoint, path), endpoint, `${path}.lean_context`),
+    exactMatch: nullableBoolean(required(row, "exact_match", endpoint, path), endpoint, `${path}.exact_match`),
+    normalizedMatch: nullableBoolean(required(row, "normalized_match", endpoint, path), endpoint, `${path}.normalized_match`),
+    ...(typeof row.reason === "string" ? { reason: row.reason } : {}),
+    ...(typeof row.reason_code === "string" ? { reasonCode: row.reason_code } : {}),
+  };
+  if (comparison.status === "completed" && (
+    comparison.maxNewTokens === null
+    || comparison.maxNewTokens < 1
+    || !comparison.fullContext
+    || !comparison.leanContext
+    || comparison.exactMatch === null
+    || comparison.normalizedMatch === null
+  )) {
+    fail(endpoint, path, "completed generation comparison requires both answers and match results");
+  }
+  return comparison;
 }
 
 function decodeTrial(value: unknown, endpoint: string, path: string): LeanContextTrial {
@@ -226,6 +301,11 @@ export function decodeLeanContextResult(value: unknown, endpoint: string, expect
     sourceIds: stringList(required(universe, "source_ids", endpoint, "$.result.universe"), endpoint, "$.result.universe.source_ids"),
     original: decodeCandidate(required(row, "original", endpoint, "$.result"), endpoint, "$.result.original"),
     best: decodeCandidate(required(row, "best", endpoint, "$.result"), endpoint, "$.result.best"),
+    generationComparison: decodeGenerationComparison(
+      required(row, "generation_comparison", endpoint, "$.result"),
+      endpoint,
+      "$.result.generation_comparison",
+    ),
     reduction: rawReduction ? {
       removedPromptTokens: count(required(rawReduction, "removed_prompt_tokens", endpoint, "$.result.reduction"), endpoint, "$.result.reduction.removed_prompt_tokens"),
       retainedPromptTokenFraction: number(required(rawReduction, "retained_prompt_token_fraction", endpoint, "$.result.reduction"), endpoint, "$.result.reduction.retained_prompt_token_fraction"),
@@ -240,6 +320,7 @@ export function decodeLeanContextResult(value: unknown, endpoint: string, expect
       exhausted: booleanValue(required(budget, "exhausted", endpoint, "$.result.budget"), endpoint, "$.result.budget.exhausted"),
       blockedByBudget: booleanValue(required(budget, "blocked_by_budget", endpoint, "$.result.budget"), endpoint, "$.result.budget.blocked_by_budget"),
     },
+    elapsedSeconds: number(required(row, "elapsed_seconds", endpoint, "$.result"), endpoint, "$.result.elapsed_seconds"),
     stoppingReason: oneOf(required(row, "stopping_reason", endpoint, "$.result"), ["search_policy_complete", "budget_exhausted", "search_unavailable", "cancelled"] as const, endpoint, "$.result.stopping_reason"),
   };
   if (result.status === "completed" && (!result.original || !result.best || !result.reduction)) {

@@ -1,25 +1,21 @@
-# Real-runtime acceptance
+# Real-runtime v1 smoke
 
-The live gate attaches to an already running v1 gateway and exercises both retained analyses with a
-real GGUF.
+Start a gateway with a local GGUF, then run:
 
 ```sh
-python -m clozn serve /absolute/path/to/model.gguf --port 8080
-python scripts/smoke/v1_acceptance.py \
+python3 scripts/smoke/v1_acceptance.py \
   --base-url http://127.0.0.1:8080 \
-  --job-timeout 180
+  --job-timeout 300
 ```
 
-The harness verifies:
+The harness proves one end-to-end product journey:
 
-1. Chat Completions creates a durable parent run with canonical context sources.
-2. Context Effects publishes measured evidence for the same source identities.
-3. Minimal Context reaches a terminal result under its fixed budget.
-4. The winner exactly preserves answer and termination while reducing rendered prompt tokens.
-5. The result can be listed and reopened.
-6. Saving creates an immutable child and a repeated save returns the same child.
-7. Parent and child are readable and compare as a valid reduction pair.
+1. a fresh text completion is durably recorded;
+2. Context Effects measures the canonical source universe;
+3. Lean Context uses the same source identities and finds a tested smaller prompt;
+4. the retained and removed sets form an exact partition; and
+5. fresh full-context and lean-context answers are generated under the same deterministic contract.
 
-Run the gateway against an isolated `CLOZN_DATA_ROOT`, stop it, restart it with the same root, and reopen
-the parent, result, and child to complete the persistence check. Browser interaction and accessibility
-remain separate release checks.
+The GitHub real-runtime workflow repeats the journey on the pinned reference model, restarts the
+gateway, and verifies that the parent run and Context Effects measurement reopen from durable storage.
+Lean Context job state is intentionally process-local.

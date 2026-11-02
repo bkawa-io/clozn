@@ -168,10 +168,14 @@ double host_target_logprob(const float* row, int vocab, int target_token) {
     float maximum = row[0];
     for (int token = 1; token < vocab; ++token)
         maximum = std::max(maximum, row[token]);
-    double sum_exp = 0.0;
+    // Match scalar /score's float32 reduction exactly. This host fallback is the
+    // diagnostic oracle that separates multi-sequence decode differences from
+    // backend sampler/reduction differences.
+    float sum_exp = 0.0f;
     for (int token = 0; token < vocab; ++token)
-        sum_exp += std::exp(static_cast<double>(row[token] - maximum));
-    const double value = static_cast<double>(row[target_token] - maximum) - std::log(sum_exp);
+        sum_exp += std::exp(row[token] - maximum);
+    const float log_normalizer = maximum + std::log(sum_exp);
+    const float value = row[target_token] - log_normalizer;
     if (!std::isfinite(value))
         throw std::runtime_error("target logprob reduction produced a non-finite value");
     return value;
@@ -1624,7 +1628,7 @@ void GgmlAdapter::branch_kv(int n_branches) {
     }
 }
 
-void GgmlAdapter::begin_target_logprob_reduction(int n_sequences) {
+void GgmlAdapter::begin_target_logprob_reduction(int n_sequences, bool use_backend_reduction) {
     if (n_sequences <= 0 || n_sequences > 16)
         throw std::invalid_argument("target logprob reduction sequence count must be in [1,16]");
     if (!target_logprob_chains_.empty())
@@ -1644,7 +1648,8 @@ void GgmlAdapter::begin_target_logprob_reduction(int n_sequences) {
             // llama.cpp may decline backend sampling (notably tensor-split models). Keep the chain
             // alive either way: the specialized readers detect the actual sampled row width and
             // honestly fall back to full-vocabulary host reduction when it was not attached.
-            llama_set_sampler(ctx_, static_cast<llama_seq_id>(sequence), chain);
+            if (use_backend_reduction)
+                llama_set_sampler(ctx_, static_cast<llama_seq_id>(sequence), chain);
         }
     } catch (...) {
         end_target_logprob_reduction();

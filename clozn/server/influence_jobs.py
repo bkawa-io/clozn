@@ -9,7 +9,7 @@ lifecycle (queued/running/persisting/completed/failed/cancelled) is tracked and 
 Cancellation and persistence share one per-job lock: once a cancel response acknowledges cancellation,
 that job cannot subsequently enter its commit.
 
-`kind` distinguishes Context Effects from Minimal Context purely for observability; it changes no
+`kind` distinguishes analysis families purely for observability; it changes no
 lifecycle behavior. One registry, one `JOBS` singleton, and one capacity budget are shared by both
 analyses so the process has one honest concurrency limit.
 """

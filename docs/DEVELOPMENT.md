@@ -5,7 +5,7 @@
 Bootstrap the pinned llama.cpp source and build the private worker:
 
 ```sh
-python engine/core/third_party/bootstrap_llama.py
+python3 engine/core/third_party/bootstrap_llama.py
 cmake -S engine/core -B engine/core/build -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCLOZN_BUILD_GGML=ON \
@@ -24,14 +24,14 @@ Use `GGML_CUDA=ON` on a CUDA host or disable both GPU backends for CPU. The help
 
 ```sh
 export CLOZN_DATA_ROOT="$(mktemp -d)/clozn-v1"
-python -m clozn serve /absolute/path/to/model.gguf --port 8080
+python3 -m clozn serve /absolute/path/to/model.gguf --port 8080
 ```
 
 In another terminal:
 
 ```sh
-python -m clozn studio --port 8080 --open
-python scripts/smoke/v1_acceptance.py --base-url http://127.0.0.1:8080
+python3 -m clozn studio --port 8080 --open
+python3 scripts/smoke/v1_acceptance.py --base-url http://127.0.0.1:8080
 ```
 
 The acceptance harness creates real runs and analysis results in the selected v1 data root. Use an
@@ -44,8 +44,8 @@ isolated root for development so qualification does not mix with personal data.
 .venv/bin/python scripts/docs/check_drift.py .
 
 cd studio-frontend
-npm test -- --run
-npm run build
+pnpm check
+pnpm build
 ```
 
 For a fresh native verification, configure a new build directory instead of relying only on an existing
@@ -60,5 +60,5 @@ incremental build.
 - `CLOZN_MAX_PENDING_REQUESTS` and `CLOZN_QUEUE_TIMEOUT` bound admitted stateful requests.
 - The v1 runtime supports one generation slot and one loaded model.
 
-No public native binary matrix is currently claimed; see
+Tagged releases publish the qualified native matrix described in
 [NATIVE_DISTRIBUTION.md](NATIVE_DISTRIBUTION.md).

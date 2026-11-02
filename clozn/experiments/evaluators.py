@@ -51,27 +51,34 @@ class ExactReferenceMatch:
 class ScoreRecordedContinuation:
     """Score the complete recorded continuation under a counterfactual prompt."""
 
-    __slots__ = ("_sealed",)
+    __slots__ = ("scoring_mode", "_sealed")
 
-    def __init__(self):
+    def __init__(self, scoring_mode: str = "exact"):
+        if scoring_mode not in {"exact", "fast"}:
+            raise EvaluatorError("ScoreRecordedContinuation scoring_mode must be exact or fast")
+        object.__setattr__(self, "scoring_mode", scoring_mode)
         object.__setattr__(self, "_sealed", True)
 
     def __setattr__(self, name, value):
         raise AttributeError("ScoreRecordedContinuation is immutable")
 
     def __repr__(self) -> str:
-        return "ScoreRecordedContinuation()"
+        return f"ScoreRecordedContinuation(scoring_mode={self.scoring_mode!r})"
 
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, ScoreRecordedContinuation)
+        return (
+            isinstance(other, ScoreRecordedContinuation)
+            and self.scoring_mode == other.scoring_mode
+        )
 
     def __hash__(self) -> int:
-        return hash(type(self))
+        return hash((type(self), self.scoring_mode))
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "kind": "score_recorded_continuation",
             "target": "full_recorded_continuation",
+            "scoring_mode": self.scoring_mode,
         }
 
     def to_json(self) -> str:
@@ -84,7 +91,7 @@ class ScoreRecordedContinuation:
             raise EvaluatorError("expected a score_recorded_continuation object")
         if value.get("target", "full_recorded_continuation") != "full_recorded_continuation":
             raise EvaluatorError("ScoreRecordedContinuation target must be full_recorded_continuation")
-        return cls()
+        return cls(scoring_mode=value.get("scoring_mode", "exact"))
 
 
 Evaluator = Union[ExactReferenceMatch, ScoreRecordedContinuation]

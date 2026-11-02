@@ -107,20 +107,6 @@ _STATEMENTS = (
        ON experiment_arms(observation_id)""",
     "CREATE INDEX IF NOT EXISTS observations_run_idx ON observations(run_id, created_ts DESC)",
     "CREATE INDEX IF NOT EXISTS observations_key_idx ON observations(observation_key_sha256)",
-    """
-    CREATE TABLE IF NOT EXISTS minimal_context_results (
-        result_id TEXT PRIMARY KEY,
-        search_id TEXT NOT NULL,
-        run_id TEXT NOT NULL,
-        base_execution_fingerprint TEXT NOT NULL,
-        created_ts REAL NOT NULL,
-        payload_json TEXT NOT NULL
-    )
-    """,
-    """CREATE INDEX IF NOT EXISTS minimal_context_results_run_idx
-       ON minimal_context_results(run_id, created_ts DESC, result_id DESC)""",
-    """CREATE INDEX IF NOT EXISTS minimal_context_results_search_idx
-       ON minimal_context_results(search_id, created_ts DESC, result_id DESC)""",
 )
 
 

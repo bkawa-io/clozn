@@ -1,8 +1,7 @@
 """Focused Batch 1 tests for the new experimental kernel.
 
 These tests keep the legacy experiment dispatcher out of the execution path.
-The substrate fakes exercise only the trusted scalar probe and ordinary replay
-seams.
+The substrate fakes exercise only the trusted scalar probe seam.
 """
 from __future__ import annotations
 
@@ -18,13 +17,10 @@ from clozn.experiments.execution import (
 )
 from clozn.experiments.interventions import DeleteSource
 from clozn.experiments.kernel import Experiment
-from clozn.experiments.materialize import materialize_arm
 from clozn.experiments.runner import run_experiment
 from clozn.experiments.selections import ContextSelection, SelectionError
 from clozn.experiments.state import ExecutionState
-import clozn.runs.store as runlog
 from clozn.runs.context_receipt import build_context_receipt
-from clozn import schemas
 
 
 CONTRACT = {
@@ -117,18 +113,6 @@ class ProbeSubstrate:
             "generated_token_ids": [10, 11],
             "termination": {"kind": "eos"},
         }
-
-
-class GenerationSubstrate(ProbeSubstrate):
-    def chat(self, messages, max_new=256, sample=True, trace_out=None, mem_out=None):
-        if mem_out is not None:
-            mem_out.update(assembled_messages=deepcopy(messages), final_prompt="child prompt")
-        if trace_out is not None:
-            trace_out.extend([
-                {"id": 20, "piece": "changed", "conf": 0.8, "alts": []},
-                {"id": 21, "piece": " answer", "conf": 0.7, "alts": []},
-            ])
-        return "changed answer"
 
 
 def test_execution_state_fingerprint_and_serialization_are_deterministic():
@@ -239,7 +223,6 @@ def test_strict_resolver_clears_whole_message_text_including_current_request():
         "stable context", "removable source", "",
     ]
 
-
 def test_strict_resolver_handles_exact_spans_and_multiple_canonical_sources():
     content = "## Keep\n" + ("keep " * 12) + "\n\n## Drop\n" + ("drop " * 12)
     messages = [
@@ -268,95 +251,3 @@ def test_strict_resolver_handles_exact_spans_and_multiple_canonical_sources():
     assert [message["content"] for message in resolved["messages"]] == [
         "stable context", "", "current question",
     ]
-
-
-def test_stale_parent_cannot_materialize():
-    run, source_ids = _run()
-    state = ExecutionState.from_run(run)
-    experiment = Experiment(
-        base=state, evaluator=ExactReferenceMatch(),
-        arms=[DeleteSource(ContextSelection([source_ids[1]]))],
-    )
-    substrate = ProbeSubstrate()
-    result = run_experiment(experiment, DeleteSourceExactReferenceAdapter(substrate, run=run))
-    stale = deepcopy(run)
-    stale["messages"][0]["content"] = "changed context"
-    with pytest.raises(Exception, match="fingerprint|changed|stale"):
-        materialize_arm(
-            stale, result, result.arms[0].arm_id,
-            substrate=substrate,
-            replay_fn=lambda *args, **kwargs: None,
-        )
-
-
-def test_materialize_arm_persists_one_generic_child_and_returns_canonical_diff(tmp_path, monkeypatch):
-    monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    run, source_ids = _run()
-    state = ExecutionState.from_run(run)
-    experiment = Experiment(
-        base=state, evaluator=ExactReferenceMatch(),
-        arms=[DeleteSource(ContextSelection([source_ids[1]]))],
-    )
-    substrate = GenerationSubstrate()
-    result = run_experiment(experiment, DeleteSourceExactReferenceAdapter(substrate, run=run))
-    outcome = materialize_arm(run, result, result.arms[0].arm_id, substrate=substrate)
-    assert outcome["state"] == "completed"
-    assert len(runlog.list_runs(20)) == 1
-    child = runlog.get_run(outcome["child_run_id"])
-    assert child["parent_run_id"] == run["id"]
-    assert child["changes_applied"]["experiment"]["experiment_id"] == result.experiment_id
-    assert child["changes_applied"]["experiment"]["intervention"] == {
-        "kind": "delete_source", "source_ids": [source_ids[1]],
-    }
-    assert "minimal_context" not in str(child["changes_applied"])
-    assert outcome["comparison"]["preservation"]["exact"] is False
-    assert outcome["comparison"]["parent_run_id"] == run["id"]
-    assert outcome["comparison"]["child_run_id"] == outcome["child_run_id"]
-    schemas.validate(outcome, "clozn.experiment-materialization.v1")
-
-
-def test_materialize_arm_replays_with_the_recorded_generation_budget():
-    run, source_ids = _run()
-    state = ExecutionState.from_run(run)
-    experiment = Experiment(
-        base=state, evaluator=ExactReferenceMatch(),
-        arms=[DeleteSource(ContextSelection([source_ids[1]]))],
-    )
-    substrate = GenerationSubstrate()
-    result = run_experiment(experiment, DeleteSourceExactReferenceAdapter(substrate, run=run))
-    calls = []
-
-    def replay(parent, changes, active_substrate, **kwargs):
-        calls.append((parent, changes, active_substrate, kwargs))
-        return {"id": "run_child", "response": "changed answer"}
-
-    outcome = materialize_arm(
-        run, result, result.arms[0].arm_id,
-        substrate=substrate, replay_fn=replay,
-    )
-
-    assert outcome["state"] == "completed"
-    assert len(calls) == 1
-    assert calls[0][3]["max_new"] == CONTRACT["max_new"]
-    assert calls[0][3]["sampling_override"] is False
-
-
-def test_failed_materialization_does_not_create_a_child(tmp_path, monkeypatch):
-    monkeypatch.setattr(runlog, "RUNS_DIR", str(tmp_path / "runs"))
-    run, source_ids = _run()
-    state = ExecutionState.from_run(run)
-    experiment = Experiment(
-        base=state, evaluator=ExactReferenceMatch(),
-        arms=[DeleteSource(ContextSelection([source_ids[1]]))],
-    )
-    substrate = GenerationSubstrate()
-    result = run_experiment(experiment, DeleteSourceExactReferenceAdapter(substrate, run=run))
-
-    outcome = materialize_arm(
-        run, result, result.arms[0].arm_id, substrate=substrate,
-        replay_fn=lambda *args, **kwargs: None,
-    )
-    assert outcome["state"] == "failed"
-    assert "child_run_id" not in outcome
-    assert runlog.list_runs(20) == []
-    schemas.validate(outcome, "clozn.experiment-materialization.v1")

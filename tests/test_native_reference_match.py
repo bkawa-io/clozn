@@ -58,7 +58,7 @@ def _sub(monkeypatch, engine):
         "status": "diverged", "removed_source_ids": arm.get("removed_source_ids")
     }
     monkeypatch.setattr(cs, "_engine_tmpl", lambda _engine, messages, **_kwargs: "PROMPT:" + str(messages))
-    monkeypatch.setenv("CLOZN_MINIMAL_CONTEXT_BATCH_WORKERS", "1")
+    monkeypatch.setenv("CLOZN_SCORE_BATCH_WORKERS", "1")
     return sub
 
 

@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clozn.context-interactions-result.v1",
+  "title": "Budgeted context interaction sampling result",
+  "$defs": {
+    "nullable_number": {"type": ["number", "null"]},
+    "loss": {
+      "type": "object",
+      "required": [
+        "answer_token_count",
+        "positive_loss_token_count",
+        "mean_positive_support_loss_nats_per_token",
+        "max_token_support_loss_nats"
+      ],
+      "properties": {
+        "answer_token_count": {"type": "integer", "minimum": 1},
+        "positive_loss_token_count": {"type": "integer", "minimum": 0},
+        "mean_positive_support_loss_nats_per_token": {"type": "number", "minimum": 0},
+        "max_token_support_loss_nats": {"type": "number", "minimum": 0}
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "status",
+    "stop_reason",
+    "seed",
+    "claim",
+    "source_ids",
+    "budget",
+    "source_estimates",
+    "elapsed_seconds",
+    "best"
+  ],
+  "properties": {
+    "schema_version": {"const": "clozn.context-interactions-result.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "status": {"enum": ["running", "completed", "partial", "unavailable"]},
+    "stop_reason": {"type": ["string", "null"]},
+    "seed": {"type": "integer", "minimum": 0},
+    "claim": {
+      "type": "object",
+      "required": ["kind", "redundancy_proven"],
+      "properties": {
+        "kind": {"const": "exploratory_sampled_marginals"},
+        "redundancy_proven": {"const": false}
+      },
+      "additionalProperties": false
+    },
+    "source_ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "budget": {
+      "type": "object",
+      "required": [
+        "max_new_executions",
+        "used_new_executions",
+        "reused_observation_count",
+        "completed_pairs"
+      ],
+      "properties": {
+        "max_new_executions": {"type": "integer", "minimum": 0},
+        "used_new_executions": {"type": "integer", "minimum": 0},
+        "reused_observation_count": {"type": "integer", "minimum": 0},
+        "completed_pairs": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "source_estimates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "source_id",
+          "sample_count",
+          "unique_pair_count",
+          "mean_marginal_nats",
+          "sample_stddev_nats",
+          "leave_one_out_nats",
+          "mean_minus_leave_one_out_nats"
+        ],
+        "properties": {
+          "source_id": {"type": "string", "minLength": 1},
+          "sample_count": {"type": "integer", "minimum": 0},
+          "unique_pair_count": {"type": "integer", "minimum": 0},
+          "mean_marginal_nats": {"$ref": "#/$defs/nullable_number"},
+          "sample_stddev_nats": {"$ref": "#/$defs/nullable_number"},
+          "leave_one_out_nats": {"$ref": "#/$defs/nullable_number"},
+          "mean_minus_leave_one_out_nats": {"$ref": "#/$defs/nullable_number"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "elapsed_seconds": {"$ref": "#/$defs/nullable_number"},
+    "best": {
+      "anyOf": [
+        {
+          "type": "object",
+          "required": ["retained_source_ids", "rendered_prompt_tokens", "loss"],
+          "properties": {
+            "retained_source_ids": {"type": "array", "items": {"type": "string"}},
+            "rendered_prompt_tokens": {"type": "integer", "minimum": 0},
+            "loss": {"anyOf": [{"$ref": "#/$defs/loss"}, {"type": "null"}]}
+          },
+          "additionalProperties": false
+        },
+        {"type": "null"}
+      ]
+    }
+  },
+  "additionalProperties": false
+}

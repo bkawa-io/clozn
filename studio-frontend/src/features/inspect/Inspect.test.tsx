@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ContractError } from "../../data/contracts";
 import type {
   ContextInvestigationQuery,
@@ -7,8 +7,9 @@ import type {
 } from "../../data/contextInvestigation";
 import { contextInvestigationApi } from "../../data/contextInvestigationClient";
 import type { ContextEffectsJob } from "../../data/contextInvestigationJobs";
+import type { ContextInteractionsJob } from "../../data/contextInteractions";
 import type { LeanContextJob } from "../../data/leanContext";
-import { InspectSurface } from "./Inspect";
+import { InspectSurface, LeanContextPanel } from "./Inspect";
 
 const runId = "run_alpha";
 const answerRange = { answerStart: 3, answerEnd: 4 } as const;
@@ -343,6 +344,13 @@ function effectsJobFixture(
         unavailableSourceCount: 1,
         failedSourceCount: 0,
         notMeasuredSourceCount: 0,
+        executedScoreCount: 1,
+        reusedScoreCount: 1,
+        elapsedSeconds: 2.5,
+        scoringMode: "fast",
+        evidenceQuality: "approximate",
+        executionStrategy: "native_prefix_trie",
+        numericalRegime: "native_prefix_trie_target_logprob_v1",
         state: "completed",
       },
     } : {}),
@@ -398,6 +406,15 @@ function leanContextJobFixture(): LeanContextJob {
         },
         observationId: "obs-best",
       },
+      generationComparison: {
+        status: "completed",
+        decodeMode: "greedy",
+        maxNewTokens: 40,
+        fullContext: { text: "Hi 🌕!", matchesRecorded: true },
+        leanContext: { text: "Hi moon!", matchesRecorded: false },
+        exactMatch: false,
+        normalizedMatch: false,
+      },
       reduction: {
         removedPromptTokens: 48,
         retainedPromptTokenFraction: .6,
@@ -412,8 +429,69 @@ function leanContextJobFixture(): LeanContextJob {
         exhausted: false,
         blockedByBudget: false,
       },
+      elapsedSeconds: 5,
       stoppingReason: "search_policy_complete",
     },
+  };
+}
+
+function interactionsJobFixture(
+  state: "queued" | "running" | "completed",
+): ContextInteractionsJob {
+  const result = state === "queued" ? undefined : {
+    schemaVersion: "clozn.context-interactions-result.v1" as const,
+    runId,
+    status: state === "completed" ? "completed" as const : "running" as const,
+    stopReason: state === "completed" ? "execution_budget" : null,
+    seed: 0,
+    claim: { kind: "exploratory_sampled_marginals" as const, redundancyProven: false as const },
+    sourceIds: ["source-a", "source b"],
+    budget: {
+      maxNewExecutions: 16,
+      usedNewExecutions: state === "completed" ? 16 : 4,
+      reusedObservationCount: 2,
+      completedPairs: state === "completed" ? 6 : 1,
+    },
+    sourceEstimates: [{
+      sourceId: "source-a",
+      sampleCount: 1,
+      uniquePairCount: 1,
+      meanMarginalNats: 1.5,
+      sampleStddevNats: null,
+      leaveOneOutNats: .42,
+      meanMinusLeaveOneOutNats: 1.08,
+    }, {
+      sourceId: "source b",
+      sampleCount: 0,
+      uniquePairCount: 0,
+      meanMarginalNats: null,
+      sampleStddevNats: null,
+      leaveOneOutNats: -.21,
+      meanMinusLeaveOneOutNats: null,
+    }],
+    elapsedSeconds: state === "completed" ? 8 : null,
+    best: state === "completed" ? {
+      retainedSourceIds: ["source-a"],
+      renderedPromptTokens: 72,
+      loss: null,
+    } : null,
+  };
+  return {
+    schemaVersion: "clozn.analysis-job.v1",
+    jobId: "infjob_interactions_ui",
+    runId,
+    kind: "context_investigation_interactions",
+    state,
+    progress: {
+      phase: state === "completed" ? "done" : "sampling_context_interactions",
+      completedUnits: state === "queued" ? 0 : state === "completed" ? 16 : 4,
+      totalUnits: 16,
+      percent: state === "queued" ? 0 : state === "completed" ? 100 : 25,
+    },
+    cancelRequested: false,
+    cancellable: state !== "completed",
+    cached: false,
+    result,
   };
 }
 
@@ -517,18 +595,65 @@ describe("Inspect surface", () => {
     const view = render(<InspectSurface route={{ surface: "inspect", runId, ...answerRange }} />);
 
     expect(await screen.findByText("2 above-floor relationships")).toBeInTheDocument();
-    expect(query).toHaveBeenCalledWith(runId, { answerStart: 3, answerEnd: 4, floorNats: .1 }, expect.any(AbortSignal));
+    expect(query).toHaveBeenCalledWith(runId, {
+      answerStart: 3,
+      answerEnd: 4,
+      floorNats: .1,
+      sourceIds: ["source-a", "source b"],
+      scoringMode: "fast",
+    }, expect.any(AbortSignal));
     expect(screen.queryByText("+0.42")).not.toBeInTheDocument();
 
     view.rerender(<InspectSurface route={{ surface: "inspect", runId, ...answerRange, sourceId: "source-a" }} />);
     expect(await screen.findByText("+0.42")).toBeInTheDocument();
-    expect(screen.getByText("Support")).toBeInTheDocument();
+    expect(screen.getAllByText("Support").some((element) => element.classList.contains("evidence-state"))).toBe(true);
     expect(screen.getByText("Delete source · recorded continuation · floor 0.10")).toBeInTheDocument();
     expect(view.container.querySelectorAll(".map-node")).toHaveLength(1);
     fireEvent.click(screen.getByText("Evidence"));
     expect(screen.getByText("experiment_reader")).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(window.location.hash).toBe("#/inspect/run_alpha");
+  });
+
+  it("draws at most three supporting and three suppressing sources for a pinned answer", async () => {
+    const reader = readerFixture();
+    const extras = [
+      { id: "source-c", direction: "support" as const, delta: .3 },
+      { id: "source-d", direction: "suppression" as const, delta: -.19 },
+      { id: "source-e", direction: "support" as const, delta: .2 },
+      { id: "source-f", direction: "suppression" as const, delta: -.18 },
+      { id: "source-g", direction: "support" as const, delta: .1 },
+      { id: "source-h", direction: "suppression" as const, delta: -.09 },
+    ];
+    reader.sources = [...reader.sources, ...extras.map(({ id, delta }, index) => ({
+      ...reader.sources[index % 2],
+      sourceId: id,
+      measurement: { ...reader.sources[index % 2].measurement, armId: `arm_${id}`, observationId: `observation_${id}` },
+      summary: { maxAbsTokenDeltaNats: Math.abs(delta), totalContinuationDeltaNats: delta, aboveFloorLocusCount: 0 },
+      loci: [],
+    }))];
+    reader.measurement.sourceUniverse = reader.sources.map((source) => source.sourceId);
+    reader.measurement.completedSourceCount = reader.sources.length;
+    const queryResult = queryFixture();
+    queryResult.effects = [
+      ...queryResult.effects,
+      ...extras.map(({ id, direction, delta }) => ({
+        ...queryResult.effects[direction === "support" ? 0 : 1],
+        sourceId: id,
+        deltaNats: delta,
+        armId: `arm_${id}`,
+        interventionObservationId: `observation_${id}`,
+      })),
+    ];
+    vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(reader);
+    vi.spyOn(contextInvestigationApi, "query").mockResolvedValue(queryResult);
+    const view = render(<InspectSurface route={{ surface: "inspect", runId, ...answerRange }} />);
+
+    expect(await screen.findByText("8 above-floor relationships")).toBeInTheDocument();
+    await waitFor(() => expect(view.container.querySelectorAll(".map-node")).toHaveLength(6));
+    expect(view.container.querySelector(".context-pane")).toHaveClass("has-linked-selection");
+    expect(view.container.querySelector('.context-prose .is-related[data-link-direction="support"]')).toBeInTheDocument();
+    expect(view.container.querySelector('.context-prose .is-related[data-link-direction="suppression"]')).toBeInTheDocument();
   });
 
   it("removes relationship paths when the locked aggregate is explicitly below floor", async () => {
@@ -570,15 +695,63 @@ describe("Inspect surface", () => {
     const button = await screen.findByRole("button", { name: "Measure context" });
     expect(start).not.toHaveBeenCalled();
     expect(poll).not.toHaveBeenCalled();
-    expect(screen.getByText("Each source is removed once and scored against the recorded answer.")).toBeInTheDocument();
+    expect(screen.getByText("Up to 2 source scores, plus a reusable baseline.")).toBeInTheDocument();
 
     fireEvent.click(button);
     await waitFor(() => expect(start).toHaveBeenCalledWith(runId, {
-      sourceIds: ["source-a", "source b"],
+      granularity: "adaptive",
+      maxArms: 2,
+      scoringMode: "fast",
     }, expect.any(AbortSignal)));
     await waitFor(() => expect(poll).toHaveBeenCalledWith(runId, "infjob_ui", expect.any(AbortSignal)));
     await waitFor(() => expect(reader).toHaveBeenCalledTimes(2));
     expect(window.location.hash).toBe(initialHash);
+  });
+
+  it("shows the arm estimate and keeps granularity configuration in the route", async () => {
+    vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(notMeasuredReaderFixture());
+    render(<InspectSurface route={{ surface: "inspect", runId }} />);
+
+    expect(await screen.findByText("2 context spans")).toBeInTheDocument();
+    expect(screen.getByText("More arms preserve smaller Markdown sections. Fast chooses native batching for prompt-heavy work and exact prefix-cached scoring when answer decoding would dominate.")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Granularity"), { target: { value: "message" } });
+
+    expect(window.location.hash).toBe(
+      "#/inspect/run_alpha?granularity=message&armBudget=1",
+    );
+  });
+
+  it("runs a custom experiment for only the selected recorded spans", async () => {
+    const reader = vi.spyOn(contextInvestigationApi, "reader")
+      .mockResolvedValue(notMeasuredReaderFixture());
+    const start = vi.spyOn(contextInvestigationApi, "startEffects")
+      .mockResolvedValue(effectsJobFixture("queued"));
+    vi.spyOn(contextInvestigationApi, "effectsJob")
+      .mockImplementation(() => new Promise(() => undefined));
+    render(<InspectSurface route={{ surface: "inspect", runId }} />);
+
+    fireEvent.change(await screen.findByLabelText("Granularity"), {
+      target: { value: "custom" },
+    });
+    expect(screen.getByText("No sources selected")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Measure context" })).toBeDisabled();
+
+    const choices = screen.getAllByRole("checkbox");
+    expect(choices).toHaveLength(2);
+    fireEvent.click(choices[0]);
+    await waitFor(() => expect(reader).toHaveBeenLastCalledWith(
+      runId,
+      expect.any(AbortSignal),
+      { sourceIds: ["source-a"], scoringMode: "fast" },
+    ));
+    expect(screen.getByText("1 context span")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Measure context" }));
+    await waitFor(() => expect(start).toHaveBeenCalledWith(
+      runId,
+      { sourceIds: ["source-a"], scoringMode: "fast" },
+      expect.any(AbortSignal),
+    ));
   });
 
   it("cancels an active measurement without changing the Inspect coordinate", async () => {
@@ -597,13 +770,44 @@ describe("Inspect surface", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Measure context" }));
     const cancelButton = await screen.findByRole("button", { name: "Cancel" });
     expect(screen.getByText("Working…")).toBeInTheDocument();
-    expect(screen.getByText("Local scoring can take several minutes. Progress updates when the current model batch finishes.")).toBeInTheDocument();
+    expect(screen.getByText("Links and heatmaps update as each scoring batch finishes. Foreground chat takes priority between batches.")).toBeInTheDocument();
     expect(screen.getByRole("progressbar")).not.toHaveAttribute("value");
     fireEvent.click(cancelButton);
 
     await waitFor(() => expect(cancel).toHaveBeenCalledWith(runId, "infjob_ui", expect.any(AbortSignal)));
     expect(await screen.findByText("Cancelled")).toBeInTheDocument();
     expect(window.location.hash).toBe("#/inspect/run_alpha?answerStart=3&answerEnd=4");
+  });
+
+  it("updates the reader while a measurement job is still running", async () => {
+    let resolvePartial!: (reader: ContextInvestigationReader) => void;
+    const partialReader = new Promise<ContextInvestigationReader>((resolve) => {
+      resolvePartial = resolve;
+    });
+    const reader = vi.spyOn(contextInvestigationApi, "reader")
+      .mockResolvedValueOnce(notMeasuredReaderFixture())
+      .mockReturnValueOnce(partialReader);
+    vi.spyOn(contextInvestigationApi, "startEffects")
+      .mockResolvedValue(effectsJobFixture("queued"));
+    const running = effectsJobFixture("running");
+    running.progress = {
+      phase: "scoring_recorded_continuation",
+      completedUnits: 1,
+      totalUnits: 2,
+      percent: 50,
+    };
+    const poll = vi.spyOn(contextInvestigationApi, "effectsJob")
+      .mockResolvedValue(running);
+    render(<InspectSurface route={{ surface: "inspect", runId }} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Measure context" }));
+    await waitFor(() => expect(poll).toHaveBeenCalled());
+    resolvePartial(partialReaderFixture());
+
+    expect(await screen.findByText("Partial")).toBeInTheDocument();
+    expect(screen.getByText("50%")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(reader).toHaveBeenCalledTimes(2);
   });
 
   it("retries status polling without dispatching a second measurement job", async () => {
@@ -637,7 +841,12 @@ describe("Inspect surface", () => {
     expect(view.container.querySelectorAll(".map-node")).toHaveLength(0);
     expect(view.container.querySelectorAll(".relationship-path")).toHaveLength(0);
     expect(screen.queryByText(/Δ nats/)).not.toBeInTheDocument();
-    expect(query).toHaveBeenCalledWith(runId, { ...answerRange, floorNats: .1 }, expect.any(AbortSignal));
+    expect(query).toHaveBeenCalledWith(runId, {
+      ...answerRange,
+      floorNats: .1,
+      sourceIds: ["source-a", "source b"],
+      scoringMode: "fast",
+    }, expect.any(AbortSignal));
   });
 
   it("keeps readable prose but does not query when the Run has no legal measurement arm", async () => {
@@ -661,8 +870,8 @@ describe("Inspect surface", () => {
     expect(view.container.querySelector(".reader-status")).toHaveTextContent("Partial");
     await waitFor(() => expect(view.container.querySelector(".query-status")).toHaveTextContent("Partial"));
     expect(screen.getByText("1 support · 0 suppression · 0 below floor · 1 unavailable · 1 failed")).toBeInTheDocument();
-    expect(screen.getByRole("img", {
-      name: "Context coverage: 1 measured source, 0 not measured sources, 1 unavailable source, 1 failed source. 1 measured answer range.",
+    expect(screen.getByRole("group", {
+      name: "Context coverage: 1 measured source, 0 not measured sources, 1 unavailable source, 1 failed source. 1 answer phrase. Answer lens: tension.",
     })).toBeInTheDocument();
 
     const failed = Array.from(view.container.querySelectorAll<HTMLElement>(".context-segment"))
@@ -710,9 +919,19 @@ describe("Inspect surface", () => {
 
     expect(await screen.findByText("Persisted evidence no longer reconstructs this Run.")).toHaveAttribute("role", "alert");
     expect(screen.getByText("A😀B context signal.")).toBeInTheDocument();
-    expect(screen.getByText("Answer unavailable.")).toBeInTheDocument();
+    expect(screen.getByText("No recorded response is available for this turn.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /measured relationship/ })).not.toBeInTheDocument();
     expect(query).not.toHaveBeenCalled();
+  });
+
+  it("disables the unified Lean Context page when no recorded answer is available", async () => {
+    const reader = readerFixture();
+    reader.answer = { status: "unavailable" };
+    vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(reader);
+    render(<InspectSurface route={{ surface: "inspect", runId, view: "lean-context" }} />);
+
+    expect(await screen.findByText("Lean Context cannot run for this turn.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Find lean context" })).toBeDisabled();
   });
 
   it("preserves overlapping Unicode source and answer geometry without losing prose", async () => {
@@ -760,12 +979,12 @@ describe("Inspect surface", () => {
     view.rerender(<InspectSurface route={{ surface: "inspect", runId: "run_beta" }} />);
     expect(screen.getByText("Loading Inspect.")).toBeInTheDocument();
     expect(screen.queryByText("Hi 🌕!")).not.toBeInTheDocument();
-    expect(reader).toHaveBeenLastCalledWith("run_beta", expect.any(AbortSignal));
+    expect(reader).toHaveBeenLastCalledWith("run_beta", expect.any(AbortSignal), { scoringMode: "fast" });
     expect(query).toHaveBeenCalledTimes(2);
     expect(keepReaderPending).toBeTypeOf("function");
   });
 
-  it("uses phrase links, restores exact spans in the answer heatmap, and preserves whole-segment context granularity", async () => {
+  it("keeps readable phrase spans in the answer heatmap and preserves whole-segment context granularity", async () => {
     const reader = readerFixture();
     const contextLength = [...reader.context.blocks[0].text].length;
     reader.sources = reader.sources.map((source, index) => index === 0 ? {
@@ -788,53 +1007,70 @@ describe("Inspect surface", () => {
     expect(screen.queryByRole("button", { name: "🌕; 1 measured relationship" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getAllByRole("button", { name: "Expand heatmap" })[1]);
-    const moon = screen.getByRole("button", { name: "🌕; 1 measured relationship" });
-    const punctuation = screen.getByRole("button", { name: "!; 1 measured relationship" });
-    expect(moon).toHaveAttribute("tabindex", "0");
-    expect(punctuation).toHaveAttribute("tabindex", "-1");
-    fireEvent.keyDown(moon, { key: "ArrowRight" });
-    expect(document.activeElement).toBe(punctuation);
-    await waitFor(() => expect(punctuation).toHaveAttribute("tabindex", "0"));
+    const expandedPhrase = screen.getByRole("button", { name: "Hi 🌕!; 2 measured relationships" });
+    expect(expandedPhrase).toHaveAttribute("tabindex", "0");
+    expect(screen.queryByRole("button", { name: "🌕; 1 measured relationship" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "!; 1 measured relationship" })).not.toBeInTheDocument();
 
     const block = document.querySelector(".context-block");
     expect(block).toHaveClass("has-whole-measurement");
     expect(block).toHaveAttribute("data-source-ids", '["source-a"]');
   });
 
-  it("turns an expanded context pane into a heatmap and restores the linked layout on collapse", async () => {
+  it("keeps the context heatmap interactive before, during, and after expansion", async () => {
     vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(readerFixture());
     const view = render(<InspectSurface route={{ surface: "inspect", runId }} />);
 
-    await screen.findByText("Measured");
-    fireEvent.click(screen.getAllByRole("button", { name: "Expand heatmap" })[0]);
-
-    expect(view.container.querySelector(".inspect-reader")).toHaveClass("is-expanded-context");
+    await screen.findByRole("button", { name: "Tension" });
     const heated = view.container.querySelector<HTMLElement>('.context-segment[data-source-ids="[\\"source-a\\"]"]');
+    const cooler = view.container.querySelector<HTMLElement>('.context-segment[data-source-ids="[\\"source b\\"]"]');
     expect(heated).toHaveAttribute("data-heat", "true");
-    expect(heated?.style.getPropertyValue("--heat-alpha")).not.toBe("");
+    expect(heated?.style.getPropertyValue("--heat-band")).toBe("5");
+    expect(cooler).toHaveAttribute("data-heat", "true");
+    expect(cooler?.style.getPropertyValue("--heat-band")).toBe("2");
+    expect(heated).toHaveAttribute("role", "button");
     fireEvent.mouseEnter(heated!);
     expect(await screen.findByText("Corresponding text")).toBeInTheDocument();
     expect(screen.getByText("+0.42 Δ")).toBeInTheDocument();
 
+    fireEvent.click(screen.getAllByRole("button", { name: "Expand heatmap" })[0]);
+    expect(view.container.querySelector(".inspect-reader")).toHaveClass("is-expanded-context");
+    expect(screen.getByRole("dialog", { name: "Expanded context heatmap" })).toContainElement(view.container.querySelector(".heatmap-peek"));
     fireEvent.click(heated!);
     expect(window.location.hash).toBe("#/inspect/run_alpha?answerStart=0&answerEnd=5&sourceId=source-a");
     fireEvent.click(screen.getByRole("button", { name: "Collapse" }));
     expect(view.container.querySelector(".inspect-reader")).not.toHaveClass("is-expanded");
-    expect(view.container.querySelector('[data-heat="true"]')).not.toBeInTheDocument();
+    expect(heated).toHaveAttribute("data-heat", "true");
+    fireEvent.click(screen.getAllByRole("button", { name: "Expand heatmap" })[1]);
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "Expanded answer heatmap" }), { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(document.body.style.overflow).toBe("");
   });
 
-  it("encodes support and suppression separately in the expanded answer heatmap", async () => {
+  it("encodes support and suppression separately in the always-visible answer heatmap", async () => {
     vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(readerFixture());
     const view = render(<InspectSurface route={{ surface: "inspect", runId }} />);
 
-    await screen.findByText("Measured");
-    fireEvent.click(screen.getAllByRole("button", { name: "Expand heatmap" })[1]);
-    const moon = screen.getByRole("button", { name: "🌕; 2 measured relationships" });
-    expect(moon).toHaveAttribute("data-direction", "mixed");
-    expect(moon.style.getPropertyValue("--heat-support-alpha")).not.toBe("");
-    expect(moon.style.getPropertyValue("--heat-suppression-alpha")).not.toBe("");
+    await screen.findByRole("button", { name: "Tension" });
+    const phrase = screen.getByRole("button", { name: "Hi 🌕!; 2 measured relationships" });
+    expect(screen.getByRole("button", { name: "Tension" })).toHaveAttribute("aria-pressed", "true");
+    expect(phrase).toHaveAttribute("data-lens", "tension");
+    expect(phrase).toHaveAttribute("data-direction", "mixed");
+    expect(phrase.style.getPropertyValue("--heat-support-fill")).not.toBe("");
+    expect(phrase.style.getPropertyValue("--heat-suppression-fill")).not.toBe("");
+    expect(view.container.querySelector('.overview-answer .overview-range[data-lens="tension"]')).toBeInTheDocument();
 
-    fireEvent.mouseEnter(moon);
+    fireEvent.click(screen.getByRole("button", { name: "Suppression" }));
+    expect(phrase).toHaveAttribute("data-lens", "suppression");
+    expect(phrase).toHaveAttribute("data-direction", "suppression");
+    expect(screen.getByText(/negative pull, not model uncertainty/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Overall" }));
+    expect(phrase).toHaveAttribute("data-lens", "influence");
+    expect(phrase).toHaveAttribute("data-direction", "mixed");
+    expect(Number.parseFloat(phrase.style.getPropertyValue("--heat-support-share"))).toBeCloseTo(66.7, 1);
+
+    fireEvent.mouseEnter(phrase);
     const peek = await waitFor(() => {
       const element = view.container.querySelector<HTMLElement>(".heatmap-peek");
       expect(element).toHaveTextContent("Corresponding text");
@@ -845,60 +1081,451 @@ describe("Inspect surface", () => {
     expect(peek).toHaveTextContent("2 linked sources");
   });
 
-  it("lets expanded hover preview a different span while a click selection remains pinned", async () => {
+  it("bubbles the strongest supporting and suppressing context to the top after selecting an answer span", async () => {
+    vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(readerFixture());
+    vi.spyOn(contextInvestigationApi, "query").mockResolvedValue(queryFixture());
+    render(<InspectSurface route={{ surface: "inspect", runId, ...answerRange }} />);
+
+    const panel = await screen.findByRole("complementary", { name: "Context competing around this answer span" });
+    expect(within(panel).getByRole("heading", { name: "Top positive influence" })).toBeInTheDocument();
+    expect(within(panel).getByRole("heading", { name: "Top negative influence" })).toBeInTheDocument();
+    expect(within(panel).getByText("+0.42 Δ")).toBeInTheDocument();
+    expect(within(panel).getByText("−0.21 Δ")).toBeInTheDocument();
+
+    const summaryLink = within(panel).getByRole("button", { name: /Focus support span/ });
+    expect(summaryLink).not.toHaveAttribute("data-source-ids");
+    expect(document.querySelector('.context-prose [data-source-ids="[\\"source-a\\"]"]')).toBeInTheDocument();
+
+    fireEvent.click(summaryLink);
+    expect(window.location.hash).toBe("#/inspect/run_alpha?answerStart=3&answerEnd=4&sourceId=source-a");
+
+    fireEvent.click(screen.getByRole("button", { name: "Suppression" }));
+    const suppressionPanel = screen.getByRole("complementary", { name: "Context suppressing this answer span" });
+    expect(within(suppressionPanel).getAllByRole("heading", { level: 4 })[0])
+      .toHaveTextContent("Top negative influence");
+  });
+
+  it("bubbles the answer spans most affected by a selected context span", async () => {
+    vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(readerFixture());
+    vi.spyOn(contextInvestigationApi, "query").mockResolvedValue(queryFixture());
+    render(<InspectSurface route={{ surface: "inspect", runId, ...answerRange, sourceId: "source-a" }} />);
+
+    const panel = await screen.findByRole("complementary", { name: "Most influenced answer spans" });
+    expect(within(panel).getByText("Hi 🌕!")).toBeInTheDocument();
+    expect(within(panel).getByText("+0.42 Δ")).toBeInTheDocument();
+    expect(within(panel).getByText("No above-floor suppression was recorded.")).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: /Focus support span/ })).not.toHaveAttribute("data-answer-start");
+    expect(document.querySelector('.answer-prose [data-answer-start="0"]')).toBeInTheDocument();
+  });
+
+  it("keeps up to three supporting and three suppressing answer passages active when context is pinned", async () => {
     const reader = readerFixture();
-    reader.loci = reader.loci.map((locus, index) => index === 1 ? {
-      ...locus,
+    const first = "First linked answer sentence carries the science evidence. ";
+    const second = "Second linked answer sentence carries the risk mitigation.";
+    const third = " Third linked answer sentence is weaker supporting evidence.";
+    const fourth = " Fourth linked answer sentence is still useful supporting evidence.";
+    const fifth = " Fifth linked answer sentence is deliberately omitted.";
+    if (reader.answer.status !== "available") throw new Error("fixture answer must be available");
+    reader.answer = {
+      ...reader.answer,
+      text: first + second + third + fourth + fifth,
+      tokens: [
+        { index: 0, tokenId: 20, piece: first, unicodeRange: [0, [...first].length], logprob: -.2 },
+        { index: 1, tokenId: 21, piece: second, unicodeRange: [[...first].length, [...first, ...second].length], logprob: -.3 },
+        { index: 2, tokenId: 22, piece: third, unicodeRange: [[...first, ...second].length, [...first, ...second, ...third].length], logprob: -.4 },
+        { index: 3, tokenId: 23, piece: fourth, unicodeRange: [[...first, ...second, ...third].length, [...first, ...second, ...third, ...fourth].length], logprob: -.5 },
+        { index: 4, tokenId: 24, piece: fifth, unicodeRange: [[...first, ...second, ...third, ...fourth].length, [...first, ...second, ...third, ...fourth, ...fifth].length], logprob: -.6 },
+      ],
+    };
+    reader.sources = [{
+      ...reader.sources[0],
+      summary: { maxAbsTokenDeltaNats: .42, totalContinuationDeltaNats: .57, aboveFloorLocusCount: 5 },
+      loci: ["locus_a", "locus_a_second", "locus_a_third", "locus_a_fourth", "locus_a_fifth"],
+    }];
+    reader.loci = [{
+      ...reader.loci[0],
+      answerTokenRange: [0, 1],
+      answerUnicodeRange: [0, [...first].length],
+      answerText: first,
+      perTokenDeltaNats: [.42],
+    }, {
+      ...reader.loci[0],
+      locusId: "locus_a_second",
+      answerTokenRange: [1, 2],
+      answerUnicodeRange: [[...first].length, [...first, ...second].length],
+      answerText: second,
+      direction: "suppression",
+      deltaNats: -.3,
+      absoluteDeltaNats: .3,
+      baselineSelectedLogp: -.3,
+      intervenedSelectedLogp: 0,
+      perTokenDeltaNats: [-.3],
+    }, {
+      ...reader.loci[0],
+      locusId: "locus_a_third",
       answerTokenRange: [2, 3],
-      answerUnicodeRange: [4, 5],
-      answerText: "!",
-    } : locus);
+      answerUnicodeRange: [[...first, ...second].length, [...first, ...second, ...third].length],
+      answerText: third,
+      deltaNats: .2,
+      absoluteDeltaNats: .2,
+      baselineSelectedLogp: -.4,
+      intervenedSelectedLogp: -.6,
+      perTokenDeltaNats: [.2],
+    }, {
+      ...reader.loci[0],
+      locusId: "locus_a_fourth",
+      answerTokenRange: [3, 4],
+      answerUnicodeRange: [[...first, ...second, ...third].length, [...first, ...second, ...third, ...fourth].length],
+      answerText: fourth,
+      deltaNats: .15,
+      absoluteDeltaNats: .15,
+      baselineSelectedLogp: -.5,
+      intervenedSelectedLogp: -.65,
+      perTokenDeltaNats: [.15],
+    }, {
+      ...reader.loci[0],
+      locusId: "locus_a_fifth",
+      answerTokenRange: [4, 5],
+      answerUnicodeRange: [[...first, ...second, ...third, ...fourth].length, [...first, ...second, ...third, ...fourth, ...fifth].length],
+      answerText: fifth,
+      deltaNats: .1,
+      absoluteDeltaNats: .1,
+      baselineSelectedLogp: -.6,
+      intervenedSelectedLogp: -.7,
+      perTokenDeltaNats: [.1],
+    }];
+    reader.measurement.sourceUniverse = ["source-a"];
+    reader.measurement.completedSourceCount = 1;
     vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(reader);
+    const queryResult = queryFixture();
+    queryResult.effects = queryResult.effects.slice(0, 1);
+    const query = vi.spyOn(contextInvestigationApi, "query").mockResolvedValue(queryResult);
+    const firstEnd = [...first].length;
+    const view = render(<InspectSurface route={{
+      surface: "inspect",
+      runId,
+      answerStart: 0,
+      answerEnd: firstEnd,
+      sourceId: "source-a",
+    }} />);
+
+    const panel = await screen.findByRole("complementary", { name: "Most influenced answer spans" });
+    expect(within(panel).getAllByRole("button")).toHaveLength(2);
+    expect(view.container.querySelectorAll(".answer-segment.is-source-linked")).toHaveLength(4);
+    expect(view.container.querySelectorAll(".overview-answer .overview-range.is-selected")).toHaveLength(4);
+    expect(view.container.querySelectorAll(".answer-gate")).toHaveLength(4);
+    expect(view.container.querySelector(".answer-pane")).toHaveClass("has-linked-selection");
+    expect(view.container.querySelector('.answer-segment.is-source-linked[data-link-direction="support"]')).toBeInTheDocument();
+    expect(view.container.querySelector('.answer-segment.is-source-linked[data-link-direction="suppression"], .answer-segment.is-source-linked[data-link-direction="mixed"]')).toBeInTheDocument();
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it("scales answer heat by relative influence per token across the full visual ramp", async () => {
+    const reader = readerFixture();
+    const phrases = [
+      "First answer sentence has low influence across these words. ",
+      "Second answer sentence has medium influence across these words. ",
+      "Third answer sentence has strong influence across these words.",
+    ];
+    const ranges = phrases.map((phrase, index) => {
+      const start = phrases.slice(0, index).reduce((length, value) => length + [...value].length, 0);
+      return [start, start + [...phrase].length] as const;
+    });
+    if (reader.answer.status !== "available") throw new Error("fixture answer must be available");
+    reader.answer = {
+      ...reader.answer,
+      text: phrases.join(""),
+      tokens: ranges.map(([start, end], index) => ({
+        index,
+        tokenId: 100 + index,
+        piece: phrases[index],
+        unicodeRange: [start, end],
+        logprob: -1,
+      })),
+    };
+    reader.loci = ranges.map(([start, end], index) => ({
+      ...reader.loci[0],
+      locusId: `density-${index}`,
+      answerTokenRange: [index, index + 1],
+      answerUnicodeRange: [start, end],
+      answerText: phrases[index],
+      deltaNats: [.1, 1, 5][index],
+      absoluteDeltaNats: [.1, 1, 5][index],
+      perTokenDeltaNats: [[.1], [1], [5]][index],
+    }));
+    vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(reader);
+    const view = render(<InspectSurface route={{ surface: "inspect", runId }} />);
+
+    await screen.findByRole("button", { name: "Tension" });
+    expect(view.container.querySelectorAll('.answer-segment[data-heat="true"]')).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Overall" }));
+    const heated = [...view.container.querySelectorAll<HTMLElement>('.answer-segment[data-heat="true"]')];
+    expect(heated).toHaveLength(3);
+    expect(heated.map((element) => element.style.getPropertyValue("--heat-band")))
+      .toEqual(["0", "1", "5"]);
+    expect(heated.map((element) => element.style.getPropertyValue("--heat-edge-width")))
+      .toEqual(["0px", "0px", "2px"]);
+    expect(screen.getByText("0–5.000 nats/token")).toBeInTheDocument();
+    expect(heated.every((element) => element.dataset.direction === "support")).toBe(true);
+    const overview = [...view.container.querySelectorAll<HTMLElement>('.overview-answer button[data-heat="true"]')];
+    expect(overview.map((element) => element.style.getPropertyValue("--heat-band")))
+      .toEqual(heated.map((element) => element.style.getPropertyValue("--heat-band")));
+    expect(heated.filter(element => element.dataset.peak)).toEqual([heated[2]]);
+    fireEvent.click(screen.getByRole("button", { name: /Highest overall effect.*Third answer sentence/ }));
+    expect(window.location.hash).toBe(`#/inspect/${runId}?answerStart=${ranges[2][0]}&answerEnd=${ranges[2][1]}`);
+  });
+
+  it("keeps hover a temporary preview without opening the pinned drawer", async () => {
+    vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(readerFixture());
+    const view = render(<InspectSurface route={{ surface: "inspect", runId }} />);
+
+    const answer = await screen.findByRole("button", { name: "Hi 🌕!; 2 measured relationships" });
+    fireEvent.mouseEnter(answer);
+
+    expect(view.container.querySelector(".evidence-map")).toHaveClass("is-preview");
+    expect(screen.getByRole("group", { name: "Influence relationships, preview" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Clear pinned/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "Context competing around this answer span" })).not.toBeInTheDocument();
+  });
+
+  it("pins a whole measured context passage from the passage surface", async () => {
+    const reader = readerFixture();
+    const contextLength = [...reader.context.blocks[0].text].length;
+    reader.context.blocks[0].sourceIds = ["source-a"];
+    reader.sources = [{
+      ...reader.sources[0],
+      unicodeRange: [0, contextLength],
+      displayUnicodeRange: [0, contextLength],
+      granularity: "whole_segment",
+    }];
+    reader.loci = [reader.loci[0]];
+    reader.measurement.sourceUniverse = ["source-a"];
+    reader.measurement.completedSourceCount = 1;
+    vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(reader);
+    vi.spyOn(contextInvestigationApi, "query").mockResolvedValue(queryFixture());
+    const view = render(<InspectSurface route={{ surface: "inspect", runId }} />);
+
+    const passage = await screen.findByRole("button", { name: /Pin context passage: “A😀B context signal/ });
+    expect(passage).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(passage);
+    expect(window.location.hash).toBe("#/inspect/run_alpha?answerStart=0&answerEnd=5&sourceId=source-a");
+
+    view.rerender(<InspectSurface route={{ surface: "inspect", runId, answerStart: 0, answerEnd: 5, sourceId: "source-a" }} />);
+    expect(await screen.findByRole("button", { name: "Clear pinned selection" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Pin context passage: “A😀B context signal/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("complementary", { name: "Most influenced answer spans" })).toBeInTheDocument();
+  });
+
+  it("keeps a pinned answer, drawer, and relationship track stable across unrelated hovers", async () => {
+    vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(readerFixture());
     vi.spyOn(contextInvestigationApi, "query").mockResolvedValue(queryFixture());
     const view = render(<InspectSurface route={{ surface: "inspect", runId, ...answerRange }} />);
 
     await screen.findByText("2 above-floor relationships");
-    fireEvent.click(screen.getAllByRole("button", { name: "Expand heatmap" })[1]);
-    const punctuation = screen.getByRole("button", { name: "!; 1 measured relationship" });
-    fireEvent.mouseEnter(punctuation);
-    const selectedText = view.container.querySelector<HTMLElement>(".heatmap-peek > div:first-of-type p");
-    expect(selectedText).toHaveTextContent("!");
+    expect(screen.getByRole("button", { name: "Clear pinned selection" })).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Context competing around this answer span" })).toBeInTheDocument();
+    expect(view.container.querySelector(".evidence-map")).toHaveClass("is-locked");
+    expect(screen.getByRole("group", { name: "Influence relationships, pinned" })).toBeInTheDocument();
+    expect(view.container.querySelector<HTMLElement>(".heatmap-peek > div:first-of-type p")).toHaveTextContent("🌕");
 
-    fireEvent.mouseLeave(punctuation);
-    expect(selectedText).toHaveTextContent("🌕");
-    expect(window.location.hash).toBe("");
+    const context = view.container.querySelector<HTMLElement>('.context-segment[data-source-ids="[\\"source b\\"]"]');
+    fireEvent.mouseEnter(context!);
+    expect(view.container.querySelector<HTMLElement>(".heatmap-peek > div:first-of-type p")).toHaveTextContent("🌕");
+    expect(screen.getByRole("complementary", { name: "Context competing around this answer span" })).toBeInTheDocument();
+    expect(view.container.querySelector(".evidence-map")).toHaveClass("is-locked");
+
+    fireEvent.mouseLeave(context!);
+    expect(view.container.querySelector<HTMLElement>(".heatmap-peek > div:first-of-type p")).toHaveTextContent("🌕");
+
+    fireEvent.click(screen.getByRole("button", { name: "Hi 🌕!; 2 above-floor relationships" }));
+    expect(window.location.hash).toBe("#/inspect/run_alpha");
+    view.rerender(<InspectSurface route={{ surface: "inspect", runId }} />);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Clear pinned selection" })).not.toBeInTheDocument());
+    expect(screen.queryByRole("complementary", { name: "Context competing around this answer span" })).not.toBeInTheDocument();
   });
 
-  it("ranks context and answer influence and opens a ranking in the linked view", async () => {
+  it("keeps opposing token effects visible when a source has zero net effect", async () => {
+    const reader = readerFixture();
+    reader.loci = [{
+      ...reader.loci[0], answerTokenRange: [0, 2], answerUnicodeRange: [0, 4],
+      perTokenDeltaNats: [2, -2], deltaNats: 0, absoluteDeltaNats: 4,
+    }];
+    vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(reader);
+    vi.spyOn(contextInvestigationApi, "query").mockResolvedValue(queryFixture(["below_floor", "below_floor"]));
+    const view = render(<InspectSurface route={{ surface: "inspect", runId, answerStart: 0, answerEnd: 5 }} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Suppression" }));
+    const panel = screen.getByRole("complementary", { name: "Context suppressing this answer span" });
+    expect(within(panel).getByText("+2.00 Δ")).toBeInTheDocument();
+    expect(within(panel).getByText("−2.00 Δ")).toBeInTheDocument();
+    expect(within(panel).getAllByRole("heading", { level: 4 })[0]).toHaveTextContent("Top negative influence");
+    fireEvent.click(within(panel).getByRole("button", { name: /Focus suppression span/ }));
+    expect(window.location.hash).toBe(`#/inspect/${runId}?answerStart=0&answerEnd=5&sourceId=source-a`);
+    view.rerender(<InspectSurface route={{ surface: "inspect", runId, answerStart: 0, answerEnd: 5, sourceId: "source-a" }} />);
+    expect(await screen.findByText("Net effect over selection")).toBeInTheDocument();
+  });
+
+  it("does not exaggerate a uniformly tiny answer effect to the highest intensity", async () => {
+    const reader = readerFixture();
+    reader.loci = [{ ...reader.loci[0], perTokenDeltaNats: [.001], deltaNats: .001, absoluteDeltaNats: .001 }];
+    vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(reader);
+    const view = render(<InspectSurface route={{ surface: "inspect", runId }} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Overall" }));
+    const phrase = view.container.querySelector<HTMLElement>('.answer-segment[data-heat="true"]')!;
+    expect(phrase.style.getPropertyValue("--heat-band")).toBe("0");
+    expect(screen.getByText("0–0.100 nats/token")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Highest overall effect/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Explore overall: Hi/ }));
+    expect(window.location.hash).toBe(`#/inspect/${runId}?answerStart=0&answerEnd=5`);
+  });
+
+  it("summarizes context and answer influence and opens a result in the linked view", async () => {
     vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(readerFixture());
     render(<InspectSurface route={{ surface: "inspect", runId }} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Efficiency" }));
-    expect(screen.getByRole("heading", { name: "Influence overview" })).toBeInTheDocument();
-    expect(screen.getByText("This measures influence, not correctness.", { exact: false })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Highlights" }));
+    expect(screen.getByText("Strongest")).toBeInTheDocument();
+    expect(screen.getByText("Weakest")).toBeInTheDocument();
+    expect(screen.getByText("Most affected")).toBeInTheDocument();
+    expect(screen.getByText("Run details")).toBeInTheDocument();
     const sourceText = screen.getByText("A😀B", { selector: ".ranking-copy strong" });
     fireEvent.click(sourceText.closest("button")!);
 
     expect(window.location.hash).toBe("#/inspect/run_alpha?answerStart=0&answerEnd=5&sourceId=source-a");
-    expect(screen.getByRole("button", { name: "Linked view" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "Attribution map" })).toHaveAttribute("aria-current", "page");
   });
 
   it("runs Lean Context and labels the result as best-found rather than minimal", async () => {
     vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(readerFixture());
     const start = vi.spyOn(contextInvestigationApi, "startLeanContext")
       .mockResolvedValue(leanContextJobFixture());
-    render(<InspectSurface route={{ surface: "inspect", runId }} />);
+    const view = render(<InspectSurface route={{ surface: "inspect", runId, view: "lean-context" }} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Lean Context" }));
-    expect(screen.getByText("Searches for a leaner context using up to 16 new model executions while the recorded answer stays inside the balanced loss tolerance. Compatible prior measurements are reused without using that budget.")).toBeInTheDocument();
+    const searchDepth = await screen.findByLabelText("Search depth");
+    expect(searchDepth).toHaveValue("16");
+    expect(screen.getByRole("heading", { name: "Original context" })).toBeInTheDocument();
+    expect(screen.getByText("A😀B context signal.")).toBeInTheDocument();
+    expect(screen.queryByText("Measured")).not.toBeInTheDocument();
+    fireEvent.change(searchDepth, { target: { value: "32" } });
     fireEvent.click(screen.getByRole("button", { name: "Find lean context" }));
 
-    await waitFor(() => expect(start).toHaveBeenCalledWith(runId, expect.any(AbortSignal)));
+    await waitFor(() => expect(start).toHaveBeenCalledWith(
+      runId,
+      { maxNewExecutions: 32 },
+      expect.any(AbortSignal),
+    ));
     const promptTokens = await screen.findByText("Prompt tokens");
-    expect(promptTokens.closest("article")).toHaveTextContent("120 → 72");
-    expect(screen.getByText("60%")).toBeInTheDocument();
-    expect(screen.getByText("Best found within this search budget. It is not a proof of the mathematically smallest context.")).toBeInTheDocument();
-    expect(screen.getByText("context", { selector: ".lean-removed li" })).toBeInTheDocument();
+    expect(promptTokens.closest("div")).toHaveTextContent("120 → 72");
+    expect(screen.getByText("40%")).toBeInTheDocument();
+    expect(screen.getByText("Best candidate found within this search budget—not proof of the mathematically smallest context.", { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Original context" })).toBeInTheDocument();
+    expect(screen.getByText("context", { selector: ".lean-source.is-removed" })).toBeInTheDocument();
+    expect(screen.getByText("A😀B", { selector: ".lean-source.is-retained" })).toBeInTheDocument();
+    expect(view.container.querySelectorAll(".lean-answer-card blockquote")).toHaveLength(2);
+    expect(screen.getAllByText("Answer changed").length).toBeGreaterThan(0);
+    expect(screen.getByText("🌕", { selector: ".lean-answer-change.is-before" })).toBeInTheDocument();
+    expect(screen.getByText("moon", { selector: ".lean-answer-change.is-after" })).toBeInTheDocument();
+    expect(screen.getByText("This candidate passed the recorded-answer score tolerance, but removing the marked context changed a fresh generation. Treat it as a failed behavioral check, not a safe reduction.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Kept only" }));
+    expect(screen.getByRole("heading", { name: "Context to keep" })).toBeInTheDocument();
+    expect(screen.queryByText("context", { selector: ".lean-source.is-removed" })).not.toBeInTheDocument();
+    expect(screen.getByText("A😀B", { selector: ".lean-source.is-retained" })).toBeInTheDocument();
+  });
+
+  it("renders a saved exact-match Lean Context result as one shared before-and-after answer", () => {
+    const completed = leanContextJobFixture();
+    if (!completed.result) throw new Error("fixture must include a result");
+    const exactJob: LeanContextJob = {
+      ...completed,
+      result: {
+        ...completed.result,
+        generationComparison: {
+          ...completed.result.generationComparison,
+          fullContext: { text: "Hi 🌕!", matchesRecorded: true },
+          leanContext: { text: "Hi 🌕!", matchesRecorded: true },
+          exactMatch: true,
+          normalizedMatch: true,
+        },
+      },
+    };
+    const view = render(<LeanContextPanel
+      reader={readerFixture()}
+      route={{ surface: "inspect", runId, view: "lean-context" }}
+      initialJob={exactJob}
+    />);
+
+    expect(screen.getByText("Exact match")).toBeInTheDocument();
+    expect(screen.getByLabelText("Before and after answers are an exact match")).toHaveTextContent("Before Full context");
+    expect(screen.getByLabelText("Before and after answers are an exact match")).toHaveTextContent("After Lean context");
+    expect(view.container.querySelectorAll(".lean-answer-exact blockquote")).toHaveLength(1);
+    expect(view.container.querySelector(".lean-answer-card")).not.toBeInTheDocument();
+  });
+
+  it("leads with the outcome and omits an empty removed-context section when no reduction passes", async () => {
+    vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(readerFixture());
+    const completed = leanContextJobFixture();
+    if (!completed.result?.original) throw new Error("fixture must include an original candidate");
+    vi.spyOn(contextInvestigationApi, "startLeanContext").mockResolvedValue({
+      ...completed,
+      result: {
+        ...completed.result,
+        best: completed.result.original,
+        reduction: {
+          removedPromptTokens: 0,
+          retainedPromptTokenFraction: 1,
+          removedSourceCount: 0,
+          retainedSourceCount: 2,
+        },
+      },
+    });
+    const view = render(<InspectSurface route={{ surface: "inspect", runId, view: "lean-context" }} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Find lean context" }));
+
+    expect(await screen.findByText("Nothing was removed")).toBeInTheDocument();
+    expect(screen.getByText("Context removed").closest("div")).toHaveTextContent("0%");
+    expect(view.container.querySelector(".lean-source.is-removed")).not.toBeInTheDocument();
+    expect(view.container.querySelectorAll(".lean-source.is-retained")).toHaveLength(2);
+  });
+
+  it("fills the interaction heatmap from a non-terminal sampled result", async () => {
+    vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(readerFixture());
+    const start = vi.spyOn(contextInvestigationApi, "startInteractions")
+      .mockResolvedValue(interactionsJobFixture("queued"));
+    vi.spyOn(contextInvestigationApi, "interactionsJob")
+      .mockResolvedValue(interactionsJobFixture("running"));
+    const view = render(<InspectSurface route={{ surface: "inspect", runId }} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Highlights" }));
+    fireEvent.click(screen.getByText("Test whether influence changes across context combinations"));
+    expect(screen.getByText("A large shift suggests interaction with other context; it does not by itself prove redundancy.", { exact: false })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Run stability test" }));
+
+    await waitFor(() => expect(start).toHaveBeenCalledWith(runId, {
+      maxNewExecutions: 16,
+      maxPairs: 32,
+      seed: 0,
+    }, expect.any(AbortSignal)));
+    expect(await screen.findByText("+1.50 Δ")).toBeInTheDocument();
+    expect(screen.getByText("1 / 2 spans sampled")).toBeInTheDocument();
+    expect(screen.getByText("Waiting for a completed pair")).toBeInTheDocument();
+    expect(screen.getByText("+1.08 vs leave-one-out")).toBeInTheDocument();
+    expect(view.container.querySelector(".interaction-row.direction-support .interaction-bar")).toBeInTheDocument();
+    expect(view.container.querySelector(".interaction-marker")).toBeInTheDocument();
+  });
+
+  it("summarizes unsampled interaction spans after a completed budget instead of leaving placeholders", async () => {
+    vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(readerFixture());
+    vi.spyOn(contextInvestigationApi, "startInteractions")
+      .mockResolvedValue(interactionsJobFixture("completed"));
+    const view = render(<InspectSurface route={{ surface: "inspect", runId }} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Highlights" }));
+    fireEvent.click(screen.getByText("Test whether influence changes across context combinations"));
+    fireEvent.click(screen.getByRole("button", { name: "Run stability test" }));
+
+    expect(await screen.findByText("1 span not sampled within this budget.")).toBeInTheDocument();
+    expect(screen.queryByText("Waiting for a completed pair")).not.toBeInTheDocument();
+    expect(view.container.querySelectorAll(".interaction-row")).toHaveLength(1);
   });
 
   it("shows honest indeterminate progress while a Lean Context model batch is running", async () => {
@@ -917,10 +1544,9 @@ describe("Inspect surface", () => {
     };
     vi.spyOn(contextInvestigationApi, "startLeanContext").mockResolvedValue(runningJob);
     vi.spyOn(contextInvestigationApi, "leanContextJob").mockResolvedValue(runningJob);
-    render(<InspectSurface route={{ surface: "inspect", runId }} />);
+    render(<InspectSurface route={{ surface: "inspect", runId, view: "lean-context" }} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Lean Context" }));
-    fireEvent.click(screen.getByRole("button", { name: "Find lean context" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Find lean context" }));
 
     expect(await screen.findByText("Working…")).toBeInTheDocument();
     expect(screen.getByText("Existing measurements are reused first. New model work reports after the current search batch finishes.")).toBeInTheDocument();

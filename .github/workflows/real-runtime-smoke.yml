@@ -111,7 +111,7 @@ jobs:
             --timeout 300 \
             --job-timeout 300 | tee smoke-logs/acceptance.json
 
-      - name: Restart and reopen durable results
+      - name: Restart and reopen the durable run and measurement
         run: |
           kill -TERM "$CLOZN_SUPERVISOR_PID"
           for attempt in $(seq 1 30); do
@@ -139,19 +139,15 @@ jobs:
           with open("smoke-logs/acceptance.json", encoding="utf-8") as handle:
               report = json.load(handle)
           parent = report["parent_run_id"]
-          minimal = report["minimal_context"]
-          result_id = minimal["result_id"]
-          child = minimal["child_run_id"]
           paths = (
               f"/runs/{parent}",
-              f"/runs/{parent}/minimal-context/results/{result_id}",
-              f"/runs/{child}",
+              f"/runs/{parent}/context-investigation/reader",
           )
           for path in paths:
               with urlopen("http://127.0.0.1:8080" + path, timeout=30) as response:
                   assert response.status == 200, (path, response.status)
                   json.load(response)
-          print("restart persistence: parent, result, and child reopened")
+          print("restart persistence: parent and Context Effects measurement reopened")
           PY
 
       - name: Verify process cleanup

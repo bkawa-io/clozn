@@ -38,6 +38,15 @@
     },
     "evidence": {"observation_id": "obs_b"}
   },
+  "generation_comparison": {
+    "status": "completed",
+    "decode_mode": "greedy",
+    "max_new_tokens": 16,
+    "full_context": {"text": "same answer", "matches_recorded": true},
+    "lean_context": {"text": "same answer", "matches_recorded": true},
+    "exact_match": true,
+    "normalized_match": true
+  },
   "reduction": {
     "removed_prompt_tokens": 8,
     "retained_prompt_token_fraction": 0.2,
@@ -52,5 +61,6 @@
     "exhausted": false,
     "blocked_by_budget": false
   },
+  "elapsed_seconds": 3.75,
   "stopping_reason": "search_policy_complete"
 }

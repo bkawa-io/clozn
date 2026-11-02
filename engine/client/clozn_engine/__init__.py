@@ -173,6 +173,75 @@ class EngineClient:
             raise ValueError("score requires continuation or continuation_ids")
         return self._post("/score", body)
 
+    def teacher_forced_score_many(
+        self,
+        arms: Sequence[Mapping[str, Any]],
+        *,
+        continuation_ids: Sequence[int],
+        topk: int = 0,
+        reduction: str = "backend_target",
+    ) -> dict[str, Any]:
+        """Try the worker's model-agnostic native multi-arm scoring path.
+
+        This is an optimization seam, not a separate scoring definition. Callers
+        must retain scalar :meth:`score` as the fallback and proof oracle until the
+        reported numerical regime has been qualified for the loaded runtime.
+        """
+        if isinstance(arms, (str, bytes, bytearray)) or not isinstance(arms, Sequence) or not arms:
+            raise ValueError("arms must be a non-empty sequence")
+        if len(arms) > 16:
+            raise ValueError("arms exceeds the native limit of 16")
+        if not isinstance(topk, int) or isinstance(topk, bool) or topk != 0:
+            raise ValueError("native teacher-forced score-many supports only topk=0")
+        if reduction not in {"backend_target", "host_full_vocab"}:
+            raise ValueError("reduction must be backend_target or host_full_vocab")
+
+        encoded_arms: list[dict[str, Any]] = []
+        for index, raw in enumerate(arms):
+            if not isinstance(raw, Mapping):
+                raise ValueError(f"arms[{index}] must be a mapping")
+            has_prompt = "prompt" in raw
+            has_ids = "prompt_ids" in raw
+            if has_prompt == has_ids:
+                raise ValueError(
+                    f"arms[{index}] needs exactly one of prompt or prompt_ids"
+                )
+            unknown = set(raw) - {"prompt", "prompt_ids"}
+            if unknown:
+                raise ValueError(f"arms[{index}] has unsupported fields: {sorted(unknown)!r}")
+            if has_ids:
+                encoded_arms.append({
+                    "prompt_ids": _integer_ids(
+                        raw["prompt_ids"], f"arms[{index}].prompt_ids", nonempty=True
+                    )
+                })
+            else:
+                prompt = raw["prompt"]
+                if not isinstance(prompt, str) or not prompt:
+                    raise ValueError(f"arms[{index}].prompt must be a non-empty string")
+                encoded_arms.append({"prompt": prompt})
+
+        response = self._post("/v1/teacher-forced-score-many", {
+            "arms": encoded_arms,
+            "continuation_ids": _integer_ids(
+                continuation_ids, "continuation_ids", nonempty=True
+            ),
+            "topk": 0,
+            "reduction": reduction,
+        })
+        results = response.get("results")
+        if not isinstance(results, list) or len(results) != len(encoded_arms):
+            raise EngineError(
+                "POST /v1/teacher-forced-score-many returned the wrong arm count"
+            )
+        for index, result in enumerate(results):
+            if not isinstance(result, Mapping) or not isinstance(result.get("tokens"), list):
+                raise EngineError(
+                    "POST /v1/teacher-forced-score-many returned invalid "
+                    f"results[{index}]"
+                )
+        return response
+
     def reference_match_arms(
         self,
         arms: Sequence[Mapping[str, Any]],

@@ -9,6 +9,7 @@ describe("Run details disclosure", () => {
   it("folds runtime and Context Receipt evidence into one disclosure", async () => {
     vi.spyOn(studioApi, "run").mockResolvedValue({
       id: "run_a", model: "local-model", substrate: "engine",
+      messages: [],
       identity: { engine_build: "build-a", model_sha256: "a".repeat(64) },
     });
     vi.spyOn(studioApi, "contextReceipt").mockResolvedValue({
@@ -18,7 +19,7 @@ describe("Run details disclosure", () => {
       },
     });
     render(<RunDetailsDisclosure runId="run_a" />);
-    fireEvent.click(screen.getByText("Context, provenance, and runtime details"));
+    fireEvent.click(screen.getByText("Run details"));
     await waitFor(() => expect(screen.getByText("local-model")).toBeInTheDocument());
     expect(screen.getByText("42")).toBeInTheDocument();
     expect(studioApi.run).toHaveBeenCalledWith("run_a", expect.any(AbortSignal));

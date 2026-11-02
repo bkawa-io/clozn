@@ -88,7 +88,7 @@ def _freeze(value: Any) -> str:
 
 _PER_ARM_FIELDS = frozenset({
     "messages", "prompt", "removed_source_ids", "retained_source_ids",
-    "context_digest", "intervened_context_digest",
+    "context_digest", "intervened_context_digest", "block",
 })
 
 
@@ -297,11 +297,60 @@ def _scalar_score_result(rows: list[Any], *, substrate: Any, strategy: str,
     )
 
 
+def _native_score_result(
+    rows: list[Any], *, strategy: str, metadata: Mapping[str, Any],
+) -> ScoreTokensManyResult:
+    regime = metadata.get("numerical_regime")
+    if not isinstance(regime, str):
+        regime = "unqualified_native"
+    identity = metadata.get("execution")
+    if not isinstance(identity, Mapping):
+        identity = {}
+    # A native endpoint existing is not itself qualification. The worker must
+    # explicitly report a versioned parity contract before these scores may be
+    # persisted as trusted evidence. Current v1 native output intentionally
+    # remains unqualified while its bounded float error is characterized.
+    scalar_qualified = bool(
+        metadata.get("qualified") is True
+        and regime in {"scalar_reference", "scalar_prefix_cached_v1"}
+        and (
+            identity.get("kind") == "clozn.score-tokens-scalar-reference.v1"
+            or (
+                identity.get("kind") == "clozn.score-tokens-scalar-prefix-cache.v1"
+                and identity.get("parity_contract") == "bit_exact_float32_logprobs"
+            )
+        )
+    )
+    qualified = bool(
+        scalar_qualified
+        or (
+            metadata.get("qualified") is True
+            and identity.get("kind") ==
+                "clozn.teacher-forced-score-many.native-prefix-trie.v1"
+            and isinstance(identity.get("parity_contract"), str)
+        )
+    )
+    approximate = bool(
+        metadata.get("evidence_use") == "approximate"
+        and identity.get("kind") ==
+            "clozn.teacher-forced-score-many.native-prefix-trie.v1"
+    )
+    return ScoreTokensManyResult(
+        results=tuple(deepcopy(rows)),
+        execution_strategy=str(metadata.get("execution_strategy") or strategy),
+        numerical_regime=regime,
+        evidence_use="trusted" if qualified else "approximate" if approximate else "unqualified",
+        qualified=qualified,
+        execution_identity=deepcopy(dict(identity)),
+        metadata=deepcopy(dict(metadata)),
+    )
+
+
 def score_tokens_many(
     substrate: Any, arms: Iterable[Mapping[str, Any]], *, cancel: Any = None,
     proof_grade: bool = True,
 ) -> ScoreTokensManyResult:
-    """Score arms with the trusted scalar route, serially or through its bounded wrapper."""
+    """Score arms through the substrate's declared scalar or native contract."""
     normalised = [_validate("score_tokens", index, raw) for index, raw in enumerate(arms)]
     if _cancelled(cancel):
         raise BatchCancelled(completed=[], next_index=0)
@@ -316,6 +365,15 @@ def score_tokens_many(
         and getattr(substrate, "score_tokens_many_proof_grade", False)
         and callable(many)
     )
+    if isinstance(declared, str) and declared.startswith("native_") and many_enabled:
+        rows, envelopes = _native_many(
+            "score_tokens", many, normalised, cancel=cancel,
+        )
+        metadata = envelopes[0] if len(envelopes) == 1 else {"groups": envelopes}
+        return _native_score_result(
+            rows, strategy=declared, metadata=metadata,
+        )
+
     if declared != "scalar_http_concurrent" or not many_enabled:
         return _scalar_score_result(
             _scalar(scalar, normalised, cancel=cancel),

@@ -11,6 +11,9 @@ SUMMARY_FIELDS = (
     "client_key",
     "client_key_source",
     "session_key",
+    "conversation_id",
+    "conversation_turn",
+    "conversation_size",
     "created_ts",
     "recorded_ts",
     "model",
@@ -32,6 +35,87 @@ SUMMARY_FIELDS = (
     "confidence_mean",
     "low_confidence_count",
 )
+
+
+def _message_identity(message: object) -> tuple[str, str, str | None] | None:
+    if not isinstance(message, dict):
+        return None
+    role = message.get("role")
+    content = message.get("content")
+    name = message.get("name")
+    if not isinstance(role, str) or not isinstance(content, str):
+        return None
+    return role, content, name if isinstance(name, str) else None
+
+
+def _conversation_prefix(record: dict) -> tuple[tuple[str, str, str | None], ...] | None:
+    messages = record.get("messages")
+    response = record.get("response")
+    if not isinstance(messages, list) or not isinstance(response, str):
+        return None
+    normalized = [_message_identity(message) for message in messages]
+    if any(message is None for message in normalized):
+        return None
+    return (*normalized, ("assistant", response, None))
+
+
+def add_conversation_facts(records: list[dict]) -> list[dict]:
+    """Annotate runs with exact, model-free conversation membership.
+
+    Explicit opaque session keys win. Without one, a run joins an earlier run
+    only when its recorded messages contain that run's complete request plus
+    recorded assistant answer as an exact prefix. No fuzzy or semantic match is
+    used, and standalone requests remain standalone conversations.
+    """
+    enriched = [dict(record) for record in records]
+    chronological = sorted(enriched, key=lambda record: (
+        float(record.get("created_ts") or 0), str(record.get("id") or ""),
+    ))
+    conversation_by_run: dict[str, str] = {}
+    earlier: list[dict] = []
+    for record in chronological:
+        run_id = record.get("id")
+        if not isinstance(run_id, str) or not run_id:
+            earlier.append(record)
+            continue
+        session = record.get("session_key")
+        parent_id = record.get("parent_run_id")
+        conversation_id = session if isinstance(session, str) and session else None
+        if conversation_id is None and isinstance(parent_id, str):
+            conversation_id = conversation_by_run.get(parent_id)
+        if conversation_id is None:
+            current_messages = record.get("messages")
+            current_identity = (
+                tuple(_message_identity(message) for message in current_messages)
+                if isinstance(current_messages, list) else ()
+            )
+            if current_identity and all(message is not None for message in current_identity):
+                for candidate in reversed(earlier):
+                    prefix = _conversation_prefix(candidate)
+                    candidate_id = candidate.get("id")
+                    if (
+                        prefix
+                        and len(current_identity) >= len(prefix)
+                        and current_identity[:len(prefix)] == prefix
+                        and isinstance(candidate_id, str)
+                    ):
+                        conversation_id = conversation_by_run.get(candidate_id, candidate_id)
+                        break
+        conversation_id = conversation_id or run_id
+        conversation_by_run[run_id] = conversation_id
+        record["conversation_id"] = conversation_id
+        earlier.append(record)
+
+    members: dict[str, list[dict]] = {}
+    for record in chronological:
+        conversation_id = record.get("conversation_id")
+        if isinstance(conversation_id, str):
+            members.setdefault(conversation_id, []).append(record)
+    for group in members.values():
+        for turn, record in enumerate(group, start=1):
+            record["conversation_turn"] = turn
+            record["conversation_size"] = len(group)
+    return enriched
 
 # Below this the model's next token was closer to a coin flip than a choice. Matches the band the run
 # reader already calls shaky, so a run cannot read as low-confidence in the index and fine on its own

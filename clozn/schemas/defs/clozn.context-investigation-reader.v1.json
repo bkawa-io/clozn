@@ -73,7 +73,15 @@
         }
       }
     },
-    "answer": {"type": "object"},
+    "answer": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": {"enum": ["available", "text_only", "unavailable"]},
+        "text": {"type": "string"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
     "sources": {
       "type": "array",
       "items": {

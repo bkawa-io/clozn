@@ -1,6 +1,10 @@
 # Clozn
 
-> Context attribution for everyday local inference. **Work in progress.**
+> Context attribution for everyday local inference.
+
+[Try the recorded demo](https://bkawa-io.github.io/clozn/) ·
+[Install from source](#install-from-source) ·
+[Capability boundary](docs/CAPABILITIES.md)
 
 Wondering how your context is influencing a model? Which parts of an answer actually depend on your
 conversation, documents, or instructions—and which survive without them? Is the model ignoring
@@ -15,57 +19,79 @@ show which context spans support or suppress each part of the answer.
 
 Clozn builds on the context-attribution research direction established by
 [ContextCite](https://github.com/MadryLab/context-cite), bringing research-inspired measurements into
-an everyday chat loop. The v1 POC uses its own direct, teacher-forced removal scoring rather than being
+an everyday chat loop. Clozn v1 uses its own direct, teacher-forced removal scoring rather than being
 a port of ContextCite's estimator.
 
-![Clozn's expanded answer heatmap links answer spans to influential context](docs/assets/context-effects-heatmap.png)
+![Clozn's Context Effects reader links answer spans to influential context](docs/assets/context-effects-heatmap.png)
 
-*Answer heatmap: color and intensity encode support or suppression; selecting a span reveals its
-strongest corresponding context.*
+*Context Effects: color and intensity encode support or suppression across the original context and
+answer; selecting either side reveals its strongest relationships.*
 
 Analysis requires additional model passes and can take minutes on local hardware. Chat generation
 itself remains a normal OpenAI-compatible request.
 
-## What the v1 POC includes
+## What v1 includes
 
-The proof of concept is deliberately narrow:
+The first release is deliberately narrow:
 
 - a text-only OpenAI Chat Completions API for one local GGUF model;
 - automatic Markdown-aware chunking across every input message;
-- Context Effects linking context spans to answer spans;
+- Context Effects linking context spans to answer spans, with Fast auto-routing and Exact scalar scoring;
 - linked, heatmap, influence-ranking, and bounded Lean Context views;
-- Minimal Context with exact answer and termination verification; and
-- durable local runs, original-versus-reduced comparison, and basic deletion.
+- a Lean Context redline, kept-only context, and fresh before/after generations; and
+- durable local conversations and basic deletion.
 
 Research workbenches, J-lens/SAE views, steering, snapshots, model comparison suites, tools/structured
 output, Responses, and Ollama-compatible APIs are not part of v1. See the
-[implementation plan](docs/V1_POC_PLAN.md) and [current capability boundary](docs/CAPABILITIES.md).
+[current capability boundary](docs/CAPABILITIES.md).
 
-## Quickstart from a source checkout
+## Recorded demo
 
-Build the private worker first; this source snapshot does not include a published native binary:
+The [recorded demo](https://bkawa-io.github.io/clozn/) is the quickest way to explore the reader and
+its interactions. It uses bundled evidence, so it does not download a model or run new inference.
+
+## Install from source
+
+Requirements: Python 3.11 or newer, Git, CMake, Ninja, and a C++ compiler on macOS or Linux.
 
 ```sh
-python engine/core/third_party/bootstrap_llama.py
-cmake -S engine/core -B engine/core/build -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCLOZN_BUILD_GGML=ON \
-  -DCLOZN_BUILD_SERVE=ON \
-  -DGGML_METAL=ON
-cmake --build engine/core/build --target clozn-server
+# macOS
+brew install python cmake ninja
+
+# Ubuntu/Debian
+sudo apt install python3 python3-venv build-essential cmake ninja-build git
 ```
 
-Use `-DGGML_CUDA=ON` on a CUDA host, or disable both Metal and CUDA for CPU. Then start one model:
+Clone the repository, then run the source installer:
 
 ```sh
-python -m clozn serve /absolute/path/to/model.gguf --port 8080
-python -m clozn studio --port 8080 --open
+git clone https://github.com/bkawa-io/clozn.git
+cd clozn
+python3 scripts/install_local.py
+```
+
+The installer fetches the pinned llama.cpp revision, builds the private worker (with Metal on Apple
+silicon), and installs Clozn into `.venv-clozn`. Download the recommended model and start the gateway:
+
+```sh
+.venv-clozn/bin/clozn pull qwen3.5
+.venv-clozn/bin/clozn serve qwen3.5 --port 8080
+```
+
+Open `http://127.0.0.1:8080/app/` for Studio, or point an OpenAI-compatible client at
+`http://127.0.0.1:8080/v1`. `qwen3.5` is a multi-gigabyte download; use `qwen-0.5b` for a smaller
+installation smoke test. The first native build takes several minutes; later starts reuse it.
+
+Check the installation at any time with:
+
+```sh
+.venv-clozn/bin/clozn doctor
 ```
 
 The same runtime can serve a command-line request:
 
 ```sh
-python -m clozn run /absolute/path/to/model.gguf "Explain entropy."
+.venv-clozn/bin/clozn run /absolute/path/to/model.gguf "Explain entropy."
 ```
 
 The public CLI is exactly:
@@ -95,26 +121,55 @@ The supported public model endpoints are `GET /v1/models` and `POST /v1/chat/com
 Unsupported behavior-bearing fields receive a typed HTTP 400 instead of being ignored. Exact request
 fields and response extensions are documented in [OpenAI compatibility](docs/OPENAI_COMPATIBILITY.md).
 
+For example, the official OpenAI Python client only needs a different base URL:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="local")
+model = client.models.list().data[0].id
+reply = client.chat.completions.create(
+    model=model,
+    messages=[{"role": "user", "content": "Help me outline an essay."}],
+)
+print(reply.choices[0].message.content)
+```
+
+Clients keep the conversation by sending prior messages on each request, just as they do with OpenAI.
+Clozn groups those recorded turns into one conversation automatically. Tools, multimodal input,
+structured output, and the Responses API are intentionally outside v1.
+
 Completed generation must be durably recorded before Clozn returns success. Non-streaming responses
 include `clozn_run_id` and `X-Clozn-Run-Id`; the terminal streaming chunk includes `clozn_run_id`.
 
 ## Studio journey
 
-Studio has a run list/composer and one run workspace:
+Studio is a conversation reader with one analysis workspace:
 
-1. create a run from one Markdown/plain-text prompt and optional instructions;
-2. inspect input and output in Context Effects;
-3. measure how removing a recorded source changes the likelihood of selected answer text;
-4. run Minimal Context and cancel it if needed;
-5. save the best exact-preserving result; and
-6. compare the reduced child with its original or reopen both after restart.
+1. open a recorded conversation and choose a request or response;
+2. inspect the original context and answer in Context Effects;
+3. select either side to reveal its strongest supporting and suppressing links;
+4. switch between Overall, Tension, and Suppression lenses or expand either heatmap; and
+5. open Lean Context to review the redline, kept-only context, and before/after generations.
 
 Every non-empty input message is eligible for automatic chunking, including system instructions and the
-latest user message. Context Effects and Minimal Context use the same canonical source identities.
-Context Effects is a teacher-forced intervention measurement; Minimal Context separately verifies the
-recorded answer and stop behavior. Low measured effect, unmeasured, unavailable, failed, and
-exact-preserved are distinct states. Clozn derives a flat Markdown-aware context partition automatically;
-`CLOZN_MAX_CONTEXT_ARMS` sets its maximum number of analysis arms (default 16).
+latest user message. Context Effects and Lean Context use the same canonical source identities.
+Context Effects is a teacher-forced intervention measurement. Lean Context uses bounded search to find
+a smaller context within fixed probability-loss tolerances, then generates a fresh answer from both the
+original and reduced contexts for comparison. Low measured effect, unmeasured, unavailable, failed, and
+completed are distinct states. Clozn derives a flat Markdown-aware context partition automatically;
+`CLOZN_MAX_CONTEXT_ARMS` sets the adaptive partition target (default 16), while
+`CLOZN_MAX_CONTEXT_UNITS` sets the exact-unit safety ceiling (default 64). Lean Context keeps a separate
+16-new-execution search budget, so long conversations do not spend more model work merely because they
+contain more exact message units.
+
+Studio defaults Context Effects to **Fast**, which uses recorded token counts to choose between packed
+native prefix-trie scoring for prompt-heavy, short-answer work and exact scalar prefix-cached scoring
+when answer decoding would dominate. Native batches are capacity-aware, include the unchanged control,
+and may contain up to 16 sequences, with a conservative per-dispatch work ceiling so foreground chat can
+run between large batches. **Exact** always uses the scalar reference scorer one condition at a time. The
+two requested modes have separate experiment and observation identities; every result records the
+strategy actually used, its evidence grade, per-phase timing, and the Fast routing reason.
 
 ## Data and privacy
 
@@ -122,28 +177,26 @@ v1 stores its SQLite journal, immutable trace blobs, evidence, and results under
 `~/.clozn/v1/` by default. Set `CLOZN_DATA_ROOT` to choose an isolated location. Historical data under
 `~/.clozn/runs/` is not imported or modified.
 
-Run deletion is transactional and refuses to remove a parent while saved children still depend on it.
-Unreferenced content-addressed blobs are cleaned through the run mutation path.
+Run deletion is transactional. Unreferenced content-addressed blobs are cleaned through the same
+mutation path.
 
 ## Qualification
 
 With a gateway already running, exercise the retained live journey with:
 
 ```sh
-python scripts/smoke/v1_acceptance.py \
+python3 scripts/smoke/v1_acceptance.py \
   --base-url http://127.0.0.1:8080
 ```
 
-The reference backend run and its exact identities are recorded in
-[v1 live qualification](docs/V1_LIVE_QUALIFICATION.md). The fresh browser journey remains a separate
-release check.
+The live harness is the model-backed qualification gate. The recorded demo and a fresh browser journey
+remain separate release checks.
 
 Model-free validation:
 
 ```sh
-.venv/bin/pytest -q tests
-cd studio-frontend && npm test -- --run
-cd studio-frontend && npm run build
+.venv/bin/python -m pytest -q tests clozn
+cd studio-frontend && pnpm check && pnpm build
 ctest --test-dir engine/core/build --output-on-failure
 ```
 
@@ -151,14 +204,14 @@ ctest --test-dir engine/core/build --output-on-failure
 
 | Path | Responsibility |
 |---|---|
-| `clozn/` | stdlib-only CLI, public gateway, run/evidence storage, and the two v1 analyses |
+| `clozn/` | stdlib-only CLI, public gateway, run/evidence storage, and v1 analyses |
 | `engine/client/` | private gateway-to-worker client |
 | `engine/core/` | private GGUF worker: generation, template rendering, scoring, exact matching, cancellation |
 | `studio-frontend/` | Studio source |
 | `studio/` | built Studio assets served by the gateway |
 | `protocol/` | private worker/gateway handshake and fixtures |
 | `scripts/smoke/` | development and live acceptance harnesses |
-| `docs/` | current architecture, contracts, and implementation plan |
+| `docs/` | current architecture, contracts, development, and release guides |
 
 The Python package has no runtime dependencies. The native worker owns model loading and inference; the
 public gateway owns compatibility, recording, orchestration, and Studio.

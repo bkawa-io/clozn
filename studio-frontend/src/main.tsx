@@ -7,6 +7,8 @@ import "./styles/tokens.css";
 import "./styles/base.css";
 import "./styles/shell.css";
 
+document.documentElement.dataset.theme = "clozn-dark";
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode><App /></StrictMode>,
 );

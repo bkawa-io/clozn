@@ -21,7 +21,14 @@ from clozn._io import atomic_write_json
 from clozn.paths import data_path
 
 from . import schema
-from .summaries import SUMMARY_FIELDS, _flags, _summ, _summary, confidence_facts
+from .summaries import (
+    SUMMARY_FIELDS,
+    _flags,
+    _summ,
+    _summary,
+    add_conversation_facts,
+    confidence_facts,
+)
 from .trace import (
     TRACE_KEYS,
     _clean_alt,
@@ -516,13 +523,13 @@ def list_runs(limit: int = 50, *, include_replays: bool = True) -> list[dict]:
             f"SELECT payload_json FROM runs {where} ORDER BY created_ts DESC, id DESC LIMIT ?",
             (max(0, int(limit)),),
         ).fetchall()
-    out = []
+    records = []
     for row in rows:
         try:
-            out.append(_summary(json.loads(row["payload_json"])))
+            records.append(json.loads(row["payload_json"]))
         except Exception:
             continue
-    return out
+    return [_summary(record) for record in add_conversation_facts(records)]
 
 
 _DERIVED_SOURCES = frozenset({"replay", "branch", "fork"})

@@ -151,13 +151,62 @@ def test_scalar_prefix_cache_regime_is_explicit_and_trusted():
     assert result.execution_identity["parity_contract"] == "bit_exact_float32_logprobs"
 
 
+def test_native_score_many_is_unqualified_until_worker_declares_a_parity_contract():
+    substrate = NativeBatchSubstrate()
+    substrate.score_tokens_many_execution_strategy = "native_prefix_trie"
+
+    def native(arms, *, cancel=None):
+        return {
+            "results": [substrate.score_tokens(**arm) for arm in arms],
+            "numerical_regime": "native_prefix_trie_target_logprob_v1",
+            "qualified": False,
+            "execution": {
+                "kind": "clozn.teacher-forced-score-many.native-prefix-trie.v1",
+            },
+        }
+
+    substrate.score_tokens_many = native
+    result = score_tokens_many(substrate, _score_arms())
+
+    assert result.execution_strategy == "native_prefix_trie"
+    assert result.numerical_regime == "native_prefix_trie_target_logprob_v1"
+    assert result.qualified is False
+    assert result.trusted is False
+    assert result.evidence_use == "unqualified"
+
+
+def test_explicit_native_approximation_is_usable_but_never_trusted():
+    substrate = NativeBatchSubstrate()
+    substrate.score_tokens_many_execution_strategy = "native_prefix_trie"
+
+    def native(arms, *, cancel=None):
+        return {
+            "results": [substrate.score_tokens(**arm) for arm in arms],
+            "numerical_regime": "native_prefix_trie_target_logprob_v1",
+            "qualified": False,
+            "evidence_use": "approximate",
+            "execution": {
+                "kind": "clozn.teacher-forced-score-many.native-prefix-trie.v1",
+                "approximate_contract": "float32_multi_sequence_batch_shape",
+            },
+        }
+
+    substrate.score_tokens_many = native
+    result = score_tokens_many(substrate, _score_arms())
+
+    assert result.execution_strategy == "native_prefix_trie"
+    assert result.evidence_use == "approximate"
+    assert result.qualified is False
+    assert result.trusted is False
+
+
 def test_engine_scalar_wrapper_declares_its_actual_worker_strategy(monkeypatch):
     from clozn.server import app as cs
 
     substrate = object.__new__(cs.EngineSubstrate)
-    monkeypatch.setenv("CLOZN_MINIMAL_CONTEXT_BATCH_WORKERS", "1")
+    monkeypatch.setenv("CLOZN_SCORE_BATCH_WORKERS", "1")
     assert substrate.score_tokens_many_execution_strategy == "scalar_serial"
-    monkeypatch.setenv("CLOZN_MINIMAL_CONTEXT_BATCH_WORKERS", "3")
+    monkeypatch.setenv("CLOZN_SCORE_BATCH_WORKERS", "3")
     assert substrate.score_tokens_many_execution_strategy == "scalar_http_concurrent"
 
 
@@ -165,7 +214,7 @@ def test_engine_scalar_wrapper_defaults_to_serial_for_the_single_worker(monkeypa
     from clozn.server import app as cs
 
     substrate = object.__new__(cs.EngineSubstrate)
-    monkeypatch.delenv("CLOZN_MINIMAL_CONTEXT_BATCH_WORKERS", raising=False)
+    monkeypatch.delenv("CLOZN_SCORE_BATCH_WORKERS", raising=False)
     assert substrate.score_tokens_many_execution_strategy == "scalar_serial"
 
 

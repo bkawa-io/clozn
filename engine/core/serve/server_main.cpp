@@ -242,6 +242,7 @@ int main(int argc, char** argv) {
             {"performance_timing", true},
             {"prompt_prefix_cache", true},
             {"score_prefix_cache", true},
+            {"teacher_forced_score_many", true},
         };
         const json build = engine_build_info();
         const std::string backend = build.value("backend", std::string("cpu"));

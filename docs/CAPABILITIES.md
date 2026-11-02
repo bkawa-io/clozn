@@ -1,36 +1,31 @@
 # Clozn v1 capability boundary
 
-This page is the current user-facing capability summary. “Implemented” means present in this source
-tree with model-free coverage; it does not imply that a packaged native release exists.
+This page is the user-facing boundary for `0.1.0`.
 
 | Area | v1 status | Boundary |
 |---|---|---|
-| Local generation | Implemented | One GGUF, one private worker, text streaming, cancellation, durable recording |
-| Studio | Implemented | Run list/composer and one workspace with linked Context Effects, pane heatmaps, Efficiency, Lean Context, and Minimal Context |
-| Context Effects | Implemented | Recorded-answer scoring under source removal; measured ranges only; influence is not correctness |
-| Lean Context | Implemented | Best context found within fixed probability-loss tolerances and at most 16 new executions; compatible measurements are reused |
-| Minimal Context | Implemented | Bounded search with exact answer and stop verification; durable result and idempotent child save |
-| Comparison | Implemented | Original versus its saved reduced child only |
-| Run storage | Implemented | SQLite metadata, content-addressed traces, isolated v1 root, read/list/delete |
-| Text API | Implemented | `/v1/models` and text-only `/v1/chat/completions` |
-| Worker internals | Implemented | generation, template rendering, scalar score, exact-reference matching, cancellation |
-| Native packaged install | Not released | Build from source; no public artifact matrix is claimed |
-| Browser live qualification | Passed | Exact-reduction gate and long-conversation Context Effects/Lean Context surfaces passed on the documented local configurations |
+| Local generation | Included | One GGUF, one private worker, text streaming, cancellation, durable recording |
+| Studio | Included | Conversation index, transcript reader, linked Context Effects, pane heatmaps, and Lean Context |
+| Context Effects | Included | Recorded-answer scoring under source removal; measured ranges only; influence is not correctness |
+| Lean Context | Included | Best context found within fixed probability-loss tolerances and a configurable 1–64 execution budget (default 16); fresh full/reduced answers are compared |
+| Run storage | Included | SQLite metadata, content-addressed traces, isolated v1 root, read/list/delete |
+| Text API | Included | `/v1/models` and text-only `/v1/chat/completions` |
+| Recorded demo | Included | Static, interactive evidence bundle; no model download or inference |
+| Native release | Included | Tagged CPU/Metal worker archives plus Python sdist/wheel |
 
 Not in v1:
 
-- tools or structured output;
-- Responses or Ollama-compatible endpoints;
+- tools, multimodal input, structured output, Responses, or Ollama-compatible endpoints;
 - multiple loaded models, preload/eviction, or model switching;
-- general run comparison, session navigation, export workbenches, or Model CI;
+- exact-minimum context proofs, saved reduced child runs, or general run comparison;
 - claims, diagnosis, corrective retries, guards, calibrated trust, or steering;
 - token workbenches, branching, snapshots, checkpoints, or time travel;
 - mechanistic tracing, J-lens, SAE readouts, state editing, or a research SDK.
 
-Unsupported public request fields fail visibly. Removed source files do not become public merely by
-appearing in a package directory: command and route manifests are explicit and covered by boundary tests.
+Unsupported public request fields fail visibly. Command and route manifests are explicit and covered
+by boundary tests.
 
-The configured context-arm cap is exact, not lossy. Clozn can merge adjacent spans inside one message,
-but it does not merge text across chat-message boundaries. If the number of non-empty messages alone
-exceeds the cap, bounded Lean/Minimal Context search reports that condition instead of dropping input.
-Direct Context Effects remains available, but its latency grows with the number and length of sources.
+The 64-unit context ceiling is an exact safety bound, not lossy compression, and is separate from Lean
+Context's model-execution budget. Clozn may merge adjacent spans inside one message, but never merges
+text across message boundaries. If the exact message-scoped universe exceeds the ceiling, bounded
+search reports that condition instead of dropping context.

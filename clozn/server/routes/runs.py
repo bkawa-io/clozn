@@ -13,7 +13,45 @@ def try_get(h, path: str) -> bool:
     if path != "/runs":
         return False
     import clozn.runs.store as runlog
-    h._json(200, {"runs": runlog.list_runs(80)})
+    from clozn.experiments.context_investigation import summarize_context_investigation
+    from clozn.experiments.persistence import ObservationStore
+    from clozn.recipes.context_effects import plan_context_effects_reader
+
+    observation_store = ObservationStore()
+    summaries = runlog.list_runs(80)
+    for summary in summaries:
+        run = runlog.get_run(summary.get("id"))
+        if not isinstance(run, dict):
+            continue
+        # The inspector opens Fast by default. Inspect both identities so a
+        # saved Fast measurement cannot be reported as absent by an Exact-only
+        # lookup. Return the selected mode so the chat link opens that evidence.
+        candidates = []
+        for scoring_mode in ("fast", "exact"):
+            try:
+                coverage = summarize_context_investigation(
+                    run,
+                    plan_context_effects_reader(run, scoring_mode=scoring_mode),
+                    observation_store=observation_store,
+                )
+            except Exception:
+                coverage = {
+                    "status": "unavailable",
+                    "source_count": 0,
+                    "completed_source_count": 0,
+                }
+            candidates.append({**coverage, "scoring_mode": scoring_mode})
+        priority = {"completed": 4, "partial": 3, "stale": 2, "not_measured": 1, "unavailable": 0}
+        analysis = max(candidates, key=lambda candidate: (
+            priority.get(candidate["status"], 0), candidate["completed_source_count"],
+        ))
+        summary.update({
+            "analysis_status": analysis["status"],
+            "analysis_scoring_mode": analysis["scoring_mode"],
+            "analysis_source_count": analysis["source_count"],
+            "analysis_completed_source_count": analysis["completed_source_count"],
+        })
+    h._json(200, {"runs": summaries})
     return True
 
 

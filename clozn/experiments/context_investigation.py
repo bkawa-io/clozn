@@ -233,6 +233,18 @@ def _trace_answer(run: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _text_only_answer(run: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Expose recorded prose even when token coordinates are not yet recoverable."""
+    response = run.get("response")
+    if not isinstance(response, str):
+        return None
+    return {
+        "status": "text_only",
+        "text": response,
+        "sha256": _sha256_text(response),
+    }
+
+
 def _answer_from_baseline(run: Mapping[str, Any], baseline: TokenScoreObservation | None,
                           *, execution_fingerprint: str) -> dict[str, Any]:
     if baseline is None or not baseline.completed:
@@ -498,7 +510,9 @@ def _base_document(*, run: Mapping[str, Any], plan: Any, context: dict[str, Any]
         "capabilities": {
             "context_effects": "measurable",
             "measurement": measurement_status,
-            "answer_selection_projection": "available" if answer else "unavailable",
+            "answer_selection_projection": (
+                "available" if answer and answer.get("status") == "available" else "unavailable"
+            ),
         },
     }
     if reason:
@@ -535,17 +549,17 @@ def build_context_investigation_reader(
     unavailable_reason = _plan_field(plan, "reason")
     unavailable_reason_code = _plan_field(plan, "reason_code")
     if not measurement_ids and unavailable_reason and unavailable_reason_code:
-        answer = None
+        answer_document = None
         try:
             state = _plan_field(plan, "execution_state")
-            answer = _answer_from_baseline(
+            answer_document = _answer_document(_answer_from_baseline(
                 run, None, execution_fingerprint=state.execution_fingerprint,
-            )
+            ))
         except ContextInvestigationError:
-            pass
+            answer_document = _text_only_answer(run)
         document = _base_document(
             run=run, plan=plan, context=context,
-            answer=_answer_document(answer) if answer else None,
+            answer=answer_document,
             floor_nats=floor, status="unavailable", measurement_status="unavailable",
             reason=str(unavailable_reason), reason_code=str(unavailable_reason_code),
             experiment_id=None,
@@ -561,18 +575,20 @@ def build_context_investigation_reader(
         view = observation_store.get_experiment(experiment_id)
     except ObservationIntegrityError as exc:
         return _base_document(
-            run=run, plan=plan, context=context, answer=None, floor_nats=floor,
+            run=run, plan=plan, context=context, answer=_text_only_answer(run), floor_nats=floor,
             status="stale", measurement_status="stale", reason=str(exc), experiment_id=experiment_id,
         )
     except (ObservationNotFound, ExperimentPersistenceError, KeyError):
-        answer = None
+        answer_document = None
         try:
             state = _plan_field(plan, "execution_state")
-            answer = _answer_from_baseline(run, None, execution_fingerprint=state.execution_fingerprint)
+            answer_document = _answer_document(
+                _answer_from_baseline(run, None, execution_fingerprint=state.execution_fingerprint),
+            )
         except ContextInvestigationError:
-            pass
+            answer_document = _text_only_answer(run)
         document = _base_document(
-            run=run, plan=plan, context=context, answer=_answer_document(answer) if answer else None,
+            run=run, plan=plan, context=context, answer=answer_document,
             floor_nats=floor, status="not_measured", measurement_status="not_measured", experiment_id=experiment_id,
         )
         document["sources"] = _display_source_records(plan, context)
@@ -587,12 +603,12 @@ def build_context_investigation_reader(
         )
     except ContextInvestigationStale as exc:
         return _base_document(
-            run=run, plan=plan, context=context, answer=None, floor_nats=floor,
+            run=run, plan=plan, context=context, answer=_text_only_answer(run), floor_nats=floor,
             status="stale", measurement_status="stale", reason=str(exc), experiment_id=experiment_id,
         )
     except ContextInvestigationUnavailable as exc:
         return _base_document(
-            run=run, plan=plan, context=context, answer=None, floor_nats=floor,
+            run=run, plan=plan, context=context, answer=_text_only_answer(run), floor_nats=floor,
             status="unavailable", measurement_status="unavailable", reason=str(exc), experiment_id=experiment_id,
         )
 
@@ -687,6 +703,78 @@ def build_context_investigation_reader(
         item["answer_token_range"][0], item["locus_id"],
     ))
     return document
+
+
+def summarize_context_investigation(
+    run: Mapping[str, Any],
+    plan: Any,
+    *,
+    observation_store: ObservationStore,
+) -> dict[str, Any]:
+    """Return model-free coverage facts without constructing loci or heatmaps."""
+    if not isinstance(run, Mapping) or not isinstance(run.get("id"), str) or not run["id"]:
+        raise ContextInvestigationError("a recorded Run with a non-empty id is required")
+    if not isinstance(observation_store, ObservationStore):
+        raise TypeError("observation_store must be an ObservationStore")
+    measurement_sources = set(_plan_ids(plan, "measurement_source_ids"))
+    base = {
+        "status": "not_measured",
+        "source_count": len(measurement_sources),
+        "completed_source_count": 0,
+        "unavailable_source_count": 0,
+        "failed_source_count": 0,
+        "not_measured_source_count": len(measurement_sources),
+    }
+    if not measurement_sources and _plan_field(plan, "reason"):
+        return {**base, "status": "unavailable"}
+
+    experiment_id = _plan_experiment(plan).experiment_id
+    try:
+        view = observation_store.get_experiment(experiment_id)
+    except ObservationIntegrityError:
+        return {**base, "status": "stale"}
+    except (ObservationNotFound, ExperimentPersistenceError, KeyError):
+        return base
+
+    try:
+        _validate_view(view, run, plan)
+        baseline = view.control if isinstance(view.control, TokenScoreObservation) else None
+        state = _plan_field(plan, "execution_state")
+        _answer_from_baseline(
+            run, baseline, execution_fingerprint=state.execution_fingerprint,
+        )
+    except ContextInvestigationStale:
+        return {**base, "status": "stale"}
+    except ContextInvestigationUnavailable:
+        return {**base, "status": "unavailable"}
+
+    statuses: dict[str, str] = {}
+    for row in view.arms:
+        if not isinstance(row, ExperimentArmView) or not isinstance(row.intervention, DeleteSource):
+            continue
+        source_ids = tuple(row.intervention.source_ids)
+        if len(source_ids) == 1 and source_ids[0] in measurement_sources:
+            statuses[source_ids[0]] = _effect_status(row)
+    for source_id in measurement_sources:
+        statuses.setdefault(source_id, "not_measured")
+    completed = sum(status == "measured" for status in statuses.values())
+    unavailable = sum(status == "unavailable" for status in statuses.values())
+    failed = sum(status == "failed" for status in statuses.values())
+    not_measured = len(measurement_sources) - completed - unavailable - failed
+    if completed == len(measurement_sources) and baseline is not None and baseline.completed:
+        status = "completed"
+    elif completed or unavailable or failed:
+        status = "partial"
+    else:
+        status = "not_measured"
+    return {
+        "status": status,
+        "source_count": len(measurement_sources),
+        "completed_source_count": completed,
+        "unavailable_source_count": unavailable,
+        "failed_source_count": failed,
+        "not_measured_source_count": max(0, not_measured),
+    }
 
 
 def _rows_for_single_source(view: ExperimentView) -> list[tuple[int, ExperimentArmView, str]]:
@@ -835,5 +923,5 @@ __all__ = [
     "ContextInvestigationUnavailable", "DEFAULT_MEASUREMENT_FLOOR_NATS", "DISPLAY_COORDINATE_BASIS",
     "DISPLAY_SEPARATOR", "LOCUS_PROJECTION_VERSION", "QUERY_SCHEMA_VERSION", "SCHEMA_VERSION",
     "build_context_investigation_reader", "project_locus_details", "project_source_loci",
-    "query_answer_effects",
+    "query_answer_effects", "summarize_context_investigation",
 ]

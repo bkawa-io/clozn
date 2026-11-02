@@ -1,7 +1,7 @@
 """Thin Q2 recipe: direct source deletion scores plus answer-span projection."""
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,6 +15,7 @@ from clozn.experiments.persistence import ObservationStore
 from clozn.experiments.scoring import DeleteSourceRecordedContinuationScoreAdapter
 from clozn.experiments.selections import AnswerSelection, ContextSelection
 from clozn.experiments.state import ExecutionState
+from clozn.runs.context_units import MAX_CONTEXT_ARMS_CEILING
 
 
 _NO_EXACTLY_REMOVABLE_SOURCE = "no automatically discovered sources are exactly removable"
@@ -29,7 +30,7 @@ class _NoExactlyRemovableSource(ValueError):
 
 
 def _receipt_source_universe(run: Mapping[str, Any]) -> list[str]:
-    """Return the same derived default units consumed by Minimal Context."""
+    """Return the derived units shared by Context Effects and Lean Context."""
     manifest = run.get("context_units") if isinstance(run.get("context_units"), Mapping) else {}
     source_ids = manifest.get("default_source_ids")
     if not isinstance(source_ids, list):
@@ -79,6 +80,96 @@ def _receipt_display_source_universe(run: Mapping[str, Any]) -> list[str]:
             seen.add(source_id)
             result.append(source_id)
     return result
+
+
+def configure_context_effect_sources(
+    run: Mapping[str, Any], *, granularity: str, max_arms: int,
+) -> tuple[str, ...]:
+    """Choose an exact canonical partition for a bounded Context Effects job.
+
+    ``message`` uses one whole-message receipt root per non-empty message.
+    ``adaptive`` starts from every available Markdown-derived child span and
+    deterministically collapses the least text-dense split messages until the
+    requested arm budget is met. No synthetic or approximate source is minted.
+    """
+    if granularity not in {"message", "adaptive"}:
+        raise ValueError("granularity must be 'message' or 'adaptive'")
+    if (
+        isinstance(max_arms, bool)
+        or not isinstance(max_arms, int)
+        or not 1 <= max_arms <= MAX_CONTEXT_ARMS_CEILING
+    ):
+        raise ValueError(
+            f"max_arms must be an integer between 1 and {MAX_CONTEXT_ARMS_CEILING}"
+        )
+    messages = run.get("messages")
+    receipt = run.get("context_receipt")
+    delivered = receipt.get("delivered") if isinstance(receipt, Mapping) else None
+    if not isinstance(messages, list) or not isinstance(delivered, list):
+        raise ValueError("recorded messages and Context Receipt are required")
+
+    partitions: list[dict[str, Any]] = []
+    for message_index, message in enumerate(messages):
+        if not isinstance(message, Mapping) or not isinstance(message.get("content"), str):
+            continue
+        text = message["content"]
+        if not text:
+            continue
+        row = delivered[message_index] if message_index < len(delivered) else None
+        if not isinstance(row, Mapping):
+            raise ValueError(f"Context Receipt is missing message {message_index}")
+        root_id = row.get("segment_id")
+        if not isinstance(root_id, str) or not root_id:
+            raise ValueError(f"Context Receipt message {message_index} has no canonical root")
+        children = [
+            source.get("source_id")
+            for source in row.get("sources", [])
+            if isinstance(source, Mapping)
+            and isinstance(source.get("source_id"), str)
+            and source.get("source_id")
+        ] if isinstance(row.get("sources"), list) else []
+        partitions.append({
+            "message_index": message_index,
+            "text_length": len(text),
+            "root_id": root_id,
+            "fine_ids": tuple(dict.fromkeys(children)) if len(children) > 1 else (root_id,),
+        })
+
+    if not partitions:
+        raise _NoExactlyRemovableSource(_NO_EXACTLY_REMOVABLE_SOURCE)
+    minimum = len(partitions)
+    if max_arms < minimum:
+        raise ValueError(
+            f"max_arms={max_arms} cannot cover {minimum} non-empty messages exactly; "
+            f"use at least {minimum} arms"
+        )
+    if granularity == "message":
+        return tuple(item["root_id"] for item in partitions)
+
+    selected = [list(item["fine_ids"]) for item in partitions]
+    selected_count = sum(len(ids) for ids in selected)
+    candidates = sorted(
+        (
+            (
+                item["text_length"] / (len(item["fine_ids"]) - 1),
+                item["message_index"],
+                index,
+            )
+            for index, item in enumerate(partitions)
+            if len(item["fine_ids"]) > 1
+        ),
+        key=lambda candidate: (candidate[0], candidate[1]),
+    )
+    for _density, _message_index, index in candidates:
+        if selected_count <= max_arms:
+            break
+        selected_count -= len(selected[index]) - 1
+        selected[index] = [partitions[index]["root_id"]]
+    if selected_count > max_arms:
+        raise ValueError(
+            f"the canonical context partition requires at least {selected_count} arms"
+        )
+    return tuple(source_id for ids in selected for source_id in ids)
 
 
 def _source_universe(run: Mapping[str, Any], source_ids: Iterable[str] | None) -> tuple[list[str], str]:
@@ -169,7 +260,10 @@ class ContextEffectsUnavailablePlan:
         }
 
 
-def plan_context_effects(run: Mapping[str, Any], source_ids: Iterable[str] | None = None) -> ContextEffectsPlan:
+def plan_context_effects(
+    run: Mapping[str, Any], source_ids: Iterable[str] | None = None, *,
+    scoring_mode: str = "exact",
+) -> ContextEffectsPlan:
     """Build the canonical, model-free Q2 Experiment plan.
 
     ``display_source_ids`` is the complete receipt catalogue.  The ordered
@@ -185,7 +279,7 @@ def plan_context_effects(run: Mapping[str, Any], source_ids: Iterable[str] | Non
     state = ExecutionState.from_run(run)
     measurement, universe_basis = _source_universe(run, source_ids)
     experiment = Experiment(
-        base=state, evaluator=ScoreRecordedContinuation(),
+        base=state, evaluator=ScoreRecordedContinuation(scoring_mode=scoring_mode),
         arms=[DeleteSource(ContextSelection([source_id])) for source_id in measurement],
     )
     return ContextEffectsPlan(
@@ -200,6 +294,9 @@ def plan_context_effects(run: Mapping[str, Any], source_ids: Iterable[str] | Non
 
 def plan_context_effects_reader(
     run: Mapping[str, Any],
+    source_ids: Iterable[str] | None = None,
+    *,
+    scoring_mode: str = "exact",
 ) -> ContextEffectsPlan | ContextEffectsUnavailablePlan:
     """Plan the pure linked reader without weakening executable Q2 planning.
 
@@ -210,7 +307,9 @@ def plan_context_effects_reader(
     continues to reject an empty executable measurement universe.
     """
     try:
-        return plan_context_effects(run)
+        return plan_context_effects(
+            run, source_ids=source_ids, scoring_mode=scoring_mode,
+        )
     except _NoExactlyRemovableSource:
         return ContextEffectsUnavailablePlan(
             run_id=str(run["id"]),
@@ -228,20 +327,26 @@ def measure_context_effects(run: Mapping[str, Any], source_ids: Iterable[str] | 
                             run_loader: Any = None, answer_selection: AnswerSelection | None = None,
                             include_control: bool = True, observation_store: ObservationStore | None = None,
                             store: ObservationStore | None = None,
-                            cancel: Any = None) -> ExperimentResult:
+                            cancel: Any = None, arm_batch_size: int | None = None,
+                            batch_control: bool = False,
+                            scoring_mode: str = "exact",
+                            execution_diagnostics: Mapping[str, Any] | None = None,
+                            on_progress: Callable[[Mapping[str, Any]], None] | None = None) -> ExperimentResult:
     """Measure baseline plus direct leave-one-out deletion score arms.
 
     ``answer_selection`` is accepted as a convenience validation input but is
     intentionally not stored in or hashed into the experiment.  Use
     :func:`project_context_effects` for the read-side selection.
 
-    Every arm uses the same trusted scalar scoring contract.
+    Every arm uses the requested scoring contract: ``exact`` preserves the
+    scalar reference path, while ``fast`` uses the native multi-arm path and
+    records its approximate evidence grade (with scalar fallback).
     """
     if not isinstance(run, Mapping):
         raise TypeError("measure_context_effects requires a run mapping")
     if answer_selection is not None and not isinstance(answer_selection, AnswerSelection):
         raise TypeError("answer_selection must be an AnswerSelection")
-    plan = plan_context_effects(run, source_ids)
+    plan = plan_context_effects(run, source_ids, scoring_mode=scoring_mode)
     adapter = execution_adapter
     if adapter is None:
         adapter = DeleteSourceRecordedContinuationScoreAdapter(
@@ -251,12 +356,19 @@ def measure_context_effects(run: Mapping[str, Any], source_ids: Iterable[str] | 
         plan.experiment, adapter, include_control=include_control,
         observation_store=observation_store, store=store,
         cancel=cancel,
-        requested_by={"recipe": "context_effects"},
+        arm_batch_size=arm_batch_size,
+        batch_control=batch_control,
+        on_progress=on_progress,
+        requested_by={"recipe": "context_effects", "scoring_mode": scoring_mode},
         diagnostics={
-        "recipe": "context_effects",
-        "source_universe": list(plan.measurement_source_ids),
-        "source_universe_basis": plan.source_universe_basis,
-        "measurement": "direct_leave_one_out_delete_source",
+            "recipe": "context_effects",
+            "source_universe": list(plan.measurement_source_ids),
+            "source_universe_basis": plan.source_universe_basis,
+            "measurement": "direct_leave_one_out_delete_source",
+            "scoring_mode": scoring_mode,
+            "requested_sequence_batch_size": arm_batch_size,
+            "batch_control_requested": batch_control,
+            **dict(execution_diagnostics or {}),
         },
     )
 
@@ -279,7 +391,8 @@ def context_effect_message(effect: AnswerSpanEffect) -> str:
 
 
 __all__ = [
-    "ContextEffectsPlan", "ContextEffectsUnavailablePlan", "context_effect_message",
+    "ContextEffectsPlan", "ContextEffectsUnavailablePlan", "configure_context_effect_sources",
+    "context_effect_message",
     "measure_context_effects", "plan_context_effects", "plan_context_effects_reader",
     "project_context_effects",
 ]

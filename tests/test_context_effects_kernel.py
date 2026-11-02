@@ -17,7 +17,12 @@ from clozn.experiments.selections import (
 )
 from clozn.experiments.state import ExecutionState
 import clozn.recipes.context_effects as context_effects_recipe
-from clozn.recipes.context_effects import measure_context_effects, project_context_effects
+from clozn.recipes.context_effects import (
+    configure_context_effect_sources,
+    measure_context_effects,
+    plan_context_effects,
+    project_context_effects,
+)
 from clozn.runs.context_receipt import build_context_receipt
 from clozn.runs.context_units import build_context_unit_manifest
 
@@ -144,6 +149,20 @@ def test_score_and_evaluator_serialization_are_deterministic():
     assert result.to_json() == ExperimentResult.from_dict(result.to_dict()).to_json()
 
 
+def test_fast_and_exact_scoring_have_separate_experiment_identities():
+    run, source_ids = _run()
+    exact = plan_context_effects(run, source_ids[:2], scoring_mode="exact")
+    fast = plan_context_effects(run, source_ids[:2], scoring_mode="fast")
+
+    assert exact.experiment_id != fast.experiment_id
+    assert exact.experiment.evaluator.to_dict()["scoring_mode"] == "exact"
+    assert fast.experiment.evaluator.to_dict()["scoring_mode"] == "fast"
+    assert ScoreRecordedContinuation.from_dict({
+        "kind": "score_recorded_continuation",
+        "target": "full_recorded_continuation",
+    }).scoring_mode == "exact"
+
+
 def test_projection_is_signed_sum_and_resupports_without_calls():
     run, source_ids = _run()
     substrate = ScoreSubstrate()
@@ -175,22 +194,69 @@ def test_selection_does_not_change_experiment_identity_and_abs_order_is_stable()
     assert abs(effects[0].delta_nats) >= abs(effects[1].delta_nats)
 
 
+def test_configured_granularity_uses_only_exact_receipt_sources_and_respects_budget():
+    content = "\n\n".join(
+        f"# Section {index}\n" + (str(index) * 80)
+        for index in range(6)
+    )
+    messages = [
+        {"role": "user", "content": content},
+        {"role": "user", "content": "What is the answer?"},
+    ]
+    run = {
+        "id": "run_configured_effects",
+        "messages": deepcopy(messages),
+        "context_receipt": build_context_receipt(
+            messages=messages, run_id="run_configured_effects", privacy="full",
+        ),
+    }
+    roots = tuple(
+        row["segment_id"] for row in run["context_receipt"]["delivered"]
+    )
+    fine = configure_context_effect_sources(
+        run, granularity="adaptive", max_arms=64,
+    )
+
+    assert configure_context_effect_sources(
+        run, granularity="message", max_arms=2,
+    ) == roots
+    assert len(fine) > len(roots)
+    assert configure_context_effect_sources(
+        run, granularity="adaptive", max_arms=2,
+    ) == roots
+    assert set(fine).issubset(set(
+        source["source_id"]
+        for row in run["context_receipt"]["delivered"]
+        for source in row.get("sources", [])
+    ) | set(roots))
+    with pytest.raises(ValueError, match="use at least 2 arms"):
+        configure_context_effect_sources(run, granularity="adaptive", max_arms=1)
+
+
 def test_measurement_forwards_cancellation_to_generic_runner(monkeypatch):
     run, source_ids = _run()
     cancel = object()
+    on_progress = object()
     observed = {}
 
     def fake_run_experiment(*args, **kwargs):
         observed["cancel"] = kwargs.get("cancel")
+        observed["arm_batch_size"] = kwargs.get("arm_batch_size")
+        observed["batch_control"] = kwargs.get("batch_control")
+        observed["on_progress"] = kwargs.get("on_progress")
         return "result"
 
     monkeypatch.setattr(context_effects_recipe, "run_experiment", fake_run_experiment)
     result = measure_context_effects(
         run, source_ids=source_ids[:1], execution_adapter=object(), cancel=cancel,
+        arm_batch_size=1, batch_control=True, on_progress=on_progress,
     )
 
     assert result == "result"
     assert observed["cancel"] is cancel
+    assert observed["arm_batch_size"] == 1
+    assert observed["batch_control"] is True
+    assert observed["on_progress"] is on_progress
 
 
 def test_score_failure_is_typed_and_does_not_approximate_text():

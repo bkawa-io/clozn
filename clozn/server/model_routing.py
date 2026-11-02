@@ -178,6 +178,169 @@ class ModelSelection:
             handler._generation_gate_release = self.gate_release
 
 
+class BackgroundScoringSubstrate:
+    """Give score calls a worker turn only after queued foreground chat.
+
+    The wrapper deliberately gates one substrate call at a time. Recipes can
+    therefore persist and publish an arm, release the worker, and let waiting
+    chat generation run before the next score is dispatched.
+    """
+
+    def __init__(self, target, gate: WorkerGateRegistry, worker_key: str,
+                 scoring_mode: str = "exact"):
+        if scoring_mode not in {"exact", "fast"}:
+            raise ValueError("scoring_mode must be exact or fast")
+        self._target = target
+        self._gate = gate
+        self._worker_key = worker_key
+        self.scoring_mode = scoring_mode
+
+    def __getattr__(self, name):
+        return getattr(self._target, name)
+
+    def with_scoring_mode(self, scoring_mode: str):
+        return BackgroundScoringSubstrate(
+            self._target, self._gate, self._worker_key, scoring_mode=scoring_mode,
+        )
+
+    @property
+    def score_tokens_many_execution_strategy(self):
+        if self.scoring_mode == "fast":
+            return "native_prefix_trie"
+        # Low-priority analysis must release the worker between arms. Even if
+        # the wrapped substrate is configured for host-side concurrency, that
+        # regime would hold the turn across a whole batch and make foreground
+        # chat wait for every in-flight score.
+        return "scalar_serial"
+
+    @property
+    def score_tokens_many_numerical_regime(self):
+        if self.scoring_mode == "fast":
+            return "native_prefix_trie_target_logprob_v1"
+        return getattr(self._target, "score_tokens_many_numerical_regime", "scalar_reference")
+
+    @property
+    def score_tokens_many_execution_identity(self):
+        if self.scoring_mode == "fast":
+            return {
+                "kind": "clozn.teacher-forced-score-many.native-prefix-trie.v1",
+                "approximate_contract": "float32_multi_sequence_batch_shape",
+                "scalar_fallback": "/score",
+            }
+        return getattr(
+            self._target,
+            "score_tokens_many_execution_identity",
+            {"kind": "clozn.score-tokens-scalar-reference.v1"},
+        )
+
+    @staticmethod
+    def _cancelled(cancel) -> bool:
+        if cancel is None:
+            return False
+        if callable(cancel):
+            return bool(cancel())
+        method = getattr(cancel, "is_set", None)
+        return bool(method()) if callable(method) else bool(cancel)
+
+    def _acquire(self, cancel=None):
+        cancel_check = (lambda: self._cancelled(cancel)) if cancel is not None else None
+        outcome, release = self._gate.acquire_background(
+            self._worker_key, cancel_check=cancel_check,
+        )
+        if outcome == "cancelled":
+            from clozn.experiments.multi_arm import BatchCancelled
+            raise BatchCancelled("background scoring cancelled while waiting for foreground chat")
+        if outcome is not None or release is None:
+            raise RuntimeError("background scoring timed out waiting for foreground chat")
+        return release
+
+    def _score_tokens_scalar(self, *args, **kwargs):
+        release = self._acquire()
+        try:
+            return self._target.score_tokens(*args, **kwargs)
+        finally:
+            release()
+
+    def chat(self, *args, **kwargs):
+        """Run one low-priority analysis generation without starving foreground chat."""
+        release = self._acquire()
+        try:
+            return self._target.chat(*args, **kwargs)
+        finally:
+            release()
+
+    def score_tokens(self, messages, continuation_ids=None, *, continuation=None,
+                     block=None, topk=0):
+        args = [messages]
+        if continuation_ids is not None:
+            args.append(continuation_ids)
+        kwargs = {}
+        if continuation is not None:
+            kwargs["continuation"] = continuation
+        if block is not None:
+            kwargs["block"] = block
+        if topk:
+            kwargs["topk"] = topk
+        if self.scoring_mode != "fast":
+            return self._score_tokens_scalar(*args, **kwargs)
+        arm = {
+            "messages": messages,
+            "continuation_ids": continuation_ids,
+            "continuation": continuation,
+            "block": block,
+            "topk": topk,
+        }
+        release = self._acquire()
+        try:
+            response = self._target.score_tokens_many_native([arm])
+            return response["results"][0]
+        except Exception:
+            # Release the native batch turn before entering the ordinary
+            # one-score background gate again.
+            pass
+        finally:
+            release()
+        return self._score_tokens_scalar(*args, **kwargs)
+
+    def score_tokens_many(self, arms, *, cancel=None):
+        from clozn.experiments.multi_arm import serial_many
+        arms = list(arms)
+        if self.scoring_mode != "fast":
+            return serial_many(self._score_tokens_scalar, arms, cancel=cancel)
+        fallback_reason = None
+        release = self._acquire(cancel=cancel)
+        try:
+            response = self._target.score_tokens_many_native(arms, cancel=cancel)
+            return {
+                **response,
+                "evidence_use": "approximate",
+                "requested_scoring_mode": "fast",
+            }
+        except Exception as exc:
+            fallback_reason = f"{type(exc).__name__}: {exc}"
+        finally:
+            release()
+
+        rows = serial_many(self._score_tokens_scalar, arms, cancel=cancel)
+        regime = getattr(
+            self._target, "score_tokens_many_numerical_regime", "scalar_reference",
+        )
+        identity = getattr(
+            self._target, "score_tokens_many_execution_identity",
+            {"kind": "clozn.score-tokens-scalar-reference.v1"},
+        )
+        return {
+            "results": rows,
+            "numerical_regime": regime,
+            "qualified": True,
+            "evidence_use": "trusted",
+            "execution_strategy": "scalar_serial",
+            "execution": deepcopy(dict(identity)),
+            "requested_scoring_mode": "fast",
+            "native_fallback": {"used": True, "reason": fallback_reason},
+        }
+
+
 class PreloadedModelRouter:
     """Strict selection for exactly one configured, already-loaded model."""
 
@@ -462,10 +625,22 @@ def select_control_model_for_run(handler, model, *, route: str):
         })
         return None
     try:
-        return router.select_control_model(model, route=route)
+        selection = router.select_control_model(model, route=route)
     except ModelRoutingError as error:
         _emit_error(handler, error, "native")
         return None
+    gate = getattr(router, "_gate", None)
+    if gate is None:
+        return selection
+    return ModelSelection(
+        model_id=selection.model_id,
+        sub=BackgroundScoringSubstrate(selection.sub, gate, selection.model_id),
+        engine=selection.engine,
+        artifact=selection.artifact,
+        runtime_key=selection.runtime_key,
+        worker_identity=selection.worker_identity,
+        gate_release=selection.gate_release,
+    )
 
 
 def select_control_model_for_request(
@@ -492,7 +667,7 @@ def select_control_model_for_request(
 
 
 __all__ = [
-    "ModelRoutingConfigError", "ModelRoutingError", "ModelSelection",
+    "BackgroundScoringSubstrate", "ModelRoutingConfigError", "ModelRoutingError", "ModelSelection",
     "PreloadedModelBinding", "PreloadedModelRouter", "clear_handler_selection",
     "select_control_model_for_request", "select_control_model_for_run",
     "select_for_handler",

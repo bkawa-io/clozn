@@ -32,7 +32,7 @@ struct ServerContext {
 };
 
 // Route-family registrars linked into the private v1 worker.
-void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx);  // /score, /apply_template
+void register_whitebox_routes(httplib::Server& svr, ServerContext& ctx);  // scoring + /apply_template
 void register_reference_match_routes(httplib::Server& svr, ServerContext& ctx); // private native-many probe
 
 }  // namespace clozn

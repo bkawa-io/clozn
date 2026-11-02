@@ -6,5 +6,12 @@
   "unavailable_source_count": 1,
   "failed_source_count": 0,
   "not_measured_source_count": 1,
+  "executed_score_count": 2,
+  "reused_score_count": 1,
+  "elapsed_seconds": 4.25,
+  "scoring_mode": "fast",
+  "evidence_quality": "approximate",
+  "execution_strategy": "native_prefix_trie",
+  "numerical_regime": "native_prefix_trie_target_logprob_v1",
   "state": "completed"
 }

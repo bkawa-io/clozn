@@ -8,9 +8,11 @@ from clozn.experiments.execution import DeleteSourceExactReferenceAdapter
 from clozn.experiments.interventions import DeleteSource
 from clozn.experiments.kernel import Experiment
 from clozn.experiments.observations import Observation, execution_observation_identity
+from clozn.experiments.persistence import ObservationStore
 from clozn.experiments.runner import run_experiment
 from clozn.experiments.selections import ContextSelection
 from clozn.experiments.state import ExecutionState
+from clozn.runs import store as run_store
 from clozn.runs.context_receipt import build_context_receipt
 
 
@@ -157,3 +159,97 @@ def test_scalar_and_proof_grade_native_many_have_identical_observation_artifacts
     )
     assert [row.observation.to_json() for row in scalar.arms] == [row.observation.to_json() for row in native.arms]
     assert native.diagnostics["execution_strategy"] == "native_many"
+
+
+def test_arm_batches_persist_before_progress_and_keep_one_experiment_identity(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_store, "RUNS_DIR", str(tmp_path / "runs"))
+    run_store._schema_verified.clear()
+    run, source_ids = _run()
+    experiment = Experiment(
+        base=ExecutionState.from_run(run), evaluator=ExactReferenceMatch(),
+        arms=[
+            DeleteSource(ContextSelection([source_ids[0]])),
+            DeleteSource(ContextSelection([source_ids[1]])),
+        ],
+    )
+    store = ObservationStore()
+    adapter = BatchAdapter()
+    snapshots = []
+
+    def on_progress(event):
+        view = store.get_experiment(experiment.experiment_id)
+        snapshots.append((dict(event), [row.state for row in view.arms]))
+
+    result = run_experiment(
+        experiment, adapter, observation_store=store,
+        arm_batch_size=1, on_progress=on_progress,
+    )
+
+    assert result.experiment_id == experiment.experiment_id
+    assert adapter.batch_requests == [
+        (experiment.arms[0].arm_id,),
+        (experiment.arms[1].arm_id,),
+    ]
+    assert [event["completed_units"] for event, _states in snapshots] == [0, 1, 2]
+    assert snapshots[1][1] == ["completed", "pending"]
+    assert snapshots[2][1] == ["completed", "completed"]
+    assert result.diagnostics["batch_sizes"] == [1, 1]
+
+
+def test_control_and_arms_share_the_first_batch_when_requested():
+    run, source_ids = _run()
+    experiment = Experiment(
+        base=ExecutionState.from_run(run), evaluator=ExactReferenceMatch(),
+        arms=[
+            DeleteSource(ContextSelection([source_ids[0]])),
+            DeleteSource(ContextSelection([source_ids[1]])),
+        ],
+    )
+    adapter = BatchAdapter()
+
+    result = run_experiment(
+        experiment, adapter, arm_batch_size=3, batch_control=True,
+    )
+
+    assert adapter.scalar_calls == []
+    assert adapter.batch_requests == [(
+        "control", experiment.arms[0].arm_id, experiment.arms[1].arm_id,
+    )]
+    assert result.control.status == "exact_preserved"
+    assert [row.status for row in result.arms] == [
+        "exact_preserved", "exact_preserved",
+    ]
+    assert result.diagnostics["control_batched"] is True
+    assert result.diagnostics["batch_sizes"] == [2]
+    assert result.diagnostics["sequence_batch_sizes"] == [3]
+    assert result.diagnostics["performance_timing"]["batches"][0]["control_included"] is True
+
+
+def test_arm_batch_cancellation_keeps_completed_durable_evidence(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_store, "RUNS_DIR", str(tmp_path / "runs"))
+    run_store._schema_verified.clear()
+    run, source_ids = _run()
+    experiment = Experiment(
+        base=ExecutionState.from_run(run), evaluator=ExactReferenceMatch(),
+        arms=[
+            DeleteSource(ContextSelection([source_ids[0]])),
+            DeleteSource(ContextSelection([source_ids[1]])),
+        ],
+    )
+    cancelled = False
+
+    def on_progress(event):
+        nonlocal cancelled
+        if event["completed_units"] == 1:
+            cancelled = True
+
+    result = run_experiment(
+        experiment, BatchAdapter(), observation_store=ObservationStore(),
+        arm_batch_size=1, on_progress=on_progress, cancel=lambda: cancelled,
+    )
+
+    assert result.state == "cancelled"
+    assert result.arms[0].state == "completed"
+    assert result.arms[0].observation_id is not None
+    assert result.arms[1].state == "cancelled"
+    assert result.arms[1].observation_id is None

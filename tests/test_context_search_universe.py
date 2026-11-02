@@ -35,6 +35,22 @@ def test_derived_universe_includes_every_nonempty_message():
     schemas.validate(artifact)
 
 
+def test_default_universe_accepts_long_conversation_without_expanding_work_budget():
+    messages = [
+        {"role": "user" if index % 2 == 0 else "assistant", "content": f"turn {index}"}
+        for index in range(24)
+    ]
+    receipt = build_context_receipt(messages=messages, run_id="run_long", privacy="full")
+    run = {"id": "run_long", "messages": deepcopy(messages), "context_receipt": receipt}
+    run["context_units"] = build_context_unit_manifest(run)
+
+    artifact = plan_context_search_universe(run, run["context_units"])
+
+    assert artifact["status"] == "planned"
+    assert artifact["source_count"] == 24
+    assert artifact["policy"]["max_units"] == 64
+
+
 def test_lower_runtime_bound_returns_typed_failure_without_repartitioning():
     content = "\n\n".join(f"# H{i}\n" + (str(i) * 80) for i in range(8))
     run = _run(content, run_id="run_bound")
