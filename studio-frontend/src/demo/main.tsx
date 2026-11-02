@@ -24,7 +24,7 @@ const heroQuestions = [
   "What can I delete without changing the answer?",
   "Where is my context helping—and where is it fighting me?",
 ];
-const heroProgress = [0, 2, 4, 6, 8, 9, 10];
+const heroProgress = [0, 1, 2, 3, 4, 5];
 
 type JsonObject = Record<string, unknown>;
 
@@ -120,19 +120,19 @@ function HeroAttribution() {
     }
     const timer = window.setTimeout(() => {
       setStep((current) => current === heroProgress.length - 1 ? 0 : current + 1);
-    }, step === 0 ? 850 : step === heroProgress.length - 1 ? 2400 : 760);
+    }, step === 0 ? 600 : step === heroProgress.length - 1 ? 2600 : 850);
     return () => window.clearTimeout(timer);
   }, [step]);
   const revealed = (threshold: number) => step >= threshold;
   return <figure className={`hero-attribution${step === 0 ? " is-resetting" : ""}`} id="hero-map">
     <figcaption>
       <span><i aria-hidden="true"/>Recorded measurement</span>
-      <strong>{heroProgress[step]} / 10 context spans</strong>
+      <strong>{heroProgress[step]} / 5 context spans</strong>
     </figcaption>
     <div className="hero-measurement-strip" aria-hidden="true">
-      {Array.from({ length: 10 }, (_, index) => {
+      {Array.from({ length: 5 }, (_, index) => {
         const measured = index < heroProgress[step];
-        const direction = index === 2 || index === 7 ? " suppression" : " support";
+        const direction = index === 4 ? " suppression" : " support";
         return <i className={measured ? `is-measured${direction}` : ""} key={index}/>;
       })}
     </div>
