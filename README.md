@@ -1,4 +1,4 @@
-# CLOZN (WIP)
+# Clozn
 
 > Context attribution for everyday local inference.
 
@@ -6,12 +6,16 @@
 [Install from source](#install-from-source) ·
 [Capability boundary](docs/CAPABILITIES.md)
 
-<img width="1551" height="773" alt="Screenshot 2026-10-24 at 1 05 46 PM" src="https://github.com/user-attachments/assets/913cfb7f-409c-4e0f-8668-81346371d138" />
+Wondering how your context is influencing a model? Which parts of an answer actually depend on your
+conversation, documents, or instructions—and which survive without them? Is the model ignoring
+something you said? Want evidence without building a notebook or instrumenting your chat app?
 
-Wondering how your context is influencing your model's response? Is the model ignoring
-something you said? Want evidence fast without building a notebook or instrumenting your chat app?
+**Clozn can help.**
 
-**CLOZN can help.**
+Clozn is a local, text-only OpenAI-compatible chat gateway with context attribution built in. Point an
+existing chat client at Clozn, chat with a local GGUF model as usual, then open the recorded response in
+Studio. Clozn automatically partitions the complete message history and runs removal experiments to
+show which context spans support or suppress each part of the answer.
 
 Clozn builds on the context-attribution research direction established by
 [ContextCite](https://github.com/MadryLab/context-cite), bringing research-inspired measurements into
