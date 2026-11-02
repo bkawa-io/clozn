@@ -11,6 +11,7 @@ from scripts.release.native_release import (
     ReleaseError,
     SourceIdentity,
     build_manifest,
+    stage_runtime,
     validate_build_identity,
     write_manifest,
     _write_deterministic_zip,
@@ -157,6 +158,38 @@ def test_archive_packaging_is_deterministic_and_normalizes_metadata(tmp_path):
         assert archive.namelist() == ["LICENSE", "bin/clozn-server"]
         assert archive.getinfo("bin/clozn-server").date_time == (1980, 1, 1, 0, 0, 0)
         assert (archive.getinfo("bin/clozn-server").external_attr >> 16) & 0o111
+
+
+def test_runtime_staging_materializes_safe_library_symlinks(tmp_path):
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "clozn-server").write_bytes(b"native executable")
+    library = runtime / "libclozn.so.1"
+    library.write_bytes(b"shared library")
+    (runtime / "libclozn.so").symlink_to(library.name)
+    license_path = tmp_path / "LICENSE"
+    license_path.write_text("license\n", encoding="utf-8")
+    stage = tmp_path / "stage"
+
+    stage_runtime(runtime, stage, "clozn-server", license_path)
+
+    staged_alias = stage / "bin" / "libclozn.so"
+    assert staged_alias.read_bytes() == library.read_bytes()
+    assert not staged_alias.is_symlink()
+
+
+def test_runtime_staging_rejects_out_of_tree_symlinks(tmp_path):
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "clozn-server").write_bytes(b"native executable")
+    outside = tmp_path / "outside-library"
+    outside.write_bytes(b"not part of the runtime")
+    (runtime / "libclozn.so").symlink_to(outside)
+    license_path = tmp_path / "LICENSE"
+    license_path.write_text("license\n", encoding="utf-8")
+
+    with pytest.raises(ReleaseError, match="in-tree file"):
+        stage_runtime(runtime, tmp_path / "stage", "clozn-server", license_path)
 
 
 def test_feature_flag_names_must_be_nonempty():

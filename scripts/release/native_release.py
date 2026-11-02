@@ -228,7 +228,13 @@ def validate_build_identity(
 
 
 def stage_runtime(bin_dir: Path, stage_root: Path, server_name: str, license_path: Path) -> None:
-    """Copy one clean build's runtime directory into the release archive layout."""
+    """Copy one clean build's runtime directory into the release archive layout.
+
+    Native shared libraries commonly use an in-directory symlink chain for
+    their unversioned and ABI-versioned names.  Release ZIPs deliberately do
+    not contain symlinks, so safe file links are materialized as regular files
+    while broken, directory, and out-of-tree links remain fail-closed.
+    """
     bin_dir, stage_root, license_path = bin_dir.resolve(), stage_root.resolve(), license_path.resolve()
     if not bin_dir.is_dir():
         raise ReleaseError(f"runtime bin directory does not exist: {bin_dir}")
@@ -242,12 +248,23 @@ def stage_runtime(bin_dir: Path, stage_root: Path, server_name: str, license_pat
     destination.mkdir(parents=True, exist_ok=True)
     for source in sorted(bin_dir.rglob("*")):
         if source.is_symlink():
-            raise ReleaseError(f"runtime staging refuses symlinks: {source}")
-        if source.is_file():
-            relative = source.relative_to(bin_dir)
-            target = destination / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
+            try:
+                resolved = source.resolve(strict=True)
+            except (OSError, RuntimeError) as error:
+                raise ReleaseError(f"runtime staging found a broken symlink: {source}: {error}") from None
+            if not resolved.is_relative_to(bin_dir) or not resolved.is_file():
+                raise ReleaseError(
+                    f"runtime staging symlink must resolve to an in-tree file: {source}"
+                )
+            copy_source = resolved
+        elif source.is_file():
+            copy_source = source
+        else:
+            continue
+        relative = source.relative_to(bin_dir)
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(copy_source, target)
     shutil.copy2(license_path, stage_root / "LICENSE")
 
 
