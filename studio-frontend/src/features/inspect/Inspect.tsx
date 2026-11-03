@@ -2339,8 +2339,14 @@ export function InspectReader({
         }}
       >
       <div className="inspect-pane-switch" role="group" aria-label="Readable pane">
-        <button type="button" aria-pressed={mobilePane === "context"} onClick={() => setMobilePane("context")}>Context</button>
-        <button type="button" aria-pressed={mobilePane === "answer"} onClick={() => setMobilePane("answer")}>Answer</button>
+        <button type="button" aria-pressed={mobilePane === "answer"} onClick={() => {
+          setMobilePane("answer");
+          if (expandedPane) setExpandedPane("answer");
+        }}>Answer</button>
+        <button type="button" aria-pressed={mobilePane === "context"} onClick={() => {
+          setMobilePane("context");
+          if (expandedPane) setExpandedPane("context");
+        }}>Context</button>
       </div>
       <SequenceOverview
         reader={reader}

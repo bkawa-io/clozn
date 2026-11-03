@@ -1036,6 +1036,11 @@ describe("Inspect surface", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Expand heatmap" })[0]);
     expect(view.container.querySelector(".inspect-reader")).toHaveClass("is-expanded-context");
     expect(screen.getByRole("dialog", { name: "Expanded context heatmap" })).toContainElement(view.container.querySelector(".heatmap-peek"));
+    fireEvent.click(screen.getByRole("button", { name: "Answer", hidden: true }));
+    expect(view.container.querySelector(".inspect-reader")).toHaveClass("is-expanded-answer");
+    expect(screen.getByRole("dialog", { name: "Expanded answer heatmap" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Context", hidden: true }));
+    expect(view.container.querySelector(".inspect-reader")).toHaveClass("is-expanded-context");
     fireEvent.click(heated!);
     expect(window.location.hash).toBe("#/inspect/run_alpha?answerStart=0&answerEnd=5&sourceId=source-a");
     fireEvent.click(screen.getByRole("button", { name: "Collapse" }));
