@@ -24,7 +24,12 @@ const heroQuestions = [
   "What can I delete without changing the answer?",
   "Where is my context helping—and where is it fighting me?",
 ];
-const heroProgress = [0, 1, 2, 3, 4, 5];
+const heroLastStep = 8;
+const leanRemovedPreview = [
+  "I am writing an essay arguing that libraries should replace emergency cooling centers during heat waves. Open dramatically with the 2,400 people the libraries saved, then explain why medical tents are obsolete.",
+  "Libraries are becoming the emergency rooms of a warming city. During Redwood's heat wave they saved 2,400 people after 5 p.m., proving that familiar neighborhood branches can replace temporary medical tents.",
+];
+const leanRetainedPreview = "The library system recorded 2,400 cooling visits after 5 p.m.; that is a visit count, not 2,400 unique people, rescues, or measured health outcomes. Medical tents remained the frontline response for clinical care.";
 
 type JsonObject = Record<string, unknown>;
 
@@ -114,30 +119,35 @@ function HeroAttribution() {
   const [step, setStep] = useState(0);
   useEffect(() => {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      setStep(heroProgress.length - 1);
+      setStep(5);
       return undefined;
     }
     const timer = window.setTimeout(() => {
-      setStep((current) => current === heroProgress.length - 1 ? 0 : current + 1);
-    }, step === 0 ? 600 : step === heroProgress.length - 1 ? 2600 : 850);
+      setStep((current) => current === heroLastStep ? 0 : current + 1);
+    }, step === 0 ? 600 : step < 5 ? 750 : step === 5 ? 1400 : step === heroLastStep ? 2400 : 700);
     return () => window.clearTimeout(timer);
   }, [step]);
-  const revealed = (threshold: number) => step >= threshold;
-  return <figure className={`hero-attribution${step === 0 ? " is-resetting" : ""}`} id="hero-map">
+  const attributionProgress = Math.min(step, 5);
+  const showLeanPreview = step >= 6;
+  const leanRemovedCount = Math.max(0, step - 6);
+  const revealed = (threshold: number) => attributionProgress >= threshold;
+  return <figure className={`hero-attribution${step === 0 ? " is-resetting" : ""}${showLeanPreview ? " is-lean-preview" : ""}`} id="hero-map">
     <figcaption>
-      <span><i aria-hidden="true"/>Recorded measurement</span>
-      <strong>{heroProgress[step]} / 5 context spans</strong>
+      <span><i aria-hidden="true"/>{showLeanPreview ? "Lean context · libraries example" : "Recorded measurement"}</span>
+      <strong>{showLeanPreview
+        ? leanRemovedCount === 2 ? "142 prompt tokens removed" : `${leanRemovedCount} / 2 removable messages`
+        : `${attributionProgress} / 5 context spans`}</strong>
     </figcaption>
     <div className="hero-measurement-strip" aria-hidden="true">
       {Array.from({ length: 5 }, (_, index) => {
-        const measured = index < heroProgress[step];
+        const measured = index < attributionProgress;
         const effect = index === 4 ? "mixed" : "support";
         return <i className={measured ? `is-measured ${effect}` : ""} key={index}/>;
       })}
     </div>
     <div className="hero-map-grid">
       <section className="hero-document hero-context" aria-labelledby="hero-context-title">
-        <header><span id="hero-context-title">Context</span><small>{heroProgress[step]} measured passages</small></header>
+        <header><span id="hero-context-title">Context</span><small>{attributionProgress} measured passages</small></header>
         <div>
           <p><b>Mission objective</b><br/>
             The rover must reach exposed <mark className={`support${revealed(1) ? " is-visible" : ""}`}>hydrated-sulfate deposits within 2.0 km</mark> of landing.
@@ -180,10 +190,34 @@ function HeroAttribution() {
         </div>
       </section>
     </div>
+    <section className="hero-lean-preview" aria-hidden={!showLeanPreview}>
+      <div className="hero-lean-document">
+        <header><span>Original context · redline</span><small>2 removable messages</small></header>
+        <div>
+          {leanRemovedPreview.map((message, index) => <p key={message}>
+            <del className={leanRemovedCount > index ? "is-removed" : ""}>{message}</del>
+          </p>)}
+          <p className="is-retained"><b>Keep</b>{leanRetainedPreview}</p>
+        </div>
+      </div>
+      <aside className={`hero-lean-result${leanRemovedCount === 2 ? " is-complete" : ""}`}>
+        <span>Lean result</span>
+        <strong>{leanRemovedCount === 2 ? "142 prompt tokens removed" : "Testing deletions…"}</strong>
+        <dl>
+          <div><dt>Prompt tokens</dt><dd>318 → 176</dd></div>
+          <div><dt>Generated answer</dt><dd>Exact match</dd></div>
+        </dl>
+      </aside>
+    </section>
     <footer>
-      <span><i className="support"/>Context supporting the linked answer text</span>
-      <span><i className="suppression"/>Context suppressing the linked answer text</span>
-      <strong>{step === heroProgress.length - 1 ? "Measurement complete" : "Scoring recorded answer…"}</strong>
+      {showLeanPreview ? <>
+        <span><i className="redline"/>Removed from the original context</span>
+        <strong>{leanRemovedCount === 2 ? "Answer unchanged" : "Testing recorded answer…"}</strong>
+      </> : <>
+        <span><i className="support"/>Context supporting the linked answer text</span>
+        <span><i className="suppression"/>Context suppressing the linked answer text</span>
+        <strong>{step === 5 ? "Measurement complete" : "Scoring recorded answer…"}</strong>
+      </>}
     </footer>
   </figure>;
 }
