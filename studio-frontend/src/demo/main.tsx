@@ -20,7 +20,7 @@ const replay = new URLSearchParams(window.location.search).get("replay") === "1"
 const heroQuestions = [
   "How much of my prompt engineering does absolutely nothing?",
   "Is my token-burning RAG system useful—or just expensive?",
-  "Which sentence actually made the model say that?",
+  "Is my model just ignoring my instructions?",
   "What can I delete without changing the answer?",
   "Where is my context helping—and where is it fighting me?",
 ];
@@ -132,8 +132,7 @@ function HeroAttribution() {
     <div className="hero-measurement-strip" aria-hidden="true">
       {Array.from({ length: 5 }, (_, index) => {
         const measured = index < heroProgress[step];
-        const direction = index === 4 ? " suppression" : " support";
-        return <i className={measured ? `is-measured${direction}` : ""} key={index}/>;
+        return <i className={measured ? "is-measured support" : ""} key={index}/>;
       })}
     </div>
     <div className="hero-map-grid">
@@ -147,35 +146,40 @@ function HeroAttribution() {
             Outcrops begin <mark className={`support peak${revealed(2) ? " is-visible" : ""}`}>1.8 km from the ellipse</mark>. The traverse is <mark className={`support${revealed(3) ? " is-visible" : ""}`}>mostly 4–8 degrees</mark>. Winter sunlight averages <mark className={`support${revealed(4) ? " is-visible" : ""}`}>8.4 hours</mark> and orbiter visibility is 94%.
           </p>
           <p><b>Cinder Plain</b><br/>
-            Orbital spectroscopy found <mark className={`suppression${revealed(5) ? " is-visible" : ""}`}>no hydrated-sulfate exposure within 6 km</mark>.
+            Orbital spectroscopy found <mark className={`support${revealed(5) ? " is-visible" : ""}`}>no hydrated-sulfate exposure within 6 km</mark>.
           </p>
         </div>
       </section>
       <div className="hero-threads" aria-hidden="true">
         <svg viewBox="0 0 100 420" preserveAspectRatio="none">
-          <path className={`support thread-1${revealed(1) ? " is-visible" : ""}`} pathLength="1" d="M0 73 C46 73 52 122 100 122"/>
-          <path className={`support thread-2${revealed(2) ? " is-visible" : ""}`} pathLength="1" d="M0 188 C42 188 58 183 100 183"/>
-          <path className={`support thread-3${revealed(3) ? " is-visible" : ""}`} pathLength="1" d="M0 232 C45 232 54 236 100 236"/>
-          <path className={`support thread-4${revealed(4) ? " is-visible" : ""}`} pathLength="1" d="M0 276 C40 276 60 294 100 294"/>
-          <path className={`suppression thread-5${revealed(5) ? " is-visible" : ""}`} pathLength="1" d="M0 365 C45 365 56 346 100 346"/>
-          <circle className={`support${revealed(2) ? " is-visible" : ""}`} cx="4" cy="188" r="3"/>
-          <circle className={`support${revealed(2) ? " is-visible" : ""}`} cx="96" cy="183" r="3"/>
-          <circle className={`suppression${revealed(5) ? " is-visible" : ""}`} cx="4" cy="365" r="3"/>
-          <circle className={`suppression${revealed(5) ? " is-visible" : ""}`} cx="96" cy="346" r="3"/>
+          <path className={`support thread-1${revealed(1) ? " is-visible" : ""}`} pathLength="100" d="M3 73 C46 73 52 122 97 122"/>
+          <path className={`support thread-2${revealed(2) ? " is-visible" : ""}`} pathLength="100" d="M3 188 C42 188 58 183 97 183"/>
+          <path className={`support thread-3${revealed(3) ? " is-visible" : ""}`} pathLength="100" d="M3 232 C45 232 54 236 97 236"/>
+          <path className={`support thread-4${revealed(4) ? " is-visible" : ""}`} pathLength="100" d="M3 276 C40 276 60 294 97 294"/>
+          <path className={`support thread-5${revealed(5) ? " is-visible" : ""}`} pathLength="100" d="M3 365 C45 365 56 346 97 346"/>
+          {[
+            [1, 73, 122],
+            [2, 188, 183],
+            [3, 232, 236],
+            [4, 276, 294],
+            [5, 365, 346],
+          ].flatMap(([threshold, sourceY, answerY]) => [
+            <circle className={`support${revealed(threshold) ? " is-visible" : ""}`} cx="3" cy={sourceY} r="2.7" key={`${threshold}-source`}/>,
+            <circle className={`support${revealed(threshold) ? " is-visible" : ""}`} cx="97" cy={answerY} r="2.7" key={`${threshold}-answer`}/>,
+          ])}
         </svg>
       </div>
       <section className="hero-document hero-answer" aria-labelledby="hero-answer-title">
-        <header><span id="hero-answer-title">Answer</span><small>support + suppression</small></header>
+        <header><span id="hero-answer-title">Answer</span><small>linked support</small></header>
         <div>
           <p>The recommended landing site is <mark className={`support peak${revealed(2) ? " is-visible" : ""}`}>Zephyr Basin</mark>. It meets the science requirement with hydrated-sulfate outcrops <mark className={`support${revealed(1) ? " is-visible" : ""}`}>well within the 2.0 km limit</mark>.</p>
           <p>Mobility remains safe: the traverse stays <mark className={`support${revealed(3) ? " is-visible" : ""}`}>between 4 and 8 degrees</mark>. Power and communications thresholds are exceeded with <mark className={`support${revealed(4) ? " is-visible" : ""}`}>8.4 hours of winter sunlight and 94% visibility</mark>.</p>
-          <p><mark className={`suppression${revealed(5) ? " is-visible" : ""}`}>Cinder Plain is rejected because no hydrated-sulfate exposure exists within 6 km</mark>, making it scientifically unviable.</p>
+          <p><mark className={`support${revealed(5) ? " is-visible" : ""}`}>Cinder Plain is rejected because no hydrated-sulfate exposure exists within 6 km</mark>, making it scientifically unviable.</p>
         </div>
       </section>
     </div>
     <footer>
-      <span><i className="support"/>Supports the answer</span>
-      <span><i className="suppression"/>Suppresses the answer</span>
+      <span><i className="support"/>Context supporting the linked answer text</span>
       <strong>{step === heroProgress.length - 1 ? "Measurement complete" : "Scoring recorded answer…"}</strong>
     </footer>
   </figure>;
@@ -222,11 +226,14 @@ function Demo() {
               <span>CLOZN / Context attribution for local LLMs</span>
               <h1 id="demo-hero-title">It has all your context.<br/>But does any of it matter?</h1>
             </div>
-            <div>
-              <p>See which parts of your context influenced which parts of the answer—and what you can remove without changing it.</p>
+            <div className="demo-hero-instrument">
+              <dl>
+                <div><dt>Trace</dt><dd>Which parts of your context influenced which parts of the answer.</dd></div>
+                <div><dt>Redline</dt><dd>What you can remove without changing it.</dd></div>
+              </dl>
               <nav aria-label="Demo actions">
-                <a className="demo-primary-action" href="#demo">Explore the recorded demo ↓</a>
-                <a href={repo}>View the source ↗</a>
+                <a className="demo-primary-action" href="#demo">Open recorded measurement ↓</a>
+                <a href={repo}>Source ↗</a>
               </nav>
             </div>
           </div>
