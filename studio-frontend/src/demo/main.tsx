@@ -219,11 +219,11 @@ function Demo() {
         <section className="demo-hero" aria-labelledby="demo-hero-title">
           <div className="demo-hero-copy">
             <div>
-              <span>Context observability for local models</span>
-              <h1 id="demo-hero-title">Your model answered. What made it say that?</h1>
+              <span>CLOZN / Context attribution for local LLMs</span>
+              <h1 id="demo-hero-title">It has all your context.<br/>But does any of it matter?</h1>
             </div>
             <div>
-              <p>CLOZN measures which prompt and retrieved passages support or suppress each part of an answer—then finds the smallest context that preserves it.</p>
+              <p>See which parts of your context influenced which parts of the answer—and what you can remove without changing it.</p>
               <nav aria-label="Demo actions">
                 <a className="demo-primary-action" href="#demo">Explore the recorded demo ↓</a>
                 <a href={repo}>View the source ↗</a>
