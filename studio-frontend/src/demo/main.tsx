@@ -101,7 +101,6 @@ async function savedQuery(_id: string, request: { answerStart: number; answerEnd
 
 function QuestionBand() {
   return <aside className="demo-question-band" aria-label="Questions Clozn answers">
-    <span>Questions Clozn answers</span>
     <div><div className="demo-question-track">
       <span>{heroQuestions.map((question) => <strong key={question}>{question}<i aria-hidden="true"/></strong>)}</span>
       <span aria-hidden="true">
@@ -212,8 +211,9 @@ function Demo() {
   const route = location.surface === "inspect" && location.runId === runId
     ? location : { surface: "inspect" as const, runId };
   return <div className="studio-shell demo-shell">
-    <header className="studio-topbar">
+    <header className={`studio-topbar${showLeanContext ? "" : " has-question-band"}`}>
       <a className="studio-brand" href="./"><i aria-hidden="true"/><strong>CLOZN</strong></a>
+      {!showLeanContext && <QuestionBand/>}
       <nav aria-label="Project">
         <a href={showLeanContext ? "./#demo" : "#demo"}>Context Effects</a>
         {showLeanContext ? <span aria-current="page">Lean Context</span> : <a href="#/lean-context">Lean Context</a>}
@@ -223,14 +223,11 @@ function Demo() {
     </header>
     <main className={`studio-workspace demo-page${showLeanContext ? " is-tool-view" : ""}`}>
       {!showLeanContext && <>
-        <QuestionBand/>
         <section className="demo-hero" aria-labelledby="demo-hero-title">
           <div className="demo-hero-copy">
-            <div>
-              <span>CLOZN / Context attribution for local LLMs</span>
-              <h1 id="demo-hero-title">It has all your context.<br/>But does any of it matter?</h1>
-              <p>See which parts of your context shaped the answer—and what you can remove without changing it.</p>
-            </div>
+            <span>CLOZN / Context attribution for local LLMs</span>
+            <h1 id="demo-hero-title">It has all your context. But does any of it matter?</h1>
+            <p>See which parts of your context shaped the answer—and what you can remove without changing it.</p>
             <nav aria-label="Demo actions">
               <a className="demo-primary-action" href="#demo">Open recorded measurement ↓</a>
               <a href={repo}>Source ↗</a>
