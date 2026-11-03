@@ -229,17 +229,12 @@ function Demo() {
             <div>
               <span>CLOZN / Context attribution for local LLMs</span>
               <h1 id="demo-hero-title">It has all your context.<br/>But does any of it matter?</h1>
+              <p>See which parts of your context shaped the answer—and what you can remove without changing it.</p>
             </div>
-            <div className="demo-hero-instrument">
-              <dl>
-                <div><dt>Trace</dt><dd>Which parts of your context influenced which parts of the answer.</dd></div>
-                <div><dt>Redline</dt><dd>What you can remove without changing it.</dd></div>
-              </dl>
-              <nav aria-label="Demo actions">
-                <a className="demo-primary-action" href="#demo">Open recorded measurement ↓</a>
-                <a href={repo}>Source ↗</a>
-              </nav>
-            </div>
+            <nav aria-label="Demo actions">
+              <a className="demo-primary-action" href="#demo">Open recorded measurement ↓</a>
+              <a href={repo}>Source ↗</a>
+            </nav>
           </div>
           <HeroAttribution/>
         </section>
