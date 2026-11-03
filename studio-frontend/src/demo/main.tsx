@@ -132,7 +132,8 @@ function HeroAttribution() {
     <div className="hero-measurement-strip" aria-hidden="true">
       {Array.from({ length: 5 }, (_, index) => {
         const measured = index < heroProgress[step];
-        return <i className={measured ? "is-measured support" : ""} key={index}/>;
+        const effect = index === 4 ? "mixed" : "support";
+        return <i className={measured ? `is-measured ${effect}` : ""} key={index}/>;
       })}
     </div>
     <div className="hero-map-grid">
@@ -146,7 +147,7 @@ function HeroAttribution() {
             Outcrops begin <mark className={`support peak${revealed(2) ? " is-visible" : ""}`}>1.8 km from the ellipse</mark>. The traverse is <mark className={`support${revealed(3) ? " is-visible" : ""}`}>mostly 4–8 degrees</mark>. Winter sunlight averages <mark className={`support${revealed(4) ? " is-visible" : ""}`}>8.4 hours</mark> and orbiter visibility is 94%.
           </p>
           <p><b>Cinder Plain</b><br/>
-            Orbital spectroscopy found <mark className={`support${revealed(5) ? " is-visible" : ""}`}>no hydrated-sulfate exposure within 6 km</mark>.
+            The terrain is <mark className={`suppression${revealed(5) ? " is-visible" : ""}`}>nearly flat</mark>, but orbital spectroscopy found <mark className={`support${revealed(5) ? " is-visible" : ""}`}>no hydrated-sulfate exposure within 6 km</mark>.
           </p>
         </div>
       </section>
@@ -156,30 +157,33 @@ function HeroAttribution() {
           <path className={`support thread-2${revealed(2) ? " is-visible" : ""}`} pathLength="100" d="M3 188 C42 188 58 183 97 183"/>
           <path className={`support thread-3${revealed(3) ? " is-visible" : ""}`} pathLength="100" d="M3 232 C45 232 54 236 97 236"/>
           <path className={`support thread-4${revealed(4) ? " is-visible" : ""}`} pathLength="100" d="M3 276 C40 276 60 294 97 294"/>
-          <path className={`support thread-5${revealed(5) ? " is-visible" : ""}`} pathLength="100" d="M3 365 C45 365 56 346 97 346"/>
+          <path className={`suppression thread-5${revealed(5) ? " is-visible" : ""}`} pathLength="100" d="M3 350 C42 350 56 226 97 226"/>
+          <path className={`support thread-6${revealed(5) ? " is-visible" : ""}`} pathLength="100" d="M3 382 C45 382 56 346 97 346"/>
           {[
-            [1, 73, 122],
-            [2, 188, 183],
-            [3, 232, 236],
-            [4, 276, 294],
-            [5, 365, 346],
-          ].flatMap(([threshold, sourceY, answerY]) => [
-            <circle className={`support${revealed(threshold) ? " is-visible" : ""}`} cx="3" cy={sourceY} r="2.7" key={`${threshold}-source`}/>,
-            <circle className={`support${revealed(threshold) ? " is-visible" : ""}`} cx="97" cy={answerY} r="2.7" key={`${threshold}-answer`}/>,
+            [1, 73, 122, "support"],
+            [2, 188, 183, "support"],
+            [3, 232, 236, "support"],
+            [4, 276, 294, "support"],
+            [5, 350, 226, "suppression"],
+            [5, 382, 346, "support"],
+          ].flatMap(([threshold, sourceY, answerY, effect]) => [
+            <circle className={`${effect}${revealed(Number(threshold)) ? " is-visible" : ""}`} cx="3" cy={sourceY} r="2.7" key={`${threshold}-${effect}-source`}/>,
+            <circle className={`${effect}${revealed(Number(threshold)) ? " is-visible" : ""}`} cx="97" cy={answerY} r="2.7" key={`${threshold}-${effect}-answer`}/>,
           ])}
         </svg>
       </div>
       <section className="hero-document hero-answer" aria-labelledby="hero-answer-title">
-        <header><span id="hero-answer-title">Answer</span><small>linked support</small></header>
+        <header><span id="hero-answer-title">Answer</span><small>support + suppression</small></header>
         <div>
           <p>The recommended landing site is <mark className={`support peak${revealed(2) ? " is-visible" : ""}`}>Zephyr Basin</mark>. It meets the science requirement with hydrated-sulfate outcrops <mark className={`support${revealed(1) ? " is-visible" : ""}`}>well within the 2.0 km limit</mark>.</p>
-          <p>Mobility remains safe: the traverse stays <mark className={`support${revealed(3) ? " is-visible" : ""}`}>between 4 and 8 degrees</mark>. Power and communications thresholds are exceeded with <mark className={`support${revealed(4) ? " is-visible" : ""}`}>8.4 hours of winter sunlight and 94% visibility</mark>.</p>
+          <p><mark className={`suppression${revealed(5) ? " is-visible" : ""}`}>Mobility remains safe</mark>: the traverse stays <mark className={`support${revealed(3) ? " is-visible" : ""}`}>between 4 and 8 degrees</mark>. Power and communications thresholds are exceeded with <mark className={`support${revealed(4) ? " is-visible" : ""}`}>8.4 hours of winter sunlight and 94% visibility</mark>.</p>
           <p><mark className={`support${revealed(5) ? " is-visible" : ""}`}>Cinder Plain is rejected because no hydrated-sulfate exposure exists within 6 km</mark>, making it scientifically unviable.</p>
         </div>
       </section>
     </div>
     <footer>
       <span><i className="support"/>Context supporting the linked answer text</span>
+      <span><i className="suppression"/>Context suppressing the linked answer text</span>
       <strong>{step === heroProgress.length - 1 ? "Measurement complete" : "Scoring recorded answer…"}</strong>
     </footer>
   </figure>;
