@@ -10,6 +10,8 @@ import { decodeContextInvestigationReader, decodeContextInvestigationQuery } fro
 import { InspectReader, LeanContextPanel } from "../features/inspect/Inspect";
 import evidence from "./flagship.json";
 import { leanDemoJob, leanDemoReader, leanDemoRunId } from "./leanFlagship";
+import mobileHeroVideo from "./assets/clozn-mobile-hero.mp4?url";
+import mobileHeroPoster from "./assets/clozn-mobile-hero-poster.png?url";
 import "./demo.css";
 
 const runId = evidence.reader.run_id;
@@ -244,6 +246,42 @@ function HeroAttribution() {
   </figure>;
 }
 
+function MobileHeroVideo() {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [paused, setPaused] = useState(false);
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      video.pause();
+      setPaused(true);
+      return;
+    }
+    void video.play().catch(() => setPaused(true));
+  }, []);
+  return <figure className="hero-mobile-video" aria-label="CLOZN context attribution and lean-context animation">
+    <video
+      ref={videoRef}
+      autoPlay
+      loop
+      muted
+      playsInline
+      preload="auto"
+      poster={mobileHeroPoster}
+      onPause={() => setPaused(true)}
+      onPlay={() => setPaused(false)}
+    >
+      <source src={mobileHeroVideo} type="video/mp4"/>
+    </video>
+    {paused && <button type="button" onClick={() => {
+      const video = videoRef.current;
+      if (!video) return;
+      video.currentTime = 0;
+      void video.play();
+    }}>Play animation ▶</button>}
+  </figure>;
+}
+
 function Demo() {
   const [completedSourceCount, setCompletedSourceCount] = useState(replay ? 0 : sourceCount);
   useEffect(() => {
@@ -289,6 +327,7 @@ function Demo() {
               <a href={repo}>Source ↗</a>
             </nav>
           </div>
+          <MobileHeroVideo/>
           <HeroAttribution/>
         </section>
       </>}

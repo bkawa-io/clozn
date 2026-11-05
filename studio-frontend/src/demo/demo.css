@@ -30,6 +30,9 @@
 .demo-hero-copy .demo-primary-action:hover { border-color: var(--text-primary); background: var(--action-secondary-hover); color: var(--text-primary); }
 
 .hero-attribution { position: relative; max-width: 1680px; margin: 0 auto; border-block: 1px solid var(--border-etched); background: color-mix(in srgb, var(--surface-workspace) 94%, var(--surface-well)); box-shadow: 0 30px 80px rgb(0 0 0 / 24%); }
+.hero-mobile-video { position: relative; display: none; width: 100%; overflow: hidden; margin: 0; border-block: 1px solid var(--border-etched); background: var(--surface-workspace); box-shadow: 0 24px 60px rgb(0 0 0 / 24%); }
+.hero-mobile-video video { display: block; width: 100%; height: auto; background: var(--surface-workspace); }
+.hero-mobile-video button { position: absolute; inset: 50% auto auto 50%; min-height: 36px; border: 1px solid var(--brand-lichen); border-radius: var(--radius-control); background: color-mix(in srgb, var(--surface-workspace) 90%, transparent); color: var(--text-primary); font-family: var(--font-mono); font-size: 9px; letter-spacing: .05em; padding: 0 var(--space-component); text-transform: uppercase; transform: translate(-50%, -50%); box-shadow: 0 8px 24px rgb(0 0 0 / 45%); }
 .hero-attribution figcaption { display: flex; align-items: center; justify-content: space-between; gap: var(--space-component); min-height: 38px; border-bottom: 1px solid var(--border-subtle); color: var(--text-tertiary); font-family: var(--font-mono); font-size: 9px; letter-spacing: .06em; padding: 0 var(--space-component); text-transform: uppercase; }
 .hero-attribution figcaption span { display: inline-flex; align-items: center; gap: var(--space-tight); }
 .hero-attribution figcaption i { width: 6px; height: 6px; border-radius: 50%; background: var(--brand-lichen); box-shadow: 0 0 14px color-mix(in srgb, var(--brand-lichen) 74%, transparent); }
@@ -131,6 +134,8 @@
   .demo-hero { padding: var(--space-section) var(--space-control); }
   .demo-hero-copy { margin-bottom: var(--space-section); }
   .demo-hero-copy h1 { font-size: clamp(27px, 7.8vw, 34px); line-height: 1.01; }
+  .hero-mobile-video { display: block; }
+  .hero-attribution { display: none; }
   .hero-map-grid { grid-template-columns: minmax(0, 1fr) 42px minmax(0, 1fr); min-height: 410px; }
   .hero-context { border-right: 1px solid var(--border-subtle); }
   .hero-answer { border-left: 1px solid var(--border-subtle); }
