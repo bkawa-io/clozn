@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "@fontsource-variable/spline-sans";
 import "@fontsource-variable/spline-sans-mono";
@@ -117,26 +117,48 @@ function QuestionBand() {
 
 function HeroAttribution() {
   const [step, setStep] = useState(0);
+  const [inView, setInView] = useState(false);
+  const [motionOverride, setMotionOverride] = useState(false);
+  const figureRef = useRef<HTMLElement>(null);
   useEffect(() => {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    const figure = figureRef.current;
+    if (!figure || typeof IntersectionObserver === "undefined") {
+      setInView(true);
+      return undefined;
+    }
+    const observer = new IntersectionObserver(([entry]) => setInView(entry.isIntersecting), {
+      threshold: 0.55,
+    });
+    observer.observe(figure);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    if (!inView) return undefined;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches && !motionOverride) {
       setStep(5);
       return undefined;
     }
     const timer = window.setTimeout(() => {
       setStep((current) => current === heroLastStep ? 0 : current + 1);
-    }, step === 0 ? 600 : step < 5 ? 750 : step === 5 ? 1400 : step === heroLastStep ? 2400 : 700);
+    }, step === 0 ? 900 : step < 5 ? 750 : step === 5 ? 1400 : step === heroLastStep ? 2400 : 700);
     return () => window.clearTimeout(timer);
-  }, [step]);
+  }, [inView, motionOverride, step]);
   const attributionProgress = Math.min(step, 5);
   const showLeanPreview = step >= 6;
   const leanRemovedCount = Math.max(0, step - 6);
   const revealed = (threshold: number) => attributionProgress >= threshold;
-  return <figure className={`hero-attribution${step === 0 ? " is-resetting" : ""}${showLeanPreview ? " is-lean-preview" : ""}`} id="hero-map">
+  return <figure ref={figureRef} className={`hero-attribution${step === 0 ? " is-resetting" : ""}${showLeanPreview ? " is-lean-preview" : ""}`} id="hero-map">
     <figcaption>
       <span><i aria-hidden="true"/>{showLeanPreview ? "Lean context · libraries example" : "Recorded measurement"}</span>
-      <strong>{showLeanPreview
-        ? leanRemovedCount === 2 ? "142 prompt tokens removed" : `${leanRemovedCount} / 2 removable messages`
-        : `${attributionProgress} / 5 context spans`}</strong>
+      <span className="hero-animation-controls">
+        <strong>{showLeanPreview
+          ? leanRemovedCount === 2 ? "142 tokens removed" : `${leanRemovedCount} / 2 removed`
+          : `${attributionProgress} / 5 spans`}</strong>
+        <button type="button" onClick={() => {
+          setMotionOverride(true);
+          setStep(0);
+        }}>Play / replay ↻</button>
+      </span>
     </figcaption>
     <div className="hero-measurement-strip" aria-hidden="true">
       {Array.from({ length: 5 }, (_, index) => {
@@ -271,16 +293,21 @@ function Demo() {
         </section>
       </>}
       <section className={`demo-explorer${showLeanContext ? " is-tool-view" : ""}`} id="demo">
+        {!showLeanContext && <header className="demo-playground-intro">
+          <div>
+            <span>Interactive demo</span>
+            <h2>Try it yourself.</h2>
+            <p>Click or tap a highlighted answer passage. CLOZN will trace it back to the context that supported—or suppressed—it.</p>
+          </div>
+          <code>Zephyr Basin landing brief · {sourceCount} context spans</code>
+        </header>}
         <div className={`inspect-surface${showLeanContext ? " lean-context-surface demo-lean-surface" : ""}`}>
-          <header className="inspect-heading demo-heading">
+          {showLeanContext && <header className="inspect-heading demo-heading">
             <div>
-              <h2>{showLeanContext ? "Lean Context" : "Explore Context Effects"}</h2>
-              <code>{showLeanContext
-                ? "Libraries as heat-resilience infrastructure · 5 messages"
-                : `Zephyr Basin landing brief · ${sourceCount} context spans`}</code>
+              <h2>Lean Context</h2>
+              <code>Libraries as heat-resilience infrastructure · 5 messages</code>
             </div>
-            {replay && !showLeanContext && <span>Recorded replay</span>}
-          </header>
+          </header>}
           <section className={`inspect-instrument${showLeanContext ? " lean-context-instrument" : ""}`} aria-label={showLeanContext ? "Recorded lean context" : "Recorded context effects"}>
             {showLeanContext
               ? <LeanContextPanel

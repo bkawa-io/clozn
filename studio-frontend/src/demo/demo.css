@@ -34,6 +34,9 @@
 .hero-attribution figcaption span { display: inline-flex; align-items: center; gap: var(--space-tight); }
 .hero-attribution figcaption i { width: 6px; height: 6px; border-radius: 50%; background: var(--brand-lichen); box-shadow: 0 0 14px color-mix(in srgb, var(--brand-lichen) 74%, transparent); }
 .hero-attribution figcaption strong { color: var(--text-secondary); font-weight: 500; font-variant-numeric: tabular-nums; }
+.hero-animation-controls { margin-left: auto; }
+.hero-animation-controls button { min-height: 26px; border: 1px solid var(--border-subtle); border-radius: var(--radius-control); background: transparent; color: var(--text-secondary); font-family: var(--font-mono); font-size: 8px; letter-spacing: .04em; padding: 0 9px; text-transform: uppercase; }
+.hero-animation-controls button:hover, .hero-animation-controls button:focus-visible { border-color: var(--brand-lichen); color: var(--text-primary); }
 .hero-measurement-strip { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2px; height: 7px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-well); padding: 2px var(--space-component); }
 .hero-measurement-strip i { display: block; background: var(--border-subtle); opacity: .5; transition: background-color 520ms var(--ease-instrument), opacity 520ms var(--ease-instrument), box-shadow 520ms var(--ease-instrument); }
 .hero-measurement-strip i.is-measured { opacity: 1; }
@@ -99,6 +102,12 @@
 
 .demo-explorer { scroll-margin-top: calc(44px + var(--space-component)); border-top: 1px solid var(--border-subtle); background: var(--surface-workspace); padding: var(--space-major) var(--space-component) 80px; }
 .demo-explorer.is-tool-view { border-top: 0; padding: 0; }
+.demo-playground-intro { display: flex; align-items: end; justify-content: space-between; gap: var(--space-section); max-width: 1680px; margin: 0 auto var(--space-section); border-bottom: 1px solid var(--border-strong); padding-bottom: var(--space-section); }
+.demo-playground-intro > div { display: grid; gap: 5px; max-width: 72ch; }
+.demo-playground-intro span { color: var(--brand-lichen); font-family: var(--font-mono); font-size: 9px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; }
+.demo-playground-intro h2 { font-size: clamp(24px, 2.4vw, 36px); font-weight: 560; letter-spacing: -.035em; line-height: 1; }
+.demo-playground-intro p { color: var(--text-secondary); font-size: clamp(13px, 1vw, 15px); line-height: 1.5; }
+.demo-playground-intro code { flex: 0 0 auto; color: var(--text-tertiary); font-family: var(--font-mono); font-size: 9px; }
 .demo-heading { margin-bottom: var(--space-tight); }
 .demo-heading > span { color: var(--text-tertiary); font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; }
 .demo-heading h2 { font-size: 14px; font-weight: 600; letter-spacing: -.01em; }
@@ -121,7 +130,7 @@
   .demo-question-band { display: none; }
   .demo-hero { padding: var(--space-section) var(--space-control); }
   .demo-hero-copy { margin-bottom: var(--space-section); }
-  .demo-hero-copy h1 { font-size: clamp(30px, 9vw, 42px); }
+  .demo-hero-copy h1 { font-size: clamp(27px, 7.8vw, 34px); line-height: 1.01; }
   .hero-map-grid { grid-template-columns: minmax(0, 1fr) 42px minmax(0, 1fr); min-height: 410px; }
   .hero-context { border-right: 1px solid var(--border-subtle); }
   .hero-answer { border-left: 1px solid var(--border-subtle); }
@@ -131,21 +140,36 @@
   .hero-document > div { align-content: center; gap: 14px; min-height: 376px; padding: 14px 10px; font-size: clamp(10px, 3vw, 12px); line-height: 1.48; }
   .hero-document b { font-size: .56em; }
   .hero-threads::after { inset-inline: 4px; }
-  .hero-lean-preview { position: static; grid-template-columns: 1fr; }
-  .hero-attribution:not(.is-lean-preview) .hero-lean-preview { display: none; }
-  .hero-attribution.is-lean-preview .hero-map-grid, .hero-attribution.is-lean-preview .hero-measurement-strip { display: none; }
-  .hero-lean-document { border-right: 0; }
-  .hero-lean-document > div { min-height: 0; }
+  .hero-lean-preview { align-content: start; grid-template-columns: 1fr; grid-template-rows: auto auto; }
+  .hero-attribution.is-lean-preview .hero-map-grid, .hero-attribution.is-lean-preview .hero-measurement-strip { visibility: hidden; }
+  .hero-lean-document { min-height: 0; border-right: 0; }
+  .hero-lean-document > header { min-height: 32px; padding-inline: 10px; font-size: 7px; }
+  .hero-lean-document > header small { font-size: 7px; }
+  .hero-lean-document > div { align-content: center; gap: 7px; min-height: 0; overflow: hidden; padding: 10px 12px; font-size: 10px; line-height: 1.35; }
+  .hero-lean-result { gap: 7px; border-top: 1px solid var(--border-subtle); padding: 9px 12px; }
+  .hero-lean-result > strong { font-size: 16px; }
+  .hero-lean-result dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hero-lean-result dl > div { padding-block: 5px; }
+  .hero-lean-result dl > div + div { padding-left: 9px; }
+  .hero-lean-result dt { font-size: 7px; }
+  .hero-lean-result dd { font-size: 8px; }
   .hero-document > div { min-height: 0; }
   .hero-attribution > footer { flex-wrap: wrap; padding-block: var(--space-tight); }
   .hero-attribution > footer strong { width: 100%; margin-left: 0; }
   .demo-explorer { padding: var(--space-section) var(--space-tight) 56px; }
+  .demo-playground-intro { align-items: start; flex-direction: column; gap: var(--space-control); margin-bottom: var(--space-component); padding: 0 var(--space-tight) var(--space-component); }
+  .demo-playground-intro h2 { font-size: 26px; }
+  .demo-playground-intro p { font-size: 13px; }
+  .demo-playground-intro code { white-space: normal; }
 }
 
 @media (max-width: 420px) {
   .hero-map-grid { grid-template-columns: minmax(0, 1fr) 36px minmax(0, 1fr); }
   .hero-document > div { padding-inline: 8px; font-size: 10px; }
   .hero-attribution figcaption { padding-inline: 10px; }
+  .hero-attribution figcaption > span:first-child { font-size: 7px; }
+  .hero-animation-controls { gap: 5px !important; }
+  .hero-animation-controls button { min-height: 24px; font-size: 7px; padding-inline: 7px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
