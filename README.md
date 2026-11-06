@@ -215,3 +215,7 @@ ctest --test-dir engine/core/build --output-on-failure
 
 The Python package has no runtime dependencies. The native worker owns model loading and inference; the
 public gateway owns compatibility, recording, orchestration, and Studio.
+
+I made this as one person in my free time for fun, sorry if it is buggy or bad.
+
+Created by Brigitte Kawaguchi
