@@ -1,9 +1,9 @@
 # Clozn
 
-## Your context has consequences. You should see them.
+## Trace the effects of context on local LLM answers.
 
-Clozn shows which parts of a local LLM's context shaped the answer—and what you can remove without
-changing it.
+Clozn runs controlled context-removal experiments against a recorded response, measuring how each
+answer span's likelihood changes when context is removed.
 
 [![Clozn links influential context directly to the answer spans that depend on it](docs/assets/context-effects-hero.svg)](https://bkawa-io.github.io/clozn/)
 
