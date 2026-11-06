@@ -5,8 +5,8 @@ This page is the user-facing boundary for `0.1.0`.
 | Area | v1 status | Boundary |
 |---|---|---|
 | Local generation | Included | One GGUF, one private worker, text streaming, cancellation, durable recording |
-| Studio | Included | Conversation index, transcript reader, linked Context Effects, pane heatmaps, and Lean Context |
-| Context Effects | Included | Recorded-answer scoring under source removal; measured ranges only; influence is not correctness |
+| Studio | Included | Conversation index, transcript reader, linked Context Effects, pane heatmaps, Lean Context, and an optional budgeted Stability test |
+| Context Effects | Included | Recorded-answer scoring under source removal; compatible cached joint removals surface as non-additivity evidence; influence is not correctness and non-additivity is not redundancy |
 | Lean Context | Included | Best context found within fixed probability-loss tolerances and a configurable 1–64 execution budget (default 16); fresh full/reduced answers are compared |
 | Run storage | Included | SQLite metadata, content-addressed traces, isolated v1 root, read/list/delete |
 | Text API | Included | `/v1/models` and text-only `/v1/chat/completions` |

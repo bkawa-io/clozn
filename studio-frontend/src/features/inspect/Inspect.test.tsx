@@ -139,6 +139,13 @@ function readerFixture(): ContextInvestigationReader {
         perTokenDeltaNats: [-.21],
       },
     ],
+    interactionEvidence: {
+      status: "not_measured",
+      basis: "cached_trusted_direct_joint_deletions",
+      claimLimit: "context_dependence_not_redundancy",
+      compatibleCoalitionCount: 0,
+      coalitions: [],
+    },
     presentation: { measurementFloorNats: .1 },
     capabilities: {
       contextEffects: "measurable",
@@ -1397,6 +1404,42 @@ describe("Inspect surface", () => {
 
     expect(window.location.hash).toBe("#/inspect/run_alpha?answerStart=0&answerEnd=5&sourceId=source-a");
     expect(screen.getByRole("button", { name: "Attribution map" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("surfaces cached joint-removal interaction evidence without claiming redundancy", async () => {
+    const reader = readerFixture();
+    reader.interactionEvidence = {
+      status: "available",
+      basis: "cached_trusted_direct_joint_deletions",
+      claimLimit: "context_dependence_not_redundancy",
+      compatibleCoalitionCount: 1,
+      coalitions: [{
+        sourceIds: ["source-a", "source b"],
+        evaluatorScoringMode: "exact",
+        evidenceQuality: "trusted_direct",
+        baselineObservationId: "observation_baseline",
+        singleObservationIds: ["observation_a", "observation_b"],
+        jointObservationId: "observation_joint",
+        jointDeltaNats: 1.03,
+        individualSumDeltaNats: .23,
+        interactionDeltaNats: .8,
+        maxAbsTokenInteractionNats: .8,
+        perTokenInteractionNats: [0, .8, 0],
+      }],
+    };
+    vi.spyOn(contextInvestigationApi, "reader").mockResolvedValue(reader);
+    const view = render(<InspectSurface route={{ surface: "inspect", runId }} />);
+
+    const notice = await screen.findByRole("complementary", { name: "Cached context interaction evidence" });
+    expect(notice).toHaveTextContent("Observed interaction · no new inference");
+    expect(notice).toHaveTextContent("evidence of context dependence, not proof of redundancy");
+    expect(notice).toHaveTextContent("up to 0.80 Δ nats/token");
+    expect(view.container.querySelectorAll(".context-segment.has-interaction-evidence")).toHaveLength(2);
+
+    fireEvent.click(within(notice).getByRole("button", { name: "Open stability test" }));
+    expect(screen.getByRole("button", { name: "Highlights" })).toHaveAttribute("aria-current", "page");
+    await waitFor(() => expect(view.container.querySelector("#context-stability-test")).toHaveAttribute("open"));
+    expect(screen.getByRole("button", { name: "Run stability test" })).toBeInTheDocument();
   });
 
   it("runs Lean Context and labels the result as best-found rather than minimal", async () => {

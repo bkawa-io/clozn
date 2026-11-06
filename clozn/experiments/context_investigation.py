@@ -42,6 +42,7 @@ DISPLAY_COORDINATE_BASIS = "context_display_unicode.v1"
 DISPLAY_SEPARATOR = "\n\n"
 LOCUS_PROJECTION_VERSION = "context_investigation_loci.v1"
 DEFAULT_MEASUREMENT_FLOOR_NATS = 0.1
+_MAX_CACHED_INTERACTION_COALITIONS = 16
 
 
 class ContextInvestigationError(ValueError):
@@ -474,6 +475,157 @@ def _display_source_records(plan: Any, context: Mapping[str, Any]) -> list[dict[
     ]
 
 
+def _empty_interaction_evidence() -> dict[str, Any]:
+    return {
+        "status": "not_measured",
+        "basis": "cached_trusted_direct_joint_deletions",
+        "claim_limit": "context_dependence_not_redundancy",
+        "compatible_coalition_count": 0,
+        "coalitions": [],
+    }
+
+
+def _deleted_source_ids(observation: TokenScoreObservation) -> tuple[str, ...] | None:
+    condition = observation.condition
+    if not isinstance(condition, Mapping) or condition.get("kind") != "intervention":
+        return None
+    intervention = condition.get("intervention")
+    try:
+        deletion = DeleteSource.from_dict(intervention)
+    except Exception:
+        return None
+    return tuple(deletion.source_ids)
+
+
+def project_cached_interaction_evidence(
+    run: Mapping[str, Any],
+    plan: Any,
+    *,
+    observation_store: ObservationStore,
+) -> dict[str, Any]:
+    """Project compatible cached joint deletions without executing a model.
+
+    A coalition is usable only when the store contains a trusted, token-aligned
+    control, every corresponding one-source deletion, and the exact combined
+    deletion under one evaluator contract.  The interaction residual is the
+    combined-removal delta minus the sum of the individual-removal deltas.  It
+    establishes non-additivity under that measured intervention, not semantic
+    redundancy between the sources.
+    """
+    empty = _empty_interaction_evidence()
+    if not isinstance(observation_store, ObservationStore):
+        return empty
+    source_ids = _plan_ids(plan, "measurement_source_ids")
+    if len(source_ids) < 2:
+        return empty
+    positions = {source_id: index for index, source_id in enumerate(source_ids)}
+    state = _plan_field(plan, "execution_state")
+    if not isinstance(state, ExecutionState):
+        try:
+            state = ExecutionState.from_run(run)
+        except Exception:
+            return empty
+    try:
+        observations = observation_store.list_observations(
+            run_id=str(run.get("id") or ""),
+            evaluator_kind="score_recorded_continuation",
+            status="completed",
+            limit=4096,
+        )
+    except Exception:
+        return empty
+
+    groups: dict[str, dict[str, Any]] = {}
+    for observation in observations:
+        if (
+            not isinstance(observation, TokenScoreObservation)
+            or not observation.completed
+            or not observation.trusted
+            or observation.base_execution_fingerprint != state.execution_fingerprint
+        ):
+            continue
+        group_key = canonical_json({
+            "evaluator": observation.evaluator,
+            "contract": observation.contract,
+        })
+        group = groups.setdefault(group_key, {"control": None, "deletions": {}})
+        if observation.condition == {"kind": "unchanged_condition"}:
+            group["control"] = group["control"] or observation
+            continue
+        removed = _deleted_source_ids(observation)
+        if not removed or len(set(removed)) != len(removed):
+            continue
+        if any(source_id not in positions for source_id in removed):
+            continue
+        canonical = tuple(sorted(removed, key=positions.__getitem__))
+        group["deletions"].setdefault(canonical, observation)
+
+    coalitions: list[dict[str, Any]] = []
+    for group in groups.values():
+        baseline = group.get("control")
+        deletions = group.get("deletions")
+        if not isinstance(baseline, TokenScoreObservation) or not isinstance(deletions, Mapping):
+            continue
+        for removed, joint_observation in deletions.items():
+            if not isinstance(removed, tuple) or len(removed) < 2:
+                continue
+            singles = [deletions.get((source_id,)) for source_id in removed]
+            if any(not isinstance(item, TokenScoreObservation) for item in singles):
+                continue
+            joint_delta = TokenScoreDelta.from_observations(baseline, joint_observation)
+            single_deltas = [TokenScoreDelta.from_observations(baseline, item) for item in singles]
+            if joint_delta.status != "completed" or any(item.status != "completed" for item in single_deltas):
+                continue
+            if any(len(item.deltas) != len(joint_delta.deltas) for item in single_deltas):
+                continue
+            individual_values = [
+                sum(item.deltas[index] for item in single_deltas)
+                for index in range(len(joint_delta.deltas))
+            ]
+            interaction_values = [
+                float(joint_delta.deltas[index]) - float(individual_values[index])
+                for index in range(len(joint_delta.deltas))
+            ]
+            joint_total = float(sum(joint_delta.deltas))
+            individual_total = float(sum(individual_values))
+            interaction_total = float(sum(interaction_values))
+            evaluator = baseline.evaluator if isinstance(baseline.evaluator, Mapping) else {}
+            coalitions.append({
+                "source_ids": list(removed),
+                "evaluator_scoring_mode": (
+                    evaluator.get("scoring_mode")
+                    if evaluator.get("scoring_mode") in {"exact", "fast"}
+                    else "exact"
+                ),
+                "evidence_quality": "trusted_direct",
+                "baseline_observation_id": baseline.observation_id,
+                "single_observation_ids": [item.observation_id for item in singles],
+                "joint_observation_id": joint_observation.observation_id,
+                "joint_delta_nats": joint_total,
+                "individual_sum_delta_nats": individual_total,
+                "interaction_delta_nats": interaction_total,
+                "max_abs_token_interaction_nats": max(
+                    (abs(value) for value in interaction_values), default=0.0,
+                ),
+                "per_token_interaction_nats": interaction_values,
+            })
+
+    if not coalitions:
+        return empty
+    coalitions.sort(key=lambda item: (
+        -float(item["max_abs_token_interaction_nats"]),
+        -abs(float(item["interaction_delta_nats"])),
+        tuple(positions[source_id] for source_id in item["source_ids"]),
+    ))
+    return {
+        "status": "available",
+        "basis": "cached_trusted_direct_joint_deletions",
+        "claim_limit": "context_dependence_not_redundancy",
+        "compatible_coalition_count": len(coalitions),
+        "coalitions": coalitions[:_MAX_CACHED_INTERACTION_COALITIONS],
+    }
+
+
 def _base_document(*, run: Mapping[str, Any], plan: Any, context: dict[str, Any],
                    answer: dict[str, Any] | None, floor_nats: float, status: str,
                    measurement_status: str, reason: str | None = None,
@@ -506,6 +658,7 @@ def _base_document(*, run: Mapping[str, Any], plan: Any, context: dict[str, Any]
         "answer": answer or {"status": "unavailable"},
         "sources": [],
         "loci": [],
+        "interaction_evidence": _empty_interaction_evidence(),
         "presentation": {"measurement_floor_nats": floor_nats},
         "capabilities": {
             "context_effects": "measurable",
@@ -702,6 +855,9 @@ def build_context_investigation_reader(
         display_order.get(item["source_id"], 2**31 - 1),
         item["answer_token_range"][0], item["locus_id"],
     ))
+    document["interaction_evidence"] = project_cached_interaction_evidence(
+        run, plan, observation_store=observation_store,
+    )
     return document
 
 
@@ -922,6 +1078,7 @@ __all__ = [
     "AnswerSelectionProjectionUnavailable", "ContextInvestigationError", "ContextInvestigationStale",
     "ContextInvestigationUnavailable", "DEFAULT_MEASUREMENT_FLOOR_NATS", "DISPLAY_COORDINATE_BASIS",
     "DISPLAY_SEPARATOR", "LOCUS_PROJECTION_VERSION", "QUERY_SCHEMA_VERSION", "SCHEMA_VERSION",
-    "build_context_investigation_reader", "project_locus_details", "project_source_loci",
+    "build_context_investigation_reader", "project_cached_interaction_evidence",
+    "project_locus_details", "project_source_loci",
     "query_answer_effects", "summarize_context_investigation",
 ]

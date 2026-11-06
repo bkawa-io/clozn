@@ -112,6 +112,13 @@ export const leanDemoReader: ContextInvestigationReader = {
     loci: [],
   })),
   loci: [],
+  interactionEvidence: {
+    status: "not_measured",
+    basis: "cached_trusted_direct_joint_deletions",
+    claimLimit: "context_dependence_not_redundancy",
+    compatibleCoalitionCount: 0,
+    coalitions: [],
+  },
   presentation: { measurementFloorNats: .1 },
   capabilities: {
     contextEffects: "measurable",

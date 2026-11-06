@@ -8,14 +8,19 @@ from clozn import schemas
 from clozn.experiments.context_investigation import (
     DEFAULT_MEASUREMENT_FLOOR_NATS,
     build_context_investigation_reader,
+    project_cached_interaction_evidence,
     project_locus_details,
     project_source_loci,
     query_answer_effects,
     summarize_context_investigation,
 )
+from clozn.experiments.interventions import DeleteSource
+from clozn.experiments.kernel import Experiment
 from clozn.experiments.observations import TokenScoreObservation
 from clozn.experiments.persistence import ExperimentView, ObservationNotFound, ObservationStore
-from clozn.experiments.selections import AnswerSelection
+from clozn.experiments.runner import run_experiment
+from clozn.experiments.scoring import DeleteSourceRecordedContinuationScoreAdapter
+from clozn.experiments.selections import AnswerSelection, ContextSelection
 from clozn.recipes.context_effects import measure_context_effects, plan_context_effects
 from clozn.recipes.context_effects import plan_context_effects_reader
 from clozn.runs.context_receipt import build_context_receipt
@@ -25,14 +30,23 @@ from tests.test_context_effects_kernel import ScoreSubstrate, _run
 
 
 class MemoryStore(ObservationStore):
-    def __init__(self, view=None):
+    def __init__(self, view=None, observations=()):
         super().__init__()
         self.view = view
+        self.observations = list(observations)
 
     def get_experiment(self, experiment_id):
         if self.view is None:
             raise ObservationNotFound(experiment_id)
         return self.view
+
+    def list_observations(self, *, run_id, evaluator_kind=None, status="completed", limit=500):
+        return [
+            observation for observation in self.observations
+            if observation.run_id == run_id
+            and (evaluator_kind is None or observation.evaluator_kind == evaluator_kind)
+            and (status is None or observation.status == status)
+        ][:limit]
 
 
 def test_compact_context_investigation_summary_avoids_locus_projection():
@@ -214,6 +228,47 @@ def test_reader_projects_direct_loci_and_keeps_unselected_display_source_unmeasu
     details = project_locus_details(document, document["loci"][0]["locus_id"])
     assert details["experiment"]["experiment_id"] == view.experiment_id
     assert details["evaluator"] == "score_recorded_continuation"
+    schemas.validate(document, "clozn.context-investigation-reader.v1")
+
+
+def test_reader_surfaces_cached_joint_deletion_non_additivity_without_new_inference():
+    run, source_ids = _run()
+    selected = source_ids[:2]
+    plan = plan_context_effects(run, source_ids=selected)
+    view = _view(run, selected)
+    joint = run_experiment(
+        Experiment(
+            base=view.base,
+            evaluator=view.evaluator,
+            arms=[DeleteSource(ContextSelection(selected))],
+        ),
+        DeleteSourceRecordedContinuationScoreAdapter(ScoreSubstrate(), run=run),
+    ).arms[0].observation
+    observations = [
+        view.control,
+        *(row.observation for row in view.arms),
+        joint,
+    ]
+    assert all(isinstance(item, TokenScoreObservation) for item in observations)
+    store = MemoryStore(view, observations)
+
+    evidence = project_cached_interaction_evidence(
+        run, plan, observation_store=store,
+    )
+    assert evidence["status"] == "available"
+    assert evidence["claim_limit"] == "context_dependence_not_redundancy"
+    assert evidence["compatible_coalition_count"] == 1
+    coalition = evidence["coalitions"][0]
+    assert coalition["source_ids"] == selected
+    assert coalition["joint_delta_nats"] == pytest.approx(2.0)
+    assert coalition["individual_sum_delta_nats"] == pytest.approx(2.5)
+    assert coalition["interaction_delta_nats"] == pytest.approx(-0.5)
+    assert coalition["per_token_interaction_nats"] == pytest.approx([-1.0, 0.5])
+
+    document = build_context_investigation_reader(
+        run, plan, observation_store=store, floor_nats=0.1,
+    )
+    assert document["interaction_evidence"] == evidence
     schemas.validate(document, "clozn.context-investigation-reader.v1")
 
 

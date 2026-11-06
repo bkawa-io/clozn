@@ -1,0 +1,186 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3200" height="1640" viewBox="0 0 1600 820" role="img" aria-labelledby="title desc" style="text-rendering:geometricPrecision;shape-rendering:geometricPrecision">
+  <title id="title">Explore Context Effects in Clozn</title>
+  <desc id="desc">A selected context passage is pinned to the answer phrases it influenced, with direct relationship lines and context-effect heatmaps.</desc>
+  <defs>
+    <linearGradient id="canvas" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#08070a"/><stop offset=".55" stop-color="#111015"/><stop offset="1" stop-color="#0c0a0e"/>
+    </linearGradient>
+    <linearGradient id="overview-green" x1="0" y1="0" x2="1" y2="0">
+      <stop stop-color="#304139"/><stop offset=".28" stop-color="#82bf65"/><stop offset=".55" stop-color="#ddf7a9"/><stop offset="1" stop-color="#b9e871"/>
+    </linearGradient>
+    <linearGradient id="overview-answer" x1="0" y1="0" x2="1" y2="0">
+      <stop stop-color="#304139"/><stop offset=".22" stop-color="#b9e871"/><stop offset=".48" stop-color="#3c5f4c"/><stop offset=".73" stop-color="#ba8ee9"/><stop offset="1" stop-color="#ddf7a9"/>
+    </linearGradient>
+    <filter id="cyan-glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="green-glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <pattern id="rail-ticks" width="80" height="34" patternUnits="userSpaceOnUse">
+      <path d="M62 33.5H80" stroke="#454349" stroke-opacity=".7"/>
+    </pattern>
+    <style>
+      .sans { font-family: "Spline Sans", "Avenir Next", "Segoe UI", sans-serif; }
+      .mono { font-family: "Spline Sans Mono", "SFMono-Regular", Consolas, monospace; }
+      .micro { font-size: 12px; letter-spacing: .8px; fill: #89858e; }
+      .label { font-size: 13px; font-weight: 650; letter-spacing: 1.7px; fill: #aba6af; }
+      .body { font-size: 22px; font-weight: 460; letter-spacing: -.2px; fill: #f1f0f2; }
+      .body-dim { font-size: 20px; font-weight: 450; letter-spacing: -.2px; fill: #77727a; opacity: .42; }
+      .heading-dim { font-size: 18px; font-weight: 560; fill: #89858e; opacity: .5; }
+      .answer { font-size: 21px; font-weight: 470; letter-spacing: -.2px; fill: #f1f0f2; }
+      .answer-dim { font-size: 20px; font-weight: 450; letter-spacing: -.2px; fill: #77727a; opacity: .42; }
+      .ray-green { fill: none; stroke: #b9e871; stroke-width: 1.7; stroke-dasharray: 2 4; opacity: .75; }
+      .ray-purple { fill: none; stroke: #ba8ee9; stroke-width: 1.7; stroke-dasharray: 2 4; opacity: .75; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="820" fill="url(#canvas)"/>
+  <rect x="8" y="8" width="1584" height="804" rx="3" fill="#111015" stroke="#454349"/>
+
+  <!-- Title bar -->
+  <g class="sans">
+    <text x="24" y="39" font-size="19" font-weight="640" fill="#f1f0f2">Explore Context Effects</text>
+    <text x="242" y="38" class="micro mono">Zephyr Basin landing brief · 9 context spans</text>
+  </g>
+  <line x1="8" y1="58" x2="1592" y2="58" stroke="#454349"/>
+
+  <!-- Overview heatmaps -->
+  <g class="mono">
+    <text x="24" y="82" class="label">CONTEXT · CLICK TO EXPLORE</text>
+    <text x="876" y="82" class="label">ANSWER · CLICK TO EXPLORE</text>
+    <text x="1466" y="82" class="micro">0–4.835 nats/token</text>
+  </g>
+  <rect x="24" y="94" width="700" height="22" fill="#0c0a0e" stroke="#454349"/>
+  <rect x="30" y="100" width="688" height="10" fill="url(#overview-green)" opacity=".92"/>
+  <g fill="#0c0a0e" opacity=".92">
+    <rect x="84" y="98" width="50" height="14"/><rect x="225" y="98" width="28" height="14"/><rect x="468" y="98" width="70" height="14"/><rect x="628" y="98" width="22" height="14"/>
+  </g>
+  <rect x="858" y="94" width="718" height="22" fill="#0c0a0e" stroke="#454349"/>
+  <rect x="864" y="100" width="706" height="10" fill="url(#overview-answer)" opacity=".86"/>
+  <g fill="#0c0a0e" opacity=".93">
+    <rect x="890" y="97" width="66" height="16"/><rect x="1001" y="97" width="42" height="16"/><rect x="1137" y="97" width="88" height="16"/><rect x="1326" y="97" width="28" height="16"/><rect x="1498" y="97" width="24" height="16"/>
+  </g>
+  <rect x="724" y="58" width="134" height="70" fill="#0c0a0e" stroke="#302f33"/>
+  <line x1="791" y1="74" x2="791" y2="116" stroke="#77727a"/>
+  <g stroke="#89858e" stroke-width="2"><line x1="786" y1="84" x2="796" y2="84"/><line x1="786" y1="96" x2="796" y2="96"/><line x1="786" y1="108" x2="796" y2="108"/></g>
+
+  <!-- Lens controls -->
+  <rect x="8" y="128" width="1584" height="48" fill="#171419" stroke="#454349"/>
+  <g class="mono">
+    <text x="26" y="158" class="label">ANSWER LENS</text>
+    <rect x="125" y="139" width="80" height="28" rx="2" fill="#24212a" stroke="#ececf0"/>
+    <text x="146" y="158" font-size="12" fill="#ececf0">Overall</text>
+    <rect x="205" y="139" width="75" height="28" fill="#111015" stroke="#302f33"/>
+    <text x="221" y="158" class="micro">Tension</text>
+    <rect x="280" y="139" width="101" height="28" fill="#111015" stroke="#302f33"/>
+    <text x="298" y="158" class="micro">Suppression</text>
+    <text x="413" y="158" class="micro">Next passage →</text>
+    <text x="1431" y="158" class="micro">Overall effect per token</text>
+  </g>
+
+  <!-- Pane headers -->
+  <rect x="8" y="176" width="716" height="58" fill="#111015" stroke="#454349"/>
+  <rect x="724" y="176" width="134" height="58" fill="#0c0a0e" stroke="#454349"/>
+  <rect x="858" y="176" width="734" height="58" fill="#111015" stroke="#454349"/>
+  <g class="sans">
+    <text x="26" y="211" font-size="18" font-weight="630" fill="#ececf0">Context</text>
+    <text x="875" y="211" font-size="18" font-weight="630" fill="#ececf0">Answer</text>
+  </g>
+  <g class="mono">
+    <rect x="593" y="188" width="113" height="34" fill="#111015" stroke="#454349"/><text x="606" y="209" class="micro">Expand heatmap</text>
+    <text x="1396" y="209" class="micro">253 tokens</text>
+    <rect x="1477" y="188" width="97" height="34" fill="#111015" stroke="#454349"/><text x="1493" y="209" class="micro">Expand</text>
+  </g>
+
+  <!-- Main panes -->
+  <rect x="8" y="234" width="716" height="578" fill="#111015" stroke="#302f33"/>
+  <rect x="724" y="234" width="134" height="578" fill="#0c0a0e" stroke="#302f33"/>
+  <rect x="858" y="234" width="734" height="578" fill="#111015" stroke="#302f33"/>
+
+  <!-- Context, dimmed around one selected source -->
+  <g class="sans">
+    <text x="40" y="282" class="heading-dim">## Aurora Ridge</text>
+    <text x="40" y="316" class="body-dim">The sulfate outcrops are only 0.5 km away, but the direct</text>
+    <text x="40" y="345" class="body-dim">route crosses repeated 15–18 degree slopes.</text>
+
+    <text x="40" y="398" class="heading-dim">## Cinder Plain</text>
+    <text x="40" y="432" class="body-dim">The terrain is nearly flat, but spectroscopy found no</text>
+    <text x="40" y="461" class="body-dim">hydrated-sulfate exposure within 6 km.</text>
+
+    <rect x="34" y="495" width="650" height="126" rx="7" fill="#70d7ff" fill-opacity=".055" stroke="#08080d" stroke-width="7"/>
+    <rect x="34" y="495" width="650" height="126" rx="7" fill="none" stroke="#70d7ff" stroke-width="3" filter="url(#cyan-glow)"/>
+    <rect x="39" y="502" width="224" height="28" rx="3" fill="#ececf0" fill-opacity=".09"/>
+    <text x="42" y="525" class="body" font-weight="600">## Available mitigation</text>
+    <text x="42" y="560" class="body">Mission control can reserve two sols for a low-speed</text>
+    <text x="42" y="590" class="body">wheel-slip survey and route the rover around Zephyr’s</text>
+    <text x="42" y="616" class="body">dust field, adding only 0.4 km to the traverse.</text>
+
+    <text x="40" y="686" class="heading-dim">## Request</text>
+    <text x="40" y="720" class="body-dim">Write a compact landing recommendation. Explain the science,</text>
+    <text x="40" y="749" class="body-dim">mobility, power, communications, risk, and mitigation.</text>
+  </g>
+
+  <!-- Registration rail and pinned source -->
+  <rect x="725" y="235" width="132" height="576" fill="url(#rail-ticks)" opacity=".8"/>
+  <line x1="790" y1="234" x2="790" y2="812" stroke="#77727a"/>
+  <line x1="790" y1="234" x2="790" y2="535" stroke="#70d7ff" stroke-opacity=".45"/>
+  <g class="mono">
+    <rect x="750" y="244" width="81" height="31" rx="16" fill="#171419" stroke="#70d7ff" stroke-width="2" filter="url(#cyan-glow)"/>
+    <text x="769" y="264" font-size="11" font-weight="650" letter-spacing="1.2" fill="#70d7ff">PINNED ×</text>
+  </g>
+  <path d="M684 558 H778" fill="none" stroke="#70d7ff" stroke-width="3" filter="url(#cyan-glow)"/>
+  <rect x="778" y="546" width="24" height="24" rx="3" fill="#0c0a0e" stroke="#ececf0" stroke-width="3"/>
+  <rect x="784" y="552" width="12" height="12" rx="1" fill="#ececf0" fill-opacity=".18" stroke="#89858e"/>
+
+  <!-- Relationship fan-out -->
+  <g>
+    <path class="ray-purple" d="M802 558 C824 520 834 330 858 315"/>
+    <path class="ray-purple" d="M802 558 C828 534 835 360 858 354"/>
+    <path class="ray-purple" d="M802 558 C832 545 838 401 858 398"/>
+    <path class="ray-purple" d="M802 558 C835 552 841 442 858 440"/>
+    <path class="ray-green" d="M802 558 C830 558 840 528 858 527"/>
+    <path class="ray-green" d="M802 558 C829 561 840 566 858 566"/>
+    <path class="ray-green" d="M802 558 C826 570 839 604 858 605"/>
+    <g stroke="#70d7ff" stroke-width="3">
+      <line x1="850" y1="315" x2="858" y2="315"/><line x1="850" y1="354" x2="858" y2="354"/>
+      <line x1="850" y1="398" x2="858" y2="398"/><line x1="850" y1="440" x2="858" y2="440"/>
+      <line x1="850" y1="527" x2="858" y2="527"/><line x1="850" y1="566" x2="858" y2="566"/><line x1="850" y1="605" x2="858" y2="605"/>
+    </g>
+  </g>
+
+  <!-- Answer text and highlighted effects -->
+  <g class="sans">
+    <text x="884" y="279" class="answer-dim">The recommended landing site is Zephyr Basin,</text>
+
+    <rect x="1155" y="292" width="391" height="34" rx="6" fill="#594571" fill-opacity=".42" stroke="#ba8ee9" stroke-width="2.5" filter="url(#green-glow)"/>
+    <text x="1161" y="316" class="answer">as it satisfies all mission constraints</text>
+    <rect x="879" y="331" width="628" height="34" rx="6" fill="#594571" fill-opacity=".36" stroke="#ba8ee9" stroke-width="2.5"/>
+    <text x="885" y="355" class="answer">while offering the best balance of science and safety.</text>
+
+    <text x="884" y="399" class="answer-dim">It meets the science requirement with outcrops 1.8 km away,</text>
+    <rect x="1198" y="414" width="340" height="34" rx="6" fill="#594571" fill-opacity=".38" stroke="#ba8ee9" stroke-width="2.5"/>
+    <text x="1204" y="438" class="answer">Mobility is assured throughout</text>
+    <rect x="879" y="453" width="543" height="34" rx="6" fill="#594571" fill-opacity=".34" stroke="#ba8ee9" stroke-width="2.5"/>
+    <text x="885" y="477" class="answer">the 4–8 degree traverse, safely under the limit.</text>
+
+    <text x="884" y="518" class="answer-dim">The primary remaining risk is wheel slip in the dust field,</text>
+    <rect x="879" y="532" width="636" height="34" rx="6" fill="#4b6c4d" fill-opacity=".48" stroke="#b9e871" stroke-width="2.5" filter="url(#green-glow)"/>
+    <text x="885" y="556" class="answer">which can be mitigated by reserving two sols for a low-speed</text>
+    <rect x="879" y="571" width="654" height="34" rx="6" fill="#4b6c4d" fill-opacity=".48" stroke="#b9e871" stroke-width="2.5"/>
+    <text x="885" y="595" class="answer">wheel-slip survey and routing around the southern edge,</text>
+    <rect x="879" y="610" width="520" height="34" rx="6" fill="#4b6c4d" fill-opacity=".48" stroke="#b9e871" stroke-width="2.5"/>
+    <text x="885" y="634" class="answer">adding only 0.4 km to the traverse.</text>
+
+    <text x="884" y="684" class="answer-dim">This site is superior to Aurora Ridge and Cinder Plain,</text>
+    <text x="884" y="718" class="answer-dim">which fail mobility, operational, or science requirements.</text>
+  </g>
+
+  <!-- Small evidence rails behind the readable text -->
+  <g opacity=".32">
+    <rect x="884" y="265" width="548" height="5" fill="#304139"/>
+    <rect x="884" y="385" width="618" height="5" fill="#3b3248"/>
+    <rect x="884" y="504" width="570" height="5" fill="#304139"/>
+    <rect x="884" y="670" width="610" height="5" fill="#3b3248"/>
+  </g>
+</svg>

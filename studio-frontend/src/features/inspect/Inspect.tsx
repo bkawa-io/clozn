@@ -17,6 +17,7 @@ import {
   type ContextInvestigationQuery,
   type ContextInvestigationReader,
   type ContextInvestigationSource,
+  type CachedContextInteractionCoalition,
   type ReaderStatus,
   type SourceMeasurementStatus,
   type UnicodeRange,
@@ -92,6 +93,13 @@ interface InfluenceFocusModel {
   title: string;
   items: readonly InfluenceFocusItem[];
   primaryDirection?: "support" | "suppression";
+}
+
+interface SelectedInteractionEvidence {
+  coalition: CachedContextInteractionCoalition;
+  totalInteractionNats: number;
+  maxAbsTokenInteractionNats: number;
+  selectionLabel: "recorded answer" | "selected answer span";
 }
 
 interface RelationshipGeometry {
@@ -995,6 +1003,7 @@ function contextSegmentClass(
   segment: AnnotatedTextSegment,
   sourceById: ReadonlyMap<string, ContextInvestigationSource>,
   activeSourceIds: ReadonlySet<string>,
+  interactionSourceIds: ReadonlySet<string>,
   focusedSourceId?: string,
 ): string {
   const sources = segment.annotationIds.flatMap((id) => {
@@ -1006,6 +1015,7 @@ function contextSegmentClass(
   if (sources.some((source) => source.measurement.status === "not_measured")) classes.push("has-not-measured");
   if (sources.some((source) => source.measurement.status === "unavailable")) classes.push("has-unavailable");
   if (sources.some((source) => source.measurement.status === "failed")) classes.push("has-failed");
+  if (segment.annotationIds.some((id) => interactionSourceIds.has(id))) classes.push("has-interaction-evidence");
   if (segment.annotationIds.some((id) => activeSourceIds.has(id))) classes.push("is-related");
   if (focusedSourceId && segment.annotationIds.some((id) => activeSourceIds.has(id)) && !segment.annotationIds.includes(focusedSourceId)) {
     classes.push("is-quieted");
@@ -1062,6 +1072,7 @@ function ContextPane({
   reader,
   paneRef,
   activeSourceIds,
+  interactionSourceIds,
   focusedSourceId,
   directionBySource,
   focusModel,
@@ -1077,6 +1088,7 @@ function ContextPane({
   reader: ContextInvestigationReader;
   paneRef: RefObject<HTMLElement | null>;
   activeSourceIds: ReadonlySet<string>;
+  interactionSourceIds: ReadonlySet<string>;
   focusedSourceId?: string;
   directionBySource: ReadonlyMap<string, EvidenceDirection>;
   focusModel?: InfluenceFocusModel;
@@ -1138,6 +1150,7 @@ function ContextPane({
           if (wholeSources.some((source) => source.measurement.status === "not_measured")) blockClasses.push("has-whole-not-measured");
           if (wholeSources.some((source) => source.measurement.status === "unavailable")) blockClasses.push("has-whole-unavailable");
           if (wholeSources.some((source) => source.measurement.status === "failed")) blockClasses.push("has-whole-failed");
+          if (wholeIds.some((sourceId) => interactionSourceIds.has(sourceId))) blockClasses.push("has-interaction-evidence");
           if (relatedWhole.length) blockClasses.push("is-related");
           if (focusedSourceId && relatedWhole.length && !relatedWhole.includes(focusedSourceId)) blockClasses.push("is-quieted");
           if (focusedSourceId && wholeIds.includes(focusedSourceId)) blockClasses.push("is-focused");
@@ -1205,7 +1218,7 @@ function ContextPane({
                 return (
                   <span
                     key={`${block.messageIndex}:${segment.start}:${segment.end}`}
-                    className={contextSegmentClass(segment, sourceById, activeSourceIds, focusedSourceId)}
+                    className={contextSegmentClass(segment, sourceById, activeSourceIds, interactionSourceIds, focusedSourceId)}
                     data-source-ids={segment.annotationIds.length ? JSON.stringify(segment.annotationIds) : undefined}
                     data-direction={heatValue !== null && heatValue !== undefined
                       ? heatDirection(heatValue)
@@ -1865,16 +1878,78 @@ function HeatmapPeek({
   );
 }
 
+function strongestCachedInteraction(
+  reader: ContextInvestigationReader,
+  range?: CodePointRange,
+): SelectedInteractionEvidence | undefined {
+  if (reader.answer.status !== "available" || reader.interactionEvidence.status !== "available") return undefined;
+  const tokenIndices = reader.answer.tokens.flatMap((token, index) => {
+    const tokenRange = tupleRange(token.unicodeRange);
+    if (tokenRange.end <= tokenRange.start) return [];
+    return !range || rangesIntersect(range, tokenRange) ? [index] : [];
+  });
+  if (!tokenIndices.length) return undefined;
+  const candidates = reader.interactionEvidence.coalitions.flatMap((coalition) => {
+    const values = tokenIndices.map((index) => coalition.perTokenInteractionNats[index] ?? 0);
+    const maxAbsTokenInteractionNats = Math.max(0, ...values.map((value) => Math.abs(value)));
+    if (maxAbsTokenInteractionNats <= reader.presentation.measurementFloorNats) return [];
+    return [{
+      coalition,
+      totalInteractionNats: values.reduce((sum, value) => sum + value, 0),
+      maxAbsTokenInteractionNats,
+      selectionLabel: range ? "selected answer span" as const : "recorded answer" as const,
+    }];
+  });
+  return candidates.sort((left, right) => (
+    right.maxAbsTokenInteractionNats - left.maxAbsTokenInteractionNats
+    || Math.abs(right.totalInteractionNats) - Math.abs(left.totalInteractionNats)
+  ))[0];
+}
+
+function CachedInteractionNotice({
+  reader,
+  evidence,
+  onOpenStability,
+}: {
+  reader: ContextInvestigationReader;
+  evidence: SelectedInteractionEvidence;
+  onOpenStability?: () => void;
+}) {
+  const sourceById = new Map(reader.sources.map((source) => [source.sourceId, source]));
+  const labels = evidence.coalition.sourceIds.map((sourceId) => {
+    const source = sourceById.get(sourceId);
+    return source ? excerpt(source.label?.trim() || sourceRecordedText(reader, source), 72) : sourceId;
+  });
+  return (
+    <aside className="cached-interaction-notice" aria-label="Cached context interaction evidence">
+      <div>
+        <span className="eyebrow">Observed interaction · no new inference</span>
+        <strong>Combined removal behaved non-additively for the {evidence.selectionLabel}.</strong>
+        <p>
+          {plural(evidence.coalition.sourceIds.length, "context span")} differed from the sum of their individual effects by up to {evidence.maxAbsTokenInteractionNats.toFixed(2)} Δ nats/token. This is evidence of context dependence, not proof of redundancy.
+        </p>
+        <ul aria-label="Context spans in the cached joint-removal measurement">
+          {labels.slice(0, 3).map((label, index) => <li key={evidence.coalition.sourceIds[index]}>{label}</li>)}
+          {labels.length > 3 && <li>{labels.length - 3} more spans</li>}
+        </ul>
+      </div>
+      {onOpenStability && <button type="button" onClick={onOpenStability}>Open stability test</button>}
+    </aside>
+  );
+}
+
 export function InspectReader({
   reader,
   route,
   querySelection = contextInvestigationApi.query,
   initialAnswerLens = "tension",
+  onOpenStability,
 }: {
   reader: ContextInvestigationReader;
   route: InspectRoute;
   querySelection?: typeof contextInvestigationApi.query;
   initialAnswerLens?: AnswerLens;
+  onOpenStability?: () => void;
 }) {
   const [hoveredRange, setHoveredRange] = useState<ActiveRange | undefined>();
   const [hoveredSourceId, setHoveredSourceId] = useState<string | undefined>();
@@ -1918,6 +1993,14 @@ export function InspectReader({
       ? { ...range, key: rangeKey(range) }
       : undefined;
   }, [answer, route.answerEnd, route.answerStart]);
+  const cachedInteraction = useMemo(
+    () => strongestCachedInteraction(reader, lockedRange),
+    [lockedRange, reader],
+  );
+  const interactionSourceIds = useMemo(
+    () => new Set(cachedInteraction?.coalition.sourceIds ?? []),
+    [cachedInteraction],
+  );
   const contextPinnedSourceId = selectionOrigin === "context"
     && route.sourceId
     && reader.sources.some((source) => source.sourceId === route.sourceId)
@@ -2364,12 +2447,20 @@ export function InspectReader({
           exploreAnswer(rankedPassages[(current + 1) % rankedPassages.length]);
         } : undefined}
       />
+      {cachedInteraction && (
+        <CachedInteractionNotice
+          reader={reader}
+          evidence={cachedInteraction}
+          onOpenStability={onOpenStability}
+        />
+      )}
       <div className={`inspect-reader mobile-${mobilePane}${lockedRange ? " has-lock" : ""}${expandedPane ? ` is-expanded is-expanded-${expandedPane}` : ""}`}>
         <div className="inspect-pane-slot context-slot">
           <ContextPane
             reader={reader}
             paneRef={contextRef}
             activeSourceIds={relatedSet}
+            interactionSourceIds={interactionSourceIds}
             focusedSourceId={displayedFocusedSourceId}
             directionBySource={directionBySource}
             focusModel={contextFocusModel}
@@ -3019,9 +3110,11 @@ function interactionEstimateStyle(
 function InteractionsPanel({
   reader,
   route,
+  onEvidenceRecorded,
 }: {
   reader: ContextInvestigationReader;
   route: InspectRoute;
+  onEvidenceRecorded?: () => Promise<void>;
 }) {
   const [budget, setBudget] = useState(16);
   const [job, setJob] = useState<ContextInteractionsJob | undefined>();
@@ -3029,7 +3122,20 @@ function InteractionsPanel({
   const [error, setError] = useState<string | undefined>();
   const [pollRevision, setPollRevision] = useState(0);
   const actionController = useRef<AbortController | undefined>(undefined);
+  const publishedEvidenceJobId = useRef<string | undefined>(undefined);
   const maxPairs = Math.min(256, budget * 2);
+
+  const publishRecordedEvidence = useCallback(async (next: ContextInteractionsJob) => {
+    if (!next.result || !isTerminalContextInteractionsJob(next)) return;
+    if (publishedEvidenceJobId.current === next.jobId) return;
+    publishedEvidenceJobId.current = next.jobId;
+    try {
+      await onEvidenceRecorded?.();
+    } catch (readerError: unknown) {
+      publishedEvidenceJobId.current = undefined;
+      setError(describeError(readerError));
+    }
+  }, [onEvidenceRecorded]);
 
   useEffect(() => {
     actionController.current?.abort();
@@ -3038,6 +3144,7 @@ function InteractionsPanel({
     setAction("idle");
     setError(undefined);
     setPollRevision(0);
+    publishedEvidenceJobId.current = undefined;
   }, [route.runId]);
 
   useEffect(() => {
@@ -3051,6 +3158,7 @@ function InteractionsPanel({
         );
         if (controller.signal.aborted) return;
         setJob(next);
+        await publishRecordedEvidence(next);
         if (!isTerminalContextInteractionsJob(next)) {
           timer = window.setTimeout(() => { void poll(); }, 750);
         }
@@ -3063,7 +3171,7 @@ function InteractionsPanel({
       controller.abort();
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [job?.jobId, job?.state, pollRevision, route.runId]);
+  }, [job?.jobId, job?.state, pollRevision, publishRecordedEvidence, route.runId]);
 
   const start = async () => {
     actionController.current?.abort();
@@ -3077,7 +3185,10 @@ function InteractionsPanel({
         maxPairs,
         seed: 0,
       }, controller.signal);
-      if (!controller.signal.aborted) setJob(next);
+      if (!controller.signal.aborted) {
+        setJob(next);
+        await publishRecordedEvidence(next);
+      }
     } catch (startError: unknown) {
       if (!controller.signal.aborted) setError(describeError(startError));
     } finally {
@@ -3767,6 +3878,22 @@ function ContextInspectSurface({ route }: { route: InspectRoute }) {
   const updateLiveReader = useCallback((updated: ContextInvestigationReader) => {
     setLiveReaderEntry({ key: readerKey, reader: updated });
   }, [readerKey]);
+  const refreshReader = useCallback(async () => {
+    const controller = new AbortController();
+    const updated = await readerLoader(controller.signal);
+    updateLiveReader(updated);
+  }, [readerLoader, updateLiveReader]);
+  const openStability = useCallback(() => {
+    setView("overview");
+    window.requestAnimationFrame(() => {
+      const disclosure = document.querySelector<HTMLDetailsElement>("#context-stability-test");
+      if (!disclosure) return;
+      disclosure.open = true;
+      if (typeof disclosure.scrollIntoView === "function") {
+        disclosure.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    });
+  }, []);
   const openLinks = useCallback((range: ActiveRange, sourceId?: string) => {
     setView("links");
     window.location.hash = routeHref({
@@ -3817,7 +3944,7 @@ function ContextInspectSurface({ route }: { route: InspectRoute }) {
               {reader.answer.status === "available" || reader.context.blocks.length > 0 ? (
                 <>
                   <div hidden={view !== "links"}>
-                    <InspectReader reader={reader} route={route} />
+                    <InspectReader reader={reader} route={route} onOpenStability={openStability} />
                   </div>
                   <div className="investigation-summary" hidden={view !== "overview"}>
                     <EfficiencyOverview
@@ -3826,7 +3953,7 @@ function ContextInspectSurface({ route }: { route: InspectRoute }) {
                       onOpenAnswer={(range) => openLinks(range)}
                     />
                     <RunDetailsDisclosure runId={route.runId} />
-                    <details className="stability-disclosure">
+                    <details className="stability-disclosure" id="context-stability-test">
                       <summary>
                         <span>
                           <strong>Test whether influence changes across context combinations</strong>
@@ -3834,7 +3961,7 @@ function ContextInspectSurface({ route }: { route: InspectRoute }) {
                         </span>
                         <span>Stability test</span>
                       </summary>
-                      <InteractionsPanel reader={reader} route={route} />
+                      <InteractionsPanel reader={reader} route={route} onEvidenceRecorded={refreshReader} />
                     </details>
                   </div>
                 </>

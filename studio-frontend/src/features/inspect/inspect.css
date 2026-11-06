@@ -322,6 +322,15 @@
 .answer-lens-toolbar .explore-answer { border: 0; background: transparent; border-radius: 0; white-space: nowrap; color: var(--text-primary); }
 .answer-lens-toolbar .explore-answer:hover { text-decoration: underline; text-underline-offset: 4px; }
 .answer-lens-toolbar > p { overflow: hidden; margin-left: auto; color: var(--text-tertiary); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.cached-interaction-notice { display: flex; align-items: center; justify-content: space-between; gap: var(--space-component); border-bottom: var(--component-seam); background: color-mix(in oklab, var(--mark-registration) 5%, var(--surface-shell-transition)); padding: var(--space-control) var(--space-component); }
+.cached-interaction-notice > div { min-width: 0; }
+.cached-interaction-notice .eyebrow { color: var(--mark-registration); }
+.cached-interaction-notice strong { display: block; margin-top: 2px; color: var(--text-primary); font-size: 11px; font-weight: 600; line-height: 1.45; }
+.cached-interaction-notice p { max-width: 94ch; margin-top: 3px; color: var(--text-secondary); font-size: 10px; line-height: 1.5; }
+.cached-interaction-notice ul { display: flex; overflow: hidden; gap: 4px; margin-top: 6px; color: var(--text-tertiary); font-family: var(--font-mono); font-size: 8px; list-style: none; }
+.cached-interaction-notice li { overflow: hidden; max-width: 28ch; border: 1px solid color-mix(in srgb, var(--mark-registration) 28%, var(--border-subtle)); border-radius: 999px; padding: 2px 7px; text-overflow: ellipsis; white-space: nowrap; }
+.cached-interaction-notice > button { min-height: 30px; flex: 0 0 auto; border: 1px solid color-mix(in srgb, var(--mark-registration) 48%, var(--border-subtle)); border-radius: var(--radius-control); background: var(--surface-workspace); color: var(--text-primary); font-family: var(--font-mono); font-size: 9px; padding: 0 var(--space-control); }
+.cached-interaction-notice > button:hover { background: var(--surface-hover); }
 
 .inspect-overview { display: grid; grid-template-columns: minmax(0, 1fr) clamp(96px, 8vw, 132px) minmax(0, 1fr); min-height: 62px; border-top: var(--component-seam); border-bottom: var(--component-seam); background: var(--surface-shell-transition); }
 .overview-track { display: grid; grid-template-rows: auto 18px; gap: 5px; min-width: 0; padding: 10px var(--space-control) 8px; }
@@ -395,6 +404,7 @@
 .context-block.has-whole-not-measured::before { border-left: 1px dotted var(--evidence-not-measured); }
 .context-block.has-whole-unavailable::before { border-left: 1px dashed var(--evidence-unavailable); }
 .context-block.has-whole-failed::before { background: var(--evidence-failed); }
+.context-block.has-interaction-evidence:not(.is-related) { outline: 1px dotted color-mix(in srgb, var(--mark-registration) 62%, transparent); outline-offset: 3px; }
 .context-block.is-related { border-radius: 3px; background: color-mix(in oklab, var(--evidence-support) 8%, transparent); box-shadow: inset 2px 0 color-mix(in oklab, var(--evidence-support) 74%, transparent); }
 .context-block.is-related[data-direction="suppression"] { background: color-mix(in oklab, var(--evidence-suppression) 8%, transparent); box-shadow: inset 2px 0 color-mix(in oklab, var(--evidence-suppression) 74%, transparent); }
 .context-block.is-related[data-direction="mixed"] { background: color-mix(in srgb, var(--evidence-measured) 8%, transparent); box-shadow: inset 2px 0 var(--evidence-measured); }
@@ -408,6 +418,7 @@
 .context-segment.has-not-measured { text-decoration: underline dotted color-mix(in srgb, var(--evidence-not-measured) 35%, transparent); text-underline-offset: 4px; }
 .context-segment.has-unavailable { text-decoration: underline dashed color-mix(in srgb, var(--evidence-unavailable) 58%, transparent); text-underline-offset: 4px; }
 .context-segment.has-failed { text-decoration: underline wavy color-mix(in srgb, var(--evidence-failed) 58%, transparent); text-underline-offset: 4px; }
+.context-segment.has-interaction-evidence:not(.is-related) { box-shadow: inset 0 -2px color-mix(in srgb, var(--mark-registration) 68%, transparent); }
 .context-segment.is-related { background: color-mix(in oklab, var(--evidence-support) 10%, transparent); box-shadow: inset 0 -2px color-mix(in oklab, var(--evidence-support) 72%, transparent); }
 .context-segment.is-related[data-direction="suppression"] { background: color-mix(in oklab, var(--evidence-suppression) 9%, transparent); box-shadow: inset 0 -2px color-mix(in oklab, var(--evidence-suppression) 72%, transparent); }
 .context-segment.is-related[data-direction="mixed"] { background: color-mix(in srgb, var(--evidence-measured) 8%, transparent); box-shadow: inset 0 -2px var(--evidence-measured); }
@@ -447,7 +458,7 @@
 .inspect-reader.is-expanded .inspect-prose { max-width: 94ch; font-size: 15px; line-height: 1.82; }
 .inspect-reading-workspace.is-expanded { position: fixed; inset: 0; z-index: 30; display: flex; flex-direction: column; background: var(--surface-workspace); }
 .inspect-reading-workspace.is-expanded > .inspect-pane-switch { display: none; }
-.inspect-reading-workspace.is-expanded > .answer-lens-toolbar, .inspect-reading-workspace.is-expanded > .inspect-overview { flex-shrink: 0; }
+.inspect-reading-workspace.is-expanded > .answer-lens-toolbar, .inspect-reading-workspace.is-expanded > .inspect-overview, .inspect-reading-workspace.is-expanded > .cached-interaction-notice { flex-shrink: 0; }
 .inspect-reading-workspace.is-expanded > .inspect-reader { flex: 1; height: auto; min-height: 0; grid-template-rows: minmax(0, 1fr); }
 .inspect-reading-workspace.is-expanded > .heatmap-peek { flex: 0 0 clamp(180px, 28dvh, 240px); min-height: 0; grid-template-columns: minmax(0, 1fr); align-content: start; overflow: auto; overscroll-behavior: contain; }
 .inspect-reading-workspace.is-expanded > .heatmap-peek > div:first-of-type { display: none; }
@@ -690,6 +701,8 @@
   .interaction-row { grid-template-columns: 1fr; }
   .interaction-value { grid-column: 1; }
   .interaction-best { align-items: start; flex-direction: column; }
+  .cached-interaction-notice { align-items: flex-start; flex-direction: column; }
+  .cached-interaction-notice > button { width: 100%; }
   .inspect-layout.has-session { grid-template-columns: 34px minmax(0, 1fr); }
   .inspect-session-orientation .conversation-scrubber-column { width: 34px; min-height: 300px; }
   .inspect-overview { grid-template-columns: minmax(0, 1fr) 56px minmax(0, 1fr); }

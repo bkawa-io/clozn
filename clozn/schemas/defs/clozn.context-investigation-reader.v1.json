@@ -114,6 +114,67 @@
         }
       }
     },
+    "interaction_evidence": {
+      "type": "object",
+      "required": [
+        "status",
+        "basis",
+        "claim_limit",
+        "compatible_coalition_count",
+        "coalitions"
+      ],
+      "properties": {
+        "status": {"enum": ["not_measured", "available"]},
+        "basis": {"const": "cached_trusted_direct_joint_deletions"},
+        "claim_limit": {"const": "context_dependence_not_redundancy"},
+        "compatible_coalition_count": {"type": "integer", "minimum": 0},
+        "coalitions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "source_ids",
+              "evaluator_scoring_mode",
+              "evidence_quality",
+              "baseline_observation_id",
+              "single_observation_ids",
+              "joint_observation_id",
+              "joint_delta_nats",
+              "individual_sum_delta_nats",
+              "interaction_delta_nats",
+              "max_abs_token_interaction_nats",
+              "per_token_interaction_nats"
+            ],
+            "properties": {
+              "source_ids": {
+                "type": "array",
+                "minItems": 2,
+                "items": {"type": "string", "minLength": 1}
+              },
+              "evaluator_scoring_mode": {"enum": ["exact", "fast"]},
+              "evidence_quality": {"const": "trusted_direct"},
+              "baseline_observation_id": {"type": "string", "minLength": 1},
+              "single_observation_ids": {
+                "type": "array",
+                "minItems": 2,
+                "items": {"type": "string", "minLength": 1}
+              },
+              "joint_observation_id": {"type": "string", "minLength": 1},
+              "joint_delta_nats": {"type": "number"},
+              "individual_sum_delta_nats": {"type": "number"},
+              "interaction_delta_nats": {"type": "number"},
+              "max_abs_token_interaction_nats": {"type": "number", "minimum": 0},
+              "per_token_interaction_nats": {
+                "type": "array",
+                "items": {"type": "number"}
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "presentation": {
       "type": "object",
       "required": ["measurement_floor_nats"],

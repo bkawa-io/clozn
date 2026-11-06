@@ -123,6 +123,28 @@ export interface ContextInvestigationLocus {
   perTokenDeltaNats: readonly number[];
 }
 
+export interface CachedContextInteractionCoalition {
+  sourceIds: readonly string[];
+  evaluatorScoringMode: "exact" | "fast";
+  evidenceQuality: "trusted_direct";
+  baselineObservationId: string;
+  singleObservationIds: readonly string[];
+  jointObservationId: string;
+  jointDeltaNats: number;
+  individualSumDeltaNats: number;
+  interactionDeltaNats: number;
+  maxAbsTokenInteractionNats: number;
+  perTokenInteractionNats: readonly number[];
+}
+
+export interface CachedContextInteractionEvidence {
+  status: "not_measured" | "available";
+  basis: "cached_trusted_direct_joint_deletions";
+  claimLimit: "context_dependence_not_redundancy";
+  compatibleCoalitionCount: number;
+  coalitions: readonly CachedContextInteractionCoalition[];
+}
+
 export interface ContextInvestigationReader {
   schemaVersion: "clozn.context-investigation-reader.v1";
   runId: string;
@@ -134,6 +156,7 @@ export interface ContextInvestigationReader {
   answer: ContextInvestigationAnswer;
   sources: readonly ContextInvestigationSource[];
   loci: readonly ContextInvestigationLocus[];
+  interactionEvidence: CachedContextInteractionEvidence;
   presentation: { measurementFloorNats: number };
   capabilities: {
     contextEffects: "measurable" | "unavailable";
@@ -480,6 +503,82 @@ function decodeLocus(value: unknown, endpoint: string, path: string): ContextInv
   };
 }
 
+function emptyInteractionEvidence(): CachedContextInteractionEvidence {
+  return {
+    status: "not_measured",
+    basis: "cached_trusted_direct_joint_deletions",
+    claimLimit: "context_dependence_not_redundancy",
+    compatibleCoalitionCount: 0,
+    coalitions: [],
+  };
+}
+
+function decodeInteractionEvidence(
+  value: unknown,
+  endpoint: string,
+  path: string,
+): CachedContextInteractionEvidence {
+  if (value === undefined) return emptyInteractionEvidence();
+  const row = record(value, endpoint, path);
+  const rawCoalitions = list(required(row, "coalitions", endpoint, path), endpoint, `${path}.coalitions`);
+  const coalitions = rawCoalitions.map((value, index): CachedContextInteractionCoalition => {
+    const coalitionPath = `${path}.coalitions[${index}]`;
+    const coalition = record(value, endpoint, coalitionPath);
+    const sourceIds = stringList(required(coalition, "source_ids", endpoint, coalitionPath), endpoint, `${coalitionPath}.source_ids`);
+    const singleObservationIds = stringList(required(coalition, "single_observation_ids", endpoint, coalitionPath), endpoint, `${coalitionPath}.single_observation_ids`);
+    if (sourceIds.length < 2 || singleObservationIds.length !== sourceIds.length) {
+      fail(endpoint, coalitionPath, "must pair at least two sources with one individual observation each");
+    }
+    assertUnique(sourceIds, endpoint, `${coalitionPath}.source_ids`);
+    const perTokenInteractionNats = list(
+      required(coalition, "per_token_interaction_nats", endpoint, coalitionPath),
+      endpoint,
+      `${coalitionPath}.per_token_interaction_nats`,
+    ).map((item, tokenIndex) => finite(item, endpoint, `${coalitionPath}.per_token_interaction_nats[${tokenIndex}]`));
+    const jointDeltaNats = finite(required(coalition, "joint_delta_nats", endpoint, coalitionPath), endpoint, `${coalitionPath}.joint_delta_nats`);
+    const individualSumDeltaNats = finite(required(coalition, "individual_sum_delta_nats", endpoint, coalitionPath), endpoint, `${coalitionPath}.individual_sum_delta_nats`);
+    const interactionDeltaNats = finite(required(coalition, "interaction_delta_nats", endpoint, coalitionPath), endpoint, `${coalitionPath}.interaction_delta_nats`);
+    const maxAbsTokenInteractionNats = nonNegative(required(coalition, "max_abs_token_interaction_nats", endpoint, coalitionPath), endpoint, `${coalitionPath}.max_abs_token_interaction_nats`);
+    if (!nearlyEqual(interactionDeltaNats, jointDeltaNats - individualSumDeltaNats)) {
+      fail(endpoint, `${coalitionPath}.interaction_delta_nats`, "must equal joint delta minus the individual delta sum");
+    }
+    if (!nearlyEqual(interactionDeltaNats, perTokenInteractionNats.reduce((sum, item) => sum + item, 0))) {
+      fail(endpoint, `${coalitionPath}.per_token_interaction_nats`, "must sum to the interaction delta");
+    }
+    if (!nearlyEqual(maxAbsTokenInteractionNats, Math.max(0, ...perTokenInteractionNats.map(Math.abs)))) {
+      fail(endpoint, `${coalitionPath}.max_abs_token_interaction_nats`, "must match the token interaction vector");
+    }
+    return {
+      sourceIds,
+      evaluatorScoringMode: oneOf(required(coalition, "evaluator_scoring_mode", endpoint, coalitionPath), ["exact", "fast"] as const, endpoint, `${coalitionPath}.evaluator_scoring_mode`),
+      evidenceQuality: oneOf(required(coalition, "evidence_quality", endpoint, coalitionPath), ["trusted_direct"] as const, endpoint, `${coalitionPath}.evidence_quality`),
+      baselineObservationId: nonEmptyText(required(coalition, "baseline_observation_id", endpoint, coalitionPath), endpoint, `${coalitionPath}.baseline_observation_id`),
+      singleObservationIds,
+      jointObservationId: nonEmptyText(required(coalition, "joint_observation_id", endpoint, coalitionPath), endpoint, `${coalitionPath}.joint_observation_id`),
+      jointDeltaNats,
+      individualSumDeltaNats,
+      interactionDeltaNats,
+      maxAbsTokenInteractionNats,
+      perTokenInteractionNats,
+    };
+  });
+  const status = oneOf(required(row, "status", endpoint, path), ["not_measured", "available"] as const, endpoint, `${path}.status`);
+  const compatibleCoalitionCount = nonNegativeInteger(required(row, "compatible_coalition_count", endpoint, path), endpoint, `${path}.compatible_coalition_count`);
+  if (status === "not_measured" && (compatibleCoalitionCount !== 0 || coalitions.length)) {
+    fail(endpoint, path, "not_measured must not contain cached coalition evidence");
+  }
+  if (status === "available" && (!coalitions.length || compatibleCoalitionCount < coalitions.length)) {
+    fail(endpoint, path, "available must contain compatible coalition evidence");
+  }
+  return {
+    status,
+    basis: oneOf(required(row, "basis", endpoint, path), ["cached_trusted_direct_joint_deletions"] as const, endpoint, `${path}.basis`),
+    claimLimit: oneOf(required(row, "claim_limit", endpoint, path), ["context_dependence_not_redundancy"] as const, endpoint, `${path}.claim_limit`),
+    compatibleCoalitionCount,
+    coalitions,
+  };
+}
+
 function decodePresentation(value: unknown, endpoint: string, path: string): ContextInvestigationReader["presentation"] {
   const row = record(value, endpoint, path);
   return { measurementFloorNats: nonNegative(required(row, "measurement_floor_nats", endpoint, path), endpoint, `${path}.measurement_floor_nats`) };
@@ -718,12 +817,23 @@ export function decodeContextInvestigationReader(
     answer: decodeAnswer(required(row, "answer", endpoint, "$"), endpoint, "$.answer"),
     sources: list(required(row, "sources", endpoint, "$"), endpoint, "$.sources").map((item, index) => decodeSource(item, endpoint, `$.sources[${index}]`)),
     loci: list(required(row, "loci", endpoint, "$"), endpoint, "$.loci").map((item, index) => decodeLocus(item, endpoint, `$.loci[${index}]`)),
+    interactionEvidence: decodeInteractionEvidence(row.interaction_evidence, endpoint, "$.interaction_evidence"),
     presentation: decodePresentation(required(row, "presentation", endpoint, "$"), endpoint, "$.presentation"),
     capabilities: decodeCapabilities(required(row, "capabilities", endpoint, "$"), endpoint, "$.capabilities"),
   };
   if (expectedRunId !== undefined && reader.runId !== expectedRunId) fail(endpoint, "$.run_id", `must match requested Run ${expectedRunId}`);
   validateSourceCoordinates(reader, endpoint);
   validateReaderEvidence(reader, endpoint);
+  const measurementSources = new Set(reader.measurement.sourceUniverse);
+  for (const [index, coalition] of reader.interactionEvidence.coalitions.entries()) {
+    const path = `$.interaction_evidence.coalitions[${index}]`;
+    if (coalition.sourceIds.some((sourceId) => !measurementSources.has(sourceId))) {
+      fail(endpoint, `${path}.source_ids`, "must belong to the reader measurement universe");
+    }
+    if (reader.answer.status !== "available" || coalition.perTokenInteractionNats.length !== reader.answer.tokens.length) {
+      fail(endpoint, `${path}.per_token_interaction_nats`, "must align with the available recorded answer tokens");
+    }
+  }
   return reader;
 }
 

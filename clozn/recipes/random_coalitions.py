@@ -1,8 +1,9 @@
-"""Opt-in budgeted coalition experiment; not a production Studio contract.
+"""Opt-in budgeted coalition experiment exposed by Studio's Stability test.
 
 Uses the same recorded-answer scorer, deletion semantics, observation identities,
 and Lean Context tolerances as the shipped recipes. No embeddings, text matching,
 surrogate model, regenerated answers, or additional native runtime are involved.
+Results remain exploratory sampled marginals, never a redundancy proof.
 """
 from __future__ import annotations
 

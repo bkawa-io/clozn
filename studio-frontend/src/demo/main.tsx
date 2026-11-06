@@ -320,7 +320,7 @@ function Demo() {
         <section className="demo-hero" aria-labelledby="demo-hero-title">
           <div className="demo-hero-copy">
             <span>CLOZN / Context attribution for local LLMs</span>
-            <h1 id="demo-hero-title">It has all your context. But does any of it matter?</h1>
+            <h1 id="demo-hero-title">Your context has consequences. You should see them.</h1>
             <p>See which parts of your context shaped the answer—and what you can remove without changing it.</p>
             <nav aria-label="Demo actions">
               <a className="demo-primary-action" href="#demo">Open recorded measurement ↓</a>

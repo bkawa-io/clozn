@@ -102,6 +102,13 @@ function readerDocument(): WireDocument {
       per_token_delta_nats: [0.4],
       additive_locus_detail: "retained on the wire, not consumed",
     }],
+    interaction_evidence: {
+      status: "not_measured",
+      basis: "cached_trusted_direct_joint_deletions",
+      claim_limit: "context_dependence_not_redundancy",
+      compatible_coalition_count: 0,
+      coalitions: [],
+    },
     presentation: { measurement_floor_nats: 0.1 },
     capabilities: {
       context_effects: "measurable",
@@ -201,7 +208,79 @@ describe("Context Investigation reader contract", () => {
       answerUnicodeRange: [3, 4],
       direction: "support",
     }));
+    expect(reader.interactionEvidence.status).toBe("not_measured");
     expect(reader).not.toHaveProperty("additiveProjectionDetail");
+  });
+
+  it("defaults additive cached-interaction evidence for older reader documents", () => {
+    const document = readerDocument();
+    delete document.interaction_evidence;
+
+    expect(decodeContextInvestigationReader(document).interactionEvidence).toEqual({
+      status: "not_measured",
+      basis: "cached_trusted_direct_joint_deletions",
+      claimLimit: "context_dependence_not_redundancy",
+      compatibleCoalitionCount: 0,
+      coalitions: [],
+    });
+  });
+
+  it("decodes cached joint-removal interaction evidence without claiming redundancy", () => {
+    const document = readerDocument();
+    document.measurement.source_universe.push("source-b");
+    document.measurement.completed_source_count = 2;
+    document.context.blocks[0].source_ids.push("source-b");
+    document.sources.push({
+      ...document.sources[0],
+      source_id: "source-b",
+      parent_source_id: "source-a",
+      unicode_range: [1, 2],
+      byte_range: [1, 5],
+      display_unicode_range: [1, 2],
+      granularity: "exact_span",
+      measurement: {
+        status: "measured",
+        experiment_id: "exp_reader",
+        arm_id: "arm_b",
+        observation_id: "obs_b",
+        intervention: {
+          kind: "delete_source",
+          target: { kind: "context_selection", source_ids: ["source-b"] },
+        },
+      },
+      summary: {
+        max_abs_token_delta_nats: 0,
+        total_continuation_delta_nats: 0,
+        above_floor_locus_count: 0,
+      },
+      loci: [],
+    });
+    document.interaction_evidence = {
+      status: "available",
+      basis: "cached_trusted_direct_joint_deletions",
+      claim_limit: "context_dependence_not_redundancy",
+      compatible_coalition_count: 1,
+      coalitions: [{
+        source_ids: ["source-a", "source-b"],
+        evaluator_scoring_mode: "exact",
+        evidence_quality: "trusted_direct",
+        baseline_observation_id: baselineObservationId,
+        single_observation_ids: ["obs_a", "obs_b"],
+        joint_observation_id: "obs_joint_ab",
+        joint_delta_nats: 0.9,
+        individual_sum_delta_nats: 0.4,
+        interaction_delta_nats: 0.5,
+        max_abs_token_interaction_nats: 0.5,
+        per_token_interaction_nats: [0, 0.5, 0],
+      }],
+    };
+
+    const evidence = decodeContextInvestigationReader(document).interactionEvidence;
+    expect(evidence.claimLimit).toBe("context_dependence_not_redundancy");
+    expect(evidence.coalitions[0]).toEqual(expect.objectContaining({
+      sourceIds: ["source-a", "source-b"],
+      interactionDeltaNats: 0.5,
+    }));
   });
 
   it("keeps stale evidence distinct from not measured evidence", () => {
